@@ -411,6 +411,25 @@ describe('queryIndex', () => {
     expect(results[0]?.path).toBe('src/auth.ts')
   })
 
+  test('references mode resolves the seed from to when from is omitted', () => {
+    // Without `from`, the seed falls back to `to`. Seeding via `to: 'src/db.ts'`
+    // (no `from`, no `query`) should return its importers, same as seeding via
+    // `from`.
+    const results = queryIndex(index, '', {
+      mode: 'references',
+      to: 'src/db.ts',
+      limit: 10,
+    })
+
+    expect(results.length).toBe(1)
+    expect(results[0]?.path).toBe('src/auth.ts')
+    expect(results[0]?.matchedOn).toContain('graph')
+    expect(results[0]?.explanation).toContain('imports this file')
+    expect(results[0]?.explanation).toContain('./db')
+    expect(results[0]?.relatedFiles?.[0]?.path).toBe('src/db.ts')
+    expect(results[0]?.relatedFiles?.[0]?.reason).toContain('imports this file')
+  })
+
   test('references mode labels statically resolved calls as requiring verification', () => {
     // Call edges are conservative static evidence, but dynamic dispatch still
     // requires live verification before an edit relies on the relationship.

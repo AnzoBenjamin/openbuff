@@ -729,8 +729,9 @@ function findSeedPaths(
  *   ownership. They remain a secondary signal because static call resolution
  *   is conservative and cannot model every language's dynamic dispatch.
  *
- * The seed file path is taken from `options.from`. If omitted, `findSeedPaths`
- * resolves it from `query` tokens (same path-seed resolution as `neighbors`).
+ * The seed file path is taken from `options.from`, falling back to
+ * `options.to`. If both are omitted, `findSeedPaths` resolves it from `query`
+ * tokens (same path-seed resolution as `neighbors`).
  * Results are directional — only files that reference the seed are returned,
  * not files the seed references.
  */
@@ -744,7 +745,7 @@ function queryReferences(
   const seedPaths = findSeedPaths(
     index,
     tokens,
-    options.from,
+    options.from ?? options.to,
     options.fileTypes,
     lexicalWeights,
   )

@@ -79,6 +79,7 @@ export function createBase2(
       'render_3d_preview',
       'read_subtree',
       'read_outline',
+      'inspect_codebase_structure',
       !isFast && !planOnly && 'write_todos',
       'create_plan',
       'update_plan_status',
@@ -5947,6 +5948,17 @@ ${specialistRoutingSection}
         if (/^(hi|hello|hey|thanks|thank you|ok|okay)$/i.test(text))
           return undefined
         if (/^(continue|go on|proceed|keep going|resume)\b/i.test(text)) {
+          return undefined
+        }
+        // Skip proactive discovery when the prompt already names concrete
+        // file paths (e.g. "sdk/src/tools/code-search.ts" or "./foo/bar.py").
+        // The relevant files are already identified, so an automatic query_index
+        // (and inspect_codebase_structure for broad prompts) is premature.
+        if (
+          /(?:^|[\s'"`(,=])\.?\.?\/?[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|swift|c|cpp|h|hpp|cs|php|sh|json|ya?ml|toml|md|mdx|css|scss|html|vue|svelte)\b/i.test(
+            text,
+          )
+        ) {
           return undefined
         }
 
