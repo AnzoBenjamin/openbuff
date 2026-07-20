@@ -430,6 +430,21 @@ describe('queryIndex', () => {
     expect(results[0]?.relatedFiles?.[0]?.reason).toContain('imports this file')
   })
 
+  test('references mode falls back to `to` when `from` is not in the index', () => {
+    // When `from` names a path that is not indexed but `to` is, the seed must
+    // resolve from `to` rather than silently degrading to token scoring.
+    const results = queryIndex(index, '', {
+      mode: 'references',
+      from: 'src/does-not-exist.ts',
+      to: 'src/db.ts',
+      limit: 10,
+    })
+
+    expect(results.length).toBe(1)
+    expect(results[0]?.path).toBe('src/auth.ts')
+    expect(results[0]?.relatedFiles?.[0]?.path).toBe('src/db.ts')
+  })
+
   test('references mode labels statically resolved calls as requiring verification', () => {
     // Call edges are conservative static evidence, but dynamic dispatch still
     // requires live verification before an edit relies on the relationship.

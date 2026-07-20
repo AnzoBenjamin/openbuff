@@ -538,7 +538,13 @@ function computeIdfForTokens(
 function fileContainsToken(file: IndexedFile, token: string): boolean {
   if (file.path.toLowerCase().replace(/\\/g, '/').includes(token)) return true
   for (const sym of file.symbols) {
-    if (sym.toLowerCase().includes(token)) return true
+    const symLower = sym.toLowerCase()
+    // Mirror scoreFile's symbol predicate (including the reverse-substring
+    // rule for substantial symbols) so the IDF document-frequency fallback
+    // counts the same files that scoreFile will actually credit.
+    if (symLower.includes(token) || (symLower.length >= 4 && token.includes(symLower))) {
+      return true
+    }
   }
   for (const h of file.headings) {
     if (h.toLowerCase().includes(token)) return true
