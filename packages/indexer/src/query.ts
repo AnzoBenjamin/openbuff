@@ -300,11 +300,15 @@ function querySearch(
   const indexAgeMs = Date.now() - index.builtAt
   const stale = indexAgeMs > MAX_INDEX_AGE_MS
 
-  return applyPathScope(Array.from(directResults.values()), pathPrefixes)
+  // Top-level results are already prefix-filtered during scoring; only
+  // relatedFiles need the prefix filter here.
+  return Array.from(directResults.values())
     .map((result) => ({
       ...result,
       score: roundScore(result.score),
-      relatedFiles: result.relatedFiles?.slice(0, MAX_RELATED_FILES_PER_RESULT),
+      relatedFiles: result.relatedFiles
+        ?.filter((related) => pathMatchesPrefixes(related.path, pathPrefixes))
+        .slice(0, MAX_RELATED_FILES_PER_RESULT),
       matchedSnippets: result.matchedSnippets?.slice(0, 5),
       explanation: explain
         ? explainResult(result, { ageMs: indexAgeMs, stale })
@@ -518,8 +522,8 @@ function computeIdfForTokens(
         if (fileContainsToken(file, token)) df++
       }
     }
-    // log((N+1)/(df+1)) + 1 — always >= ~0.005, rare tokens ~log(N), and a
-    // +1 floor keeps every match contributing at least its base weight.
+    // log((N+1)/(df+1)) + 1 — always >= 1 (the +1 floor keeps every match
+    // contributing at least its base weight); rare tokens approach log(N)+1.
     idf.set(token, Math.log((total + 1) / (df + 1)) + 1)
   }
   return idf
@@ -773,11 +777,9 @@ function queryReferences(
       if (existing) {
         existing.score += edge.weight
         existing.matchedOn = addMatchedOn(existing.matchedOn, 'graph')
-        if (existing.relatedFiles) {
-          existing.relatedFiles = mergeRelatedFiles(existing.relatedFiles, [
-            { path: seedPath, score: edge.weight, reason, via: edge.label },
-          ])
-        }
+        existing.relatedFiles = mergeRelatedFiles(existing.relatedFiles, [
+          { path: seedPath, score: edge.weight, reason, via: edge.label },
+        ])
         if (
           existing.explanation &&
           !existing.explanation.includes(seedPath)
