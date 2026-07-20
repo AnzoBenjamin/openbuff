@@ -47,7 +47,7 @@ export function resolveLexicalWeights(
       DEFAULT_LEXICAL_WEIGHTS,
     ) as (keyof LexicalWeights)[]) {
       const value = weights[key]
-      if (typeof value === 'number' && Number.isFinite(value)) {
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
         resolved[key] = value
       }
     }
@@ -369,24 +369,14 @@ function queryPath(
   options: QueryOptions,
 ): QueryIndexResult[] {
   const lexicalWeights = resolveLexicalWeights(options.lexicalWeights)
-  const from =
-    options.from ??
-    findSeedPaths(
-      index,
-      tokens,
-      undefined,
-      options.fileTypes,
-      lexicalWeights,
-    )[0]
-  const to =
-    options.to ??
-    findSeedPaths(
-      index,
-      tokens,
-      undefined,
-      options.fileTypes,
-      lexicalWeights,
-    ).find((path) => path !== from)
+  // Compute the seed list once and derive both endpoints from it to avoid
+  // duplicate IDF + scoring work when neither from nor to is explicit.
+  const seedPaths =
+    options.from && options.to
+      ? []
+      : findSeedPaths(index, tokens, undefined, options.fileTypes, lexicalWeights)
+  const from = options.from ?? seedPaths[0]
+  const to = options.to ?? seedPaths.find((path) => path !== from)
   if (!from || !to) return []
 
   const path = shortestFilePath(index, adjacency, from, to)

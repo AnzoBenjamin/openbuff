@@ -339,6 +339,15 @@ describe('queryIndex', () => {
     expect(resolved.path).toBe(DEFAULT_LEXICAL_WEIGHTS.path)
   })
 
+  test('resolveLexicalWeights ignores negative values', () => {
+    const resolved = resolveLexicalWeights({
+      symbol: -3,
+      path: -0.5,
+    })
+    expect(resolved.symbol).toBe(DEFAULT_LEXICAL_WEIGHTS.symbol)
+    expect(resolved.path).toBe(DEFAULT_LEXICAL_WEIGHTS.path)
+  })
+
   test('zeroing the lexical symbol weight down-ranks a symbol-heavy match', () => {
     const defaultResults = queryIndex(index, 'AuthProvider', { limit: 5 })
     const zeroedResults = queryIndex(index, 'AuthProvider', {
