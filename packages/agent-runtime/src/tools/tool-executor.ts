@@ -1090,6 +1090,35 @@ export async function executeToolCall<T extends ToolName>(
       false
   }
 
+  // Deterministically block git-committer spawns until the validation/reviewer
+  // gate has passed. canSuggestFollowups is false precisely when the gate is
+  // not green (edits pending review). This mirrors the suggest_followups guard
+  // above and enforces the harness ordering: commit only after review is green.
+  // When canSuggestFollowups is undefined (gate system not active, e.g. non-base2
+  // agents), the check is skipped so custom agents are unaffected.
+  if (
+    toolName === 'spawn_agents' &&
+    canSuggestFollowups === false
+  ) {
+    const agents = (toolCall.input as Record<string, unknown>)?.agents
+    if (Array.isArray(agents)) {
+      const hasGitCommitter = agents.some(
+        (agent) =>
+          agent &&
+          typeof agent === 'object' &&
+          (agent as Record<string, unknown>).agent_type === 'git-committer',
+      )
+      if (hasGitCommitter) {
+        onResponseChunk({
+          type: 'error',
+          message:
+            'Spawning `git-committer` is not available yet. The validation/reviewer gate must pass before committing. Wait for the automated gate to complete, then commit.',
+        })
+        return abortablePreviousToolCallFinished
+      }
+    }
+  }
+
   // TODO: Allow tools to provide a validation function, and move this logic into the spawn_agents validation function.
   // Pre-validate spawn_agents to filter out non-existent agents before streaming
   let effectiveInput = toolCall.input as Record<string, unknown>

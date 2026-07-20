@@ -468,6 +468,64 @@ describe('runAgentStep - set_output tool', () => {
     )
   })
 
+  it('blocks git-committer spawn when the validation/reviewer gate has not passed', async () => {
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('spawn_agents', {
+        agents: [
+          {
+            agent_type: 'git-committer',
+            prompt: 'Commit the changes',
+            params: { owned_paths: ['src/a.ts'] },
+          },
+        ],
+      })
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState =
+      sessionState.mainAgentState as typeof sessionState.mainAgentState & {
+        canSuggestFollowups?: boolean
+      }
+    // canSuggestFollowups === false means the gate is not green.
+    agentState.canSuggestFollowups = false
+    const committerAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'test-committer-agent',
+      toolNames: ['spawn_agents', 'end_turn'],
+      spawnableAgents: ['git-committer'],
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'test-committer-agent',
+      localAgentTemplates: { 'test-committer-agent': committerAgent },
+      agentTemplate: committerAgent,
+      agentState,
+      prompt: 'Commit before the gate passes',
+    })
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining(
+          'Spawning `git-committer` is not available yet',
+        ),
+      }),
+    )
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'spawn_agents',
+      }),
+    )
+  })
+
   it('blocks suggest_followups after same-step file edits even when the gate started open', async () => {
     const chunks: unknown[] = []
     runAgentStepBaseParams = {
