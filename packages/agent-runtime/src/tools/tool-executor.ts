@@ -1117,7 +1117,12 @@ export async function executeToolCall<T extends ToolName>(
           !(
             agent &&
             typeof agent === 'object' &&
-            (agent as Record<string, unknown>).agent_type === 'git-committer'
+            typeof (agent as Record<string, unknown>).agent_type === 'string' &&
+            // Match on the resolved agent id so a git-committer alias cannot
+            // bypass the pre-gate block (consistent with spawn resolution).
+            normalizeSpawnAgentType(
+              String((agent as Record<string, unknown>).agent_type),
+            ) === 'git-committer'
           ),
       )
       if (filteredAgents.length < agents.length) {
@@ -1143,7 +1148,37 @@ export async function executeToolCall<T extends ToolName>(
       // disrupting the call. The prompt guard (Fix A) is the primary
       // prevention; this is the safety net.
       const MAX_SINGLE_AGENT_PAYLOAD_CHARS = 4_000
+      // Cheap recursive pre-screen: only pay for a full JSON.stringify when an
+      // entry's accumulated string/key content could plausibly reach the limit.
+      // This avoids serializing every (typically small) agent entry on the hot
+      // spawn path. The walk early-exits at the limit, so any entry with >= limit
+      // chars of string/key content still gets the exact serialized-length check.
+      const couldExceedPayloadLimit = (value: unknown): boolean => {
+        let total = 0
+        const walk = (node: unknown): boolean => {
+          if (typeof node === 'string') {
+            total += node.length
+            return total >= MAX_SINGLE_AGENT_PAYLOAD_CHARS
+          }
+          if (Array.isArray(node)) {
+            for (const item of node) {
+              if (walk(item)) return true
+            }
+            return false
+          }
+          if (node && typeof node === 'object') {
+            for (const [key, val] of Object.entries(node)) {
+              total += key.length
+              if (total >= MAX_SINGLE_AGENT_PAYLOAD_CHARS) return true
+              if (walk(val)) return true
+            }
+          }
+          return false
+        }
+        return walk(value)
+      }
       for (const agent of agents) {
+        if (!couldExceedPayloadLimit(agent)) continue
         let serialized: string
         try {
           serialized = JSON.stringify(agent)
