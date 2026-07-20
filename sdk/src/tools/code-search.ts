@@ -302,7 +302,6 @@ export function codeSearch({
 
     const timeoutId = setTimeout(() => {
       if (isResolved) return
-      hardKill()
 
       // Build output from collected matches
       const collectedLines: string[] = []
@@ -320,11 +319,15 @@ export function codeSearch({
           ? stderrBuf.substring(0, 1000) + '\n\n[Error output truncated]'
           : stderrBuf
 
+      // settle() first (clears any pre-existing timer), then hardKill() arms
+      // the SIGKILL-escalation fallback so a child that ignores SIGTERM is
+      // still killed after 1s.
       settle({
         errorMessage: `Code search timed out after ${timeoutSeconds} seconds. The search may be too broad or the pattern too complex. Try narrowing your search with more specific flags or a more specific pattern.`,
         stdout: truncatedStdout,
         stderr: truncatedStderr,
       })
+      hardKill()
     }, timeoutSeconds * 1000)
 
     // Parse ripgrep JSON for early stopping
@@ -397,7 +400,6 @@ export function codeSearch({
                 estimatedOutputLen >= maxOutputStringLength
               ) {
                 killedForLimit = true
-                hardKill()
 
                 // Build final output from collected matches
                 const limitedLines: string[] = []
@@ -415,10 +417,14 @@ export function codeSearch({
                     ? `[Global limit of ${globalMaxResults} results reached.]`
                     : '[Output size limit reached.]'
 
-                return settle({
+                // settle() first, then hardKill() so the SIGKILL-escalation
+                // fallback survives (settle clears timers; hardKill re-arms).
+                settle({
                   stdout: finalOutput + '\n\n' + limitReason,
                   message: `Stopped early after ${matchesGlobal} match(es).`,
                 })
+                hardKill()
+                return
               }
             }
           }
