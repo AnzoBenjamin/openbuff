@@ -779,6 +779,12 @@ function queryReferences(
             { path: seedPath, score: edge.weight, reason, via: edge.label },
           ])
         }
+        if (
+          existing.explanation &&
+          !existing.explanation.includes(seedPath)
+        ) {
+          existing.explanation += `; also references ${seedPath}`
+        }
       } else {
         results.set(importerNode.path, {
           path: importerNode.path,
