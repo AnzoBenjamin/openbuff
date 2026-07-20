@@ -147,19 +147,19 @@ export function queryIndex(
 
   if (mode === 'neighbors') {
     return applyPathScope(
-      queryNeighbors(index, adjacency, tokens, options),
+      queryNeighbors(index, adjacency, tokens, options, lexicalWeights),
       pathPrefixes,
     ).slice(0, limit)
   }
   if (mode === 'path') {
     return applyPathScope(
-      queryPath(index, adjacency, tokens, options),
+      queryPath(index, adjacency, tokens, options, lexicalWeights),
       pathPrefixes,
     ).slice(0, limit)
   }
   if (mode === 'references') {
     return applyPathScope(
-      queryReferences(index, adjacency, tokens, options),
+      queryReferences(index, adjacency, tokens, options, lexicalWeights),
       pathPrefixes,
     ).slice(0, limit)
   }
@@ -324,8 +324,8 @@ function queryNeighbors(
   adjacency: GraphAdjacency,
   tokens: string[],
   options: QueryOptions,
+  lexicalWeights: Required<LexicalWeights>,
 ): QueryIndexResult[] {
-  const lexicalWeights = resolveLexicalWeights(options.lexicalWeights)
   const seedPaths = findSeedPaths(
     index,
     tokens,
@@ -372,8 +372,8 @@ function queryPath(
   adjacency: GraphAdjacency,
   tokens: string[],
   options: QueryOptions,
+  lexicalWeights: Required<LexicalWeights>,
 ): QueryIndexResult[] {
-  const lexicalWeights = resolveLexicalWeights(options.lexicalWeights)
   // Compute the seed list once and derive both endpoints from it to avoid
   // duplicate IDF + scoring work when neither from nor to is explicit.
   const seedPaths =
@@ -743,8 +743,8 @@ function queryReferences(
   adjacency: GraphAdjacency,
   tokens: string[],
   options: QueryOptions,
+  lexicalWeights: Required<LexicalWeights>,
 ): QueryIndexResult[] {
-  const lexicalWeights = resolveLexicalWeights(options.lexicalWeights)
   const seedPaths = findSeedPaths(
     index,
     tokens,
