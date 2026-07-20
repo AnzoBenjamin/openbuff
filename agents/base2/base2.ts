@@ -5952,11 +5952,12 @@ ${specialistRoutingSection}
           return undefined
         }
         // Skip proactive discovery when the prompt already names concrete
-        // file paths (e.g. "sdk/src/tools/code-search.ts" or "./foo/bar.py").
-        // The relevant files are already identified, so an automatic query_index
-        // (and inspect_codebase_structure for broad prompts) is premature.
+        // file paths (e.g. "sdk/src/tools/code-search.ts", "./foo/bar.py",
+        // or a bare filename like "code-search.ts"). The relevant files are
+        // already identified, so an automatic query_index (and
+        // inspect_codebase_structure for broad prompts) is premature.
         if (
-          /(?:^|[\s'"`(,=])\.?\.?\/?[\w.-]+\/(?:[\w.-]+\/)*[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|swift|c|cpp|h|hpp|cs|php|sh|json|ya?ml|toml|md|mdx|css|scss|html|vue|svelte)\b/i.test(
+          /(?:^|[\s'"`(,=])\.?\.?\/?(?:[\w.-]+\/)*[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|swift|c|cpp|h|hpp|cs|php|sh|json|ya?ml|toml|md|mdx|css|scss|html|vue|svelte)\b/i.test(
             text,
           )
         ) {
