@@ -664,9 +664,11 @@ function shortestFilePath(
   const queue: string[][] = [[fileNodeId(from)]]
   const seen = new Set<string>([fileNodeId(from)])
 
-  while (queue.length > 0) {
-    const currentPath = queue.shift()
-    if (!currentPath) break
+  // Use an index cursor instead of queue.shift() to avoid O(V^2) array
+  // re-indexing on large graphs (shift re-indexes every remaining element).
+  let head = 0
+  while (head < queue.length) {
+    const currentPath = queue[head++]
     const current = currentPath[currentPath.length - 1]
     if (current === fileNodeId(to)) {
       return currentPath
