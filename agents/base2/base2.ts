@@ -682,6 +682,10 @@ ${specialistRoutingSection}
         activeWorkState.openReviewerBlockers.length === 0 &&
         activeWorkState.nextRequiredAction.trim().length === 0
       const gatePassedFiles = new Set<string>(activeWorkState.gatePassedFiles)
+      // Track files previously observed dirty in git status so we can safely
+      // prune them from the pending set when they disappear (committed).
+      const gitStatusObservedFiles = new Set<string>()
+      let gitStatusObservedDirty = false
       if (
         activeWorkState.gatePassedPendingFiles.length > 0 &&
         activeWorkState.gatePassedFingerprint &&
@@ -818,6 +822,35 @@ ${specialistRoutingSection}
         const currentGitStatusLineMap = extractGitStatusLineMap(
           (currentGitStatus as any)?.toolResult,
         )
+        // Prune pending gate files that were previously observed as dirty in
+        // git status but are no longer present (i.e., they were committed).
+        // Without this, committed files stay in the pending set forever,
+        // blocking suggest_followups and keeping the gate in
+        // 'awaiting_validation' even though the working tree is clean.
+        // Only prune when the git_status result is a real response (has a
+        // `status` field) and we have previously confirmed files dirty, to
+        // avoid false pruning from mock/empty results in tests.
+        const isRealGitStatusResult =
+          (currentGitStatus as any)?.toolResult?.[0]?.value?.status !==
+          undefined
+        if (
+          isRealGitStatusResult &&
+          gitStatusObservedDirty &&
+          gitStatusFiles.length === 0
+        ) {
+          for (const pendingFile of Array.from(pendingGateFiles)) {
+            if (gitStatusObservedFiles.has(pendingFile)) {
+              pendingGateFiles.delete(pendingFile)
+              gatePassedFiles.add(pendingFile)
+            }
+          }
+        }
+        for (const file of gitStatusFiles) {
+          gitStatusObservedFiles.add(file)
+        }
+        if (isRealGitStatusResult && gitStatusFiles.length > 0) {
+          gitStatusObservedDirty = true
+        }
         for (const file of gitStatusFiles) {
           if (
             !initialGitStatusFiles.includes(file) &&
