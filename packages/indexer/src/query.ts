@@ -699,8 +699,10 @@ function findSeedPaths(
   explicitPath?: string,
   fileTypes?: string[],
   lexicalWeights: Required<LexicalWeights> = DEFAULT_LEXICAL_WEIGHTS,
+  fallbackPath?: string,
 ): string[] {
   if (explicitPath && index.files[explicitPath]) return [explicitPath]
+  if (fallbackPath && index.files[fallbackPath]) return [fallbackPath]
   const idf = computeIdfForTokens(index, tokens)
   const candidates = getPostingCandidates(index, tokens)
   const files = candidates
@@ -745,9 +747,10 @@ function queryReferences(
   const seedPaths = findSeedPaths(
     index,
     tokens,
-    options.from ?? options.to,
+    options.from,
     options.fileTypes,
     lexicalWeights,
+    options.to,
   )
   const results = new Map<string, QueryIndexResult>()
 
