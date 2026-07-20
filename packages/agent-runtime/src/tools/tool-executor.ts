@@ -1148,17 +1148,21 @@ export async function executeToolCall<T extends ToolName>(
       // disrupting the call. The prompt guard (Fix A) is the primary
       // prevention; this is the safety net.
       const MAX_SINGLE_AGENT_PAYLOAD_CHARS = 4_000
-      // Cheap recursive pre-screen: only pay for a full JSON.stringify when an
-      // entry's accumulated string/key content could plausibly reach the limit.
-      // This avoids serializing every (typically small) agent entry on the hot
-      // spawn path. The walk early-exits at the limit, so any entry with >= limit
-      // chars of string/key content still gets the exact serialized-length check.
+      // Conservative pre-screen threshold: JSON.stringify adds structural
+      // overhead (quotes, braces, commas, escaping) on top of the raw
+      // string/key content, so an entry whose raw content is somewhat below the
+      // limit can still serialize past it. Trigger the exact serialized-length
+      // check at half the limit so near-boundary oversized entries are not
+      // missed, while still skipping truly small entries on the hot spawn path.
+      const PAYLOAD_PRESCREEN_CHARS = Math.floor(
+        MAX_SINGLE_AGENT_PAYLOAD_CHARS / 2,
+      )
       const couldExceedPayloadLimit = (value: unknown): boolean => {
         let total = 0
         const walk = (node: unknown): boolean => {
           if (typeof node === 'string') {
             total += node.length
-            return total >= MAX_SINGLE_AGENT_PAYLOAD_CHARS
+            return total >= PAYLOAD_PRESCREEN_CHARS
           }
           if (Array.isArray(node)) {
             for (const item of node) {
@@ -1169,7 +1173,7 @@ export async function executeToolCall<T extends ToolName>(
           if (node && typeof node === 'object') {
             for (const [key, val] of Object.entries(node)) {
               total += key.length
-              if (total >= MAX_SINGLE_AGENT_PAYLOAD_CHARS) return true
+              if (total >= PAYLOAD_PRESCREEN_CHARS) return true
               if (walk(val)) return true
             }
           }
