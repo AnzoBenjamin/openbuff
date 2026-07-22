@@ -1,7 +1,10 @@
 import z from 'zod/v4'
 
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
-import { fileMutationResultV1Schema } from '@codebuff/common/tools/results/filesystem'
+import {
+  buildReadFilesResultV1,
+  fileMutationResultV1Schema,
+} from '@codebuff/common/tools/results/filesystem'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { promptSuccess } from '@codebuff/common/util/error'
 import {
@@ -15,6 +18,7 @@ import { mockFileContext } from './test-utils'
 import { processStream } from '../tools/stream-parser'
 import {
   buildSpawnAgentsHandlerFailureOutput,
+  buildUnavailableToolMessage,
   normalizeNativeToolOutput,
   parseRawCustomToolCall,
   parseRawToolCall,
@@ -139,41 +143,56 @@ describe('tool validation error handling', () => {
     expect(JSON.stringify(malformed.output)).not.toContain('secret/path.ts')
     expect(JSON.stringify(malformed.output)).not.toContain('must not leak')
 
+    const canonicalReceipt = {
+      kind: 'commit_receipt' as const,
+      version: 1 as const,
+      receiptId: 'receipt-id',
+      operationId: 'receipt-operation',
+      callId: 'call-receipt',
+      authorityTier: 'portable_path' as const,
+      status: 'committed' as const,
+      actions: [
+        {
+          actionId: 'receipt-operation:0',
+          index: 0,
+          action: 'update' as const,
+          path: 'src/recovered.ts',
+          status: 'committed' as const,
+          beforeHash: 'before',
+          afterHash: 'after',
+        },
+      ],
+      finalHashes: { 'src/recovered.ts': 'after' },
+    }
+    const malformedReceiptOutput = jsonToolResult({
+      kind: 'file_mutation_result',
+      version: 2,
+      operationId: 'receipt-operation',
+      outcome: 'applied',
+      actions: 'malformed',
+      authorityTier: 'portable_path',
+      receiptId: 'receipt-id',
+      errors: [],
+      freshCapabilities: [],
+      authorityReceipt: canonicalReceipt,
+    }) as never
+
+    const forgedOnly = normalizeNativeToolOutput({
+      toolName: 'write_file',
+      toolCallId: 'call-receipt',
+      output: malformedReceiptOutput,
+    })
+    expect(forgedOnly.valid).toBe(false)
+    expect(forgedOnly.output[0]).toMatchObject({
+      type: 'json',
+      value: { kind: 'native_tool_result_error' },
+    })
+
     const recovered = normalizeNativeToolOutput({
       toolName: 'write_file',
       toolCallId: 'call-receipt',
-      output: jsonToolResult({
-        kind: 'file_mutation_result',
-        version: 2,
-        operationId: 'receipt-operation',
-        outcome: 'applied',
-        actions: 'malformed',
-        authorityTier: 'portable_path',
-        receiptId: 'receipt-id',
-        errors: [],
-        freshCapabilities: [],
-        authorityReceipt: {
-          kind: 'commit_receipt',
-          version: 1,
-          receiptId: 'receipt-id',
-          operationId: 'receipt-operation',
-          callId: 'call-receipt',
-          authorityTier: 'portable_path',
-          status: 'committed',
-          actions: [
-            {
-              actionId: 'receipt-operation:0',
-              index: 0,
-              action: 'update',
-              path: 'src/recovered.ts',
-              status: 'committed',
-              beforeHash: 'before',
-              afterHash: 'after',
-            },
-          ],
-          finalHashes: { 'src/recovered.ts': 'after' },
-        },
-      }) as never,
+      output: malformedReceiptOutput,
+      canonicalReceipt,
     })
     expect(recovered.valid).toBe(false)
     expect(recovered.output[0]).toMatchObject({
@@ -237,6 +256,20 @@ describe('tool validation error handling', () => {
           freshCapabilities: [],
         }),
       ),
+      canonicalReceipt: {
+        ...canonicalReceipt,
+        receiptId: 'other-receipt',
+        operationId: 'other-operation',
+        callId: 'different-call',
+        actions: [
+          {
+            ...canonicalReceipt.actions[0],
+            actionId: 'other-operation:0',
+            path: 'src/other.ts',
+          },
+        ],
+        finalHashes: { 'src/other.ts': 'after' },
+      },
     })
     expect(mismatchedCall.valid).toBe(false)
     expect(mismatchedCall.output[0]).toMatchObject({
@@ -475,7 +508,7 @@ describe('tool validation error handling', () => {
     }
   })
 
-  it('should hint that basedOnRead must be a token/object when str_replace receives a wrong shape (Fix D)', () => {
+  it('should hint that basedOnRead must be a cap.v3 token when str_replace receives a wrong shape (Fix D)', () => {
     const result = parseRawToolCall({
       rawToolCall: {
         toolName: 'str_replace',
@@ -487,8 +520,7 @@ describe('tool validation error handling', () => {
               oldString: 'a',
               newString: 'b',
               allowMultiple: false,
-              // Wrapped-object shape that is not the accepted { startLine,
-              // endLine, hash } form.
+              // Object forms are rejected; callers must copy the cap.v3 token.
               basedOnRead: { $text: 'cap.something' },
             },
           ],
@@ -498,7 +530,9 @@ describe('tool validation error handling', () => {
 
     expect('error' in result).toBe(true)
     if ('error' in result) {
-      expect(result.error).toContain('`basedOnRead` must be')
+      expect(result.error).toContain('authenticated cap.v3 readCapability')
+      expect(result.error).toContain('Object-form anchors')
+      expect(result.error).not.toContain('OR an object')
     }
   })
 
@@ -648,6 +682,59 @@ describe('tool validation error handling', () => {
     }
   })
 
+  it('gives actionable recovery for a validation issue at agents.0.handoff', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-agents-incomplete-handoff-tool-call-id',
+        input: {
+          agents: [
+            {
+              agent_type: 'repair-editor',
+              handoff: {
+                schemaVersion: 1,
+                truncatedEvidence: 'authority-bearing-secret-fragment',
+              },
+            },
+          ],
+        },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('agents[0].handoff')
+      expect(result.error).toContain('"handoff"?: object')
+      expect(result.error).toContain(
+        'one complete compact canonical `AgentHandoff` object',
+      )
+      for (const field of [
+        'schemaVersion',
+        'taskId',
+        'objective',
+        'role',
+        'requirements',
+        'acceptanceCriteria',
+        'context',
+        'nonGoals',
+        'findings',
+        'permissions',
+      ]) {
+        expect(result.error).toContain(`\`${field}\``)
+      }
+      expect(result.error).toContain(
+        'Truncated handoffs cannot be repaired safely',
+      )
+      expect(result.error).toContain('Keep evidence compact')
+      expect(result.formattedInput).toContain(
+        'invalid handoff payload omitted',
+      )
+      expect(result.formattedInput).not.toContain(
+        'authority-bearing-secret-fragment',
+      )
+    }
+  })
+
   it('gives spawn-specific recovery for truncated agent JSON', () => {
     const result = parseRawToolCall({
       rawToolCall: {
@@ -660,6 +747,8 @@ describe('tool validation error handling', () => {
     if ('error' in result) {
       expect(result.error).toContain('Pass agents as an array of objects')
       expect(result.error).toContain('truncated JSON')
+      expect(result.error).toContain('"handoff"?: object')
+      expect(result.error).not.toContain('canonical `AgentHandoff`')
     }
   })
 
@@ -750,6 +839,92 @@ describe('tool validation error handling', () => {
     if ('error' in result) {
       expect(result.error).toContain('Missing required: command')
     }
+  })
+
+  describe('run_terminal_command scalar coercion', () => {
+    it('coerces string "false"/"60" to boolean/number before validation', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'run_terminal_command',
+          toolCallId: 'terminal-coerce-scalars-tool-call-id',
+          input: {
+            command: 'echo hi',
+            detach: 'false',
+            timeout_seconds: '60',
+            process_type: 'SYNC',
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        expect(result.input.detach).toBe(false)
+        expect(result.input.timeout_seconds).toBe(60)
+      }
+    })
+
+    it('coerces string "true" detach to boolean true', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'run_terminal_command',
+          toolCallId: 'terminal-coerce-detach-true-tool-call-id',
+          input: { command: 'echo hi', detach: 'true' },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        expect(result.input.detach).toBe(true)
+      }
+    })
+
+    it('leaves already-correct scalar types untouched', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'run_terminal_command',
+          toolCallId: 'terminal-correct-types-tool-call-id',
+          input: { command: 'echo hi', detach: true, timeout_seconds: -1 },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        expect(result.input.detach).toBe(true)
+        expect(result.input.timeout_seconds).toBe(-1)
+      }
+    })
+
+    it('fails closed and hints when timeout_seconds cannot be coerced', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'run_terminal_command',
+          toolCallId: 'terminal-uncoercible-timeout-tool-call-id',
+          input: { command: 'echo hi', timeout_seconds: 'soon' },
+        },
+      })
+
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain('timeout_seconds')
+        // The ambiguous string is never silently turned into a number.
+        expect(result.error).not.toContain('timeout_seconds": 0')
+      }
+    })
+
+    it('fails closed for an ambiguous detach string', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'run_terminal_command',
+          toolCallId: 'terminal-ambiguous-detach-tool-call-id',
+          input: { command: 'echo hi', detach: 'yes' },
+        },
+      })
+
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain('detach')
+      }
+    })
   })
 
   it('should accept old_str/new_str aliases for str_replace replacements', () => {
@@ -978,6 +1153,11 @@ describe('tool validation error handling', () => {
       startLine: 100,
       endLine: 156,
       hash,
+      scope: {
+        projectId: mockFileContext.projectRoot,
+        path: 'agents/base2/base2.ts',
+        runId: 'test-run-id',
+      },
     })
     const result = parseRawToolCall({
       rawToolCall: {
@@ -1001,8 +1181,12 @@ describe('tool validation error handling', () => {
 
     expect('error' in result).toBe(true)
     if ('error' in result) {
-      expect(result.error).toContain('capability covers lines 100-156')
-      expect(result.error).toContain('choose one target form only')
+      expect(result.error).toContain('Unrecognized key: "expectedHash"')
+      expect(result.error).toContain(
+        'provide both to target a contained sub-range',
+      )
+      expect(result.error).toContain('Never pass expectedHash')
+      expect(result.error).not.toContain('re-read the exact target lines first')
       expect(result.error).not.toContain(
         'Pass `edits` as an actual array of objects',
       )
@@ -1059,6 +1243,8 @@ describe('tool validation error handling', () => {
     if ('error' in result) {
       expect(result.error).toContain('edits[0].type')
       expect(result.error).toContain('No matching discriminator')
+      expect(result.error).toContain('Valid types:')
+      expect(result.error).toContain('set `type` explicitly')
     }
   })
 
@@ -1459,6 +1645,70 @@ describe('tool validation error handling', () => {
     ).toThrow('Missing required: command')
   })
 
+  it('includes the exact declared params contract for a generic child', async () => {
+    const { validateAgentInput } =
+      await import('../tools/handlers/tool/spawn-agent-utils')
+    const agentTemplate = {
+      ...testAgentTemplate,
+      id: 'generic-child',
+      inputSchema: {
+        params: z.object({
+          source_path: z.string(),
+          retry_count: z.number().int().optional(),
+        }),
+      },
+    }
+
+    let message = ''
+    try {
+      validateAgentInput(agentTemplate, 'generic-child', undefined, {})
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(message).toContain('Exact params contract (from the child agent schema)')
+    expect(message).toContain('"required":["source_path"]')
+    expect(message).toContain('"source_path":{"type":"string"}')
+    expect(message).toContain('"retry_count":{"type":"integer"')
+    expect(message).toContain('Preserve params field names exactly.')
+  })
+
+  it('rejects security-reviewer snapshot_id with canonical params recovery', async () => {
+    const { validateAgentInput } =
+      await import('../tools/handlers/tool/spawn-agent-utils')
+    const securityReviewer = {
+      ...testAgentTemplate,
+      id: 'security-reviewer',
+      inputSchema: {
+        params: z
+          .object({
+            changed_files: z.array(z.string()),
+            snapshot_fingerprint: z.string(),
+          })
+          .strict(),
+      },
+    }
+
+    let message = ''
+    try {
+      validateAgentInput(securityReviewer, 'security-reviewer', undefined, {
+        changed_files: ['src/auth.ts'],
+        snapshot_id: 'wrong-alias',
+      })
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(message).toContain('snapshot_fingerprint')
+    expect(message).toContain(
+      '"required":["changed_files","snapshot_fingerprint"]',
+    )
+    expect(message).toContain('Exact params contract (from the child agent schema)')
+    expect(message).toContain('replace params.snapshot_id with params.snapshot_fingerprint')
+    expect(message).toContain('Retain params.changed_files')
+    expect(message).toContain('Preserve params field names exactly.')
+  })
+
   it('publishes a structured failure result when Basher is missing command', async () => {
     const parent: AgentTemplate = {
       ...testAgentTemplate,
@@ -1577,9 +1827,18 @@ describe('tool validation error handling', () => {
     const agentState = sessionState.mainAgentState
 
     // Mock requestFiles to return a file
-    agentRuntimeImpl.requestFiles = async () => ({
-      'test.ts': 'console.log("test")',
-    })
+    agentRuntimeImpl.requestFiles = async () =>
+      buildReadFilesResultV1([
+        {
+          selector: 'file',
+          requestIndex: 0,
+          path: 'test.ts',
+          status: 'ok',
+          content: 'console.log("test")',
+          complete: true,
+          template: false,
+        },
+      ])
 
     const responseChunks: (string | PrintModeEvent)[] = []
 
@@ -1740,9 +1999,18 @@ describe('tool validation error handling', () => {
     const sessionState = getInitialSessionState(mockFileContext)
     const agentState = sessionState.mainAgentState
 
-    agentRuntimeImpl.requestFiles = async () => ({
-      'test.ts': 'console.log("test")',
-    })
+    agentRuntimeImpl.requestFiles = async () =>
+      buildReadFilesResultV1([
+        {
+          selector: 'file',
+          requestIndex: 0,
+          path: 'test.ts',
+          status: 'ok',
+          content: 'console.log("test")',
+          complete: true,
+          template: false,
+        },
+      ])
 
     const responseChunks: (string | PrintModeEvent)[] = []
 
@@ -1995,5 +2263,39 @@ describe('tool validation error handling', () => {
         !assistantToolCallIds.has(message.toolCallId),
     )
     expect(orphanToolResults.length).toBe(0)
+  })
+})
+
+describe('buildUnavailableToolMessage', () => {
+  it('explains a known-but-ungranted tool without suggesting a near match', () => {
+    const message = buildUnavailableToolMessage({
+      toolName: 'code_search',
+      agentId: 'base2',
+      availableTools: ['query_index', 'read_files', 'glob'],
+    })
+
+    expect(message).toContain('is a registered tool but is not granted')
+    expect(message).toContain('is not available for agent `base2`')
+  })
+
+  it('suggests the closest granted tool for a likely typo', () => {
+    const message = buildUnavailableToolMessage({
+      toolName: 'read_file',
+      agentId: 'base2',
+      availableTools: ['read_files', 'query_index'],
+    })
+
+    expect(message).toContain('Did you mean `read_files`?')
+  })
+
+  it('omits suggestions for an unknown tool with no near match', () => {
+    const message = buildUnavailableToolMessage({
+      toolName: 'zzzzzzzzzz',
+      agentId: 'base2',
+      availableTools: ['query_index'],
+    })
+
+    expect(message).not.toContain('Did you mean')
+    expect(message).not.toContain('is a registered tool')
   })
 })

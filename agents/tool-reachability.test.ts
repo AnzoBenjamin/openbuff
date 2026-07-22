@@ -2,10 +2,40 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
+import basher from './basher'
 import { createBase2 } from './base2/base2'
+import browserUse from './browser-use/browser-use'
+import dependencyManager from './dependency-manager/dependency-manager'
+import docWriter from './doc-writer/doc-writer'
 import { createCodeEditor } from './editor/editor'
+import codeSearcher from './file-explorer/code-searcher'
+import directoryLister from './file-explorer/directory-lister'
+import filePicker from './file-explorer/file-picker'
+import globMatcher from './file-explorer/glob-matcher'
 import { createGeneralAgent } from './general-agent/general-agent'
+import librarian from './librarian/librarian'
+import researcherDocs from './researcher/researcher-docs'
+import researcherWeb from './researcher/researcher-web'
+import codeReviewer from './reviewer/code-reviewer'
+import securityReviewer from './security-reviewer/security-reviewer'
+import accessibilityReviewer from './specialists/accessibility-reviewer'
+import architect from './specialists/architect'
+import compatibilityReviewer from './specialists/compatibility-reviewer'
+import dependencyReviewer from './specialists/dependency-reviewer'
+import docsArchitect from './specialists/docs-architect'
+import evaluator from './specialists/evaluator'
+import incidentCoordinator from './specialists/incident-coordinator'
+import integrationAgent from './specialists/integration-agent'
+import migrationReviewer from './specialists/migration-reviewer'
+import performanceSpecialist from './specialists/performance-specialist'
+import productReviewer from './specialists/product-reviewer'
+import releaseManager from './specialists/release-manager'
+import reliabilityReviewer from './specialists/reliability-reviewer'
+import uxVisualReviewer from './specialists/ux-visual-reviewer'
+import synthesizer from './synthesizer/synthesizer'
+import testWriter from './test-writer/test-writer'
 import thinker from './thinker/thinker'
+import tmuxCli from './tmux-cli'
 import { quarantinedToolNames } from '@codebuff/common/tools/constants'
 
 /**
@@ -14,7 +44,8 @@ import { quarantinedToolNames } from '@codebuff/common/tools/constants'
  * `toolNames`, so no agent can ever call it. (This is exactly what happened to
  * read_outline / read_slices / rewrite_symbol on first add.)
  *
- * read_slices remains registered for compatibility but is not prompt-visible.
+ * read_slices and apply_smart_patch were fully removed (schemas, handlers,
+ * and registrations); they are no longer registered or prompt-visible.
  *
  * Every orchestrator mode must expose structural reads. Every non-plan
  * orchestrator exposes one canonical transaction surface; compatibility edit
@@ -140,12 +171,47 @@ describe('agent prompt/tool availability alignment', () => {
 
     expect(runtimePrompts).not.toContain('Prefer \\`read_slices\\`')
     expect(runtimePrompts).not.toContain('Prefer \\`apply_smart_patch\\`')
-    expect(toolsDoc).toContain('`read_slices` (deprecated compatibility alias)')
-    expect(toolsDoc).toContain('### `apply_smart_patch`')
+    expect(toolsDoc).not.toContain(
+      '`read_slices` (deprecated compatibility alias)',
+    )
+    expect(toolsDoc).not.toContain('### `apply_smart_patch`')
   })
 
   test('structured-output agents without set_output do not prompt the model to call it', () => {
-    const defs = [thinker]
+    const defs = [
+      thinker,
+      createCodeEditor({ model: 'opus' }),
+      codeReviewer,
+      securityReviewer,
+      testWriter,
+      docWriter,
+      synthesizer,
+      dependencyManager,
+      researcherWeb,
+      researcherDocs,
+      basher,
+      librarian,
+      globMatcher,
+      codeSearcher,
+      directoryLister,
+      filePicker,
+      browserUse,
+      tmuxCli,
+      architect,
+      productReviewer,
+      integrationAgent,
+      performanceSpecialist,
+      reliabilityReviewer,
+      migrationReviewer,
+      accessibilityReviewer,
+      uxVisualReviewer,
+      compatibilityReviewer,
+      dependencyReviewer,
+      incidentCoordinator,
+      releaseManager,
+      docsArchitect,
+      evaluator,
+    ]
 
     for (const def of defs) {
       const tools = def.toolNames ?? []
@@ -158,10 +224,13 @@ describe('agent prompt/tool availability alignment', () => {
         .filter(Boolean)
         .join('\n')
 
-      if (!tools.includes('set_output')) {
+      const hasSetOutput =
+        tools.includes('set_output') ||
+        def.outputMode === 'structured_output'
+      if (!hasSetOutput) {
         expect(
           modelVisiblePrompt,
-          `${def.id} must not mention set_output unless it exposes the tool`,
+          `${('id' in def ? def.id : undefined) ?? def.displayName ?? 'unknown agent'} must not mention set_output unless it exposes the tool`,
         ).not.toContain('set_output')
       }
     }

@@ -54,6 +54,11 @@ export function collectReviewerAttestationIssues(
   expectedFingerprint: string,
   pendingFiles: string[],
 ): string[] {
+  // The caller passes the reviewable subset; when it is empty there is
+  // nothing to attest, so surface no attestation issues.
+  if (pendingFiles.length === 0) {
+    return []
+  }
   const structured = collectStructuredReviewerOutputs(toolResult)
   if (structured.length === 0) {
     return [
@@ -61,11 +66,7 @@ export function collectReviewerAttestationIssues(
     ]
   }
   const result = structured[structured.length - 1]
-  if (
-    typeof result.schemaVersion !== 'number' ||
-    !Number.isInteger(result.schemaVersion) ||
-    result.schemaVersion <= 0
-  ) {
+  if (result.schemaVersion !== 1) {
     return ['BLOCKING: reviewer returned an invalid attestation schemaVersion']
   }
   const issues: string[] = []

@@ -158,6 +158,8 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
   toolName: T
   toolCallId: string
   output: CodebuffToolOutput<T>
+  canonicalReceipt?: unknown
+  capabilityScope?: { projectId: string; runId: string }
 }):
   | { valid: true; output: CodebuffToolOutput<T>; issues: [] }
   | {
@@ -188,14 +190,53 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
   )
   if (parsed.success) {
     if (getToolMetadata(params.toolName).resultContract === 'mutation_v1') {
+      const mutationPart = params.output.find(
+        (part) =>
+          part.type === 'json' &&
+          fileMutationResultV1Schema.safeParse(part.value).success,
+      )
+      if (mutationPart?.type === 'json') {
+        const mutation = fileMutationResultV1Schema.parse(mutationPart.value)
+        const reconciled = reconcileFileMutationResultV1({
+          lifecycle: {
+            kind: 'tool_lifecycle',
+            version: 1,
+            callId: params.toolCallId,
+            sequence: 0,
+            state: 'succeeded',
+          },
+          operationId: mutation.operationId,
+          handlerResult: mutation,
+          receipt: params.canonicalReceipt,
+          capabilityScope: params.capabilityScope,
+        })
+        if (
+          mutation.outcome !== 'unconfirmed' &&
+          reconciled.mutation.outcome === 'unconfirmed'
+        ) {
+          return {
+            valid: false,
+            output: jsonToolResult(reconciled.mutation) as CodebuffToolOutput<T>,
+            issues: [
+              {
+                message:
+                  'mutation result lacked canonical receipt evidence for the active tool call',
+              },
+            ],
+          }
+        }
+        if (reconciled.mutation.outcome !== 'unconfirmed') {
+          return {
+            valid: true,
+            output: jsonToolResult(reconciled.mutation) as CodebuffToolOutput<T>,
+            issues: [],
+          }
+        }
+      }
       const canonical = params.output.some((part) => {
         if (part.type !== 'json') return false
         const mutation = fileMutationResultV1Schema.safeParse(part.value)
-        return (
-          mutation.success &&
-          (mutation.data.outcome === 'unconfirmed' ||
-            mutation.data.authorityReceipt?.callId === params.toolCallId)
-        )
+        return mutation.success && mutation.data.outcome === 'unconfirmed'
       })
       if (!canonical) {
         const mismatchedCanonical = params.output.some(
@@ -321,17 +362,10 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
     const raw = first?.type === 'json' ? first.value : undefined
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
       const record = raw as Record<string, unknown>
-      const receipt = record.authorityReceipt
       const operationId =
         typeof record.operationId === 'string'
           ? record.operationId
-          : receipt &&
-              typeof receipt === 'object' &&
-              !Array.isArray(receipt) &&
-              typeof (receipt as Record<string, unknown>).operationId ===
-                'string'
-            ? ((receipt as Record<string, unknown>).operationId as string)
-            : undefined
+          : undefined
       if (operationId) {
         const reconciled = reconcileFileMutationResultV1({
           lifecycle: {
@@ -343,7 +377,8 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
           },
           operationId,
           handlerResult: raw,
-          receipt,
+          receipt: params.canonicalReceipt,
+          capabilityScope: params.capabilityScope,
         })
         if (reconciled.mutation.outcome !== 'unconfirmed') {
           return {
@@ -493,6 +528,115 @@ function repairSetOutputData(toolName: string, input: unknown): unknown {
   return { ...record, data: parsed }
 }
 
+// Narrow, fail-closed coercion for run_terminal_command scalar args that some
+// providers emit as strings (e.g. { "detach": "false", "timeout_seconds": "60" }).
+// Only unambiguous string scalars are coerced; anything else is left untouched
+// so the strict schema still rejects it and the validation hint fires. Mirrors
+// repairSetOutputData's narrow, tool-scoped, early-return style.
+function repairTerminalCommandScalars(
+  toolName: string,
+  input: unknown,
+): unknown {
+  if (
+    toolName !== 'run_terminal_command' ||
+    input === null ||
+    typeof input !== 'object' ||
+    Array.isArray(input)
+  ) {
+    return input
+  }
+  const record = input as Record<string, unknown>
+  let copy: Record<string, unknown> | undefined
+
+  // detach: only the exact strings "true"/"false" coerce; "yes"/"1"/"" fail closed.
+  if (record.detach === 'true') {
+    copy = { ...record }
+    copy.detach = true
+  } else if (record.detach === 'false') {
+    copy = { ...record }
+    copy.detach = false
+  }
+
+  // timeout_seconds: only a strict finite integer/decimal string coerces;
+  // "soon"/""/"NaN"/"Infinity"/"6e2" fail closed.
+  if (typeof record.timeout_seconds === 'string') {
+    const trimmed = record.timeout_seconds.trim()
+    if (
+      /^-?\d+(?:\.\d+)?$/.test(trimmed) &&
+      Number.isFinite(Number(trimmed))
+    ) {
+      copy = copy ?? { ...record }
+      copy.timeout_seconds = Number(trimmed)
+    }
+  }
+
+  return copy ?? input
+}
+
+function levenshteinDistanceForToolSuggestion(a: string, b: string): number {
+  const rows = a.length + 1
+  const cols = b.length + 1
+  const dist = Array.from({ length: rows }, () => new Array<number>(cols).fill(0))
+  for (let i = 0; i < rows; i += 1) dist[i][0] = i
+  for (let j = 0; j < cols; j += 1) dist[0][j] = j
+  for (let i = 1; i < rows; i += 1) {
+    for (let j = 1; j < cols; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      dist[i][j] = Math.min(
+        dist[i - 1][j] + 1,
+        dist[i][j - 1] + 1,
+        dist[i - 1][j - 1] + cost,
+      )
+    }
+  }
+  return dist[rows - 1][cols - 1]
+}
+
+function suggestClosestToolName(
+  attempted: string,
+  available: string[],
+): string | undefined {
+  let best: string | undefined
+  let bestDistance = Infinity
+  for (const candidate of available) {
+    const distance = levenshteinDistanceForToolSuggestion(attempted, candidate)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      best = candidate
+    }
+  }
+  if (best === undefined) return undefined
+  // Only suggest a genuinely close match; scale with the longer name so short
+  // names need a tight match and longer names tolerate a couple edits.
+  const threshold = Math.max(2, Math.floor(Math.max(attempted.length, best.length) / 3))
+  return bestDistance <= threshold ? best : undefined
+}
+
+export function buildUnavailableToolMessage(params: {
+  toolName: string
+  agentId: string
+  availableTools: string[]
+}): string {
+  const { toolName, agentId, availableTools } = params
+  const availableList =
+    availableTools.length > 0
+      ? availableTools.map((name) => `\`${name}\``).join(', ')
+      : '(none)'
+  const base = `Tool \`${toolName}\` is not available for agent \`${agentId}\`. Available tools: ${availableList}. Use one of those tools or continue without a tool; do not retry the unavailable name.`
+  // Case 1: the name is a real registered tool this agent was simply not
+  // granted. Point the model at the granted tools / spawnable agents instead
+  // of letting it guess another unavailable name.
+  if ((toolNames as readonly string[]).includes(toolName)) {
+    return `${base} \`${toolName}\` is a registered tool but is not granted to this agent; use one of the available tools above, or spawn an agent that provides that capability.`
+  }
+  // Case 2: likely a typo/near-miss of a granted tool.
+  const suggestion = suggestClosestToolName(toolName, availableTools)
+  if (suggestion) {
+    return `${base} Did you mean \`${suggestion}\`?`
+  }
+  return base
+}
+
 function getFieldSpecificHint(
   toolName: string,
   issues: ValidationIssue[],
@@ -530,8 +674,8 @@ function getFieldSpecificHint(
 
   if (paths.has('basedOnRead') || fieldNames.has('basedOnRead')) {
     return [
-      'Hint: `basedOnRead` must be a read-capability token string returned by read_files (e.g. "cap.<base64>") OR an object { startLine, endLine, hash }. A wrapped object like { "$text": "..." } is not accepted.',
-      'Copy the `readCapability` value verbatim from the read_files range header output.',
+      'Hint: `basedOnRead` must be an authenticated cap.v3 readCapability token string returned by read_files. Object-form anchors and wrapped objects like { "$text": "..." } are not accepted.',
+      'Copy the `editAnchor.readCapability` value verbatim from the matching fresh read_files result.'
     ].join('\n')
   }
 
@@ -542,6 +686,15 @@ function getFieldSpecificHint(
   }
 
   return undefined
+}
+
+function isSpawnAgentHandoffIssue(issue: ValidationIssue): boolean {
+  const path = issue.path ?? []
+  return (
+    path[0] === 'agents' &&
+    (typeof path[1] === 'number' || /^\d+$/.test(String(path[1]))) &&
+    path[2] === 'handoff'
+  )
 }
 
 function getToolValidationHint(
@@ -568,11 +721,24 @@ function getToolValidationHint(
       'Pass a real object to set_output. Do not JSON.stringify it or place serialized JSON inside data. Keep findings and evidence concise enough to finish the tool call.',
     ].join('\n')
   }
-  if (toolName === 'spawn_agents') {
+  if (toolName === 'run_terminal_command') {
     return [
-      'Expected shape: { "agents": [{ "agent_type": string, "prompt"?: string, "params"?: object }] }.',
+      'Expected shape: { "command": string, "process_type"?: "SYNC" | "BACKGROUND", "detach"?: boolean, "timeout_seconds"?: number, "cwd"?: string }.',
+      '`detach` must be a boolean (true/false) and `timeout_seconds` a number (e.g. 60, or -1 for no timeout) — do not quote them as strings. `process_type` must be the bare enum SYNC or BACKGROUND.',
+    ].join('\n')
+  }
+  if (toolName === 'spawn_agents') {
+    const base = [
+      'Expected shape: { "agents": [{ "agent_type": string, "prompt"?: string, "params"?: object, "handoff"?: object }] }.',
       'Pass agents as an array of objects. Valid stringified or double-stringified JSON is repaired automatically, but truncated JSON and non-object entries are rejected. Do not stringify each agent entry.',
     ].join('\n')
+    const hasHandoffIssue = (issues ?? []).some(isSpawnAgentHandoffIssue)
+    if (!hasHandoffIssue) return base
+    return [
+      base,
+      'A versioned handoff must be resent as one complete compact canonical `AgentHandoff` object with all required top-level fields: `schemaVersion`, `taskId`, `objective`, `role`, `requirements`, `acceptanceCriteria`, `context`, `nonGoals`, `findings`, and `permissions`.',
+      'Truncated handoffs cannot be repaired safely. Keep evidence compact enough to resend the complete object; do not silently truncate authority-bearing arrays or objects.',
+    ].join('\n\n')
   }
   if (toolName === 'edit_transaction') {
     const fieldNames = new Set(
@@ -581,12 +747,17 @@ function getToolValidationHint(
       ),
     )
     const targetedHints: string[] = []
-    if (fieldNames.has('readCapability')) {
+    const hasRemovedExpectedHash = (issues ?? []).some(
+      (issue) =>
+        issue.code === 'unrecognized_keys' &&
+        issue.keys?.includes('expectedHash'),
+    )
+    if (fieldNames.has('readCapability') || hasRemovedExpectedHash) {
       targetedHints.push(
         [
-          'For replace_range, choose one target form only.',
-          'Preferred: { "type": "replace_range", "path": "file.ts", "readCapability": "cap...", "newContent": "..." }.',
-          'If the capability covers a wider range than intended, re-read the exact target lines first; never narrow a capability with separate line/hash fields.',
+          'For replace_range, pass one authenticated cap.v3 readCapability copied from a fresh read_files editAnchor.',
+          'Omit startLine/endLine to replace the full observed range, or provide both to target a contained sub-range within that capability.',
+          'Never pass expectedHash or other separate hash fields.'
         ].join('\n'),
       )
     }
@@ -595,6 +766,21 @@ function getToolValidationHint(
         [
           '`skipIfMissing` is deletion-only. Remove it when newString is non-empty.',
           'For an idempotent deletion use { "oldString": "...", "newString": "", "skipIfMissing": true }.',
+        ].join('\n'),
+      )
+    }
+    const hasTypeDiscriminatorIssue = (issues ?? []).some(
+      (issue) =>
+        issue.path?.[0] === 'edits' &&
+        (issue.code === 'invalid_union' ||
+          String(issue.path?.[issue.path.length - 1]) === 'type'),
+    )
+    if (hasTypeDiscriminatorIssue) {
+      targetedHints.push(
+        [
+          'Each edit needs an explicit `type` discriminator. Valid types: "str_replace", "replace_range", "structured", "create", "delete", "move", "rewrite_symbol", "patch", "write_file".',
+          'Example: { "type": "str_replace", "path": "file.ts", "replacements": [{ "oldString": "a", "newString": "b" }] }.',
+          'The type is inferred only when the payload shape is unambiguous (for example, `replacements` implies str_replace). A bare { path, content } is ambiguous between create and write_file, so set `type` explicitly.',
         ].join('\n'),
       )
     }
@@ -625,6 +811,19 @@ function formatInvalidInputExcerpts(
   input: unknown,
   issues: ValidationIssue[],
 ): string {
+  const handoffIssues = issues.filter(isSpawnAgentHandoffIssue)
+  if (handoffIssues.length > 0) {
+    const labels = new Set(
+      handoffIssues.map((issue) => `agents[${String(issue.path?.[1])}].handoff`),
+    )
+    return [...labels]
+      .map(
+        (label) =>
+          `${label}:\n[invalid handoff payload omitted; resend one complete canonical AgentHandoff object]`,
+      )
+      .join('\n\n')
+  }
+
   const seen = new Set<string>()
   const excerpts: string[] = []
   for (const issue of issues) {
@@ -823,7 +1022,10 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
     )
   }
 
-  const repairedInput = repairSetOutputData(toolName, processedParameters.input)
+  const repairedInput = repairTerminalCommandScalars(
+    toolName,
+    repairSetOutputData(toolName, processedParameters.input),
+  )
   const result = paramsSchema.safeParse(repairedInput)
 
   if (!result.success) {
@@ -978,7 +1180,11 @@ export async function executeToolCall<T extends ToolName>(
     // The stream parser will convert this to a user message for proper API compliance
     onResponseChunk({
       type: 'error',
-      message: `Tool \`${toolName}\` is not available for agent \`${agentTemplate.id}\`. Available tools: ${availableTools.length > 0 ? availableTools.map((name) => `\`${name}\``).join(', ') : '(none)'}. Use one of those tools or continue without a tool; do not retry the unavailable name.`,
+      message: buildUnavailableToolMessage({
+        toolName,
+        agentId: agentTemplate.id,
+        availableTools,
+      }),
     })
     return abortablePreviousToolCallFinished
   }
@@ -1042,9 +1248,13 @@ export async function executeToolCall<T extends ToolName>(
           ),
       )
     if (deniedPaths.length > 0) {
+      const repairEditorReadRecovery =
+        agentTemplate.id === 'repair-editor' && filesystemAccess.access === 'read'
+          ? ' Recovery: do not retry this read or request broader scope. If the path is a synthetic fixture literal, inspect the authorized test file that owns the literal instead; otherwise report the missing read permission to the parent.'
+          : ''
       onResponseChunk({
         type: 'error',
-        message: `Tool \`${toolName}\` was blocked by the ${agentTemplate.id} filesystem ${filesystemAccess.access} scope. Disallowed path(s): ${deniedPaths.map(({ rawPath }) => rawPath).join(', ')}. Allowed patterns: ${allowedPatterns.join(', ')}.`,
+        message: `Tool \`${toolName}\` was blocked by the ${agentTemplate.id} filesystem ${filesystemAccess.access} scope. Disallowed path(s): ${deniedPaths.map(({ rawPath }) => rawPath).join(', ')}. Allowed patterns: ${allowedPatterns.join(', ')}.${repairEditorReadRecovery}`,
       })
       return abortablePreviousToolCallFinished
     }
@@ -1384,6 +1594,7 @@ export async function executeToolCall<T extends ToolName>(
     toolCallsToAddToMessageHistory.push(finalToolCall)
   }
 
+  let canonicalReceipt: unknown
   const toolResultPromise = Promise.resolve().then(() =>
     handler({
       ...params,
@@ -1404,6 +1615,7 @@ export async function executeToolCall<T extends ToolName>(
           input: clientToolCall.input,
           signal: params.signal,
         })
+        canonicalReceipt = clientToolResult.canonicalReceipt
         return clientToolResult.output as CodebuffToolOutput<T>
       }) as any,
     }),
@@ -1491,6 +1703,11 @@ export async function executeToolCall<T extends ToolName>(
         toolName,
         toolCallId: toolCall.toolCallId,
         output,
+        canonicalReceipt,
+        capabilityScope: {
+          projectId: params.fileContext.projectRoot,
+          runId: params.runId,
+        },
       })
       if (!normalized.valid) {
         logger.error(
@@ -1675,7 +1892,11 @@ export async function executeCustomToolCall(
     // The stream parser will convert this to a user message for proper API compliance
     onResponseChunk({
       type: 'error',
-      message: `Tool \`${toolName}\` is not available for agent \`${agentTemplate.id}\`. Available tools: ${availableTools.length > 0 ? availableTools.map((name) => `\`${name}\``).join(', ') : '(none)'}. Use one of those tools or continue without a tool; do not retry the unavailable name.`,
+      message: buildUnavailableToolMessage({
+        toolName,
+        agentId: agentTemplate.id,
+        availableTools,
+      }),
     })
     return abortablePreviousToolCallFinished
   }

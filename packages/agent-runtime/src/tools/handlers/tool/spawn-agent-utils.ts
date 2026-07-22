@@ -53,6 +53,12 @@ import type {
 } from '@codebuff/common/types/session-state'
 import type { ProjectFileContext } from '@codebuff/common/util/file'
 import type { ToolSet } from 'ai'
+import { z } from 'zod/v4'
+import {
+  commitReceiptV1Schema,
+  fileMutationResultV1Schema,
+  getConfirmedAppliedActionsV1,
+} from '@codebuff/common/tools/results/filesystem'
 
 /**
  * Common context params needed for spawning subagents.
@@ -958,6 +964,17 @@ function extractReceiptStringArray(output: unknown, key: string): string[] {
   return [...new Set(found)]
 }
 
+function extractRuntimeMutationToolMessages(
+  messageHistory: unknown,
+): unknown[] {
+  if (!Array.isArray(messageHistory)) return []
+  return messageHistory.filter((message) => {
+    if (!message || typeof message !== 'object') return false
+    const record = message as Record<string, unknown>
+    return record.role === 'tool' && record.toolName === 'edit_transaction'
+  })
+}
+
 function extractMutationAttestations(value: unknown): Array<{
   path: string
   beforeHash?: string
@@ -970,65 +987,90 @@ function extractMutationAttestations(value: unknown): Array<{
     string,
     ReturnType<typeof extractMutationAttestations>[number]
   >()
-  const visit = (
-    item: unknown,
-    inheritedReceiptId?: string,
-    depth = 0,
-  ): void => {
-    if (!item || depth > 12) return
-    if (Array.isArray(item)) {
-      for (const nested of item) visit(nested, inheritedReceiptId, depth + 1)
-      return
-    }
-    if (typeof item !== 'object') return
-    const record = item as Record<string, unknown>
-    const receiptId =
-      typeof record.receiptId === 'string'
-        ? record.receiptId
-        : inheritedReceiptId
-    if (
-      (record.kind === 'file_mutation_result' ||
-        record.kind === 'commit_receipt') &&
-      Array.isArray(record.actions)
-    ) {
-      for (const action of record.actions) {
-        if (!action || typeof action !== 'object') continue
-        const actionRecord = action as Record<string, unknown>
-        const applied =
-          actionRecord.outcome === 'applied' ||
-          actionRecord.status === 'committed'
-        if (!applied || typeof actionRecord.path !== 'string') continue
-        const paths = [
-          actionRecord.path,
-          ...(typeof actionRecord.destinationPath === 'string'
-            ? [actionRecord.destinationPath]
-            : []),
-        ]
-        for (const path of paths) {
-          byPath.set(path, {
-            path,
-            ...(typeof actionRecord.beforeHash === 'string'
-              ? { beforeHash: actionRecord.beforeHash }
-              : {}),
-            ...(typeof actionRecord.afterHash === 'string'
-              ? { afterHash: actionRecord.afterHash }
-              : {}),
-            ...(receiptId ? { mutationReceiptId: receiptId } : {}),
-            ...(typeof record.workspaceRevision === 'number'
-              ? { workspaceRevision: record.workspaceRevision }
-              : {}),
-            ...(typeof record.workspaceSnapshotId === 'string'
-              ? { workspaceSnapshotId: record.workspaceSnapshotId }
-              : {}),
-          })
-        }
-      }
-    }
-    for (const nested of Object.values(record)) {
-      visit(nested, receiptId, depth + 1)
+  if (!Array.isArray(value)) return []
+
+  const attest = (params: {
+    path: string
+    destinationPath?: string
+    beforeHash: string | null
+    afterHash: string | null
+    receiptId: string
+    workspaceRevision?: number
+    workspaceSnapshotId?: string
+  }): void => {
+    const paths = [
+      params.path,
+      ...(params.destinationPath ? [params.destinationPath] : []),
+    ]
+    for (const path of paths) {
+      byPath.set(path, {
+        path,
+        ...(params.beforeHash ? { beforeHash: params.beforeHash } : {}),
+        ...(params.afterHash ? { afterHash: params.afterHash } : {}),
+        mutationReceiptId: params.receiptId,
+        ...(params.workspaceRevision !== undefined
+          ? { workspaceRevision: params.workspaceRevision }
+          : {}),
+        ...(params.workspaceSnapshotId
+          ? { workspaceSnapshotId: params.workspaceSnapshotId }
+          : {}),
+      })
     }
   }
-  visit(value)
+
+  for (const message of value) {
+    if (!message || typeof message !== 'object') continue
+    const messageRecord = message as Record<string, unknown>
+    const content = messageRecord.content
+    if (!Array.isArray(content)) continue
+    for (const part of content) {
+      if (!part || typeof part !== 'object') continue
+      const partRecord = part as Record<string, unknown>
+      if (partRecord.type !== 'json') continue
+
+      const parsedResult = fileMutationResultV1Schema.safeParse(partRecord.value)
+      if (
+        parsedResult.success &&
+        parsedResult.data.authorityReceipt &&
+        parsedResult.data.authorityReceipt.callId === messageRecord.toolCallId
+      ) {
+        for (const action of getConfirmedAppliedActionsV1(parsedResult.data)) {
+          attest({
+            path: action.path,
+            destinationPath: action.destinationPath,
+            beforeHash: action.beforeHash,
+            afterHash: action.afterHash,
+            receiptId: parsedResult.data.authorityReceipt.receiptId,
+            workspaceRevision: parsedResult.data.workspaceRevision,
+            workspaceSnapshotId: parsedResult.data.workspaceSnapshotId,
+          })
+        }
+        continue
+      }
+
+      const parsedReceipt = commitReceiptV1Schema.safeParse(partRecord.value)
+      if (
+        !parsedReceipt.success ||
+        typeof messageRecord.toolCallId !== 'string' ||
+        parsedReceipt.data.callId !== messageRecord.toolCallId ||
+        parsedReceipt.data.status !== 'committed'
+      ) {
+        continue
+      }
+      for (const action of parsedReceipt.data.actions) {
+        if (action.status !== 'committed') continue
+        attest({
+          path: action.path,
+          destinationPath: action.destinationPath,
+          beforeHash: action.beforeHash,
+          afterHash: action.afterHash,
+          receiptId: parsedReceipt.data.receiptId,
+          workspaceRevision: parsedReceipt.data.workspaceRevision,
+          workspaceSnapshotId: parsedReceipt.data.workspaceSnapshotId,
+        })
+      }
+    }
+  }
   return [...byPath.values()]
 }
 
@@ -1207,10 +1249,9 @@ export function buildRuntimeAgentReceipt(params: {
     )
   const completionContractFailed =
     missingExplicitCompletion || missingAuditReceipt
-  const mutationAttestations = extractMutationAttestations([
-    params.output,
-    params.agentState?.messageHistory,
-  ])
+  const mutationAttestations = extractMutationAttestations(
+    extractRuntimeMutationToolMessages(params.agentState?.messageHistory),
+  )
   const claimedChangedFiles = extractReceiptStringArray(
     params.output,
     'changedFiles',
@@ -1286,26 +1327,65 @@ export function buildRuntimeAgentReceipt(params: {
     params.output,
     'findingsAddressed',
   )
-  const attestedFindingIds = params.handoff
-    ? claimedFindingIds.filter((id) => {
-        const finding = params.handoff?.findings.find((item) => item.id === id)
-        return !!finding?.files.some((path) => actualChangedPaths.has(path))
-      })
-    : claimedFindingIds
+  const attestedFindingIds =
+    overclaimedPaths.length > 0
+      ? []
+      : params.handoff
+        ? claimedFindingIds.filter((id) => {
+            const finding = params.handoff?.findings.find((item) => item.id === id)
+            return !!finding?.files.some((path) => actualChangedPaths.has(path))
+          })
+        : claimedFindingIds
+  // RF-2/RF-7/RF-11/RF-16: runtime-attested mutations are the completion
+  // authority for editor-family agents. A stale blocked/null child output must
+  // not hide applied work from the parent gate, while receipt errors still
+  // fail closed.
+  const hasMutationProgress = mutationAttestations.length > 0
+  const foundOutputStatus = findReceiptStatus(params.output)
+  const mutationsComplete =
+    mutationAgent && hasMutationProgress && errors.length === 0
+  const resolvedStatus = completionContractFailed
+    ? 'partial'
+    : errors.length > 0
+      ? 'failed'
+      : mutationsComplete
+        ? 'completed'
+        : (params.status ?? foundOutputStatus ?? (mutationAgent ? 'blocked' : 'completed'))
+  const normalizedOutput = normalizeSpawnedAgentOutput(
+    params.output,
+    params.agentType,
+  )
+  const reconciledOutput = mutationsComplete
+    ? normalizedOutput &&
+      typeof normalizedOutput === 'object' &&
+      !Array.isArray(normalizedOutput) &&
+      normalizedOutput.type === 'structuredOutput' &&
+      normalizedOutput.value &&
+      typeof normalizedOutput.value === 'object' &&
+      !Array.isArray(normalizedOutput.value)
+      ? {
+          ...normalizedOutput,
+          value: {
+            ...normalizedOutput.value,
+            status: 'completed',
+            changedFiles: changedFiles.map((file) => file.path),
+          },
+        }
+      : {
+          type: 'structuredOutput',
+          value: {
+            status: 'completed',
+            changedFiles: changedFiles.map((file) => file.path),
+          },
+        }
+    : normalizedOutput
   const receipt = agentReceiptSchema.parse({
     schemaVersion: 1,
     receiptId: generateCompactId(),
     taskId: params.handoff?.taskId ?? `spawn-${params.agentId}`,
     role: inferredRole,
     agentId: params.agentId,
-    status:
-      params.status ??
-      (completionContractFailed
-        ? 'partial'
-        : errors.length > 0
-          ? 'failed'
-          : findReceiptStatus(params.output)) ??
-      (mutationAgent ? 'blocked' : 'completed'),
+    status: resolvedStatus,
     workspaceRevision:
       latestMutation?.workspaceRevision ??
       params.agentState?.workspaceState?.revision ??
@@ -1339,7 +1419,7 @@ export function buildRuntimeAgentReceipt(params: {
     ),
     artifacts: extractReceiptStringArray(receiptSources, 'artifacts'),
     errors,
-    output: normalizeSpawnedAgentOutput(params.output, params.agentType) as any,
+    output: reconciledOutput as any,
   })
   return receipt
 }
@@ -1442,6 +1522,54 @@ function findMissingEditorBriefFields(prompt: string): string[] {
   return REQUIRED_EDITOR_BRIEF_FIELDS.filter((label) => !valueFor(label))
 }
 
+const AGENT_PARAMS_CONTRACT_MAX_CHARS = 2_400
+
+function formatAgentParamsContract(schema: unknown): string {
+  try {
+    const rendered = z.toJSONSchema(schema as z.ZodType, { io: 'input' }) as Record<
+      string,
+      unknown
+    >
+    const compact = (value: unknown, depth = 0): unknown => {
+      if (depth > 8 || value === null || typeof value !== 'object') return value
+      if (Array.isArray(value)) {
+        return value.slice(0, 64).map((entry) => compact(entry, depth + 1))
+      }
+      const omittedMetadata = new Set([
+        '$schema',
+        'description',
+        'examples',
+        'title',
+      ])
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .filter(([key]) => !omittedMetadata.has(key))
+          .slice(0, 64)
+          .map(([key, entry]) => [key, compact(entry, depth + 1)]),
+      )
+    }
+    const serialized = JSON.stringify(compact(rendered))
+    if (serialized.length <= AGENT_PARAMS_CONTRACT_MAX_CHARS) return serialized
+
+    const properties = rendered.properties
+    const propertyNames =
+      properties && typeof properties === 'object' && !Array.isArray(properties)
+        ? Object.keys(properties).slice(0, 64)
+        : []
+    const required = Array.isArray(rendered.required)
+      ? rendered.required.filter((key): key is string => typeof key === 'string')
+      : []
+    return JSON.stringify({
+      type: rendered.type ?? 'object',
+      required,
+      properties: propertyNames,
+      truncated: true,
+    })
+  } catch {
+    return '{"schema":"unavailable"}'
+  }
+}
+
 /**
  * Validates prompt and params against agent schema
  */
@@ -1523,15 +1651,24 @@ export function validateAgentInput(
         ),
       )
       const normalizedAgentType = normalizeAgentIdForLookup(agentType)
+      const paramsRecord =
+        params && typeof params === 'object' && !Array.isArray(params)
+          ? (params as Record<string, unknown>)
+          : undefined
       const recoveryHint =
         normalizedAgentType === 'basher' && issuePaths.has('command')
           ? '\n\nRecovery: spawn Basher with { "agent_type": "basher", "params": { "command": "<shell command>" } }. A command mentioned only in prompt prose is never executed.'
           : normalizedAgentType === 'compatibility-reviewer' &&
               issuePaths.has('snapshot_id')
             ? '\n\nRecovery: set params.snapshot_id to the exact current snapshot fingerprint from get_change_review_bundle, for example { "agent_type": "compatibility-reviewer", "params": { "snapshot_id": "<current fingerprint>" } }. Do not invent or reuse a stale fingerprint.'
-            : ''
+            : normalizedAgentType === 'security-reviewer' &&
+                (issuePaths.has('snapshot_fingerprint') ||
+                  Object.hasOwn(paramsRecord ?? {}, 'snapshot_id'))
+              ? '\n\nRecovery: replace params.snapshot_id with params.snapshot_fingerprint, or add params.snapshot_fingerprint when it is missing. Retain params.changed_files and preserve both canonical field names exactly.'
+              : ''
+      const paramsContract = formatAgentParamsContract(inputSchema.params)
       throw new Error(
-        `Invalid params for agent ${agentType}: ${formatValidationIssues({ issues: result.error.issues })}${recoveryHint}\n\nOriginal params value:\n${formatValueForError(params ?? {})}`,
+        `Invalid params for agent ${agentType}: ${formatValidationIssues({ issues: result.error.issues })}\n\nExact params contract (from the child agent schema): ${paramsContract}\nPreserve params field names exactly.${recoveryHint}\n\nOriginal params value:\n${formatValueForError(params ?? {})}`,
       )
     }
   }

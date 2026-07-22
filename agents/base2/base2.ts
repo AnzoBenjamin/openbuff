@@ -113,6 +113,24 @@ export function createBase2(
     ],
     spawnableAgentToolMode: 'generic',
     programmaticConfig: { hasNoValidation, planOnly },
+    // Spawnable roster with documented, intentional per-mode deltas (M3.2).
+    // The deltas are ONLY the coded gates below; everything else is shared
+    // across default/fast/plan/execute-plan. Asserted by
+    // agents/__tests__/roster-drift.test.ts ("intentional per-mode
+    // spawnable deltas").
+    //   - Unconditional in EVERY mode (incl. fast and plan): browser-use,
+    //     code-reviewer, security-reviewer, debugger, and the read-only
+    //     analysis/reviewer specialists. browser-use is deliberately NOT
+    //     gated by mode — fast still needs live visual verification and
+    //     plan mode uses it read-only — so base2-fast is aligned with the
+    //     other modes on browser-use.
+    //   - Default-only (dropped in fast): thinker, editor, repair-editor.
+    //     Fast mode implements inline via edit_transaction instead of
+    //     delegating to the editor family, and skips the thinker for speed.
+    //   - Implementation-only (dropped in plan, `!planOnly`):
+    //     dependency-manager, tmux-cli, git-committer, doc-writer,
+    //     test-writer, and the default-only editor/repair-editor. Plan mode
+    //     is read-only, so mutation agents are withheld.
     spawnableAgents: buildArray(
       // handleSteps invokes this automatically through spawn_agent_inline on
       // every loop. It must still be declared for derived IDs such as
@@ -130,6 +148,8 @@ export function createBase2(
       isDefault && !planOnly && 'editor',
       isDefault && !planOnly && 'repair-editor',
       !planOnly && 'tmux-cli',
+      // browser-use is intentionally unconditional across all modes (default,
+      // fast, plan, execute-plan). See the per-mode delta note above (M3.2).
       'browser-use',
       'code-reviewer',
       'security-reviewer',
@@ -494,6 +514,7 @@ ${specialistRoutingSection}
         gatePassedReviewerVerdict: '',
         gatePassedValidationSummary: '',
         gatePassedFingerprint: '',
+        reviewedReviewableFingerprint: '',
         lastReviewerGateSkipReason: '',
         preEditSecurityReviewDone: false,
         securityReviewGateDone: false,
@@ -519,6 +540,7 @@ ${specialistRoutingSection}
       activeWorkState.gatePassedReviewerVerdict ??= ''
       activeWorkState.gatePassedValidationSummary ??= ''
       activeWorkState.gatePassedFingerprint ??= ''
+      activeWorkState.reviewedReviewableFingerprint ??= ''
       activeWorkState.lastReviewerGateSkipReason ??= ''
       activeWorkState.openReviewerBlockers ??= []
       activeWorkState.openReviewerFindings ??= []
@@ -541,6 +563,17 @@ ${specialistRoutingSection}
       activeWorkState.specialistReviewGatesDone ??= []
       activeWorkState.reviewReceipts ??= []
       activeWorkState.auxGatesLastPendingFiles ??= []
+      if (
+        activeWorkState.openReviewerFindings.length > 0 &&
+        !activeWorkState.requiredReviewerRevalidation
+      ) {
+        const originGateId = activeWorkState.openReviewerFindings[0].gateId
+        activeWorkState.requiredReviewerRevalidation = originGateId.startsWith(
+          'security-reviewer:',
+        )
+          ? 'security-reviewer'
+          : 'code-reviewer'
+      }
       activeWorkState.workflowTodoProgress = normalizeWorkflowTodoProgress(
         activeWorkState.workflowTodoProgress,
       )
@@ -1290,6 +1323,7 @@ ${specialistRoutingSection}
           editsHappened &&
           currentPendingGateFiles.length > 0 &&
           !activeWorkState.securityReviewGateDone &&
+          !activeWorkState.requiredReviewerRevalidation &&
           matchesSecuritySensitiveGlob(currentPendingGateFiles)
         ) {
           auxGateFiredThisIteration = true
@@ -1333,31 +1367,210 @@ ${specialistRoutingSection}
             securityAttestationIssues.length > 0 ||
             !securityVerdict
           if (securityBlockers.length > 0) {
-            activeWorkState.validationAssurance = 'reduced'
+            const records = collectReviewerFindingRecordsInline(securityToolResult)
+            activeWorkState.openReviewerBlockers = securityBlockers
+            activeWorkState.openReviewerFindings = securityBlockers.map(
+              (text: string, index: number) => ({
+                id:
+                  records[index]?.id ?? buildReviewerFindingId(text, index),
+                gateId: `security-reviewer:${securitySnapshotFingerprint}`,
+                text: records[index]?.text ?? text,
+                status: 'open' as const,
+                files: currentPendingGateFiles,
+                snapshotFingerprint: securitySnapshotFingerprint,
+                reviewer: 'security-reviewer' as const,
+                createdAt: new Date().toISOString(),
+              }),
+            )
+            activeWorkState.requiredReviewerRevalidation = 'security-reviewer'
+            activeWorkState.currentPhase = 'repair_loop'
+            activeWorkState.nextRequiredAction =
+              'Repair-editor must address every open security-review finding before validation and finalization.'
             activeWorkState.latestWorkSummary =
-              'Security review reported blocking findings; continuing with reduced assurance.'
+              'Security review reported blocking findings; repair is required.'
+            activeWorkState.securityReviewGateDone = false
+            activeWorkState.preEditSecurityReviewDone = false
             markActiveWorkStateChanged()
             emitGateTelemetry({
-              currentPhase: 'awaiting_validation',
+              currentPhase: 'repair_loop',
               pendingFileCount: currentPendingGateFiles.length,
               pendingFiles: currentPendingGateFiles,
-              reviewerStatus: 'passed',
+              reviewerStatus: 'failed',
               validationStatus: 'passed',
-              reuseReason: 'aux-gate:security-reviewer',
+              blockerCount: securityBlockers.length,
+              reuseReason: 'aux-gate:security-reviewer-blocking',
             })
+            yield {
+              toolName: 'add_message',
+              input: {
+                role: 'user',
+                content: [
+                  'Security reviewer returned blocking findings. The harness will send these exact findings to repair-editor:',
+                  '',
+                  ...securityBlockers,
+                  '',
+                  'These findings remain open until targeted validation and a fresh matching security review clear them.',
+                ].join('\n'),
+              },
+              includeToolCall: false,
+            } as any
+            const securityRepairResult = yield {
+              toolName: 'spawn_agents',
+              input: {
+                agents: [
+                  {
+                    agent_type: 'repair-editor',
+                    handoff: {
+                      schemaVersion: 1,
+                      taskId: `security-review-repair-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                      role: 'repair-editor',
+                      objective:
+                        'Resolve every open security-review finding without unrelated changes.',
+                      requirements: activeWorkState.openReviewerFindings.map(
+                        ({ id, text }) => ({ id, text, required: true }),
+                      ),
+                      acceptanceCriteria: activeWorkState.openReviewerFindings.map(
+                        ({ id }) => ({
+                          id: `clear-${id}`,
+                          behavior: `Security finding ${id} is addressed in the live workspace.`,
+                          verification:
+                            'Targeted validation passes and a fresh snapshot-bound security review clears the finding.',
+                        }),
+                      ),
+                      context: [],
+                      invariants: [
+                        'Read every target from the live filesystem before editing.',
+                        'Treat every finding ID as open until a fresh security reviewer clears it.',
+                      ],
+                      nonGoals: ['Unrelated diagnostics, refactors, or cleanup.'],
+                      risks: [
+                        'Security findings may be stale if the workspace snapshot changed.',
+                      ],
+                      unknowns: [],
+                      findings: activeWorkState.openReviewerFindings.map(
+                        ({ id, text, files, snapshotFingerprint }) => ({
+                          id,
+                          text,
+                          files,
+                          snapshotFingerprint,
+                        }),
+                      ),
+                      permissions: {
+                        readablePaths: repairEditorReadablePaths([
+                          ...pendingGateFiles,
+                          ...activeWorkState.openReviewerFindings.flatMap(
+                            (finding: { files?: string[] }) =>
+                              finding.files ?? [],
+                          ),
+                        ]),
+                        writablePaths: Array.from(
+                          new Set([
+                            ...pendingGateFiles,
+                            ...activeWorkState.openReviewerFindings.flatMap(
+                              (finding: { files?: string[] }) =>
+                                finding.files ?? [],
+                            ),
+                          ]),
+                        ),
+                        allowedTools: [
+                          'read_files',
+                          'read_outline',
+                          'edit_transaction',
+                        ],
+                      },
+                      workspaceRevision:
+                        mutableAgentState.workspaceState?.revision,
+                      workspaceSnapshotId:
+                        mutableAgentState.workspaceState?.snapshotId,
+                      artifacts: [],
+                      successCriteria: [
+                        'All security finding IDs are cleared by a fresh reviewer receipt.',
+                      ],
+                      constraints: [
+                        'Keep every edit within the pending gate file set.',
+                      ],
+                    },
+                    prompt: [
+                      'Repair the blocking security-review findings below.',
+                      'Treat every finding ID as open until a fresh security reviewer clears it.',
+                      'Read every target from the live filesystem before editing.',
+                      '',
+                      ...activeWorkState.openReviewerFindings.map(
+                        (finding) => `${finding.id}: ${finding.text}`,
+                      ),
+                    ].join('\n'),
+                  },
+                ],
+              },
+            } as any
+            const securityRepairReceipt = extractAgentReceipt(
+              (securityRepairResult as any)?.toolResult ?? securityRepairResult,
+            )
+            const openSecurityFindingIds = new Set(
+              activeWorkState.openReviewerFindings.map((finding) => finding.id),
+            )
+            const securityRepairHasProgress =
+              !!securityRepairReceipt &&
+              securityRepairReceipt.changedFiles.some(
+                (file: { path: string }) =>
+                  typeof file.path === 'string' && file.path.trim().length > 0,
+              )
+            if (
+              !securityRepairReceipt ||
+              (!securityRepairHasProgress &&
+                (securityRepairReceipt.status !== 'completed' ||
+                  [...openSecurityFindingIds].some(
+                    (id) => !securityRepairReceipt.findingsAddressed.includes(id),
+                  )))
+            ) {
+              activeWorkState.currentPhase = 'blocked'
+              activeWorkState.nextRequiredAction =
+                'Repair-editor did not return a completed receipt addressing every open security-review finding.'
+              activeWorkState.latestWorkSummary =
+                'Security-review repair receipt was incomplete or missing.'
+              markActiveWorkStateChanged()
+              break
+            }
+            activeWorkState.requiredReviewerRevalidation = 'security-reviewer'
+            activeWorkState.currentPhase = 'awaiting_validation'
+            activeWorkState.nextRequiredAction = ''
+            activeWorkState.latestWorkSummary =
+              'Repair-editor addressed security-review findings; targeted validation and a fresh security review are required.'
+            markActiveWorkStateChanged()
+            continue
           } else if (securityProtocolFailure) {
-            activeWorkState.validationAssurance = 'reduced'
-            activeWorkState.latestWorkSummary =
-              'Security reviewer infrastructure failed without reporting a concrete finding; continuing with reduced assurance.'
+            const protocolFailureDetail =
+              securityCrash ||
+              securityAttestationIssues.join('; ') ||
+              'Security reviewer did not return a valid verdict.'
+            activeWorkState.currentPhase = 'blocked'
+            activeWorkState.nextRequiredAction =
+              'Obtain a fresh matching snapshot-bound security review before validation or finalization can continue.'
+            activeWorkState.latestWorkSummary = `Security review is incomplete: ${protocolFailureDetail}`
+            activeWorkState.securityReviewGateDone = false
+            activeWorkState.preEditSecurityReviewDone = false
             markActiveWorkStateChanged()
             emitGateTelemetry({
-              currentPhase: 'awaiting_validation',
+              currentPhase: 'blocked',
               pendingFileCount: currentPendingGateFiles.length,
               pendingFiles: currentPendingGateFiles,
-              reviewerStatus: 'passed',
+              reviewerStatus: 'failed',
               validationStatus: 'passed',
-              reuseReason: 'aux-gate:security-reviewer',
+              skipReason: 'security-review-protocol-failure',
             })
+            yield {
+              toolName: 'add_message',
+              input: {
+                role: 'user',
+                content: [
+                  'Security review could not be verified and remains incomplete.',
+                  `Protocol failure: ${protocolFailureDetail}`,
+                  'Next required action: obtain a fresh matching snapshot-bound security review before validation or finalization can continue.',
+                ].join('\n'),
+              },
+              includeToolCall: false,
+            } as any
+            break
           } else {
             recordSuccessfulReviewReceipt(
               securityToolResult,
@@ -1597,7 +1810,19 @@ ${specialistRoutingSection}
                     specialistBlocked = true
                     break
                   }
-                  if (crash || !verdict) {
+                  if (crash) {
+                    activeWorkState.currentPhase = 'blocked'
+                    activeWorkState.openReviewerBlockers = [
+                      `${agentType} crashed during specialist review: ${crash}`,
+                    ]
+                    activeWorkState.openReviewerFindings = []
+                    activeWorkState.latestWorkSummary = `${agentType} crashed during specialist review.`
+                    markActiveWorkStateChanged()
+                    specialistBlocked = true
+                    specialistTerminalFailure = true
+                    break
+                  }
+                  if (!verdict) {
                     activeWorkState.validationAssurance = 'reduced'
                     activeWorkState.latestWorkSummary = `${agentType} infrastructure failed without reporting a concrete finding; continuing with reduced assurance.`
                   } else {
@@ -1618,25 +1843,36 @@ ${specialistRoutingSection}
               }
               if (specialistBlocked) {
                 if (specialistTerminalFailure) {
-                  // Terminal specialist protocol failure: record a skip reason
-                  // and fall through toward finalization. Clear both the durable
-                  // and local pending-file state so git-status re-detection does
-                  // not re-enter the specialist gate on the next iteration.
+                  // A specialist that cannot attest to either the original or
+                  // refreshed bundle is a terminal protocol failure. Preserve
+                  // the pending gate state so it cannot bypass finalization.
                   if (!activeWorkState.lastReviewerGateSkipReason) {
                     activeWorkState.lastReviewerGateSkipReason =
                       'specialist-terminal-failure'
                   }
-                  for (const file of pendingGateFiles) gatePassedFiles.add(file)
-                  activeWorkState.gatePassedFiles = Array.from(gatePassedFiles)
-                  activeWorkState.currentPhase = 'final_response_allowed'
-                  activeWorkState.pendingGateFiles = []
-                  pendingGateFiles.clear()
-                  activeWorkState.openReviewerBlockers = []
-                  editsHappened = false
-                  finalResponseGateOpen = true
-                  mutableAgentState.canSuggestFollowups = true
+                  activeWorkState.currentPhase = 'blocked'
+                  activeWorkState.nextRequiredAction =
+                    'Obtain a fresh matching specialist review against a stable review bundle before finalization can continue.'
+                  activeWorkState.latestWorkSummary =
+                    'Specialist review protocol failed after one automatic refresh; finalization remains blocked.'
+                  mutableAgentState.canSuggestFollowups = false
+                  finalResponseGateOpen = false
                   markActiveWorkStateChanged()
-                  continue
+                  yield {
+                    toolName: 'add_message',
+                    input: {
+                      role: 'user',
+                      content: [
+                        'Specialist review gate failed snapshot/file attestation after one automatic refresh.',
+                        '',
+                        ...activeWorkState.openReviewerBlockers,
+                        '',
+                        'This is a specialist reviewer protocol/configuration failure, not a source-code finding. The harness did not spawn repair-editor or finalize. Stop retrying automatically; obtain a fresh matching specialist review against a stable review bundle.',
+                      ].join('\n'),
+                    },
+                    includeToolCall: false,
+                  } as any
+                  break
                 }
                 continue
               }
@@ -1844,7 +2080,14 @@ ${specialistRoutingSection}
             currentConversationMessages,
           )
           activeWorkState.currentPhase = 'blocked'
-          activeWorkState.nextRequiredAction = `Reviewer protocol attestation failed twice. Fix reviewer configuration or explicitly reply "BYPASS REVIEWER ${challenge.id}"; the harness will not retry automatically.`
+          activeWorkState.openReviewerBlockers = [
+            'BLOCKING: Reviewer protocol attestation failed twice; a fresh matching structured review is required.',
+          ]
+          activeWorkState.nextRequiredAction = `Obtain a fresh matching structured review, or explicitly reply "BYPASS REVIEWER ${challenge.id}"; the harness will not retry automatically.`
+          activeWorkState.latestWorkSummary =
+            'Reviewer protocol attestation failed after the bounded retry; finalization remains blocked.'
+          mutableAgentState.canSuggestFollowups = false
+          finalResponseGateOpen = false
           markActiveWorkStateChanged()
           yield {
             toolName: 'add_message',
@@ -1873,14 +2116,37 @@ ${specialistRoutingSection}
         // runs concurrently. The join contract is preserved: a validation
         // failure still `continue`s below and ignores this background job; we
         // only `check_background_agent` for its result if validation passes.
+        const requiredReviewerAgentType =
+          activeWorkState.requiredReviewerRevalidation ?? reviewerAgentType
         const staticReviewConcurrency =
-          runReviewerGate && editsHappened && staticReviewOnlyEnabled
-        const reviewSnapshotDetails = buildGateSnapshotDetails(
+          runReviewerGate &&
+          editsHappened &&
+          staticReviewOnlyEnabled &&
+          requiredReviewerAgentType === reviewerAgentType
+        // Fix 1/2/3 (reviewer-gate scoping): the final code-reviewer must only
+        // ever be asked to attest to reviewable *source* files, never
+        // bookkeeping/docs/plan artifacts (e.g. .agents/sessions/**
+        // STATE.json/EVENTS.jsonl/STATUS.md/LESSONS.md). Drive the reviewer's
+        // snapshot details and pending-file attestation off the reviewable
+        // subset so the fingerprint the reviewer echoes matches what
+        // attestation checks. Validation-hook behavior is unchanged; only the
+        // reviewer spawn/attestation scoping uses this subset.
+        const reviewablePendingFiles = selectReviewableGateFiles(
           Array.from(pendingGateFiles),
+        )
+        const reviewSnapshotDetails = buildGateSnapshotDetails(
+          reviewablePendingFiles,
           '',
         )
         const reviewSnapshotFingerprint = hashGateSnapshotDetails(
           reviewSnapshotDetails,
+        )
+        // Fingerprint of the reviewable subset for the R5 skip-re-review
+        // short-circuit. Equal to reviewSnapshotFingerprint today, but kept
+        // as its own binding so the intent (reviewable-set identity) is clear
+        // and stable if the review snapshot inputs ever change.
+        const reviewableFingerprint = hashGateSnapshotDetails(
+          buildGateSnapshotDetails(reviewablePendingFiles, ''),
         )
         if (staticReviewConcurrency && !activeWorkState.staticReviewerJobId) {
           const bgReview = yield {
@@ -1888,12 +2154,12 @@ ${specialistRoutingSection}
             input: {
               agents: [
                 {
-                  agent_type: reviewerAgentType,
+                  agent_type: requiredReviewerAgentType,
                   background: true,
                   prompt: [
                     'Review the completed default-flow code changes before finalization.',
                     '',
-                    `Pending changed files: ${Array.from(pendingGateFiles).join(', ') || '(unknown)'}`,
+                    `Pending changed files: ${reviewablePendingFiles.join(', ') || '(unknown)'}`,
                     `Snapshot fingerprint (echo exactly): ${reviewSnapshotFingerprint}`,
                     'Snapshot details (read for file membership; do not echo):',
                     reviewSnapshotDetails,
@@ -2117,13 +2383,22 @@ ${specialistRoutingSection}
               const validationRepairReceipt = extractAgentReceipt(
                 (repair as any)?.toolResult ?? repair,
               )
+              const validationRepairHasProgress =
+                !!validationRepairReceipt &&
+                validationRepairReceipt.changedFiles.some(
+                  (file: { path: string }) =>
+                    typeof file.path === 'string' && file.path.trim().length > 0,
+                )
               if (
                 !validationRepairReceipt ||
-                validationRepairReceipt.status !== 'completed' ||
-                validationFindingIds.some(
-                  (id: string) =>
-                    !validationRepairReceipt.findingsAddressed.includes(id),
-                )
+                (!validationRepairHasProgress &&
+                  (validationRepairReceipt.status !== 'completed' ||
+                    validationFindingIds.some(
+                      (id: string) =>
+                        !validationRepairReceipt.findingsAddressed.includes(
+                          id,
+                        ),
+                    )))
               ) {
                 activeWorkState.currentPhase = 'blocked'
                 activeWorkState.nextRequiredAction =
@@ -2138,6 +2413,7 @@ ${specialistRoutingSection}
                 input: {},
               } as any
               const repairChangedFiles = extractGitStatusFiles(
+
                 (repairGitStatus as any)?.toolResult,
               ).filter(
                 (file: string) =>
@@ -2325,13 +2601,21 @@ ${specialistRoutingSection}
                 const escalationReceipt = extractAgentReceipt(
                   (escalate as any)?.toolResult ?? escalate,
                 )
+                const escalationHasProgress =
+                  !!escalationReceipt &&
+                  escalationReceipt.changedFiles.some(
+                    (file: { path: string }) =>
+                      typeof file.path === 'string' &&
+                      file.path.trim().length > 0,
+                  )
                 if (
                   !escalationReceipt ||
-                  escalationReceipt.status !== 'completed' ||
-                  escalationFindingIds.some(
-                    (id: string) =>
-                      !escalationReceipt.findingsAddressed.includes(id),
-                  )
+                  (!escalationHasProgress &&
+                    (escalationReceipt.status !== 'completed' ||
+                      escalationFindingIds.some(
+                        (id: string) =>
+                          !escalationReceipt.findingsAddressed.includes(id),
+                      )))
                 ) {
                   activeWorkState.currentPhase = 'blocked'
                   activeWorkState.nextRequiredAction =
@@ -2353,6 +2637,7 @@ ${specialistRoutingSection}
                     !gatePassedFiles.has(file),
                 )
                 if (escalateChangedFiles.length > 0) {
+
                   recordChangedFiles(escalateChangedFiles, { fromRepair: true })
                   activeWorkState.latestWorkSummary = `Escalation editor fixed: ${escalateChangedFiles.join(', ')}`
                   markActiveWorkStateChanged()
@@ -2477,33 +2762,75 @@ ${specialistRoutingSection}
             'user-authorized-reviewer-protocol-bypass'
           markActiveWorkStateChanged()
         }
-        if (
-          activeWorkState.lastReviewerGateSkipReason ===
-          'reviewer-protocol-attestation-failed'
-        ) {
-          // Re-entry guard: a prior iteration already exhausted the bounded
-          // reviewer protocol retry and recorded a skip. Clear the blocking
-          // state and treat the reviewer gate as skipped for this snapshot so
-          // the loop proceeds toward finalization instead of re-spawning the
-          // reviewer (which would loop forever because the retry count is
-          // already exhausted). Mark the pending files as gate-passed and open
-          // the final-response gate so git status does not re-detect the
-          // still-modified files and re-enter the gate forever.
-          for (const file of pendingGateFiles) gatePassedFiles.add(file)
-          activeWorkState.gatePassedFiles = Array.from(gatePassedFiles)
-          activeWorkState.currentPhase = 'final_response_allowed'
-          activeWorkState.pendingGateFiles = []
-          pendingGateFiles.clear()
-          activeWorkState.openReviewerBlockers = []
-          editsHappened = false
-          finalResponseGateOpen = true
-          mutableAgentState.canSuggestFollowups = true
+        // Fix 1/3 (R3) + Fix 3b (R5): decide whether the final code-reviewer
+        // spawn can be skipped entirely and the gate treated as green. Two
+        // cases short-circuit to the same success state the gate sets on a
+        // LOOKS_GOOD/NON_BLOCKING verdict:
+        //   - no reviewable source files in the pending set (only
+        //     bookkeeping/docs/plan artifacts like .agents/sessions/**
+        //     STATE.json/EVENTS.jsonl/STATUS.md/LESSONS.md changed), or
+        //   - the reviewable subset is unchanged from the last reviewed pass
+        //     (a git-action turn with no new source edits).
+        // Validation-hook behavior is unchanged; only the reviewer spawn is
+        // skipped. The subsequent runValidationGate success block performs the
+        // actual state clearing, fingerprint recording, and aux-flag reset.
+        const reviewableSetAlreadyReviewed =
+          reviewablePendingFiles.length > 0 &&
+          !!activeWorkState.reviewedReviewableFingerprint &&
+          activeWorkState.reviewedReviewableFingerprint ===
+            reviewableFingerprint
+        const skipReviewerForReviewableScope =
+          runReviewerGate &&
+          editsHappened &&
+          !reviewerProtocolBypassAuthorized &&
+          activeWorkState.lastReviewerGateSkipReason !==
+            'reviewer-protocol-attestation-failed' &&
+          (reviewablePendingFiles.length === 0 || reviewableSetAlreadyReviewed)
+        if (skipReviewerForReviewableScope) {
+          reviewerFinalizationVerdict = 'NON_BLOCKING'
+          activeWorkState.currentPhase = 'awaiting_review'
+          activeWorkState.nextRequiredAction = ''
+          activeWorkState.staticReviewerJobId = undefined
+          const reviewerSkipReason =
+            reviewablePendingFiles.length === 0
+              ? 'reviewer skip: no reviewable source files'
+              : 'reviewer skip: reviewable source set unchanged since last review'
           markActiveWorkStateChanged()
+          emitGateTelemetry({
+            currentPhase: 'awaiting_review',
+            pendingFileCount: pendingGateFiles.size,
+            pendingFiles: Array.from(pendingGateFiles),
+            reviewerStatus: 'skipped',
+            validationStatus: 'passed',
+            reviewerVerdict: reviewerFinalizationVerdict,
+            skipReason:
+              reviewablePendingFiles.length === 0
+                ? 'reviewer-skip-no-reviewable-source-files'
+                : 'reviewer-skip-reviewable-set-unchanged',
+          })
+          yield {
+            toolName: 'add_message',
+            input: {
+              role: 'user',
+              content: [
+                `Reviewer gate skipped (${reviewerSkipReason}); treating the gate as passed.`,
+                formatGateStateBlock(
+                  'reviewer',
+                  'skipped',
+                  reviewablePendingFiles.length === 0
+                    ? `reviewer-skip-no-reviewable-source-files: pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`
+                    : `reviewer-skip-reviewable-set-unchanged: reviewable files: ${reviewablePendingFiles.join(', ') || '(none)'}`,
+                ),
+              ].join('\n'),
+            },
+            includeToolCall: false,
+          } as any
         }
         if (
           runReviewerGate &&
           editsHappened &&
           !reviewerProtocolBypassAuthorized &&
+          !skipReviewerForReviewableScope &&
           activeWorkState.lastReviewerGateSkipReason !==
             'reviewer-protocol-attestation-failed'
         ) {
@@ -2535,11 +2862,11 @@ ${specialistRoutingSection}
               input: {
                 agents: [
                   {
-                    agent_type: reviewerAgentType,
+                    agent_type: requiredReviewerAgentType,
                     prompt: [
-                      'Review the completed default-flow code changes before finalization.',
+                      `Review the completed ${requiredReviewerAgentType} changes before finalization.`,
                       '',
-                      `Pending changed files: ${Array.from(pendingGateFiles).join(', ') || '(unknown)'}`,
+                      `Pending changed files: ${reviewablePendingFiles.join(', ') || '(unknown)'}`,
                       `Snapshot fingerprint (echo exactly): ${reviewSnapshotFingerprint}`,
                       'Snapshot details (read for file membership; do not echo):',
                       reviewSnapshotDetails,
@@ -2560,7 +2887,7 @@ ${specialistRoutingSection}
             : collectReviewerAttestationIssues(
                 reviewerToolResult,
                 reviewSnapshotFingerprint,
-                Array.from(pendingGateFiles),
+                reviewablePendingFiles,
               )
           if (
             attestationIssues.length > 0 &&
@@ -2578,11 +2905,11 @@ ${specialistRoutingSection}
               input: {
                 agents: [
                   {
-                    agent_type: reviewerAgentType,
+                    agent_type: requiredReviewerAgentType,
                     prompt: [
-                      'Retry the completed default-flow code review because the prior response failed the reviewer protocol contract.',
+                      `Retry the completed ${requiredReviewerAgentType} review because the prior response failed the reviewer protocol contract.`,
                       '',
-                      `Pending changed files: ${Array.from(pendingGateFiles).join(', ') || '(unknown)'}`,
+                      `Pending changed files: ${reviewablePendingFiles.join(', ') || '(unknown)'}`,
                       `Snapshot fingerprint (echo exactly): ${reviewSnapshotFingerprint}`,
                       'Snapshot details (read for file membership; do not echo):',
                       reviewSnapshotDetails,
@@ -2602,32 +2929,24 @@ ${specialistRoutingSection}
             attestationIssues = collectReviewerAttestationIssues(
               reviewerToolResult,
               reviewSnapshotFingerprint,
-              Array.from(pendingGateFiles),
+              reviewablePendingFiles,
             )
           }
           if (attestationIssues.length > 0) {
-            // Skip-and-continue instead of break: record the skip reason, move
-            // to finalization, and clear the blocking state so the gate does
-            // not re-block. Mark the pending files as gate-passed and open the
-            // final-response gate so the loop terminates instead of re-detecting
-            // the still-modified files and re-entering the gate forever. The
-            // re-entry guard above short-circuits the reviewer spawn on any
-            // subsequent iteration (the retry count is already exhausted).
-            for (const file of pendingGateFiles) gatePassedFiles.add(file)
-            activeWorkState.gatePassedFiles = Array.from(gatePassedFiles)
+            activeWorkState.openReviewerBlockers = [
+              `BLOCKING: ${reviewerAgentType} failed snapshot/file attestation twice.`,
+              ...attestationIssues,
+            ]
             activeWorkState.openReviewerFindings = []
             activeWorkState.latestWorkSummary =
-              'Reviewer protocol failed after one automatic retry; no source repair was attempted.'
+              'Reviewer protocol failed after one automatic retry; finalization remains blocked.'
             activeWorkState.lastReviewerGateSkipReason =
               'reviewer-protocol-attestation-failed'
-            activeWorkState.currentPhase = 'final_response_allowed'
-            activeWorkState.pendingGateFiles = []
-            pendingGateFiles.clear()
-            activeWorkState.openReviewerBlockers = []
-            activeWorkState.nextRequiredAction = ''
-            editsHappened = false
-            finalResponseGateOpen = true
-            mutableAgentState.canSuggestFollowups = true
+            activeWorkState.currentPhase = 'blocked'
+            activeWorkState.nextRequiredAction =
+              'Obtain a fresh matching structured review before finalization can continue.'
+            mutableAgentState.canSuggestFollowups = false
+            finalResponseGateOpen = false
             markActiveWorkStateChanged()
             yield {
               toolName: 'add_message',
@@ -2638,12 +2957,12 @@ ${specialistRoutingSection}
                   '',
                   ...attestationIssues,
                   '',
-                  'This is a reviewer protocol/configuration failure, not a source-code finding. The harness did not spawn repair-editor. Stop retrying automatically; ask the user to fix reviewer configuration or explicitly say "bypass reviewer gate".',
+                  'This is a reviewer protocol/configuration failure, not a source-code finding. The harness did not spawn repair-editor or finalize. Stop retrying automatically; obtain a fresh matching structured review or explicitly authorize the reviewer-protocol bypass.',
                 ].join('\n'),
               },
               includeToolCall: false,
             } as any
-            continue
+            break
           }
           activeWorkState.reviewerProtocolRetryCount = 0
           const blockers = collectReviewerBlockers(reviewerToolResult)
@@ -2655,11 +2974,12 @@ ${specialistRoutingSection}
             activeWorkState.openReviewerFindings = blockers.map(
               (text: string, index: number) => ({
                 id: buildReviewerFindingId(text, index),
-                gateId: reviewSnapshotFingerprint,
+                gateId: `${requiredReviewerAgentType}:${reviewSnapshotFingerprint}`,
                 text,
                 status: 'open' as const,
                 files: Array.from(pendingGateFiles),
                 snapshotFingerprint: reviewSnapshotFingerprint,
+                reviewer: requiredReviewerAgentType,
                 createdAt: new Date().toISOString(),
               }),
             )
@@ -2686,6 +3006,7 @@ ${specialistRoutingSection}
               activeWorkState.repairSessionId ??
               `review-repair-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
             activeWorkState.repairSessionId = reviewerRepairSessionId
+            activeWorkState.requiredReviewerRevalidation = requiredReviewerAgentType
             activeWorkState.currentPhase = 'repair_loop'
             activeWorkState.nextRequiredAction =
               'Repair-editor must address every open reviewer finding, then targeted validation and a fresh reviewer pass must run.'
@@ -2800,12 +3121,20 @@ ${specialistRoutingSection}
                 (finding) => finding.id,
               ),
             )
+            const reviewerRepairHasProgress =
+              !!reviewerRepairReceipt &&
+              reviewerRepairReceipt.changedFiles.some(
+                (file: { path: string }) =>
+                  typeof file.path === 'string' && file.path.trim().length > 0,
+              )
             if (
               !reviewerRepairReceipt ||
-              reviewerRepairReceipt.status !== 'completed' ||
-              [...openFindingIds].some(
-                (id) => !reviewerRepairReceipt.findingsAddressed.includes(id),
-              )
+              (!reviewerRepairHasProgress &&
+                (reviewerRepairReceipt.status !== 'completed' ||
+                  [...openFindingIds].some(
+                    (id) =>
+                      !reviewerRepairReceipt.findingsAddressed.includes(id),
+                  )))
             ) {
               activeWorkState.currentPhase = 'blocked'
               activeWorkState.nextRequiredAction =
@@ -2829,6 +3158,7 @@ ${specialistRoutingSection}
               buildGateSnapshotDetails(
                 Array.from(pendingGateFiles),
                 validationSummary,
+
               ),
             )
             if (repairedSnapshotFingerprint === reviewSnapshotFingerprint) {
@@ -2848,6 +3178,10 @@ ${specialistRoutingSection}
               (reVerify as any) && (reVerify as any).toolResult,
             )
             if (reFailures.length === 0) {
+              activeWorkState.requiredReviewerRevalidation ??=
+                reviewerOriginFromGateId(
+                  activeWorkState.openReviewerFindings[0]?.gateId,
+                )
               validationSummary = summarizeHookResults(
                 (reVerify as any) && (reVerify as any).toolResult,
               )
@@ -2908,7 +3242,7 @@ ${specialistRoutingSection}
           if (reviewerFinalizationVerdict) {
             recordSuccessfulReviewReceipt(
               reviewerToolResult,
-              reviewerAgentType,
+              requiredReviewerAgentType,
               reviewSnapshotFingerprint,
             )
           }
@@ -3030,9 +3364,13 @@ ${specialistRoutingSection}
         if (runValidationGate) {
           const passedPendingFiles = Array.from(pendingGateFiles)
           if (passedPendingFiles.length > 0 && reviewerFinalizationVerdict) {
+            // Compare the reviewable subset (not the raw pending set) so this
+            // drift guard stays consistent with reviewSnapshotFingerprint,
+            // which is now scoped to reviewablePendingFiles. Bookkeeping-only
+            // churn must not falsely reopen validation/review.
             const finalReviewedFingerprint = hashGateSnapshotDetails(
               buildGateSnapshotDetails(
-                passedPendingFiles,
+                selectReviewableGateFiles(passedPendingFiles),
                 '',
               ),
             )
@@ -3050,6 +3388,7 @@ ${specialistRoutingSection}
           if (passedPendingFiles.length > 0 && reviewerFinalizationVerdict) {
             activeWorkState.openReviewerBlockers = []
             activeWorkState.openReviewerFindings = []
+            activeWorkState.requiredReviewerRevalidation = undefined
             pendingGateFiles.clear()
             activeWorkState.pendingGateFiles = []
             activeWorkState.latestWorkSummary = ''
@@ -3066,6 +3405,10 @@ ${specialistRoutingSection}
               passedPendingFiles,
               validationSummary,
             )
+            // R5: record the reviewable subset's fingerprint so a later
+            // git-action turn (no new source edits) that reopens the gate on
+            // an unchanged reviewable set can skip re-review.
+            activeWorkState.reviewedReviewableFingerprint = reviewableFingerprint
             activeWorkState.lastReviewerGateSkipReason = ''
             activeWorkState.repairRoundCount = 0
             activeWorkState.repairSessionId = undefined
@@ -3275,6 +3618,14 @@ ${specialistRoutingSection}
         }
         if (state.pendingGateFiles.length > 0) return 'awaiting_validation'
         return 'idle'
+      }
+
+      function reviewerOriginFromGateId(
+        gateId: string | undefined,
+      ): 'code-reviewer' | 'security-reviewer' {
+        return gateId?.startsWith('security-reviewer:')
+          ? 'security-reviewer'
+          : 'code-reviewer'
       }
 
       function recordChangedFiles(
@@ -3756,11 +4107,22 @@ ${specialistRoutingSection}
         })
       }
 
-      function repairEditorReadablePaths(_paths: string[]): string[] {
-        // Repair agents need project-wide diagnostic visibility to follow
-        // imports, generated sources, shared config, and fixtures. Mutation
-        // authority remains restricted separately to finding-scoped files.
-        return ['*', '**/*']
+      function repairEditorReadablePaths(paths: string[]): string[] {
+        const files = Array.from(
+          new Set(
+            paths
+              .map((path) => normalizeGateFilePath(path))
+              .filter((path) => path.length > 0),
+          ),
+        )
+        const directories = new Set<string>()
+        for (const file of files) {
+          const separator = file.lastIndexOf('/')
+          if (separator > 0) directories.add(file.slice(0, separator))
+        }
+        return Array.from(
+          new Set([...files, ...Array.from(directories, (dir) => `${dir}/**/*`)]),
+        )
       }
 
       function isPublicApiSourceFile(filePath: string): boolean {
@@ -3779,6 +4141,42 @@ ${specialistRoutingSection}
 
       function selectDocWriterTargets(files: string[]): string[] {
         return files.filter(isPublicApiSourceFile)
+      }
+
+      // Inline mirror of isReviewableGateFile in agents/base2/gate-paths.ts.
+      // Kept byte-identical (minus the export keyword) because handleSteps is
+      // serialized via .toString() + new Function(...) and cannot reference
+      // module-scope imports; a parity test asserts behavioral equality.
+      // Returns true only for reviewable source files; excludes tests,
+      // generated code, docs, config/data (.jsonl bookkeeping like
+      // EVENTS.jsonl), .env files, and docs/ / evals/ / .agents/ paths.
+      function isReviewableGateFile(filePath: string): boolean {
+        if (/__tests__\//.test(filePath)) return false
+        if (/\.(test|spec)\.tsx?$/.test(filePath)) return false
+        if (/\.generated\.tsx?$/.test(filePath)) return false
+        if (/\.(md|mdx|json|jsonl|yml|yaml|toml)$/.test(filePath)) return false
+        if (/(^|\/)\.env($|\.)/.test(filePath)) return false
+        if (filePath.startsWith('docs/')) return false
+        if (filePath.startsWith('evals/') || filePath.startsWith('.agents/')) {
+          return false
+        }
+        return /\.(?:tsx?|jsx?|mjs|cjs|py|go|rs|java|kt|kts|cs|fs|vb)$/.test(
+          filePath,
+        )
+      }
+
+      // Inline mirror of selectReviewableGateFiles in gate-paths.ts.
+      function selectReviewableGateFiles(files: string[]): string[] {
+        const reviewableFiles: string[] = []
+        const seen = new Set<string>()
+        for (const file of files) {
+          const normalized = normalizeGateFilePath(file)
+          if (!normalized || seen.has(normalized)) continue
+          if (!isReviewableGateFile(normalized)) continue
+          seen.add(normalized)
+          reviewableFiles.push(normalized)
+        }
+        return reviewableFiles
       }
 
       // Return the subset of `files` that at least one aux gate predicate
@@ -5152,6 +5550,11 @@ ${specialistRoutingSection}
         expectedFingerprint: string,
         pendingFiles: string[],
       ): string[] {
+        // The caller passes the reviewable subset; when it is empty there is
+        // nothing to attest, so surface no attestation issues.
+        if (pendingFiles.length === 0) {
+          return []
+        }
         const structured = collectStructuredReviewerOutputs(toolResult)
         if (structured.length === 0) {
           return [
@@ -5159,11 +5562,7 @@ ${specialistRoutingSection}
           ]
         }
         const result = structured[structured.length - 1]
-        if (
-          typeof result.schemaVersion !== 'number' ||
-          !Number.isInteger(result.schemaVersion) ||
-          result.schemaVersion <= 0
-        ) {
+        if (result.schemaVersion !== 1) {
           return [
             'BLOCKING: reviewer returned an invalid attestation schemaVersion',
           ]
@@ -5205,47 +5604,82 @@ ${specialistRoutingSection}
             requestedValidation: string[]
           }
         | undefined {
-        const visit = (value: unknown, depth = 0): any => {
+        const hasOwn = (record: Record<string, unknown>, key: string) =>
+          Object.prototype.hasOwnProperty.call(record, key)
+        const parseReceipt = (candidate: unknown) => {
+          if (
+            !candidate ||
+            typeof candidate !== 'object' ||
+            Array.isArray(candidate)
+          ) {
+            return undefined
+          }
+          const record = candidate as Record<string, unknown>
+          if (
+            record.schemaVersion !== 1 ||
+            typeof record.receiptId !== 'string' ||
+            typeof record.status !== 'string' ||
+            !Array.isArray(record.changedFiles)
+          ) {
+            return undefined
+          }
+          return {
+            status: record.status,
+            changedFiles: record.changedFiles.flatMap((item) => {
+              if (typeof item === 'string') return [{ path: item }]
+              if (item && typeof item === 'object') {
+                const path = (item as Record<string, unknown>).path
+                return typeof path === 'string' ? [{ path }] : []
+              }
+              return []
+            }),
+            findingsAddressed: Array.isArray(record.findingsAddressed)
+              ? record.findingsAddressed.filter(
+                  (item): item is string => typeof item === 'string',
+                )
+              : [],
+            requestedValidation: Array.isArray(record.requestedValidation)
+              ? record.requestedValidation.filter(
+                  (item): item is string => typeof item === 'string',
+                )
+              : [],
+          }
+        }
+        const isRuntimeReceiptEnvelope = (record: Record<string, unknown>) =>
+          hasOwn(record, 'agentReceipt') &&
+          (hasOwn(record, 'result') ||
+            (typeof record.agentId === 'string' &&
+              typeof record.agentName === 'string' &&
+              typeof record.agentType === 'string' &&
+              hasOwn(record, 'value')))
+        const visit = (
+          value: unknown,
+          depth = 0,
+          allowResultWrapper = false,
+        ): ReturnType<typeof parseReceipt> => {
           if (!value || depth > 10) return undefined
           if (Array.isArray(value)) {
             for (const item of value) {
-              const found = visit(item, depth + 1)
+              const found = visit(item, depth + 1, allowResultWrapper)
               if (found) return found
             }
             return undefined
           }
           if (typeof value !== 'object') return undefined
           const record = value as Record<string, unknown>
-          if (
-            record.schemaVersion === 1 &&
-            typeof record.receiptId === 'string' &&
-            typeof record.status === 'string' &&
-            Array.isArray(record.changedFiles)
-          ) {
-            return {
-              status: record.status,
-              changedFiles: record.changedFiles.flatMap((item) => {
-                if (typeof item === 'string') return [{ path: item }]
-                if (item && typeof item === 'object') {
-                  const path = (item as Record<string, unknown>).path
-                  return typeof path === 'string' ? [{ path }] : []
-                }
-                return []
-              }),
-              findingsAddressed: Array.isArray(record.findingsAddressed)
-                ? record.findingsAddressed.filter(
-                    (item): item is string => typeof item === 'string',
-                  )
-                : [],
-              requestedValidation: Array.isArray(record.requestedValidation)
-                ? record.requestedValidation.filter(
-                    (item): item is string => typeof item === 'string',
-                  )
-                : [],
-            }
+          if (isRuntimeReceiptEnvelope(record)) {
+            return parseReceipt(record.agentReceipt)
           }
-          for (const nested of Object.values(record)) {
-            const found = visit(nested, depth + 1)
+          if (hasOwn(record, 'toolResult')) {
+            const found = visit(record.toolResult, depth + 1, true)
+            if (found) return found
+          }
+          if (allowResultWrapper && hasOwn(record, 'result')) {
+            const found = visit(record.result, depth + 1, false)
+            if (found) return found
+          }
+          if (record.type === 'json' && hasOwn(record, 'value')) {
+            const found = visit(record.value, depth + 1, false)
             if (found) return found
           }
           return undefined
@@ -6143,6 +6577,11 @@ function buildImplementationStepPrompt({
 
 function buildExecutePlanStepPrompt({}: {}) {
   return buildArray(
+    // EXECUTE_PLAN is always default-mode, non-fast, so it carries the same
+    // editor-handoff / phase-trigger / "don't manually spawn code-reviewer"
+    // guidance as the DEFAULT step prompt. Compose it from the shared builder
+    // instead of reimplementing so the two step prompts cannot drift.
+    buildImplementationStepPrompt({ isDefault: true, isFast: false }),
     'You are in EXECUTE_PLAN mode. Execute or resume durable plan artifacts, using the project source editing tools when implementation work is required. Unlike PLAN mode, you may edit project source files to complete planned tasks.',
     'Treat SPEC.md, PLAN.md, STATUS.md, and LESSONS.md under the durable plan session as authoritative. Use any artifact contents already present in the conversation as the initial source of truth, confirm the next incomplete or blocked item from that context, and read artifacts directly only when contents are missing, truncated, stale, or have changed. Do not repeatedly re-read unchanged artifacts or source files after confirming the next item; continue from it unless the artifacts say completed work must be revisited.',
     'Honor the deterministic preflight included with resumed artifacts. Do not edit source when preflight reports errors. Use stable task IDs for updates, keep at most one task in_progress, respect dependencies, and do not mark a task done until its Validate gate passes and the checkpoint is recorded.',

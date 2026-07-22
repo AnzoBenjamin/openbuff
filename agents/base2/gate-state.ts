@@ -66,6 +66,14 @@ export type Base2GateState = {
   gatePassedReviewerVerdict: string
   gatePassedValidationSummary: string
   gatePassedFingerprint: string
+  /**
+   * Content fingerprint of the reviewable-source subset the last time the
+   * final code-reviewer gate passed. Used to skip re-review when a
+   * subsequent turn (e.g. a git-action turn with no new source edits)
+   * reopens the gate on an unchanged reviewable set. Backward-compatible:
+   * older serialized state lacks this field (treated as unset).
+   */
+  reviewedReviewableFingerprint?: string
   lastReviewerGateSkipReason: string
 }
 
@@ -83,8 +91,16 @@ export type Base2ActiveWorkState = Base2GateState & {
     taskId?: string
     files: string[]
     snapshotFingerprint: string
+    /** Reviewer family that produced this blocking finding. */
+    reviewer?: 'code-reviewer' | 'security-reviewer'
     createdAt: string
   }>
+  /**
+   * Reviewer family that must re-attest after a runtime-attested repair changes
+   * the workspace and validation passes. Missing legacy provenance fails closed
+   * into the code-reviewer path rather than permitting finalization.
+   */
+  requiredReviewerRevalidation?: 'code-reviewer' | 'security-reviewer'
   validationEvidence?: Array<{
     gateId: string
     files: string[]
