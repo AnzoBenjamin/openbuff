@@ -4203,7 +4203,7 @@ ${specialistRoutingSection}
       // EVENTS.jsonl), .env files, and docs/ / evals/ / .agents/ paths.
       function isReviewableGateFile(filePath: string): boolean {
         if (/__tests__\//.test(filePath)) return false
-        if (/\.(test|spec)\.tsx?$/.test(filePath)) return false
+        if (/\.(test|spec)\.(?:tsx?|jsx?|mjs|cjs)$/.test(filePath)) return false
         if (/\.generated\.tsx?$/.test(filePath)) return false
         if (/\.(md|mdx|json|jsonl|yml|yaml|toml)$/.test(filePath)) return false
         if (/(^|\/)\.env($|\.)/.test(filePath)) return false
@@ -4233,7 +4233,7 @@ ${specialistRoutingSection}
       // Inline mirror of isCoverageEvidenceFile in gate-paths.ts.
       function isCoverageEvidenceFile(filePath: string): boolean {
         if (/__tests__\//.test(filePath)) return true
-        if (/\.(test|spec)\.tsx?$/.test(filePath)) return true
+        if (/\.(test|spec)\.(?:tsx?|jsx?|mjs|cjs)$/.test(filePath)) return true
         return false
       }
 

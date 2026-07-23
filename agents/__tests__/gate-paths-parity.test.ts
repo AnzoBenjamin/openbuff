@@ -192,6 +192,13 @@ describe('gate-path helpers — inline copies match canonical exports', () => {
       'src/__tests__/foo.ts',
       // .test.ts path (false)
       'src/foo.test.ts',
+      // JS-flavored test/spec files (false) — parity must hold across the
+      // broadened (?:tsx?|jsx?|mjs|cjs) exclusion so a `.test.js`/`.spec.mjs`
+      // test file is not classified as reviewable source by the inline copy.
+      'src/foo.test.js',
+      'src/foo.spec.mjs',
+      'src/foo.test.cjs',
+      'src/foo.spec.jsx',
       // .generated.ts path (false)
       'src/foo.generated.ts',
       // docs/data/config extensions (false each)
@@ -264,6 +271,13 @@ describe('gate-path helpers — inline copies match canonical exports', () => {
       'src/foo.test.ts',
       'src/foo.spec.ts',
       'src/foo.test.tsx',
+      // JS-flavored test/spec files (true) — parity must hold across the
+      // broadened (?:tsx?|jsx?|mjs|cjs) exclusion so a `.test.js`/`.spec.mjs`
+      // test file is treated as coverage evidence by the inline copy too.
+      'src/foo.test.js',
+      'src/foo.spec.mjs',
+      'src/foo.test.cjs',
+      'src/foo.spec.jsx',
       // reviewable source (false)
       'src/foo.ts',
       // generated / docs / data (false each)
