@@ -865,6 +865,30 @@ describe('tool validation error handling', () => {
     }
   })
 
+  it('rejects the original stringified agents array with a mis-braced prompt and points at the corrected shape', () => {
+    // Reproduces the exact real-world failure: the whole `agents` value was
+    // emitted as a JSON string, and inside it a stray `"prompt": "..."` pair
+    // floats as a sibling *array element* rather than a key inside the first
+    // agent object. That inner text is not valid JSON, so it cannot be
+    // auto-repaired and must fail closed with corrected-shape guidance.
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-agents-stringified-misbraced-prompt-tool-call-id',
+        input: {
+          agents:
+            '[{"agent_type": "code-searcher", "params": {"searchQueries": [{"pattern": "serialized handleSteps", "flags": "-g *.ts"}]}}, "prompt": "Find the test in the agents test suite."}]',
+        },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('Corrected example:')
+      expect(result.error).toContain('INSIDE each agent object')
+    }
+  })
+
   it('gives spawn-specific recovery for truncated agent JSON', () => {
     const result = parseRawToolCall({
       rawToolCall: {
