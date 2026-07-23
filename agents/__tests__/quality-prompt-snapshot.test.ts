@@ -120,6 +120,16 @@ describe('shared craftsmanship prompt sections', () => {
     expect(gitDisciplineSection).toContain(
       'Spawning git-committer is not available yet',
     )
+    // Wait-and-commit guidance added for gate ergonomics: the gate re-arms per
+    // edit, the block is normal ordering (not an error), and the commit lands
+    // automatically once the gate clears.
+    expect(gitDisciplineSection).toContain('re-arms on every new edit')
+    expect(gitDisciplineSection).toContain(
+      'Treat this as normal ordering, not an error',
+    )
+    expect(gitDisciplineSection).toContain(
+      'the commit will land automatically once the gate clears',
+    )
   })
 
   test('gateAwarenessSection contains the required gate-awareness topics (not byte-frozen)', () => {

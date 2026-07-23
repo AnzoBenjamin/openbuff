@@ -1529,7 +1529,7 @@ export async function executeToolCall<T extends ToolName>(
         onResponseChunk({
           type: 'error',
           message:
-            'Spawning `git-committer` is not available yet. The validation/reviewer gate must pass before committing. Wait for the automated gate to complete, then commit.',
+            'Spawning `git-committer` is not available yet. This is normal ordering, not a failure: the validation/reviewer gate re-arms whenever code changes, so a fresh edit sets it back to pending and the committer is withheld until that gate passes for the changed files. The gate runs and clears automatically — do not retry the spawn now. Wait for the gate to report passed for the pending files, then spawn git-committer; the commit will succeed on the next attempt.',
         })
         if (filteredAgents.length === 0) {
           return abortablePreviousToolCallFinished
@@ -1690,7 +1690,7 @@ export async function executeToolCall<T extends ToolName>(
         onResponseChunk({
           type: 'error',
           message:
-            'Spawning `git-committer` is not available yet. The requested commit would stage changes that have not passed the validation/reviewer gate. Validate the working-tree changes first, then commit.',
+            'Spawning `git-committer` is not available yet. This is normal ordering, not a failure: the requested commit would stage changes that have not passed the validation/reviewer gate (a recent edit left working-tree files pending). The gate runs and clears automatically for those files — do not retry the spawn now. Wait for it to report passed, then spawn git-committer; the commit will succeed on the next attempt.',
         })
         if (filteredAgents.length === 0) {
           return abortablePreviousToolCallFinished
