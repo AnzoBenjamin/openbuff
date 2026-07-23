@@ -1735,6 +1735,33 @@ describe('tool validation error handling', () => {
     expect(message).toContain('Preserve params field names exactly.')
   })
 
+  it('gives code-searcher a searchQueries recovery hint on empty params', async () => {
+    const { validateAgentInput } =
+      await import('../tools/handlers/tool/spawn-agent-utils')
+    const codeSearcher = {
+      ...testAgentTemplate,
+      id: 'code-searcher',
+      inputSchema: {
+        params: z.object({
+          searchQueries: z.array(z.object({ pattern: z.string() })),
+        }),
+      },
+    }
+
+    let message = ''
+    try {
+      validateAgentInput(codeSearcher, 'code-searcher', undefined, {})
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(message).toContain('Missing required: searchQueries')
+    expect(message).toContain('spawn code-searcher with')
+    expect(message).toContain('"searchQueries"')
+    expect(message).toContain('required array of objects')
+    expect(message).toContain('Preserve params field names exactly.')
+  })
+
   it('publishes a structured failure result when Basher is missing command', async () => {
     const parent: AgentTemplate = {
       ...testAgentTemplate,

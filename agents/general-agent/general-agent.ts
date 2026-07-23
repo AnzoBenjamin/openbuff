@@ -1,4 +1,5 @@
 import { buildArray } from '@codebuff/common/util/array'
+import { containsStructuralAuditReceipt } from '@codebuff/common/util/audit-receipt'
 
 import { publisher } from '../constants'
 
@@ -93,6 +94,7 @@ export const createGeneralAgent = (options: {
       !isGpt5 &&
         `If indexed evidence leaves explicit coverage gaps, spawn bounded parallel waves of non-overlapping file-picker/code-searcher/researcher tasks. Join each wave before deciding whether more coverage is needed; do not restart the same discovery through multiple agent layers.`,
       `File-picker and code-searcher are discovery-only helpers. Their results do not satisfy analysis, implementation-completeness, call-site, test-coverage, or dead-code claims. Read and verify the relevant source and test files yourself before synthesizing the requested answer.`,
+      `For ripgrep-style content search, spawn the code-searcher agent; \`code_search\` is a registered runtime tool but is intentionally not granted to you, so calling it directly is rejected. When you spawn code-searcher, pass its required params or the spawn fails: code-searcher needs \`params.searchQueries\` (an array of { pattern } objects, e.g. { "params": { "searchQueries": [{ "pattern": "createUser", "flags": "-g *.ts" }] } }); put it in \`params\`, not only in the prose prompt.`,
       `When params.sessionSlug and params.shardId are provided, this is a durable audit shard. params.snapshotId must be the exact inspect_codebase_structure snapshot; copy it into write_audit_findings.snapshotId. Analyze the assigned files, call write_audit_findings exactly once with structured findings and full subsystem/feature/file/domain coverage, then return only its compact artifact receipt, including structuralReceipt. Do not repeat findings in your final response.`,
       `Do not stop after announcing a tool call or delegating discovery. In the same final response that contains the requested answer or compact audit receipt, call task_completed. Never call task_completed while required reads, synthesis, coverage, or audit artifact persistence remain unfinished.`,
     ).join('\n'),
@@ -178,7 +180,7 @@ export const createGeneralAgent = (options: {
         const auditRequested = Boolean(sessionSlug && shardId)
         if (
           auditRequested &&
-          !hasSuccessfulAuditReceipt(
+          !containsStructuralAuditReceipt(
             stepResult.agentState?.messageHistory,
             expectedSnapshotId,
           ) &&
@@ -197,40 +199,6 @@ export const createGeneralAgent = (options: {
           continue
         }
         break
-      }
-
-      function hasSuccessfulAuditReceipt(
-        value: unknown,
-        expectedSnapshotId: string,
-      ): boolean {
-        let found = false
-        const visit = (item: unknown, depth = 0): void => {
-          if (found || !item || depth > 12) return
-          if (Array.isArray(item)) {
-            for (const nested of item) visit(nested, depth + 1)
-            return
-          }
-          if (typeof item !== 'object') return
-          const record = item as Record<string, unknown>
-          const receipt = record.structuralReceipt
-          if (
-            receipt &&
-            typeof receipt === 'object' &&
-            !Array.isArray(receipt)
-          ) {
-            const snapshotId = (receipt as Record<string, unknown>).snapshot_id
-            if (
-              typeof snapshotId === 'string' &&
-              (!expectedSnapshotId || snapshotId === expectedSnapshotId)
-            ) {
-              found = true
-              return
-            }
-          }
-          for (const nested of Object.values(record)) visit(nested, depth + 1)
-        }
-        visit(value)
-        return found
       }
 
       function shouldProactivelyQueryIndex(value: unknown): value is string {
