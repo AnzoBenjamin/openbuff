@@ -890,6 +890,37 @@ function formatInvalidInputExcerpts(
   return excerpts.join('\n\n') || formatValueForError(input, 2_000)
 }
 
+// Reject a mis-braced spawn_agents payload where `prompt`, `params`, or
+// `handoff` appear as siblings of `agents` at the top level. These fields
+// belong INSIDE each agent object; the non-strict top-level schema would
+// otherwise silently drop the stray key, hiding the mistake. Detect it before
+// safeParse strips the sibling and surface the base spawn_agents guidance.
+function detectMisbracedSpawnPayload(args: {
+  input: unknown
+  toolCallId: string
+  rawInput: unknown
+}): ToolCallError | undefined {
+  const { input, toolCallId, rawInput } = args
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return undefined
+  }
+  const record = input as Record<string, unknown>
+  if (!Array.isArray(record.agents)) return undefined
+  const misplacedKeys = ['prompt', 'params', 'handoff'].filter((key) =>
+    Object.hasOwn(record, key),
+  )
+  if (misplacedKeys.length === 0) return undefined
+  const hint = getToolValidationHint('spawn_agents', undefined, input)
+  const summary = `misplaced top-level field(s) ${misplacedKeys.join(', ')} alongside \`agents\``
+  return {
+    toolName: 'spawn_agents',
+    toolCallId,
+    input: rawInput,
+    error: `Invalid parameters for spawn_agents: ${summary}.${hint ? `\n\n${hint}` : ''}`,
+    formattedInput: formatInvalidInputExcerpts(input, []),
+  }
+}
+
 function isFileChangingTool(toolName: string): boolean {
   return (
     toolName === 'apply_patch' ||
@@ -1068,6 +1099,16 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
     toolName,
     repairSetOutputData(toolName, processedParameters.input),
   )
+  if (toolName === 'spawn_agents') {
+    const misbracedError = detectMisbracedSpawnPayload({
+      input: repairedInput,
+      toolCallId: rawToolCall.toolCallId,
+      rawInput: rawToolCall.input,
+    })
+    if (misbracedError) {
+      return misbracedError
+    }
+  }
   const result = paramsSchema.safeParse(repairedInput)
 
   if (!result.success) {
