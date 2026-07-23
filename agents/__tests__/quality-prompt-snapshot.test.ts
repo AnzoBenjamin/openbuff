@@ -13,6 +13,7 @@ import {
   gitDisciplineSection,
   qualitySection,
   securityReviewSection,
+  specialistRoutingSection,
 } from '../base2/quality-prompt-section'
 
 /**
@@ -88,6 +89,36 @@ describe('shared craftsmanship prompt sections', () => {
     expect(gitDisciplineSection).toContain('git_branch')
   })
 
+  test('gitDisciplineSection tells the orchestrator to pass owned_paths in git-committer params', () => {
+    // git-committer requires params.owned_paths; a prompt-only or empty-params
+    // spawn fails outright. Guard that the guidance names the required key so
+    // the orchestrator supplies it instead of relying on the prose prompt.
+    expect(gitDisciplineSection).toContain('owned_paths')
+    expect(gitDisciplineSection).toContain('in params')
+  })
+
+  test('gitDisciplineSection warns that an empty/prompt-only git-committer spawn fails the spawn', () => {
+    // Regression guard for the observed failure: spawning git-committer with
+    // empty params ({}) fails with "Missing required: owned_paths". The
+    // guidance must mark owned_paths REQUIRED and explain that omitting it via
+    // an empty or prompt-only spawn fails outright, so the orchestrator does
+    // not rely on the prose prompt alone and hit the same spawn rejection.
+    expect(gitDisciplineSection).toContain('REQUIRED')
+    expect(gitDisciplineSection).toContain('required field')
+    expect(gitDisciplineSection).toContain('empty or prompt-only spawn')
+    expect(gitDisciplineSection).toContain('fails the spawn')
+  })
+
+  test('gateAwarenessSection contains the required gate-awareness topics (not byte-frozen)', () => {
+    // gateAwarenessSection is advisory guidance that may evolve; only assert
+    // topic coverage so future tightening does not silently drop the
+    // don't-double-spawn-code-reviewer guidance.
+    expect(gateAwarenessSection).toContain('# Automated Validation & Review Gate')
+    expect(gateAwarenessSection).toContain('code-reviewer')
+    expect(gateAwarenessSection).toContain('validation hooks')
+    expect(gateAwarenessSection).toContain('before finalization')
+  })
+
   test('securityReviewSection contains the required security-review topics (not byte-frozen)', () => {
     // securityReviewSection is advisory guidance that may evolve; only assert
     // topic coverage so future tightening does not silently drop a rule.
@@ -100,6 +131,17 @@ describe('shared craftsmanship prompt sections', () => {
     expect(securityReviewSection).toContain('auth')
     expect(securityReviewSection).toContain('secrets')
     expect(securityReviewSection).toContain('read-only')
+  })
+
+  test('specialistRoutingSection names the exact snapshot param contract for reviewer-family specialists', () => {
+    // Reviewer-family specialists require params.snapshot_id from
+    // get_change_review_bundle, while security-reviewer requires
+    // changed_files + snapshot_fingerprint. Guard that the guidance names both
+    // contracts so a spawn does not fail on the wrong/missing snapshot key.
+    expect(specialistRoutingSection).toContain('snapshot_id')
+    expect(specialistRoutingSection).toContain('get_change_review_bundle')
+    expect(specialistRoutingSection).toContain('changed_files')
+    expect(specialistRoutingSection).toContain('snapshot_fingerprint')
   })
 
   test('all three consumers interpolate shared sections and leave conditional sections gated', () => {
