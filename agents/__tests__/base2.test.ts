@@ -80,6 +80,7 @@ function attestedReviewerResult(
   reviewCall: any,
   verdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING' = 'LOOKS_GOOD',
   findings: string[] = [],
+  coverage: 'covered' | 'missing' | 'n/a' = 'covered',
 ) {
   const prompt = String(reviewCall?.input?.agents?.[0]?.prompt ?? '')
   const fingerprint =
@@ -101,7 +102,7 @@ function attestedReviewerResult(
             snapshotFingerprint: fingerprint,
             reviewedFiles: files,
             findings,
-            coverage: 'covered',
+            coverage,
             dimensions: {
               correctness: 'pass',
               security: 'pass',
@@ -2770,6 +2771,117 @@ describe('base2 verification and reviewer gates', () => {
     expect(text).not.toContain('Historical changed files: src/a.ts')
     expect(text).not.toContain('Historical touched files: src/a.ts')
     expect(gen.next().value).toBe('STEP')
+  })
+
+  // All-coverage blocker sets must not co-spawn repair-editor.
+  test('all-coverage reviewer findings route exclusively to test-writer', () => {
+    const base2 = createBase2('default')
+    const agentState = { agentId: 'base2' }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Make the requested change now please',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+        .value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    expect(gen.next().value).toBe('STEP')
+    expect(
+      gen.next({
+        stepsComplete: true,
+        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    const reviewCall = gen.next({
+      toolResult: [{ type: 'json', value: [] }],
+    } as any).value
+    expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+    // coverage: 'missing' with empty findings produces only the synthetic
+    // all-coverage blocker classified by isTestCoverageReviewerFinding.
+    const afterReview = gen.next(
+      attestedReviewerResult(reviewCall, 'NON_BLOCKING', [], 'missing') as any,
+    )
+    expect(afterReview.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect((afterReview.value as any).input.content).toContain('test-writer')
+    expect((afterReview.value as any).input.content).not.toContain(
+      'to repair-editor',
+    )
+
+    const repairSpawn = gen.next().value as any
+    expect(repairSpawn).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'test-writer' }] },
+    })
+    expect(repairSpawn.input.agents).toHaveLength(1)
+    expect(repairSpawn.input.agents[0].agent_type).not.toBe('repair-editor')
+    expect((agentState as any).base2ActiveWork.nextRequiredAction).toContain(
+      'Test-writer must add coverage',
+    )
+  })
+
+  test('mixed coverage and code findings keep repair-editor only', () => {
+    const base2 = createBase2('default')
+    const agentState = { agentId: 'base2' }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Make the requested change now please',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+        .value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    expect(gen.next().value).toBe('STEP')
+    expect(
+      gen.next({
+        stepsComplete: true,
+        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    const reviewCall = gen.next({
+      toolResult: [{ type: 'json', value: [] }],
+    } as any).value
+    expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+    // Code finding + coverage missing => mixed set must stay on repair-editor.
+    const afterReview = gen.next(
+      attestedReviewerResult(
+        reviewCall,
+        'BLOCKING',
+        ['Fix the edge case.'],
+        'missing',
+      ) as any,
+    )
+    expect(afterReview.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect((afterReview.value as any).input.content).toContain('repair-editor')
+
+    const repairSpawn = gen.next().value as any
+    expect(repairSpawn).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'repair-editor' }] },
+    })
+    expect(repairSpawn.input.agents).toHaveLength(1)
+    expect(repairSpawn.input.agents[0].agent_type).not.toBe('test-writer')
   })
 
   test('repair-editor with mutation progress continues into re-validation even when receipt is blocked', () => {

@@ -2928,6 +2928,18 @@ ${specialistRoutingSection}
           activeWorkState.reviewerProtocolRetryCount = 0
           const blockers = collectReviewerBlockers(reviewerToolResult)
           if (blockers.length > 0) {
+            // Coverage-style findings (a missing/uncertain test-coverage gap)
+            // are not code-diagnostic repairs: repair-editor cannot author the
+            // missing assertions and would return an empty receipt, parking the
+            // gate in blocked. Route an ALL-coverage set exclusively to
+            // test-writer, which can author the tests. Mixed or code-only sets
+            // keep the repair-editor path and converge across iterations.
+            const allCoverageFindings = blockers.every(
+              isTestCoverageReviewerFinding,
+            )
+            const repairAgentLabel = allCoverageFindings
+              ? 'Test-writer'
+              : 'Repair-editor'
             activeWorkState.reviewerRepairRoundCount = Number(
               activeWorkState.reviewerRepairRoundCount ?? 0,
             ) + 1
@@ -2954,7 +2966,7 @@ ${specialistRoutingSection}
               input: {
                 role: 'user',
                 content: [
-                  `Reviewer gate: ${reviewerAgentType} returned blocking feedback. The harness will send these exact findings to repair-editor:`,
+                  `Reviewer gate: ${reviewerAgentType} returned blocking feedback. The harness will send these exact findings to ${allCoverageFindings ? 'test-writer' : 'repair-editor'}:`,
                   '',
                   ...blockers,
                   '',
@@ -2969,97 +2981,187 @@ ${specialistRoutingSection}
             activeWorkState.repairSessionId = reviewerRepairSessionId
             activeWorkState.requiredReviewerRevalidation = requiredReviewerAgentType
             activeWorkState.currentPhase = 'repair_loop'
-            activeWorkState.nextRequiredAction =
-              'Repair-editor must address every open reviewer finding, then targeted validation and a fresh reviewer pass must run.'
+            activeWorkState.nextRequiredAction = allCoverageFindings
+              ? 'Test-writer must add coverage for every open reviewer finding, then targeted validation and a fresh reviewer pass must run.'
+              : 'Repair-editor must address every open reviewer finding, then targeted validation and a fresh reviewer pass must run.'
             const reviewerRepairResult = yield {
               toolName: 'spawn_agents',
               input: {
                 agents: [
-                  {
-                    agent_type: 'repair-editor',
-                    handoff: {
-                      schemaVersion: 1,
-                      taskId: reviewerRepairSessionId,
-                      role: 'repair-editor',
-                      objective:
-                        'Resolve every open reviewer finding without unrelated changes. Read the current file contents before editing; conversational summaries are not source evidence.',
-                      requirements: activeWorkState.openReviewerFindings.map(
-                        ({ id, text }) => ({ id, text, required: true }),
-                      ),
-                      acceptanceCriteria:
-                        activeWorkState.openReviewerFindings.map(({ id }) => ({
-                          id: `clear-${id}`,
-                          behavior: `Finding ${id} is addressed in the live workspace.`,
-                          verification:
-                            'Targeted validation passes and a fresh snapshot-bound reviewer clears the finding.',
-                        })),
-                      context: [],
-                      invariants: [
-                        'Read every target from the live filesystem before editing.',
-                        'Treat every finding ID as open until a fresh reviewer clears it.',
-                      ],
-                      nonGoals: [
-                        'Unrelated diagnostics, refactors, or cleanup.',
-                      ],
-                      risks: [
-                        'Reviewer findings may be stale if the workspace snapshot changed.',
-                      ],
-                      unknowns: [],
-                      findings: activeWorkState.openReviewerFindings.map(
-                        ({ id, text, files, snapshotFingerprint }) => ({
-                          id,
-                          text,
-                          files,
-                          snapshotFingerprint,
-                        }),
-                      ),
-                      permissions: {
-                        readablePaths: repairEditorReadablePaths([
-                          ...pendingGateFiles,
-                          ...activeWorkState.openReviewerFindings.flatMap(
-                            (finding: { files?: string[] }) =>
-                              finding.files ?? [],
-                          ),
-                        ]),
-                        writablePaths: Array.from(
-                          new Set([
-                            ...pendingGateFiles,
-                            ...activeWorkState.openReviewerFindings.flatMap(
-                              (finding: { files?: string[] }) =>
-                                finding.files ?? [],
+                  allCoverageFindings
+                    ? {
+                        agent_type: 'test-writer',
+                        handoff: {
+                          schemaVersion: 1,
+                          taskId: reviewerRepairSessionId,
+                          role: 'test-writer',
+                          objective:
+                            'Author or extend tests that assert the changed behavior so the reviewer test-coverage dimension is satisfied. For each finding, add or extend a case in the relevant *.test.* file exercising the behavior-changing logic in the gate changed files. Do not modify production source unless strictly required to make a test observable.',
+                          requirements:
+                            activeWorkState.openReviewerFindings.map(
+                              ({ id, text }) => ({ id, text, required: true }),
                             ),
-                          ]),
-                        ),
-                        allowedTools: [
-                          'read_files',
-                          'read_outline',
-                          'edit_transaction',
-                        ],
+                          acceptanceCriteria:
+                            activeWorkState.openReviewerFindings.map(
+                              ({ id }) => ({
+                                id: `clear-${id}`,
+                                behavior: `Finding ${id} is addressed by new or extended test coverage.`,
+                                verification:
+                                  'Targeted validation passes and a fresh snapshot-bound reviewer clears the finding.',
+                              }),
+                            ),
+                          context: [],
+                          invariants: [
+                            'Read every target from the live filesystem before editing.',
+                            'Treat every finding ID as open until a fresh reviewer clears it.',
+                          ],
+                          nonGoals: [
+                            'Unrelated diagnostics, refactors, or cleanup.',
+                          ],
+                          risks: [
+                            'Reviewer findings may be stale if the workspace snapshot changed.',
+                          ],
+                          unknowns: [],
+                          findings: activeWorkState.openReviewerFindings.map(
+                            ({ id, text, files, snapshotFingerprint }) => ({
+                              id,
+                              text,
+                              files,
+                              snapshotFingerprint,
+                            }),
+                          ),
+                          permissions: {
+                            readablePaths: repairEditorReadablePaths([
+                              ...pendingGateFiles,
+                              ...activeWorkState.openReviewerFindings.flatMap(
+                                (finding: { files?: string[] }) =>
+                                  finding.files ?? [],
+                              ),
+                            ]),
+                            writablePaths: Array.from(
+                              new Set([
+                                ...pendingGateFiles,
+                                ...activeWorkState.openReviewerFindings.flatMap(
+                                  (finding: { files?: string[] }) =>
+                                    finding.files ?? [],
+                                ),
+                              ]),
+                            ),
+                            allowedTools: [
+                              'read_files',
+                              'read_outline',
+                              'write_file',
+                              'str_replace',
+                              'set_output',
+                            ],
+                          },
+                          workspaceRevision:
+                            mutableAgentState.workspaceState?.revision,
+                          workspaceSnapshotId:
+                            mutableAgentState.workspaceState?.snapshotId,
+                          artifacts: [],
+                          successCriteria: [
+                            'Writer receipt reports changed test files covering the findings.',
+                          ],
+                          constraints: [
+                            'Keep every edit within the pending gate file set.',
+                          ],
+                        },
+                        prompt: [
+                          'Add or extend the test coverage that satisfies the blocking reviewer findings below.',
+                          'Treat every finding ID as open until a fresh reviewer clears it.',
+                          'Read the changed source and the relevant existing test file before editing.',
+                          '',
+                          ...activeWorkState.openReviewerFindings.map(
+                            (finding) => `${finding.id}: ${finding.text}`,
+                          ),
+                        ].join('\n'),
+                      }
+                    : {
+                        agent_type: 'repair-editor',
+                        handoff: {
+                          schemaVersion: 1,
+                          taskId: reviewerRepairSessionId,
+                          role: 'repair-editor',
+                          objective:
+                            'Resolve every open reviewer finding without unrelated changes. Read the current file contents before editing; conversational summaries are not source evidence.',
+                          requirements: activeWorkState.openReviewerFindings.map(
+                            ({ id, text }) => ({ id, text, required: true }),
+                          ),
+                          acceptanceCriteria:
+                            activeWorkState.openReviewerFindings.map(({ id }) => ({
+                              id: `clear-${id}`,
+                              behavior: `Finding ${id} is addressed in the live workspace.`,
+                              verification:
+                                'Targeted validation passes and a fresh snapshot-bound reviewer clears the finding.',
+                            })),
+                          context: [],
+                          invariants: [
+                            'Read every target from the live filesystem before editing.',
+                            'Treat every finding ID as open until a fresh reviewer clears it.',
+                          ],
+                          nonGoals: [
+                            'Unrelated diagnostics, refactors, or cleanup.',
+                          ],
+                          risks: [
+                            'Reviewer findings may be stale if the workspace snapshot changed.',
+                          ],
+                          unknowns: [],
+                          findings: activeWorkState.openReviewerFindings.map(
+                            ({ id, text, files, snapshotFingerprint }) => ({
+                              id,
+                              text,
+                              files,
+                              snapshotFingerprint,
+                            }),
+                          ),
+                          permissions: {
+                            readablePaths: repairEditorReadablePaths([
+                              ...pendingGateFiles,
+                              ...activeWorkState.openReviewerFindings.flatMap(
+                                (finding: { files?: string[] }) =>
+                                  finding.files ?? [],
+                              ),
+                            ]),
+                            writablePaths: Array.from(
+                              new Set([
+                                ...pendingGateFiles,
+                                ...activeWorkState.openReviewerFindings.flatMap(
+                                  (finding: { files?: string[] }) =>
+                                    finding.files ?? [],
+                                ),
+                              ]),
+                            ),
+                            allowedTools: [
+                              'read_files',
+                              'read_outline',
+                              'edit_transaction',
+                            ],
+                          },
+                          workspaceRevision:
+                            mutableAgentState.workspaceState?.revision,
+                          workspaceSnapshotId:
+                            mutableAgentState.workspaceState?.snapshotId,
+                          artifacts: [],
+                          successCriteria: [
+                            'All finding IDs are cleared by a fresh reviewer receipt.',
+                          ],
+                          constraints: [
+                            'Keep every edit within the pending gate file set.',
+                          ],
+                        },
+                        prompt: [
+                          'Repair the blocking reviewer findings below.',
+                          'Treat every finding ID as open until a fresh reviewer clears it.',
+                          'Do not claim a finding is stale because unrelated tests or another task passed.',
+                          'Read every target from the live filesystem before editing.',
+                          'Keep unrelated diagnostics secondary to this finding set.',
+                          '',
+                          ...activeWorkState.openReviewerFindings.map(
+                            (finding) => `${finding.id}: ${finding.text}`,
+                          ),
+                        ].join('\n'),
                       },
-                      workspaceRevision:
-                        mutableAgentState.workspaceState?.revision,
-                      workspaceSnapshotId:
-                        mutableAgentState.workspaceState?.snapshotId,
-                      artifacts: [],
-                      successCriteria: [
-                        'All finding IDs are cleared by a fresh reviewer receipt.',
-                      ],
-                      constraints: [
-                        'Keep every edit within the pending gate file set.',
-                      ],
-                    },
-                    prompt: [
-                      'Repair the blocking reviewer findings below.',
-                      'Treat every finding ID as open until a fresh reviewer clears it.',
-                      'Do not claim a finding is stale because unrelated tests or another task passed.',
-                      'Read every target from the live filesystem before editing.',
-                      'Keep unrelated diagnostics secondary to this finding set.',
-                      '',
-                      ...activeWorkState.openReviewerFindings.map(
-                        (finding) => `${finding.id}: ${finding.text}`,
-                      ),
-                    ].join('\n'),
-                  },
                 ],
               },
             } as any
@@ -3069,8 +3171,8 @@ ${specialistRoutingSection}
             if (repairCrash) {
               activeWorkState.currentPhase = 'blocked'
               activeWorkState.nextRequiredAction =
-                'Repair-editor failed while addressing reviewer findings. Inspect the failure before retrying.'
-              activeWorkState.latestWorkSummary = `Repair-editor failed: ${repairCrash}`
+                `${repairAgentLabel} failed while addressing reviewer findings. Inspect the failure before retrying.`
+              activeWorkState.latestWorkSummary = `${repairAgentLabel} failed: ${repairCrash}`
               markActiveWorkStateChanged()
               break
             }
@@ -3099,7 +3201,7 @@ ${specialistRoutingSection}
             ) {
               activeWorkState.currentPhase = 'blocked'
               activeWorkState.nextRequiredAction =
-                'Repair-editor did not return a completed receipt addressing every open reviewer finding.'
+                `${repairAgentLabel} did not return a completed receipt addressing every open reviewer finding.`
               activeWorkState.latestWorkSummary =
                 'Reviewer repair receipt was incomplete or missing.'
               markActiveWorkStateChanged()
@@ -3125,7 +3227,7 @@ ${specialistRoutingSection}
             if (repairedSnapshotFingerprint === reviewSnapshotFingerprint) {
               activeWorkState.currentPhase = 'blocked'
               activeWorkState.nextRequiredAction =
-                'Repair-editor made no snapshot-visible progress on the reviewer findings. Stop retrying and inspect the finding or handoff.'
+                `${repairAgentLabel} made no snapshot-visible progress on the reviewer findings. Stop retrying and inspect the finding or handoff.`
               activeWorkState.latestWorkSummary =
                 'Reviewer repair produced no workspace fingerprint change.'
               markActiveWorkStateChanged()
@@ -3150,7 +3252,7 @@ ${specialistRoutingSection}
               activeWorkState.currentPhase = 'awaiting_review'
               activeWorkState.nextRequiredAction = ''
               activeWorkState.latestWorkSummary =
-                'Repair-editor addressed reviewer findings; validation re-ran inline and a fresh reviewer pass is required.'
+                `${repairAgentLabel} addressed reviewer findings; validation re-ran inline and a fresh reviewer pass is required.`
               markActiveWorkStateChanged()
               emitGateTelemetry({
                 currentPhase: 'awaiting_review',
@@ -3166,7 +3268,7 @@ ${specialistRoutingSection}
               activeWorkState.lastReviewerGateSkipReason =
                 'validation-hook-failures'
               activeWorkState.currentPhase = 'blocked'
-              activeWorkState.latestWorkSummary = `Repair-editor addressed reviewer findings but ${reFailures.length} validation failure(s) remain.`
+              activeWorkState.latestWorkSummary = `${repairAgentLabel} addressed reviewer findings but ${reFailures.length} validation failure(s) remain.`
               markActiveWorkStateChanged()
               emitGateTelemetry({
                 currentPhase: 'blocked',
@@ -3181,7 +3283,7 @@ ${specialistRoutingSection}
                 input: {
                   role: 'user',
                   content: [
-                    `Repair-editor addressed the reviewer findings but ${reFailures.length} validation failure(s) remain. Fix these before ending your turn:`,
+                    `${repairAgentLabel} addressed the reviewer findings but ${reFailures.length} validation failure(s) remain. Fix these before ending your turn:`,
                     '',
                     ...reFailures,
                     '',
@@ -5407,6 +5509,18 @@ ${specialistRoutingSection}
           remaining = remaining.slice(match[0].length).trim()
         }
         return remaining
+      }
+
+      // Inline mirror of isTestCoverageReviewerFinding in
+      // agents/base2/gate-reviewer.ts (all-coverage → exclusive test-writer).
+      // Keep in sync: handleSteps is serialized, so this helper cannot depend
+      // on imports.
+      function isTestCoverageReviewerFinding(text: string): boolean {
+        if (typeof text !== 'string') return false
+        const t = text.toLowerCase()
+        if (t.includes('test coverage')) return true
+        if (t.includes('coverage') && /\.test\.[a-z0-9]+/.test(t)) return true
+        return false
       }
 
       function collectReviewerBlockers(toolResult: unknown): string[] {

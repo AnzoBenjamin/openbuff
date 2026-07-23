@@ -103,6 +103,15 @@ export function stripReviewerPreamble(text: string): string {
   return remaining
 }
 
+/** True when a blocker is a pure test-coverage gap (all-coverage sets route to test-writer). */
+export function isTestCoverageReviewerFinding(text: string): boolean {
+  if (typeof text !== 'string') return false
+  const t = text.toLowerCase()
+  if (t.includes('test coverage')) return true
+  if (t.includes('coverage') && /\.test\.[a-z0-9]+/.test(t)) return true
+  return false
+}
+
 export function collectReviewerBlockers(toolResult: unknown): string[] {
   // First check for structured reviewer outputs (e.g. JSON with a
   // verdict field). When present and BLOCKING, surface findings as the
