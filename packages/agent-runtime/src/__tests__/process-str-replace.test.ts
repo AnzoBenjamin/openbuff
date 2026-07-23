@@ -1447,6 +1447,10 @@ function test3() {
     expect(result).toHaveProperty('error')
     if ('error' in result) {
       expect(result.error).toContain('different project, path, or agent run')
+      expect(result.error).toContain('Cross-path and cross-run capability replay')
+      expect(result.error).not.toContain('may refer to content that changed')
+      expect(result.error).not.toContain('content may have been removed')
+      expect(result.error).not.toContain('Before attempting another str_replace')
     }
   })
 

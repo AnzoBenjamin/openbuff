@@ -462,7 +462,7 @@ export const handleWriteFile = (async (
     toolName: 'write_file',
     fileProcessingState,
     paths: [path],
-    rejectionRequiresRead: !('error' in writeFileResult),
+    rejectionRequiresRead: false,
     wholeFileContentByPath:
       'content' in writeFileResult
         ? new Map([[path, writeFileResult.content]])

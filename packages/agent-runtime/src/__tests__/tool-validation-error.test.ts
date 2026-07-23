@@ -561,6 +561,33 @@ describe('tool validation error handling', () => {
     }
   })
 
+  it('gives actionable recovery when get_build_targets receives no changed files', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'get_build_targets',
+        toolCallId: 'get-build-targets-empty-files-tool-call-id',
+        input: { files: [] },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('Raw validation issues:')
+      expect(result.error).toContain('"code": "too_small"')
+      expect(result.error).toContain(
+        '`files` must be a non-empty array of changed project-relative file paths',
+      )
+      expect(result.error).toContain(
+        '{ "files": ["packages/agent-runtime/src/tools/tool-executor.ts"] }',
+      )
+      expect(result.error).toContain(
+        'do not call `get_build_targets`; skip build-target discovery until a concrete changed-file list exists',
+      )
+      expect(result.formattedInput).toContain('<root>:')
+      expect(result.formattedInput).toContain('"files": []')
+    }
+  })
+
   it('should parse stringified params for spawn_agents entries', () => {
     const result = parseRawToolCall({
       rawToolCall: {
@@ -732,6 +759,26 @@ describe('tool validation error handling', () => {
       expect(result.formattedInput).not.toContain(
         'authority-bearing-secret-fragment',
       )
+    }
+  })
+
+  it('rejects mis-braced serialized spawn payloads with field-placement guidance', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-agents-misbraced-tool-call-id',
+        input:
+          '{"agents":[{"agent_type":"thinker"}],"prompt":"outside-agent"}',
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain(
+        '`prompt`, `params`, and `handoff` must be inside each agent object',
+      )
+      expect(result.error).toContain('check every brace and bracket')
+      expect(result.error).toContain('ambiguous brace nesting')
     }
   })
 
@@ -1697,6 +1744,94 @@ describe('tool validation error handling', () => {
     expect(message).toContain('"source_path":{"type":"string"}')
     expect(message).toContain('"retry_count":{"type":"integer"')
     expect(message).toContain('Preserve params field names exactly.')
+  })
+
+  it('gives reliability-reviewer snapshot_id recovery with its normalized ID', async () => {
+    const { validateAgentInput } =
+      await import('../tools/handlers/tool/spawn-agent-utils')
+    const reliabilityReviewer = {
+      ...testAgentTemplate,
+      id: 'reliability-reviewer',
+      inputSchema: {
+        params: z.object({ snapshot_id: z.string() }),
+      },
+    }
+
+    let message = ''
+    try {
+      validateAgentInput(
+        reliabilityReviewer,
+        'reliability-reviewer',
+        undefined,
+        {},
+      )
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(message).toContain('Missing required: snapshot_id')
+    expect(message).toContain('params.snapshot_id')
+    expect(message).toContain('"agent_type": "reliability-reviewer"')
+    expect(message).toContain('"snapshot_id": "<current fingerprint>"')
+    expect(message).toContain('exact current snapshot fingerprint')
+    expect(message).toContain('get_change_review_bundle')
+  })
+
+  it('gives dependency-manager canonical manager and operation recovery', async () => {
+    const { validateAgentInput } =
+      await import('../tools/handlers/tool/spawn-agent-utils')
+    const dependencyManager = {
+      ...testAgentTemplate,
+      id: 'dependency-manager',
+      inputSchema: {
+        params: z.object({
+          manager: z.string(),
+          operation: z.enum(['add', 'remove', 'sync', 'restore', 'update']),
+        }),
+      },
+    }
+
+    let message = ''
+    try {
+      validateAgentInput(dependencyManager, 'dependency-manager', undefined, {})
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(message).toContain('manager:')
+    expect(message).toContain('operation:')
+    expect(message).toContain('"required":["manager","operation"]')
+    expect(message).toContain('"manager": "npm"')
+    expect(message).toContain('"operation": "add"')
+    expect(message).toContain('repository manifest/environment evidence')
+    expect(message).toContain('add, remove, sync, restore, or update')
+    expect(message).toContain(
+      'Do not infer dependency mutation authorization from a validation failure.',
+    )
+  })
+
+  it('gives librarian canonical repoUrl recovery on empty params', async () => {
+    const { validateAgentInput } =
+      await import('../tools/handlers/tool/spawn-agent-utils')
+    const librarian = {
+      ...testAgentTemplate,
+      id: 'librarian',
+      inputSchema: {
+        params: z.object({ repoUrl: z.string().url() }),
+      },
+    }
+
+    let message = ''
+    try {
+      validateAgentInput(librarian, 'librarian', undefined, {})
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(message).toContain('Missing required: repoUrl')
+    expect(message).toContain('params.repoUrl')
+    expect(message).toContain('"repoUrl": "https://github.com/<owner>/<repo>"')
+    expect(message).toContain('a URL only in prompt prose is not used')
   })
 
   it('rejects security-reviewer snapshot_id with canonical params recovery', async () => {

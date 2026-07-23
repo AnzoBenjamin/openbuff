@@ -188,13 +188,11 @@ describe('gate-path helpers — inline copies match canonical exports', () => {
     const pathInputs: string[] = [
       // reviewable source (expect true)
       'src/foo.ts',
-      // __tests__/ path (false)
+      // Tests are first-class reviewable files.
       'src/__tests__/foo.ts',
-      // .test.ts path (false)
       'src/foo.test.ts',
-      // JS-flavored test/spec files (false) — parity must hold across the
-      // broadened (?:tsx?|jsx?|mjs|cjs) exclusion so a `.test.js`/`.spec.mjs`
-      // test file is not classified as reviewable source by the inline copy.
+      // JS-flavored test/spec files are reviewable and remain separately
+      // identifiable as coverage evidence.
       'src/foo.test.js',
       'src/foo.spec.mjs',
       'src/foo.test.cjs',
@@ -234,7 +232,7 @@ describe('gate-path helpers — inline copies match canonical exports', () => {
     // selectReviewableGateFiles normalizes + filters + dedupes internally, so
     // pass raw path lists.
     const listInputs: string[][] = [
-      // mixed source + bookkeeping: only source survives, normalized + deduped
+      // mixed source + tests + bookkeeping: source and tests survive
       [
         'src/foo.ts',
         './src/foo.ts',
@@ -367,12 +365,12 @@ describe('gate-path helpers — canonical export behavior', () => {
     expect(normalizeGateFilePath('   ')).toBe('')
   })
 
-  test('selectReviewableGateFiles keeps reviewable source and drops tests/generated/docs/data/bookkeeping', () => {
+  test('selectReviewableGateFiles keeps source and tests and drops generated/docs/data/bookkeeping', () => {
     const selected = selectReviewableGateFiles([
       // reviewable source (kept): .ts and .py
       'src/foo.ts',
       'scripts/tool.py',
-      // __tests__/ and .test/.spec (dropped)
+      // __tests__/ and .test/.spec (kept)
       'src/__tests__/foo.ts',
       'src/foo.test.ts',
       'src/foo.spec.ts',
@@ -392,7 +390,13 @@ describe('gate-path helpers — canonical export behavior', () => {
       'evals/case.ts',
       '.agents/sessions/slug/STATE.json',
     ])
-    expect(selected).toEqual(['src/foo.ts', 'scripts/tool.py'])
+    expect(selected).toEqual([
+      'src/foo.ts',
+      'scripts/tool.py',
+      'src/__tests__/foo.ts',
+      'src/foo.test.ts',
+      'src/foo.spec.ts',
+    ])
     // empty list -> []
     expect(selectReviewableGateFiles([])).toEqual([])
   })
@@ -421,7 +425,11 @@ describe('gate-path helpers — canonical export behavior', () => {
       'src/__tests__/feature.ts',
     ]
 
-    expect(selectReviewableGateFiles(inputs)).toEqual(['src/feature.ts'])
+    expect(selectReviewableGateFiles(inputs)).toEqual([
+      'src/feature.ts',
+      'src/feature.test.ts',
+      'src/__tests__/feature.ts',
+    ])
     expect(selectCoverageEvidenceFiles(inputs)).toEqual([
       'src/feature.test.ts',
       'src/__tests__/feature.ts',
@@ -443,12 +451,9 @@ describe('gate-path helpers — canonical export behavior', () => {
     ).toEqual(['src/feature.test.ts', 'src/__tests__/feature.ts'])
   })
 
-  test('JS-flavored test files are excluded from reviewable source and treated as coverage evidence', () => {
-    // RF-3/RF-9: widen the test/spec exclusion so JS-flavored test files
-    // (foo.test.mjs/.cjs/.jsx, foo.spec.*) are treated as tests rather than
-    // reviewable source. Without this, the reviewable include regex (which
-    // already accepts mjs|cjs|jsx as source extensions) would classify a JS
-    // test file as reviewable source.
+  test('JS-flavored test files are reviewable and treated as coverage evidence', () => {
+    // Tests participate in reviewer attestation while remaining identifiable
+    // as coverage evidence.
     for (const testFile of [
       'src/foo.test.mjs',
       'src/foo.test.cjs',
@@ -457,7 +462,7 @@ describe('gate-path helpers — canonical export behavior', () => {
       'src/foo.spec.cjs',
       'src/foo.spec.jsx',
     ]) {
-      expect(isReviewableGateFile(testFile)).toBe(false)
+      expect(isReviewableGateFile(testFile)).toBe(true)
       expect(isCoverageEvidenceFile(testFile)).toBe(true)
     }
     // Non-test JS-flavored source stays reviewable and is not coverage evidence.

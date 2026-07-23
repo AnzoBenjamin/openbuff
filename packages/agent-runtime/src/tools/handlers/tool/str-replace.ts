@@ -327,14 +327,20 @@ export const handleStrReplace = (async (
     // the agent only needs to fix the syntax, not re-read the file or switch
     // tools. (Fix C circuit breaker only counts real processing failures.)
     if (!strReplaceResult.preflightSyntaxError) {
-      if (!hadFreshWholeFileAuthorization) {
+      const requiresFreshCapability =
+        /(?:readCapability|basedOnRead).*(?:stale|different project, path, or agent run)|(?:stale|different project, path, or agent run).*(?:readCapability|basedOnRead)/is.test(
+          strReplaceResult.error,
+        )
+      if (requiresFreshCapability) {
         markEditRequiresFreshRead({
           fileProcessingState,
           path,
-          reason: 'preflight_failed',
+          reason: 'stale_capability',
           sourceTool: 'str_replace',
         })
       }
+      // Deterministic no-match/ambiguity preflight failures do not mutate the
+      // client and therefore preserve any valid read authorization.
       // Fix C: a hard error consumes the per-path failure budget.
       fileProcessingState.consecutiveStrReplaceFailuresByPath[path] =
         (fileProcessingState.consecutiveStrReplaceFailuresByPath[path] ?? 0) + 1
@@ -372,11 +378,10 @@ export const handleStrReplace = (async (
     toolName: 'str_replace',
     fileProcessingState,
     paths: [path],
-    // Processing/preflight failures never reached the client. Preserve a
-    // verified whole-file authorization; scoped/stale paths were explicitly
-    // marked above. Client-side rejection after a prepared edit still requires
-    // a fresh read through the coordinator's default path.
-    rejectionRequiresRead: !('error' in strReplaceResult),
+    rejectionRequiresRead: false,
+    // Deterministic processing failures and explicit client rejections preserve
+    // valid read authorization. Stale capability and uncertain application
+    // outcomes are marked separately and still require a fresh read.
     wholeFileContentByPath:
       'content' in strReplaceResult
         ? new Map([[path, strReplaceResult.content]])

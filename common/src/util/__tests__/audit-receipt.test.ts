@@ -50,6 +50,25 @@ describe('containsStructuralAuditReceipt', () => {
     ).toBe(false)
   })
 
+  it('terminates and returns false for a cyclic object graph without a receipt', () => {
+    const value: Record<string, unknown> = { nested: {} }
+    value.self = value
+    ;(value.nested as Record<string, unknown>).parent = value
+
+    expect(containsStructuralAuditReceipt(value, 'snapshot-1')).toBe(false)
+  })
+
+  it('returns true for a receipt nested deeper than the old depth limit', () => {
+    let value: Record<string, unknown> = {
+      structuralReceipt: { snapshot_id: 'snapshot-deep' },
+    }
+    for (let depth = 0; depth < 13; depth += 1) {
+      value = { nested: value }
+    }
+
+    expect(containsStructuralAuditReceipt(value, 'snapshot-deep')).toBe(true)
+  })
+
   it('returns false for non-object inputs', () => {
     expect(containsStructuralAuditReceipt(null, 'snapshot-1')).toBe(false)
     expect(containsStructuralAuditReceipt('snapshot-1', 'snapshot-1')).toBe(false)

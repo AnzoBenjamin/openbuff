@@ -620,10 +620,15 @@ describe('read_files edit-state recovery', () => {
     expect(fileProcessingState.promisesByPath[path]).toBeUndefined()
   })
 
-  it('invalidates prepared str_replace state when the client rejects the patch', async () => {
+  it('preserves authorization when the client explicitly rejects str_replace without applying', async () => {
     const path = 'src/rejected.ts'
     const diskContent = 'export const value = 1\n'
     const fileProcessingState = createFileProcessingState()
+    fileProcessingState.strictReadBeforeEdit = true
+    fileProcessingState.readAuthorizationsByPath = { [path]: true }
+    fileProcessingState.readAuthorizationHashesByPath = {
+      [path]: getContentHash(diskContent),
+    }
 
     const result = await handleStrReplace({
       previousToolCallFinished: Promise.resolve(),
@@ -660,8 +665,11 @@ describe('read_files edit-state recovery', () => {
         errorMessage: 'client rejected patch',
       })
     }
-    expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
+    expect(
+      fileProcessingState.failedEditRequiresReadByPath[path],
+    ).toBeUndefined()
     expect(fileProcessingState.promisesByPath[path]).toBeUndefined()
+    expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
   })
 
   it('[ABI-M05] sends exact whole-file bytes and rejects an unconfirmed client result', async () => {
@@ -724,7 +732,7 @@ describe('read_files edit-state recovery', () => {
     expect(fileProcessingState.promisesByPath[path]).toBeUndefined()
   })
 
-  it('does not grant write authorization or retain prepared state when the client rejects write_file', async () => {
+  it('preserves existing write authorization when the client explicitly rejects write_file', async () => {
     const path = 'src/rejected-write.ts'
     const diskContent = 'export const value = 1\n'
     const fileProcessingState = createFileProcessingState()
@@ -769,15 +777,17 @@ describe('read_files edit-state recovery', () => {
         errorMessage: 'client rejected write',
       })
     }
-    expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
-    expect(fileProcessingState.promisesByPath[path]).toBeUndefined()
-    expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBeUndefined()
     expect(
-      fileProcessingState.readAuthorizationHashesByPath?.[path],
+      fileProcessingState.failedEditRequiresReadByPath[path],
     ).toBeUndefined()
+    expect(fileProcessingState.promisesByPath[path]).toBeUndefined()
+    expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
+    expect(fileProcessingState.readAuthorizationHashesByPath?.[path]).toBe(
+      getContentHash(diskContent),
+    )
   })
 
-  it('detects a write_file client error in any output part and revokes authorization', async () => {
+  it('detects a late explicit write_file rejection and preserves authorization', async () => {
     const path = 'src/rejected-late-write.ts'
     const fileProcessingState = createFileProcessingState()
     fileProcessingState.strictReadBeforeEdit = true
@@ -813,9 +823,11 @@ describe('read_files edit-state recovery', () => {
     } as any)
 
     expect(result.output).toHaveLength(2)
-    expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
+    expect(
+      fileProcessingState.failedEditRequiresReadByPath[path],
+    ).toBeUndefined()
     expect(fileProcessingState.promisesByPath[path]).toBeUndefined()
-    expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBeUndefined()
+    expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
   })
 
   it('registers write_file processing before waiting for previous tool completion', async () => {
@@ -1153,10 +1165,15 @@ describe('read_files edit-state recovery', () => {
     }
   })
 
-  it('blocks later str_replace calls after edit_transaction preflight fails', async () => {
+  it('preserves valid read authorization after edit_transaction preflight fails', async () => {
     const path = 'src/helper.ts'
     const diskContent = 'export const value = 1\n'
     const fileProcessingState = createFileProcessingState()
+    fileProcessingState.strictReadBeforeEdit = true
+    fileProcessingState.readAuthorizationsByPath = { [path]: true }
+    fileProcessingState.readAuthorizationHashesByPath = {
+      [path]: getContentHash(diskContent),
+    }
 
     const transactionResult = await handleEditTransaction({
       previousToolCallFinished: Promise.resolve(),
@@ -1193,8 +1210,12 @@ describe('read_files edit-state recovery', () => {
     if (output.type === 'json') {
       expect(output.value).toHaveProperty('errorMessage')
     }
-    expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
+    expect(
+      fileProcessingState.failedEditRequiresReadByPath[path],
+    ).toBeUndefined()
+    expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
 
+    let followUpApplied = false
     const strReplaceResult = await handleStrReplace({
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
@@ -1215,27 +1236,23 @@ describe('read_files edit-state recovery', () => {
       logger,
       requestOptionalFile: async ({ filePath }: { filePath: string }) =>
         filePath === path ? diskContent : null,
-      requestClientToolCall: async () => {
-        throw new Error('should not apply blocked edit')
+      requestClientToolCall: async (clientToolCall: any) => {
+        followUpApplied = true
+        return confirmedMutationOutput(clientToolCall)
       },
       writeToClient: () => {},
     } as any)
 
+    expect(followUpApplied).toBe(true)
     const replaceOutput = strReplaceResult.output[0]
-    expect(fileProcessingState.editRereadRequirementsByPath?.[path]).toEqual({
-      reason: 'preflight_failed',
-      sourceTool: 'edit_transaction',
-    })
+    expect(fileProcessingState.editRereadRequirementsByPath?.[path]).toBeUndefined()
     expect(replaceOutput.type).toBe('json')
     if (replaceOutput.type === 'json') {
-      expect(replaceOutput.value).toHaveProperty('errorMessage')
-      expect(
-        String((replaceOutput.value as { errorMessage?: string }).errorMessage),
-      ).toContain('previous edit_transaction preflight failed')
+      expect(replaceOutput.value).not.toHaveProperty('errorMessage')
     }
   })
 
-  it('marks all transaction paths as requiring re-read when client rejects a patch', async () => {
+  it('preserves valid authorization for all transaction paths when the client explicitly rejects without applying', async () => {
     const path = 'src/helper.ts'
     const otherPath = 'src/other.ts'
     const diskContentByPath: Record<string, string> = {
@@ -1243,6 +1260,15 @@ describe('read_files edit-state recovery', () => {
       [otherPath]: 'export const other = 1\n',
     }
     const fileProcessingState = createFileProcessingState()
+    fileProcessingState.strictReadBeforeEdit = true
+    fileProcessingState.readAuthorizationsByPath = {
+      [path]: true,
+      [otherPath]: true,
+    }
+    fileProcessingState.readAuthorizationHashesByPath = {
+      [path]: getContentHash(diskContentByPath[path]),
+      [otherPath]: getContentHash(diskContentByPath[otherPath]),
+    }
 
     const transactionResult = await handleEditTransaction({
       previousToolCallFinished: Promise.resolve(),
@@ -1302,11 +1328,16 @@ describe('read_files edit-state recovery', () => {
     }
     expect(fileProcessingState.promisesByPath[path]).toBeUndefined()
     expect(fileProcessingState.promisesByPath[otherPath]).toBeUndefined()
-    expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
-    expect(fileProcessingState.failedEditRequiresReadByPath[otherPath]).toBe(
-      true,
-    )
+    expect(
+      fileProcessingState.failedEditRequiresReadByPath[path],
+    ).toBeUndefined()
+    expect(
+      fileProcessingState.failedEditRequiresReadByPath[otherPath],
+    ).toBeUndefined()
+    expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
+    expect(fileProcessingState.readAuthorizationsByPath?.[otherPath]).toBe(true)
 
+    let followUpApplied = false
     const strReplaceResult = await handleStrReplace({
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
@@ -1316,7 +1347,7 @@ describe('read_files edit-state recovery', () => {
           path,
           replacements: [
             {
-              oldString: 'export const value = 2',
+              oldString: 'export const value = 1',
               newString: 'export const value = 3',
               allowMultiple: false,
             },
@@ -1327,23 +1358,19 @@ describe('read_files edit-state recovery', () => {
       logger,
       requestOptionalFile: async ({ filePath }: { filePath: string }) =>
         diskContentByPath[filePath] ?? null,
-      requestClientToolCall: async () => {
-        throw new Error('should not apply blocked edit')
+      requestClientToolCall: async (clientToolCall: any) => {
+        followUpApplied = true
+        return confirmedMutationOutput(clientToolCall)
       },
       writeToClient: () => {},
     } as any)
 
+    expect(followUpApplied).toBe(true)
     const replaceOutput = strReplaceResult.output[0]
-    expect(fileProcessingState.editRereadRequirementsByPath?.[path]).toEqual({
-      reason: 'application_rejected',
-      sourceTool: 'edit_transaction',
-    })
+    expect(fileProcessingState.editRereadRequirementsByPath?.[path]).toBeUndefined()
     expect(replaceOutput.type).toBe('json')
     if (replaceOutput.type === 'json') {
-      expect(replaceOutput.value).toHaveProperty('errorMessage')
-      expect(
-        String((replaceOutput.value as { errorMessage?: string }).errorMessage),
-      ).toContain('previous edit_transaction application was rejected')
+      expect(replaceOutput.value).not.toHaveProperty('errorMessage')
     }
   })
 
@@ -3393,7 +3420,7 @@ describe('read_files edit-state recovery', () => {
       expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
     })
 
-    it('replace_range preserves strict read authorization on success and only flags re-read after client errors', async () => {
+    it('replace_range preserves authorization on success but revokes it for stale client snapshots', async () => {
       const path = 'src/helper.ts'
       let diskContent = 'export const value = 1\n'
       const fileProcessingState = createFileProcessingState()
@@ -3459,6 +3486,10 @@ describe('read_files edit-state recovery', () => {
 
       expect(errorResult.output[0]?.type).toBe('json')
       expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
+      expect(
+        fileProcessingState.editRereadRequirementsByPath?.[path],
+      ).toMatchObject({ reason: 'stale_snapshot' })
+      expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBeUndefined()
     })
 
     it('strict replace_range rejects a legacy pathless expectedHash as authorization', async () => {

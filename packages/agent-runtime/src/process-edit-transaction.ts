@@ -105,6 +105,7 @@ export async function processEditTransaction(params: {
     { startLine: number; endLine: number; lineDelta: number }[]
   >()
   const failures: TransactionFailure[] = []
+  const pathsWithNonRangeEdit = new Set<string>()
   for (let editIndex = 0; editIndex < edits.length; editIndex++) {
     const edit = edits[editIndex]
     if (!edit) continue
@@ -132,6 +133,25 @@ export async function processEditTransaction(params: {
         ...(effectiveEdit.id && { id: effectiveEdit.id }),
         path: effectiveEdit.path,
         errorMessage: rangeAdjustment.error,
+      })
+      break
+    }
+
+    // A replace_range authenticates against ORIGINAL-snapshot coordinates, but a
+    // prior non-replace_range content edit on the same path changes the working
+    // line count without being reflected in those coordinates. Rather than try to
+    // compute str_replace/structured/patch line deltas, block the replace_range so
+    // it can never silently splice the wrong lines while its capability hash check
+    // (validated against the original snapshot) still passes.
+    if (
+      effectiveEdit.type === 'replace_range' &&
+      pathsWithNonRangeEdit.has(effectiveEdit.path)
+    ) {
+      failures.push({
+        editIndex,
+        ...(effectiveEdit.id && { id: effectiveEdit.id }),
+        path: effectiveEdit.path,
+        errorMessage: `replace_range blocked for ${effectiveEdit.path}: a prior non-replace_range edit changed this file earlier in the transaction, so replace_range's original-snapshot line coordinates can no longer be safely applied. Split this into a separate transaction or use str_replace/rewrite_symbol for this path.`,
       })
       break
     }
@@ -167,6 +187,9 @@ export async function processEditTransaction(params: {
     }
 
     workingContentByPath.set(effectiveEdit.path, result.content)
+    if (rangeAdjustment.edit.type !== 'replace_range') {
+      pathsWithNonRangeEdit.add(effectiveEdit.path)
+    }
     if (rangeAdjustment.edit.type === 'replace_range') {
       const originalRange = rangeAdjustment.edit.originalRange ?? {
         startLine: rangeAdjustment.edit.startLine,
@@ -196,7 +219,7 @@ export async function processEditTransaction(params: {
       tool: 'edit_transaction',
       error: [
         `edit_transaction aborted during preflight at edit ${firstFailure.editIndex + 1} of ${edits.length}, so NO files were changed.`,
-        'The detailed cause is listed once in failures below. Re-read only when that failure explicitly requires it, then retry the whole related transaction from one current snapshot.',
+        'The detailed cause is listed once in failures below. If that failure requires fresh read/capability state, re-read EVERY target in this transaction in the current run, then rebuild and retry the whole transaction from that one current snapshot. Do not refresh only the first failed path while replaying stale tokens for the remaining targets.',
       ].join('\n\n'),
       failures,
     }
@@ -356,21 +379,6 @@ async function processTransactionEdit(params: {
   switch (edit.type) {
     case 'str_replace': {
       const initialContent = await initialContentPromise
-      if (typeof initialContent === 'string') {
-        return processStrReplace({
-          path: edit.path,
-          replacements: edit.replacements,
-          atomic: true,
-          transactionContext: true,
-          requireFreshReadCapability,
-          readCapabilityScope: readCapabilityIssuer
-            ? { ...readCapabilityIssuer, path: edit.path }
-            : undefined,
-          initialContentPromise: Promise.resolve(initialContent),
-          logger,
-        })
-      }
-
       return processStrReplace({
         path: edit.path,
         replacements: edit.replacements,
@@ -409,11 +417,21 @@ async function processTransactionEdit(params: {
           : lines.at(-1) === ''
             ? lines.length - 1
             : lines.length
+      const authorizationTarget = edit.originalRange ?? {
+        startLine: edit.startLine,
+        endLine: edit.endLine,
+      }
       {
         const decoded = decodeReadCapabilityToken(edit.readCapability)
         if (typeof decoded === 'string') {
           return { error: decoded }
         }
+        // Invariant: the runtime always supplies readCapabilityIssuer in
+        // production, so project/path/run scope is enforced by the scope check
+        // below. Do not hard-require the issuer here: non-runtime/test callers
+        // may omit it. When it is absent the capability metadata match plus the
+        // observed-content-hash freshness check still gate the edit, but
+        // cross-scope replay is not detectable in that case.
         const scope = readCapabilityIssuer
           ? { ...readCapabilityIssuer, path: edit.path }
           : undefined
@@ -443,10 +461,6 @@ async function processTransactionEdit(params: {
             error: `replace_range blocked for ${edit.path}: the readCapability-covered content is stale. Re-read lines ${edit.capabilityStartLine}-${edit.capabilityEndLine} and retry with the fresh token.`,
           }
         }
-        const authorizationTarget = edit.originalRange ?? {
-          startLine: edit.startLine,
-          endLine: edit.endLine,
-        }
         if (
           authorizationTarget.startLine < edit.capabilityStartLine ||
           authorizationTarget.endLine > edit.capabilityEndLine
@@ -464,13 +478,6 @@ async function processTransactionEdit(params: {
         return {
           error: `replace_range ${edit.startLine}-${edit.endLine} is outside ${edit.path} (${visibleLineCount} lines).`,
         }
-      }
-      const currentRange = lines
-        .slice(edit.startLine - 1, edit.endLine)
-        .join('\n')
-      const authorizationTarget = edit.originalRange ?? {
-        startLine: edit.startLine,
-        endLine: edit.endLine,
       }
       const narrowedTarget =
         authorizationTarget.startLine !== edit.capabilityStartLine ||

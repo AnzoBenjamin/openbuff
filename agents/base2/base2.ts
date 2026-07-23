@@ -446,10 +446,12 @@ ${specialistRoutingSection}
       const mutableAgentState = (agentState ?? {}) as Base2AgentState
       const agentId = mutableAgentState.agentId
       const configuredHasNoValidation = config?.hasNoValidation
+      const configuredPlanOnly = config?.planOnly === true
       const runValidationGate =
-        typeof configuredHasNoValidation === 'boolean'
+        !configuredPlanOnly &&
+        (typeof configuredHasNoValidation === 'boolean'
           ? !configuredHasNoValidation
-          : agentId !== 'base2-fast' && agentId !== 'base2-fast-no-validation'
+          : agentId !== 'base2-fast' && agentId !== 'base2-fast-no-validation')
       // M3 (R1a–R1d) automated phase-gate predicates. These mirror the
       // advisory glob list in securityReviewSection (quality-prompt-section.ts)
       // so the automated gate and the advisory prompt agree on what is
@@ -479,13 +481,6 @@ ${specialistRoutingSection}
       const reviewerAgentType = 'code-reviewer'
       const MAX_REPAIR_ROUNDS = 3
       const MAX_REVIEWER_NO_VERDICT_RETRIES = 1
-      // static-review-only concurrency (M3.1): when the reviewer is configured
-      // for static-only review, it can run concurrently with the blocking
-      // validation hooks. Defaults to false so the existing sequential
-      // validation-then-reviewer behavior is preserved.
-      const staticReviewOnlyEnabled = !!(
-        mutableAgentState.base2ActiveWork?.staticReviewOnly ?? false
-      )
       const existingActiveWorkState = mutableAgentState.base2ActiveWork
       const hadPendingGateFiles =
         !!existingActiveWorkState &&
@@ -2125,95 +2120,22 @@ ${specialistRoutingSection}
           break
         }
 
-        // Verification gate: after the model thinks it's done, run configured
-        // file-change hooks (typecheck/lint/test). If any failed, surface the
-        // failures and keep the turn open so the model fixes them. The runtime's
-        // max step limit bounds pathological retry loops; the gate itself must
-        // not silently skip validation after repeated failures.
-        //
-        // static-review-only concurrency (M3.1): when the reviewer is
-        // static-only (base2ActiveWork.staticReviewOnly), spawn it in the
-        // background BEFORE the blocking validation hooks so static review
-        // runs concurrently. The join contract is preserved: a validation
-        // failure still `continue`s below and ignores this background job; we
-        // only `check_background_agent` for its result if validation passes.
+        // Validation runs before the final reviewer because hooks may mutate
+        // generated or formatted output. The exact source and test snapshot is
+        // re-captured at the reviewer spawn boundary below.
         const requiredReviewerAgentType =
           activeWorkState.requiredReviewerRevalidation ?? reviewerAgentType
-        const staticReviewConcurrency =
-          runReviewerGate &&
-          editsHappened &&
-          staticReviewOnlyEnabled &&
-          requiredReviewerAgentType === reviewerAgentType
-        // Fix 1/2/3 (reviewer-gate scoping): the final code-reviewer must only
-        // ever be asked to attest to reviewable *source* files, never
-        // bookkeeping/docs/plan artifacts (e.g. .agents/sessions/**
-        // STATE.json/EVENTS.jsonl/STATUS.md/LESSONS.md). Drive the reviewer's
-        // snapshot details and pending-file attestation off the reviewable
-        // subset so the fingerprint the reviewer echoes matches what
-        // attestation checks. Validation-hook behavior is unchanged; only the
-        // reviewer spawn/attestation scoping uses this subset.
-        const reviewablePendingFiles = selectReviewableGateFiles(
+        let reviewablePendingFiles = selectReviewableGateFiles(
           Array.from(pendingGateFiles),
         )
-        const reviewSnapshotDetails = buildGateSnapshotDetails(
+        let reviewSnapshotDetails = buildGateSnapshotDetails(
           reviewablePendingFiles,
           '',
         )
-        const reviewSnapshotFingerprint = hashGateSnapshotDetails(
+        let reviewSnapshotFingerprint = hashGateSnapshotDetails(
           reviewSnapshotDetails,
         )
-        // Fingerprint of the reviewable subset for the R5 skip-re-review
-        // short-circuit. Equal to reviewSnapshotFingerprint today, but kept
-        // as its own binding so the intent (reviewable-set identity) is clear
-        // and stable if the review snapshot inputs ever change.
-        const reviewableFingerprint = hashGateSnapshotDetails(
-          buildGateSnapshotDetails(reviewablePendingFiles, ''),
-        )
-        // Co-changed test files are excluded from the reviewable fingerprint
-        // set (isReviewableGateFile drops tests), which historically made it
-        // impossible for the reviewer to confirm coverage — it could never see
-        // the changed test file, so it always reported coverage missing/
-        // uncertain and the gate looped. Surface them as readable, additive
-        // "coverage evidence" context. This does NOT enter reviewSnapshot
-        // Fingerprint or attestation (those stay scoped to reviewable source).
-        const coverageEvidenceFiles = selectCoverageEvidenceFiles(
-          Array.from(pendingGateFiles),
-        )
-        const coverageEvidenceDetails = coverageEvidenceFiles.length
-          ? buildGateSnapshotDetails(coverageEvidenceFiles, '')
-          : '(no co-changed test files)'
-        if (staticReviewConcurrency && !activeWorkState.staticReviewerJobId) {
-          const bgReview = yield {
-            toolName: 'spawn_agents',
-            input: {
-              agents: [
-                {
-                  agent_type: requiredReviewerAgentType,
-                  background: true,
-                  prompt: [
-                    'Review the completed default-flow code changes before finalization.',
-                    '',
-                    `Pending changed files: ${reviewablePendingFiles.join(', ') || '(unknown)'}`,
-                    `Snapshot fingerprint (echo exactly): ${reviewSnapshotFingerprint}`,
-                    'Snapshot details (read for file membership; do not echo):',
-                    reviewSnapshotDetails,
-                    'Coverage evidence (co-changed tests; readable and citable, not part of the reviewed fingerprint):',
-                    coverageEvidenceDetails,
-                    'Validation gate summary: Reviewer running concurrently with validation (static-review-only mode).',
-                    '',
-                    'Return the required structured review object. Echo snapshotFingerprint exactly, list every reviewed file, evaluate all review dimensions, and map every user requirement to evidence. Co-changed test files are listed under "Coverage evidence" above; they are readable and citable even though they are not part of the reviewed fingerprint. Test-coverage requirements are satisfied (not uncertain) when a Coverage evidence test file covers the changed behavior — cite that test file and the covering test name(s) as the requirement evidence. Use coverage: missing only when no covering test exists in the Coverage evidence list or anywhere in the repo, and requirement status uncertain only when you could not inspect a listed Coverage evidence test file at all.',
-                  ].join('\n'),
-                },
-              ],
-            },
-          } as any
-          const bgJobId = extractBackgroundAgentJobId(
-            (bgReview as any) && (bgReview as any).toolResult,
-          )
-          if (bgJobId) {
-            activeWorkState.staticReviewerJobId = bgJobId
-          }
-        }
+        let reviewableFingerprint = reviewSnapshotFingerprint
         let validationSummary =
           'No file changes were detected, so no validation hooks ran.'
         const validationInfrastructureBypassed =
@@ -2777,6 +2699,20 @@ ${specialistRoutingSection}
           activeWorkState.currentPhase = 'awaiting_review'
         }
 
+        // Validation has completed. Re-capture the exact source+test snapshot
+        // immediately before any final reviewer spawn or skip decision.
+        reviewablePendingFiles = selectReviewableGateFiles(
+          Array.from(pendingGateFiles),
+        )
+        reviewSnapshotDetails = buildGateSnapshotDetails(
+          reviewablePendingFiles,
+          '',
+        )
+        reviewSnapshotFingerprint = hashGateSnapshotDetails(
+          reviewSnapshotDetails,
+        )
+        reviewableFingerprint = reviewSnapshotFingerprint
+
         let reviewerFinalizationVerdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | '' =
           reviewerProtocolBypassAuthorized ? 'NON_BLOCKING' : ''
         if (reviewerProtocolBypassAuthorized) {
@@ -2882,52 +2818,29 @@ ${specialistRoutingSection}
         ) {
           activeWorkState.lastReviewerGateSkipReason = ''
           markActiveWorkStateChanged()
-          let reviewerToolResult: unknown
-          if (staticReviewConcurrency && activeWorkState.staticReviewerJobId) {
-            const checkResult = yield {
-              toolName: 'check_background_agent',
-              input: {
-                jobId: activeWorkState.staticReviewerJobId,
-                timeout_seconds: 120,
-              },
-            } as any
-            // check_background_agent returns { result } where `result` is the
-            // subagent's final output (same shape a foreground spawn_agents
-            // toolResult wraps). Wait for the background reviewer to settle
-            // rather than matching only one verdict token: LOOKS_GOOD and
-            // NON_BLOCKING both pass, while BLOCKING must be parsed below as
-            // actionable feedback. On error/timeout with no result, fall
-            // through to the existing 'did not return LOOKS_GOOD/NON_BLOCKING'
-            // blocked handling below.
-            reviewerToolResult =
-              (checkResult as any)?.toolResult?.result ??
-              (checkResult as any)?.toolResult
-          } else {
-            const review = yield {
-              toolName: 'spawn_agents',
-              input: {
-                agents: [
-                  {
-                    agent_type: requiredReviewerAgentType,
-                    prompt: [
-                      `Review the completed ${requiredReviewerAgentType} changes before finalization.`,
-                      '',
-                      `Pending changed files: ${reviewablePendingFiles.join(', ') || '(unknown)'}`,
-                      `Snapshot fingerprint (echo exactly): ${reviewSnapshotFingerprint}`,
-                      'Snapshot details (read for file membership; do not echo):',
-                      reviewSnapshotDetails,
-                      'Coverage evidence (co-changed tests; readable and citable, not part of the reviewed fingerprint):',
-                      coverageEvidenceDetails,
-                      `Validation gate summary: ${validationSummary}`,
-                      '',
-                      'Return the required structured review object. Echo snapshotFingerprint exactly, list every reviewed file, evaluate all review dimensions, and map every user requirement to evidence. Co-changed test files are listed under "Coverage evidence" above; they are readable and citable even though they are not part of the reviewed fingerprint. Test-coverage requirements are satisfied (not uncertain) when a Coverage evidence test file covers the changed behavior — cite that test file and the covering test name(s) as the requirement evidence. Use coverage: missing only when no covering test exists in the Coverage evidence list or anywhere in the repo, and requirement status uncertain only when you could not inspect a listed Coverage evidence test file at all.',
-                    ].join('\n'),
-                  },
-                ],
-              },
-            } as any
-            reviewerToolResult = (review as any) && (review as any).toolResult
-          }
+          const review = yield {
+            toolName: 'spawn_agents',
+            input: {
+              agents: [
+                {
+                  agent_type: requiredReviewerAgentType,
+                  prompt: [
+                    `Review the completed ${requiredReviewerAgentType} changes before finalization.`,
+                    '',
+                    `Pending changed files: ${reviewablePendingFiles.join(', ') || '(unknown)'}`,
+                    `Snapshot fingerprint (echo exactly): ${reviewSnapshotFingerprint}`,
+                    'Snapshot details (read for file membership; do not echo):',
+                    reviewSnapshotDetails,
+                    `Validation gate summary: ${validationSummary}`,
+                    '',
+                    'Return the required structured review object. Echo snapshotFingerprint exactly, list every pending changed file in reviewedFiles (including tests), evaluate all review dimensions, and map every user requirement to evidence. Changed tests are first-class review targets and may also be cited as coverage evidence. Use coverage: missing only when no covering test exists in the changed files or elsewhere in the repo.',
+                  ].join('\n'),
+                },
+              ],
+            },
+          } as any
+          let reviewerToolResult: unknown =
+            (review as any) && (review as any).toolResult
           const reviewerCrashedBeforeAttestation =
             detectReviewerCrash(reviewerToolResult)
           let attestationIssues = reviewerCrashedBeforeAttestation
@@ -2961,8 +2874,6 @@ ${specialistRoutingSection}
                       `Snapshot fingerprint (echo exactly): ${reviewSnapshotFingerprint}`,
                       'Snapshot details (read for file membership; do not echo):',
                       reviewSnapshotDetails,
-                      'Coverage evidence (co-changed tests; readable and citable, not part of the reviewed fingerprint):',
-                      coverageEvidenceDetails,
                       `Validation gate summary: ${validationSummary}`,
                       '',
                       'Protocol errors from the prior response:',
@@ -3559,8 +3470,10 @@ ${specialistRoutingSection}
           continue
         }
         if (editsHappened) {
-          activeWorkState.lastReviewerGateSkipReason =
-            'validation-and-reviewer-gates-disabled'
+          const disabledGateReason = configuredPlanOnly
+            ? 'plan-only-automatic-finalization-gate-disabled'
+            : 'validation-and-reviewer-gates-disabled'
+          activeWorkState.lastReviewerGateSkipReason = disabledGateReason
           markActiveWorkStateChanged()
           emitGateTelemetry({
             currentPhase: activeWorkState.currentPhase,
@@ -3568,19 +3481,21 @@ ${specialistRoutingSection}
             pendingFiles: Array.from(pendingGateFiles),
             reviewerStatus: 'skipped',
             validationStatus: 'skipped',
-            skipReason: 'validation-and-reviewer-gates-disabled',
+            skipReason: disabledGateReason,
           })
           yield {
             toolName: 'add_message',
             input: {
               role: 'user',
               content: [
-                'Validation and reviewer gates are disabled for this agent mode; skipping automated gate checks even though edits were detected.',
+                configuredPlanOnly
+                  ? 'PLAN-only mode disables the automatic validation/reviewer finalization gate; manual reviewer-family analysis remains available.'
+                  : 'Validation and reviewer gates are disabled for this agent mode; skipping automated gate checks even though edits were detected.',
                 `Pending edited files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`,
                 formatGateStateBlock(
                   'validation/reviewer',
                   'skipped',
-                  `validation-and-reviewer-gates-disabled: skipped automated gate checks for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`,
+                  `${disabledGateReason}: skipped automated gate checks for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`,
                 ),
               ].join('\n'),
             },
@@ -4197,12 +4112,10 @@ ${specialistRoutingSection}
       // Kept byte-identical (minus the export keyword) because handleSteps is
       // serialized via .toString() + new Function(...) and cannot reference
       // module-scope imports; a parity test asserts behavioral equality.
-      // Returns true only for reviewable source files; excludes tests,
-      // generated code, docs, config/data (.jsonl bookkeeping like
-      // EVENTS.jsonl), .env files, and docs/ / evals/ / .agents/ paths.
+      // Returns true for reviewable source and test files; excludes generated
+      // code, docs, config/data (.jsonl bookkeeping like EVENTS.jsonl), .env
+      // files, and docs/ / evals/ / .agents/ paths.
       function isReviewableGateFile(filePath: string): boolean {
-        if (/__tests__\//.test(filePath)) return false
-        if (/\.(test|spec)\.(?:tsx?|jsx?|mjs|cjs)$/.test(filePath)) return false
         if (/\.generated\.tsx?$/.test(filePath)) return false
         if (/\.(md|mdx|json|jsonl|yml|yaml|toml)$/.test(filePath)) return false
         if (/(^|\/)\.env($|\.)/.test(filePath)) return false
@@ -5494,36 +5407,6 @@ ${specialistRoutingSection}
           remaining = remaining.slice(match[0].length).trim()
         }
         return remaining
-      }
-
-      function extractBackgroundAgentJobId(
-        toolResult: unknown,
-      ): string | undefined {
-        // The background spawn_agents report is an array of tool-result parts;
-        // the background entry has value.background === true with a jobId. Also
-        // tolerate a direct object shape (value or the part itself) so this
-        // stays robust to small runtime report-shape variations.
-        const candidates: unknown[] = []
-        if (Array.isArray(toolResult)) {
-          for (const part of toolResult) {
-            const value =
-              part && (part as any).type === 'json' ? (part as any).value : part
-            candidates.push(value)
-          }
-        } else if (toolResult && typeof toolResult === 'object') {
-          candidates.push((toolResult as any).value ?? toolResult)
-        }
-        for (const value of candidates) {
-          if (
-            value &&
-            typeof value === 'object' &&
-            (value as any).background === true &&
-            typeof (value as any).jobId === 'string'
-          ) {
-            return (value as any).jobId
-          }
-        }
-        return undefined
       }
 
       function collectReviewerBlockers(toolResult: unknown): string[] {

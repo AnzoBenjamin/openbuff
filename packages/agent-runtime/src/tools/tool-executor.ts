@@ -705,6 +705,22 @@ function getToolValidationHint(
 ): string | undefined {
   const fieldHint = issues ? getFieldSpecificHint(toolName, issues) : undefined
 
+  if (
+    toolName === 'get_build_targets' &&
+    (issues ?? []).some(
+      (issue) =>
+        issue.code === 'too_small' &&
+        issue.path?.length === 1 &&
+        issue.path[0] === 'files',
+    )
+  ) {
+    return [
+      '`files` must be a non-empty array of changed project-relative file paths.',
+      'Example: { "files": ["packages/agent-runtime/src/tools/tool-executor.ts"] }',
+      'When there are no changed files, do not call `get_build_targets`; skip build-target discovery until a concrete changed-file list exists.',
+    ].join('\n')
+  }
+
   if (toolName === 'str_replace') {
     const base = [
       'Expected shape: { "path": string, "replacements": [{ "oldString": string, "newString": string, "allowMultiple"?: boolean }] }.',
@@ -732,7 +748,7 @@ function getToolValidationHint(
   if (toolName === 'spawn_agents') {
     const base = [
       'Expected shape: { "agents": [{ "agent_type": string, "prompt"?: string, "params"?: object, "handoff"?: object }] }.',
-      'Pass agents as an array of objects. Valid stringified or double-stringified JSON is repaired automatically, but truncated JSON and non-object entries are rejected. Do not stringify each agent entry.',
+      'Pass agents as an array of objects. `prompt`, `params`, and `handoff` must be inside each agent object; check every brace and bracket when a field appears misplaced. Valid stringified or double-stringified JSON is repaired automatically, but ambiguous brace nesting, truncated JSON, and non-object entries are rejected without guessing or auto-repair. Do not stringify each agent entry.',
     ].join('\n')
     const hasHandoffIssue = (issues ?? []).some(isSpawnAgentHandoffIssue)
     if (!hasHandoffIssue) return base

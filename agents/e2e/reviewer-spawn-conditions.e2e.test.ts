@@ -137,6 +137,66 @@ describe('base2 reviewer spawn conditions e2e', () => {
     expect(done.done).toBe(true)
   })
 
+  test('PLAN-only skips the automatic finalization gate with an explicit reason', () => {
+    const base2 = createBase2('default', { planOnly: true })
+    const agentState = { agentId: 'base2-plan' }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Plan the lifecycle change.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'query_index' })
+    expect(gen.next(feedJson([])).value).toMatchObject({ toolName: 'add_message' })
+    expect(gen.next(feedJson([])).value).toMatchObject({ toolName: 'git_status' })
+    expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    expect(gen.next().value).toBe('STEP')
+    expect(gen.next(finishStep({ file: '.agents/sessions/x/PLAN.md' })).value).toMatchObject({
+      toolName: 'git_status',
+    })
+    const skipped = gen.next(
+      feedJson({ status: ' M .agents/sessions/x/PLAN.md' }),
+    )
+    expect(skipped.value).toMatchObject({ toolName: 'add_message' })
+    const text = (skipped.value as any).input.content as string
+    expect(text).toContain('plan-only-automatic-finalization-gate-disabled')
+    expect(parseGateStateBlock(text)).toMatchObject({
+      gate: 'validation/reviewer',
+      status: 'skipped',
+    })
+    expect(base2.spawnableAgents).toContain('code-reviewer')
+  })
+
+  test('EXECUTE_PLAN retains automatic validation before reviewer spawn', () => {
+    const base2 = createBase2('default', { executePlan: true })
+    const gen = base2.handleSteps!({
+      agentState: { agentId: 'base2-execute-plan' },
+      prompt: 'Execute the lifecycle change.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'query_index' })
+    expect(gen.next(feedJson([])).value).toMatchObject({ toolName: 'add_message' })
+    expect(gen.next(feedJson([])).value).toMatchObject({ toolName: 'git_status' })
+    expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    expect(gen.next().value).toBe('STEP')
+    expect(gen.next(finishStep({ file: 'src/lifecycle.ts' })).value).toMatchObject({
+      toolName: 'git_status',
+    })
+    expect(
+      gen.next(feedJson({ status: ' M src/lifecycle.ts' })).value,
+    ).toMatchObject({
+      toolName: 'run_file_change_hooks',
+      input: { files: ['src/lifecycle.ts'] },
+    })
+  })
+
   test('no edits detected emits passed no-edits gate and does not spawn reviewer', () => {
     const base2 = createBase2('default')
     const agentState = { agentId: 'base2-custom' }

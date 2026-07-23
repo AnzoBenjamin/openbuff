@@ -394,27 +394,25 @@ export const handleEditTransaction = (async (
         }
 
   if ('error' in transactionResult) {
-    const failedPaths = new Set(
-      transactionResult.failures.length > 0
-        ? transactionResult.failures.map((failure) => failure.path)
-        : uniquePaths,
-    )
-    const preserveAuthorizedPaths = [...failedPaths].filter((path) =>
-      freshWholeFileAuthorizationPaths.has(path),
-    )
-    const requireFreshReadPaths = [...failedPaths].filter(
-      (path) => !freshWholeFileAuthorizationPaths.has(path),
-    )
+    const failureText = transactionResult.failures
+      .map((failure) => failure.errorMessage)
+      .join('\n')
+    const requiresFreshCapability =
+      /different project, path, or agent run|Invalid basedOnRead|readCapability-covered content is stale|normalized capability metadata does not match/i.test(
+        failureText,
+      )
+    // Deterministic preflight failures made no writes and preserve existing
+    // authorization. Capability freshness/scope failures are different: retrying
+    // the atomic transaction requires one new snapshot for every target so no
+    // stale token from another path is replayed alongside the refreshed failure.
     invalidatePreparedEditPaths({
       fileProcessingState,
-      paths: preserveAuthorizedPaths,
-      requiresFreshRead: false,
-    })
-    invalidatePreparedEditPaths({
-      fileProcessingState,
-      paths: requireFreshReadPaths,
-      reason: 'preflight_failed',
-      sourceTool: 'edit_transaction',
+      paths: uniquePaths,
+      revokeReadAuthorization: requiresFreshCapability,
+      requiresFreshRead: requiresFreshCapability,
+      ...(requiresFreshCapability
+        ? { reason: 'stale_capability' as const, sourceTool: 'edit_transaction' }
+        : {}),
     })
 
     return {
@@ -422,7 +420,12 @@ export const handleEditTransaction = (async (
         {
           type: 'json',
           value: {
-            errorMessage: transactionResult.error,
+            errorMessage: requiresFreshCapability
+              ? [
+                  transactionResult.error,
+                  `Atomic recovery requires fresh read state for every transaction target in this run: ${uniquePaths.join(', ')}. Re-read all targets and rebuild the complete transaction with only those fresh capabilities; do not refresh only the first failed path or replay any other stale token.`,
+                ].join('\n')
+              : transactionResult.error,
             failures: transactionResult.failures,
           },
         },
@@ -563,6 +566,18 @@ export const handleEditTransaction = (async (
   })
   clientChanges.sort((a, b) => a.index - b.index)
 
+  // Only paths that produced an actual client change can emit an `applied`
+  // action, so scope the positive-evidence confirmation set to those paths.
+  // A content edit that resolved to a no-op is excluded from `clientChanges`
+  // and must not be required for confirmation.
+  const confirmationPaths = new Set<string>()
+  for (const { change } of clientChanges) {
+    confirmationPaths.add(change.path)
+    if (change.type === 'move' && typeof change.destinationPath === 'string') {
+      confirmationPaths.add(change.destinationPath)
+    }
+  }
+
   const appliedFiles: {
     path: string
     patch: string
@@ -572,6 +587,8 @@ export const handleEditTransaction = (async (
     toolName: 'edit_transaction',
     fileProcessingState,
     paths: uniquePaths,
+    confirmationPaths,
+    rejectionRequiresRead: false,
     apply: () =>
       requestClientToolCall({
         toolCallId: toolCall.toolCallId,
