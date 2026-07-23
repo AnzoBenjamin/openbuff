@@ -914,8 +914,9 @@ function detectMisbracedSpawnPayload(args: {
   input: unknown
   toolCallId: string
   rawInput: unknown
+  logger?: Logger
 }): DetectMisbracedSpawnResult | undefined {
-  const { input, toolCallId, rawInput } = args
+  const { input, toolCallId, rawInput, logger } = args
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return undefined
   }
@@ -957,6 +958,12 @@ function detectMisbracedSpawnPayload(args: {
         if ((foldableKeys as readonly string[]).includes(key)) continue
         repairedInput[key] = value
       }
+      // Log only the folded key names and the toolCallId; never the payload
+      // values themselves, to avoid leaking prompt/params/handoff content.
+      logger?.debug(
+        { toolCallId, misplacedKeys },
+        'spawn_agents: auto-repaired mis-braced single-agent payload by folding stray sibling field(s) into the agent entry',
+      )
       return { repairedInput }
     }
   }
@@ -1129,8 +1136,9 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
     input: unknown
     providerOptions?: ProviderMetadata
   }
+  logger?: Logger
 }): CodebuffToolCall<T> | ToolCallError {
-  const { rawToolCall } = params
+  const { rawToolCall, logger } = params
   const toolName = rawToolCall.toolName
 
   const processedParameters = parseStringifiedToolInput(
@@ -1157,6 +1165,7 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
       input: repairedInput,
       toolCallId: rawToolCall.toolCallId,
       rawInput: rawToolCall.input,
+      logger,
     })
     if (misbraced) {
       if ('error' in misbraced) {
@@ -1305,6 +1314,7 @@ export async function executeToolCall<T extends ToolName>(
       input,
       providerOptions: params.providerOptions,
     },
+    logger,
   })
 
   // Filter out restricted tools - emit error instead of tool call/result

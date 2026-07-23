@@ -2088,6 +2088,75 @@ describe('tool validation error handling', () => {
     })
   })
 
+  it('repairs a single-agent mis-braced spawn payload and publishes it to the handler', async () => {
+    const parent: AgentTemplate = {
+      ...testAgentTemplate,
+      toolNames: ['spawn_agents', 'end_turn'],
+      spawnableAgents: ['basher'],
+    }
+    const basher: AgentTemplate = {
+      ...testAgentTemplate,
+      id: 'basher',
+      inputSchema: { params: z.object({ command: z.string().min(1) }) },
+      toolNames: ['run_terminal_command'],
+      spawnableAgents: [],
+    }
+    const misbracedSpawn: StreamChunk = {
+      type: 'tool-call',
+      toolName: 'spawn_agents',
+      toolCallId: 'basher-misbraced-fold-tool-call-id',
+      input: {
+        agents: [{ agent_type: 'basher', params: { command: 'bun test' } }],
+        prompt: 'Run the tests',
+      },
+    }
+    async function* mockStream() {
+      yield misbracedSpawn
+      return promptSuccess('mock-message-id')
+    }
+    const responseChunks: (string | PrintModeEvent)[] = []
+    const sessionState = getInitialSessionState(mockFileContext)
+
+    await processStream({
+      ...agentRuntimeImpl,
+      agentContext: {},
+      agentState: sessionState.mainAgentState,
+      agentStepId: 'test-step-id',
+      agentTemplate: parent,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fileContext: mockFileContext,
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { 'test-agent': parent, basher },
+      messages: [],
+      prompt: 'test prompt',
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      stream: mockStream(),
+      system: 'test system',
+      tools: {},
+      userId: 'test-user',
+      userInputId: 'test-input-id',
+      onCostCalculated: async () => {},
+      onResponseChunk: (chunk) => responseChunks.push(chunk),
+    })
+
+    const events = responseChunks.filter(
+      (chunk): chunk is PrintModeEvent => typeof chunk !== 'string',
+    )
+    // The payload was repaired (folded), not rejected, so no error event.
+    expect(events.some((event) => event.type === 'error')).toBe(false)
+    // A tool_call for spawn_agents was published to the handler.
+    expect(events.find((event) => event.type === 'tool_call')).toMatchObject({
+      type: 'tool_call',
+      toolName: 'spawn_agents',
+      toolCallId: 'basher-misbraced-fold-tool-call-id',
+    })
+  })
+
   it('should still emit tool_call and tool_result for valid tool calls', async () => {
     // Create an agent that has read_files tool
     const agentWithReadFiles: AgentTemplate = {
