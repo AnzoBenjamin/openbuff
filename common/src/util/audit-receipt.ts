@@ -5,7 +5,10 @@ const MAX_TRAVERSAL_DEPTH = 32
  * object whose `snapshot_id` matches `expectedSnapshotId`. When
  * `expectedSnapshotId` is empty/undefined, any structuralReceipt with a string
  * `snapshot_id` counts as a match. Depth-bounded (<=32) to stay conservative
- * on deeply nested inputs, with visited-object tracking for cyclic/shared graphs.
+ * on deeply nested inputs, with min-depth revisit tracking for cyclic/shared
+ * graphs: each object records the shallowest depth it was reached at, so a
+ * later shorter path (which has more remaining depth budget) re-traverses,
+ * while equal-or-deeper revisits (including cycles) are skipped.
  * Shared by the general-agent handleSteps gate and the runtime
  * buildRuntimeAgentReceipt gate so the two do not drift.
  */
@@ -14,7 +17,7 @@ export function containsStructuralAuditReceipt(
   expectedSnapshotId?: string,
 ): boolean {
   let found = false
-  const visited = new WeakSet<object>()
+  const visited = new WeakMap<object, number>()
   const visit = (item: unknown, depth = 0): void => {
     if (
       found ||
@@ -24,8 +27,9 @@ export function containsStructuralAuditReceipt(
     ) {
       return
     }
-    if (visited.has(item)) return
-    visited.add(item)
+    const existing = visited.get(item)
+    if (existing !== undefined && existing <= depth) return
+    visited.set(item, depth)
     if (Array.isArray(item)) {
       for (const nested of item) visit(nested, depth + 1)
       return

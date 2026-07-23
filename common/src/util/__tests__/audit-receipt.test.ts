@@ -76,6 +76,31 @@ describe('containsStructuralAuditReceipt', () => {
     expect(containsStructuralAuditReceipt(undefined, 'snapshot-1')).toBe(false)
   })
 
+  it('finds a receipt via a shorter path even after the shared node was first reached deeper', () => {
+    // Shared node holds the receipt a few levels below it.
+    const shared: Record<string, unknown> = {
+      level1: { level2: { structuralReceipt: { snapshot_id: 'deep-shared' } } },
+    }
+
+    // Build a deep wrapper chain (well over MAX_TRAVERSAL_DEPTH = 32 levels)
+    // whose innermost node points at `shared`. From this side the receipt sits
+    // beyond the depth budget, so this path alone cannot reach it.
+    let deepChain: Record<string, unknown> = { shared }
+    for (let depth = 0; depth < 40; depth += 1) {
+      deepChain = { nested: deepChain }
+    }
+
+    // Deep chain is the FIRST key so Object.values visits it first, recording
+    // `shared` at a deep depth; the short path is a LATER key that re-reaches
+    // `shared` with a much shallower depth and enough budget to find it.
+    const root: Record<string, unknown> = {
+      deep: deepChain,
+      short: shared,
+    }
+
+    expect(containsStructuralAuditReceipt(root, 'deep-shared')).toBe(true)
+  })
+
   it('returns false when structuralReceipt exists but snapshot_id is missing or non-string', () => {
     expect(
       containsStructuralAuditReceipt({ structuralReceipt: {} }),
