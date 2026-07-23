@@ -135,11 +135,37 @@ describe('shared craftsmanship prompt sections', () => {
   test('gateAwarenessSection contains the required gate-awareness topics (not byte-frozen)', () => {
     // gateAwarenessSection is advisory guidance that may evolve; only assert
     // topic coverage so future tightening does not silently drop the
-    // don't-double-spawn-code-reviewer guidance.
+    // don't-double-spawn-code-reviewer guidance and the four hooks-vs-gate
+    // clarifications (re-arm ownership, targeted validation ≠ gate, commit
+    // recovery, pending-set authority).
     expect(gateAwarenessSection).toContain('# Automated Validation & Review Gate')
     expect(gateAwarenessSection).toContain('code-reviewer')
-    expect(gateAwarenessSection).toContain('validation hooks')
-    expect(gateAwarenessSection).toContain('before finalization')
+    expect(gateAwarenessSection).toContain('run_file_change_hooks')
+    expect(gateAwarenessSection).toContain('finalization allowed when green')
+    // 1) Re-arm ownership: runtime-owned hooks→reviewer; no manual re-spawn
+    // for the same pending set; wait when awaiting_validation.
+    expect(gateAwarenessSection).toContain('Do not double-spawn code-reviewer')
+    expect(gateAwarenessSection).toContain('same pending set')
+    expect(gateAwarenessSection).toContain('awaiting_validation')
+    // 2) run_targeted_validation is NOT the gate (scoped evidence only).
+    expect(gateAwarenessSection).toContain('run_targeted_validation')
+    expect(gateAwarenessSection).toContain('is NOT the gate')
+    expect(gateAwarenessSection).toContain(
+      'does not clear reviewer findings by itself',
+    )
+    expect(gateAwarenessSection).toContain('does **not** unlock')
+    expect(gateAwarenessSection).toContain('Basher typechecks')
+    // 3) Commit recovery: git-committer only after gate green; re-arms; no tight-loop.
+    expect(gateAwarenessSection).toContain('git-committer')
+    expect(gateAwarenessSection).toContain('re-arms on every new edit')
+    expect(gateAwarenessSection).toContain('tight-loop')
+    expect(gateAwarenessSection).toContain('not available yet')
+    // 4) Pending-set authority: full pendingGateFiles set, not last-edited file.
+    expect(gateAwarenessSection).toContain('pendingGateFiles')
+    expect(gateAwarenessSection).toContain('full related set')
+    expect(gateAwarenessSection).toContain(
+      'authoritative over conversational memory',
+    )
   })
 
   test('securityReviewSection contains the required security-review topics (not byte-frozen)', () => {
@@ -181,6 +207,7 @@ describe('shared craftsmanship prompt sections', () => {
     expect(base2.systemPrompt).toContain(gateAwarenessSection)
     expect(base2.systemPrompt).toContain(gitDisciplineSection)
     expect(base2.systemPrompt).toContain(securityReviewSection)
+    expect(base2.systemPrompt).toContain(specialistRoutingSection)
 
     expect(baseDeep.systemPrompt).toContain(qualitySection)
     expect(baseDeep.systemPrompt).toContain(PLACEHOLDER.FRONTEND_SECTION)
@@ -189,6 +216,7 @@ describe('shared craftsmanship prompt sections', () => {
     expect(baseDeep.systemPrompt).toContain(gateAwarenessSection)
     expect(baseDeep.systemPrompt).toContain(gitDisciplineSection)
     expect(baseDeep.systemPrompt).toContain(securityReviewSection)
+    expect(baseDeep.systemPrompt).toContain(specialistRoutingSection)
 
     // gitDisciplineSection is intentionally NOT interpolated into the editor —
     // the editor is for code editing, not git work; the git-committer agent

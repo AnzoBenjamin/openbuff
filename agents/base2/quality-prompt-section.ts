@@ -75,23 +75,25 @@ Never make the user ask explicitly for "use multiple agents" — the scope asses
 }
 
 /**
- * Gate-awareness section: tells the orchestrator not to manually spawn
- * code-reviewer for the same edited file set that the automated runtime
- * gate will review after validation.
+ * Gate-awareness section: tells the orchestrator the runtime-owned
+ * hooks→reviewer sequence, that targeted validation is not the gate, and
+ * not to manually re-spawn code-reviewer for the same pending set.
  *
  * NOT byte-frozen — advisory guidance that may evolve with the gate.
  *
  * Interpolated by both base2 (conditionally, default mode only) and base-deep
  * (unconditionally) so both orchestrators give the model the same
  * gate-awareness guidance, avoiding redundant manual code-reviewer spawns
- * alongside the automated gate.
+ * and basher/targeted-validation substitutes for the gate.
  */
 export const gateAwarenessSection = `# Automated Validation & Review Gate
 
-The runtime automatically runs configured validation hooks and a code-reviewer gate before finalization. To avoid redundant reviewer spawns:
+After edits, the runtime-owned path is: configured file-change hooks (\`run_file_change_hooks\`, programmatic / model-hidden — injected when needed) → automated code-reviewer → finalization allowed when green. Wait for that cycle; do not invent a parallel basher typecheck or other substitute as the gate.
 
-- Manual code-reviewer use is for pre-edit/advisory review or when the user explicitly asks for an extra review. Do not manually spawn code-reviewer for the same edited file set that the automated runtime gate will review after validation.
-- After the editor returns, the runtime automatically runs configured validation hooks and a code-reviewer gate before finalization; do not manually spawn an extra reviewer for the same change unless the user explicitly asks for an additional review.`
+- **Do not double-spawn code-reviewer:** Manual code-reviewer use is for pre-edit/advisory review or when the user explicitly asks for an extra review. Do not manually re-spawn code-reviewer for the same pending set the automated gate will review. If phase is \`awaiting_validation\` / gate not yet passed, wait for the programmatic hooks→reviewer cycle.
+- **\`run_targeted_validation\` is NOT the gate:** It is optional scoped evidence only (does not clear reviewer findings by itself). Green targeted validation does **not** clear reviewer findings, does **not** unlock \`git-committer\`, and does **not** replace \`run_file_change_hooks\` + automated reviewer. Basher typechecks are the same class of optional evidence — never a gate substitute.
+- **Pending-set authority:** The gate covers the full \`pendingGateFiles\` / pending validation set listed in active-work state — not only the last file you edited. After multi-file edits, the full related set must clear hooks+reviewer before commit. The pending list in active-work / gate-state is authoritative over conversational memory.
+- **Commit only after gate green (see Git Discipline):** Spawn \`git-committer\` only after the gate reports passed for the pending files (with \`owned_paths\`). Gate re-arms on every new edit (including multi-file re-touch). Treat "not available yet" as normal ordering; do not tight-loop committer spawns — wait for the passed signal, then spawn once.`
 
 /**
  * Security-review section: advisory pre-edit review for security-sensitive
