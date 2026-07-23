@@ -109,6 +109,19 @@ describe('shared craftsmanship prompt sections', () => {
     expect(gitDisciplineSection).toContain('fails the spawn')
   })
 
+  test('gitDisciplineSection names the literal owned_paths key and the gate-block on early git-committer spawns', () => {
+    // Two observed failures this guidance targets: (1) passing a wrong key
+    // name (filePaths) instead of the literal owned_paths, and (2) attempting
+    // the git-committer spawn before the gate passed. Guard that the guidance
+    // names the exact key and the runtime gate-block message.
+    expect(gitDisciplineSection).toContain('literally `owned_paths`')
+    expect(gitDisciplineSection).toContain('filePaths')
+    expect(gitDisciplineSection).toContain('Missing required: owned_paths')
+    expect(gitDisciplineSection).toContain(
+      'Spawning git-committer is not available yet',
+    )
+  })
+
   test('gateAwarenessSection contains the required gate-awareness topics (not byte-frozen)', () => {
     // gateAwarenessSection is advisory guidance that may evolve; only assert
     // topic coverage so future tightening does not silently drop the
@@ -190,5 +203,17 @@ describe('shared craftsmanship prompt sections', () => {
     expect(base2.systemPrompt).toContain('code_search')
     expect(base2.systemPrompt).toContain('find_files_matching_content')
     expect(base2.systemPrompt).toContain('not granted to you as root')
+  })
+
+  test('base2 system prompt names required spawn params for code-searcher and basher', () => {
+    // Regression guard for observed spawn failures: code-searcher requires
+    // params.searchQueries and basher requires params.command. The prompt
+    // must name both required keys so the orchestrator supplies them in
+    // params instead of relying on the prose prompt and hitting a spawn
+    // rejection.
+    const base2 = createBase2('default')
+
+    expect(base2.systemPrompt).toContain('params.searchQueries')
+    expect(base2.systemPrompt).toContain('params.command')
   })
 })
