@@ -764,6 +764,36 @@ describe('normalizeTransactionEditList', () => {
     ).toEqual([explicit, contentOnly, conflicting])
   })
 
+  it('overrides an invalid-but-unambiguous edit type from shape', () => {
+    expect(
+      normalizeTransactionEditList([
+        {
+          path: 'a.ts',
+          type: 'edit',
+          replacements: [{ oldString: 'a', newString: 'b' }],
+        },
+      ]),
+    ).toMatchObject([{ type: 'str_replace' }])
+  })
+
+  it('canonicalizes case/separator variants of a valid edit type', () => {
+    expect(
+      normalizeTransactionEditList([
+        {
+          path: 'a.ts',
+          type: 'Str-Replace',
+          replacements: [{ oldString: 'a', newString: 'b' }],
+        },
+      ]),
+    ).toMatchObject([{ type: 'str_replace' }])
+  })
+
+  it('leaves an invalid type with an ambiguous shape unchanged', () => {
+    expect(
+      normalizeTransactionEditList([{ path: 'a.ts', type: 'bogus', content: 'x' }]),
+    ).toEqual([{ path: 'a.ts', type: 'bogus', content: 'x' }])
+  })
+
   it('repairs a JSON-stringified transaction array', () => {
     expect(
       normalizeTransactionEditList(

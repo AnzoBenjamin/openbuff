@@ -13,6 +13,7 @@ import {
   gitDisciplineSection,
   qualitySection,
   securityReviewSection,
+  specialistRoutingSection,
 } from '../base2/quality-prompt-section'
 
 /**
@@ -88,6 +89,49 @@ describe('shared craftsmanship prompt sections', () => {
     expect(gitDisciplineSection).toContain('git_branch')
   })
 
+  test('gitDisciplineSection tells the orchestrator to pass owned_paths in git-committer params', () => {
+    // git-committer requires params.owned_paths; a prompt-only or empty-params
+    // spawn fails outright. Guard that the guidance names the required key so
+    // the orchestrator supplies it instead of relying on the prose prompt.
+    expect(gitDisciplineSection).toContain('owned_paths')
+    expect(gitDisciplineSection).toContain('in params')
+  })
+
+  test('gitDisciplineSection warns that an empty/prompt-only git-committer spawn fails the spawn', () => {
+    // Regression guard for the observed failure: spawning git-committer with
+    // empty params ({}) fails with "Missing required: owned_paths". The
+    // guidance must mark owned_paths REQUIRED and explain that omitting it via
+    // an empty or prompt-only spawn fails outright, so the orchestrator does
+    // not rely on the prose prompt alone and hit the same spawn rejection.
+    expect(gitDisciplineSection).toContain('REQUIRED')
+    expect(gitDisciplineSection).toContain('required field')
+    expect(gitDisciplineSection).toContain('empty or prompt-only spawn')
+    expect(gitDisciplineSection).toContain('fails the spawn')
+  })
+
+  test('gitDisciplineSection names the literal owned_paths key and the gate-block on early git-committer spawns', () => {
+    // Two observed failures this guidance targets: (1) passing a wrong key
+    // name (filePaths) instead of the literal owned_paths, and (2) attempting
+    // the git-committer spawn before the gate passed. Guard that the guidance
+    // names the exact key and the runtime gate-block message.
+    expect(gitDisciplineSection).toContain('literally `owned_paths`')
+    expect(gitDisciplineSection).toContain('filePaths')
+    expect(gitDisciplineSection).toContain('Missing required: owned_paths')
+    expect(gitDisciplineSection).toContain(
+      'Spawning git-committer is not available yet',
+    )
+  })
+
+  test('gateAwarenessSection contains the required gate-awareness topics (not byte-frozen)', () => {
+    // gateAwarenessSection is advisory guidance that may evolve; only assert
+    // topic coverage so future tightening does not silently drop the
+    // don't-double-spawn-code-reviewer guidance.
+    expect(gateAwarenessSection).toContain('# Automated Validation & Review Gate')
+    expect(gateAwarenessSection).toContain('code-reviewer')
+    expect(gateAwarenessSection).toContain('validation hooks')
+    expect(gateAwarenessSection).toContain('before finalization')
+  })
+
   test('securityReviewSection contains the required security-review topics (not byte-frozen)', () => {
     // securityReviewSection is advisory guidance that may evolve; only assert
     // topic coverage so future tightening does not silently drop a rule.
@@ -100,6 +144,17 @@ describe('shared craftsmanship prompt sections', () => {
     expect(securityReviewSection).toContain('auth')
     expect(securityReviewSection).toContain('secrets')
     expect(securityReviewSection).toContain('read-only')
+  })
+
+  test('specialistRoutingSection names the exact snapshot param contract for reviewer-family specialists', () => {
+    // Reviewer-family specialists require params.snapshot_id from
+    // get_change_review_bundle, while security-reviewer requires
+    // changed_files + snapshot_fingerprint. Guard that the guidance names both
+    // contracts so a spawn does not fail on the wrong/missing snapshot key.
+    expect(specialistRoutingSection).toContain('snapshot_id')
+    expect(specialistRoutingSection).toContain('get_change_review_bundle')
+    expect(specialistRoutingSection).toContain('changed_files')
+    expect(specialistRoutingSection).toContain('snapshot_fingerprint')
   })
 
   test('all three consumers interpolate shared sections and leave conditional sections gated', () => {
@@ -135,5 +190,30 @@ describe('shared craftsmanship prompt sections', () => {
     expect(editor.instructionsPrompt).toContain(PLACEHOLDER.FRONTEND_SECTION)
     expect(editor.instructionsPrompt).toContain(PLACEHOLDER.LANGUAGE_PROFILE)
     expect(editor.instructionsPrompt).not.toContain(frontendSection)
+  })
+
+  test('base2 system prompt routes ripgrep-style search through code-searcher', () => {
+    // The root orchestrator is not granted code_search/find_files_matching_content;
+    // its prompt must tell it to spawn code-searcher instead of calling them
+    // directly (otherwise the runtime rejects the call). Guard the semantic
+    // content without freezing the exact wording.
+    const base2 = createBase2('default')
+
+    expect(base2.systemPrompt).toContain('code-searcher')
+    expect(base2.systemPrompt).toContain('code_search')
+    expect(base2.systemPrompt).toContain('find_files_matching_content')
+    expect(base2.systemPrompt).toContain('not granted to you as root')
+  })
+
+  test('base2 system prompt names required spawn params for code-searcher and basher', () => {
+    // Regression guard for observed spawn failures: code-searcher requires
+    // params.searchQueries and basher requires params.command. The prompt
+    // must name both required keys so the orchestrator supplies them in
+    // params instead of relying on the prose prompt and hitting a spawn
+    // rejection.
+    const base2 = createBase2('default')
+
+    expect(base2.systemPrompt).toContain('params.searchQueries')
+    expect(base2.systemPrompt).toContain('params.command')
   })
 })

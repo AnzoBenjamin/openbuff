@@ -1248,6 +1248,32 @@ describe('tool validation error handling', () => {
     }
   })
 
+  it('names the offending edit type in the edit_transaction discriminator hint', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'edit_transaction',
+        toolCallId: 'named-bad-transaction-type-tool-call-id',
+        input: {
+          edits: [
+            {
+              path: 'src/x.ts',
+              type: 'totally_wrong',
+              content: 'export const v = 1',
+            },
+          ],
+        },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('edits[0].type')
+      expect(result.error).toContain('"totally_wrong"')
+      expect(result.error).toContain('is not a valid edit type')
+      expect(result.error).toContain('Valid types:')
+    }
+  })
+
   it('should summarize missing replacement fields without implying deletion', () => {
     const result = parseRawToolCall({
       rawToolCall: {

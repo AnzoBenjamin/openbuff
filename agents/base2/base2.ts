@@ -208,7 +208,7 @@ ${
     ? '- **Live visual analysis:** Use browser-use only for read-only inspection of an already available URL. Do not start dev servers or request browser interactions in plan mode.'
     : '- **Live visual verification:** Visual verification extends beyond web apps. Image artifacts from 3D renders (e.g. Blender frames), image/video exports, generated diagrams, and charts must be inspected with read_image, not inferred from text logs alone. The workflow is: render/export -> poll the background job to completion -> read_image the emitted artifacts -> assess the result -> make a targeted edit -> re-render. Polling (check_job/check_background_agent/read_logs) is only the bridge to artifact inspection; do not re-poll a finished or unchanging job indefinitely. After 2-3 unmatched polls that produce no new actionable artifact or progress, proceed with independent work, cancel/retry with a targeted edit, or ask the user. For web app visual checks specifically, start any long-running dev server through a BACKGROUND basher, keep its returned jobId, use check_job to wait for readiness, then spawn browser-use for screenshots/navigation/interaction.'
 }
-- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead.
+- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead. For ripgrep-style content search, spawn the code-searcher agent (and file-picker for fuzzy file discovery): \`code_search\`/\`find_files_matching_content\` are registered runtime tools but are intentionally not granted to you as root, so calling them directly is rejected. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs \`params.searchQueries\` (an array of { pattern } objects) and basher needs \`params.command\` (a shell string); put these in \`params\`, not only in the prose prompt.
 
 # Code Editing Mandates
 
@@ -704,9 +704,6 @@ ${specialistRoutingSection}
       const initialGitStatusDirtyFiles = extractGitStatusFiles(
         (initialGitStatus as any)?.toolResult,
       )
-      const initialGitStatusLineMap = extractGitStatusLineMap(
-        (initialGitStatus as any)?.toolResult,
-      )
       const changedFiles = new Set<string>(activeWorkState.changedFiles)
       const pendingGateFiles = new Set<string>(activeWorkState.pendingGateFiles)
       let editsHappened =
@@ -730,7 +727,6 @@ ${specialistRoutingSection}
         activeWorkState.gatePassedFingerprint &&
         !hasFreshGateFingerprintForPendingFiles(
           activeWorkState.gatePassedPendingFiles,
-          initialGitStatusLineMap,
           activeWorkState.gatePassedValidationSummary ||
             activeWorkState.lastValidationSummary ||
             'No configured file-change hooks ran.',
@@ -882,9 +878,6 @@ ${specialistRoutingSection}
           input: {},
         } as any
         const gitStatusFiles = extractGitStatusFiles(
-          (currentGitStatus as any)?.toolResult,
-        )
-        const currentGitStatusLineMap = extractGitStatusLineMap(
           (currentGitStatus as any)?.toolResult,
         )
         // Prune pending gate files that were previously observed as dirty in
@@ -1972,7 +1965,6 @@ ${specialistRoutingSection}
           conversationGatePass &&
           hasFreshGateFingerprintForPendingFiles(
             currentPendingGateFiles,
-            currentGitStatusLineMap,
             conversationValidationSummary,
           )
         ) {
@@ -2034,10 +2026,7 @@ ${specialistRoutingSection}
         if (
           runValidationGate &&
           editsHappened &&
-          hasDurableGatePassForPendingFiles(
-            currentPendingGateFiles,
-            currentGitStatusLineMap,
-          )
+          hasDurableGatePassForPendingFiles(currentPendingGateFiles)
         ) {
           const durableReviewerVerdict =
             reviewerFinalizationVerdictFromDurablePass()
@@ -2837,7 +2826,17 @@ ${specialistRoutingSection}
           reviewerFinalizationVerdict = 'NON_BLOCKING'
           activeWorkState.currentPhase = 'awaiting_review'
           activeWorkState.nextRequiredAction = ''
-          activeWorkState.staticReviewerJobId = undefined
+          if (activeWorkState.staticReviewerJobId) {
+            yield {
+              toolName: 'check_background_agent',
+              input: {
+                jobId: activeWorkState.staticReviewerJobId,
+                cancel: true,
+              },
+              includeToolCall: false,
+            } as any
+            activeWorkState.staticReviewerJobId = undefined
+          }
           const reviewerSkipReason =
             reviewablePendingFiles.length === 0
               ? 'reviewer skip: no reviewable source files'
@@ -4771,7 +4770,6 @@ ${specialistRoutingSection}
 
       function hasFreshGateFingerprintForPendingFiles(
         files: string[],
-        currentStatusLines: Map<string, string>,
         validationSummary: string,
       ): boolean {
         if (files.length === 0) return false
@@ -4791,14 +4789,10 @@ ${specialistRoutingSection}
         return recorded === currentFingerprint
       }
 
-      function hasDurableGatePassForPendingFiles(
-        files: string[],
-        currentStatusLines: Map<string, string>,
-      ): boolean {
+      function hasDurableGatePassForPendingFiles(files: string[]): boolean {
         if (!reviewerFinalizationVerdictFromDurablePass()) return false
         return hasFreshGateFingerprintForPendingFiles(
           files,
-          currentStatusLines,
           activeWorkState.gatePassedValidationSummary ||
             activeWorkState.lastValidationSummary ||
             'No configured file-change hooks ran.',
@@ -5312,41 +5306,6 @@ ${specialistRoutingSection}
           }
         }
         return normalizeGateFileList([...files])
-      }
-
-      /**
-       * Extracts a map of normalized-file -> raw git status line for the given
-       * pending files from a git_status tool result. Lines for other files are
-       * ignored. Used to build a durable fingerprint for the gate pass so we
-       * only reuse a durable pass when the working tree state for those files
-       * still matches.
-       */
-      function extractGitStatusLineMap(
-        toolResult: unknown,
-      ): Map<string, string> {
-        const map = new Map<string, string>()
-        if (!Array.isArray(toolResult)) return map
-        for (const part of toolResult) {
-          const value =
-            part && (part as any).type === 'json'
-              ? (part as any).value
-              : undefined
-          const status =
-            value && typeof value === 'object'
-              ? (value as Record<string, unknown>).status
-              : undefined
-          if (typeof status !== 'string') continue
-          for (const rawLine of status.split('\n')) {
-            const file = parseGitStatusLine(rawLine)
-            if (!file) continue
-            const normalized = normalizeGateFilePath(file)
-            if (!normalized) continue
-            // Keep the raw line (without trailing whitespace) so XY status bits
-            // are part of the fingerprint.
-            map.set(normalized, rawLine.replace(/\s+$/, ''))
-          }
-        }
-        return map
       }
 
       /**
