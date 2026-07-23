@@ -4684,4 +4684,37 @@ describe('base2 test-writer aux-gate completion path', () => {
       expect(nextYield.input.agent_type).not.toBe('test-writer')
     }
   })
+
+  test('proactive query_index fires only for code-intent prompts', () => {
+    const firstYield = (prompt: string) => {
+      const base2 = createBase2('default')
+      const gen = base2.handleSteps!({
+        agentState: { agentId: 'base2-classify' },
+        prompt,
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+      return gen.next().value as any
+    }
+
+    // A code-intent prompt with no concrete file path triggers a proactive
+    // query_index (mode: 'search') as the very first step.
+    expect(
+      firstYield('Refactor the authentication module code.'),
+    ).toMatchObject({ toolName: 'query_index', input: { mode: 'search' } })
+
+    // A prompt naming a concrete file path already identifies the relevant
+    // file, so proactive retrieval is skipped and the turn starts at git_status.
+    expect(firstYield('Update src/app.ts with the new export')).toMatchObject({
+      toolName: 'git_status',
+    })
+
+    // Too-short prompts skip proactive retrieval.
+    expect(firstYield('fix it')).toMatchObject({ toolName: 'git_status' })
+
+    // Continuation prompts skip proactive retrieval.
+    expect(
+      firstYield('continue working on the previous task'),
+    ).toMatchObject({ toolName: 'git_status' })
+  })
 })

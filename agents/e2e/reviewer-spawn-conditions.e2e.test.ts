@@ -142,7 +142,7 @@ describe('base2 reviewer spawn conditions e2e', () => {
     const agentState = { agentId: 'base2-plan' }
     const gen = base2.handleSteps!({
       agentState,
-      prompt: 'Plan the lifecycle change.',
+      prompt: 'Plan the lifecycle change in the code.',
       params: {},
       config: base2.programmaticConfig,
     } as any)
@@ -174,7 +174,7 @@ describe('base2 reviewer spawn conditions e2e', () => {
     const base2 = createBase2('default', { executePlan: true })
     const gen = base2.handleSteps!({
       agentState: { agentId: 'base2-execute-plan' },
-      prompt: 'Execute the lifecycle change.',
+      prompt: 'Execute the lifecycle change in the code.',
       params: {},
       config: base2.programmaticConfig,
     } as any)
