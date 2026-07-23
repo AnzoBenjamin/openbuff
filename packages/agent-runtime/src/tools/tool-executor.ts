@@ -4,6 +4,7 @@ import { decodeJsonObjectString } from '@codebuff/common/tools/params/tool/set-o
 import {
   parseJsonBounded,
   parseJsonStringWithRepair,
+  TRANSACTION_EDIT_TYPES,
 } from '@codebuff/common/tools/params/utils'
 import {
   buildNativeToolResultErrorOutputV1,
@@ -700,6 +701,7 @@ function isSpawnAgentHandoffIssue(issue: ValidationIssue): boolean {
 function getToolValidationHint(
   toolName: string,
   issues?: ValidationIssue[],
+  input?: unknown,
 ): string | undefined {
   const fieldHint = issues ? getFieldSpecificHint(toolName, issues) : undefined
 
@@ -776,9 +778,33 @@ function getToolValidationHint(
           String(issue.path?.[issue.path.length - 1]) === 'type'),
     )
     if (hasTypeDiscriminatorIssue) {
+      const namedBadTypes: string[] = []
+      for (const issue of issues ?? []) {
+        if (issue.path?.[0] !== 'edits') continue
+        const index = issue.path[1]
+        if (typeof index !== 'number') continue
+        const editValue = valueAtPath(input, ['edits', index])
+        if (
+          editValue &&
+          typeof editValue === 'object' &&
+          !Array.isArray(editValue)
+        ) {
+          const editType = (editValue as Record<string, unknown>).type
+          if (
+            typeof editType === 'string' &&
+            !(TRANSACTION_EDIT_TYPES as readonly string[]).includes(editType)
+          ) {
+            namedBadTypes.push(`edits[${index}].type ${JSON.stringify(editType)}`)
+          }
+        }
+      }
+      const badTypeLead =
+        namedBadTypes.length > 0
+          ? `${namedBadTypes.join(', ')} is not a valid edit type. `
+          : ''
       targetedHints.push(
         [
-          'Each edit needs an explicit `type` discriminator. Valid types: "str_replace", "replace_range", "structured", "create", "delete", "move", "rewrite_symbol", "patch", "write_file".',
+          `${badTypeLead}Each edit needs an explicit \`type\` discriminator. Valid types: "str_replace", "replace_range", "structured", "create", "delete", "move", "rewrite_symbol", "patch", "write_file".`,
           'Example: { "type": "str_replace", "path": "file.ts", "replacements": [{ "oldString": "a", "newString": "b" }] }.',
           'The type is inferred only when the payload shape is unambiguous (for example, `replacements` implies str_replace). A bare { path, content } is ambiguous between create and write_file, so set `type` explicitly.',
         ].join('\n'),
@@ -1056,7 +1082,7 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
     }
 
     const issues = result.error.issues as ValidationIssue[]
-    const hint = getToolValidationHint(toolName, issues)
+    const hint = getToolValidationHint(toolName, issues, repairedInput)
     const summary = formatValidationIssues({ issues, toolName })
     const validationDetails = JSON.stringify(result.error.issues, null, 2)
     return {

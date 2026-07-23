@@ -136,4 +136,17 @@ describe('shared craftsmanship prompt sections', () => {
     expect(editor.instructionsPrompt).toContain(PLACEHOLDER.LANGUAGE_PROFILE)
     expect(editor.instructionsPrompt).not.toContain(frontendSection)
   })
+
+  test('base2 system prompt routes ripgrep-style search through code-searcher', () => {
+    // The root orchestrator is not granted code_search/find_files_matching_content;
+    // its prompt must tell it to spawn code-searcher instead of calling them
+    // directly (otherwise the runtime rejects the call). Guard the semantic
+    // content without freezing the exact wording.
+    const base2 = createBase2('default')
+
+    expect(base2.systemPrompt).toContain('code-searcher')
+    expect(base2.systemPrompt).toContain('code_search')
+    expect(base2.systemPrompt).toContain('find_files_matching_content')
+    expect(base2.systemPrompt).toContain('not granted to you as root')
+  })
 })

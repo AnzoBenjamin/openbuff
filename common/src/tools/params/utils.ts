@@ -482,6 +482,26 @@ export function normalizeReplacementList(val: unknown): unknown {
   })
 }
 
+export const TRANSACTION_EDIT_TYPES = [
+  'str_replace',
+  'replace_range',
+  'structured',
+  'create',
+  'delete',
+  'move',
+  'rewrite_symbol',
+  'patch',
+  'write_file',
+] as const
+
+const TRANSACTION_EDIT_TYPE_SET = new Set<string>(TRANSACTION_EDIT_TYPES)
+
+function canonicalizeTransactionEditType(rawType: unknown): string | undefined {
+  if (typeof rawType !== 'string') return undefined
+  const normalized = rawType.trim().toLowerCase().replace(/[\s-]+/g, '_')
+  return TRANSACTION_EDIT_TYPE_SET.has(normalized) ? normalized : undefined
+}
+
 /**
  * Repairs omitted edit_transaction discriminators only when the payload shape
  * identifies exactly one operation. Ambiguous content-only edits remain
@@ -509,7 +529,12 @@ export function normalizeTransactionEditList(val: unknown): unknown {
     }
 
     const edit = parsedEntry as Record<string, unknown>
-    if (edit.type !== undefined) return parsedEntry
+    if (
+      typeof edit.type === 'string' &&
+      TRANSACTION_EDIT_TYPE_SET.has(edit.type)
+    ) {
+      return parsedEntry
+    }
 
     const candidateTypes: string[] = []
     if (edit.replacements !== undefined) candidateTypes.push('str_replace')
@@ -531,6 +556,15 @@ export function normalizeTransactionEditList(val: unknown): unknown {
       candidateTypes.push('replace_range')
     }
 
+    // Case/separator-only variant of a real type: canonicalize regardless of
+    // shape (e.g. "Str-Replace" -> "str_replace").
+    const canonicalType = canonicalizeTransactionEditType(edit.type)
+    if (canonicalType) {
+      return { ...edit, type: canonicalType }
+    }
+
+    // Omitted or genuinely-invalid type: infer only when the payload shape
+    // identifies exactly one operation. Otherwise leave it for Zod to reject.
     return candidateTypes.length === 1
       ? { ...edit, type: candidateTypes[0] }
       : parsedEntry
