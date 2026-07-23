@@ -767,8 +767,11 @@ describe('tool validation error handling', () => {
       rawToolCall: {
         toolName: 'spawn_agents',
         toolCallId: 'spawn-agents-misbraced-tool-call-id',
+        // Two agent entries with a stray top-level `prompt`: it is ambiguous
+        // which agent the sibling belongs to, so this stays fail-closed and
+        // is not auto-repaired (unlike the single-agent fold case below).
         input:
-          '{"agents":[{"agent_type":"thinker"}],"prompt":"outside-agent"}',
+          '{"agents":[{"agent_type":"thinker"},{"agent_type":"file-picker"}],"prompt":"outside-agent"}',
       },
     })
 
@@ -779,6 +782,86 @@ describe('tool validation error handling', () => {
       )
       expect(result.error).toContain('check every brace and bracket')
       expect(result.error).toContain('ambiguous brace nesting')
+    }
+  })
+
+  it('repairs a single-agent stray-sibling spawn payload by folding prompt into the entry', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-agents-single-agent-fold-tool-call-id',
+        input: {
+          agents: [
+            {
+              agent_type: 'code-searcher',
+              params: { searchQueries: [{ pattern: 'x' }] },
+            },
+          ],
+          prompt: 'find x',
+        },
+      },
+    })
+
+    expect('error' in result).toBe(false)
+    if (!('error' in result)) {
+      expect(result.input.agents[0].prompt).toBe('find x')
+      expect(result.input.agents[0].params).toEqual({
+        searchQueries: [{ pattern: 'x' }],
+      })
+    }
+  })
+
+  it('still rejects a multi-entry spawn array with stray sibling fields', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-agents-multi-entry-stray-sibling-tool-call-id',
+        input: {
+          agents: [{ agent_type: 'a' }, { agent_type: 'b' }],
+          prompt: 'x',
+        },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain(
+        '`prompt`, `params`, and `handoff` must be inside each agent object',
+      )
+    }
+  })
+
+  it('does not overwrite an existing in-entry prompt when folding a single-agent stray sibling', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-agents-single-agent-no-overwrite-tool-call-id',
+        input: {
+          agents: [{ agent_type: 'code-searcher', prompt: 'inner' }],
+          prompt: 'outer',
+        },
+      },
+    })
+
+    expect('error' in result).toBe(false)
+    if (!('error' in result)) {
+      expect(result.input.agents[0].prompt).toBe('inner')
+    }
+  })
+
+  it('shows the corrected spawn shape inline when agents is an invalid JSON string', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-agents-corrected-shape-hint-tool-call-id',
+        input: { agents: 'not valid json {' },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('Corrected example:')
+      expect(result.error).toContain('INSIDE each agent object')
     }
   })
 
@@ -2457,13 +2540,26 @@ describe('tool validation error handling', () => {
 describe('buildUnavailableToolMessage', () => {
   it('explains a known-but-ungranted tool without suggesting a near match', () => {
     const message = buildUnavailableToolMessage({
-      toolName: 'code_search',
+      toolName: 'run_terminal_command',
       agentId: 'base2',
       availableTools: ['query_index', 'read_files', 'glob'],
     })
 
     expect(message).toContain('is a registered tool but is not granted')
     expect(message).toContain('is not available for agent `base2`')
+  })
+
+  it('gives concrete code-searcher recovery for ungranted content-search tools', () => {
+    for (const toolName of ['code_search', 'find_files_matching_content']) {
+      const message = buildUnavailableToolMessage({
+        toolName,
+        agentId: 'base2',
+        availableTools: ['read_files'],
+      })
+
+      expect(message).toContain('code-searcher')
+      expect(message).toContain('searchQueries')
+    }
   })
 
   it('suggests the closest granted tool for a likely typo', () => {
