@@ -704,6 +704,35 @@ describe('normalizeReplacementList', () => {
     ).toEqual([{ old_str: 'before', new_str: 'after' }])
   })
 
+  it('drops an empty->empty placeholder carrying only basedOnRead but keeps a sibling real replacement', () => {
+    expect(
+      normalizeReplacementList([
+        { oldString: 'before', newString: 'after' },
+        { oldString: '', newString: '', basedOnRead: 'cap.v3.x' },
+      ]),
+    ).toEqual([{ oldString: 'before', newString: 'after' }])
+  })
+
+  it('drops a lone empty->empty placeholder leaving an empty array', () => {
+    expect(
+      normalizeReplacementList([
+        { oldString: '', newString: '', basedOnRead: 'cap.v3.x' },
+      ]),
+    ).toEqual([])
+  })
+
+  it('keeps a malformed empty-oldString-with-content edit for validation', () => {
+    expect(
+      normalizeReplacementList([{ oldString: '', newString: 'content' }]),
+    ).toEqual([{ oldString: '', newString: 'content' }])
+  })
+
+  it('keeps a real deletion with an empty newString', () => {
+    expect(
+      normalizeReplacementList([{ oldString: 'x', newString: '' }]),
+    ).toEqual([{ oldString: 'x', newString: '' }])
+  })
+
   it('coerces a single replacement object into an array before filtering', () => {
     expect(
       normalizeReplacementList({ oldString: 'a', newString: 'b' }),

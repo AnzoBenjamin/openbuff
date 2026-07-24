@@ -1,13 +1,11 @@
 import z from 'zod/v4'
 
-import {
-  PLAN_TASK_STATUSES,
-  type PlanTaskStatus,
-} from '@codebuff/common/util/plan-artifacts'
+import { PLAN_TASK_STATUSES } from '@codebuff/common/util/plan-artifacts'
 import { updateFileResultSchema } from './str-replace'
 import {
   $getNativeToolCallExampleString,
   coerceToArray,
+  coerceToObject,
   jsonToolResultSchema,
 } from '../utils'
 
@@ -97,7 +95,8 @@ const inputSchema = z
       .describe(
         'Targeted updates applied in order. Each entry rewrites at most one matching checklist line; unmatched updates fall through to `append`.',
       ),
-    append: appendEntrySchema
+    append: z
+      .preprocess(coerceToObject, appendEntrySchema)
       .optional()
       .describe(
         'Optional delimited entry appended at the end of the artifact (used when there is no matching task line for the change being recorded).',
@@ -134,16 +133,19 @@ const inputSchema = z
         'Optional STATE.json compare-and-swap revision. The update fails without writing when the current revision differs.',
       ),
     checkpoint: z
-      .object({
-        taskId: z.string().min(1),
-        phase: z.enum(['validation', 'review']),
-        passed: z.boolean(),
-        summary: z.string().optional(),
-        receiptIds: z
-          .preprocess(coerceToArray, z.array(z.string().min(1)))
-          .transform((ids) => (ids.length > 0 ? ids : undefined))
-          .optional(),
-      })
+      .preprocess(
+        coerceToObject,
+        z.object({
+          taskId: z.string().min(1),
+          phase: z.enum(['validation', 'review']),
+          passed: z.boolean(),
+          summary: z.string().optional(),
+          receiptIds: z
+            .preprocess(coerceToArray, z.array(z.string().min(1)))
+            .transform((ids) => (ids.length > 0 ? ids : undefined))
+            .optional(),
+        }),
+      )
       .optional()
       .describe(
         'Validation or review evidence associated with a stable task ID. Completing a PLAN task requires a passed validation checkpoint with receiptIds.',
@@ -158,7 +160,7 @@ const inputSchema = z
       input.checkpoint !== undefined,
     {
       message:
-        'Provide at least one `updates` entry, an `append` entry, a `sessionStatus`, or a `currentTask`.',
+        'Provide at least one `updates` entry, an `append` entry, a `sessionStatus`, a `currentTask`, or a `checkpoint`.',
     },
   )
 const description = `
@@ -176,8 +178,9 @@ Two operations, both optional but at least one required:
 - \`append\`: When no targeted line matches (or for free-form lessons), the entry is written at the end of the file under \`## <heading> — <ISO timestamp>\` so it is clearly delimited and easy to scan.
 
 Session-level controls (also optional):
-- \`sessionStatus\`: When provided, \`.agents/sessions/<slug>/STATE.json\` is created or updated with the new lifecycle status (active / paused / completed / archived). Useful for marking a plan finished without editing individual checklist lines.
+- \`sessionStatus\`: When provided, \`.agents/sessions/<slug>/STATE.json\` is created or updated with the new lifecycle status (draft / ready / active / executing / validating / reviewing / blocked / paused / completed / archived). Useful for marking a plan finished without editing individual checklist lines.
 - \`currentTask\`: When provided, the \`<!-- current-task: <task> -->\` annotation in PLAN.md is rewritten. Empty string clears the pointer. The executor reads this annotation to know what to work on next.
+- \`checkpoint\`: Optional validation/review evidence bound to a stable task ID. Provide \`taskId\`, \`phase\` (\`validation\` or \`review\`), \`passed\`, an optional \`summary\`, and \`receiptIds\`. Completing a PLAN task requires a passed validation checkpoint with receiptIds.
 
 This tool preserves user prose: it never rewrites unmatched lines, never reorders content, and only appends when explicitly requested.
 

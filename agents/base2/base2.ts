@@ -1260,15 +1260,11 @@ ${specialistRoutingSection}
                   unknowns: [],
                   findings: [],
                   permissions: {
-                    readablePaths: [
-                      ...docTargets,
-                      ...docTargets.map((f: string) =>
-                        f.includes('/')
-                          ? f.split('/').slice(0, -1).join('/')
-                          : '.',
-                      ),
-                      ...docWriterScopePatterns(docTargets),
-                    ],
+                    // Mirror doc-writer's static filesystemScope.read (already '**/*') so this
+                    // per-spawn handoff does not narrow below the agent's static read ceiling.
+                    // Writes stay doc-only via docWriterScopePatterns and the agent has no
+                    // terminal/network/spawn tool, so repo-wide read grants no exfiltration path.
+                    readablePaths: ['**/*'],
                     writablePaths: docWriterScopePatterns(docTargets),
                     allowedTools: [
                       'read_files',

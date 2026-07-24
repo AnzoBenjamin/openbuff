@@ -450,12 +450,29 @@ const REPLACEMENT_PLACEHOLDER_KEYS = new Set([
   'skipIfMissing',
 ])
 
+/** Returns the first string value found among the given keys, else undefined. */
+function firstDefinedReplacementString(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'string') return value
+  }
+  return undefined
+}
+
 /**
- * Drops only operation-less replacement placeholders such as `{}` or
- * `{ allowMultiple: false }`. Some providers append one of these after an
- * otherwise complete replacement array. Entries containing either payload
- * field, an alias, or any unknown key remain untouched so normal validation
- * still rejects one-sided/truncated or misspelled real edits.
+ * Drops only operation-less replacement placeholders such as `{}`,
+ * `{ allowMultiple: false }`, or a pure empty->empty entry that only carries
+ * placeholder-set keys (e.g. `{ oldString: '', newString: '', basedOnRead }`).
+ * Some providers append one of these after an otherwise complete replacement
+ * array; without this, the empty->empty entry would reach Zod and hard-fail
+ * the entire transaction with `oldString cannot be empty` even when a valid
+ * replacement is present. Entries carrying any unknown key remain untouched so
+ * normal validation still reports misspelled real edits, and a one-sided edit
+ * (empty oldString with real newString, or a real deletion) is kept so Zod
+ * still surfaces the precise guidance.
  */
 export function normalizeReplacementList(val: unknown): unknown {
   const replacements = coerceToArray(val)
@@ -469,16 +486,25 @@ export function normalizeReplacementList(val: unknown): unknown {
     ) {
       return true
     }
-    return [
+
+    const oldValue = firstDefinedReplacementString(record, [
       'oldString',
-      'newString',
       'old',
-      'new',
       'old_str',
-      'new_str',
       'old_string',
+    ])
+    const newValue = firstDefinedReplacementString(record, [
+      'newString',
+      'new',
+      'new_str',
       'new_string',
-    ].some((key) => record[key] !== undefined)
+    ])
+
+    const oldEmpty = oldValue === undefined || oldValue === ''
+    const newEmpty = newValue === undefined || newValue === ''
+    if (oldEmpty && newEmpty) return false
+
+    return oldValue !== undefined || newValue !== undefined
   })
 }
 
