@@ -1612,18 +1612,21 @@ describe('base2 verification and reviewer gates', () => {
     expect((agentState as any).canSuggestFollowups).toBe(false)
   })
 
-  test('publishes uncommittedUnvalidatedFiles: turn-start dirty files not covered by a gate pass', () => {
+  test('publishes uncommittedUnvalidatedFiles: agent-touched dirty files not covered by a gate pass', () => {
     // The git-committer commit guard in the tool executor relies on base2
-    // publishing the set of working-tree files that are dirty but NOT covered
-    // by a green gate pass. A turn can start with an already-gate-passed file A
-    // plus an unrelated never-validated dirty file B; only B must appear in the
-    // published set so the executor can refuse to stage B while allowing A.
+    // publishing the set of working-tree files that are dirty, touched by this
+    // agent, and NOT covered by a green gate pass. A turn can start with an
+    // already-gate-passed file A plus a never-validated agent-touched dirty
+    // file B; only B must appear in the published set so the executor can
+    // refuse to stage B while allowing A. Dirty files the agent never touched
+    // (e.g. left dirty by another agent or process sharing the codebase) must
+    // NOT be published, so unrelated work no longer blocks commits.
     const base2 = createBase2('default')
     const agentState: Record<string, unknown> = {
       agentId: 'base2',
       base2ActiveWork: {
-        changedFiles: ['src/a.ts'],
-        touchedFiles: ['src/a.ts'],
+        changedFiles: ['src/a.ts', 'src/b.ts'],
+        touchedFiles: ['src/a.ts', 'src/b.ts'],
         pendingGateFiles: [],
         currentPhase: 'final_response_allowed',
         latestWorkSummary: '',
@@ -1641,12 +1644,15 @@ describe('base2 verification and reviewer gates', () => {
     } as any)
 
     expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
-    // Working tree is dirty on both the gate-passed file A and the unrelated
-    // never-validated file B.
+    // Working tree is dirty on the gate-passed file A, the never-validated
+    // agent-touched file B, and the never-touched file C.
     expect(
       gen.next({
         toolResult: [
-          { type: 'json', value: { status: ' M src/a.ts\n M src/b.ts' } },
+          {
+            type: 'json',
+            value: { status: ' M src/a.ts\n M src/b.ts\n M src/c.ts' },
+          },
         ],
       } as any).value,
     ).toMatchObject({ toolName: 'spawn_agent_inline' })
@@ -1656,8 +1662,8 @@ describe('base2 verification and reviewer gates', () => {
       expect(gen.next().value).toBe('STEP')
     }
 
-    // Only the never-validated dirty file B is published; the gate-passed file
-    // A is excluded.
+    // Only the never-validated agent-touched dirty file B is published; the
+    // gate-passed file A and the untouched file C are excluded.
     expect((agentState as any).uncommittedUnvalidatedFiles).toEqual(['src/b.ts'])
   })
 
@@ -4833,5 +4839,131 @@ describe('base2 test-writer aux-gate completion path', () => {
     expect(
       firstYield('continue working on the previous task'),
     ).toMatchObject({ toolName: 'git_status' })
+  })
+})
+
+describe('base2 COMMIT ANYWAY commit-scope bypass publisher', () => {
+  test('authorizes the bypass at turn start for an exact standalone user COMMIT ANYWAY message', () => {
+    // Publisher-parse coverage for updateCommitScopeBypassFromMessages: an
+    // exact standalone user 'COMMIT ANYWAY' message authorizes the bypass
+    // BEFORE the first STEP (turn-start recognition next to
+    // updateWorkflowTodoProgressFromMessages), so a git-committer spawned in
+    // the first step of the turn already sees the published flag, and the
+    // bypass record captures the unvalidated dirty files at authorization
+    // time.
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2-custom',
+      messageHistory: [
+        { role: 'user', content: 'Please commit the pending changes.' },
+        { role: 'assistant', content: 'The validation gate is still pending.' },
+        { role: 'user', content: 'COMMIT ANYWAY' },
+      ],
+      uncommittedUnvalidatedFiles: ['src/b.ts'],
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'COMMIT ANYWAY',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    // The first yield is the turn-start git_status; the bypass must already
+    // be published by then (before any STEP completes).
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect((agentState as any).commitScopeBypassAuthorized).toBe(true)
+    expect((agentState as any).commitScopeBypassRecord).toMatchObject({
+      reason: expect.stringContaining('COMMIT ANYWAY'),
+      unvalidatedFiles: ['src/b.ts'],
+    })
+    expect(
+      typeof (agentState as any).commitScopeBypassRecord.authorizedAt,
+    ).toBe('string')
+    expect(
+      (agentState as any).commitScopeBypassRecord.authorizedAt.length,
+    ).toBeGreaterThan(0)
+  })
+
+  test('recognizes a COMMIT ANYWAY message that arrives in the post-STEP message history', () => {
+    // The post-STEP messageHistory branch still recognizes the phrase when it
+    // appears in the message history returned by the step result.
+    const base2 = createBase2('default')
+    const agentState = { agentId: 'base2-custom' }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Commit the pending changes please',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+        .value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    expect(gen.next().value).toBe('STEP')
+    expect((agentState as any).commitScopeBypassAuthorized).toBeUndefined()
+    // The step returns an updated message history containing the exact
+    // standalone user authorization; the post-STEP branch publishes the bypass.
+    gen.next({
+      stepsComplete: false,
+      toolResult: [],
+      agentState: {
+        messageHistory: [
+          { role: 'user', content: 'Commit the pending changes please' },
+          { role: 'user', content: 'COMMIT ANYWAY' },
+        ],
+      },
+    } as any)
+    expect((agentState as any).commitScopeBypassAuthorized).toBe(true)
+    expect((agentState as any).commitScopeBypassRecord).toMatchObject({
+      reason: expect.stringContaining('COMMIT ANYWAY'),
+    })
+  })
+
+  test('does not authorize for substring prose or assistant/tool-role exact phrases', () => {
+    // Negative publisher-parse cases: substring prose ('please commit anyway
+    // now') and the exact phrase spoken by assistant/tool roles must NOT
+    // authorize the security-sensitive commit-guard bypass.
+    const negativeHistories: Array<Array<Record<string, unknown>>> = [
+      [{ role: 'user', content: 'please commit anyway now' }],
+      [{ role: 'assistant', content: 'COMMIT ANYWAY' }],
+      [{ role: 'tool', content: 'COMMIT ANYWAY' }],
+      [
+        {
+          role: 'user',
+          content: [{ type: 'text', text: 'please commit anyway now' }],
+        },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'COMMIT ANYWAY' }],
+        },
+      ],
+    ]
+    for (const messageHistory of negativeHistories) {
+      const base2 = createBase2('default')
+      const agentState = { agentId: 'base2-custom', messageHistory }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Commit the pending changes please',
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+
+      // Turn start (first yield) must not have published the bypass...
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect((agentState as any).commitScopeBypassAuthorized).toBeUndefined()
+      expect((agentState as any).commitScopeBypassRecord).toBeUndefined()
+      // ...and neither must the post-STEP messageHistory branch.
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+      gen.next() // STEP
+      gen.next({
+        stepsComplete: false,
+        toolResult: [],
+        agentState: { messageHistory },
+      } as any)
+      expect((agentState as any).commitScopeBypassAuthorized).toBeUndefined()
+      expect((agentState as any).commitScopeBypassRecord).toBeUndefined()
+    }
   })
 })

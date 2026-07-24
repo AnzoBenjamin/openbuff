@@ -1547,6 +1547,24 @@ export async function executeToolCall<T extends ToolName>(
   // them via git-committer. Only applies when the gate system is active
   // (canSuggestFollowups !== undefined); non-base2/custom agents leave it
   // undefined and are unaffected.
+  //
+  // Durable COMMIT ANYWAY bypass: once base2 publishes
+  // commitScopeBypassAuthorized === true (the user replied with the exact
+  // standalone phrase "COMMIT ANYWAY"), this uncommitted-unvalidated-files
+  // guard is skipped for the rest of the session — but ONLY for git-committer
+  // spawns whose owned_paths stay within the file set recorded in
+  // commitScopeBypassRecord.unvalidatedFiles at authorization time. A file
+  // that becomes dirty AFTER authorization is not in the recorded set, so a
+  // commit claiming it is still blocked below. The bypass affects ONLY this
+  // guard: the earlier canSuggestFollowups === false gate-not-green guard
+  // above stays fully in force, so COMMIT ANYWAY never lets a commit land
+  // while validation/review is still pending or failing.
+  const commitScopeBypassAuthorized =
+    (agentState as { commitScopeBypassAuthorized?: unknown })
+      .commitScopeBypassAuthorized === true
+  const commitScopeBypassRecord = (
+    agentState as { commitScopeBypassRecord?: unknown }
+  ).commitScopeBypassRecord
   if (toolName === 'spawn_agents' && canSuggestFollowups !== undefined) {
     const hasUncommittedUnvalidatedFiles = Object.hasOwn(
       agentState,
@@ -1589,12 +1607,18 @@ export async function executeToolCall<T extends ToolName>(
         if (/^\/[A-Za-z]:\//.test(normalized)) {
           normalized = normalized.slice(1)
         }
-        const cwd =
-          typeof process === 'object' &&
-          process !== null &&
-          typeof process.cwd === 'function'
-            ? process.cwd().replace(/\\/g, '/').replace(/\/+$/, '')
-            : ''
+        const rawRoot = params.fileContext?.projectRoot
+        const cwd = (
+          typeof rawRoot === 'string' && rawRoot.trim().length > 0
+            ? rawRoot
+            : typeof process === 'object' &&
+                process !== null &&
+                typeof process.cwd === 'function'
+              ? process.cwd()
+              : ''
+        )
+          .replace(/\\/g, '/')
+          .replace(/\/+$/, '')
         const isAbsolute =
           normalized.startsWith('/') || /^[A-Za-z]:\//.test(normalized)
         if (
@@ -1655,6 +1679,39 @@ export async function executeToolCall<T extends ToolName>(
         if (!p) return true
         return dirtyFiles.some((f) => f === p || f.startsWith(`${p}/`))
       }
+      // The specific normalized dirty files an owned_path covers. Fails closed
+      // alongside ownedPathCoversDirtyFile: an uncertain dirty set or an
+      // uncanonicalizable owned_path counts as covering the whole known dirty
+      // set. Used to name the blocking file(s) in the refusal error below.
+      const dirtyFilesCoveredByOwnedPath = (ownedPath: string): string[] => {
+        if (dirtySetUncertain) return dirtyFiles
+        const p = normalizeCoveragePath(ownedPath)
+        if (!p) return dirtyFiles
+        return dirtyFiles.filter((f) => f === p || f.startsWith(`${p}/`))
+      }
+      // The normalized file set the durable COMMIT ANYWAY bypass was recorded
+      // against (commitScopeBypassRecord.unvalidatedFiles at authorization
+      // time). Canonicalized with the same normalizeCoveragePath helper as the
+      // dirty set and the owned_paths so all three sides compare in the same
+      // form; entries that cannot be canonicalized drop out, so an
+      // uncanonicalizable owned_path can never match the recorded set here and
+      // still fails closed through ownedPathCoversDirtyFile below.
+      const recordedBypassFileList =
+        commitScopeBypassRecord !== null &&
+        typeof commitScopeBypassRecord === 'object'
+          ? (commitScopeBypassRecord as Record<string, unknown>)
+              .unvalidatedFiles
+          : undefined
+      const recordedBypassFiles: string[] = (
+        Array.isArray(recordedBypassFileList) ? recordedBypassFileList : []
+      )
+        .filter((file): file is string => typeof file === 'string')
+        .map(normalizeCoveragePath)
+        .filter((file) => file.length > 0)
+      // The unvalidated dirty files that refused git-committer agents tried to
+      // stage; surfaced in the block error below so the refusal names the
+      // specific file(s) instead of a generic "not available yet" message.
+      const blockingDirtyFiles = new Set<string>()
       const filteredAgents = agents.filter((agent) => {
         if (
           !(
@@ -1675,22 +1732,55 @@ export async function executeToolCall<T extends ToolName>(
             : undefined
         // Missing/empty/non-array owned_paths covers nothing here; the existing
         // gate-state guard and git-committer's own required owned_paths schema
-        // handle that path. Do not block on it.
+        // handle that path. Do not block on it. An EMPTY array ([]) instead
+        // falls through to the scoped-bypass `every` check (vacuously true for
+        // []) and then the dirty-coverage check — so an authorized bypass with
+        // owned_paths: [] is allowed while a non-bypassed one is handled by the
+        // normal dirty-file filter.
         if (!Array.isArray(ownedPaths)) {
           return true
         }
-        const coversDirty = ownedPaths.some(
-          (ownedPath) =>
-            typeof ownedPath === 'string' &&
-            ownedPathCoversDirtyFile(ownedPath),
-        )
+        // Scoped COMMIT ANYWAY bypass: keep this git-committer only when the
+        // bypass was authorized AND every owned_path (canonicalized the same
+        // way as the recorded set) is contained in the recorded bypass file
+        // set. An empty recorded set contains nothing, and an owned_path that
+        // canonicalizes away can never match it, so both cases fall through
+        // to the normal dirty-file filtering below (which fails closed on an
+        // uncanonicalizable owned_path).
+        if (
+          commitScopeBypassAuthorized &&
+          ownedPaths.every(
+            (ownedPath) =>
+              typeof ownedPath === 'string' &&
+              recordedBypassFiles.includes(normalizeCoveragePath(ownedPath)),
+          )
+        ) {
+          return true
+        }
+        const coversDirty = ownedPaths.some((ownedPath) => {
+          if (
+            typeof ownedPath !== 'string' ||
+            !ownedPathCoversDirtyFile(ownedPath)
+          ) {
+            return false
+          }
+          for (const file of dirtyFilesCoveredByOwnedPath(ownedPath)) {
+            blockingDirtyFiles.add(file)
+          }
+          return true
+        })
         return !coversDirty
       })
       if (filteredAgents.length < agents.length) {
+        const blockedFiles =
+          blockingDirtyFiles.size > 0
+            ? Array.from(blockingDirtyFiles).join(', ')
+            : dirtyFiles.length > 0
+              ? dirtyFiles.join(', ')
+              : '(unknown files)'
         onResponseChunk({
           type: 'error',
-          message:
-            'Spawning `git-committer` is not available yet. This is normal ordering, not a failure: the requested commit would stage changes that have not passed the validation/reviewer gate (a recent edit left working-tree files pending). The gate runs and clears automatically for those files — do not retry the spawn now. Wait for it to report passed, then spawn git-committer; the commit will succeed on the next attempt.',
+          message: `git-committer blocked by unvalidated dirty file(s): ${blockedFiles}. These working-tree files were left pending and have not passed the validation/reviewer gate, so the committer will not stage them. Either wait for the gate to pass for those files, or reply "COMMIT ANYWAY" to authorize committing despite them.`,
         })
         if (filteredAgents.length === 0) {
           return abortablePreviousToolCallFinished

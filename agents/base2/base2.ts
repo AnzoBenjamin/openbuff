@@ -435,6 +435,12 @@ ${specialistRoutingSection}
         base2ActiveWork?: Base2ActiveWorkState
         canSuggestFollowups?: boolean
         uncommittedUnvalidatedFiles?: string[]
+        commitScopeBypassAuthorized?: boolean
+        commitScopeBypassRecord?: {
+          reason: string
+          authorizedAt: string
+          unvalidatedFiles: string[]
+        }
         workspaceState?: {
           revision: number
           snapshotId: string
@@ -589,6 +595,11 @@ ${specialistRoutingSection}
         activeWorkState.gatePassedPendingFiles,
       )
       updateWorkflowTodoProgressFromMessages(mutableAgentState.messageHistory)
+      // Recognize a user-issued "COMMIT ANYWAY" at turn start (not only in
+      // the post-STEP messageHistory branch) so a git-committer spawned in
+      // the first step of the 'COMMIT ANYWAY' turn already sees the
+      // published bypass flag instead of being blocked by the stale value.
+      updateCommitScopeBypassFromMessages(mutableAgentState.messageHistory)
       if (!hadCurrentPhase) {
         activeWorkState.currentPhase = inferActiveWorkPhase(activeWorkState)
       }
@@ -779,10 +790,27 @@ ${specialistRoutingSection}
         // green gate pass, so the git-committer spawn guard in the tool executor can
         // refuse to stage never-validated changes even when the finalization gate is
         // otherwise open (a turn can end green on file A while an unrelated file B was
-        // never validated). Recomputed every iteration against the current
-        // gatePassedFiles so files validated this turn drop out of the set.
+        // never validated). Scoped to task-related files this agent actually touched
+        // (touchedFiles/changedFiles/pendingGateFiles/gatePassedFiles) so unrelated
+        // dirty files left by other agents or processes working the same codebase no
+        // longer block commits. The filter is recomputed every iteration
+        // against the current gatePassedFiles so files validated this turn drop
+        // out of the set. Note: initialGitStatusDirtyFiles is the turn-start
+        // snapshot. A task-related file dirtied at turn start and then reverted
+        // (not committed) mid-turn stays published until the next turn
+        // (fail-closed, safe), and a file dirtied only via a non-edit-tool
+        // channel (e.g. run_terminal_command) may not be re-captured into the
+        // task-related set this turn. Both directions fail safe.
+        const taskRelatedFiles = new Set<string>([
+          ...activeWorkState.touchedFiles,
+          ...activeWorkState.changedFiles,
+          ...activeWorkState.pendingGateFiles,
+          ...activeWorkState.gatePassedFiles,
+        ])
         mutableAgentState.uncommittedUnvalidatedFiles =
-          initialGitStatusDirtyFiles.filter((file) => !gatePassedFiles.has(file))
+          initialGitStatusDirtyFiles.filter(
+            (file) => taskRelatedFiles.has(file) && !gatePassedFiles.has(file),
+          )
 
         const pinnedStateMessage = buildPinnedActiveWorkMessage(activeWorkState)
         if (
@@ -843,6 +871,7 @@ ${specialistRoutingSection}
         if (Array.isArray(messageHistory)) {
           currentConversationMessages = messageHistory
           updateWorkflowTodoProgressFromMessages(messageHistory)
+          updateCommitScopeBypassFromMessages(messageHistory)
           processedMessageHistoryLength = messageHistory.length
         }
         if (messageFiles.length > 0) {
@@ -2821,7 +2850,7 @@ ${specialistRoutingSection}
                 {
                   agent_type: requiredReviewerAgentType,
                   prompt: [
-                    `Review the completed ${requiredReviewerAgentType} changes before finalization.`,
+                    `Review the completed changes as the ${requiredReviewerAgentType} before finalization.`,
                     '',
                     `Pending changed files: ${reviewablePendingFiles.join(', ') || '(unknown)'}`,
                     `Snapshot fingerprint (echo exactly): ${reviewSnapshotFingerprint}`,
@@ -4938,6 +4967,51 @@ ${specialistRoutingSection}
         )
         activeWorkState.workflowTodoProgress = progress
         if (progressChanged) markActiveWorkStateChanged()
+      }
+
+      // Detects an exact standalone "COMMIT ANYWAY" user message and publishes
+      // a durable session-scoped bypass flag for the git-committer
+      // uncommitted-unvalidated-files commit guard in the tool executor. Text
+      // extraction mirrors hasReviewerBypassAuthorization (collectMessageText
+      // over user message content) and the match is a trim/uppercase
+      // exact-phrase compare only — never a substring match, so prose like
+      // "please commit anyway now" cannot authorize the bypass. Session-
+      // durable and scoped: once authorized it stays set for the rest of the
+      // session, but the tool executor skips the guard ONLY for the files
+      // recorded in commitScopeBypassRecord.unvalidatedFiles at authorization
+      // time — files dirtied after authorization remain blocked. Self-
+      // contained inline helper:
+      // handleSteps is serialized via .toString() + new Function(...), so it
+      // must not reference module-scope imports.
+      function updateCommitScopeBypassFromMessages(messages: unknown): void {
+        if (mutableAgentState.commitScopeBypassAuthorized === true) return
+        if (!Array.isArray(messages)) return
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          const message = messages[index]
+          if (!message || typeof message !== 'object') continue
+          const record = message as Record<string, unknown>
+          if (record.role !== 'user') continue
+          const texts: string[] = []
+          collectMessageText(record.content, texts)
+          if (
+            !texts.some(
+              (text) => text.trim().toUpperCase() === 'COMMIT ANYWAY',
+            )
+          ) {
+            continue
+          }
+          mutableAgentState.commitScopeBypassAuthorized = true
+          mutableAgentState.commitScopeBypassRecord = {
+            reason:
+              'User authorized COMMIT ANYWAY to bypass the uncommitted-unvalidated-files commit guard',
+            authorizedAt: new Date().toISOString(),
+            unvalidatedFiles: [
+              ...(mutableAgentState.uncommittedUnvalidatedFiles ?? []),
+            ],
+          }
+          markActiveWorkStateChanged()
+          return
+        }
       }
 
       function extractLatestWorkflowTodoProgress(
