@@ -126,9 +126,18 @@ describe('specialist agents', () => {
     expect(compatibilityReviewer.spawnerPrompt).toContain(
       'Requires params.snapshot_id',
     )
+    expect(compatibilityReviewer.spawnerPrompt).toContain(
+      'assigned gate snapshot fingerprint for this spawn',
+    )
     expect(
       (compatibilityReviewer.inputSchema as any).params.properties.snapshot_id
         .description,
-    ).toContain('get_change_review_bundle')
+    ).toContain('assigned gate snapshot fingerprint for this spawn')
+    expect(dependencyReviewer.instructionsPrompt).toContain(
+      'authoritative assigned snapshot',
+    )
+    expect(dependencyReviewer.instructionsPrompt).toContain(
+      'do not emit stale-snapshot solely because the live bundle moved',
+    )
   })
 })
