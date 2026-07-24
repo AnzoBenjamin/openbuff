@@ -838,7 +838,7 @@ export interface SkillParams {
 }
 
 /**
- * Spawn up to 8 agents and send a prompt and/or parameters to each of them. These agents will run in parallel. Note that that means they will run independently. Split larger work into bounded waves. If you need to run agents sequentially, use spawn_agents with one agent at a time instead.
+ * Spawn up to 12 agents and send a prompt and/or parameters to each of them. These agents will run in parallel. Note that that means they will run independently. Split larger work into bounded waves. If you need to run agents sequentially, use spawn_agents with one agent at a time instead.
  */
 export interface SpawnAgentsParams {
   agents: {
