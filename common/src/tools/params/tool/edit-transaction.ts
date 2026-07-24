@@ -263,6 +263,9 @@ const writeFileEditSchema = editBaseSchema.extend({
   content: z.string().refine((value) => !isObviousEditPlaceholder(value), {
     message: 'content is an explicit placeholder; provide exact file bytes.',
   }),
+  basedOnRead: basedOnReadSchema.describe(
+    'Optional whole-file-covering cap.v3 from a fresh complete whole-file read. Only a full-file capability with a hash matching current content may authorize overwrite; partial ranges never authorize write_file.',
+  ),
 })
 
 export const transactionEditSchema = z.discriminatedUnion('type', [
@@ -361,6 +364,9 @@ export const editTransactionResultSchema = z.union([
         id: z.string().optional(),
         path: z.string(),
         errorMessage: z.string(),
+        basedOnRead: basedOnReadSchema.optional().describe(
+          'Ready-to-paste whole-file or recovery capability echoed on residual failures.',
+        ),
       }),
     ),
   }),

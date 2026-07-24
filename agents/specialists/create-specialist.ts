@@ -84,7 +84,7 @@ export function createSpecialist(
     displayName: config.displayName,
     spawnerPrompt: config.advisory
       ? config.purpose
-      : `${config.purpose} Requires params.snapshot_id with the exact current change-review fingerprint.`,
+      : `${config.purpose} Requires params.snapshot_id with the assigned gate snapshot fingerprint for this spawn.`,
     inputSchema: {
       prompt: {
         type: 'string',
@@ -103,7 +103,7 @@ export function createSpecialist(
             type: 'string',
             maxLength: 512,
             description:
-              'Required exact current change-review snapshot fingerprint from get_change_review_bundle. Do not invent or reuse a stale value.',
+              'Required assigned gate snapshot fingerprint for this spawn (opaque token from the parent gate). Echo it exactly as snapshotFingerprint; do not invent a different value.',
           },
           command: {
             type: 'string',
@@ -232,8 +232,8 @@ export function createSpecialist(
     systemPrompt: `You are the ${config.displayName} specialist. You make source-backed judgments within a narrow contract and never invent validation, approvals, or filesystem state.`,
     instructionsPrompt: [
       config.advisory
-        ? 'Read the exact current sources and task state. A snapshot_id is optional for pre-edit advisory work; when supplied, verify it against the current review bundle and echo it exactly.'
-        : 'Read the exact current sources and snapshot-scoped review bundle. snapshot_id is an opaque single-line token and is required; echo it exactly, list the exact normalized project-relative paths you read, and return BLOCKING with a stale-snapshot finding when it differs from the current bundle.',
+        ? 'Read the exact current sources and task state. A snapshot_id is optional for pre-edit advisory work; when supplied, it is the assigned gate snapshot fingerprint for this spawn — echo it exactly as snapshotFingerprint and do not invent a different value or re-validate against a live bundle that may have moved.'
+        : 'params.snapshot_id is the authoritative assigned snapshot for this review spawn (opaque single-line token from the parent gate). Echo that exact value as snapshotFingerprint. You may use get_change_review_bundle as read-only evidence of the assigned snapshot (file list/diff for that fingerprint if available), but if a fresh call returns a different id, keep reviewing against params.snapshot_id and echo params.snapshot_id — do not emit stale-snapshot solely because the live bundle moved. List the exact normalized project-relative paths you read. Stale-snapshot BLOCKING is only for: missing/empty snapshot_id, inventing a different fingerprint, or inability to read the assigned files — not live-bundle drift during review.',
       config.advisory
         ? 'Return family=advisory. Your output is design/coordination evidence; do not invent a blocking gate verdict and do not mutate files or external systems.'
         : 'Return family=reviewer. Any material issue requiring a code or contract change is BLOCKING.',
@@ -242,7 +242,7 @@ export function createSpecialist(
       config.terminal
         ? 'Use only the tools exposed for this specialist. run_terminal_command is available only for the optional bounded diagnostic command; do not call a basher agent.'
         : 'Use only the tools exposed for this specialist. Do not call basher or run terminal validation; if runtime evidence is required, report the exact missing evidence for the parent to collect.',
-      `Use these exact dimension keys: ${dimensionKeys.join(', ')}. Every finding ID must be stable and formatted ${config.id}:<dimension>:<slug>; include severity, concrete evidence, and an actionable correction. Only emit findings that require a concrete code or contract change; do not emit informational observations about intended or documented behavior (e.g. 'this is the intended scope, not a defect'). Keep the result compact: at most ${MAX_FINDINGS} findings and ${MAX_EVIDENCE_ITEMS} evidence items per finding. Snapshot/file-attestation mismatches are protocol failures, not source findings; report a stale-snapshot finding and do not invent a repair. Call set_output with a JSON object directly; never JSON.stringify the object or wrap it in a string. Return the required structured output and do not modify files.`,
+      `Use these exact dimension keys: ${dimensionKeys.join(', ')}. Every finding ID must be stable and formatted ${config.id}:<dimension>:<slug>; include severity, concrete evidence, and an actionable correction. Only emit findings that require a concrete code or contract change; do not emit informational observations about intended or documented behavior (e.g. 'this is the intended scope, not a defect'). Keep the result compact: at most ${MAX_FINDINGS} findings and ${MAX_EVIDENCE_ITEMS} evidence items per finding. Snapshot/file-attestation protocol failures (missing/empty snapshot_id, invented fingerprint, or inability to read assigned files) are not source findings; report a stale-snapshot finding and do not invent a repair. Do not treat live get_change_review_bundle drift as stale-snapshot. Call set_output with a JSON object directly; never JSON.stringify the object or wrap it in a string. Return the required structured output and do not modify files.`,
     ].join('\n'),
   }
 }

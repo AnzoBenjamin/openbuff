@@ -97,14 +97,57 @@ common cause of "I already read this file, why is my edit blocked?":
   post-edit content, including edits originally authorized by a scoped range.
 - A read and edit emitted in one provider response still execute in safe order,
   but the new implicit whole-file authorization is not usable until the next
-  model step. This prevents edit arguments authored before the model saw the
-  read result from borrowing authority from that unseen result. Explicit
-  authenticated capabilities from earlier visible context remain valid.
-- Semantic compaction and emergency mechanical trimming revoke implicit
-  whole-file authorizations because the exact read bodies were removed from
-  model-visible context. The runtime persists a `context_compacted` reread
-  reason; a fresh read clears it. Authenticated scoped capabilities retained in
+  model step **unless** the edit carries an explicit capability or the server
+  performs its one-shot auto-reread (below). Explicit authenticated capabilities
+  from earlier visible context remain valid.
+- Semantic compaction and emergency mechanical trimming **no longer wipe**
+  sticky whole-file authorizations/hashes. They record a `context_compacted`
+  reread reason. For `str_replace`, hash-fresh unique edits may still proceed
+  and clear the marker only after a successful unique apply (unique `oldString`
+  is the safety bound); failed/no-match `str_replace` and proper-subset/scoped
+  reads do **not** clear it. For **`write_file`**, `context_compacted` **blocks**
+  a whole-file overwrite even when the sticky hash still matches disk — only a
+  complete whole-file `read_files` grant (paths whole-file content, or full-file
+  range `1..totalLines` with `sourceContent`) **or** an explicit whole-file-covering
+  `basedOnRead` (hash-fresh, startLine=1 through current line count, same project/
+  path/run) clears that marker before overwrite is allowed. Changed files still
+  fail closed on hash mismatch. Authenticated scoped capabilities retained in
   operational memory are still verified against live content when used.
+- Complete full-file range reads (`startLine === 1` and `endLine === totalLines`,
+  with complete `sourceContent`) grant sticky whole-file authorization the same
+  way as `read_files.paths`. Proper-subset and truncated ranges stay scoped-only.
+- On a strict auth miss (no fresh whole-file hash match and no `basedOnRead`),
+  `str_replace` / `edit_transaction` `str_replace` may **auto-reread once**
+  server-side via `requestOptionalFile` and authorize **only that** unique
+  replacement in-process (`allowMultiple` false/undefined). Multi-match
+  replacements with `allowMultiple: true` **never** auto-reread — they fail
+  closed and require real sticky auth or explicit `basedOnRead`. Auto-reread
+  **does not** mint durable sticky whole-file authorization (so a later
+  `write_file` cannot chain a blind overwrite off a server re-read). A successful
+  applied unique edit may still refresh sticky from observed **post-edit**
+  content. Still fail-closed if the file is missing, the circuit breaker is open,
+  the match is ambiguous, or zero matches remain after re-read; residual failures
+  mint a whole-file `basedOnRead` capability in the error recovery payload.
+  Explicit `basedOnRead` still works same-batch.
+  **`write_file` (standalone and `edit_transaction` `write_file`) never
+  auto-rereads** — whole-file overwrites require a prior complete whole-file
+  sticky hash match from a real read / successful observed edit, **or** an
+  optional whole-file-covering `basedOnRead` from a fresh complete whole-file
+  read (paths or full-file range). Partial range caps **never** authorize
+  overwrite. Capability echo on `write_file` / create-on-existing failures is
+  retry-usable as `basedOnRead` without an exploratory re-read. Sticky maps alone
+  do not make partial-range `basedOnRead` work for overwrite.
+- `edit_transaction` create-on-existing recovery points to `write_file` or
+  `str_replace` with whole-file sticky auth **or** `basedOnRead` on the
+  `write_file` / replacement (end-to-end reachable: mint capability → pass as
+  `basedOnRead` on `write_file`). When a capability is already echoed, primary
+  guidance is capability-retry (`write_file`/`str_replace` + `basedOnRead`) —
+  not an exploratory `read_files` first. The same preference applies to strict
+  auth-miss and residual process-failure recovery messages: mint/`basedOnRead`
+  first when content is known; `read_files` remains the fallback only when no
+  capability can be minted. Auto-reread for transaction `str_replace` does **not**
+  clear `context_compacted`/failed-edit markers pre-apply — only successful unique
+  apply (or a real whole-file basedOnRead/read) clears them.
 - Input-only and preflight failures that never reached the client preserve a
   still-current whole-file authorization. Failures that make filesystem state
   uncertain revoke it and persist a typed reread reason across turns; the next
@@ -118,6 +161,7 @@ Structured v1 `read_files` responses are correlated back to their requested
 selectors before any authorization is derived from them. A response whose
 items do not line up with the requested selector index, kind, and path fails
 closed: no content or capability from that batch is allowed to mint whole-file
+
 or scoped read authorization. The failure is reported per selector — each
 requested selector keeps its own genuine per-item diagnostic (for example a
 real `not_found`/`blocked` error for that path) instead of being collapsed

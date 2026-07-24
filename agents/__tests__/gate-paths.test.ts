@@ -134,7 +134,7 @@ describe('gate-paths helpers', () => {
     expect(gateFileSetsEqual(['a', 'b'], ['a', 'c'])).toBe(false)
   })
 
-  test('isReviewableGateFile includes real source and excludes tests/generated/docs/data/bookkeeping', () => {
+  test('isReviewableGateFile includes source and tests while excluding generated/docs/data/bookkeeping', () => {
     // Reviewable source extensions (expect true).
     for (const reviewable of [
       'src/a.ts',
@@ -148,19 +148,19 @@ describe('gate-paths helpers', () => {
       'cmd/main.go',
       'svc/App.java',
       'app/Main.kt',
-    ]) {
-      expect(isReviewableGateFile(reviewable)).toBe(true)
-    }
-
-    // Tests, generated code, docs, data/config, env, and bookkeeping dirs
-    // (expect false).
-    for (const excluded of [
       'src/__tests__/a.ts',
       'src/a.test.ts',
       'src/a.spec.tsx',
       'src/a.test.mjs',
       'src/a.spec.cjs',
       'src/a.test.jsx',
+    ]) {
+      expect(isReviewableGateFile(reviewable)).toBe(true)
+    }
+
+    // Generated code, docs, data/config, env, and bookkeeping dirs
+    // (expect false).
+    for (const excluded of [
       'src/a.generated.ts',
       'src/a.generated.tsx',
       'README.md',
@@ -206,14 +206,14 @@ describe('gate-paths helpers', () => {
     }
   })
 
-  test('selectReviewableGateFiles normalizes, dedupes, drops empties, keeps only reviewable source', () => {
+  test('selectReviewableGateFiles normalizes, dedupes, and keeps source and tests', () => {
     const cwd = process.cwd().replace(/\\/g, '/').replace(/\/+$/, '')
     const result = selectReviewableGateFiles([
       'src/a.ts',
       './src/a.ts', // dedupes with src/a.ts after normalization
       `${cwd}/src/a.ts`, // in-cwd absolute -> src/a.ts (dedupe)
       'src\\b.ts', // backslashes -> src/b.ts
-      'src/a.test.ts', // test file excluded
+      'src/a.test.ts', // test file included
       'src/a.generated.ts', // generated excluded
       'README.md', // doc excluded
       'docs/guide.ts', // docs/ excluded
@@ -221,7 +221,7 @@ describe('gate-paths helpers', () => {
       '', // empty dropped
       '   ', // whitespace dropped
     ])
-    expect(result).toEqual(['src/a.ts', 'src/b.ts'])
+    expect(result).toEqual(['src/a.ts', 'src/b.ts', 'src/a.test.ts'])
   })
 
   test('selectCoverageEvidenceFiles normalizes, dedupes, and keeps only test files', () => {

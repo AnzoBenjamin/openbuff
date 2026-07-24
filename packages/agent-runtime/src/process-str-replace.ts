@@ -95,6 +95,16 @@ const FAILED_EDIT_INLINE_RECOVERY_GUIDANCE = [
 ].join('\n')
 
 function addFailedEditRecoveryGuidance(error: string): string {
+  // Scope mismatches are authenticity failures, not evidence that file content
+  // changed or disappeared. Keep their recovery precise while preserving the
+  // cap.v3 project/path/run anti-replay boundary.
+  if (
+    error.includes(
+      'read capability belongs to a different project, path, or agent run',
+    )
+  ) {
+    return error
+  }
   return `${error}\n\n${
     error.includes('Recovery capability for candidate 1:')
       ? FAILED_EDIT_INLINE_RECOVERY_GUIDANCE
@@ -180,6 +190,7 @@ export async function processStrReplace(params: {
   const validatedReadRanges = new Map<string, ValidatedReadRange>()
   const readCapabilityWarnings: string[] = []
   const preflightErrors: string[] = []
+  const capabilityAuthorityErrors: string[] = []
   let hadNoOpSkip = false
 
   // Decode any token-form basedOnRead up front so the rest of the pipeline only
@@ -207,7 +218,7 @@ export async function processStrReplace(params: {
         requireBoundCapability: requireFreshReadCapability,
       })
       if (authorityError) {
-        preflightErrors.push(
+        capabilityAuthorityErrors.push(
           `Invalid basedOnRead for replacement ${i + 1}: ${authorityError}`,
         )
       }
@@ -223,6 +234,14 @@ export async function processStrReplace(params: {
       preflightErrors.push(
         `Invalid occurrenceIndex for replacement ${i + 1}: expected a positive finite integer, but received ${JSON.stringify(occurrenceIndex)}.`,
       )
+    }
+  }
+
+  if (capabilityAuthorityErrors.length > 0) {
+    return {
+      tool: 'str_replace' as const,
+      path,
+      error: capabilityAuthorityErrors.join('\n\n'),
     }
   }
 

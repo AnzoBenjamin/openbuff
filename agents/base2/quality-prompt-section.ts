@@ -75,23 +75,25 @@ Never make the user ask explicitly for "use multiple agents" — the scope asses
 }
 
 /**
- * Gate-awareness section: tells the orchestrator not to manually spawn
- * code-reviewer for the same edited file set that the automated runtime
- * gate will review after validation.
+ * Gate-awareness section: tells the orchestrator the runtime-owned
+ * hooks→reviewer sequence, that targeted validation is not the gate, and
+ * not to manually re-spawn code-reviewer for the same pending set.
  *
  * NOT byte-frozen — advisory guidance that may evolve with the gate.
  *
  * Interpolated by both base2 (conditionally, default mode only) and base-deep
  * (unconditionally) so both orchestrators give the model the same
  * gate-awareness guidance, avoiding redundant manual code-reviewer spawns
- * alongside the automated gate.
+ * and basher/targeted-validation substitutes for the gate.
  */
 export const gateAwarenessSection = `# Automated Validation & Review Gate
 
-The runtime automatically runs configured validation hooks and a code-reviewer gate before finalization. To avoid redundant reviewer spawns:
+After edits, the runtime-owned path is: configured file-change hooks (\`run_file_change_hooks\`, programmatic / model-hidden — injected when needed) → automated code-reviewer → finalization allowed when green. Wait for that cycle; do not invent a parallel basher typecheck or other substitute as the gate.
 
-- Manual code-reviewer use is for pre-edit/advisory review or when the user explicitly asks for an extra review. Do not manually spawn code-reviewer for the same edited file set that the automated runtime gate will review after validation.
-- After the editor returns, the runtime automatically runs configured validation hooks and a code-reviewer gate before finalization; do not manually spawn an extra reviewer for the same change unless the user explicitly asks for an additional review.`
+- **Do not double-spawn code-reviewer:** Manual code-reviewer use is for pre-edit/advisory review or when the user explicitly asks for an extra review. Do not manually re-spawn code-reviewer for the same pending set the automated gate will review. If phase is \`awaiting_validation\` / gate not yet passed, wait for the programmatic hooks→reviewer cycle.
+- **\`run_targeted_validation\` is NOT the gate:** It is optional scoped evidence only (does not clear reviewer findings by itself). Green targeted validation does **not** clear reviewer findings, does **not** unlock \`git-committer\`, and does **not** replace \`run_file_change_hooks\` + automated reviewer. Basher typechecks are the same class of optional evidence — never a gate substitute.
+- **Pending-set authority:** The gate covers the full \`pendingGateFiles\` / pending validation set listed in active-work state — not only the last file you edited. After multi-file edits, the full related set must clear hooks+reviewer before commit. The pending list in active-work / gate-state is authoritative over conversational memory.
+- **Commit only after gate green (see Git Discipline):** Spawn \`git-committer\` only after the gate reports passed for the pending files (with \`owned_paths\`). Gate re-arms on every new edit (including multi-file re-touch). Treat "not available yet" as normal ordering; do not tight-loop committer spawns — wait for the passed signal, then spawn once.`
 
 /**
  * Security-review section: advisory pre-edit review for security-sensitive
@@ -156,7 +158,7 @@ export const gitDisciplineSection = `# Git Discipline
 When the user asks to commit, stage, branch, or push changes, delegate the full git workflow to the \`git-committer\` agent rather than running raw \`git\` commands yourself. Pass exact task-owned paths whenever known. The git-committer agent handles repository/worktree inspection, ownership-safe staging, commit-message composition, remote freshness checks, and explicitly authorized non-force feature-branch pushes.
 
 - **Pass owned_paths in params (REQUIRED):** spawn git-committer with a real params object whose owned_paths is the array of task-owned, project-relative file paths to stage. owned_paths is a required field and a hard allowlist, so omitting it (an empty or prompt-only spawn) fails the spawn outright. The param key is literally \`owned_paths\` — not \`paths\`, \`filePaths\`, or \`files\`; any other key name is ignored and the spawn fails with "Missing required: owned_paths". Optional params keys: branch_name, branch_switch, allow_dirty_branch, push (defaults to false; never set true unless the user explicitly asked to push), and remote. Put these in params, not only in the prose prompt.
-- **Commit only after the gate is green:** the automated validation/reviewer gate reviews your UNCOMMITTED worktree changes (the diff against HEAD). Committing or pushing first empties that review set, so reviewers can no longer see the change and the gate cannot attest to it. Run the gate first; only commit/push (via git-committer) once validation and review are green for the changed files. If the user asks to commit before the gate has run, run the gate first, then commit. The runtime enforces this ordering: spawning git-committer before the gate passes fails with "Spawning git-committer is not available yet", so wait for the gate to report passed for the pending files, then spawn the committer.
+- **Commit only after the gate is green:** the automated validation/reviewer gate reviews your UNCOMMITTED worktree changes (the diff against HEAD). Committing or pushing first empties that review set, so reviewers can no longer see the change and the gate cannot attest to it. Run the gate first; only commit/push (via git-committer) once validation and review are green for the changed files. If the user asks to commit before the gate has run, run the gate first, then commit. The runtime enforces this ordering: spawning git-committer before the gate passes fails with "Spawning git-committer is not available yet", so wait for the gate to report passed for the pending files, then spawn the committer. The gate re-arms on every new edit: a fresh code change sets it back to pending, so a commit request that immediately follows an edit must wait one more gate cycle even if a prior cycle already passed. Treat this as normal ordering, not an error — the gate runs and clears automatically, so do not retry the committer spawn in a tight loop; wait for the passed signal, then spawn it once. When the user asks to commit right after an edit, tell them the commit will land automatically once the gate clears rather than surfacing the block as a failure.
 - **Never push to the remote repository** unless the user explicitly asks you to. Direct default-branch pushes require separate explicit authorization; force pushes remain prohibited.
 - **Never alter git config** (no \`git config user.name/email\`, no \`--global\` flags).
 - **Never commit secrets** — scan staged content for tokens, API keys, and credentials before committing. The git-committer agent does this automatically.

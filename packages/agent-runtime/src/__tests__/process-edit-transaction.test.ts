@@ -1119,7 +1119,7 @@ describe('processEditTransaction', () => {
     }
   })
 
-  it('does not coalesce same-file str_replace edits across other edit types', async () => {
+  it('blocks a replace_range that follows a same-file str_replace before later edits', async () => {
     const initialContent = 'const a = 1\nconst b = 1\nconst c = 1\n'
     const result = await processEditTransaction({
       initialContentByPath: new Map([['src/helper.ts', initialContent]]),
@@ -1178,13 +1178,18 @@ describe('processEditTransaction', () => {
 
     expect('error' in result).toBe(true)
     if ('error' in result) {
+      // The replace_range at edit index 1 follows a str_replace that already
+      // changed src/helper.ts, so the line-shift guard aborts before the third
+      // edit is ever reached.
       expect(result.failures[0]).toEqual(
         expect.objectContaining({
-          editIndex: 2,
+          editIndex: 1,
           path: 'src/helper.ts',
         }),
       )
-      expect(result.failures[0]?.errorMessage).toContain('basedOnRead')
+      expect(result.failures[0]?.errorMessage).toContain(
+        'a prior non-replace_range edit changed this file earlier in the transaction',
+      )
     }
   })
 
@@ -1628,5 +1633,138 @@ describe('processEditTransaction', () => {
     if ('error' in retry) {
       expect(retry.failures[0]!.errorMessage).toBe(message)
     }
+  })
+
+  it('reports a narrowed sub-range when replace_range targets fewer lines than the capability covers', async () => {
+    const initial = 'alpha\nbeta\ngamma\n'
+    const issuer = { projectId: '/project', runId: 'run-narrowed-subrange' }
+    const result = await processEditTransaction({
+      initialContentByPath: new Map([['src/file.ts', initial]]),
+      logger,
+      readCapabilityIssuer: issuer,
+      edits: [
+        {
+          type: 'replace_range',
+          path: 'src/file.ts',
+          ...readAuthorization({
+            path: 'src/file.ts',
+            startLine: 1,
+            endLine: 3,
+            content: 'alpha\nbeta\ngamma',
+            issuer,
+          }),
+          startLine: 2,
+          endLine: 2,
+          newContent: 'BETA',
+        },
+      ],
+    })
+
+    expect('files' in result).toBe(true)
+    if ('files' in result) {
+      expect(result.files[0].content).toBe('alpha\nBETA\ngamma\n')
+      expect(result.files[0].messages).toContain(
+        'Replaced lines 2-2 in src/file.ts within the readCapability-covered range.',
+      )
+    }
+  })
+
+  it('aborts overlapping replace_range edits in one transaction without applying changes', async () => {
+    const initial = 'one\ntwo\nthree\nfour\n'
+    const issuer = { projectId: '/project', runId: 'run-overlap-abort' }
+    const result = await processEditTransaction({
+      initialContentByPath: new Map([['src/file.ts', initial]]),
+      logger,
+      readCapabilityIssuer: issuer,
+      edits: [
+        {
+          type: 'replace_range',
+          path: 'src/file.ts',
+          ...readAuthorization({
+            path: 'src/file.ts',
+            startLine: 1,
+            endLine: 2,
+            content: 'one\ntwo',
+            issuer,
+          }),
+          startLine: 1,
+          endLine: 2,
+          newContent: 'ONE\nTWO',
+        },
+        {
+          type: 'replace_range',
+          path: 'src/file.ts',
+          ...readAuthorization({
+            path: 'src/file.ts',
+            startLine: 2,
+            endLine: 3,
+            content: 'two\nthree',
+            issuer,
+          }),
+          startLine: 2,
+          endLine: 3,
+          newContent: 'TWO\nTHREE',
+        },
+      ],
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.failures[0]).toEqual(
+        expect.objectContaining({ editIndex: 1, path: 'src/file.ts' }),
+      )
+      expect(result.failures[0]?.errorMessage).toContain(
+        'overlap a prior replace_range',
+      )
+    }
+    expect('files' in result).toBe(false)
+  })
+
+  it('blocks a replace_range after a prior non-replace_range edit changed the same file', async () => {
+    const initial = 'const a = 1\nconst b = 1\nconst c = 1\n'
+    const issuer = { projectId: '/project', runId: 'run-nonrange-block' }
+    const result = await processEditTransaction({
+      initialContentByPath: new Map([['src/file.ts', initial]]),
+      logger,
+      readCapabilityIssuer: issuer,
+      edits: [
+        {
+          type: 'str_replace',
+          path: 'src/file.ts',
+          replacements: [
+            {
+              oldString: 'const a = 1',
+              newString: 'const a = 1\nconst inserted = true',
+              allowMultiple: false,
+            },
+          ],
+        },
+        {
+          type: 'replace_range',
+          path: 'src/file.ts',
+          ...readAuthorization({
+            path: 'src/file.ts',
+            startLine: 3,
+            endLine: 3,
+            content: 'const c = 1',
+            issuer,
+          }),
+          startLine: 3,
+          endLine: 3,
+          newContent: 'const c = 2',
+        },
+      ],
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.failures[0]).toEqual(
+        expect.objectContaining({ editIndex: 1, path: 'src/file.ts' }),
+      )
+      expect(result.failures[0]?.errorMessage).toContain(
+        'a prior non-replace_range edit changed this file earlier in the transaction',
+      )
+    }
+    expect('files' in result).toBe(false)
   })
 })

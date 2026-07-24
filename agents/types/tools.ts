@@ -347,6 +347,8 @@ export interface EditTransactionParams {
         path: string
         type: 'write_file'
         content: string
+        /** Optional whole-file-covering cap.v3 from a fresh complete whole-file read. Only a full-file capability with a hash matching current content may authorize overwrite; partial ranges never authorize write_file. */
+        basedOnRead?: string
       }
   )[]
 }
@@ -1084,6 +1086,8 @@ export interface WriteFileParams {
   instructions: string
   /** Complete file content to write to the file. */
   content: string
+  /** Optional whole-file-covering cap.v3 from a fresh complete whole-file read (paths or full-file range). Only a capability that covers the entire current file (startLine=1 through the current line count) with a hash matching current content may authorize overwrite; partial range capabilities never authorize write_file. */
+  basedOnRead?: string
 }
 
 /**

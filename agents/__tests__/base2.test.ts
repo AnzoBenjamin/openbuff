@@ -80,6 +80,7 @@ function attestedReviewerResult(
   reviewCall: any,
   verdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING' = 'LOOKS_GOOD',
   findings: string[] = [],
+  coverage: 'covered' | 'missing' | 'n/a' = 'covered',
 ) {
   const prompt = String(reviewCall?.input?.agents?.[0]?.prompt ?? '')
   const fingerprint =
@@ -101,7 +102,7 @@ function attestedReviewerResult(
             snapshotFingerprint: fingerprint,
             reviewedFiles: files,
             findings,
-            coverage: 'covered',
+            coverage,
             dimensions: {
               correctness: 'pass',
               security: 'pass',
@@ -336,9 +337,14 @@ describe('base2 validation/reviewer coordination prompts', () => {
     )
     expect(base2.systemPrompt).toContain('product, Openbuff')
     expect(base2.systemPrompt).not.toContain('product, Codebuff')
+    // gateAwarenessSection: runtime-owned hooks → automated reviewer (not the
+    // older "runtime automatically runs configured validation hooks…" phrasing).
     expect(base2.systemPrompt).toContain(
-      'the runtime automatically runs configured validation hooks and a code-reviewer gate',
+      'the runtime-owned path is: configured file-change hooks',
     )
+    expect(base2.systemPrompt).toContain('run_file_change_hooks')
+    expect(base2.systemPrompt).toContain('automated code-reviewer')
+    expect(base2.systemPrompt).toContain('finalization allowed when green')
     expect(base2.systemPrompt).not.toContain(
       '- Spawn a code-reviewer to review the changes after you have implemented the changes.',
     )
@@ -2772,6 +2778,117 @@ describe('base2 verification and reviewer gates', () => {
     expect(gen.next().value).toBe('STEP')
   })
 
+  // All-coverage blocker sets must not co-spawn repair-editor.
+  test('all-coverage reviewer findings route exclusively to test-writer', () => {
+    const base2 = createBase2('default')
+    const agentState = { agentId: 'base2' }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Make the requested change now please',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+        .value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    expect(gen.next().value).toBe('STEP')
+    expect(
+      gen.next({
+        stepsComplete: true,
+        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    const reviewCall = gen.next({
+      toolResult: [{ type: 'json', value: [] }],
+    } as any).value
+    expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+    // coverage: 'missing' with empty findings produces only the synthetic
+    // all-coverage blocker classified by isTestCoverageReviewerFinding.
+    const afterReview = gen.next(
+      attestedReviewerResult(reviewCall, 'NON_BLOCKING', [], 'missing') as any,
+    )
+    expect(afterReview.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect((afterReview.value as any).input.content).toContain('test-writer')
+    expect((afterReview.value as any).input.content).not.toContain(
+      'to repair-editor',
+    )
+
+    const repairSpawn = gen.next().value as any
+    expect(repairSpawn).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'test-writer' }] },
+    })
+    expect(repairSpawn.input.agents).toHaveLength(1)
+    expect(repairSpawn.input.agents[0].agent_type).not.toBe('repair-editor')
+    expect((agentState as any).base2ActiveWork.nextRequiredAction).toContain(
+      'Test-writer must add coverage',
+    )
+  })
+
+  test('mixed coverage and code findings keep repair-editor only', () => {
+    const base2 = createBase2('default')
+    const agentState = { agentId: 'base2' }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Make the requested change now please',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+        .value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    expect(gen.next().value).toBe('STEP')
+    expect(
+      gen.next({
+        stepsComplete: true,
+        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    const reviewCall = gen.next({
+      toolResult: [{ type: 'json', value: [] }],
+    } as any).value
+    expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+    // Code finding + coverage missing => mixed set must stay on repair-editor.
+    const afterReview = gen.next(
+      attestedReviewerResult(
+        reviewCall,
+        'BLOCKING',
+        ['Fix the edge case.'],
+        'missing',
+      ) as any,
+    )
+    expect(afterReview.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect((afterReview.value as any).input.content).toContain('repair-editor')
+
+    const repairSpawn = gen.next().value as any
+    expect(repairSpawn).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'repair-editor' }] },
+    })
+    expect(repairSpawn.input.agents).toHaveLength(1)
+    expect(repairSpawn.input.agents[0].agent_type).not.toBe('test-writer')
+  })
+
   test('repair-editor with mutation progress continues into re-validation even when receipt is blocked', () => {
     const base2 = createBase2('default')
     const agentState = { agentId: 'base2' }
@@ -3820,22 +3937,13 @@ describe('base2 verification and reviewer gates', () => {
     } as any).value as any
     expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
     const reviewPrompt = reviewCall.input.agents[0].prompt as string
-    // Co-changed test files are surfaced as readable "Coverage evidence" so
-    // the reviewer can confirm coverage; without this the reviewer could never
-    // see the changed test file and always reported coverage missing/uncertain.
     expect(reviewPrompt).toContain(
-      'Coverage evidence (co-changed tests; readable and citable, not part of the reviewed fingerprint):',
+      'list every pending changed file in reviewedFiles (including tests)',
     )
     expect(reviewPrompt).toContain(
-      'Co-changed test files are listed under "Coverage evidence"',
+      'Changed tests are first-class review targets and may also be cited as coverage evidence.',
     )
-    expect(reviewPrompt).toContain('satisfied (not uncertain)')
-    expect(reviewPrompt).toContain(
-      'when a Coverage evidence test file covers the changed behavior',
-    )
-    expect(reviewPrompt).toContain(
-      'Use coverage: missing only when no covering test exists in the Coverage evidence list or anywhere in the repo',
-    )
+    expect(reviewPrompt).not.toContain('not part of the reviewed fingerprint')
   })
 
   test('reviewer attestation citing the changed test file clears the gate test-coverage requirement', () => {
@@ -4295,40 +4403,8 @@ describe('base2 verification and reviewer gates', () => {
   })
 })
 
-describe('base2 static-review-only concurrency (M3.1)', () => {
-  test('default path (staticReviewOnly absent) does not spawn the reviewer in the background', () => {
-    const base2 = createBase2('default')
-    const agentState = { agentId: 'base2-custom' }
-    const gen = base2.handleSteps!({
-      agentState,
-      prompt: 'Make the requested change now please',
-      params: {},
-    } as any)
-
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
-    expect(
-      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
-        .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
-    expect(gen.next().value).toBe('STEP')
-    expect(
-      gen.next({
-        stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
-      } as any).value,
-    ).toMatchObject({ toolName: 'git_status' })
-    const afterGit = gen.next({
-      toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
-    } as any)
-    // No background reviewer: validation runs first (foreground), exactly as
-    // the existing sequential behavior.
-    expect(afterGit.value).toMatchObject({ toolName: 'run_file_change_hooks' })
-    expect(
-      (agentState as any).base2ActiveWork.staticReviewerJobId,
-    ).toBeUndefined()
-  })
-
-  test('staticReviewOnly spawns the reviewer in the background before validation and stashes jobId', () => {
+describe('base2 validation-first reviewer snapshots', () => {
+  test('staticReviewOnly still validates before spawning the final reviewer', () => {
     const base2 = createBase2('default')
     const agentState = {
       agentId: 'base2-custom',
@@ -4352,323 +4428,20 @@ describe('base2 static-review-only concurrency (M3.1)', () => {
         toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const bgSpawn = gen.next({
+    const validation = gen.next({
       toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
     } as any)
-    // Reviewer spawned in the background BEFORE validation hooks run.
-    expect(bgSpawn.value).toMatchObject({ toolName: 'spawn_agents' })
-    const agents = (bgSpawn.value as any).input.agents as any[]
-    expect(agents[0].agent_type).toBe('code-reviewer')
-    expect(agents[0].background).toBe(true)
-    expect(agents[0].prompt as string).toContain(
-      'Reviewer running concurrently with validation (static-review-only mode).',
-    )
+    expect(validation.value).toMatchObject({ toolName: 'run_file_change_hooks' })
+    expect((agentState as any).base2ActiveWork.staticReviewerJobId).toBeUndefined()
 
-    const afterReport = gen.next({
-      toolResult: [
-        {
-          type: 'json',
-          value: {
-            background: true,
-            jobId: 'bg-reviewer-1',
-            message: 'Reviewer running in the background.',
-          },
-        },
-      ],
-    } as any)
-    expect((afterReport.value as any).toolName).toBe('run_file_change_hooks')
-    expect((agentState as any).base2ActiveWork.staticReviewerJobId).toBe(
-      'bg-reviewer-1',
-    )
-  })
-
-  test('staticReviewOnly: validation failure does not consult the background reviewer', () => {
-    const base2 = createBase2('default')
-    const agentState = {
-      agentId: 'base2-custom',
-      base2ActiveWork: { staticReviewOnly: true },
-    }
-    const gen = base2.handleSteps!({
-      agentState,
-      prompt: 'Make the requested change now please',
-      params: {},
-    } as any)
-
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
-    expect(
-      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
-        .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
-    expect(gen.next().value).toBe('STEP')
-    expect(
-      gen.next({
-        stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
-      } as any).value,
-    ).toMatchObject({ toolName: 'git_status' })
-    const bgSpawn = gen.next({
-      toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
-    } as any)
-    expect(bgSpawn.value).toMatchObject({ toolName: 'spawn_agents' })
-
-    const afterReport = gen.next({
-      toolResult: [
-        {
-          type: 'json',
-          value: { background: true, jobId: 'bg-reviewer-2', message: 'ok' },
-        },
-      ],
-    } as any)
-    expect((afterReport.value as any).toolName).toBe('run_file_change_hooks')
-    expect((agentState as any).base2ActiveWork.staticReviewerJobId).toBe(
-      'bg-reviewer-2',
-    )
-
-    // Validation fails (unparseable failure -> blocked, no repair loop).
-    const afterHooks = gen.next({
-      toolResult: [
-        {
-          type: 'json',
-          value: [{ hookName: 'typecheck', exitCode: 1, stderr: 'boom' }],
-        },
-      ],
-    } as any)
-    // Validation failure cancels speculative review before surfacing the
-    // blocking validation diagnostics.
-    expect((afterHooks.value as any).toolName).toBe('check_background_agent')
-    expect((afterHooks.value as any).input).toMatchObject({
-      jobId: 'bg-reviewer-2',
-      cancel: true,
-    })
-    const blocked = gen.next({ toolResult: [] } as any)
-    expect((blocked.value as any).toolName).toBe('add_message')
-    const text = (blocked.value as any).input.content as string
-    expect(text).toContain('Verification gate')
-    expect(
-      (agentState as any).base2ActiveWork.staticReviewerJobId,
-    ).toBeUndefined()
-  })
-
-  test('staticReviewOnly: validation pass joins the background reviewer via check_background_agent', () => {
-    const base2 = createBase2('default')
-    const agentState = {
-      agentId: 'base2-custom',
-      base2ActiveWork: { staticReviewOnly: true },
-    }
-    const gen = base2.handleSteps!({
-      agentState,
-      prompt: 'Make the requested change now please',
-      params: {},
-    } as any)
-
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
-    expect(
-      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
-        .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
-    expect(gen.next().value).toBe('STEP')
-    expect(
-      gen.next({
-        stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
-      } as any).value,
-    ).toMatchObject({ toolName: 'git_status' })
-    const bgSpawn = gen.next({
-      toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
-    } as any)
-    expect(bgSpawn.value).toMatchObject({ toolName: 'spawn_agents' })
-    expect((bgSpawn.value as any).input.agents[0].background).toBe(true)
-
-    const afterReport = gen.next({
-      toolResult: [
-        {
-          type: 'json',
-          value: { background: true, jobId: 'bg-reviewer-3', message: 'ok' },
-        },
-      ],
-    } as any)
-    expect((afterReport.value as any).toolName).toBe('run_file_change_hooks')
-    expect((agentState as any).base2ActiveWork.staticReviewerJobId).toBe(
-      'bg-reviewer-3',
-    )
-
-    // Validation passes (hooks skipped).
-    const afterHooks = gen.next({
-      toolResult: [
-        {
-          type: 'json',
-          value: [
-            {
-              validationStatus: 'hooks_skipped',
-              message:
-                'Configured file-change hooks were skipped because none matched the changed files.',
-              configuredHookCount: 1,
-              changedFiles: ['src/a.ts'],
-            },
-          ],
-        },
-      ],
-    } as any)
-    // Join the background reviewer instead of a foreground spawn_agents, using
-    // the stashed jobId.
-    expect(afterHooks.value).toMatchObject({
-      toolName: 'check_background_agent',
-    })
-    expect((afterHooks.value as any).input).toMatchObject({
-      jobId: 'bg-reviewer-3',
-      timeout_seconds: 120,
-    })
-    expect((afterHooks.value as any).input).not.toHaveProperty('wait_for')
-
-    // The reviewer returns LOOKS_GOOD via the background result; feed it through
-    // the existing collectReviewerBlockers / getReviewerFinalizationVerdict
-    // path (unchanged) to reach finalization.
-    const gatePassed = gen.next(
-      attestedBackgroundReviewerResult(agentState, 'LOOKS_GOOD') as any,
-    )
-    expect(gatePassed.value).toMatchObject({
-      toolName: 'add_message',
-      input: { role: 'user' },
-    })
-    expect((gatePassed.value as any).input.content.toLowerCase()).toContain(
-      'reviewer gate passed with looks_good',
-    )
-    expect((agentState as any).base2ActiveWork).toMatchObject({
-      currentPhase: 'final_response_allowed',
-      pendingGateFiles: [],
-      gatePassedReviewerVerdict: 'LOOKS_GOOD',
-      staticReviewerJobId: undefined,
-    })
-  })
-
-  test('staticReviewOnly: background reviewer NON_BLOCKING result finalizes after validation pass', () => {
-    const base2 = createBase2('default')
-    const agentState = {
-      agentId: 'base2-custom',
-      base2ActiveWork: { staticReviewOnly: true },
-    }
-    const gen = base2.handleSteps!({
-      agentState,
-      prompt: 'Make the requested change now please',
-      params: {},
-    } as any)
-
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
-    expect(
-      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
-        .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
-    expect(gen.next().value).toBe('STEP')
-    expect(
-      gen.next({
-        stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
-      } as any).value,
-    ).toMatchObject({ toolName: 'git_status' })
-    expect(
-      gen.next({
-        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
-      } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agents' })
-    expect(
-      gen.next({
-        toolResult: [
-          { type: 'json', value: { background: true, jobId: 'bg-reviewer-4' } },
-        ],
-      } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
-    const afterHooks = gen.next({
+    const review = gen.next({
       toolResult: [{ type: 'json', value: [] }],
     } as any)
-
-    expect(afterHooks.value).toMatchObject({
-      toolName: 'check_background_agent',
-      input: { jobId: 'bg-reviewer-4', timeout_seconds: 120 },
+    expect(review.value).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'code-reviewer' }] },
     })
-    expect((afterHooks.value as any).input).not.toHaveProperty('wait_for')
-
-    const gatePassed = gen.next(
-      attestedBackgroundReviewerResult(agentState, 'NON_BLOCKING', [
-        'Minor suggestion.',
-      ]) as any,
-    )
-    expect(gatePassed.value).toMatchObject({ toolName: 'add_message' })
-    expect((gatePassed.value as any).input.content).toContain(
-      'Reviewer gate passed with NON_BLOCKING',
-    )
-    expect((agentState as any).base2ActiveWork).toMatchObject({
-      currentPhase: 'final_response_allowed',
-      pendingGateFiles: [],
-      gatePassedReviewerVerdict: 'NON_BLOCKING',
-      staticReviewerJobId: undefined,
-    })
-  })
-
-  test('staticReviewOnly: background reviewer BLOCKING result reopens the turn after validation pass', () => {
-    const base2 = createBase2('default')
-    const agentState = {
-      agentId: 'base2-custom',
-      base2ActiveWork: { staticReviewOnly: true },
-    }
-    const gen = base2.handleSteps!({
-      agentState,
-      prompt: 'Make the requested change now please',
-      params: {},
-    } as any)
-
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
-    expect(
-      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
-        .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
-    expect(gen.next().value).toBe('STEP')
-    expect(
-      gen.next({
-        stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
-      } as any).value,
-    ).toMatchObject({ toolName: 'git_status' })
-    expect(
-      gen.next({
-        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
-      } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agents' })
-    expect(
-      gen.next({
-        toolResult: [
-          { type: 'json', value: { background: true, jobId: 'bg-reviewer-5' } },
-        ],
-      } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
-    const afterHooks = gen.next({
-      toolResult: [{ type: 'json', value: [] }],
-    } as any)
-
-    expect(afterHooks.value).toMatchObject({
-      toolName: 'check_background_agent',
-      input: { jobId: 'bg-reviewer-5', timeout_seconds: 120 },
-    })
-    expect((afterHooks.value as any).input).not.toHaveProperty('wait_for')
-
-    const afterReview = gen.next(
-      attestedBackgroundReviewerResult(agentState, 'BLOCKING', [
-        'Fix the static path.',
-      ]) as any,
-    )
-    expect(afterReview.value).toMatchObject({
-      toolName: 'add_message',
-      input: { role: 'user' },
-    })
-    expect((afterReview.value as any).input.content).toContain(
-      'BLOCKING: Fix the static path.',
-    )
-    expect((agentState as any).base2ActiveWork).toMatchObject({
-      currentPhase: 'blocked',
-      pendingGateFiles: ['src/a.ts'],
-      openReviewerBlockers: ['BLOCKING: Fix the static path.'],
-      nextRequiredAction:
-        'Resolve the reviewer feedback below before any unrelated work, final response, or another review.',
-    })
+    expect((review.value as any).input.agents[0]).not.toHaveProperty('background')
   })
 })
 
@@ -5027,5 +4800,38 @@ describe('base2 test-writer aux-gate completion path', () => {
     if (nextYield?.toolName === 'spawn_agent_inline') {
       expect(nextYield.input.agent_type).not.toBe('test-writer')
     }
+  })
+
+  test('proactive query_index fires only for code-intent prompts', () => {
+    const firstYield = (prompt: string) => {
+      const base2 = createBase2('default')
+      const gen = base2.handleSteps!({
+        agentState: { agentId: 'base2-classify' },
+        prompt,
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+      return gen.next().value as any
+    }
+
+    // A code-intent prompt with no concrete file path triggers a proactive
+    // query_index (mode: 'search') as the very first step.
+    expect(
+      firstYield('Refactor the authentication module code.'),
+    ).toMatchObject({ toolName: 'query_index', input: { mode: 'search' } })
+
+    // A prompt naming a concrete file path already identifies the relevant
+    // file, so proactive retrieval is skipped and the turn starts at git_status.
+    expect(firstYield('Update src/app.ts with the new export')).toMatchObject({
+      toolName: 'git_status',
+    })
+
+    // Too-short prompts skip proactive retrieval.
+    expect(firstYield('fix it')).toMatchObject({ toolName: 'git_status' })
+
+    // Continuation prompts skip proactive retrieval.
+    expect(
+      firstYield('continue working on the previous task'),
+    ).toMatchObject({ toolName: 'git_status' })
   })
 })

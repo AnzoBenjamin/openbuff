@@ -118,6 +118,41 @@ export function editOutputHasError<T extends ToolName>(
   return hasExplicitError(output)
 }
 
+function outputIndicatesStaleSnapshot(value: unknown, depth = 0): boolean {
+  if (depth > 6 || value === null || value === undefined) return false
+  if (Array.isArray(value)) {
+    return value.some((item) => outputIndicatesStaleSnapshot(item, depth + 1))
+  }
+  if (typeof value === 'string') {
+    return /(?:stale\s+(?:snapshot|hash|range)|content\s+(?:changed|mismatch)|expected\s+hash)/i.test(
+      value,
+    )
+  }
+  if (typeof value !== 'object') return false
+  return Object.values(value as Record<string, unknown>).some((nested) =>
+    outputIndicatesStaleSnapshot(nested, depth + 1),
+  )
+}
+
+function outputIndicatesUnconfirmedApplication(
+  value: unknown,
+  depth = 0,
+): boolean {
+  if (depth > 6 || value === null || value === undefined) return false
+  if (Array.isArray(value)) {
+    return value.some((item) =>
+      outputIndicatesUnconfirmedApplication(item, depth + 1),
+    )
+  }
+  if (typeof value === 'string') {
+    return /could not confirm/i.test(value)
+  }
+  if (typeof value !== 'object') return false
+  return Object.values(value as Record<string, unknown>).some((nested) =>
+    outputIndicatesUnconfirmedApplication(nested, depth + 1),
+  )
+}
+
 export function invalidatePreparedEditPaths(params: {
   fileProcessingState: FileProcessingState
   paths: Iterable<string>
@@ -177,11 +212,16 @@ export async function coordinateEditApplication<T extends ToolName>(params: {
   fileProcessingState: FileProcessingState
   paths: Iterable<string>
   apply: () => Promise<CodebuffToolOutput<T>>
-  rejectionRequiresRead?: boolean
   wholeFileContentByPath?: ReadonlyMap<string, string>
   onApplied?: () => void
+  rejectionRequiresRead?: boolean
+  confirmationPaths?: Iterable<string>
 }): Promise<CoordinatedApplication<T>> {
   const paths = [...new Set(params.paths)]
+  const confirmationPaths =
+    params.confirmationPaths === undefined
+      ? new Set(paths)
+      : new Set(params.confirmationPaths)
   let output: CodebuffToolOutput<T>
   try {
     output = await params.apply()
@@ -209,22 +249,39 @@ export async function coordinateEditApplication<T extends ToolName>(params: {
   }
 
   if (editOutputHasError(output)) {
-    if (params.rejectionRequiresRead !== false) {
+    if (outputIndicatesStaleSnapshot(output)) {
       invalidatePreparedEditPaths({
         fileProcessingState: params.fileProcessingState,
         paths,
-        reason: 'application_rejected',
+        reason: 'stale_snapshot',
+        sourceTool: params.toolName,
+      })
+    } else if (outputIndicatesUnconfirmedApplication(output)) {
+      // An unconfirmed-application wrapper (e.g. an empty client result wrapped
+      // into a 'could not confirm' error) may reflect a partial write, so it
+      // always requires a re-read regardless of `rejectionRequiresRead`.
+      invalidatePreparedEditPaths({
+        fileProcessingState: params.fileProcessingState,
+        paths,
+        reason: 'application_unconfirmed',
         sourceTool: params.toolName,
       })
     } else {
-      for (const path of paths) {
-        delete params.fileProcessingState.promisesByPath[path]
-      }
+      // An explicit client rejection confirms that no prepared mutation was
+      // applied. Drop speculative prepared state, but preserve valid read
+      // authorization; unlike unconfirmed output or a throw, this outcome is
+      // deterministic and does not require a re-read.
+      invalidatePreparedEditPaths({
+        fileProcessingState: params.fileProcessingState,
+        paths,
+        revokeReadAuthorization: params.rejectionRequiresRead ?? true,
+        requiresFreshRead: params.rejectionRequiresRead ?? true,
+      })
     }
     return { status: 'rejected', output }
   }
 
-  if (!hasPositiveApplicationEvidence(output, new Set(paths))) {
+  if (!hasPositiveApplicationEvidence(output, confirmationPaths)) {
     invalidatePreparedEditPaths({
       fileProcessingState: params.fileProcessingState,
       paths,

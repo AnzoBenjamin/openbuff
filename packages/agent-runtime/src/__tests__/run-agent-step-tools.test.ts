@@ -611,6 +611,21 @@ describe('runAgentStep - set_output tool', () => {
         ),
       }),
     )
+    // Pin the reworded gate-block guidance: the message frames the block as
+    // normal ordering (the gate re-arms per edit and clears automatically),
+    // not a failure, so this behavior-changing wording stays covered.
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining('normal ordering, not a failure'),
+      }),
+    )
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining('clears automatically'),
+      }),
+    )
     expect(chunks).not.toContainEqual(
       expect.objectContaining({
         type: 'tool_call',
@@ -927,6 +942,20 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringContaining(
           'would stage changes that have not passed the validation/reviewer gate',
         ),
+      }),
+    )
+    // Pin the reworded uncommitted-unvalidated gate-block guidance: normal
+    // ordering framing plus the auto-clearing explanation.
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining('normal ordering, not a failure'),
+      }),
+    )
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining('clears automatically'),
       }),
     )
     expect(chunks).not.toContainEqual(

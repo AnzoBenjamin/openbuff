@@ -1,4 +1,10 @@
-import { getContentHash } from '@codebuff/common/util/content-hash'
+import {
+  decodeReadCapabilityToken,
+  encodeReadCapabilityToken,
+  getContentHash,
+  normalizeLineEndings,
+  readCapabilityMatchesScope,
+} from '@codebuff/common/util/content-hash'
 import {
   MAX_FILE_CHANGES_PER_TRANSACTION,
   MAX_TRANSACTION_FILE_BYTES,
@@ -15,6 +21,10 @@ import {
   normalizeToolPath,
   revokeWholeFileReadAuthorization,
 } from './write-file'
+import {
+  clearEditRereadRequirement,
+  getEditRereadRequirement,
+} from './edit-read-state'
 import {
   coordinateEditApplication,
   invalidatePreparedEditPaths,
@@ -225,6 +235,55 @@ export const handleEditTransaction = (async (
     }
   }
 
+  const projectId = params.fileContext?.projectRoot ?? ''
+  const runId = params.runId ?? ''
+  const mintWholeFileCapability = (path: string, content: string) =>
+    encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: normalizeLineEndings(content).split('\n').length,
+      hash: getContentHash(content),
+      scope: {
+        projectId,
+        path,
+        runId,
+      },
+    })
+
+  /**
+   * Validate write_file basedOnRead: must be whole-file covering, scope-bound,
+   * and hash-fresh against current content. Partial ranges never authorize.
+   */
+  const validateWriteFileBasedOnRead = (
+    path: string,
+    content: string,
+    token: string,
+  ): { ok: true } | { ok: false; error: string } => {
+    const decoded = decodeReadCapabilityToken(token)
+    if (typeof decoded === 'string') {
+      return { ok: false, error: decoded }
+    }
+    if (!readCapabilityMatchesScope(decoded, { projectId, path, runId })) {
+      return {
+        ok: false,
+        error: `write_file basedOnRead for ${path} belongs to a different project, path, or agent run. Re-read the whole file and pass the fresh capability.`,
+      }
+    }
+    const lineCount = normalizeLineEndings(content).split('\n').length
+    if (decoded.startLine !== 1 || decoded.endLine !== lineCount) {
+      return {
+        ok: false,
+        error: `a range capability cannot authorize a whole-file overwrite for ${path} (capability covers lines ${decoded.startLine}-${decoded.endLine}; file has ${lineCount} lines). Pass only a whole-file-covering cap.v3 from a complete paths or full-file range read.`,
+      }
+    }
+    if (decoded.hash !== getContentHash(content)) {
+      return {
+        ok: false,
+        error: `write_file basedOnRead for ${path} did not match the current file content (stale hash). Re-read the whole file and retry with the fresh capability.`,
+      }
+    }
+    return { ok: true }
+  }
+
   const freshWholeFileAuthorizationPaths = new Set<string>()
   const staleWholeFileAuthorizationPaths = new Set<string>()
   for (const path of uniquePaths) {
@@ -242,9 +301,111 @@ export const handleEditTransaction = (async (
       )
     if (isFresh) {
       freshWholeFileAuthorizationPaths.add(path)
+      // Do not clear context_compacted on mere hash-fresh: write_file must stay
+      // blocked until a real re-read or explicit whole-file basedOnRead. str_replace
+      // clears the marker when it proceeds below (unique oldString is the safety bound).
+      const rereadReq = getEditRereadRequirement(fileProcessingState, path)
+      if (rereadReq?.reason !== 'context_compacted') {
+        clearEditRereadRequirement(fileProcessingState, path)
+      }
     } else if (hasStoredAuthorization) {
       staleWholeFileAuthorizationPaths.add(path)
       revokeWholeFileReadAuthorization(fileProcessingState, path)
+    }
+  }
+
+  // Explicit write_file basedOnRead: whole-file covering + hash-fresh authorizes
+  // this path for the transaction (including clearing context_compacted).
+  for (const edit of edits) {
+    if (edit.type !== 'write_file' || !edit.basedOnRead) continue
+    if (freshWholeFileAuthorizationPaths.has(edit.path)) {
+      // Still honor explicit capability for context_compacted: sticky alone is not enough.
+      const rereadReq = getEditRereadRequirement(fileProcessingState, edit.path)
+      if (rereadReq?.reason === 'context_compacted') {
+        const content = initialContentByPath.get(edit.path)
+        if (typeof content === 'string') {
+          const auth = validateWriteFileBasedOnRead(
+            edit.path,
+            content,
+            edit.basedOnRead,
+          )
+          if (auth.ok) {
+            grantWholeFileReadAuthorization(
+              fileProcessingState,
+              edit.path,
+              content,
+            )
+            clearEditRereadRequirement(fileProcessingState, edit.path)
+          }
+        }
+      }
+      continue
+    }
+    const content = initialContentByPath.get(edit.path)
+    if (typeof content !== 'string') continue
+    const auth = validateWriteFileBasedOnRead(
+      edit.path,
+      content,
+      edit.basedOnRead,
+    )
+    if (auth.ok) {
+      freshWholeFileAuthorizationPaths.add(edit.path)
+      grantWholeFileReadAuthorization(fileProcessingState, edit.path, content)
+      clearEditRereadRequirement(fileProcessingState, edit.path)
+    }
+  }
+
+  // Auto-reread-once per unique path for str_replace auth misses only.
+  // write_file whole-file overwrites must keep the standalone floor: prior
+  // complete whole-file sticky hash match (or explicit capability). Snapshots
+  // already loaded content via requestOptionalFile — authorize *this*
+  // transaction's str_replace edits from that content without minting durable
+  // sticky (so a later write_file cannot chain off a blind server re-read).
+  // Post-apply grant of *new* content after successful application may still
+  // refresh sticky from observed post-edit bytes (onApplied below).
+  const autoRereadAuthorizedPaths = new Set<string>()
+  if (fileProcessingState.strictReadBeforeEdit) {
+    // Unique-only contract: any allowMultiple:true replacement on a path
+    // skips auto-reread authorization for that path (fail closed).
+    const pathsWithAllowMultiple = new Set<string>()
+    for (const edit of edits) {
+      if (edit.type !== 'str_replace') continue
+      if (
+        Array.isArray(edit.replacements) &&
+        edit.replacements.some(
+          (replacement) => replacement.allowMultiple === true,
+        )
+      ) {
+        pathsWithAllowMultiple.add(edit.path)
+      }
+    }
+    const pathsNeedingAuth = new Set<string>()
+    for (const edit of edits) {
+      if (edit.type !== 'str_replace') continue
+      if (freshWholeFileAuthorizationPaths.has(edit.path)) continue
+      if (pathsWithAllowMultiple.has(edit.path)) continue
+      if (
+        Array.isArray(edit.replacements) &&
+        edit.replacements.length > 0 &&
+        edit.replacements.every((replacement) => Boolean(replacement.basedOnRead))
+      ) {
+        continue
+      }
+      pathsNeedingAuth.add(edit.path)
+    }
+    for (const path of pathsNeedingAuth) {
+      if (freshWholeFileAuthorizationPaths.has(path)) continue
+      if (staleWholeFileAuthorizationPaths.has(path)) continue
+      const content = initialContentByPath.get(path)
+      if (typeof content !== 'string') continue
+      // Transaction-local only: do not call grantWholeFileReadAuthorization and
+      // do not add to freshWholeFileAuthorizationPaths (would authorize write_file).
+      // Do not clear reread markers here — auto-reread only authorizes this
+      // transaction's str_replace preflight. Markers (context_compacted /
+      // failed-edit) remain until successful unique apply (onApplied) so a
+      // failed unique/no-match still keeps write_file blocked under
+      // context_compacted.
+      autoRereadAuthorizedPaths.add(path)
     }
   }
 
@@ -254,6 +415,7 @@ export const handleEditTransaction = (async (
       editIndex: number
       path: string
       errorMessage: string
+      basedOnRead?: string
     }> = []
     edits.forEach((edit, editIndex) => {
       if (
@@ -262,7 +424,109 @@ export const handleEditTransaction = (async (
       ) {
         return
       }
-      if (freshWholeFileAuthorizationPaths.has(edit.path)) return
+      // write_file: context_compacted blocks overwrite even when sticky hash matches,
+      // unless an explicit whole-file-covering basedOnRead authorizes (handled above).
+      if (
+        edit.type === 'write_file' &&
+        getEditRereadRequirement(fileProcessingState, edit.path)?.reason ===
+          'context_compacted'
+      ) {
+        // Retry validation when basedOnRead was present but failed earlier, or absent.
+        if (edit.basedOnRead) {
+          const content = initialContentByPath.get(edit.path)
+          if (typeof content === 'string') {
+            const auth = validateWriteFileBasedOnRead(
+              edit.path,
+              content,
+              edit.basedOnRead,
+            )
+            if (auth.ok) {
+              freshWholeFileAuthorizationPaths.add(edit.path)
+              grantWholeFileReadAuthorization(
+                fileProcessingState,
+                edit.path,
+                content,
+              )
+              clearEditRereadRequirement(fileProcessingState, edit.path)
+              return
+            }
+            const recoveryCap = mintWholeFileCapability(edit.path, content)
+            failures.push({
+              editIndex,
+              path: edit.path,
+              errorMessage: `Edit blocked: ${edit.path} had its exact read content removed from the active model context (context compaction). ${auth.error} basedOnRead="${recoveryCap}"`,
+              basedOnRead: recoveryCap,
+            })
+            return
+          }
+        }
+        const content = initialContentByPath.get(edit.path)
+        const basedOnRead =
+          typeof content === 'string'
+            ? mintWholeFileCapability(edit.path, content)
+            : undefined
+        const compactionRecovery = basedOnRead
+          ? ` Retry with write_file basedOnRead set to the capability below (whole-file overwrite). Do not exploratory re-read first when basedOnRead is provided; sticky hash match alone is not sufficient for write_file. basedOnRead="${basedOnRead}"`
+          : ` Call read_files with paths: ["${edit.path}"] before a whole-file overwrite, or pass a whole-file-covering basedOnRead on the write_file edit; sticky hash match alone is not sufficient for write_file.`
+        failures.push({
+          editIndex,
+          path: edit.path,
+          errorMessage: `Edit blocked: ${edit.path} had its exact read content removed from the active model context (context compaction).${compactionRecovery}`,
+          ...(basedOnRead ? { basedOnRead } : {}),
+        })
+        return
+      }
+      if (freshWholeFileAuthorizationPaths.has(edit.path)) {
+        // Hash-fresh sticky authorizes this edit, but do not clear
+        // context_compacted here for str_replace — only after successful apply
+        // in onApplied. write_file stays blocked above while the marker remains
+        // unless basedOnRead already cleared it.
+        if (
+          edit.type !== 'write_file' &&
+          edit.type !== 'str_replace' &&
+          getEditRereadRequirement(fileProcessingState, edit.path)?.reason !==
+            'context_compacted'
+        ) {
+          clearEditRereadRequirement(fileProcessingState, edit.path)
+        }
+        return
+      }
+      // Auto-reread authorizes str_replace only in this transaction.
+      if (
+        edit.type === 'str_replace' &&
+        autoRereadAuthorizedPaths.has(edit.path)
+      ) {
+        return
+      }
+      // write_file basedOnRead that failed validation must surface a clear error.
+      if (edit.type === 'write_file' && edit.basedOnRead) {
+        const content = initialContentByPath.get(edit.path)
+        if (typeof content === 'string') {
+          const auth = validateWriteFileBasedOnRead(
+            edit.path,
+            content,
+            edit.basedOnRead,
+          )
+          if (auth.ok) {
+            freshWholeFileAuthorizationPaths.add(edit.path)
+            grantWholeFileReadAuthorization(
+              fileProcessingState,
+              edit.path,
+              content,
+            )
+            clearEditRereadRequirement(fileProcessingState, edit.path)
+            return
+          }
+          const recoveryCap = mintWholeFileCapability(edit.path, content)
+          failures.push({
+            editIndex,
+            path: edit.path,
+            errorMessage: `Edit blocked: ${auth.error} basedOnRead="${recoveryCap}"`,
+            basedOnRead: recoveryCap,
+          })
+          return
+        }
+      }
       // Per-edit basedOnRead anchors satisfy strict mode without a prior read,
       // but every replacement must carry its own scoped capability.
       const hasBasedOnRead =
@@ -282,19 +546,40 @@ export const handleEditTransaction = (async (
         requireFreshReadCapabilityForPaths.add(edit.path)
         return
       }
+      const content = initialContentByPath.get(edit.path)
+      const basedOnRead =
+        typeof content === 'string'
+          ? mintWholeFileCapability(edit.path, content)
+          : undefined
       const rangeRecovery =
         edit.type === 'replace_range'
           ? ` Call read_files with ranges: [{ "path": "${edit.path}", "startLine": ${edit.startLine}, "endLine": ${edit.endLine} }] and retry with only its readCapability plus newContent.`
           : ''
+      // Prefer capability-retry when a whole-file token is already minted;
+      // exploratory re-read is only the fallback when no capability exists.
+      const writeFileRecovery =
+        edit.type === 'write_file'
+          ? basedOnRead
+            ? ` Retry with write_file basedOnRead set to the capability below (whole-file overwrite). Do not exploratory re-read first when basedOnRead is provided.`
+            : ` Call read_files with paths: ["${edit.path}"] before retrying, or pass a whole-file-covering basedOnRead on the write_file edit.`
+          : ''
+      const defaultRecovery = basedOnRead
+        ? ` Retry with basedOnRead set to the capability below (write_file basedOnRead, or basedOnRead on every str_replace replacement). Do not exploratory re-read first when basedOnRead is provided.`
+        : ` Call read_files with paths: ["${edit.path}"] before retrying, or include a matching fresh basedOnRead capability on every replacement.`
+      const capabilityHint = basedOnRead
+        ? ` basedOnRead="${basedOnRead}"`
+        : ''
       failures.push({
         editIndex,
         path: edit.path,
         errorMessage: staleWholeFileAuthorizationPaths.has(edit.path)
-          ? `Edit blocked: ${edit.path} changed after its last whole-file read, so the stored authorization was revoked.${rangeRecovery || ` Call read_files with paths: ["${edit.path}"] before retrying, or include a matching fresh basedOnRead capability on every replacement.`}`
-          : `Edit blocked: strict read-before-edit is enabled and no fresh read authorization exists for ${edit.path}.${rangeRecovery || ` Call read_files with paths: ["${edit.path}"] before retrying, or include a matching fresh basedOnRead capability on every replacement.`} Only a complete whole-file read registers reusable authorization for ${edit.path}; a range read only yields a scoped capability that must be passed explicitly as basedOnRead/readCapability on the edit. If you already read ${edit.path} this session, that authorization may have been dropped: a read and edit emitted in the same step do not authorize until the next step, and context compaction revokes earlier implicit reads — re-read before retrying.`,
+          ? `Edit blocked: ${edit.path} changed after its last whole-file read, so the stored authorization was revoked.${rangeRecovery || writeFileRecovery || defaultRecovery}${capabilityHint}`
+          : `Edit blocked: strict read-before-edit is enabled and no fresh read authorization exists for ${edit.path}.${rangeRecovery || writeFileRecovery || defaultRecovery}${basedOnRead ? '' : ` Only a complete whole-file read registers reusable authorization for ${edit.path}; a range read only yields a scoped capability that must be passed explicitly as basedOnRead/readCapability on the edit. If you already read ${edit.path} this session, that authorization may have been dropped: a read and edit emitted in the same step do not authorize until the next step, and context compaction may mark earlier implicit reads for re-check — re-read before retrying when the file changed.`}${capabilityHint}`,
+        ...(basedOnRead ? { basedOnRead } : {}),
       })
     })
     if (failures.length > 0) {
+      const anyBasedOnRead = failures.some((failure) => failure.basedOnRead)
       return {
         output: [
           {
@@ -302,7 +587,9 @@ export const handleEditTransaction = (async (
             value: {
               errorMessage: [
                 'edit_transaction blocked: strict read-before-edit is enabled and one or more paths have no read authorization.',
-                "Follow each failure's exact recovery selector. For replace_range, re-read that range and use only its readCapability; for str_replace, use a whole-file read or matching basedOnRead on every replacement.",
+                anyBasedOnRead
+                  ? "Follow each failure's exact recovery selector. When a failure includes basedOnRead, retry with that capability first (write_file basedOnRead, or basedOnRead on every str_replace replacement) without an exploratory re-read; for replace_range without a capability, re-read that range and use only its readCapability."
+                  : "Follow each failure's exact recovery selector. For replace_range, re-read that range and use only its readCapability; for str_replace, use a whole-file read or matching basedOnRead on every replacement.",
               ].join('\n'),
               failures,
             },
@@ -315,11 +602,16 @@ export const handleEditTransaction = (async (
   const lifecycleFailures = edits.flatMap((edit, editIndex) => {
     const source = initialContentByPath.get(edit.path)
     if (edit.type === 'create' && source !== null) {
+      const basedOnRead =
+        typeof source === 'string'
+          ? mintWholeFileCapability(edit.path, source)
+          : undefined
       return [
         {
           editIndex,
           path: edit.path,
-          errorMessage: 'Create destination already exists.',
+          errorMessage: `Create destination already exists at ${edit.path}. Retry with type "write_file" and basedOnRead set to the capability below (whole-file overwrite), or "str_replace" for an in-place edit. Do not exploratory re-read first when basedOnRead is provided.${basedOnRead ? ` basedOnRead="${basedOnRead}"` : ` Call read_files paths: ["${edit.path}"] first if no capability is available.`}`,
+          ...(basedOnRead ? { basedOnRead } : {}),
         },
       ]
     }
@@ -394,27 +686,42 @@ export const handleEditTransaction = (async (
         }
 
   if ('error' in transactionResult) {
-    const failedPaths = new Set(
-      transactionResult.failures.length > 0
-        ? transactionResult.failures.map((failure) => failure.path)
-        : uniquePaths,
-    )
-    const preserveAuthorizedPaths = [...failedPaths].filter((path) =>
-      freshWholeFileAuthorizationPaths.has(path),
-    )
-    const requireFreshReadPaths = [...failedPaths].filter(
-      (path) => !freshWholeFileAuthorizationPaths.has(path),
-    )
-    invalidatePreparedEditPaths({
-      fileProcessingState,
-      paths: preserveAuthorizedPaths,
-      requiresFreshRead: false,
+    // Echo whole-file basedOnRead on residual process/preflight failures when
+    // snapshot content is known, matching standalone str_replace recovery
+    // (capability retry without exploratory re-read).
+    const enrichedFailures = transactionResult.failures.map((failure) => {
+      if (failure.basedOnRead) return failure
+      const content = initialContentByPath.get(failure.path)
+      if (typeof content !== 'string') return failure
+      const basedOnRead = mintWholeFileCapability(failure.path, content)
+      const errorMessage = failure.errorMessage.includes('basedOnRead=')
+        ? failure.errorMessage
+        : `${failure.errorMessage} basedOnRead="${basedOnRead}"`
+      return {
+        ...failure,
+        errorMessage,
+        basedOnRead,
+      }
     })
+    const failureText = enrichedFailures
+      .map((failure) => failure.errorMessage)
+      .join('\n')
+    const requiresFreshCapability =
+      /different project, path, or agent run|Invalid basedOnRead|readCapability-covered content is stale|normalized capability metadata does not match/i.test(
+        failureText,
+      )
+    // Deterministic preflight failures made no writes and preserve existing
+    // authorization. Capability freshness/scope failures are different: retrying
+    // the atomic transaction requires one new snapshot for every target so no
+    // stale token from another path is replayed alongside the refreshed failure.
     invalidatePreparedEditPaths({
       fileProcessingState,
-      paths: requireFreshReadPaths,
-      reason: 'preflight_failed',
-      sourceTool: 'edit_transaction',
+      paths: uniquePaths,
+      revokeReadAuthorization: requiresFreshCapability,
+      requiresFreshRead: requiresFreshCapability,
+      ...(requiresFreshCapability
+        ? { reason: 'stale_capability' as const, sourceTool: 'edit_transaction' }
+        : {}),
     })
 
     return {
@@ -422,8 +729,13 @@ export const handleEditTransaction = (async (
         {
           type: 'json',
           value: {
-            errorMessage: transactionResult.error,
-            failures: transactionResult.failures,
+            errorMessage: requiresFreshCapability
+              ? [
+                  transactionResult.error,
+                  `Atomic recovery requires fresh read state for every transaction target in this run: ${uniquePaths.join(', ')}. Re-read all targets and rebuild the complete transaction with only those fresh capabilities; do not refresh only the first failed path or replay any other stale token.`,
+                ].join('\n')
+              : transactionResult.error,
+            failures: enrichedFailures,
           },
         },
       ],
@@ -563,6 +875,18 @@ export const handleEditTransaction = (async (
   })
   clientChanges.sort((a, b) => a.index - b.index)
 
+  // Only paths that produced an actual client change can emit an `applied`
+  // action, so scope the positive-evidence confirmation set to those paths.
+  // A content edit that resolved to a no-op is excluded from `clientChanges`
+  // and must not be required for confirmation.
+  const confirmationPaths = new Set<string>()
+  for (const { change } of clientChanges) {
+    confirmationPaths.add(change.path)
+    if (change.type === 'move' && typeof change.destinationPath === 'string') {
+      confirmationPaths.add(change.destinationPath)
+    }
+  }
+
   const appliedFiles: {
     path: string
     patch: string
@@ -572,6 +896,8 @@ export const handleEditTransaction = (async (
     toolName: 'edit_transaction',
     fileProcessingState,
     paths: uniquePaths,
+    confirmationPaths,
+    rejectionRequiresRead: false,
     apply: () =>
       requestClientToolCall({
         toolCallId: toolCall.toolCallId,
@@ -579,13 +905,41 @@ export const handleEditTransaction = (async (
         input: clientChanges.map(({ change }) => change),
       }),
     onApplied: () => {
+      // Paths that successfully applied a str_replace in this transaction may
+      // clear context_compacted (unique oldString safety bound, post-apply only).
+      // write_file authorized via whole-file basedOnRead already cleared markers
+      // pre-apply and refreshes sticky from post-edit content below.
+      const appliedStrReplacePaths = new Set(
+        edits
+          .filter((edit) => edit.type === 'str_replace')
+          .map((edit) => edit.path),
+      )
+      const appliedWriteFilePaths = new Set(
+        edits
+          .filter((edit) => edit.type === 'write_file')
+          .map((edit) => edit.path),
+      )
       for (const file of transactionResult.files) {
-        if (freshWholeFileAuthorizationPaths.has(file.path)) {
+        // Refresh sticky from observed post-edit content when this transaction
+        // had whole-file auth (real sticky hash-fresh, write_file basedOnRead,
+        // or successful unique str_replace after auto-reread). Auto-reread alone
+        // never mints durable sticky before apply; only post-edit observed bytes
+        // get a durable grant.
+        if (
+          freshWholeFileAuthorizationPaths.has(file.path) ||
+          autoRereadAuthorizedPaths.has(file.path)
+        ) {
           grantWholeFileReadAuthorization(
             fileProcessingState,
             file.path,
             file.content,
           )
+        }
+        if (appliedStrReplacePaths.has(file.path)) {
+          clearEditRereadRequirement(fileProcessingState, file.path)
+        }
+        if (appliedWriteFilePaths.has(file.path)) {
+          clearEditRereadRequirement(fileProcessingState, file.path)
         }
         const fileProcessingResult = Promise.resolve({
           tool: 'edit_transaction' as const,

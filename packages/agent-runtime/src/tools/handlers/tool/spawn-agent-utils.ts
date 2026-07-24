@@ -9,6 +9,7 @@ import {
 } from '@codebuff/common/util/agent-id-parsing'
 import { withTimeout } from '@codebuff/common/util/promise'
 import { generateCompactId } from '@codebuff/common/util/string'
+import { containsStructuralAuditReceipt } from '@codebuff/common/util/audit-receipt'
 import {
   agentHandoffSchema,
   agentReceiptSchema,
@@ -1122,36 +1123,6 @@ function containsToolCall(value: unknown, toolName: string): boolean {
   return found
 }
 
-function containsStructuralAuditReceipt(
-  value: unknown,
-  expectedSnapshotId?: string,
-): boolean {
-  let found = false
-  const visit = (item: unknown, depth = 0): void => {
-    if (found || !item || depth > 12) return
-    if (Array.isArray(item)) {
-      for (const nested of item) visit(nested, depth + 1)
-      return
-    }
-    if (typeof item !== 'object') return
-    const record = item as Record<string, unknown>
-    const receipt = record.structuralReceipt
-    if (receipt && typeof receipt === 'object' && !Array.isArray(receipt)) {
-      const snapshotId = (receipt as Record<string, unknown>).snapshot_id
-      if (
-        typeof snapshotId === 'string' &&
-        (!expectedSnapshotId || snapshotId === expectedSnapshotId)
-      ) {
-        found = true
-        return
-      }
-    }
-    for (const nested of Object.values(record)) visit(nested, depth + 1)
-  }
-  visit(value)
-  return found
-}
-
 function extractReceiptEvidence(params: {
   output: unknown
   agentType: string
@@ -1651,6 +1622,17 @@ export function validateAgentInput(
         ),
       )
       const normalizedAgentType = normalizeAgentIdForLookup(agentType)
+      const reviewerFamilyRequiredSnapshotIds = new Set([
+        'product-reviewer',
+        'performance-specialist',
+        'reliability-reviewer',
+        'migration-reviewer',
+        'compatibility-reviewer',
+        'accessibility-reviewer',
+        'ux-visual-reviewer',
+        'dependency-reviewer',
+        'evaluator',
+      ])
       const paramsRecord =
         params && typeof params === 'object' && !Array.isArray(params)
           ? (params as Record<string, unknown>)
@@ -1658,14 +1640,23 @@ export function validateAgentInput(
       const recoveryHint =
         normalizedAgentType === 'basher' && issuePaths.has('command')
           ? '\n\nRecovery: spawn Basher with { "agent_type": "basher", "params": { "command": "<shell command>" } }. A command mentioned only in prompt prose is never executed.'
-          : normalizedAgentType === 'compatibility-reviewer' &&
+          : reviewerFamilyRequiredSnapshotIds.has(normalizedAgentType) &&
               issuePaths.has('snapshot_id')
-            ? '\n\nRecovery: set params.snapshot_id to the exact current snapshot fingerprint from get_change_review_bundle, for example { "agent_type": "compatibility-reviewer", "params": { "snapshot_id": "<current fingerprint>" } }. Do not invent or reuse a stale fingerprint.'
+            ? `\n\nRecovery: set params.snapshot_id to the exact current snapshot fingerprint from get_change_review_bundle, for example { "agent_type": "${normalizedAgentType}", "params": { "snapshot_id": "<current fingerprint>" } }. Do not invent or reuse a stale fingerprint.`
             : normalizedAgentType === 'security-reviewer' &&
                 (issuePaths.has('snapshot_fingerprint') ||
                   Object.hasOwn(paramsRecord ?? {}, 'snapshot_id'))
               ? '\n\nRecovery: replace params.snapshot_id with params.snapshot_fingerprint, or add params.snapshot_fingerprint when it is missing. Retain params.changed_files and preserve both canonical field names exactly.'
-              : ''
+              : normalizedAgentType === 'dependency-manager' &&
+                  (issuePaths.has('manager') || issuePaths.has('operation'))
+                ? '\n\nRecovery: place both canonical keys in params, for example { "agent_type": "dependency-manager", "params": { "manager": "npm", "operation": "add" } }. manager must come from repository manifest/environment evidence. operation must be one of add, remove, sync, restore, or update. Do not infer dependency mutation authorization from a validation failure.'
+                : normalizedAgentType === 'librarian' &&
+                    issuePaths.has('repoUrl')
+                  ? '\n\nRecovery: set params.repoUrl to a GitHub URL, for example { "agent_type": "librarian", "params": { "repoUrl": "https://github.com/<owner>/<repo>" } }. params.repoUrl must have the form https://github.com/<owner>/<repo>; a URL only in prompt prose is not used.'
+                  : normalizedAgentType === 'code-searcher' &&
+                      issuePaths.has('searchQueries')
+                    ? '\n\nRecovery: spawn code-searcher with { "agent_type": "code-searcher", "params": { "searchQueries": [{ "pattern": "<regex>", "flags": "-g *.ts" }] } }. searchQueries is a required array of objects each with a non-empty string "pattern"; queries mentioned only in prompt prose are never executed.'
+                    : ''
       const paramsContract = formatAgentParamsContract(inputSchema.params)
       throw new Error(
         `Invalid params for agent ${agentType}: ${formatValidationIssues({ issues: result.error.issues })}\n\nExact params contract (from the child agent schema): ${paramsContract}\nPreserve params field names exactly.${recoveryHint}\n\nOriginal params value:\n${formatValueForError(params ?? {})}`,

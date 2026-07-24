@@ -561,6 +561,33 @@ describe('tool validation error handling', () => {
     }
   })
 
+  it('gives actionable recovery when get_build_targets receives no changed files', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'get_build_targets',
+        toolCallId: 'get-build-targets-empty-files-tool-call-id',
+        input: { files: [] },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('Raw validation issues:')
+      expect(result.error).toContain('"code": "too_small"')
+      expect(result.error).toContain(
+        '`files` must be a non-empty array of changed project-relative file paths',
+      )
+      expect(result.error).toContain(
+        '{ "files": ["packages/agent-runtime/src/tools/tool-executor.ts"] }',
+      )
+      expect(result.error).toContain(
+        'do not call `get_build_targets`; skip build-target discovery until a concrete changed-file list exists',
+      )
+      expect(result.formattedInput).toContain('<root>:')
+      expect(result.formattedInput).toContain('"files": []')
+    }
+  })
+
   it('should parse stringified params for spawn_agents entries', () => {
     const result = parseRawToolCall({
       rawToolCall: {
@@ -732,6 +759,133 @@ describe('tool validation error handling', () => {
       expect(result.formattedInput).not.toContain(
         'authority-bearing-secret-fragment',
       )
+    }
+  })
+
+  it('rejects mis-braced serialized spawn payloads with field-placement guidance', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-agents-misbraced-tool-call-id',
+        // Two agent entries with a stray top-level `prompt`: it is ambiguous
+        // which agent the sibling belongs to, so this stays fail-closed and
+        // is not auto-repaired (unlike the single-agent fold case below).
+        input:
+          '{"agents":[{"agent_type":"thinker"},{"agent_type":"file-picker"}],"prompt":"outside-agent"}',
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain(
+        '`prompt`, `params`, and `handoff` must be inside each agent object',
+      )
+      expect(result.error).toContain('check every brace and bracket')
+      expect(result.error).toContain('ambiguous brace nesting')
+    }
+  })
+
+  it('repairs a single-agent stray-sibling spawn payload by folding prompt into the entry', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-agents-single-agent-fold-tool-call-id',
+        input: {
+          agents: [
+            {
+              agent_type: 'code-searcher',
+              params: { searchQueries: [{ pattern: 'x' }] },
+            },
+          ],
+          prompt: 'find x',
+        },
+      },
+    })
+
+    expect('error' in result).toBe(false)
+    if (!('error' in result)) {
+      expect(result.input.agents[0].prompt).toBe('find x')
+      expect(result.input.agents[0].params).toEqual({
+        searchQueries: [{ pattern: 'x' }],
+      })
+    }
+  })
+
+  it('still rejects a multi-entry spawn array with stray sibling fields', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-agents-multi-entry-stray-sibling-tool-call-id',
+        input: {
+          agents: [{ agent_type: 'a' }, { agent_type: 'b' }],
+          prompt: 'x',
+        },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain(
+        '`prompt`, `params`, and `handoff` must be inside each agent object',
+      )
+    }
+  })
+
+  it('does not overwrite an existing in-entry prompt when folding a single-agent stray sibling', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-agents-single-agent-no-overwrite-tool-call-id',
+        input: {
+          agents: [{ agent_type: 'code-searcher', prompt: 'inner' }],
+          prompt: 'outer',
+        },
+      },
+    })
+
+    expect('error' in result).toBe(false)
+    if (!('error' in result)) {
+      expect(result.input.agents[0].prompt).toBe('inner')
+    }
+  })
+
+  it('shows the corrected spawn shape inline when agents is an invalid JSON string', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-agents-corrected-shape-hint-tool-call-id',
+        input: { agents: 'not valid json {' },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('Corrected example:')
+      expect(result.error).toContain('INSIDE each agent object')
+    }
+  })
+
+  it('rejects the original stringified agents array with a mis-braced prompt and points at the corrected shape', () => {
+    // Reproduces the exact real-world failure: the whole `agents` value was
+    // emitted as a JSON string, and inside it a stray `"prompt": "..."` pair
+    // floats as a sibling *array element* rather than a key inside the first
+    // agent object. That inner text is not valid JSON, so it cannot be
+    // auto-repaired and must fail closed with corrected-shape guidance.
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-agents-stringified-misbraced-prompt-tool-call-id',
+        input: {
+          agents:
+            '[{"agent_type": "code-searcher", "params": {"searchQueries": [{"pattern": "serialized handleSteps", "flags": "-g *.ts"}]}}, "prompt": "Find the test in the agents test suite."}]',
+        },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('Corrected example:')
+      expect(result.error).toContain('INSIDE each agent object')
     }
   })
 
@@ -1699,6 +1853,94 @@ describe('tool validation error handling', () => {
     expect(message).toContain('Preserve params field names exactly.')
   })
 
+  it('gives reliability-reviewer snapshot_id recovery with its normalized ID', async () => {
+    const { validateAgentInput } =
+      await import('../tools/handlers/tool/spawn-agent-utils')
+    const reliabilityReviewer = {
+      ...testAgentTemplate,
+      id: 'reliability-reviewer',
+      inputSchema: {
+        params: z.object({ snapshot_id: z.string() }),
+      },
+    }
+
+    let message = ''
+    try {
+      validateAgentInput(
+        reliabilityReviewer,
+        'reliability-reviewer',
+        undefined,
+        {},
+      )
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(message).toContain('Missing required: snapshot_id')
+    expect(message).toContain('params.snapshot_id')
+    expect(message).toContain('"agent_type": "reliability-reviewer"')
+    expect(message).toContain('"snapshot_id": "<current fingerprint>"')
+    expect(message).toContain('exact current snapshot fingerprint')
+    expect(message).toContain('get_change_review_bundle')
+  })
+
+  it('gives dependency-manager canonical manager and operation recovery', async () => {
+    const { validateAgentInput } =
+      await import('../tools/handlers/tool/spawn-agent-utils')
+    const dependencyManager = {
+      ...testAgentTemplate,
+      id: 'dependency-manager',
+      inputSchema: {
+        params: z.object({
+          manager: z.string(),
+          operation: z.enum(['add', 'remove', 'sync', 'restore', 'update']),
+        }),
+      },
+    }
+
+    let message = ''
+    try {
+      validateAgentInput(dependencyManager, 'dependency-manager', undefined, {})
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(message).toContain('manager:')
+    expect(message).toContain('operation:')
+    expect(message).toContain('"required":["manager","operation"]')
+    expect(message).toContain('"manager": "npm"')
+    expect(message).toContain('"operation": "add"')
+    expect(message).toContain('repository manifest/environment evidence')
+    expect(message).toContain('add, remove, sync, restore, or update')
+    expect(message).toContain(
+      'Do not infer dependency mutation authorization from a validation failure.',
+    )
+  })
+
+  it('gives librarian canonical repoUrl recovery on empty params', async () => {
+    const { validateAgentInput } =
+      await import('../tools/handlers/tool/spawn-agent-utils')
+    const librarian = {
+      ...testAgentTemplate,
+      id: 'librarian',
+      inputSchema: {
+        params: z.object({ repoUrl: z.string().url() }),
+      },
+    }
+
+    let message = ''
+    try {
+      validateAgentInput(librarian, 'librarian', undefined, {})
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(message).toContain('Missing required: repoUrl')
+    expect(message).toContain('params.repoUrl')
+    expect(message).toContain('"repoUrl": "https://github.com/<owner>/<repo>"')
+    expect(message).toContain('a URL only in prompt prose is not used')
+  })
+
   it('rejects security-reviewer snapshot_id with canonical params recovery', async () => {
     const { validateAgentInput } =
       await import('../tools/handlers/tool/spawn-agent-utils')
@@ -1732,6 +1974,33 @@ describe('tool validation error handling', () => {
     expect(message).toContain('Exact params contract (from the child agent schema)')
     expect(message).toContain('replace params.snapshot_id with params.snapshot_fingerprint')
     expect(message).toContain('Retain params.changed_files')
+    expect(message).toContain('Preserve params field names exactly.')
+  })
+
+  it('gives code-searcher a searchQueries recovery hint on empty params', async () => {
+    const { validateAgentInput } =
+      await import('../tools/handlers/tool/spawn-agent-utils')
+    const codeSearcher = {
+      ...testAgentTemplate,
+      id: 'code-searcher',
+      inputSchema: {
+        params: z.object({
+          searchQueries: z.array(z.object({ pattern: z.string() })),
+        }),
+      },
+    }
+
+    let message = ''
+    try {
+      validateAgentInput(codeSearcher, 'code-searcher', undefined, {})
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(message).toContain('Missing required: searchQueries')
+    expect(message).toContain('spawn code-searcher with')
+    expect(message).toContain('"searchQueries"')
+    expect(message).toContain('required array of objects')
     expect(message).toContain('Preserve params field names exactly.')
   })
 
@@ -1816,6 +2085,75 @@ describe('tool validation error handling', () => {
           ]),
         },
       ],
+    })
+  })
+
+  it('repairs a single-agent mis-braced spawn payload and publishes it to the handler', async () => {
+    const parent: AgentTemplate = {
+      ...testAgentTemplate,
+      toolNames: ['spawn_agents', 'end_turn'],
+      spawnableAgents: ['basher'],
+    }
+    const basher: AgentTemplate = {
+      ...testAgentTemplate,
+      id: 'basher',
+      inputSchema: { params: z.object({ command: z.string().min(1) }) },
+      toolNames: ['run_terminal_command'],
+      spawnableAgents: [],
+    }
+    const misbracedSpawn: StreamChunk = {
+      type: 'tool-call',
+      toolName: 'spawn_agents',
+      toolCallId: 'basher-misbraced-fold-tool-call-id',
+      input: {
+        agents: [{ agent_type: 'basher', params: { command: 'bun test' } }],
+        prompt: 'Run the tests',
+      },
+    }
+    async function* mockStream() {
+      yield misbracedSpawn
+      return promptSuccess('mock-message-id')
+    }
+    const responseChunks: (string | PrintModeEvent)[] = []
+    const sessionState = getInitialSessionState(mockFileContext)
+
+    await processStream({
+      ...agentRuntimeImpl,
+      agentContext: {},
+      agentState: sessionState.mainAgentState,
+      agentStepId: 'test-step-id',
+      agentTemplate: parent,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fileContext: mockFileContext,
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { 'test-agent': parent, basher },
+      messages: [],
+      prompt: 'test prompt',
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      stream: mockStream(),
+      system: 'test system',
+      tools: {},
+      userId: 'test-user',
+      userInputId: 'test-input-id',
+      onCostCalculated: async () => {},
+      onResponseChunk: (chunk) => responseChunks.push(chunk),
+    })
+
+    const events = responseChunks.filter(
+      (chunk): chunk is PrintModeEvent => typeof chunk !== 'string',
+    )
+    // The payload was repaired (folded), not rejected, so no error event.
+    expect(events.some((event) => event.type === 'error')).toBe(false)
+    // A tool_call for spawn_agents was published to the handler.
+    expect(events.find((event) => event.type === 'tool_call')).toMatchObject({
+      type: 'tool_call',
+      toolName: 'spawn_agents',
+      toolCallId: 'basher-misbraced-fold-tool-call-id',
     })
   })
 
@@ -2295,13 +2633,26 @@ describe('tool validation error handling', () => {
 describe('buildUnavailableToolMessage', () => {
   it('explains a known-but-ungranted tool without suggesting a near match', () => {
     const message = buildUnavailableToolMessage({
-      toolName: 'code_search',
+      toolName: 'run_terminal_command',
       agentId: 'base2',
       availableTools: ['query_index', 'read_files', 'glob'],
     })
 
     expect(message).toContain('is a registered tool but is not granted')
     expect(message).toContain('is not available for agent `base2`')
+  })
+
+  it('gives concrete code-searcher recovery for ungranted content-search tools', () => {
+    for (const toolName of ['code_search', 'find_files_matching_content']) {
+      const message = buildUnavailableToolMessage({
+        toolName,
+        agentId: 'base2',
+        availableTools: ['read_files'],
+      })
+
+      expect(message).toContain('code-searcher')
+      expect(message).toContain('searchQueries')
+    }
   })
 
   it('suggests the closest granted tool for a likely typo', () => {

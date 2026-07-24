@@ -8,6 +8,7 @@ import {
   collectReviewerFindingRecords,
   detectReviewerCrash,
   getReviewerFinalizationVerdict,
+  isTestCoverageReviewerFinding,
   stripReviewerPreamble,
 } from '../base2/gate-reviewer'
 
@@ -610,5 +611,65 @@ describe('gate-reviewer helpers', () => {
         'Preamble. {"verdict":"MAYBE","findings":[],"coverage":"covered"}',
       ),
     ).toBe('')
+  })
+
+  test('isTestCoverageReviewerFinding keys on the test-coverage bigram or coverage plus a .test.* token', () => {
+    // The synthetic coverage blocker from collectReviewerBlockers must classify
+    // as coverage so the all-coverage set routes exclusively to test-writer.
+    expect(
+      isTestCoverageReviewerFinding(
+        'BLOCKING: test coverage missing for changed behavior (add a case to the relevant *.test.ts)',
+      ),
+    ).toBe(true)
+    expect(
+      isTestCoverageReviewerFinding('test coverage is insufficient'),
+    ).toBe(true)
+    expect(isTestCoverageReviewerFinding('TEST COVERAGE missing')).toBe(true)
+    expect(
+      isTestCoverageReviewerFinding(
+        'BLOCKING: coverage gap: add a case to src/foo.test.ts for the new behavior',
+      ),
+    ).toBe(true)
+    expect(
+      isTestCoverageReviewerFinding('coverage missing; extend widget.test.tsx'),
+    ).toBe(true)
+  })
+
+  test('isTestCoverageReviewerFinding stays conservative for generic test/coverage mentions', () => {
+    // Generic requirements mentioning test(s)/tested or bare coverage must
+    // keep routing to repair-editor (status quo).
+    expect(
+      isTestCoverageReviewerFinding('BLOCKING: add tests for the parser'),
+    ).toBe(false)
+    expect(
+      isTestCoverageReviewerFinding('BLOCKING: this path is not tested'),
+    ).toBe(false)
+    expect(
+      isTestCoverageReviewerFinding(
+        'BLOCKING: coverage of edge cases is unclear',
+      ),
+    ).toBe(false)
+    expect(
+      isTestCoverageReviewerFinding(
+        'BLOCKING: update foo.test.ts to match the new API',
+      ),
+    ).toBe(false)
+    expect(
+      isTestCoverageReviewerFinding(
+        'BLOCKING: fix the null dereference in parse()',
+      ),
+    ).toBe(false)
+    expect(isTestCoverageReviewerFinding('')).toBe(false)
+  })
+
+  test('isTestCoverageReviewerFinding rejects non-string inputs', () => {
+    expect(
+      isTestCoverageReviewerFinding(undefined as unknown as string),
+    ).toBe(false)
+    expect(isTestCoverageReviewerFinding(null as unknown as string)).toBe(
+      false,
+    )
+    expect(isTestCoverageReviewerFinding(42 as unknown as string)).toBe(false)
+    expect(isTestCoverageReviewerFinding({} as unknown as string)).toBe(false)
   })
 })

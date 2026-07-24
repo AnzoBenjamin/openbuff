@@ -1,4 +1,10 @@
 import {
+  encodeReadCapabilityToken,
+  getContentHash,
+  normalizeLineEndings,
+} from '@codebuff/common/util/content-hash'
+
+import {
   formatUnsafeToolPathError,
   hasWholeFileReadAuthorization,
   isWholeFileReadAuthorizationFresh,
@@ -8,6 +14,8 @@ import {
 } from './write-file'
 import { coordinateEditApplication } from './edit-application-coordinator'
 import {
+  clearEditRereadRequirement,
+  getEditRereadRequirement,
   markEditRequiresFreshRead,
   strictEditAuthorizationError,
 } from './edit-read-state'
@@ -126,37 +134,6 @@ export const handleStrReplace = (async (
     }
   }
 
-  if (
-    recoveringFromFailedEdit &&
-    !hasAnyReadCapability &&
-    !structuralRecovery
-  ) {
-    const authorizationError = strictEditAuthorizationError({
-      fileProcessingState,
-      path,
-      toolName: 'str_replace',
-      hasFreshWholeFileAuthorization: false,
-    })
-    return {
-      output: [
-        {
-          type: 'json',
-          value: {
-            file: path,
-            errorMessage:
-              authorizationError?.errorMessage ??
-              `str_replace blocked for ${path}: read_files must refresh the file before retrying.`,
-            errorCode: 'fresh_read_required',
-            recovery: {
-              tool: 'read_files',
-              input: { paths: [path] },
-            },
-          },
-        },
-      ],
-    }
-  }
-
   const hasStoredWholeFileAuthorization = hasWholeFileReadAuthorization(
     fileProcessingState,
     path,
@@ -170,36 +147,6 @@ export const handleStrReplace = (async (
   ) {
     revokeWholeFileReadAuthorization(fileProcessingState, path)
   }
-  if (
-    fileProcessingState.strictReadBeforeEdit &&
-    !hasStoredWholeFileAuthorization &&
-    !hasAnyReadCapability
-  ) {
-    const authorizationError = strictEditAuthorizationError({
-      fileProcessingState,
-      path,
-      toolName: 'str_replace',
-      hasFreshWholeFileAuthorization: false,
-    })
-    return {
-      output: [
-        {
-          type: 'json',
-          value: {
-            file: path,
-            errorMessage:
-              authorizationError?.errorMessage ??
-              `str_replace blocked for ${path}: read_files must authorize the file before editing.`,
-            errorCode: 'fresh_read_required',
-            recovery: {
-              tool: 'read_files',
-              input: { paths: [path] },
-            },
-          },
-        },
-      ],
-    }
-  }
 
   if (!fileProcessingState.promisesByPath[path]) {
     fileProcessingState.promisesByPath[path] = []
@@ -211,7 +158,8 @@ export const handleStrReplace = (async (
   // Same-turn committed edits are the current base even when the client's
   // filesystem stub does not immediately reflect them. Across turns there is
   // no prior promise, so the disk read below is the external-change boundary.
-  const latestContent = hasAnyReadCapability
+  // Auto-reread-once for strict auth miss also uses this load (one attempt).
+  let latestContent = hasAnyReadCapability
     ? await requestOptionalFile({ ...params, filePath: path })
     : previousEdit
       ? await previousEdit.then((maybeResult) =>
@@ -221,9 +169,72 @@ export const handleStrReplace = (async (
         )
       : await requestOptionalFile({ ...params, filePath: path })
 
-  const hadFreshWholeFileAuthorization =
+  let hadFreshWholeFileAuthorization =
     typeof latestContent === 'string' &&
     isWholeFileReadAuthorizationFresh(fileProcessingState, path, latestContent)
+
+  // Auto-reread-once: when strict auth would block because there is *no* stored
+  // sticky auth and no basedOnRead, authorize *this* unique str_replace from the
+  // just-loaded disk content only (in-process). Do NOT mint durable sticky via
+  // grantWholeFileReadAuthorization — that would let a later write_file whole-file
+  // overwrite chain off a blind server re-read. Post-apply grant of *new* content
+  // after a successful unique edit still refreshes sticky (observed post-edit
+  // bytes). Never auto-regrant over a *stale* sticky hash (external change):
+  // that path must revoke and fail closed with a freshness error. Fail closed if
+  // the file is missing. Circuit breaker already returned above.
+  // Unique-only contract: any allowMultiple:true replacement skips auto-reread
+  // entirely so multi-match calls fail closed (require sticky or basedOnRead).
+  let autoRereadAttempted = false
+  const replacementsAreUniqueOnly = replacements.every(
+    (replacement) => replacement.allowMultiple !== true,
+  )
+  const needsAuthWithoutCapability =
+    (fileProcessingState.strictReadBeforeEdit === true ||
+      recoveringFromFailedEdit) &&
+    !hadFreshWholeFileAuthorization &&
+    !hasAnyReadCapability &&
+    !hasStoredWholeFileAuthorization &&
+    !structuralRecovery
+  if (needsAuthWithoutCapability && replacementsAreUniqueOnly) {
+    autoRereadAttempted = true
+    if (typeof latestContent !== 'string') {
+      // Prefer a fresh disk load when previous-edit chain had no content.
+      latestContent = await requestOptionalFile({ ...params, filePath: path })
+    }
+    if (typeof latestContent === 'string') {
+      // In-process only: authorize this str_replace call; no durable sticky mint.
+      // Auto-reread runs only when there is no stored sticky, so clearing
+      // context_compacted here cannot open a hash-fresh write_file chain.
+      clearEditRereadRequirement(fileProcessingState, path)
+      hadFreshWholeFileAuthorization = true
+    } else {
+      const authorizationError = strictEditAuthorizationError({
+        fileProcessingState,
+        path,
+        toolName: 'str_replace',
+        hasFreshWholeFileAuthorization: false,
+        authorizationWasStale: hasStoredWholeFileAuthorization,
+      })
+      return {
+        output: [
+          {
+            type: 'json',
+            value: {
+              file: path,
+              errorMessage:
+                authorizationError?.errorMessage ??
+                `str_replace blocked for ${path}: read_files must authorize the file before editing.`,
+              errorCode: 'fresh_read_required',
+              recovery: {
+                tool: 'read_files',
+                input: { paths: [path] },
+              },
+            },
+          },
+        ],
+      }
+    }
+  }
 
   if (hasStoredWholeFileAuthorization && !hadFreshWholeFileAuthorization) {
     markEditRequiresFreshRead({
@@ -234,17 +245,42 @@ export const handleStrReplace = (async (
     })
   }
 
+  // Hash-fresh authorization may clear prior reread markers for UX, but must
+  // preserve context_compacted until a successful unique apply (or a complete
+  // whole-file read_files grant). Otherwise a failed no-match attempt would
+  // drop the marker and let a later write_file overwrite on sticky alone.
+  if (hadFreshWholeFileAuthorization) {
+    const rereadReq = getEditRereadRequirement(fileProcessingState, path)
+    if (rereadReq?.reason !== 'context_compacted') {
+      clearEditRereadRequirement(fileProcessingState, path)
+    }
+  }
+
   const requireFreshReadCapability =
     fileProcessingState.strictReadBeforeEdit === true &&
     !hadFreshWholeFileAuthorization
 
   if (requireFreshReadCapability && !hasAnyReadCapability) {
+    const freshReadCapability =
+      typeof latestContent === 'string'
+        ? encodeReadCapabilityToken({
+            startLine: 1,
+            endLine: normalizeLineEndings(latestContent).split('\n').length,
+            hash: getContentHash(latestContent),
+            scope: {
+              projectId: params.fileContext?.projectRoot ?? '',
+              path,
+              runId: params.runId ?? '',
+            },
+          })
+        : undefined
     const authorizationError = strictEditAuthorizationError({
       fileProcessingState,
       path,
       toolName: 'str_replace',
       hasFreshWholeFileAuthorization: false,
       authorizationWasStale: hasStoredWholeFileAuthorization,
+      freshReadCapability,
     })
     return {
       output: [
@@ -256,7 +292,7 @@ export const handleStrReplace = (async (
               authorizationError?.errorMessage ??
               `str_replace blocked for ${path}: read_files must refresh the file before retrying.`,
             errorCode: 'fresh_read_required',
-            recovery: {
+            recovery: authorizationError?.recovery ?? {
               tool: 'read_files',
               input: { paths: [path] },
             },
@@ -327,14 +363,46 @@ export const handleStrReplace = (async (
     // the agent only needs to fix the syntax, not re-read the file or switch
     // tools. (Fix C circuit breaker only counts real processing failures.)
     if (!strReplaceResult.preflightSyntaxError) {
-      if (!hadFreshWholeFileAuthorization) {
+      const requiresFreshCapability =
+        /(?:readCapability|basedOnRead).*(?:stale|different project, path, or agent run)|(?:stale|different project, path, or agent run).*(?:readCapability|basedOnRead)/is.test(
+          strReplaceResult.error,
+        )
+      if (requiresFreshCapability) {
         markEditRequiresFreshRead({
           fileProcessingState,
           path,
-          reason: 'preflight_failed',
+          reason: 'stale_capability',
           sourceTool: 'str_replace',
         })
       }
+      // After auto-reread-once, still-failed unique/ambiguous matches mint a
+      // whole-file basedOnRead so the agent can retry without another disk thrash.
+      if (autoRereadAttempted && typeof latestContent === 'string') {
+        const basedOnRead = encodeReadCapabilityToken({
+          startLine: 1,
+          endLine: normalizeLineEndings(latestContent).split('\n').length,
+          hash: getContentHash(latestContent),
+          scope: {
+            projectId: params.fileContext?.projectRoot ?? '',
+            path,
+            runId: params.runId ?? '',
+          },
+        })
+        strReplaceResult.error = [
+          strReplaceResult.error,
+          'Auto-re-read once failed to apply; retry with basedOnRead below.',
+          `basedOnRead="${basedOnRead}"`,
+          JSON.stringify({
+            recovery: {
+              tool: 'read_files',
+              input: { paths: [path] },
+              basedOnRead,
+            },
+          }),
+        ].join('\n')
+      }
+      // Deterministic no-match/ambiguity preflight failures do not mutate the
+      // client and therefore preserve any valid read authorization.
       // Fix C: a hard error consumes the per-path failure budget.
       fileProcessingState.consecutiveStrReplaceFailuresByPath[path] =
         (fileProcessingState.consecutiveStrReplaceFailuresByPath[path] ?? 0) + 1
@@ -372,11 +440,10 @@ export const handleStrReplace = (async (
     toolName: 'str_replace',
     fileProcessingState,
     paths: [path],
-    // Processing/preflight failures never reached the client. Preserve a
-    // verified whole-file authorization; scoped/stale paths were explicitly
-    // marked above. Client-side rejection after a prepared edit still requires
-    // a fresh read through the coordinator's default path.
-    rejectionRequiresRead: !('error' in strReplaceResult),
+    rejectionRequiresRead: false,
+    // Deterministic processing failures and explicit client rejections preserve
+    // valid read authorization. Stale capability and uncertain application
+    // outcomes are marked separately and still require a fresh read.
     wholeFileContentByPath:
       'content' in strReplaceResult
         ? new Map([[path, strReplaceResult.content]])
@@ -389,6 +456,15 @@ export const handleStrReplace = (async (
         (strReplaceResult.failedReplacementCount ?? 0) === 0
       ) {
         delete fileProcessingState.consecutiveStrReplaceFailuresByPath[path]
+      }
+      // Clear context_compacted only after a successful unique apply. Unique
+      // oldString is the safety bound that authorizes dropping the marker.
+      if (
+        !hadAutoCorrect &&
+        'content' in strReplaceResult &&
+        (strReplaceResult.failedReplacementCount ?? 0) === 0
+      ) {
+        clearEditRereadRequirement(fileProcessingState, path)
       }
     },
     apply: () =>

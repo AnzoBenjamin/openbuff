@@ -76,7 +76,7 @@ through a hosted Openbuff/Codebuff service in this primary flow.
    - `inspect_workspace`, `get_task`, `get_change_review_bundle` → snapshot-bound workspace/task/review evidence
    - `inspect_environment`, `get_affected_tests`, `get_build_targets` → read-only toolchain and validation-target intelligence
    - `inspect_codebase_structure`, `inspect_feature_completeness`, `evaluate_audit_coverage` → snapshot-bound broad-audit inventory and completeness gating
-   - `run_targeted_validation` → snapshot-checked scoped validation
+   - `run_targeted_validation` → snapshot-checked scoped validation (scoped evidence only; not the full hooks+reviewer gate)
    - Custom tool definitions and MCP tools
 6. **Action handlers** stream provider output back to the CLI:
    - `response-chunk` → streams text to the CLI

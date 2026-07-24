@@ -205,7 +205,9 @@ describe('rewrite_symbol handler', () => {
 
     expect(outputJson(result).errorMessage).toContain('client rejected patch')
     expect(state.consecutiveStrReplaceFailuresByPath['svc.ts']).toBe(3)
-    expect(state.failedEditRequiresReadByPath['svc.ts']).toBe(true)
+    // An explicit client rejection is deterministic: no prepared mutation was
+    // applied, so it preserves read authorization and does not force a re-read.
+    expect(state.failedEditRequiresReadByPath['svc.ts']).toBeUndefined()
   })
 
   test('errors clearly when the symbol is not found', async () => {

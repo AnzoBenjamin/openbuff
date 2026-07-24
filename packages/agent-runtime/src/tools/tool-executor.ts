@@ -628,6 +628,13 @@ export function buildUnavailableToolMessage(params: {
   // granted. Point the model at the granted tools / spawnable agents instead
   // of letting it guess another unavailable name.
   if ((toolNames as readonly string[]).includes(toolName)) {
+    // Concrete recovery for the two content-search tools the root orchestrator
+    // is intentionally not granted: point the model at the code-searcher agent
+    // with a copyable params shape instead of the generic sentence. This stays
+    // message-only; the tool remains fail-closed and nothing is auto-spawned.
+    if (toolName === 'code_search' || toolName === 'find_files_matching_content') {
+      return `${base} \`${toolName}\` is a registered tool the root orchestrator is not granted; spawn the code-searcher agent instead: { "agent_type": "code-searcher", "params": { "searchQueries": [{ "pattern": "<regex>", "flags": "-g *.ts" }] } }.`
+    }
     return `${base} \`${toolName}\` is a registered tool but is not granted to this agent; use one of the available tools above, or spawn an agent that provides that capability.`
   }
   // Case 2: likely a typo/near-miss of a granted tool.
@@ -705,6 +712,22 @@ function getToolValidationHint(
 ): string | undefined {
   const fieldHint = issues ? getFieldSpecificHint(toolName, issues) : undefined
 
+  if (
+    toolName === 'get_build_targets' &&
+    (issues ?? []).some(
+      (issue) =>
+        issue.code === 'too_small' &&
+        issue.path?.length === 1 &&
+        issue.path[0] === 'files',
+    )
+  ) {
+    return [
+      '`files` must be a non-empty array of changed project-relative file paths.',
+      'Example: { "files": ["packages/agent-runtime/src/tools/tool-executor.ts"] }',
+      'When there are no changed files, do not call `get_build_targets`; skip build-target discovery until a concrete changed-file list exists.',
+    ].join('\n')
+  }
+
   if (toolName === 'str_replace') {
     const base = [
       'Expected shape: { "path": string, "replacements": [{ "oldString": string, "newString": string, "allowMultiple"?: boolean }] }.',
@@ -732,7 +755,8 @@ function getToolValidationHint(
   if (toolName === 'spawn_agents') {
     const base = [
       'Expected shape: { "agents": [{ "agent_type": string, "prompt"?: string, "params"?: object, "handoff"?: object }] }.',
-      'Pass agents as an array of objects. Valid stringified or double-stringified JSON is repaired automatically, but truncated JSON and non-object entries are rejected. Do not stringify each agent entry.',
+      'Pass agents as an array of objects. `prompt`, `params`, and `handoff` must be inside each agent object; check every brace and bracket when a field appears misplaced. Valid stringified or double-stringified JSON is repaired automatically, but ambiguous brace nesting, truncated JSON, and non-object entries are rejected without guessing or auto-repair. Do not stringify each agent entry.',
+      'Corrected example: { "agents": [{ "agent_type": "code-searcher", "prompt": "<task>", "params": { "searchQueries": [{ "pattern": "<regex>" }] } }] } — note prompt/params live INSIDE each agent object, and agents is a real array, not a JSON string.',
     ].join('\n')
     const hasHandoffIssue = (issues ?? []).some(isSpawnAgentHandoffIssue)
     if (!hasHandoffIssue) return base
@@ -872,6 +896,89 @@ function formatInvalidInputExcerpts(
     if (excerpts.join('\n\n').length >= 6_000) break
   }
   return excerpts.join('\n\n') || formatValueForError(input, 2_000)
+}
+
+// Handle a mis-braced spawn_agents payload where `prompt`, `params`, or
+// `handoff` appear as siblings of `agents` at the top level. These fields
+// belong INSIDE each agent object; the non-strict top-level schema would
+// otherwise silently drop the stray key, hiding the mistake. In the
+// unambiguous single-agent case we fold the stray siblings into that one
+// entry and return a repaired input for safeParse. Every ambiguous case
+// (multi-entry arrays, unexpected sibling keys) still fails closed with the
+// base spawn_agents guidance.
+type DetectMisbracedSpawnResult =
+  | { repairedInput: Record<string, unknown> }
+  | { error: ToolCallError }
+
+function detectMisbracedSpawnPayload(args: {
+  input: unknown
+  toolCallId: string
+  rawInput: unknown
+  logger?: Logger
+}): DetectMisbracedSpawnResult | undefined {
+  const { input, toolCallId, rawInput, logger } = args
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return undefined
+  }
+  const record = input as Record<string, unknown>
+  if (!Array.isArray(record.agents)) return undefined
+  const foldableKeys = ['prompt', 'params', 'handoff'] as const
+  const misplacedKeys = foldableKeys.filter((key) => Object.hasOwn(record, key))
+  if (misplacedKeys.length === 0) return undefined
+
+  // Unambiguous single-agent repair: fold the stray prompt/params/handoff
+  // siblings INTO the single agent entry without overwriting existing in-entry
+  // values, then hand the corrected shape back for safeParse (which reruns the
+  // per-entry normalize preprocess). Never fold into a multi-entry array (it is
+  // ambiguous which agent the sibling belongs to). Any sibling key outside
+  // {prompt, params, handoff} other than the legitimate end-step param makes
+  // the intent ambiguous, so those fall through to the fail-closed error below.
+  const allowedSiblingKeys = new Set<string>([
+    ...foldableKeys,
+    endsAgentStepParam,
+  ])
+  const hasUnexpectedSibling = Object.keys(record).some(
+    (key) => key !== 'agents' && !allowedSiblingKeys.has(key),
+  )
+  if (record.agents.length === 1 && !hasUnexpectedSibling) {
+    const entry = parseJsonBounded(record.agents[0])
+    if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
+      const entryRecord = entry as Record<string, unknown>
+      const merged: Record<string, unknown> = { ...entryRecord }
+      for (const key of foldableKeys) {
+        if (Object.hasOwn(record, key) && !Object.hasOwn(entryRecord, key)) {
+          merged[key] = record[key]
+        }
+      }
+      const repairedInput: Record<string, unknown> = { agents: [merged] }
+      // Preserve any legitimate non-agent top-level key the schema still
+      // accepts (e.g. the end-step param); drop the folded stray siblings.
+      for (const [key, value] of Object.entries(record)) {
+        if (key === 'agents') continue
+        if ((foldableKeys as readonly string[]).includes(key)) continue
+        repairedInput[key] = value
+      }
+      // Log only the folded key names and the toolCallId; never the payload
+      // values themselves, to avoid leaking prompt/params/handoff content.
+      logger?.debug(
+        { toolCallId, misplacedKeys },
+        'spawn_agents: auto-repaired mis-braced single-agent payload by folding stray sibling field(s) into the agent entry',
+      )
+      return { repairedInput }
+    }
+  }
+
+  const hint = getToolValidationHint('spawn_agents', undefined, input)
+  const summary = `misplaced top-level field(s) ${misplacedKeys.join(', ')} alongside \`agents\``
+  return {
+    error: {
+      toolName: 'spawn_agents',
+      toolCallId,
+      input: rawInput,
+      error: `Invalid parameters for spawn_agents: ${summary}.${hint ? `\n\n${hint}` : ''}`,
+      formattedInput: formatInvalidInputExcerpts(input, []),
+    },
+  }
 }
 
 function isFileChangingTool(toolName: string): boolean {
@@ -1029,8 +1136,9 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
     input: unknown
     providerOptions?: ProviderMetadata
   }
+  logger?: Logger
 }): CodebuffToolCall<T> | ToolCallError {
-  const { rawToolCall } = params
+  const { rawToolCall, logger } = params
   const toolName = rawToolCall.toolName
 
   const processedParameters = parseStringifiedToolInput(
@@ -1048,10 +1156,24 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
     )
   }
 
-  const repairedInput = repairTerminalCommandScalars(
+  let repairedInput = repairTerminalCommandScalars(
     toolName,
     repairSetOutputData(toolName, processedParameters.input),
   )
+  if (toolName === 'spawn_agents') {
+    const misbraced = detectMisbracedSpawnPayload({
+      input: repairedInput,
+      toolCallId: rawToolCall.toolCallId,
+      rawInput: rawToolCall.input,
+      logger,
+    })
+    if (misbraced) {
+      if ('error' in misbraced) {
+        return misbraced.error
+      }
+      repairedInput = misbraced.repairedInput
+    }
+  }
   const result = paramsSchema.safeParse(repairedInput)
 
   if (!result.success) {
@@ -1192,6 +1314,7 @@ export async function executeToolCall<T extends ToolName>(
       input,
       providerOptions: params.providerOptions,
     },
+    logger,
   })
 
   // Filter out restricted tools - emit error instead of tool call/result
@@ -1406,7 +1529,7 @@ export async function executeToolCall<T extends ToolName>(
         onResponseChunk({
           type: 'error',
           message:
-            'Spawning `git-committer` is not available yet. The validation/reviewer gate must pass before committing. Wait for the automated gate to complete, then commit.',
+            'Spawning `git-committer` is not available yet. This is normal ordering, not a failure: the validation/reviewer gate re-arms whenever code changes, so a fresh edit sets it back to pending and the committer is withheld until that gate passes for the changed files. The gate runs and clears automatically — do not retry the spawn now. Wait for the gate to report passed for the pending files, then spawn git-committer; the commit will succeed on the next attempt.',
         })
         if (filteredAgents.length === 0) {
           return abortablePreviousToolCallFinished
@@ -1567,7 +1690,7 @@ export async function executeToolCall<T extends ToolName>(
         onResponseChunk({
           type: 'error',
           message:
-            'Spawning `git-committer` is not available yet. The requested commit would stage changes that have not passed the validation/reviewer gate. Validate the working-tree changes first, then commit.',
+            'Spawning `git-committer` is not available yet. This is normal ordering, not a failure: the requested commit would stage changes that have not passed the validation/reviewer gate (a recent edit left working-tree files pending). The gate runs and clears automatically for those files — do not retry the spawn now. Wait for it to report passed, then spawn git-committer; the commit will succeed on the next attempt.',
         })
         if (filteredAgents.length === 0) {
           return abortablePreviousToolCallFinished

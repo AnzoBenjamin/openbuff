@@ -244,4 +244,24 @@ describe('editTransactionParams inputSchema transform — whole-file readCapabil
     expect(decoded.endLine).toBe(4)
     expect(decoded.hash).toBe(getContentHash(wholeFileContent))
   })
+
+  it('outputSchema accepts residual failures with basedOnRead capability', () => {
+    const parsed = editTransactionParams.outputSchema.safeParse([
+      {
+        type: 'json',
+        value: {
+          errorMessage: 'edit_transaction blocked',
+          failures: [
+            {
+              editIndex: 0,
+              path,
+              errorMessage: 'no read authorization',
+              basedOnRead: wholeFileCap,
+            },
+          ],
+        },
+      },
+    ])
+    expect(parsed.success).toBe(true)
+  })
 })

@@ -208,7 +208,7 @@ ${
     ? '- **Live visual analysis:** Use browser-use only for read-only inspection of an already available URL. Do not start dev servers or request browser interactions in plan mode.'
     : '- **Live visual verification:** Visual verification extends beyond web apps. Image artifacts from 3D renders (e.g. Blender frames), image/video exports, generated diagrams, and charts must be inspected with read_image, not inferred from text logs alone. The workflow is: render/export -> poll the background job to completion -> read_image the emitted artifacts -> assess the result -> make a targeted edit -> re-render. Polling (check_job/check_background_agent/read_logs) is only the bridge to artifact inspection; do not re-poll a finished or unchanging job indefinitely. After 2-3 unmatched polls that produce no new actionable artifact or progress, proceed with independent work, cancel/retry with a targeted edit, or ask the user. For web app visual checks specifically, start any long-running dev server through a BACKGROUND basher, keep its returned jobId, use check_job to wait for readiness, then spawn browser-use for screenshots/navigation/interaction.'
 }
-- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead. For ripgrep-style content search, spawn the code-searcher agent (and file-picker for fuzzy file discovery): \`code_search\`/\`find_files_matching_content\` are registered runtime tools but are intentionally not granted to you as root, so calling them directly is rejected. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs \`params.searchQueries\` (an array of { pattern } objects) and basher needs \`params.command\` (a shell string); put these in \`params\`, not only in the prose prompt.
+- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead. For ripgrep-style content search, spawn the code-searcher agent (and file-picker for fuzzy file discovery): \`code_search\`/\`find_files_matching_content\` are registered runtime tools but are intentionally not granted to you as root, so calling them directly is rejected. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs \`params.searchQueries\` (an array of { pattern } objects) and basher needs \`params.command\` (a shell string); put these in \`params\`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).
 
 # Code Editing Mandates
 
@@ -267,11 +267,11 @@ Use the spawn_agents tool to spawn specialized agents to help you complete the u
 - **Thinker delegation:** Spawn thinker only after enough context exists for complex architecture, design tradeoff, risk, debugging strategy, spec/plan critique, or repeated-failure reasoning. Do not use thinker as a substitute for reading files or for straightforward edits.
 - **Release/deployment flow:** Treat releases, deployments, publishing, migrations against shared environments, production-affecting scripts, git commits, and git pushes as high-impact actions. Do not run or ask subagents to run them unless the user explicitly requested that action in this task or confirms after you explain the exact command, target environment, and rollback/verification plan. When requested, follow the deterministic sequence: inspect worktree, fetch remote state/tags, decide rebase/merge with the user when non-fast-forward or conflicts appear, push, wait for CI/CD, trigger the release, verify artifact/tag/package publication, then sync and report local branch state.
 - **Plan artifact maintenance:** In PLAN mode create and maintain durable artifacts; in EXECUTE_PLAN keep STATUS.md and LESSONS.md current at phase boundaries, blocker discovery/resolution, validation/review results, and finalization. Use update_plan_status for incremental STATUS/LESSONS updates and create_plan for SPEC/PLAN rewrites or missing artifacts. Do not update plan artifacts for ordinary implementation mode unless the user requested plan/session work.
-- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use read_files/read_outline/read_subtree/glob/list_directory/query_index for source inspection, inspect_3d_asset/render_3d_preview for 3D assets, read_image for other screenshots/images, edit_3d_asset for guarded Blender changes, edit_transaction for text project mutations, browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool.
+- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use read_files/read_outline/read_subtree/glob/list_directory/query_index for source inspection, inspect_3d_asset/render_3d_preview for 3D assets, read_image for other screenshots/images, edit_3d_asset for guarded Blender changes, edit_transaction for text project mutations, browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. \`run_targeted_validation\` is scoped evidence only — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.
 - **Sequence agents properly:** Keep in mind dependencies when spawning different agents. Don't spawn agents in parallel that depend on each other.
 - **Subagent deadlines:** Omit top-level \`timeout_seconds\` for editor and other productive subagents; omitted and \`-1\` mean no wall-clock deadline. Set a positive deadline only when the user explicitly requests one or the child is intentionally bounded diagnostic work.
 - **Parallel join discipline:** When spawning agents in parallel, wait for every required result before moving to the next dependent phase. A timeout, failed validation, or \`BLOCKING:\` reviewer/security finding blocks completion until repaired or explicitly scoped out.
-- **Validation selection:** Validate every non-trivial or risky edit with the narrowest relevant typecheck/test/lint/build command or configured file-change hooks. Map changed paths to suites deterministically when possible: agents/base2/* -> agents typecheck plus prompt/gate tests or e2e subset when behavior changes; agents/* -> agents typecheck and relevant agent tests; packages/sdk/* -> SDK typecheck/tests; packages/agent-runtime/* -> runtime typecheck/tests; common/* -> common checks plus dependent package typechecks; cli/src/components/* or cli/src/hooks/* -> CLI typecheck plus CLI visual smoke; docs/prompt-only changes -> configured hooks or explicit skip reason. Skip validation only for docs/prompt-only changes, tiny low-risk edits, explicit no-validation modes, or when the user forbids it; state the skip reason. Validation failures/timeouts are blocking and must be repaired or explicitly scoped out.
+- **Validation selection:** Validate every non-trivial or risky edit with the narrowest relevant typecheck/test/lint/build command or configured file-change hooks. Map changed paths to suites deterministically when possible: agents/base2/* -> agents typecheck plus prompt/gate tests or e2e subset when behavior changes; agents/* -> agents typecheck and relevant agent tests; packages/sdk/* -> SDK typecheck/tests; packages/agent-runtime/* -> runtime typecheck/tests; common/* -> common checks plus dependent package typechecks; cli/src/components/* or cli/src/hooks/* -> CLI typecheck plus CLI visual smoke; docs/prompt-only changes -> configured hooks or explicit skip reason. Skip validation only for docs/prompt-only changes, tiny low-risk edits, explicit no-validation modes, or when the user forbids it; state the skip reason. Validation failures/timeouts are blocking and must be repaired or explicitly scoped out. Green basher typechecks or \`run_targeted_validation\` are optional evidence only — never a substitute for the runtime hooks+reviewer gate.
 - **Reviewer selection:** Use the automated reviewer gate for edited code in default mode. Spawn code-reviewer manually only for user-requested extra review, advisory/pre-edit review, significant diffs outside the automated gate, or changed code whose risk warrants another perspective; spawn security-reviewer for auth, crypto, secrets, permissions, injection, sandboxing, path/process/network handling, supply-chain, or production-risk changes; spawn test-writer when behavior changes lack coverage; spawn debugger after repeated validation failure, runtime failure, or unclear crash behavior. Do not duplicate the same post-edit review manually.
 - **Validation/reviewer coordination:** It is fine to run validation bashers and reviewers in parallel only when the reviewer is asked for static code review that explicitly does not depend on validation output. Always wait for both. Treat the final decision as a join of both results: validation failure/timeout blocks completion even if review looks good, and reviewer \`BLOCKING:\` blocks completion even if validation passes. When the review needs validation results, run validation first and include the completed validation summary in the reviewer prompt.
   ${buildArray(
@@ -446,10 +446,12 @@ ${specialistRoutingSection}
       const mutableAgentState = (agentState ?? {}) as Base2AgentState
       const agentId = mutableAgentState.agentId
       const configuredHasNoValidation = config?.hasNoValidation
+      const configuredPlanOnly = config?.planOnly === true
       const runValidationGate =
-        typeof configuredHasNoValidation === 'boolean'
+        !configuredPlanOnly &&
+        (typeof configuredHasNoValidation === 'boolean'
           ? !configuredHasNoValidation
-          : agentId !== 'base2-fast' && agentId !== 'base2-fast-no-validation'
+          : agentId !== 'base2-fast' && agentId !== 'base2-fast-no-validation')
       // M3 (R1a–R1d) automated phase-gate predicates. These mirror the
       // advisory glob list in securityReviewSection (quality-prompt-section.ts)
       // so the automated gate and the advisory prompt agree on what is
@@ -479,13 +481,6 @@ ${specialistRoutingSection}
       const reviewerAgentType = 'code-reviewer'
       const MAX_REPAIR_ROUNDS = 3
       const MAX_REVIEWER_NO_VERDICT_RETRIES = 1
-      // static-review-only concurrency (M3.1): when the reviewer is configured
-      // for static-only review, it can run concurrently with the blocking
-      // validation hooks. Defaults to false so the existing sequential
-      // validation-then-reviewer behavior is preserved.
-      const staticReviewOnlyEnabled = !!(
-        mutableAgentState.base2ActiveWork?.staticReviewOnly ?? false
-      )
       const existingActiveWorkState = mutableAgentState.base2ActiveWork
       const hadPendingGateFiles =
         !!existingActiveWorkState &&
@@ -2125,95 +2120,22 @@ ${specialistRoutingSection}
           break
         }
 
-        // Verification gate: after the model thinks it's done, run configured
-        // file-change hooks (typecheck/lint/test). If any failed, surface the
-        // failures and keep the turn open so the model fixes them. The runtime's
-        // max step limit bounds pathological retry loops; the gate itself must
-        // not silently skip validation after repeated failures.
-        //
-        // static-review-only concurrency (M3.1): when the reviewer is
-        // static-only (base2ActiveWork.staticReviewOnly), spawn it in the
-        // background BEFORE the blocking validation hooks so static review
-        // runs concurrently. The join contract is preserved: a validation
-        // failure still `continue`s below and ignores this background job; we
-        // only `check_background_agent` for its result if validation passes.
+        // Validation runs before the final reviewer because hooks may mutate
+        // generated or formatted output. The exact source and test snapshot is
+        // re-captured at the reviewer spawn boundary below.
         const requiredReviewerAgentType =
           activeWorkState.requiredReviewerRevalidation ?? reviewerAgentType
-        const staticReviewConcurrency =
-          runReviewerGate &&
-          editsHappened &&
-          staticReviewOnlyEnabled &&
-          requiredReviewerAgentType === reviewerAgentType
-        // Fix 1/2/3 (reviewer-gate scoping): the final code-reviewer must only
-        // ever be asked to attest to reviewable *source* files, never
-        // bookkeeping/docs/plan artifacts (e.g. .agents/sessions/**
-        // STATE.json/EVENTS.jsonl/STATUS.md/LESSONS.md). Drive the reviewer's
-        // snapshot details and pending-file attestation off the reviewable
-        // subset so the fingerprint the reviewer echoes matches what
-        // attestation checks. Validation-hook behavior is unchanged; only the
-        // reviewer spawn/attestation scoping uses this subset.
-        const reviewablePendingFiles = selectReviewableGateFiles(
+        let reviewablePendingFiles = selectReviewableGateFiles(
           Array.from(pendingGateFiles),
         )
-        const reviewSnapshotDetails = buildGateSnapshotDetails(
+        let reviewSnapshotDetails = buildGateSnapshotDetails(
           reviewablePendingFiles,
           '',
         )
-        const reviewSnapshotFingerprint = hashGateSnapshotDetails(
+        let reviewSnapshotFingerprint = hashGateSnapshotDetails(
           reviewSnapshotDetails,
         )
-        // Fingerprint of the reviewable subset for the R5 skip-re-review
-        // short-circuit. Equal to reviewSnapshotFingerprint today, but kept
-        // as its own binding so the intent (reviewable-set identity) is clear
-        // and stable if the review snapshot inputs ever change.
-        const reviewableFingerprint = hashGateSnapshotDetails(
-          buildGateSnapshotDetails(reviewablePendingFiles, ''),
-        )
-        // Co-changed test files are excluded from the reviewable fingerprint
-        // set (isReviewableGateFile drops tests), which historically made it
-        // impossible for the reviewer to confirm coverage — it could never see
-        // the changed test file, so it always reported coverage missing/
-        // uncertain and the gate looped. Surface them as readable, additive
-        // "coverage evidence" context. This does NOT enter reviewSnapshot
-        // Fingerprint or attestation (those stay scoped to reviewable source).
-        const coverageEvidenceFiles = selectCoverageEvidenceFiles(
-          Array.from(pendingGateFiles),
-        )
-        const coverageEvidenceDetails = coverageEvidenceFiles.length
-          ? buildGateSnapshotDetails(coverageEvidenceFiles, '')
-          : '(no co-changed test files)'
-        if (staticReviewConcurrency && !activeWorkState.staticReviewerJobId) {
-          const bgReview = yield {
-            toolName: 'spawn_agents',
-            input: {
-              agents: [
-                {
-                  agent_type: requiredReviewerAgentType,
-                  background: true,
-                  prompt: [
-                    'Review the completed default-flow code changes before finalization.',
-                    '',
-                    `Pending changed files: ${reviewablePendingFiles.join(', ') || '(unknown)'}`,
-                    `Snapshot fingerprint (echo exactly): ${reviewSnapshotFingerprint}`,
-                    'Snapshot details (read for file membership; do not echo):',
-                    reviewSnapshotDetails,
-                    'Coverage evidence (co-changed tests; readable and citable, not part of the reviewed fingerprint):',
-                    coverageEvidenceDetails,
-                    'Validation gate summary: Reviewer running concurrently with validation (static-review-only mode).',
-                    '',
-                    'Return the required structured review object. Echo snapshotFingerprint exactly, list every reviewed file, evaluate all review dimensions, and map every user requirement to evidence. Co-changed test files are listed under "Coverage evidence" below; they are readable and citable even though they are not part of the reviewed fingerprint. Test-coverage requirements are satisfied (not uncertain) when a Coverage evidence test file covers the changed behavior — cite that test file and the covering test name(s) as the requirement evidence. Use coverage: missing only when no covering test exists in the Coverage evidence list or anywhere in the repo, and requirement status uncertain only when you could not inspect a listed Coverage evidence test file at all.',
-                  ].join('\n'),
-                },
-              ],
-            },
-          } as any
-          const bgJobId = extractBackgroundAgentJobId(
-            (bgReview as any) && (bgReview as any).toolResult,
-          )
-          if (bgJobId) {
-            activeWorkState.staticReviewerJobId = bgJobId
-          }
-        }
+        let reviewableFingerprint = reviewSnapshotFingerprint
         let validationSummary =
           'No file changes were detected, so no validation hooks ran.'
         const validationInfrastructureBypassed =
@@ -2777,6 +2699,20 @@ ${specialistRoutingSection}
           activeWorkState.currentPhase = 'awaiting_review'
         }
 
+        // Validation has completed. Re-capture the exact source+test snapshot
+        // immediately before any final reviewer spawn or skip decision.
+        reviewablePendingFiles = selectReviewableGateFiles(
+          Array.from(pendingGateFiles),
+        )
+        reviewSnapshotDetails = buildGateSnapshotDetails(
+          reviewablePendingFiles,
+          '',
+        )
+        reviewSnapshotFingerprint = hashGateSnapshotDetails(
+          reviewSnapshotDetails,
+        )
+        reviewableFingerprint = reviewSnapshotFingerprint
+
         let reviewerFinalizationVerdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | '' =
           reviewerProtocolBypassAuthorized ? 'NON_BLOCKING' : ''
         if (reviewerProtocolBypassAuthorized) {
@@ -2882,52 +2818,29 @@ ${specialistRoutingSection}
         ) {
           activeWorkState.lastReviewerGateSkipReason = ''
           markActiveWorkStateChanged()
-          let reviewerToolResult: unknown
-          if (staticReviewConcurrency && activeWorkState.staticReviewerJobId) {
-            const checkResult = yield {
-              toolName: 'check_background_agent',
-              input: {
-                jobId: activeWorkState.staticReviewerJobId,
-                timeout_seconds: 120,
-              },
-            } as any
-            // check_background_agent returns { result } where `result` is the
-            // subagent's final output (same shape a foreground spawn_agents
-            // toolResult wraps). Wait for the background reviewer to settle
-            // rather than matching only one verdict token: LOOKS_GOOD and
-            // NON_BLOCKING both pass, while BLOCKING must be parsed below as
-            // actionable feedback. On error/timeout with no result, fall
-            // through to the existing 'did not return LOOKS_GOOD/NON_BLOCKING'
-            // blocked handling below.
-            reviewerToolResult =
-              (checkResult as any)?.toolResult?.result ??
-              (checkResult as any)?.toolResult
-          } else {
-            const review = yield {
-              toolName: 'spawn_agents',
-              input: {
-                agents: [
-                  {
-                    agent_type: requiredReviewerAgentType,
-                    prompt: [
-                      `Review the completed ${requiredReviewerAgentType} changes before finalization.`,
-                      '',
-                      `Pending changed files: ${reviewablePendingFiles.join(', ') || '(unknown)'}`,
-                      `Snapshot fingerprint (echo exactly): ${reviewSnapshotFingerprint}`,
-                      'Snapshot details (read for file membership; do not echo):',
-                      reviewSnapshotDetails,
-                      'Coverage evidence (co-changed tests; readable and citable, not part of the reviewed fingerprint):',
-                      coverageEvidenceDetails,
-                      `Validation gate summary: ${validationSummary}`,
-                      '',
-                      'Return the required structured review object. Echo snapshotFingerprint exactly, list every reviewed file, evaluate all review dimensions, and map every user requirement to evidence. Co-changed test files are listed under "Coverage evidence" below; they are readable and citable even though they are not part of the reviewed fingerprint. Test-coverage requirements are satisfied (not uncertain) when a Coverage evidence test file covers the changed behavior — cite that test file and the covering test name(s) as the requirement evidence. Use coverage: missing only when no covering test exists in the Coverage evidence list or anywhere in the repo, and requirement status uncertain only when you could not inspect a listed Coverage evidence test file at all.',
-                    ].join('\n'),
-                  },
-                ],
-              },
-            } as any
-            reviewerToolResult = (review as any) && (review as any).toolResult
-          }
+          const review = yield {
+            toolName: 'spawn_agents',
+            input: {
+              agents: [
+                {
+                  agent_type: requiredReviewerAgentType,
+                  prompt: [
+                    `Review the completed ${requiredReviewerAgentType} changes before finalization.`,
+                    '',
+                    `Pending changed files: ${reviewablePendingFiles.join(', ') || '(unknown)'}`,
+                    `Snapshot fingerprint (echo exactly): ${reviewSnapshotFingerprint}`,
+                    'Snapshot details (read for file membership; do not echo):',
+                    reviewSnapshotDetails,
+                    `Validation gate summary: ${validationSummary}`,
+                    '',
+                    'Return the required structured review object. Echo snapshotFingerprint exactly, list every pending changed file in reviewedFiles (including tests), evaluate all review dimensions, and map every user requirement to evidence. Changed tests are first-class review targets and may also be cited as coverage evidence. Use coverage: missing only when no covering test exists in the changed files or elsewhere in the repo.',
+                  ].join('\n'),
+                },
+              ],
+            },
+          } as any
+          let reviewerToolResult: unknown =
+            (review as any) && (review as any).toolResult
           const reviewerCrashedBeforeAttestation =
             detectReviewerCrash(reviewerToolResult)
           let attestationIssues = reviewerCrashedBeforeAttestation
@@ -2961,8 +2874,6 @@ ${specialistRoutingSection}
                       `Snapshot fingerprint (echo exactly): ${reviewSnapshotFingerprint}`,
                       'Snapshot details (read for file membership; do not echo):',
                       reviewSnapshotDetails,
-                      'Coverage evidence (co-changed tests; readable and citable, not part of the reviewed fingerprint):',
-                      coverageEvidenceDetails,
                       `Validation gate summary: ${validationSummary}`,
                       '',
                       'Protocol errors from the prior response:',
@@ -3017,6 +2928,18 @@ ${specialistRoutingSection}
           activeWorkState.reviewerProtocolRetryCount = 0
           const blockers = collectReviewerBlockers(reviewerToolResult)
           if (blockers.length > 0) {
+            // Coverage-style findings (a missing/uncertain test-coverage gap)
+            // are not code-diagnostic repairs: repair-editor cannot author the
+            // missing assertions and would return an empty receipt, parking the
+            // gate in blocked. Route an ALL-coverage set exclusively to
+            // test-writer, which can author the tests. Mixed or code-only sets
+            // keep the repair-editor path and converge across iterations.
+            const allCoverageFindings = blockers.every(
+              isTestCoverageReviewerFinding,
+            )
+            const repairAgentLabel = allCoverageFindings
+              ? 'Test-writer'
+              : 'Repair-editor'
             activeWorkState.reviewerRepairRoundCount = Number(
               activeWorkState.reviewerRepairRoundCount ?? 0,
             ) + 1
@@ -3043,7 +2966,7 @@ ${specialistRoutingSection}
               input: {
                 role: 'user',
                 content: [
-                  `Reviewer gate: ${reviewerAgentType} returned blocking feedback. The harness will send these exact findings to repair-editor:`,
+                  `Reviewer gate: ${reviewerAgentType} returned blocking feedback. The harness will send these exact findings to ${allCoverageFindings ? 'test-writer' : 'repair-editor'}:`,
                   '',
                   ...blockers,
                   '',
@@ -3058,97 +2981,187 @@ ${specialistRoutingSection}
             activeWorkState.repairSessionId = reviewerRepairSessionId
             activeWorkState.requiredReviewerRevalidation = requiredReviewerAgentType
             activeWorkState.currentPhase = 'repair_loop'
-            activeWorkState.nextRequiredAction =
-              'Repair-editor must address every open reviewer finding, then targeted validation and a fresh reviewer pass must run.'
+            activeWorkState.nextRequiredAction = allCoverageFindings
+              ? 'Test-writer must add coverage for every open reviewer finding, then targeted validation and a fresh reviewer pass must run.'
+              : 'Repair-editor must address every open reviewer finding, then targeted validation and a fresh reviewer pass must run.'
             const reviewerRepairResult = yield {
               toolName: 'spawn_agents',
               input: {
                 agents: [
-                  {
-                    agent_type: 'repair-editor',
-                    handoff: {
-                      schemaVersion: 1,
-                      taskId: reviewerRepairSessionId,
-                      role: 'repair-editor',
-                      objective:
-                        'Resolve every open reviewer finding without unrelated changes. Read the current file contents before editing; conversational summaries are not source evidence.',
-                      requirements: activeWorkState.openReviewerFindings.map(
-                        ({ id, text }) => ({ id, text, required: true }),
-                      ),
-                      acceptanceCriteria:
-                        activeWorkState.openReviewerFindings.map(({ id }) => ({
-                          id: `clear-${id}`,
-                          behavior: `Finding ${id} is addressed in the live workspace.`,
-                          verification:
-                            'Targeted validation passes and a fresh snapshot-bound reviewer clears the finding.',
-                        })),
-                      context: [],
-                      invariants: [
-                        'Read every target from the live filesystem before editing.',
-                        'Treat every finding ID as open until a fresh reviewer clears it.',
-                      ],
-                      nonGoals: [
-                        'Unrelated diagnostics, refactors, or cleanup.',
-                      ],
-                      risks: [
-                        'Reviewer findings may be stale if the workspace snapshot changed.',
-                      ],
-                      unknowns: [],
-                      findings: activeWorkState.openReviewerFindings.map(
-                        ({ id, text, files, snapshotFingerprint }) => ({
-                          id,
-                          text,
-                          files,
-                          snapshotFingerprint,
-                        }),
-                      ),
-                      permissions: {
-                        readablePaths: repairEditorReadablePaths([
-                          ...pendingGateFiles,
-                          ...activeWorkState.openReviewerFindings.flatMap(
-                            (finding: { files?: string[] }) =>
-                              finding.files ?? [],
-                          ),
-                        ]),
-                        writablePaths: Array.from(
-                          new Set([
-                            ...pendingGateFiles,
-                            ...activeWorkState.openReviewerFindings.flatMap(
-                              (finding: { files?: string[] }) =>
-                                finding.files ?? [],
+                  allCoverageFindings
+                    ? {
+                        agent_type: 'test-writer',
+                        handoff: {
+                          schemaVersion: 1,
+                          taskId: reviewerRepairSessionId,
+                          role: 'test-writer',
+                          objective:
+                            'Author or extend tests that assert the changed behavior so the reviewer test-coverage dimension is satisfied. For each finding, add or extend a case in the relevant *.test.* file exercising the behavior-changing logic in the gate changed files. Do not modify production source unless strictly required to make a test observable.',
+                          requirements:
+                            activeWorkState.openReviewerFindings.map(
+                              ({ id, text }) => ({ id, text, required: true }),
                             ),
-                          ]),
-                        ),
-                        allowedTools: [
-                          'read_files',
-                          'read_outline',
-                          'edit_transaction',
-                        ],
+                          acceptanceCriteria:
+                            activeWorkState.openReviewerFindings.map(
+                              ({ id }) => ({
+                                id: `clear-${id}`,
+                                behavior: `Finding ${id} is addressed by new or extended test coverage.`,
+                                verification:
+                                  'Targeted validation passes and a fresh snapshot-bound reviewer clears the finding.',
+                              }),
+                            ),
+                          context: [],
+                          invariants: [
+                            'Read every target from the live filesystem before editing.',
+                            'Treat every finding ID as open until a fresh reviewer clears it.',
+                          ],
+                          nonGoals: [
+                            'Unrelated diagnostics, refactors, or cleanup.',
+                          ],
+                          risks: [
+                            'Reviewer findings may be stale if the workspace snapshot changed.',
+                          ],
+                          unknowns: [],
+                          findings: activeWorkState.openReviewerFindings.map(
+                            ({ id, text, files, snapshotFingerprint }) => ({
+                              id,
+                              text,
+                              files,
+                              snapshotFingerprint,
+                            }),
+                          ),
+                          permissions: {
+                            readablePaths: repairEditorReadablePaths([
+                              ...pendingGateFiles,
+                              ...activeWorkState.openReviewerFindings.flatMap(
+                                (finding: { files?: string[] }) =>
+                                  finding.files ?? [],
+                              ),
+                            ]),
+                            writablePaths: Array.from(
+                              new Set([
+                                ...pendingGateFiles,
+                                ...activeWorkState.openReviewerFindings.flatMap(
+                                  (finding: { files?: string[] }) =>
+                                    finding.files ?? [],
+                                ),
+                              ]),
+                            ),
+                            allowedTools: [
+                              'read_files',
+                              'read_outline',
+                              'write_file',
+                              'str_replace',
+                              'set_output',
+                            ],
+                          },
+                          workspaceRevision:
+                            mutableAgentState.workspaceState?.revision,
+                          workspaceSnapshotId:
+                            mutableAgentState.workspaceState?.snapshotId,
+                          artifacts: [],
+                          successCriteria: [
+                            'Writer receipt reports changed test files covering the findings.',
+                          ],
+                          constraints: [
+                            'Keep every edit within the pending gate file set.',
+                          ],
+                        },
+                        prompt: [
+                          'Add or extend the test coverage that satisfies the blocking reviewer findings below.',
+                          'Treat every finding ID as open until a fresh reviewer clears it.',
+                          'Read the changed source and the relevant existing test file before editing.',
+                          '',
+                          ...activeWorkState.openReviewerFindings.map(
+                            (finding) => `${finding.id}: ${finding.text}`,
+                          ),
+                        ].join('\n'),
+                      }
+                    : {
+                        agent_type: 'repair-editor',
+                        handoff: {
+                          schemaVersion: 1,
+                          taskId: reviewerRepairSessionId,
+                          role: 'repair-editor',
+                          objective:
+                            'Resolve every open reviewer finding without unrelated changes. Read the current file contents before editing; conversational summaries are not source evidence.',
+                          requirements: activeWorkState.openReviewerFindings.map(
+                            ({ id, text }) => ({ id, text, required: true }),
+                          ),
+                          acceptanceCriteria:
+                            activeWorkState.openReviewerFindings.map(({ id }) => ({
+                              id: `clear-${id}`,
+                              behavior: `Finding ${id} is addressed in the live workspace.`,
+                              verification:
+                                'Targeted validation passes and a fresh snapshot-bound reviewer clears the finding.',
+                            })),
+                          context: [],
+                          invariants: [
+                            'Read every target from the live filesystem before editing.',
+                            'Treat every finding ID as open until a fresh reviewer clears it.',
+                          ],
+                          nonGoals: [
+                            'Unrelated diagnostics, refactors, or cleanup.',
+                          ],
+                          risks: [
+                            'Reviewer findings may be stale if the workspace snapshot changed.',
+                          ],
+                          unknowns: [],
+                          findings: activeWorkState.openReviewerFindings.map(
+                            ({ id, text, files, snapshotFingerprint }) => ({
+                              id,
+                              text,
+                              files,
+                              snapshotFingerprint,
+                            }),
+                          ),
+                          permissions: {
+                            readablePaths: repairEditorReadablePaths([
+                              ...pendingGateFiles,
+                              ...activeWorkState.openReviewerFindings.flatMap(
+                                (finding: { files?: string[] }) =>
+                                  finding.files ?? [],
+                              ),
+                            ]),
+                            writablePaths: Array.from(
+                              new Set([
+                                ...pendingGateFiles,
+                                ...activeWorkState.openReviewerFindings.flatMap(
+                                  (finding: { files?: string[] }) =>
+                                    finding.files ?? [],
+                                ),
+                              ]),
+                            ),
+                            allowedTools: [
+                              'read_files',
+                              'read_outline',
+                              'edit_transaction',
+                            ],
+                          },
+                          workspaceRevision:
+                            mutableAgentState.workspaceState?.revision,
+                          workspaceSnapshotId:
+                            mutableAgentState.workspaceState?.snapshotId,
+                          artifacts: [],
+                          successCriteria: [
+                            'All finding IDs are cleared by a fresh reviewer receipt.',
+                          ],
+                          constraints: [
+                            'Keep every edit within the pending gate file set.',
+                          ],
+                        },
+                        prompt: [
+                          'Repair the blocking reviewer findings below.',
+                          'Treat every finding ID as open until a fresh reviewer clears it.',
+                          'Do not claim a finding is stale because unrelated tests or another task passed.',
+                          'Read every target from the live filesystem before editing.',
+                          'Keep unrelated diagnostics secondary to this finding set.',
+                          '',
+                          ...activeWorkState.openReviewerFindings.map(
+                            (finding) => `${finding.id}: ${finding.text}`,
+                          ),
+                        ].join('\n'),
                       },
-                      workspaceRevision:
-                        mutableAgentState.workspaceState?.revision,
-                      workspaceSnapshotId:
-                        mutableAgentState.workspaceState?.snapshotId,
-                      artifacts: [],
-                      successCriteria: [
-                        'All finding IDs are cleared by a fresh reviewer receipt.',
-                      ],
-                      constraints: [
-                        'Keep every edit within the pending gate file set.',
-                      ],
-                    },
-                    prompt: [
-                      'Repair the blocking reviewer findings below.',
-                      'Treat every finding ID as open until a fresh reviewer clears it.',
-                      'Do not claim a finding is stale because unrelated tests or another task passed.',
-                      'Read every target from the live filesystem before editing.',
-                      'Keep unrelated diagnostics secondary to this finding set.',
-                      '',
-                      ...activeWorkState.openReviewerFindings.map(
-                        (finding) => `${finding.id}: ${finding.text}`,
-                      ),
-                    ].join('\n'),
-                  },
                 ],
               },
             } as any
@@ -3158,8 +3171,8 @@ ${specialistRoutingSection}
             if (repairCrash) {
               activeWorkState.currentPhase = 'blocked'
               activeWorkState.nextRequiredAction =
-                'Repair-editor failed while addressing reviewer findings. Inspect the failure before retrying.'
-              activeWorkState.latestWorkSummary = `Repair-editor failed: ${repairCrash}`
+                `${repairAgentLabel} failed while addressing reviewer findings. Inspect the failure before retrying.`
+              activeWorkState.latestWorkSummary = `${repairAgentLabel} failed: ${repairCrash}`
               markActiveWorkStateChanged()
               break
             }
@@ -3188,7 +3201,7 @@ ${specialistRoutingSection}
             ) {
               activeWorkState.currentPhase = 'blocked'
               activeWorkState.nextRequiredAction =
-                'Repair-editor did not return a completed receipt addressing every open reviewer finding.'
+                `${repairAgentLabel} did not return a completed receipt addressing every open reviewer finding.`
               activeWorkState.latestWorkSummary =
                 'Reviewer repair receipt was incomplete or missing.'
               markActiveWorkStateChanged()
@@ -3214,7 +3227,7 @@ ${specialistRoutingSection}
             if (repairedSnapshotFingerprint === reviewSnapshotFingerprint) {
               activeWorkState.currentPhase = 'blocked'
               activeWorkState.nextRequiredAction =
-                'Repair-editor made no snapshot-visible progress on the reviewer findings. Stop retrying and inspect the finding or handoff.'
+                `${repairAgentLabel} made no snapshot-visible progress on the reviewer findings. Stop retrying and inspect the finding or handoff.`
               activeWorkState.latestWorkSummary =
                 'Reviewer repair produced no workspace fingerprint change.'
               markActiveWorkStateChanged()
@@ -3239,7 +3252,7 @@ ${specialistRoutingSection}
               activeWorkState.currentPhase = 'awaiting_review'
               activeWorkState.nextRequiredAction = ''
               activeWorkState.latestWorkSummary =
-                'Repair-editor addressed reviewer findings; validation re-ran inline and a fresh reviewer pass is required.'
+                `${repairAgentLabel} addressed reviewer findings; validation re-ran inline and a fresh reviewer pass is required.`
               markActiveWorkStateChanged()
               emitGateTelemetry({
                 currentPhase: 'awaiting_review',
@@ -3255,7 +3268,7 @@ ${specialistRoutingSection}
               activeWorkState.lastReviewerGateSkipReason =
                 'validation-hook-failures'
               activeWorkState.currentPhase = 'blocked'
-              activeWorkState.latestWorkSummary = `Repair-editor addressed reviewer findings but ${reFailures.length} validation failure(s) remain.`
+              activeWorkState.latestWorkSummary = `${repairAgentLabel} addressed reviewer findings but ${reFailures.length} validation failure(s) remain.`
               markActiveWorkStateChanged()
               emitGateTelemetry({
                 currentPhase: 'blocked',
@@ -3270,7 +3283,7 @@ ${specialistRoutingSection}
                 input: {
                   role: 'user',
                   content: [
-                    `Repair-editor addressed the reviewer findings but ${reFailures.length} validation failure(s) remain. Fix these before ending your turn:`,
+                    `${repairAgentLabel} addressed the reviewer findings but ${reFailures.length} validation failure(s) remain. Fix these before ending your turn:`,
                     '',
                     ...reFailures,
                     '',
@@ -3559,8 +3572,10 @@ ${specialistRoutingSection}
           continue
         }
         if (editsHappened) {
-          activeWorkState.lastReviewerGateSkipReason =
-            'validation-and-reviewer-gates-disabled'
+          const disabledGateReason = configuredPlanOnly
+            ? 'plan-only-automatic-finalization-gate-disabled'
+            : 'validation-and-reviewer-gates-disabled'
+          activeWorkState.lastReviewerGateSkipReason = disabledGateReason
           markActiveWorkStateChanged()
           emitGateTelemetry({
             currentPhase: activeWorkState.currentPhase,
@@ -3568,19 +3583,21 @@ ${specialistRoutingSection}
             pendingFiles: Array.from(pendingGateFiles),
             reviewerStatus: 'skipped',
             validationStatus: 'skipped',
-            skipReason: 'validation-and-reviewer-gates-disabled',
+            skipReason: disabledGateReason,
           })
           yield {
             toolName: 'add_message',
             input: {
               role: 'user',
               content: [
-                'Validation and reviewer gates are disabled for this agent mode; skipping automated gate checks even though edits were detected.',
+                configuredPlanOnly
+                  ? 'PLAN-only mode disables the automatic validation/reviewer finalization gate; manual reviewer-family analysis remains available.'
+                  : 'Validation and reviewer gates are disabled for this agent mode; skipping automated gate checks even though edits were detected.',
                 `Pending edited files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`,
                 formatGateStateBlock(
                   'validation/reviewer',
                   'skipped',
-                  `validation-and-reviewer-gates-disabled: skipped automated gate checks for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`,
+                  `${disabledGateReason}: skipped automated gate checks for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`,
                 ),
               ].join('\n'),
             },
@@ -4197,12 +4214,10 @@ ${specialistRoutingSection}
       // Kept byte-identical (minus the export keyword) because handleSteps is
       // serialized via .toString() + new Function(...) and cannot reference
       // module-scope imports; a parity test asserts behavioral equality.
-      // Returns true only for reviewable source files; excludes tests,
-      // generated code, docs, config/data (.jsonl bookkeeping like
-      // EVENTS.jsonl), .env files, and docs/ / evals/ / .agents/ paths.
+      // Returns true for reviewable source and test files; excludes generated
+      // code, docs, config/data (.jsonl bookkeeping like EVENTS.jsonl), .env
+      // files, and docs/ / evals/ / .agents/ paths.
       function isReviewableGateFile(filePath: string): boolean {
-        if (/__tests__\//.test(filePath)) return false
-        if (/\.(test|spec)\.(?:tsx?|jsx?|mjs|cjs)$/.test(filePath)) return false
         if (/\.generated\.tsx?$/.test(filePath)) return false
         if (/\.(md|mdx|json|jsonl|yml|yaml|toml)$/.test(filePath)) return false
         if (/(^|\/)\.env($|\.)/.test(filePath)) return false
@@ -5496,34 +5511,16 @@ ${specialistRoutingSection}
         return remaining
       }
 
-      function extractBackgroundAgentJobId(
-        toolResult: unknown,
-      ): string | undefined {
-        // The background spawn_agents report is an array of tool-result parts;
-        // the background entry has value.background === true with a jobId. Also
-        // tolerate a direct object shape (value or the part itself) so this
-        // stays robust to small runtime report-shape variations.
-        const candidates: unknown[] = []
-        if (Array.isArray(toolResult)) {
-          for (const part of toolResult) {
-            const value =
-              part && (part as any).type === 'json' ? (part as any).value : part
-            candidates.push(value)
-          }
-        } else if (toolResult && typeof toolResult === 'object') {
-          candidates.push((toolResult as any).value ?? toolResult)
-        }
-        for (const value of candidates) {
-          if (
-            value &&
-            typeof value === 'object' &&
-            (value as any).background === true &&
-            typeof (value as any).jobId === 'string'
-          ) {
-            return (value as any).jobId
-          }
-        }
-        return undefined
+      // Inline mirror of isTestCoverageReviewerFinding in
+      // agents/base2/gate-reviewer.ts (all-coverage → exclusive test-writer).
+      // Keep in sync: handleSteps is serialized, so this helper cannot depend
+      // on imports.
+      function isTestCoverageReviewerFinding(text: string): boolean {
+        if (typeof text !== 'string') return false
+        const t = text.toLowerCase()
+        if (t.includes('test coverage')) return true
+        if (t.includes('coverage') && /\.test\.[a-z0-9]+/.test(t)) return true
+        return false
       }
 
       function collectReviewerBlockers(toolResult: unknown): string[] {

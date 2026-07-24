@@ -55,11 +55,17 @@ export function strictEditAuthorizationError(params: {
   allowScopedCapability?: boolean
   authorizationWasStale?: boolean
   wholeFileRequired?: boolean
+  /** Optional whole-file capability token to echo for recovery without a re-read round-trip. */
+  freshReadCapability?: string
 }):
   | {
       errorMessage: string
       errorCode: 'fresh_read_required'
-      recovery: { tool: 'read_files'; input: { paths: string[] } }
+      recovery: {
+        tool: 'read_files'
+        input: { paths: string[] }
+        basedOnRead?: string
+      }
     }
   | undefined {
   const {
@@ -71,6 +77,7 @@ export function strictEditAuthorizationError(params: {
     allowScopedCapability = true,
     authorizationWasStale = false,
     wholeFileRequired = false,
+    freshReadCapability,
   } = params
   const prior = getEditRereadRequirement(fileProcessingState, path)
   const recoveringFromFailedEdit = Boolean(
@@ -83,6 +90,9 @@ export function strictEditAuthorizationError(params: {
   ) {
     return undefined
   }
+  // Fresh hash match authorizes even when a prior context_compacted (or other)
+  // reread requirement is still recorded — callers clear it after a successful
+  // hash-fresh check.
   if (hasFreshWholeFileAuthorization) return undefined
   if (allowScopedCapability && hasScopedCapability) return undefined
 
@@ -100,10 +110,19 @@ export function strictEditAuthorizationError(params: {
   const scopeNote = wholeFileRequired
     ? ' A prior range-anchored edit or scoped range capability cannot authorize a whole-file overwrite.'
     : ' A scoped edit may instead provide the fresh capability/hash returned by read_files.'
+  // Prefer capability-retry when a whole-file token is already available; keep
+  // read_files only as the secondary path when no capability can be echoed.
+  const nextLine = freshReadCapability
+    ? `Next: retry with basedOnRead set to the capability below on the next edit (write_file basedOnRead, or basedOnRead on every str_replace replacement). Do not exploratory re-read first when basedOnRead is provided.\nbasedOnRead="${freshReadCapability}"`
+    : `Next: call read_files with paths: [${JSON.stringify(path)}].`
   return {
-    errorMessage: `${firstLine}\nNext: call read_files with paths: [${JSON.stringify(path)}].${scopeNote}`,
+    errorMessage: `${firstLine}\n${nextLine}${scopeNote}`,
     errorCode: 'fresh_read_required',
-    recovery: { tool: 'read_files', input: { paths: [path] } },
+    recovery: {
+      tool: 'read_files',
+      input: { paths: [path] },
+      ...(freshReadCapability ? { basedOnRead: freshReadCapability } : {}),
+    },
   }
 }
 

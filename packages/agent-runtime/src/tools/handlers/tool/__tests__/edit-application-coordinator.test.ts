@@ -108,6 +108,73 @@ describe('edit application coordinator', () => {
     )
   })
 
+  it('confirms an applied transaction when a no-op path is excluded from confirmationPaths', async () => {
+    const clientOutput = [
+      {
+        type: 'json',
+        value: {
+          kind: 'file_mutation_result',
+          version: 1,
+          operationId: 'operation',
+          outcome: 'applied',
+          actions: [
+            {
+              actionId: 'operation:0',
+              index: 0,
+              action: 'update',
+              path: 'a.ts',
+              outcome: 'applied',
+              beforeHash: 'before',
+              afterHash: 'after',
+            },
+          ],
+          authorityTier: 'portable_path',
+          receiptId: 'operation',
+          errors: [],
+          freshCapabilities: [],
+        },
+      },
+    ] as any
+
+    // b.ts resolved to a no-op and was excluded from client changes, so the
+    // client never emits an `applied` action for it. Scoping confirmation to
+    // only the paths that actually changed lets the transaction be confirmed.
+    const state = getFileProcessingValues({
+      promisesByPath: { 'a.ts': [], 'b.ts': [] },
+    })
+    let committed = false
+    const result = await coordinateEditApplication({
+      toolName: 'edit_transaction',
+      fileProcessingState: state,
+      paths: ['a.ts', 'b.ts'],
+      confirmationPaths: ['a.ts'],
+      rejectionRequiresRead: false,
+      apply: async () => clientOutput,
+      onApplied: () => {
+        committed = true
+      },
+    })
+
+    expect(result.status).toBe('applied')
+    expect(committed).toBe(true)
+
+    // Without confirmationPaths the default requires BOTH paths, so the same
+    // output is wrongly reported as rejected — this locks in that the scoping
+    // is what fixes the false-negative.
+    const defaultState = getFileProcessingValues({
+      promisesByPath: { 'a.ts': [], 'b.ts': [] },
+    })
+    const defaultResult = await coordinateEditApplication({
+      toolName: 'edit_transaction',
+      fileProcessingState: defaultState,
+      paths: ['a.ts', 'b.ts'],
+      rejectionRequiresRead: false,
+      apply: async () => clientOutput,
+    })
+
+    expect(defaultResult.status).toBe('rejected')
+  })
+
   it('drops syntax-rejected prepared state without revoking fresh authorization', async () => {
     const state = getFileProcessingValues({
       promisesByPath: { 'a.ts': [] },

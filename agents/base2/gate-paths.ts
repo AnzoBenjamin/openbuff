@@ -66,16 +66,12 @@ export function gateFileSetsEqual(left: string[], right: string[]): boolean {
   return left.every((file) => rightFiles.has(file))
 }
 
-// Returns true only for reviewable source files. Everything else — tests,
-// generated code, docs, config/data files (including .jsonl bookkeeping like
-// EVENTS.jsonl), .env files, and anything under docs/, evals/, or .agents/ —
-// is excluded so the final code-reviewer gate never fires on
-// bookkeeping/docs/plan artifacts. Mirrors the exclusion style of
-// isPublicApiSourceFile in base2.ts but ALSO drops `.jsonl` and `.env`
-// basenames. Operates on an already-normalized path (caller normalizes).
+// Returns true for reviewable source and test files. Generated code, docs,
+// config/data files (including .jsonl bookkeeping like EVENTS.jsonl), .env
+// files, and anything under docs/, evals/, or .agents/ remain excluded so the
+// final code-reviewer gate never attests to bookkeeping/docs/plan artifacts.
+// Operates on an already-normalized path (caller normalizes).
 export function isReviewableGateFile(filePath: string): boolean {
-  if (/__tests__\//.test(filePath)) return false
-  if (/\.(test|spec)\.(?:tsx?|jsx?|mjs|cjs)$/.test(filePath)) return false
   if (/\.generated\.tsx?$/.test(filePath)) return false
   if (/\.(md|mdx|json|jsonl|yml|yaml|toml)$/.test(filePath)) return false
   if (/(^|\/)\.env($|\.)/.test(filePath)) return false
@@ -101,11 +97,9 @@ export function selectReviewableGateFiles(files: string[]): string[] {
   return reviewableFiles
 }
 
-// Co-changed test files (the complement of isReviewableGateFile's test
-// exclusion). These are surfaced to the final reviewer as readable
-// "coverage evidence" so it can confirm the changed behavior is tested,
-// WITHOUT adding tests to the reviewed-for-defects fingerprint set.
-// Operates on an already-normalized path (caller normalizes).
+// Co-changed test files remain identifiable for coverage-specific prompting,
+// but they are also first-class reviewable files and participate in the final
+// reviewer fingerprint and reviewedFiles attestation.
 export function isCoverageEvidenceFile(filePath: string): boolean {
   if (/__tests__\//.test(filePath)) return true
   if (/\.(test|spec)\.(?:tsx?|jsx?|mjs|cjs)$/.test(filePath)) return true

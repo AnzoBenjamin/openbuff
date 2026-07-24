@@ -1,8 +1,16 @@
 import { AbortError } from '@codebuff/common/util/error'
-import { getContentHash } from '@codebuff/common/util/content-hash'
+import {
+  decodeReadCapabilityToken,
+  encodeReadCapabilityToken,
+  getContentHash,
+  normalizeLineEndings,
+  readCapabilityMatchesScope,
+} from '@codebuff/common/util/content-hash'
 
 import { coordinateEditApplication } from './edit-application-coordinator'
 import {
+  clearEditRereadRequirement,
+  getEditRereadRequirement,
   markEditRequiresFreshRead,
   strictEditAuthorizationError,
 } from './edit-read-state'
@@ -270,7 +278,7 @@ export const handleWriteFile = (async (
     writeToClient,
   } = params
   const path = normalizeToolPath(toolCall.input.path)
-  const { content } = toolCall.input
+  const { content, basedOnRead } = toolCall.input
 
   if (!path) {
     return {
@@ -339,23 +347,161 @@ export const handleWriteFile = (async (
       initialContent = await getExistingDiskContent()
     }
 
+    const projectId =
+      (params as { fileContext?: { projectRoot?: string } }).fileContext
+        ?.projectRoot ?? ''
+    const runId = (params as { runId?: string }).runId ?? ''
+    const mintWholeFileCapability = (fileContent: string) =>
+      encodeReadCapabilityToken({
+        startLine: 1,
+        endLine: normalizeLineEndings(fileContent).split('\n').length,
+        hash: getContentHash(fileContent),
+        scope: {
+          projectId,
+          path,
+          runId,
+        },
+      })
+
+    /**
+     * Validate an explicit whole-file-covering basedOnRead for overwrite.
+     * Partial ranges never authorize; hash/scope must match current content.
+     * On success: grant sticky + clear reread markers (including context_compacted).
+     * Never auto-rereads — capability or sticky only.
+     */
+    const tryAuthorizeFromBasedOnRead = (
+      fileContent: string,
+    ): { ok: true } | { ok: false; error: string } => {
+      if (!basedOnRead) {
+        return { ok: false, error: 'missing basedOnRead' }
+      }
+      const decoded = decodeReadCapabilityToken(basedOnRead)
+      if (typeof decoded === 'string') {
+        const freshReadCapability = mintWholeFileCapability(fileContent)
+        return {
+          ok: false,
+          error: `${decoded}\nbasedOnRead="${freshReadCapability}"`,
+        }
+      }
+      const scope = { projectId, path, runId }
+      if (!readCapabilityMatchesScope(decoded, scope)) {
+        const freshReadCapability = mintWholeFileCapability(fileContent)
+        return {
+          ok: false,
+          error: `write_file blocked for ${path}: basedOnRead belongs to a different project, path, or agent run. Re-read the whole file and pass the fresh capability.\nbasedOnRead="${freshReadCapability}"`,
+        }
+      }
+      const lineCount = normalizeLineEndings(fileContent).split('\n').length
+      if (decoded.startLine !== 1 || decoded.endLine !== lineCount) {
+        const freshReadCapability = mintWholeFileCapability(fileContent)
+        return {
+          ok: false,
+          error: `write_file blocked for ${path}: a range capability cannot authorize a whole-file overwrite (capability covers lines ${decoded.startLine}-${decoded.endLine}; file has ${lineCount} lines). Pass only a whole-file-covering cap.v3 from a complete paths or full-file range read.\nbasedOnRead="${freshReadCapability}"`,
+        }
+      }
+      if (decoded.hash !== getContentHash(fileContent)) {
+        const freshReadCapability = mintWholeFileCapability(fileContent)
+        return {
+          ok: false,
+          error: `write_file blocked for ${path}: basedOnRead did not match the current file content (stale hash). Re-read the whole file and retry with the fresh capability.\nbasedOnRead="${freshReadCapability}"`,
+        }
+      }
+      // Explicit whole-file capability is the real re-read substitute, including
+      // clearing context_compacted without an exploratory auto-reread.
+      grantWholeFileReadAuthorization(fileProcessingState, path, fileContent)
+      clearEditRereadRequirement(fileProcessingState, path)
+      return { ok: true }
+    }
+
+    // Compaction keeps sticky hashes but clears model-visible bytes. Hash-fresh
+    // alone must not authorize a whole-file overwrite or clear context_compacted;
+    // only a complete whole-file read_files grant, explicit whole-file basedOnRead,
+    // or equivalent real re-read clears that marker for write_file. str_replace may
+    // still proceed on hash-fresh unique edits (unique oldString is the safety bound).
+    const rereadRequirement = getEditRereadRequirement(
+      fileProcessingState,
+      path,
+    )
+    let isHashFresh =
+      initialContent !== null &&
+      isWholeFileReadAuthorizationFresh(
+        fileProcessingState,
+        path,
+        initialContent,
+      )
+    if (
+      initialContent !== null &&
+      rereadRequirement?.reason === 'context_compacted'
+    ) {
+      if (basedOnRead) {
+        const auth = tryAuthorizeFromBasedOnRead(initialContent)
+        if (auth.ok) {
+          isHashFresh = true
+        } else {
+          return {
+            tool: 'write_file' as const,
+            path,
+            error: auth.error,
+          }
+        }
+      } else {
+        const freshReadCapability = mintWholeFileCapability(initialContent)
+        const authorizationError = strictEditAuthorizationError({
+          fileProcessingState,
+          path,
+          toolName: 'write_file',
+          hasFreshWholeFileAuthorization: false,
+          wholeFileRequired: true,
+          freshReadCapability,
+        })
+        return {
+          tool: 'write_file' as const,
+          path,
+          error:
+            authorizationError?.errorMessage ??
+            `write_file blocked for ${path}: context compaction removed the exact read content from the active model context; re-read the whole file before overwriting.\nbasedOnRead="${freshReadCapability}"`,
+        }
+      }
+    }
+
+    if (isHashFresh) {
+      clearEditRereadRequirement(fileProcessingState, path)
+    }
+
     if (
       initialContent !== null &&
       fileProcessingState.failedEditRequiresReadByPath[path]
     ) {
-      const authorizationError = strictEditAuthorizationError({
-        fileProcessingState,
-        path,
-        toolName: 'write_file',
-        hasFreshWholeFileAuthorization: false,
-        wholeFileRequired: true,
-      })
-      return {
-        tool: 'write_file' as const,
-        path,
-        error:
-          authorizationError?.errorMessage ??
-          `write_file blocked for ${path}: read_files must refresh the current whole-file content before retrying.`,
+      if (isHashFresh) {
+        clearEditRereadRequirement(fileProcessingState, path)
+      } else if (basedOnRead) {
+        const auth = tryAuthorizeFromBasedOnRead(initialContent)
+        if (auth.ok) {
+          isHashFresh = true
+        } else {
+          return {
+            tool: 'write_file' as const,
+            path,
+            error: auth.error,
+          }
+        }
+      } else {
+        const freshReadCapability = mintWholeFileCapability(initialContent)
+        const authorizationError = strictEditAuthorizationError({
+          fileProcessingState,
+          path,
+          toolName: 'write_file',
+          hasFreshWholeFileAuthorization: false,
+          wholeFileRequired: true,
+          freshReadCapability,
+        })
+        return {
+          tool: 'write_file' as const,
+          path,
+          error:
+            authorizationError?.errorMessage ??
+            `write_file blocked for ${path}: read_files must refresh the current whole-file content before retrying.\nbasedOnRead="${freshReadCapability}"`,
+        }
       }
     }
     if (
@@ -368,34 +514,47 @@ export const handleWriteFile = (async (
         initialContent,
       )
     ) {
-      const authorizationWasStale = hasWholeFileReadAuthorization(
-        fileProcessingState,
-        path,
-      )
-      if (authorizationWasStale) {
-        markEditRequiresFreshRead({
+      if (basedOnRead) {
+        const auth = tryAuthorizeFromBasedOnRead(initialContent)
+        if (!auth.ok) {
+          return {
+            tool: 'write_file' as const,
+            path,
+            error: auth.error,
+          }
+        }
+      } else {
+        const authorizationWasStale = hasWholeFileReadAuthorization(
           fileProcessingState,
           path,
-          reason: 'stale_snapshot',
-          sourceTool: 'write_file',
+        )
+        if (authorizationWasStale) {
+          markEditRequiresFreshRead({
+            fileProcessingState,
+            path,
+            reason: 'stale_snapshot',
+            sourceTool: 'write_file',
+          })
+        } else {
+          revokeWholeFileReadAuthorization(fileProcessingState, path)
+        }
+        const freshReadCapability = mintWholeFileCapability(initialContent)
+        const authorizationError = strictEditAuthorizationError({
+          fileProcessingState,
+          path,
+          toolName: 'write_file',
+          hasFreshWholeFileAuthorization: false,
+          authorizationWasStale,
+          wholeFileRequired: true,
+          freshReadCapability,
         })
-      } else {
-        revokeWholeFileReadAuthorization(fileProcessingState, path)
-      }
-      const authorizationError = strictEditAuthorizationError({
-        fileProcessingState,
-        path,
-        toolName: 'write_file',
-        hasFreshWholeFileAuthorization: false,
-        authorizationWasStale,
-        wholeFileRequired: true,
-      })
-      return {
-        tool: 'write_file' as const,
-        path,
-        error:
-          authorizationError?.errorMessage ??
-          `write_file blocked for ${path}: read_files must authorize the current whole-file content before overwriting it.`,
+        return {
+          tool: 'write_file' as const,
+          path,
+          error:
+            authorizationError?.errorMessage ??
+            `write_file blocked for ${path}: read_files must authorize the current whole-file content before overwriting it.\nbasedOnRead="${freshReadCapability}"`,
+        }
       }
     }
 
@@ -462,7 +621,7 @@ export const handleWriteFile = (async (
     toolName: 'write_file',
     fileProcessingState,
     paths: [path],
-    rejectionRequiresRead: !('error' in writeFileResult),
+    rejectionRequiresRead: false,
     wholeFileContentByPath:
       'content' in writeFileResult
         ? new Map([[path, writeFileResult.content]])
