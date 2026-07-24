@@ -337,9 +337,14 @@ describe('base2 validation/reviewer coordination prompts', () => {
     )
     expect(base2.systemPrompt).toContain('product, Openbuff')
     expect(base2.systemPrompt).not.toContain('product, Codebuff')
+    // gateAwarenessSection: runtime-owned hooks → automated reviewer (not the
+    // older "runtime automatically runs configured validation hooks…" phrasing).
     expect(base2.systemPrompt).toContain(
-      'the runtime automatically runs configured validation hooks and a code-reviewer gate',
+      'the runtime-owned path is: configured file-change hooks',
     )
+    expect(base2.systemPrompt).toContain('run_file_change_hooks')
+    expect(base2.systemPrompt).toContain('automated code-reviewer')
+    expect(base2.systemPrompt).toContain('finalization allowed when green')
     expect(base2.systemPrompt).not.toContain(
       '- Spawn a code-reviewer to review the changes after you have implemented the changes.',
     )
