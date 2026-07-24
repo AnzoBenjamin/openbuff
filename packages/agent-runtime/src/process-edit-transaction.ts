@@ -57,13 +57,21 @@ type TransactionEdit =
       occurrence?: number
     }
   | { id?: string; type: 'patch'; path: string; diff: string }
-  | { id?: string; type: 'write_file'; path: string; content: string }
+  | {
+      id?: string
+      type: 'write_file'
+      path: string
+      content: string
+      basedOnRead?: string
+    }
 
 type TransactionFailure = {
   editIndex: number
   id?: string
   path: string
   errorMessage: string
+  /** Optional whole-file capability echoed by the handler for residual recovery. */
+  basedOnRead?: string
 }
 
 type TransactionFileChange = {

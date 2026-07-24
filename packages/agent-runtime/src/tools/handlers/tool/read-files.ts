@@ -14,7 +14,10 @@ import {
   grantWholeFileReadAuthorization,
   normalizeToolPath,
 } from './write-file'
-import { clearEditRereadRequirement } from './edit-read-state'
+import {
+  clearEditRereadRequirement,
+  getEditRereadRequirement,
+} from './edit-read-state'
 import { getFileReadingUpdates } from '../../../get-file-reading-updates'
 import { extractSlices } from '../../../structural-read'
 
@@ -195,19 +198,21 @@ export const handleReadFiles = (async (
       .map((result) => result.path),
   )
 
-  for (const path of successfulReadPaths) {
-    clearEditRereadRequirement(fileProcessingState, path)
-    delete fileProcessingState.promisesByPath[path]
-  }
+  // Paths that receive a complete whole-file sticky grant (or the same complete
+  // whole-file result that would mint one) may clear context_compacted.
+  // Partial/range-subset/symbol success may still clear other reread reasons
+  // (failed_edit gates) but must not drop context_compacted.
+  const wholeFileGrantPaths = new Set<string>()
 
-  if (fileProcessingState.strictReadBeforeEdit) {
-    for (const result of fileResults) {
-      if (
-        result.selector === 'file' &&
-        result.status === 'ok' &&
-        result.complete &&
-        typeof result.content === 'string'
-      ) {
+  for (const result of fileResults) {
+    if (
+      result.selector === 'file' &&
+      result.status === 'ok' &&
+      result.complete &&
+      typeof result.content === 'string'
+    ) {
+      wholeFileGrantPaths.add(result.path)
+      if (fileProcessingState.strictReadBeforeEdit) {
         grantWholeFileReadAuthorization(
           fileProcessingState,
           result.path,
@@ -215,6 +220,57 @@ export const handleReadFiles = (async (
         )
       }
     }
+    // Promote complete full-file range reads (1..totalLines) to sticky whole-file
+    // auth — same as paths reads. Truncated/partial ranges never grant.
+    if (
+      result.selector === 'range' &&
+      result.status === 'ok' &&
+      result.complete === true &&
+      typeof result.content === 'string'
+    ) {
+      const totalLines =
+        'totalLines' in result && typeof result.totalLines === 'number'
+          ? result.totalLines
+          : undefined
+      const isFullFileCoverage =
+        result.startLine === 1 &&
+        totalLines !== undefined &&
+        result.endLine === totalLines
+      if (isFullFileCoverage) {
+        // Prefer undecorated sourceContent (hash-stable whole-file bytes).
+        // Numbered display content alone is not used for granting.
+        const wholeFileContent =
+          'sourceContent' in result &&
+          typeof result.sourceContent === 'string'
+            ? result.sourceContent
+            : null
+        if (wholeFileContent !== null) {
+          wholeFileGrantPaths.add(result.path)
+          if (fileProcessingState.strictReadBeforeEdit) {
+            grantWholeFileReadAuthorization(
+              fileProcessingState,
+              result.path,
+              wholeFileContent,
+            )
+          }
+        }
+      }
+    }
+  }
+
+  for (const path of successfulReadPaths) {
+    const rereadReq = getEditRereadRequirement(fileProcessingState, path)
+    if (
+      rereadReq?.reason === 'context_compacted' &&
+      !wholeFileGrantPaths.has(path)
+    ) {
+      // Preserve context_compacted until a complete whole-file grant; still
+      // drop stale per-path edit content so later anchors use current disk.
+      delete fileProcessingState.promisesByPath[path]
+      continue
+    }
+    clearEditRereadRequirement(fileProcessingState, path)
+    delete fileProcessingState.promisesByPath[path]
   }
 
   const renderedFileResults = fileResults.map((result) => {
@@ -322,7 +378,15 @@ export const handleReadFiles = (async (
     }
 
     successfulReadPaths.add(request.path)
-    clearEditRereadRequirement(fileProcessingState, request.path)
+    // Symbol-only success may clear failed_edit gates but never mints whole-file
+    // auth, so it must not drop context_compacted.
+    const symbolRereadReq = getEditRereadRequirement(
+      fileProcessingState,
+      request.path,
+    )
+    if (symbolRereadReq?.reason !== 'context_compacted') {
+      clearEditRereadRequirement(fileProcessingState, request.path)
+    }
     delete fileProcessingState.promisesByPath[request.path]
     const slicesTooLarge =
       slices.reduce((total, slice) => total + slice.content.length, 0) > 100_000

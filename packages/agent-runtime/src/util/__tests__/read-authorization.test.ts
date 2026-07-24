@@ -5,7 +5,7 @@ import { revokeImplicitReadAuthorizationsAfterCompaction } from '../read-authori
 import type { AgentState } from '@codebuff/common/types/session-state'
 
 describe('revokeImplicitReadAuthorizationsAfterCompaction', () => {
-  it('revokes implicit whole-file authority and records a typed reread reason', () => {
+  it('keeps sticky whole-file authority and records a typed reread reason', () => {
     const state = {
       readAuthorizationsByPath: { 'src/a.ts': true },
       readAuthorizationHashesByPath: {
@@ -22,8 +22,12 @@ describe('revokeImplicitReadAuthorizationsAfterCompaction', () => {
 
     revokeImplicitReadAuthorizationsAfterCompaction(state)
 
-    expect(state.readAuthorizationsByPath).toEqual({})
-    expect(state.readAuthorizationHashesByPath).toEqual({})
+    // Sticky maps are preserved; edit-time hash freshness still gates edits.
+    expect(state.readAuthorizationsByPath).toEqual({ 'src/a.ts': true })
+    expect(state.readAuthorizationHashesByPath).toEqual({
+      'src/a.ts': 'sha256:a',
+      'src/hash-only.ts': 'sha256:b',
+    })
     expect(state.editRereadRequirementsByPath).toEqual({
       'src/a.ts': {
         reason: 'context_compacted',
@@ -33,6 +37,7 @@ describe('revokeImplicitReadAuthorizationsAfterCompaction', () => {
         reason: 'context_compacted',
         sourceTool: 'context compaction',
       },
+      // Non-context_compacted requirements are preserved.
       'src/existing.ts': {
         reason: 'stale_snapshot',
         sourceTool: 'str_replace',
