@@ -379,7 +379,7 @@ describe('handleReadSubtree', () => {
       expect(rootEntry).toMatchObject({
         liveNodeCount: 4,
         liveScanTruncated: false,
-        liveScanMaxNodes: 1000,
+        liveScanMaxNodes: 5000,
       })
     } finally {
       nodeFs.rmSync(tmpRoot, { recursive: true, force: true })
@@ -769,7 +769,7 @@ describe('handleReadSubtree', () => {
       nodePath.join(nodeOs.tmpdir(), 'openbuff-read-subtree-limit-'),
     )
     try {
-      for (let index = 0; index < 1_010; index++) {
+      for (let index = 0; index < 5_010; index++) {
         nodeFs.writeFileSync(nodePath.join(tmpRoot, `file-${index}.txt`), '')
       }
       fileContext.projectRoot = tmpRoot
@@ -795,12 +795,12 @@ describe('handleReadSubtree', () => {
       const entry = (output[0].value as ReadSubtreeResultEntry[])[0]
       expect(entry).toMatchObject({
         type: 'directory',
-        liveNodeCount: 1000,
+        liveNodeCount: 5000,
         liveScanTruncated: true,
-        liveScanMaxNodes: 1000,
+        liveScanMaxNodes: 5000,
         recovery: expect.stringContaining('narrower subtree'),
       })
-      expect(realpathCalls).toBe(1000)
+      expect(realpathCalls).toBe(5000)
     } finally {
       nodeFs.rmSync(tmpRoot, { recursive: true, force: true })
     }

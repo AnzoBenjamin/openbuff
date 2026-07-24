@@ -2066,8 +2066,40 @@ function test3() {
     }
   })
 
-  it('rejects stale basedOnRead on small files instead of expanding scope', async () => {
+  it('auto-strips stale basedOnRead on small files when oldString is unique', async () => {
     const initialContent = 'const x = 1;\nconst y = 2;\n'
+
+    const result = await processStrReplace({
+      path: 'small.ts',
+      readCapabilityScope: readScope('small.ts'),
+      replacements: [
+        {
+          oldString: 'const y = 2;',
+          newString: 'const y = 3;',
+          allowMultiple: false,
+          basedOnRead: readCapability({
+            path: 'small.ts',
+            startLine: 1,
+            endLine: 1,
+            content: 'totally stale content',
+          }),
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(false)
+    if (!('error' in result)) {
+      expect(result.content).toContain('const y = 3;')
+      expect(result.messages.some((msg) => msg.includes('stale basedOnRead'))).toBe(
+        true,
+      )
+    }
+  })
+
+  it('rejects stale basedOnRead on small files when oldString is ambiguous', async () => {
+    const initialContent = 'const y = 2;\nconst y = 2;\n'
 
     const result = await processStrReplace({
       path: 'small.ts',

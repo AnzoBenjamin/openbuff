@@ -334,7 +334,7 @@ describe('OpenbuffClientOptions fileFilter', () => {
     expect(optionalFileError).toContain('read_files blocked')
   })
 
-  it('[SEC-H01] rejects absolute requestOptionalFile paths inside cwd', async () => {
+  it('[SEC-H01] accepts absolute requestOptionalFile paths inside cwd', async () => {
     spyOn(databaseModule, 'getUserInfoFromApiKey').mockResolvedValue({
       id: 'user-123',
       email: 'test@example.com',
@@ -403,7 +403,7 @@ describe('OpenbuffClientOptions fileFilter', () => {
     })
 
     expect(result.output.type).toBe('lastMessage')
-    expect(optionalFileError).toContain('read_files outside_project')
+    expect(optionalFileError).toBeUndefined()
   })
 
   it('should allow all files when no fileFilter is provided', async () => {

@@ -17,7 +17,7 @@ import type {
 } from '@codebuff/common/tools/list'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 
-const MAX_FETCH_LENGTH = 50_000
+const MAX_FETCH_LENGTH = 150_000
 
 export const handleWebSearch = (async (params: {
   previousToolCallFinished: Promise<void>

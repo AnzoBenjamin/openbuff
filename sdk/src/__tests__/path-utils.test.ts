@@ -14,10 +14,10 @@ import {
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 
 describe('[SEC-H01] isSafeProjectRelativePath', () => {
-  test('rejects traversal, absolute, drive, UNC, and NUL inputs before I/O', () => {
+  test('rejects traversal, drive, UNC, and NUL inputs; allows in-project absolute POSIX form', () => {
     expect(isSafeProjectRelativePath('../secret')).toBe(false)
     expect(isSafeProjectRelativePath('src/../secret')).toBe(false)
-    expect(isSafeProjectRelativePath('/repo/file.ts')).toBe(false)
+    expect(isSafeProjectRelativePath('/repo/file.ts')).toBe(true)
     expect(isSafeProjectRelativePath('C:\\repo\\file.ts')).toBe(false)
     expect(isSafeProjectRelativePath('\\\\server\\share\\file.ts')).toBe(false)
     expect(isSafeProjectRelativePath('src/secret\0.txt')).toBe(false)

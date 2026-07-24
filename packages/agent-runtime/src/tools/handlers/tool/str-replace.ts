@@ -40,10 +40,11 @@ import type { ProjectFileContext } from '@codebuff/common/util/file'
 // Fix C: after this many str_replace attempts on the same path in one turn
 // return an error or an auto-corrected near-match, hard-block further
 // str_replace calls on that path and direct the agent to a whole-symbol or
-// whole-file edit instead. Successful edits deliberately do not erase this
-// failure budget: alternating failure/success cascades are the common way a
-// stale multi-replacement batch evades a purely consecutive-failure counter.
-const STR_REPLACE_MAX_CONSECUTIVE_FAILURES = 3
+// whole-file edit instead. Clean exact-match successes leave the budget
+// unchanged (non-draining) rather than full-reset or drain-by-1, so
+// fail↔success oscillation cannot evade the breaker. Limit=5 reduces
+// mid-refactor lockout friction while still forcing tool switches.
+const STR_REPLACE_MAX_CONSECUTIVE_FAILURES = 5
 
 const NEAR_MATCH_AUTOCORRECT_MARKER = 'auto-corrected a near-match edit'
 
@@ -419,9 +420,10 @@ export const handleStrReplace = (async (
     }
   } else {
     // Fix C: an auto-corrected near-match is a weak/suspect outcome and also
-    // counts toward the circuit breaker. A clean exact-match success keeps any
-    // existing failure budget intact so failure -> success -> failure loops
-    // cannot run forever. The state naturally resets at the next turn.
+    // counts toward the circuit breaker. Clean exact-match success leaves the
+    // budget intact (non-draining) rather than full-reset or drain-by-1 so
+    // fail↔success oscillation cannot evade the breaker. Full reset still only
+    // happens at the next turn (or structural recovery below).
     hadAutoCorrect = strReplaceResult.messages.some((msg) =>
       msg.includes(NEAR_MATCH_AUTOCORRECT_MARKER),
     )
@@ -429,6 +431,8 @@ export const handleStrReplace = (async (
       fileProcessingState.consecutiveStrReplaceFailuresByPath[path] =
         (fileProcessingState.consecutiveStrReplaceFailuresByPath[path] ?? 0) + 1
     }
+    // else: clean exact-match success — leave consecutiveStrReplaceFailuresByPath
+    // unchanged so prior failures keep climbing toward the limit.
     // Strict read-before-edit: read authorization is sticky once granted by
     // read_files or write_file. Successful edits on the same path remain
     // authorized for subsequent edits; only a failed edit (which sets

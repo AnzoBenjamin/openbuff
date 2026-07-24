@@ -36,7 +36,7 @@ export type FileFilter = (filePath: string) => FileFilterResult
 export type { FileLineRange }
 
 export const READ_SNAPSHOT_CONCURRENCY = 8
-export const MAX_RANGE_READ_BYTES = 1_048_576
+export const MAX_RANGE_READ_BYTES = 4_194_304
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024
 // The 10MB byte gate (MAX_FILE_BYTES) is now the single read ceiling: any file

@@ -477,20 +477,30 @@ export function deriveSpawnTemplateCapabilities(params: {
     )
   }
 
-  const read = narrowFilesystemPatterns({
-    requested: handoff.permissions.readablePaths,
-    staticPatterns: inheritedTemplate.filesystemScope?.read,
-    projectRoot,
-    access: 'read',
-    agentId: inheritedTemplate.id,
-  })
-  const write = narrowFilesystemPatterns({
-    requested: handoff.permissions.writablePaths,
-    staticPatterns: inheritedTemplate.filesystemScope?.write,
-    projectRoot,
-    access: 'write',
-    agentId: inheritedTemplate.id,
-  })
+  // Only narrow when the handoff actually listed paths; otherwise preserve
+  // static scope (undefined = unrestricted). Empty array must NOT become a
+  // zero-read/write lockout — empty is truthy and matches nothing.
+  const read =
+    handoff.permissions.readablePaths.length > 0
+      ? narrowFilesystemPatterns({
+          requested: handoff.permissions.readablePaths,
+          staticPatterns: inheritedTemplate.filesystemScope?.read,
+          projectRoot,
+          access: 'read',
+          agentId: inheritedTemplate.id,
+        })
+      : inheritedTemplate.filesystemScope?.read
+
+  const write =
+    handoff.permissions.writablePaths.length > 0
+      ? narrowFilesystemPatterns({
+          requested: handoff.permissions.writablePaths,
+          staticPatterns: inheritedTemplate.filesystemScope?.write,
+          projectRoot,
+          access: 'write',
+          agentId: inheritedTemplate.id,
+        })
+      : inheritedTemplate.filesystemScope?.write
 
   // The downstream requiredTools check (selectAgentAttempt) only *requires*
   // each granted tool to be present; it never adds one. The toolNames filter
@@ -503,6 +513,17 @@ export function deriveSpawnTemplateCapabilities(params: {
       !inheritedTemplate.toolNames.includes(toolName),
   )
 
+  // Only set filesystemScope fields that are defined so we do not invent empty
+  // arrays. When both remain undefined, keep the inherited scope (typically
+  // undefined = unrestricted) rather than emitting {}.
+  const filesystemScope =
+    read !== undefined || write !== undefined
+      ? {
+          ...(read !== undefined ? { read } : {}),
+          ...(write !== undefined ? { write } : {}),
+        }
+      : inheritedTemplate.filesystemScope
+
   return {
     ...inheritedTemplate,
     toolNames: [
@@ -511,11 +532,11 @@ export function deriveSpawnTemplateCapabilities(params: {
       ),
       ...grantedReadOnlyTools,
     ],
-    programmaticToolNames: (
-      inheritedTemplate.programmaticToolNames ?? []
-    ).filter((toolName) => requestedTools.has(toolName)),
-    spawnableAgents: [],
-    filesystemScope: { read, write },
+    // KEEP programmatic tools from the static template (not model-visible)
+    programmaticToolNames: inheritedTemplate.programmaticToolNames,
+    // KEEP child's static spawnableAgents (getMatchingSpawn already enforces ceiling)
+    spawnableAgents: inheritedTemplate.spawnableAgents,
+    ...(filesystemScope !== undefined ? { filesystemScope } : {}),
   }
 }
 

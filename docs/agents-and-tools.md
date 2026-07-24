@@ -39,11 +39,40 @@ Cross-cutting orchestration policy:
 - Ask the user before destructive commands, public API/contract changes, dependency additions, schema/data migrations, release/publish/deploy actions, production-affecting scripts, or ambiguous product behavior.
 - Terminal execution is enforced by runtime permission profiles, not prompt text alone: `read-only`, the clone-scoped `librarian-read-only`, `workspace-write`, and explicit `full-access`. Background commands are request-owned unless `detach` is explicitly requested.
 - Browser-use defaults to `params.interactionPolicy: "read-only"`. Clicks, typing, uploads, evaluation, and other browser-state mutations require `allow-interactions`; each run receives an isolated browser session that is closed with the owning SDK run.
-- `base2-plan` can spawn `basher`, `browser-use`, `debugger`, and `general-agent` for deep analysis. Plan-only authority propagates through descendants: terminal-capable children are clamped to the read-only terminal profile and browser interactions remain denied even if a child requests `allow-interactions`. Mutation agents and direct edit/terminal tools remain unavailable. The eight-agent batch limit is a concurrency bound; planners may launch additional joined waves until coverage is complete and can poll/cancel detached analysis with `check_background_agent`.
+- `base2-plan` can spawn `basher`, `browser-use`, `debugger`, and `general-agent` for deep analysis. Plan-only authority propagates through descendants: terminal-capable children are clamped to the read-only terminal profile and browser interactions remain denied even if a child requests `allow-interactions`. Mutation agents and direct edit/terminal tools remain unavailable. The spawn batch limit (`MAX_SPAWN_BATCH_SIZE`, currently 12) is a concurrency bound; planners may launch additional joined waves until coverage is complete and can poll/cancel detached analysis with `check_background_agent`.
 - Prefer dedicated tools over shell fallbacks: `git_status` for repo state, file/read/search tools for inspection, `read_image` for images, deterministic edit tools for edits, configured hooks for validation, and browser/CLI visual agents for smoke checks.
 - Maintain durable plan artifacts in EXECUTE_PLAN at phase boundaries, blockers, validation/review results, and finalization.
 - Parallelism is allowed for independent discovery shards, independent validation commands, and static review that does not depend on validation output. Dependent edits, fragile debug loops, and validation-repair cycles stay sequential.
 - The orchestrator must join all required results before completion. Reviewers running alongside validation provide static review only; failed or timed-out validation still blocks a green finish.
+
+### Agent restriction policy (relaxed vs keep)
+
+Runtime agent restrictions keep real security boundaries while removing over-strict friction that blocked legitimate local work. Vulnerability reporting stays in [SECURITY.md](../SECURITY.md); this section is product policy only.
+
+**Keep (real security value):**
+
+- SSRF host/IP/redirect revalidation on network fetches
+- Denials for `.env`, private keys/credentials, and real `.tfstate` paths
+- Project-path containment for reads/writes/spawned work
+- `cap.v3` HMAC signing with project/path/run scope binding
+- `replace_range` authority chain (authenticated capability, not prose hashes)
+- Plan-only terminal attenuation (descendants stay on the read-only terminal profile)
+- Force/delete/default-branch push gating
+- Privilege-escalation, system-package, and env-dump bans
+- Large-file scoped `basedOnRead` hard-fail when the anchor is required and invalid
+- `str_replace` circuit-breaker non-draining success (limit 5)
+
+**Relaxed (intentional friction reductions):**
+
+- Empty handoff `readablePaths` / `writablePaths` no longer invent `[]` lockouts
+- Handoff preserves static `spawnableAgents` and `programmaticToolNames`
+- Git commit guide uses multiple `-m` flags (HEREDOC and `$()` remain blocked under the git-commit profile)
+- Ripgrep expands combined short flags such as `-ni` and allows `-v` / `-c`
+- `/git` pathspec allows `()[]{}` while still blocking shell operators
+- Sensitive-path matching is more precise: no false positives on public certs/docs/examples/`yarnrc`; kubeconfig/tfstate use exact or suffix rules (real secret denials remain)
+- In-project absolute POSIX paths are allowed; containment remains authoritative
+- Higher throughput defaults with truncation/backstops kept: range read 4MB, live subtree 5000 nodes (`LIVE_SUBTREE_MAX_NODES`), web fetch 2MB / 150KB text, `code_search` `maxResults` 30, `find_files` `maxFiles` 250, spawn batch 12 (`MAX_SPAWN_BATCH_SIZE`)
+- Small-file unique stale `basedOnRead` is auto-stripped so a unique exact match can proceed
 
 ### Harness control plane and specialist intelligence
 
@@ -763,7 +792,7 @@ while the structured anchor carries freshness metadata without prose parsing.
 it never falls back to the host process filesystem. When no live view is
 available, cached tree entries are returned with `provenance: "cached"` and
 `stale: true`, while cache misses return a typed `unsupported` error. Live
-walks reserve their 1,000-node budget before scheduling work, traverse sorted
+walks reserve their 5,000-node budget (`LIVE_SUBTREE_MAX_NODES`) before scheduling work, traverse sorted
 entries deterministically, stop admitting work at the limit, and report typed
 per-path I/O/cancellation errors plus an aggregate `partial` status.
 

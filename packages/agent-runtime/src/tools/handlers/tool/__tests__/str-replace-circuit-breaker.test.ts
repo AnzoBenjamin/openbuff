@@ -40,12 +40,12 @@ const confirmedRequestClientToolCall = async (toolCall: any) =>
 describe('handleStrReplace circuit breaker (Fix C)', () => {
   it('returns a circuit-breaker errorMessage when the per-path failure budget reaches the limit', async () => {
     const path = 'blocked.ts'
-    // STR_REPLACE_MAX_CONSECUTIVE_FAILURES is 3 in source. Pre-set the counter
+    // STR_REPLACE_MAX_CONSECUTIVE_FAILURES is 5 in source. Pre-set the counter
     // to the limit so the next call is the one that trips the breaker. The
     // breaker fires before any file processing, so the requestOptionalFile stub
     // is never reached.
     const fileProcessingState = getFileProcessingValues({
-      consecutiveStrReplaceFailuresByPath: { [path]: 3 },
+      consecutiveStrReplaceFailuresByPath: { [path]: 5 },
     })
 
     const result = await handleStrReplace({
@@ -119,7 +119,7 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
     const path = 'not-cleared.ts'
     const fileContent = 'const x = 1\nconst y = 2\n'
     const fileProcessingState = getFileProcessingValues({
-      consecutiveStrReplaceFailuresByPath: { [path]: 3 },
+      consecutiveStrReplaceFailuresByPath: { [path]: 5 },
       strictReadBeforeEdit: false,
     })
 
@@ -169,7 +169,7 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
     // The counter is NOT cleared by the fresh basedOnRead; it stays at the
     // limit.
     expect(fileProcessingState.consecutiveStrReplaceFailuresByPath[path]).toBe(
-      3,
+      5,
     )
   })
 
@@ -179,11 +179,11 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
     // payload, fails again, re-reads, retries again... Before the fix each
     // fresh basedOnRead reset the counter so this loop never tripped the
     // breaker. After the fix the counter accumulates across re-reads and the
-    // breaker fires on the 4th attempt (3 prior failures + this one).
+    // breaker fires once the counter is already at the limit at call start.
     const path = 'retry-loop.ts'
     const fileContent = 'const x = 1\nconst y = 2\n'
     const fileProcessingState = getFileProcessingValues({
-      consecutiveStrReplaceFailuresByPath: { [path]: 2 },
+      consecutiveStrReplaceFailuresByPath: { [path]: 4 },
       strictReadBeforeEdit: false,
     })
 
@@ -221,21 +221,21 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
       | { errorMessage?: string; message?: string }
       | undefined
     expect(value).toBeDefined()
-    // This is the 3rd consecutive failure (counter was 2, this failure makes
-    // it 3). The breaker does NOT trip on this call (it trips when the counter
-    // is ALREADY >= 3 at the START of the call), but the counter must now be 3
+    // This is the 5th consecutive failure (counter was 4, this failure makes
+    // it 5). The breaker does NOT trip on this call (it trips when the counter
+    // is ALREADY >= 5 at the START of the call), but the counter must now be 5
     // so the NEXT attempt — even with a fresh basedOnRead — will trip it.
     expect(value?.errorMessage ?? '').not.toMatch(
       /^str_replace circuit breaker:/,
     )
     expect(value?.errorMessage).toContain('str_replace retry limit reached')
     expect(fileProcessingState.consecutiveStrReplaceFailuresByPath[path]).toBe(
-      3,
+      5,
     )
 
     // Second attempt: a fresh basedOnRead re-read, same broken payload. Before
     // the fix the counter would reset to 0 here and the loop would continue
-    // forever. After the fix the counter stays at 3 and the breaker trips.
+    // forever. After the fix the counter stays at 5 and the breaker trips.
     const freshReadToken2 = encodeReadCapabilityToken({
       startLine: 1,
       endLine: 2,
@@ -274,7 +274,7 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
     // Counter is unchanged by the tripped attempt (the breaker returns before
     // any processing that would increment it).
     expect(fileProcessingState.consecutiveStrReplaceFailuresByPath[path]).toBe(
-      3,
+      5,
     )
   })
 
@@ -282,7 +282,7 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
     const path = 'alternating-loop.ts'
     const fileContent = 'const x = 1\nconst y = 2\n'
     const fileProcessingState = getFileProcessingValues({
-      consecutiveStrReplaceFailuresByPath: { [path]: 1 },
+      consecutiveStrReplaceFailuresByPath: { [path]: 3 },
       strictReadBeforeEdit: false,
     })
 
@@ -310,8 +310,10 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
       | { errorMessage?: string; message?: string }
       | undefined
     expect(value?.errorMessage).toBeUndefined()
+    // Clean success leaves the counter unchanged (3 → 3); no drain-by-1 and no
+    // full erase to 0, so fail↔success oscillation still climbs to the limit.
     expect(fileProcessingState.consecutiveStrReplaceFailuresByPath[path]).toBe(
-      1,
+      3,
     )
   })
 

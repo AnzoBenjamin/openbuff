@@ -24,28 +24,25 @@ When the user requests a new git commit, please follow these steps closely:
    - Revisit your draft to confirm it truly reflects the changes and their intention.
 
 4. **Create the commit.**
-   To maintain proper formatting, use cross-platform compatible commit messages:
-   
-   **For Unix/bash shells:**
+   Use a portable form that works everywhere and stays within agent terminal policy:
+
+   **One-line message:** a single \`-m\` flag:
    \`\`\`
-   git commit -m "$(cat <<'EOF'
-   Your commit message here.
-   EOF
-   )"
+   git commit -m "Subject line under 72 chars"
    \`\`\`
-   
-   **For Windows Command Prompt:**
+
+   **Subject + body:** multiple \`-m\` flags (each \`-m\` becomes a paragraph):
    \`\`\`
-   git commit -m "Your commit message here."
+   git commit -m "Subject line under 72 chars" -m "Body explaining why. No shell substitution, heredoc, or raw newlines."
    \`\`\`
-   
-   Always detect the platform and use the appropriate syntax. HEREDOC syntax (\`<<'EOF'\`) only works in bash/Unix shells and will fail on Windows Command Prompt. Do not append any AI-attribution footer to commit messages (no "Generated with Openbuff", no "Co-Authored-By", no trailing emoji line).
+
+   Under agent profiles, never use HEREDOC (\`<<'EOF'\`), command substitution (\`$(...)\` or backticks), pipes, redirects, or multi-line shell strings for commit messages—those forms are blocked. Keep the whole \`git commit\` command on one line. Do not amend unless the user explicitly authorized amend. Do not append any AI-attribution footer to commit messages (no "Generated with Openbuff", no "Co-Authored-By", no trailing emoji line).
 
 **Important details**
 
-- When feasible, use a single \`git commit -am\` command to add and commit together, but do not accidentally stage unrelated files.
+- Prefer staging explicit paths, then committing. Avoid \`git commit -am\` when it would stage unrelated files.
 - Never alter the git config.
-- Do not push to the remote repository.
+- Do not push to the remote repository unless the user asked you to push.
 - Avoid using interactive flags (e.g., \`-i\`) that require unsupported interactive input.
 - Do not create an empty commit if there are no changes.
 - Make sure your commit message is concise yet descriptive, focusing on the intention behind the changes rather than merely describing them. Do not append any AI-attribution footer.

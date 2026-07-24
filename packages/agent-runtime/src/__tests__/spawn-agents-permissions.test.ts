@@ -376,6 +376,86 @@ describe('Spawn Agents Permissions', () => {
     expect(derived.toolNames).toEqual(['code_search'])
   })
 
+  it('does not lock reads to [] when handoff readablePaths is empty', () => {
+    const parentAgent = createMockAgent('orchestrator', ['repair-editor'])
+    const childAgent = createMockAgent('repair-editor')
+    childAgent.toolNames = ['edit_transaction']
+
+    const derived = deriveSpawnTemplateCapabilities({
+      agentTemplate: childAgent,
+      parentAgentTemplate: parentAgent,
+      handoff: createVersionedHandoff(['edit_transaction']),
+      projectRoot: mockFileContext.projectRoot,
+    })
+
+    // Empty readablePaths must preserve unrestricted static scope, not emit [].
+    expect(derived.filesystemScope?.read).toBeUndefined()
+    expect(derived.filesystemScope?.write).toBeUndefined()
+  })
+
+  it('still narrows filesystem scope when handoff lists non-empty paths', () => {
+    const parentAgent = createMockAgent('orchestrator', ['repair-editor'])
+    const childAgent = createMockAgent('repair-editor')
+    childAgent.toolNames = ['edit_transaction']
+
+    const handoff = createVersionedHandoff(['edit_transaction'])!
+    handoff.permissions.readablePaths = ['src/a.ts']
+    handoff.permissions.writablePaths = ['src/a.ts']
+
+    const derived = deriveSpawnTemplateCapabilities({
+      agentTemplate: childAgent,
+      parentAgentTemplate: parentAgent,
+      handoff,
+      projectRoot: mockFileContext.projectRoot,
+    })
+
+    expect(derived.filesystemScope?.read).toBeDefined()
+    expect(derived.filesystemScope?.read).not.toEqual([])
+    expect(
+      derived.filesystemScope?.read?.some((pattern) =>
+        pattern.includes('src/a.ts'),
+      ),
+    ).toBe(true)
+    expect(derived.filesystemScope?.write).toBeDefined()
+    expect(
+      derived.filesystemScope?.write?.some((pattern) =>
+        pattern.includes('src/a.ts'),
+      ),
+    ).toBe(true)
+  })
+
+  it('keeps child static spawnableAgents after handoff', () => {
+    const parentAgent = createMockAgent('orchestrator', ['repair-editor'])
+    const childAgent = createMockAgent('repair-editor', ['code-searcher'])
+    childAgent.toolNames = ['edit_transaction']
+
+    const derived = deriveSpawnTemplateCapabilities({
+      agentTemplate: childAgent,
+      parentAgentTemplate: parentAgent,
+      handoff: createVersionedHandoff(['edit_transaction']),
+      projectRoot: mockFileContext.projectRoot,
+    })
+
+    expect(derived.spawnableAgents).toEqual(['code-searcher'])
+  })
+
+  it('keeps programmatic tools after handoff even when not in allowedTools', () => {
+    const parentAgent = createMockAgent('orchestrator', ['repair-editor'])
+    const childAgent = createMockAgent('repair-editor')
+    childAgent.toolNames = ['edit_transaction']
+    childAgent.programmaticToolNames = ['set_output']
+
+    const derived = deriveSpawnTemplateCapabilities({
+      agentTemplate: childAgent,
+      parentAgentTemplate: parentAgent,
+      handoff: createVersionedHandoff(['edit_transaction']),
+      projectRoot: mockFileContext.projectRoot,
+    })
+
+    expect(derived.programmaticToolNames).toEqual(['set_output'])
+    expect(derived.toolNames).toEqual(['edit_transaction'])
+  })
+
   it('does not let running background jobs block foreground analysis', async () => {
     const parentAgent = createMockAgent('parent', ['thinker'])
     const childAgent = createMockAgent('thinker')
@@ -486,7 +566,7 @@ describe('Spawn Agents Permissions', () => {
       toolName: 'spawn_agents',
       toolCallId: 'spawn-too-many',
       input: {
-        agents: Array.from({ length: 9 }, (_, index) => ({
+        agents: Array.from({ length: 13 }, (_, index) => ({
           agent_type: 'thinker',
           prompt: `task ${index}`,
         })),
@@ -501,7 +581,7 @@ describe('Spawn Agents Permissions', () => {
         localAgentTemplates: { thinker: childAgent },
         toolCall,
       }),
-    ).rejects.toThrow('at most 8 agents')
+    ).rejects.toThrow('at most 12 agents')
   })
 })
 

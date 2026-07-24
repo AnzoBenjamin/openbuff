@@ -503,14 +503,32 @@ export async function processStrReplace(params: {
       !hasFreshBasedOnRead
 
     if (hasStaleBasedOnRead && !requireFreshReadCapability) {
-      const staleScopedFailure = [
-        `Scoped str_replace blocked for ${path}: the supplied basedOnRead range is stale, so the runtime did not fall back to an unscoped whole-file match.`,
-        ...readCapabilityWarnings,
-        'Re-read the exact target range and retry with its fresh readCapability token, or deliberately omit basedOnRead and provide a unique current oldString.',
-      ].join('\n')
-      messages.push(staleScopedFailure)
-      recordFailure(staleScopedFailure)
-      continue
+      // Loop-breaker for small files only (mirrors autoStrippedBogusAnchor):
+      // when basedOnRead is stale but oldString uniquely identifies a spot,
+      // drop the anchor and continue as a naked unique literal edit. Large
+      // files keep hard-fail so scoped authority is never silently discarded.
+      const uniqueStaleStrip =
+        !isLargeFile &&
+        normalizedOldStr.length > 0 &&
+        normalizedCurrentContent.split(normalizedOldStr).length - 1 === 1
+      if (uniqueStaleStrip) {
+        messages.push(
+          [
+            `Note: a stale basedOnRead anchor was ignored for ${path} because the oldString was uniquely matchable, so the edit applied as a naked edit.`,
+            'Stop reusing stale basedOnRead values. Omit basedOnRead when oldString is unique, or copy the readCapability token from a fresh read_files header.',
+          ].join('\n'),
+        )
+        // Fall through to unscoped unique-literal matching below.
+      } else {
+        const staleScopedFailure = [
+          `Scoped str_replace blocked for ${path}: the supplied basedOnRead range is stale, so the runtime did not fall back to an unscoped whole-file match.`,
+          ...readCapabilityWarnings,
+          'Re-read the exact target range and retry with its fresh readCapability token, or deliberately omit basedOnRead and provide a unique current oldString.',
+        ].join('\n')
+        messages.push(staleScopedFailure)
+        recordFailure(staleScopedFailure)
+        continue
+      }
     }
 
     if (enforceReadCapability && !hasFreshBasedOnRead) {
