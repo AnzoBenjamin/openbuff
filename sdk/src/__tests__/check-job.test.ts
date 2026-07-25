@@ -12,7 +12,10 @@ import {
   type BackgroundJob,
 } from '../tools/background-jobs'
 import { checkJob } from '../tools/check-job'
-import { getPendingBackgroundJob } from '@codebuff/common/util/pending-background-jobs'
+import {
+  getPendingBackgroundJob,
+  upsertPendingBackgroundJob,
+} from '@codebuff/common/util/pending-background-jobs'
 
 let counter = 0
 const tempFiles: string[] = []
@@ -200,11 +203,35 @@ describe('checkJob', () => {
     expect(killCalled).toBe(true)
     expect(result).toMatchObject({
       jobId: job.jobId,
-      status: 'error',
+      status: 'stopped',
       matched: false,
       killed: true,
     })
-    expect(job.status).toBe('error')
+    expect(job.status).toBe('stopped')
+  })
+
+  test('follow timeout kill failure surfaces errorMessage through the output union', async () => {
+    const job = makeJob({
+      child: {
+        pid: undefined,
+        kill: () => true,
+      } as unknown as BackgroundJob['child'],
+    })
+
+    const result = value(
+      await withElapsedFollowTimeout(() =>
+        checkJob({
+          jobId: job.jobId,
+          wait_for: 'never appears',
+          timeout_seconds: 1,
+          kill_on_timeout: true,
+        }),
+      ),
+    )
+
+    expect(result.killed).toBe(true)
+    expect(typeof result.errorMessage).toBe('string')
+    expect(result.errorMessage.length).toBeGreaterThan(0)
   })
 
   test('reports completed status and exit code', async () => {
@@ -212,6 +239,13 @@ describe('checkJob', () => {
     fs.appendFileSync(job.logFile, 'done\n')
     const result = value(await checkJob({ jobId: job.jobId }))
     expect(result).toMatchObject({ status: 'completed', exitCode: 0 })
+  })
+
+  test('success output includes the job logFile for a running job', async () => {
+    const job = makeJob()
+    fs.appendFileSync(job.logFile, 'line one\n')
+    const result = value(await checkJob({ jobId: job.jobId }))
+    expect(result.logFile).toBe(job.logFile)
   })
 
   test('returns an error for an unknown job id', async () => {
@@ -480,5 +514,30 @@ describe('checkJob', () => {
     tempFiles.push(logFile)
 
     expect(getBackgroundJob(jobId)).toBeUndefined()
+  })
+
+  test('retains a settled pending entry until the TTL sweep', () => {
+    const jobId = `job-settled-retained-${++counter}`
+    // Mirror what the SDK exit/kill path now does: retain the settled job in
+    // the pending gate with a final status + a recent completedAt so the gate
+    // can still serve its final output/exit code after it finishes.
+    upsertPendingBackgroundJob({
+      jobId,
+      command: 'echo hi',
+      status: 'completed',
+      startedAt: Date.now() - 5_000,
+      completedAt: Date.now(),
+      owner: {
+        clientSessionId: 'session-1',
+        rootRunId: 'root-1',
+        parentRunId: 'parent-1',
+        parentAgentId: 'agent-1',
+      },
+    })
+
+    // getPendingBackgroundJob sweeps first; a recent completedAt is retained.
+    const entry = getPendingBackgroundJob(jobId)
+    expect(entry?.status).toBe('completed')
+    expect(entry?.completedAt).toBeDefined()
   })
 })

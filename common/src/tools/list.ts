@@ -12,6 +12,7 @@ import { codeSearchParams } from './params/tool/code-search'
 import { gitBranchParams } from './params/tool/git-branch'
 import { gitStatusParams } from './params/tool/git-status'
 import { killJobParams } from './params/tool/kill-job'
+import { listJobsParams } from './params/tool/list-jobs'
 import { readLogsParams } from './params/tool/read-logs'
 import { createPlanParams } from './params/tool/create-plan'
 import { editTransactionParams } from './params/tool/edit-transaction'
@@ -92,6 +93,7 @@ const canonicalToolParams = {
   inspect_feature_completeness: inspectFeatureCompletenessParams,
   evaluate_audit_coverage: evaluateAuditCoverageParams,
   kill_job: killJobParams,
+  list_jobs: listJobsParams,
   read_logs: readLogsParams,
   create_plan: createPlanParams,
   edit_transaction: editTransactionParams,
@@ -187,6 +189,10 @@ export const clientToolCallSchema = z.discriminatedUnion('toolName', [
   z.object({
     toolName: z.literal('read_logs'),
     input: toolParams.read_logs.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('list_jobs'),
+    input: toolParams.list_jobs.inputSchema,
   }),
   z.object({
     toolName: z.literal('git_status'),

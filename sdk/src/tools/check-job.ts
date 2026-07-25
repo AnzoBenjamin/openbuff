@@ -4,6 +4,7 @@ import {
   readNewJobOutput,
 } from './background-jobs'
 
+import type { BackgroundJobOwner } from './background-jobs'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 
 const CHECK_JOB_OUTPUT_LIMIT = 50_000
@@ -32,6 +33,7 @@ export async function checkJob(params: {
   wait_for?: string
   timeout_seconds?: number
   kill_on_timeout?: boolean
+  owner?: BackgroundJobOwner
 }): Promise<CodebuffToolOutput<'check_job'>> {
   const { jobId, wait_for: waitFor } = params
   const timeoutMs = Math.max(0, (params.timeout_seconds ?? 0) * 1000)
@@ -39,7 +41,7 @@ export async function checkJob(params: {
   // request termination when a follow timeout represents a hard deadline.
   const killOnTimeout = params.kill_on_timeout ?? false
 
-  const job = getBackgroundJob(jobId)
+  const job = getBackgroundJob(jobId, { restampOwner: params.owner })
   if (!job) {
     return [
       {
@@ -99,6 +101,7 @@ export async function checkJob(params: {
                   ? { exitCode: killResult.exitCode }
                   : {}),
                 ...(waitFor ? { matched } : {}),
+                logFile: job.logFile,
                 killed: true,
               },
             },
@@ -115,6 +118,7 @@ export async function checkJob(params: {
               newOutput: truncateEnd(collected, CHECK_JOB_OUTPUT_LIMIT),
               ...(job.exitCode !== null ? { exitCode: job.exitCode } : {}),
               ...(waitFor ? { matched } : {}),
+              logFile: job.logFile,
               killed: true,
               errorMessage: killResult.errorMessage,
             },
@@ -130,6 +134,7 @@ export async function checkJob(params: {
             newOutput: truncateEnd(collected, CHECK_JOB_OUTPUT_LIMIT),
             ...(job.exitCode !== null ? { exitCode: job.exitCode } : {}),
             ...(waitFor ? { matched } : {}),
+            logFile: job.logFile,
           },
         },
       ]

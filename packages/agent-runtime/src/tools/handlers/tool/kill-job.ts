@@ -1,13 +1,11 @@
+import { authorizeBackgroundJob } from './authorize-background-job'
+
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
   ClientToolCall,
   CodebuffToolCall,
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
-import {
-  getPendingBackgroundJob,
-  pendingBackgroundJobOwnedBy,
-} from '@codebuff/common/util/pending-background-jobs'
 import type { AgentState } from '@codebuff/common/types/session-state'
 
 type ToolName = 'kill_job'
@@ -26,13 +24,12 @@ export const handleKillJob = (async ({
   agentState: AgentState
   clientSessionId: string
 }): Promise<{ output: CodebuffToolOutput<ToolName> }> => {
-  const job = getPendingBackgroundJob(toolCall.input.jobId)
-  const owner = {
+  const authorization = authorizeBackgroundJob({
+    jobId: toolCall.input.jobId,
+    agentState,
     clientSessionId,
-    rootRunId:
-      agentState.ancestorRunIds[0] ?? agentState.runId ?? agentState.agentId,
-  }
-  if (!job || !pendingBackgroundJobOwnedBy(job, owner)) {
+  })
+  if (authorization.status === 'foreign') {
     return {
       output: [
         {
@@ -50,6 +47,7 @@ export const handleKillJob = (async ({
     toolCallId: toolCall.toolCallId,
     input: {
       jobId: toolCall.input.jobId,
+      owner: authorization.owner,
       signal: toolCall.input.signal,
     },
   }

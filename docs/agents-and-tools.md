@@ -574,6 +574,36 @@ an agent that provides the capability (for example, spawn `code-searcher` for
 codebase search). Do not retry the same unavailable name — the result will not
 change.
 
+### Background shell jobs (`check_job` / `read_logs` / `kill_job` / `list_jobs`)
+
+Background shell jobs are started with `run_terminal_command` using
+`process_type: BACKGROUND`, which returns a `jobId` immediately. Four read/manage
+tools operate on those jobs:
+
+- `check_job` polls or follows a job's new output and status, and returns the
+  job's `logFile` path in its success output.
+- `read_logs` reads the trailing lines of a job's log (or an arbitrary file).
+- `kill_job` stops a running job (status becomes `stopped`).
+- `list_jobs` lists the current run's background jobs — both running and
+  recently settled — so an agent that lost a `jobId` (for example after context
+  compaction) can rediscover them. It takes no agent-supplied input; the owner
+  field is runtime-managed and agents must omit it.
+
+Settled shell jobs remain checkable within the session/TTL: `check_job`,
+`read_logs`, and `kill_job` now work after a job has completed (returning its
+final status, exit code, and output) rather than failing once it finishes.
+Settled entries are retained in the pending registry with a `completedAt`
+timestamp and swept on a TTL, and `list_jobs` reports them until they are swept.
+
+Job ownership is scoped to the run that started the job. When a job has a live
+pending entry owned by another run, these tools reject it as "unavailable to
+this run" to preserve live-job isolation. On a true pending-miss (no entry —
+typically after a session restart), the runtime forwards the call with the
+current run's owner so the SDK can recover the job from its persisted disk
+metadata and re-stamp ownership. This cross-session recovery reattaches to a
+still-running job (a recovered job whose process is still alive stays
+`running`; one whose process is gone reports `lost`).
+
 ### `query_index`
 
 `query_index` queries the local codebase graph index. It is intended for retrieval-led context gathering before reading or editing files.

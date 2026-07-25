@@ -14,6 +14,15 @@ const inputSchema = z
       .describe(
         'The jobId returned by run_terminal_command with process_type: BACKGROUND.',
       ),
+    owner: z
+      .object({
+        clientSessionId: z.string(),
+        rootRunId: z.string(),
+        parentRunId: z.string(),
+        parentAgentId: z.string(),
+      })
+      .optional()
+      .describe('Runtime-managed background job owner; agents must omit.'),
     wait_for: z
       .string()
       .min(1)
@@ -46,7 +55,7 @@ const inputSchema = z
 const description = `
 Poll or follow a background job (started by run_terminal_command with process_type: BACKGROUND).
 
-- Poll mode (no wait_for/timeout): returns immediately with output produced since your last check_job for this job, plus status (running|completed|error) and exitCode when finished.
+- Poll mode (no wait_for/timeout): returns immediately with output produced since your last check_job for this job, plus status (running|completed|error|stopped) and exitCode when finished.
 - Follow mode (wait_for and/or timeout_seconds): blocks — bounded by timeout_seconds — until wait_for appears in new output or the job exits, then returns. \`matched\` indicates whether wait_for was seen. A timeout leaves the job running by default; set kill_on_timeout to true only when the timeout should explicitly terminate it. Poll mode never kills.
 
 Output never repeats lines across calls: each check_job call advances that job's read offset and returns only new output. If you need the full/latest tail without consuming incremental output, use read_logs with the jobId. Prefer check_job over blocking SYNC commands for dev servers, build watchers, and log tails.
@@ -73,11 +82,13 @@ export const checkJobParams = {
     z.union([
       z.object({
         jobId: z.string(),
-        status: z.enum(['running', 'completed', 'error', 'lost']),
+        status: z.enum(['running', 'completed', 'error', 'lost', 'stopped']),
         newOutput: z.string(),
         exitCode: z.number().optional(),
         matched: z.boolean().optional(),
         killed: z.boolean().optional(),
+        logFile: z.string().optional(),
+        errorMessage: z.string().optional(),
       }),
       z.object({
         jobId: z.string(),

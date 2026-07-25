@@ -28,6 +28,7 @@ export type ToolName =
   | 'glob'
   | 'kill_job'
   | 'list_directory'
+  | 'list_jobs'
   | 'lookup_agent_info'
   | 'query_index'
   | 'read_docs'
@@ -87,6 +88,7 @@ export interface ToolParamsMap {
   glob: GlobParams
   kill_job: KillJobParams
   list_directory: ListDirectoryParams
+  list_jobs: ListJobsParams
   lookup_agent_info: LookupAgentInfoParams
   query_index: QueryIndexParams
   read_docs: ReadDocsParams
@@ -202,6 +204,13 @@ export interface CheckBackgroundAgentParams {
 export interface CheckJobParams {
   /** The jobId returned by run_terminal_command with process_type: BACKGROUND. */
   jobId: string
+  /** Runtime-managed background job owner; agents must omit. */
+  owner?: {
+    clientSessionId: string
+    rootRunId: string
+    parentRunId: string
+    parentAgentId: string
+  }
   /** Optional substring to wait for in the new output before returning (follow mode). Returns early as soon as it appears (e.g. "Listening on" / "compiled successfully"). */
   wait_for?: string
   /** Max seconds to wait for new output / the wait_for pattern. 0 (default) returns immediately with whatever new output exists (poll mode); >0 blocks up to this long (follow mode). */
@@ -564,6 +573,13 @@ export interface KillJobParams {
   jobId: string
   /** Signal to send. Defaults to SIGTERM; use SIGKILL only if graceful termination fails. */
   signal?: 'SIGTERM' | 'SIGKILL'
+  /** Runtime-managed background job owner; agents must omit. */
+  owner?: {
+    clientSessionId: string
+    rootRunId: string
+    parentRunId: string
+    parentAgentId: string
+  }
 }
 
 /**
@@ -572,6 +588,19 @@ export interface KillJobParams {
 export interface ListDirectoryParams {
   /** Directory path to list, relative to the project root. */
   path: string
+}
+
+/**
+ * List this run's background shell jobs (running and settled) and their statuses.
+ */
+export interface ListJobsParams {
+  /** Runtime-managed; agents must omit. */
+  owner?: {
+    clientSessionId: string
+    rootRunId: string
+    parentRunId: string
+    parentAgentId: string
+  }
 }
 
 /**
@@ -666,6 +695,13 @@ export interface ReadLogsParams {
   path?: string
   /** Background job id returned by run_terminal_command(process_type: BACKGROUND). When provided, reads the job log file directly. */
   jobId?: string
+  /** Runtime-managed background job owner; agents must omit. */
+  owner?: {
+    clientSessionId: string
+    rootRunId: string
+    parentRunId: string
+    parentAgentId: string
+  }
   /** Number of trailing lines to read. Defaults to 200. */
   lines?: number
   /** Maximum characters to return. Defaults to 20,000. */

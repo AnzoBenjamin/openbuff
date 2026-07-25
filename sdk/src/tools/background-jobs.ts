@@ -7,7 +7,7 @@ import { StringDecoder } from 'string_decoder'
 
 import {
   __clearPendingBackgroundJobsForTest,
-  removePendingBackgroundJob,
+  restampPendingBackgroundJobOwner,
   upsertPendingBackgroundJob,
 } from '@codebuff/common/util/pending-background-jobs'
 
@@ -21,7 +21,12 @@ import {
  * bytes since the last check (tracked by readOffset) so output is never
  * duplicated or lost between polls.
  */
-export type BackgroundJobStatus = 'running' | 'completed' | 'error' | 'lost'
+export type BackgroundJobStatus =
+  | 'running'
+  | 'completed'
+  | 'error'
+  | 'lost'
+  | 'stopped'
 
 export interface BackgroundJobOwner {
   clientSessionId: string
@@ -75,6 +80,8 @@ export interface BackgroundJob {
   /** Preserves incomplete UTF-8 sequences across bounded incremental reads. */
   decoder?: StringDecoder
   owner?: BackgroundJobOwner
+  /** Wall-clock time of the last throttled metadata write, if any. */
+  lastMetadataWriteAt?: number
 }
 
 const jobs = new Map<string, BackgroundJob>()
@@ -91,6 +98,12 @@ const ORPHANED_JOB_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 const MAX_BACKGROUND_LOG_BYTES = 10 * 1024 * 1024
 const MAX_BACKGROUND_READ_BYTES = 100_000
 const BACKGROUND_LOG_MONITOR_INTERVAL_MS = 250
+/**
+ * Minimum interval between per-poll metadata writes in readNewJobOutput. The
+ * readOffset is persisted for cross-session recovery, so we throttle the churn
+ * of writing metadata on every read while still writing promptly on settle.
+ */
+const METADATA_WRITE_THROTTLE_MS = 1000
 const JOB_ID_PATTERN = /^job-[A-Za-z0-9_-]+$/
 /**
  * Permissions for newly-created background job temp files. 0o600 keeps the
@@ -420,6 +433,11 @@ export function startBackgroundJob(params: {
       }
       // Keep trimming while the process is unwinding so a chatty child cannot
       // regrow a sparse/oversized log between SIGTERM and exit.
+      //
+      // Deliberate tradeoff: truncation keeps the HEAD (oldest bytes) and drops
+      // the newest output. The job is being terminated for exceeding its log
+      // quota, and the startup/context head is the most diagnostically useful
+      // part; losing the tail is a known, accepted cost.
       fs.truncateSync(logFile, MAX_BACKGROUND_LOG_BYTES)
     } catch {
       // The process exit/error handlers own final cleanup.
@@ -438,42 +456,97 @@ export function startBackgroundJob(params: {
   const writeMetadata = () => writeBackgroundJobMetadata(job)
   writeMetadata()
   child.on('exit', (code) => {
-    job.status = quotaExceeded ? 'error' : code === 0 ? 'completed' : 'error'
+    // A prior killBackgroundJob call sets status to 'stopped' synchronously
+    // before this exit fires. SIGTERM produces a non-zero exit code, so treat
+    // an already-'stopped' job as an intentional stop rather than an error and
+    // preserve the documented 'stopped' contract in both the in-memory job and
+    // the retained pending-registry entry below. Quota termination still wins.
+    const intentionallyStopped = job.status === 'stopped'
+    job.status = quotaExceeded
+      ? 'error'
+      : intentionallyStopped
+        ? 'stopped'
+        : code === 0
+          ? 'completed'
+          : 'error'
     job.exitCode = code
     if (quotaExceeded) {
+      // See the log-quota monitor above: truncation keeps the HEAD (oldest
+      // bytes) and drops the newest output. Known, accepted tradeoff for a
+      // job terminated for exceeding its log quota.
       try {
         fs.truncateSync(logFile, MAX_BACKGROUND_LOG_BYTES)
       } catch {}
     }
     writeMetadata()
     closeLog()
-    removePendingBackgroundJob(jobId)
+    // Retain the settled job in the pending gate (with its final status and a
+    // completedAt for the TTL sweep) so check_job/read_logs/kill_job can still
+    // serve its final output/exit code after it finishes.
+    upsertPendingBackgroundJob({
+      jobId,
+      command: job.command,
+      status: job.status,
+      startedAt: job.startedAt,
+      owner: job.owner,
+      completedAt: Date.now(),
+    })
   })
   child.on('error', () => {
     job.status = 'error'
     writeMetadata()
     closeLog()
-    removePendingBackgroundJob(jobId)
+    upsertPendingBackgroundJob({
+      jobId,
+      command: job.command,
+      status: job.status,
+      startedAt: job.startedAt,
+      owner: job.owner,
+      completedAt: Date.now(),
+    })
   })
 
   jobs.set(jobId, job)
   return job
 }
 
-export function getBackgroundJob(jobId: string): BackgroundJob | undefined {
+export function getBackgroundJob(
+  jobId: string,
+  opts?: { restampOwner?: BackgroundJobOwner },
+): BackgroundJob | undefined {
   const existing = jobs.get(jobId)
   if (existing) return existing
 
   const recovered = recoverBackgroundJob(jobId)
   if (recovered) {
     jobs.set(jobId, recovered)
+    // Cross-session re-attach: when a restampOwner is supplied, the pending
+    // gate entry is (re)stamped with the current run's owner instead of the
+    // disk metadata's original owner. Same-process callers pass no opts, so
+    // the original owner and delete-free behavior are preserved.
+    const owner = opts?.restampOwner ?? recovered.owner
     if (recovered.status === 'running') {
       upsertPendingBackgroundJob({
         jobId: recovered.jobId,
         command: recovered.command,
         status: recovered.status,
         startedAt: recovered.startedAt,
-        owner: recovered.owner,
+        owner,
+      })
+      if (opts?.restampOwner) {
+        restampPendingBackgroundJobOwner(recovered.jobId, opts.restampOwner)
+      }
+    } else if (opts?.restampOwner) {
+      // A settled recovered job is upserted into the gate too (with a
+      // completedAt for the TTL sweep) so the re-attaching run can serve its
+      // final output/exit code.
+      upsertPendingBackgroundJob({
+        jobId: recovered.jobId,
+        command: recovered.command,
+        status: recovered.status,
+        startedAt: recovered.startedAt,
+        owner,
+        completedAt: Date.now(),
       })
     }
   }
@@ -615,8 +688,17 @@ export function killBackgroundJob(
       ? terminateProcessTree(job.child, signal)
       : killProcess(os.platform() === 'win32' ? pid : -pid, signal)
   if (killed) {
-    job.status = 'error'
-    removePendingBackgroundJob(jobId)
+    // An intentional kill is not a failure, so record it as 'stopped' and
+    // retain the settled entry in the gate for post-kill status/output reads.
+    job.status = 'stopped'
+    upsertPendingBackgroundJob({
+      jobId,
+      command: job.command,
+      status: 'stopped',
+      startedAt: job.startedAt,
+      owner: job.owner,
+      completedAt: Date.now(),
+    })
   }
 
   return {
@@ -651,7 +733,17 @@ export function readNewJobOutput(job: BackgroundJob): string {
     const bytesRead = fs.readSync(fd, buf, 0, length, job.readOffset)
     job.readOffset += bytesRead
     if (bytesRead > 0) {
-      writeBackgroundJobMetadata(job)
+      // Persist the advanced readOffset for cross-session recovery, but throttle
+      // the churn of writing on every poll. Bypass the throttle once the job has
+      // settled so the final offset/status is durable.
+      const now = Date.now()
+      if (
+        job.status !== 'running' ||
+        now - (job.lastMetadataWriteAt ?? 0) >= METADATA_WRITE_THROTTLE_MS
+      ) {
+        writeBackgroundJobMetadata(job)
+        job.lastMetadataWriteAt = now
+      }
     }
     job.decoder ??= new StringDecoder('utf8')
     return job.decoder.write(buf.subarray(0, bytesRead))

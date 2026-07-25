@@ -22,6 +22,15 @@ const inputSchema = z
       .describe(
         'Background job id returned by run_terminal_command(process_type: BACKGROUND). When provided, reads the job log file directly.',
       ),
+    owner: z
+      .object({
+        clientSessionId: z.string(),
+        rootRunId: z.string(),
+        parentRunId: z.string(),
+        parentAgentId: z.string(),
+      })
+      .optional()
+      .describe('Runtime-managed background job owner; agents must omit.'),
     lines: z
       .number()
       .int()
@@ -81,7 +90,9 @@ export const readLogsParams = {
         path: z.string(),
         resolvedPath: z.string(),
         jobId: z.string().optional(),
-        status: z.enum(['running', 'completed', 'error', 'lost']).optional(),
+        status: z
+          .enum(['running', 'completed', 'error', 'lost', 'stopped'])
+          .optional(),
         lines: z.number(),
         content: z.string(),
         truncated: z.boolean().optional(),

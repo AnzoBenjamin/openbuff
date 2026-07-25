@@ -1,5 +1,3 @@
-import { authorizeBackgroundJob } from './authorize-background-job'
-
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
   ClientToolCall,
@@ -8,8 +6,8 @@ import type {
 } from '@codebuff/common/tools/list'
 import type { AgentState } from '@codebuff/common/types/session-state'
 
-type ToolName = 'check_job'
-export const handleCheckJob = (async ({
+type ToolName = 'list_jobs'
+export const handleListJobs = (async ({
   previousToolCallFinished,
   toolCall,
   requestClientToolCall,
@@ -24,33 +22,18 @@ export const handleCheckJob = (async ({
   agentState: AgentState
   clientSessionId: string
 }): Promise<{ output: CodebuffToolOutput<ToolName> }> => {
-  const authorization = authorizeBackgroundJob({
-    jobId: toolCall.input.jobId,
-    agentState,
-    clientSessionId,
-  })
-  if (authorization.status === 'foreign') {
-    return {
-      output: [
-        {
-          type: 'json',
-          value: {
-            jobId: toolCall.input.jobId,
-            errorMessage: `Background shell job "${toolCall.input.jobId}" is unavailable to this run.`,
-          },
-        },
-      ],
-    }
-  }
+  const rootRunId =
+    agentState.ancestorRunIds[0] ?? agentState.runId ?? agentState.agentId
   const clientToolCall: ClientToolCall<ToolName> = {
-    toolName: 'check_job',
+    toolName: 'list_jobs',
     toolCallId: toolCall.toolCallId,
     input: {
-      jobId: toolCall.input.jobId,
-      owner: authorization.owner,
-      wait_for: toolCall.input.wait_for,
-      timeout_seconds: toolCall.input.timeout_seconds,
-      kill_on_timeout: toolCall.input.kill_on_timeout,
+      owner: {
+        clientSessionId,
+        rootRunId,
+        parentRunId: agentState.runId ?? agentState.agentId,
+        parentAgentId: agentState.agentId,
+      },
     },
   }
   await previousToolCallFinished

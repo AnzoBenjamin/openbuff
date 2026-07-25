@@ -3,6 +3,7 @@ import * as path from 'path'
 
 import { getBackgroundJob, safeOpenJobLogForRead } from './background-jobs'
 
+import type { BackgroundJobOwner } from './background-jobs'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 
 const DEFAULT_LINES = 200
@@ -13,6 +14,7 @@ type ReadLogsParams = {
   cwd: string
   path?: string
   jobId?: string
+  owner?: BackgroundJobOwner
   lines?: number
   max_chars?: number
 }
@@ -27,7 +29,7 @@ export async function readLogs(
   )
 
   if (params.jobId) {
-    const job = getBackgroundJob(params.jobId)
+    const job = getBackgroundJob(params.jobId, { restampOwner: params.owner })
     if (!job) {
       return [
         {

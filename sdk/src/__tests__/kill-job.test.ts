@@ -66,7 +66,7 @@ describe('killJob', () => {
     const out = await killJob({ jobId: job.jobId })
     expect(value(out)).toEqual({
       jobId: job.jobId,
-      status: 'error',
+      status: 'stopped',
       killed: true,
       signal: 'SIGTERM',
       exitCode: null,

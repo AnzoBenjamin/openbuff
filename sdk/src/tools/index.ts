@@ -11,6 +11,7 @@ import { getFilesStructured } from './read-files'
 import { replaceRange } from './replace-range'
 import { runFileChangeHooks } from './file-change-hooks'
 import { runTerminalCommand } from './run-terminal-command'
+import { listJobs } from './list-jobs'
 import { writeAuditFindings } from './write-audit-findings'
 
 export {
@@ -71,4 +72,5 @@ export const ToolHelpers = {
   render3dPreview,
   edit3dAsset,
   writeAuditFindings,
+  listJobs,
 }

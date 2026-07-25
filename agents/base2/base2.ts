@@ -95,6 +95,7 @@ export function createBase2(
       'check_job',
       'kill_job',
       'read_logs',
+      'list_jobs',
       'inspect_workspace',
       'get_task',
       'get_change_review_bundle',

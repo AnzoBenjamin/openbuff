@@ -21,6 +21,15 @@ const inputSchema = z
       .describe(
         'Signal to send. Defaults to SIGTERM; use SIGKILL only if graceful termination fails.',
       ),
+    owner: z
+      .object({
+        clientSessionId: z.string(),
+        rootRunId: z.string(),
+        parentRunId: z.string(),
+        parentAgentId: z.string(),
+      })
+      .optional()
+      .describe('Runtime-managed background job owner; agents must omit.'),
   })
   .describe('Cancel a background job started by run_terminal_command.')
 
@@ -49,7 +58,7 @@ export const killJobParams = {
     z.union([
       z.object({
         jobId: z.string(),
-        status: z.enum(['running', 'completed', 'error', 'lost']),
+        status: z.enum(['running', 'completed', 'error', 'lost', 'stopped']),
         killed: z.boolean(),
         signal: z.enum(['SIGTERM', 'SIGKILL']),
         exitCode: z.number().nullable().optional(),

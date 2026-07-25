@@ -120,6 +120,7 @@ import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { SessionState } from '@codebuff/common/types/session-state'
 import type { Source } from '@codebuff/common/types/source'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+import { listJobs } from './tools/list-jobs'
 
 /**
  * Wraps content for user messages, ensuring text is wrapped in <user_message> tags.
@@ -1681,6 +1682,19 @@ async function handleToolCall({
       result = await readLogs({
         ...readLogsInput,
         cwd: requireCwd(cwd, 'read_logs'),
+      })
+    } else if (toolName === 'list_jobs') {
+      result = await listJobs({
+        owner: (
+          input as {
+            owner?: {
+              clientSessionId: string
+              rootRunId: string
+              parentRunId: string
+              parentAgentId: string
+            }
+          }
+        ).owner,
       })
     } else if (toolName === 'git_status') {
       const gitStatusInput = input as Omit<
