@@ -1611,7 +1611,7 @@ async function handleToolCall({
       }
       result = await browserLogs(
         browserAction as Parameters<typeof browserLogs>[0],
-        _browserOwner,
+        { ..._browserOwner, projectRoot: cwd },
       )
     } else if (toolName === 'code_search') {
       if (fs.hostProcessView === false) {

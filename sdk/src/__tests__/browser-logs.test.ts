@@ -3,6 +3,7 @@ import { z } from 'zod/v4'
 
 import {
   type BrowserAction,
+  type NetworkEvent,
   BrowserActionInputSchema,
   BrowserActionSchema,
 } from '@codebuff/common/browser-actions'
@@ -12,6 +13,7 @@ import {
   frameSelectorOffsetScript,
   getBrowserSessionKey,
   normalizeBrowserUrl,
+  recordNetworkEvent,
   translateFramePoint,
 } from '../tools/browser-logs'
 
@@ -115,6 +117,15 @@ describe('browser_logs', () => {
       { type: 'recording', operation: 'start', everyNthFrame: 2 },
       { type: 'pdf', printBackground: true },
       { type: 'pixel_diff', expectedImageBase64: 'abc', threshold: 0.1 },
+      { type: 'design_tokens' },
+      {
+        type: 'design_tokens',
+        selector: 'main',
+        maxElements: 200,
+        frameSelector: 'iframe#embed',
+      },
+      { type: 'screenshot', screenshotPurpose: 'design' },
+      { type: 'screenshot', screenshotPurpose: 'smoke', fullPage: true },
     ]
 
     for (const action of actions) {
@@ -122,6 +133,22 @@ describe('browser_logs', () => {
         action.type as BrowserAction['type'],
       )
     }
+  })
+
+  test('input schema accepts design_tokens and screenshot purpose fields', () => {
+    expect(
+      BrowserActionInputSchema.safeParse({
+        type: 'design_tokens',
+        selector: 'main',
+        maxElements: 100,
+      }).success,
+    ).toBe(true)
+    expect(
+      BrowserActionInputSchema.safeParse({
+        type: 'screenshot',
+        screenshotPurpose: 'design',
+      }).success,
+    ).toBe(true)
   })
 
   test('accepts iframe targeting on selector-based actions', () => {
@@ -219,5 +246,123 @@ describe('browser_logs', () => {
         value: previousDocument,
       })
     }
+  })
+
+  test('correlates responseReceived with its request method and url', () => {
+    const networks: NetworkEvent[] = []
+    const requests = new Map<string, { method: string; url: string }>()
+    const timestamp = 1_700_000_000_000
+
+    recordNetworkEvent(
+      networks,
+      requests,
+      {
+        method: 'Network.requestWillBeSent',
+        params: {
+          requestId: 'r1',
+          request: { method: 'POST', url: 'https://api.example.com/x' },
+        },
+      },
+      timestamp,
+    )
+
+    // requestWillBeSent only tracks the request; nothing is pushed yet.
+    expect(networks).toHaveLength(0)
+    expect(requests.size).toBe(1)
+
+    recordNetworkEvent(
+      networks,
+      requests,
+      {
+        method: 'Network.responseReceived',
+        params: {
+          requestId: 'r1',
+          response: { url: 'https://api.example.com/x', status: 200 },
+        },
+      },
+      timestamp,
+    )
+
+    expect(networks).toEqual([
+      {
+        url: 'https://api.example.com/x',
+        method: 'POST',
+        status: 200,
+        timestamp,
+      },
+    ])
+    // The correlation entry is cleaned up once the response arrives.
+    expect(requests.size).toBe(0)
+  })
+
+  test('reports tracked method and url for a correlated loadingFailed', () => {
+    const networks: NetworkEvent[] = []
+    const requests = new Map<string, { method: string; url: string }>()
+    const timestamp = 1_700_000_000_001
+
+    recordNetworkEvent(
+      networks,
+      requests,
+      {
+        method: 'Network.requestWillBeSent',
+        params: {
+          requestId: 'r2',
+          request: { method: 'PUT', url: 'https://api.example.com/y' },
+        },
+      },
+      timestamp,
+    )
+
+    recordNetworkEvent(
+      networks,
+      requests,
+      {
+        method: 'Network.loadingFailed',
+        params: { requestId: 'r2', errorText: 'net::ERR_FAILED' },
+      },
+      timestamp,
+    )
+
+    // The failure reports the tracked method/url, not the requestId.
+    expect(networks).toEqual([
+      {
+        url: 'https://api.example.com/y',
+        method: 'PUT',
+        errorText: 'net::ERR_FAILED',
+        timestamp,
+      },
+    ])
+    expect(requests.size).toBe(0)
+  })
+
+  test('bounds the tracked-request correlation map to avoid unbounded growth', () => {
+    const networks: NetworkEvent[] = []
+    const requests = new Map<string, { method: string; url: string }>()
+    const timestamp = 1_700_000_000_002
+
+    // Simulate many in-flight requests that never receive a response/failure
+    // (which would otherwise leak entries for the life of the session).
+    for (let i = 0; i < 2500; i++) {
+      recordNetworkEvent(
+        networks,
+        requests,
+        {
+          method: 'Network.requestWillBeSent',
+          params: {
+            requestId: `req-${i}`,
+            request: { method: 'GET', url: `https://api.example.com/${i}` },
+          },
+        },
+        timestamp,
+      )
+    }
+
+    // The map is capped at MAX_TRACKED_NETWORK_REQUESTS (2000); oldest entries
+    // are evicted first, so the most recent request is retained.
+    expect(requests.size).toBe(2000)
+    expect(requests.has('req-2499')).toBe(true)
+    expect(requests.has('req-0')).toBe(false)
+    // No dangling response events were pushed for tracking-only requests.
+    expect(networks).toHaveLength(0)
   })
 })

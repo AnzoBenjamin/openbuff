@@ -14,6 +14,7 @@ import type {
 import type { Log, NetworkEvent } from '@codebuff/common/browser-actions'
 import type { JSONValue } from '@codebuff/common/types/json'
 import { getSdkEnv } from '../env'
+import { resolveFilePathForOperation } from './path-utils'
 
 type CdpResponse = {
   id?: number
@@ -47,6 +48,7 @@ type RecordingState = {
 
 type BrowserSession = {
   owner?: BrowserSessionOwner
+  projectRoot?: string
   child: ChildProcess
   port: number
   userDataDir: string
@@ -54,6 +56,7 @@ type BrowserSession = {
   activeTargetId: string
   logs: Log[]
   networks: NetworkEvent[]
+  networkRequests: Map<string, { method: string; url: string }>
   logOffset: number
   networkOffset: number
   recording: RecordingState | null
@@ -81,11 +84,17 @@ const CRC_TABLE = makeCrcTable()
 const browserSessions = new Map<string, BrowserSession>()
 const DEFAULT_BROWSER_SESSION_KEY = 'default'
 
+const MAX_RECORDING_FRAMES = 600
+const MAX_SESSION_LOG_ENTRIES = 5000
+const MAX_SESSION_NETWORK_EVENTS = 5000
+const MAX_TRACKED_NETWORK_REQUESTS = 2000
+
 export type BrowserSessionOwner = {
   clientSessionId: string
   rootRunId: string
   parentRunId: string
   parentAgentId: string
+  projectRoot?: string
 }
 
 export function getBrowserSessionKey(owner: BrowserSessionOwner): string {
@@ -105,6 +114,10 @@ export async function browserLogs(
 ): Promise<CodebuffToolOutput<'browser_logs'>> {
   const owner =
     typeof sessionOwnerOrKey === 'string' ? undefined : sessionOwnerOrKey
+  const projectRoot =
+    typeof sessionOwnerOrKey === 'string'
+      ? undefined
+      : sessionOwnerOrKey.projectRoot
   const sessionKey =
     typeof sessionOwnerOrKey === 'string'
       ? sessionOwnerOrKey
@@ -116,6 +129,7 @@ export async function browserLogs(
     }
 
     const session = await ensureBrowserSession(sessionKey, owner)
+    if (owner) session.projectRoot = projectRoot
     const page = await getActivePage(session)
     await enablePageDomains(page)
 
@@ -152,17 +166,20 @@ export async function browserLogs(
     }
 
     if (action.type === 'screenshot') {
+      const designMode = action.screenshotPurpose === 'design'
+      const format =
+        action.screenshotCompression ?? (designMode ? 'png' : 'jpeg')
+      const quality =
+        format === 'png'
+          ? undefined
+          : (action.screenshotCompressionQuality ?? (designMode ? 90 : 70))
       const result = await captureScreenshot(page, {
-        format: action.screenshotCompression ?? 'jpeg',
-        quality:
-          action.screenshotCompression === 'png'
-            ? undefined
-            : (action.screenshotCompressionQuality ?? 70),
+        format,
+        quality,
         fullPage: action.fullPage ?? false,
         timeout: action.timeout,
       })
-      const mediaType =
-        action.screenshotCompression === 'png' ? 'image/png' : 'image/jpeg'
+      const mediaType = format === 'png' ? 'image/png' : 'image/jpeg'
       return [
         jsonResult({
           ...(await buildResponse(session, page, action.type)),
@@ -299,6 +316,18 @@ export async function browserLogs(
       ]
     }
 
+    if (action.type === 'design_tokens') {
+      const result = await evaluateInTarget(
+        page,
+        designTokensScript(action.selector, action.maxElements),
+        action,
+        action.timeout,
+      )
+      return [
+        jsonResult(await buildResponse(session, page, action.type, result)),
+      ]
+    }
+
     if (action.type === 'wait_for') {
       const result = await evaluateInTarget(
         page,
@@ -324,6 +353,7 @@ export async function browserLogs(
         action.selector,
         action.paths,
         action,
+        session.projectRoot,
       )
       return [
         jsonResult(await buildResponse(session, page, action.type, result)),
@@ -553,6 +583,9 @@ async function ensureBrowserSession(
   const target = await waitForPageTarget(port)
   const session: BrowserSession = {
     ...(owner ? { owner } : {}),
+    ...(owner?.projectRoot !== undefined
+      ? { projectRoot: owner.projectRoot }
+      : {}),
     child,
     port,
     userDataDir,
@@ -560,6 +593,7 @@ async function ensureBrowserSession(
     activeTargetId: target.id,
     logs: [],
     networks: [],
+    networkRequests: new Map(),
     logOffset: 0,
     networkOffset: 0,
     recording: null,
@@ -723,6 +757,25 @@ function handleCdpMessage(
   }
 }
 
+function trimSessionBuffer(
+  session: BrowserSession,
+  kind: 'logs' | 'networks',
+): void {
+  if (kind === 'logs') {
+    const overflow = session.logs.length - MAX_SESSION_LOG_ENTRIES
+    if (overflow > 0) {
+      session.logs.splice(0, overflow)
+      session.logOffset = Math.max(0, session.logOffset - overflow)
+    }
+  } else {
+    const overflow = session.networks.length - MAX_SESSION_NETWORK_EVENTS
+    if (overflow > 0) {
+      session.networks.splice(0, overflow)
+      session.networkOffset = Math.max(0, session.networkOffset - overflow)
+    }
+  }
+}
+
 function recordEvent(
   session: BrowserSession,
   page: BrowserPage,
@@ -756,6 +809,7 @@ function recordEvent(
       timestamp,
       source: 'browser',
     })
+    trimSessionBuffer(session, 'logs')
   }
   if (message.method === 'Runtime.exceptionThrown') {
     const details = isRecord(params.exceptionDetails)
@@ -768,6 +822,7 @@ function recordEvent(
       timestamp,
       source: 'browser',
     })
+    trimSessionBuffer(session, 'logs')
   }
   if (message.method === 'Log.entryAdded' && isRecord(params.entry)) {
     const entry = params.entry
@@ -778,38 +833,101 @@ function recordEvent(
       source: 'browser',
       location: typeof entry.url === 'string' ? entry.url : undefined,
     })
+    trimSessionBuffer(session, 'logs')
   }
   if (
-    message.method === 'Network.responseReceived' &&
-    isRecord(params.response)
+    message.method === 'Network.requestWillBeSent' ||
+    message.method === 'Network.responseReceived' ||
+    message.method === 'Network.loadingFailed'
   ) {
-    const response = params.response
-    session.networks.push({
-      url: String(response.url ?? ''),
-      method: String(params.type ?? 'GET'),
-      status: typeof response.status === 'number' ? response.status : undefined,
+    recordNetworkEvent(
+      session.networks,
+      session.networkRequests,
+      message,
       timestamp,
-    })
-  }
-  if (message.method === 'Network.loadingFailed') {
-    session.networks.push({
-      url: String(params.requestId ?? ''),
-      method: 'GET',
-      errorText: String(params.errorText ?? 'Network request failed'),
-      timestamp,
-    })
+    )
+    trimSessionBuffer(session, 'networks')
   }
   if (message.method === 'Page.screencastFrame' && session.recording) {
     const data = typeof params.data === 'string' ? params.data : undefined
     if (data && session.recording.targetId === page.targetId) {
       session.recording.frames.push({ data, timestamp })
       session.recording.frameCount++
+      if (session.recording.frames.length > MAX_RECORDING_FRAMES) {
+        session.recording.frames.shift()
+      }
     }
     if (typeof params.sessionId === 'number') {
       void waitForCommand(page, 'Page.screencastFrameAck', {
         sessionId: params.sessionId,
       }).catch(() => undefined)
     }
+  }
+}
+
+/**
+ * Maps Chrome DevTools Protocol network events into NetworkEvent diagnostics.
+ *
+ * The HTTP request method and URL are only carried by `Network.requestWillBeSent`
+ * (via `request.method` / `request.url`), so we remember them keyed by
+ * `requestId` and resolve the correct values when the response arrives or the
+ * request fails. `Network.responseReceived` params only expose the resource
+ * `type` (e.g. "Document"/"XHR"), not the HTTP method, and `Network.loadingFailed`
+ * exposes neither the method nor the URL.
+ */
+export function recordNetworkEvent(
+  networks: NetworkEvent[],
+  requests: Map<string, { method: string; url: string }>,
+  message: Pick<CdpResponse, 'method' | 'params'>,
+  timestamp: number,
+): void {
+  const params = message.params ?? {}
+  const requestId =
+    typeof params.requestId === 'string' ? params.requestId : undefined
+
+  if (
+    message.method === 'Network.requestWillBeSent' &&
+    isRecord(params.request)
+  ) {
+    const request = params.request
+    if (requestId) {
+      requests.set(requestId, {
+        method: typeof request.method === 'string' ? request.method : 'GET',
+        url: typeof request.url === 'string' ? request.url : '',
+      })
+      if (requests.size > MAX_TRACKED_NETWORK_REQUESTS) {
+        const oldestKey = requests.keys().next().value
+        if (oldestKey !== undefined) requests.delete(oldestKey)
+      }
+    }
+    return
+  }
+
+  if (
+    message.method === 'Network.responseReceived' &&
+    isRecord(params.response)
+  ) {
+    const response = params.response
+    const tracked = requestId ? requests.get(requestId) : undefined
+    networks.push({
+      url: String(response.url ?? tracked?.url ?? ''),
+      method: tracked?.method ?? 'GET',
+      status: typeof response.status === 'number' ? response.status : undefined,
+      timestamp,
+    })
+    if (requestId) requests.delete(requestId)
+    return
+  }
+
+  if (message.method === 'Network.loadingFailed') {
+    const tracked = requestId ? requests.get(requestId) : undefined
+    networks.push({
+      url: tracked?.url ?? '',
+      method: tracked?.method ?? 'GET',
+      errorText: String(params.errorText ?? 'Network request failed'),
+      timestamp,
+    })
+    if (requestId) requests.delete(requestId)
   }
 }
 
@@ -1499,6 +1617,7 @@ async function uploadFiles(
   selector: string,
   paths: string[],
   target: FrameTarget & { timeout?: number },
+  projectRoot: string | undefined,
 ): Promise<unknown> {
   if (
     target.frameSelector ||
@@ -1536,7 +1655,18 @@ async function uploadFiles(
     'DOM.setFileInputFiles',
     {
       nodeId: inputNodeId,
-      files: paths.map((filePath) => path.resolve(filePath)),
+      files: paths.map((filePath) => {
+        if (projectRoot === undefined) {
+          throw new Error(
+            'upload requires a project root to confine file paths',
+          )
+        }
+        const resolved = resolveFilePathForOperation(projectRoot, filePath)
+        if (resolved === null) {
+          throw new Error('upload path escapes project root: ' + filePath)
+        }
+        return resolved.operationPath
+      }),
     },
     target.timeout ?? 15_000,
   )
@@ -1736,7 +1866,10 @@ async function handleRecordingAction(
     action.timeout ?? 15_000,
   ).catch(() => undefined)
   const apng = buildApng(
-    recording.frames.map((frame) => Buffer.from(frame.data, 'base64')),
+    recording.frames.map((frame) => ({
+      buffer: Buffer.from(frame.data, 'base64'),
+      timestamp: frame.timestamp,
+    })),
   )
   return [
     jsonResult({
@@ -1770,11 +1903,29 @@ async function pixelDiff(
     fullPage: action.fullPage ?? false,
     timeout: action.timeout,
   })
-  const expectedBuffer = action.expectedImageBase64
-    ? Buffer.from(action.expectedImageBase64, 'base64')
-    : action.expectedImagePath
-      ? readFileSync(path.resolve(action.expectedImagePath))
-      : undefined
+  let expectedBuffer: Buffer | undefined
+  if (action.expectedImageBase64) {
+    expectedBuffer = Buffer.from(action.expectedImageBase64, 'base64')
+  } else if (action.expectedImagePath) {
+    const projectRoot = session.projectRoot
+    if (projectRoot === undefined) {
+      throw new Error(
+        'pixel_diff expectedImagePath requires a project root to confine file paths',
+      )
+    } else {
+      const resolved = resolveFilePathForOperation(
+        projectRoot,
+        action.expectedImagePath,
+      )
+      if (resolved === null) {
+        throw new Error(
+          'pixel_diff expectedImagePath escapes project root: ' +
+            action.expectedImagePath,
+        )
+      }
+      expectedBuffer = readFileSync(resolved.operationPath)
+    }
+  }
   if (!expectedBuffer) {
     throw new Error(
       'pixel_diff requires expectedImagePath or expectedImageBase64',
@@ -1874,6 +2025,64 @@ export function frameSelectorOffsetScript(frameSelector: string): string {
     if (!frame) throw new Error('No frame matches selector: ${escapeForJs(frameSelector)}');
     const rect = frame.getBoundingClientRect();
     return { x: rect.left, y: rect.top };
+  })()`
+}
+
+function designTokensScript(
+  selector: string | undefined,
+  maxElements: number | undefined,
+): string {
+  const cap = maxElements ?? 400
+  return `(() => {
+    const root = ${selector ? `document.querySelector(${JSON.stringify(selector)})` : 'document.body'};
+    if (!root) throw new Error('No element matches selector: ${selector ? escapeForJs(selector) : 'document.body'}');
+    const elements = Array.from(root.querySelectorAll('*')).slice(0, ${cap});
+    const colors = new Set();
+    const fontFamilies = new Set();
+    const fontSizes = new Set();
+    const fontWeights = new Set();
+    const lineHeights = new Set();
+    const spacing = new Set();
+    const addColor = (value) => {
+      if (!value) return;
+      if (value === 'transparent' || value === 'rgba(0, 0, 0, 0)') return;
+      colors.add(value);
+    };
+    const addSpacing = (value) => {
+      if (!value || value === '0px') return;
+      spacing.add(value);
+    };
+    let sampledElements = 0;
+    for (const el of elements) {
+      const style = window.getComputedStyle(el);
+      if (!style) continue;
+      sampledElements++;
+      addColor(style.color);
+      addColor(style.backgroundColor);
+      addColor(style.borderColor);
+      if (style.fontFamily) fontFamilies.add(style.fontFamily);
+      if (style.fontSize) fontSizes.add(style.fontSize);
+      if (style.fontWeight) fontWeights.add(style.fontWeight);
+      if (style.lineHeight) lineHeights.add(style.lineHeight);
+      addSpacing(style.marginTop);
+      addSpacing(style.marginRight);
+      addSpacing(style.marginBottom);
+      addSpacing(style.marginLeft);
+      addSpacing(style.paddingTop);
+      addSpacing(style.paddingRight);
+      addSpacing(style.paddingBottom);
+      addSpacing(style.paddingLeft);
+    }
+    const cap = (set) => Array.from(set).sort().slice(0, 60);
+    return {
+      colors: cap(colors),
+      fontFamilies: cap(fontFamilies),
+      fontSizes: cap(fontSizes),
+      fontWeights: cap(fontWeights),
+      lineHeights: cap(lineHeights),
+      spacing: cap(spacing),
+      sampledElements,
+    };
   })()`
 }
 
@@ -2071,7 +2280,13 @@ function modifierBitmask(
 }
 
 function escapeForJs(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
 }
 
 function toJsonValue(value: unknown, seen = new WeakSet<object>()): JSONValue {
@@ -2122,13 +2337,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function buildApng(frames: Buffer[]): Buffer {
+const DEFAULT_FRAME_DELAY_MS = 100
+
+function frameDelayMs(
+  frames: Array<{ timestamp: number }>,
+  index: number,
+): number {
+  // Non-final frame: delay is the gap until the next captured frame.
+  if (index < frames.length - 1) {
+    const delta = frames[index + 1].timestamp - frames[index].timestamp
+    if (Number.isFinite(delta) && delta > 0) return Math.min(delta, 65535)
+    return DEFAULT_FRAME_DELAY_MS
+  }
+  // Final frame has no successor: reuse the previous inter-frame delay.
+  if (index > 0) {
+    const delta = frames[index].timestamp - frames[index - 1].timestamp
+    if (Number.isFinite(delta) && delta > 0) return Math.min(delta, 65535)
+  }
+  return DEFAULT_FRAME_DELAY_MS
+}
+
+function buildApng(frames: Array<{ buffer: Buffer; timestamp: number }>): Buffer {
   if (frames.length === 0) return Buffer.alloc(0)
-  const parsed = frames.map(parsePngChunks)
+  const parsed = frames.map((frame) => parsePngChunks(frame.buffer))
   const first = parsed[0]
   const ihdr = first.find((chunk) => chunk.type === 'IHDR')
   const iend = first.find((chunk) => chunk.type === 'IEND')
-  if (!ihdr || !iend) return frames[0]
+  if (!ihdr || !iend) return frames[0].buffer
   const width = ihdr.data.readUInt32BE(0)
   const height = ihdr.data.readUInt32BE(4)
   const chunks: Buffer[] = [
@@ -2145,7 +2380,7 @@ function buildApng(frames: Buffer[]): Buffer {
           sequenceNumber: sequence++,
           width,
           height,
-          delayNum: 100,
+          delayNum: frameDelayMs(frames, index),
           delayDen: 1000,
         }),
       ),
