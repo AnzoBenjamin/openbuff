@@ -853,6 +853,11 @@ ${specialistRoutingSection}
             .messageHistory
         }
         let editsThisStep = false
+        // Reset per STEP iteration (NOT hoisted across iterations): true when
+        // this step ran a terminal-mutation tool that can write files the
+        // edit-artifact channel does not capture. Used to scope the mid-turn
+        // git-status sweep's absorption below.
+        let terminalMutationThisStep = false
         const files = extractChangedFiles(
           (stepResult as any) && (stepResult as any).toolResult,
         )
@@ -864,10 +869,24 @@ ${specialistRoutingSection}
           markActiveWorkStateChanged()
         }
         const messageHistory = (stepResult as any)?.agentState?.messageHistory
+        // Capture the pre-update start index so the terminal-mutation scan
+        // below covers the SAME message delta extractChangedFilesFromMessages
+        // scans; processedMessageHistoryLength is overwritten right after. If
+        // we scanned from the post-update length the slice would be empty and
+        // the terminal signal would always be false.
+        const messageHistoryStartIndex = processedMessageHistoryLength
         const messageFiles = extractChangedFilesFromMessages(
           messageHistory,
-          processedMessageHistoryLength,
+          messageHistoryStartIndex,
         )
+        if (
+          messagesRanTerminalMutationTool(
+            messageHistory,
+            messageHistoryStartIndex,
+          )
+        ) {
+          terminalMutationThisStep = true
+        }
         if (Array.isArray(messageHistory)) {
           currentConversationMessages = messageHistory
           updateWorkflowTodoProgressFromMessages(messageHistory)
@@ -934,9 +953,22 @@ ${specialistRoutingSection}
           gitStatusObservedDirty = true
         }
         for (const file of gitStatusFiles) {
+          // Concurrent-instance isolation: absorb a newly-dirty git-status
+          // file into the pending set only when this agent plausibly authored
+          // it — either it is already task-related (present in the live
+          // changedFiles set, which recordChangedFiles populated this step from
+          // edit-tool/message-history artifacts) or a terminal-mutation tool
+          // (run_terminal_command / a spawned basher) ran this step and can
+          // write files the edit-artifact channel does not capture. A file that
+          // is neither self-authored nor produced during a terminal step is
+          // attributed to a concurrent instance / external churn and excluded.
+          // The observation bookkeeping above (gitStatusObservedFiles.add and
+          // gitStatusObservedDirty) stays UNSCOPED for every git-status file so
+          // committed-file pruning keeps working.
           if (
             !initialGitStatusFiles.includes(file) &&
-            !gatePassedFiles.has(file)
+            !gatePassedFiles.has(file) &&
+            (changedFiles.has(file) || terminalMutationThisStep)
           ) {
             editsHappened = true
             recordChangedFiles([file], { fromStatusObservation: true })
@@ -2777,13 +2809,23 @@ ${specialistRoutingSection}
           !!activeWorkState.reviewedReviewableFingerprint &&
           activeWorkState.reviewedReviewableFingerprint ===
             reviewableFingerprint
+        // Skip the final reviewer when the reviewable pending set has no
+        // working-tree diff this turn (already committed / clean tree). Only
+        // trusted when git_status returned a real result; a dirty reviewable
+        // file (present in gitStatusFiles) keeps the reviewer spawning.
+        const reviewableSetHasNoWorkingTreeDiff =
+          isRealGitStatusResult &&
+          reviewablePendingFiles.length > 0 &&
+          !reviewablePendingFiles.some((file) => gitStatusFiles.includes(file))
         const skipReviewerForReviewableScope =
           runReviewerGate &&
           editsHappened &&
           !reviewerProtocolBypassAuthorized &&
           activeWorkState.lastReviewerGateSkipReason !==
             'reviewer-protocol-attestation-failed' &&
-          (reviewablePendingFiles.length === 0 || reviewableSetAlreadyReviewed)
+          (reviewablePendingFiles.length === 0 ||
+            reviewableSetAlreadyReviewed ||
+            reviewableSetHasNoWorkingTreeDiff)
         if (skipReviewerForReviewableScope) {
           reviewerFinalizationVerdict = 'NON_BLOCKING'
           activeWorkState.currentPhase = 'awaiting_review'
@@ -4895,7 +4937,7 @@ ${specialistRoutingSection}
 
         const sections: string[] = [`Current phase: ${state.currentPhase}`]
         sections.push(
-          `Gate status: phase=${state.currentPhase}; validation hooks ran=${state.lastValidationSummary ? 'yes' : 'no'}; this is a durable snapshot at turn start, not a live process — the validation/reviewer gate runs across turns; do not infer progress or predict when it will pass.`,
+          `Gate status: phase=${state.currentPhase}; validation hooks ran=${state.lastValidationSummary ? 'yes' : 'no'}; this is a durable snapshot captured at turn start; the validation/reviewer gate runs inline and locally when you end your turn (it is not a backend/async job and does not run between turns on its own), so do not infer progress or predict when it will pass — just finish your work and let it run.`,
         )
         if (
           typeof state.gateProgressLine === 'string' &&
@@ -5283,6 +5325,62 @@ ${specialistRoutingSection}
           }
         }
         return normalizeGateFileList([...out])
+      }
+
+      // Detects a terminal-mutation tool call in a message-history delta.
+      // Mirrors the scanning shape of extractChangedFilesFromMessages: iterate
+      // messages.slice(startIndex), and for each assistant record with an array
+      // content, return true if any part is a tool-call whose tool name is
+      // run_terminal_command, OR a spawn (spawn_agents / spawn_agent_inline)
+      // whose input names `basher` as an agent_type. Terminal writes are not
+      // captured by the edit-artifact channel, so this signal scopes the
+      // git-status sweep's absorption. Self-contained inline helper (handleSteps
+      // is serialized via .toString() + new Function(...), so it must not
+      // reference module-scope imports).
+      function messagesRanTerminalMutationTool(
+        messages: unknown,
+        startIndex: number,
+      ): boolean {
+        if (!Array.isArray(messages)) return false
+        const spawnsBasher = (input: unknown): boolean => {
+          if (!input || typeof input !== 'object') return false
+          const record = input as Record<string, unknown>
+          if (record.agent_type === 'basher') return true
+          if (Array.isArray(record.agents)) {
+            for (const agent of record.agents) {
+              if (
+                agent &&
+                typeof agent === 'object' &&
+                (agent as Record<string, unknown>).agent_type === 'basher'
+              ) {
+                return true
+              }
+            }
+          }
+          return false
+        }
+        for (const message of messages.slice(startIndex)) {
+          if (!message || typeof message !== 'object') continue
+          const record = message as Record<string, unknown>
+          if (record.role !== 'assistant') continue
+          if (!Array.isArray(record.content)) continue
+          for (const part of record.content) {
+            if (!part || typeof part !== 'object') continue
+            const toolCall = part as Record<string, unknown>
+            if (toolCall.type !== 'tool-call') continue
+            const toolName =
+              typeof toolCall.toolName === 'string' ? toolCall.toolName : ''
+            if (toolName === 'run_terminal_command') return true
+            if (
+              (toolName === 'spawn_agents' ||
+                toolName === 'spawn_agent_inline') &&
+              spawnsBasher(toolCall.input)
+            ) {
+              return true
+            }
+          }
+        }
+        return false
       }
 
       function visitToolValue(value: unknown, out: Set<string>): void {

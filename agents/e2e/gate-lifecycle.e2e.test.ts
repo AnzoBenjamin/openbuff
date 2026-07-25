@@ -30,6 +30,40 @@ function finishStepWithToolResult(value: unknown) {
   } as any
 }
 
+/**
+ * Canonical file_mutation_result receipt (the real production edit-artifact
+ * shape) for `path`. Feed this instead of a bare `{ file }` so the edited file
+ * lands in the live changedFiles set before the mid-turn git-status sweep.
+ */
+function editReceipt(path: string) {
+  return {
+    kind: 'file_mutation_result',
+    version: 1,
+    operationId: `op-${path}`,
+    receiptId: `receipt-${path}`,
+    outcome: 'applied',
+    authorityTier: 'conditional_commit',
+    actions: [
+      {
+        actionId: `action-${path}`,
+        index: 0,
+        action: 'update',
+        path,
+        outcome: 'applied',
+        beforeHash: 'before',
+        afterHash: 'after',
+      },
+    ],
+    authorityReceipt: {
+      operationId: `op-${path}`,
+      receiptId: `receipt-${path}`,
+      actions: [{ actionId: `action-${path}` }],
+    },
+    errors: [],
+    freshCapabilities: [],
+  }
+}
+
 const SCRATCH_ROOT = '.e2e-scratch/base2-gate-lifecycle'
 const LIFECYCLE_FILE = `${SCRATCH_ROOT}/lifecycle.ts`
 
@@ -113,7 +147,7 @@ describe('base2 deterministic gate lifecycle e2e', () => {
 
     // Invariant 1: an edit detected after a model step opens the validation gate.
     expect(
-      gen.next(finishStepWithToolResult({ file: LIFECYCLE_FILE })).value,
+      gen.next(finishStepWithToolResult(editReceipt(LIFECYCLE_FILE))).value,
     ).toMatchObject({ toolName: 'git_status', input: {} })
     expect(
       gen.next(feedJson({ status: ` M ${LIFECYCLE_FILE}` })).value,
@@ -173,7 +207,7 @@ describe('base2 deterministic gate lifecycle e2e', () => {
 
     // Invariant 5: the model can apply a validation fix in the recovery step.
     expect(
-      gen.next(finishStepWithToolResult({ file: LIFECYCLE_FILE })).value,
+      gen.next(finishStepWithToolResult(editReceipt(LIFECYCLE_FILE))).value,
     ).toMatchObject({ toolName: 'git_status' })
 
     // Invariant 6: passing validation advances to reviewer instead of finalizing.

@@ -27,6 +27,40 @@ function finishStep(value: unknown) {
   } as any
 }
 
+/**
+ * Canonical file_mutation_result receipt (the real production edit-artifact
+ * shape) for `path`. Feed this instead of a bare `{ file }` so the edited file
+ * lands in the live changedFiles set before the mid-turn git-status sweep.
+ */
+function editReceipt(path: string) {
+  return {
+    kind: 'file_mutation_result',
+    version: 1,
+    operationId: `op-${path}`,
+    receiptId: `receipt-${path}`,
+    outcome: 'applied',
+    authorityTier: 'conditional_commit',
+    actions: [
+      {
+        actionId: `action-${path}`,
+        index: 0,
+        action: 'update',
+        path,
+        outcome: 'applied',
+        beforeHash: 'before',
+        afterHash: 'after',
+      },
+    ],
+    authorityReceipt: {
+      operationId: `op-${path}`,
+      receiptId: `receipt-${path}`,
+      actions: [{ actionId: `action-${path}` }],
+    },
+    errors: [],
+    freshCapabilities: [],
+  }
+}
+
 describe('base2 reviewer spawn conditions e2e', () => {
   test('default mode with edits and passing validation spawns code-reviewer', () => {
     const base2 = createBase2('default')
@@ -58,7 +92,7 @@ describe('base2 reviewer spawn conditions e2e', () => {
     })
     expect(gen.next().value).toBe('STEP')
     expect(
-      gen.next(finishStep({ file: 'src/lifecycle.ts' })).value,
+      gen.next(finishStep(editReceipt('src/lifecycle.ts'))).value,
     ).toMatchObject({
       toolName: 'git_status',
     })
@@ -109,7 +143,7 @@ describe('base2 reviewer spawn conditions e2e', () => {
     })
     expect(gen.next().value).toBe('STEP')
     expect(
-      gen.next(finishStep({ file: 'src/lifecycle.ts' })).value,
+      gen.next(finishStep(editReceipt('src/lifecycle.ts'))).value,
     ).toMatchObject({
       toolName: 'git_status',
     })
@@ -154,7 +188,7 @@ describe('base2 reviewer spawn conditions e2e', () => {
       toolName: 'spawn_agent_inline',
     })
     expect(gen.next().value).toBe('STEP')
-    expect(gen.next(finishStep({ file: '.agents/sessions/x/PLAN.md' })).value).toMatchObject({
+    expect(gen.next(finishStep(editReceipt('.agents/sessions/x/PLAN.md'))).value).toMatchObject({
       toolName: 'git_status',
     })
     const skipped = gen.next(
@@ -186,7 +220,7 @@ describe('base2 reviewer spawn conditions e2e', () => {
       toolName: 'spawn_agent_inline',
     })
     expect(gen.next().value).toBe('STEP')
-    expect(gen.next(finishStep({ file: 'src/lifecycle.ts' })).value).toMatchObject({
+    expect(gen.next(finishStep(editReceipt('src/lifecycle.ts'))).value).toMatchObject({
       toolName: 'git_status',
     })
     expect(
@@ -313,6 +347,94 @@ describe('base2 reviewer spawn conditions e2e', () => {
       lastReviewerGateSkipReason: 'edits-detected-without-pending-gate-files',
       nextRequiredAction:
         'Unsafe reviewer gate state: edits were detected without pending gate files. Re-read the edited files/status, make a minimal follow-up edit if needed to restore pending gate files, then finish so validation/review can run safely.',
+    })
+  })
+
+  test('resumed pending file already committed (clean tree) skips reviewer instead of looping', () => {
+    // Fix 2: a follow-up turn (e.g. "commit the changes") can reopen the gate
+    // on a reviewable pending file whose bytes are already committed. The
+    // working tree is clean for that file, so a spawned reviewer could only
+    // fail file attestation and loop. The gate must skip the reviewer and
+    // treat the pass as green instead. editsHappened is true here because the
+    // resumed state carries a pending gate file with an awaiting_validation
+    // phase, but git_status reports the reviewable file is NOT dirty.
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2-custom',
+      base2ActiveWork: {
+        changedFiles: ['src/lifecycle.ts'],
+        touchedFiles: ['src/lifecycle.ts'],
+        pendingGateFiles: ['src/lifecycle.ts'],
+        currentPhase: 'awaiting_validation',
+        latestWorkSummary: '',
+        openReviewerBlockers: [],
+        lastValidationSummary: '',
+        nextRequiredAction: '',
+        lastPinnedStateMessage: '',
+      },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Now commit the previous lifecycle change.',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    // Turn-start git_status: clean tree (the reviewable file is committed).
+    expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    const pinned = gen.next()
+    expect(pinned.value).toMatchObject({ toolName: 'add_message' })
+    expect(gen.next().value).toBe('STEP')
+    expect(
+      gen.next({ stepsComplete: true, toolResult: [] } as any).value,
+    ).toMatchObject({
+      toolName: 'git_status',
+    })
+
+    // Post-step git_status: still clean — the pending reviewable file has no
+    // working-tree diff. The gate must NOT spawn code-reviewer; it emits a
+    // reviewer-skip gate-state and treats the gate as passed. Validation hooks
+    // still run on the pending set — only the reviewer spawn is skipped.
+    let next = gen.next(feedJson({ status: '' }))
+    // Walk any run_file_change_hooks / add_message steps until we reach either
+    // a reviewer spawn (bug) or the skip message. Assert we never spawn the
+    // reviewer for the clean reviewable set.
+    let sawReviewerSpawn = false
+    let sawReviewerSkip = false
+    for (let i = 0; i < 12 && !next.done; i += 1) {
+      const value = next.value as any
+      if (
+        value?.toolName === 'spawn_agents' &&
+        Array.isArray(value?.input?.agents) &&
+        value.input.agents.some(
+          (agent: any) => agent?.agent_type === 'code-reviewer',
+        )
+      ) {
+        sawReviewerSpawn = true
+        break
+      }
+      if (
+        value?.toolName === 'add_message' &&
+        typeof value?.input?.content === 'string' &&
+        value.input.content.includes('Reviewer gate skipped')
+      ) {
+        sawReviewerSkip = true
+      }
+      if (value === 'STEP') break
+      next = gen.next(feedJson({ status: '' }))
+    }
+
+    expect(sawReviewerSpawn).toBe(false)
+    expect(sawReviewerSkip).toBe(true)
+    // Structural signal alongside the operator-string check so a reworded skip
+    // message cannot silently produce a vacuous pass (both booleans false):
+    // the gate must actually reach the green finalization phase.
+    expect((agentState as any).base2ActiveWork).toMatchObject({
+      currentPhase: 'final_response_allowed',
+      pendingGateFiles: [],
     })
   })
 })

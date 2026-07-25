@@ -27,6 +27,40 @@ function finishStepWithToolResult(value: unknown) {
   } as any
 }
 
+/**
+ * Canonical file_mutation_result receipt (the real production edit-artifact
+ * shape) for `path`. Feed this instead of a bare `{ file }` so the edited file
+ * lands in the live changedFiles set before the mid-turn git-status sweep.
+ */
+function editReceipt(path: string) {
+  return {
+    kind: 'file_mutation_result',
+    version: 1,
+    operationId: `op-${path}`,
+    receiptId: `receipt-${path}`,
+    outcome: 'applied',
+    authorityTier: 'conditional_commit',
+    actions: [
+      {
+        actionId: `action-${path}`,
+        index: 0,
+        action: 'update',
+        path,
+        outcome: 'applied',
+        beforeHash: 'before',
+        afterHash: 'after',
+      },
+    ],
+    authorityReceipt: {
+      operationId: `op-${path}`,
+      receiptId: `receipt-${path}`,
+      actions: [{ actionId: `action-${path}` }],
+    },
+    errors: [],
+    freshCapabilities: [],
+  }
+}
+
 function writerNoopResult(receiptId: string) {
   const agentReceipt = {
     schemaVersion: 1,
@@ -200,7 +234,7 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
 
     // 4) The model step edits the triple-aux-relevant file, then finishes.
     expect(
-      gen.next(finishStepWithToolResult({ file: AUX_TRIPLE_FILE })).value,
+      gen.next(finishStepWithToolResult(editReceipt(AUX_TRIPLE_FILE))).value,
     ).toMatchObject({ toolName: 'git_status', input: {} })
 
     // 5) git_status reports the pending edit -> the aux block fires.
@@ -484,7 +518,7 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     })
     expect(gen.next().value).toBe('STEP')
     expect(
-      gen.next(finishStepWithToolResult({ file: AUX_TRIPLE_FILE })).value,
+      gen.next(finishStepWithToolResult(editReceipt(AUX_TRIPLE_FILE))).value,
     ).toMatchObject({ toolName: 'git_status' })
 
     const securityReviewerYield = gen.next(
@@ -592,7 +626,7 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     })
     expect(gen.next().value).toBe('STEP')
     expect(
-      gen.next(finishStepWithToolResult({ file: AUX_TRIPLE_FILE })).value,
+      gen.next(finishStepWithToolResult(editReceipt(AUX_TRIPLE_FILE))).value,
     ).toMatchObject({ toolName: 'git_status' })
 
     const securityReviewerYield = gen.next(
@@ -675,7 +709,9 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       input: { agent_type: 'context-pruner' },
     })
     expect(gen.next().value).toBe('STEP')
-    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+    expect(
+      gen.next(finishStepWithToolResult(editReceipt(AUX_TRIPLE_FILE))).value,
+    ).toMatchObject({
       toolName: 'git_status',
     })
 
@@ -774,11 +810,16 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       input: { agent_type: 'context-pruner' },
     })
     // Pinned state + model step with the SAME pending file (no new files added
-    // -> aux-relevant snapshot is stable -> no resetAuxGateFlags).
+    // -> aux-relevant snapshot is stable -> no resetAuxGateFlags). This second
+    // step makes NO new edit: AUX_TRIPLE_FILE is already in the live
+    // changedFiles set from the first iteration, so the scoped git-status sweep
+    // still absorbs it. Feeding a fresh edit receipt here would reset
+    // specialistReviewGatesDone and re-fire the aux gates, defeating the
+    // idempotency invariant under test.
     expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
     expect(gen.next().value).toBe('STEP')
     expect(
-      gen.next(finishStepWithToolResult({ file: AUX_TRIPLE_FILE })).value,
+      gen.next(finishStepWithToolResult({})).value,
     ).toMatchObject({ toolName: 'git_status' })
 
     // Idempotency invariant: on this second iteration reaching the aux block

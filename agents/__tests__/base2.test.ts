@@ -22,6 +22,42 @@ function makeProjectTempDir(prefix: string): string {
   return mkdtempSync(join(TEST_TMP_ROOT, prefix))
 }
 
+/**
+ * Build a canonical file_mutation_result receipt (the real production
+ * edit-artifact shape) for `path`. The mid-turn git-status sweep only absorbs
+ * a newly-dirty file into the pending gate set when it is already in the live
+ * changedFiles set (populated from canonical edit artifacts), so simulated
+ * edits must feed this shape rather than a bare `{ file }`.
+ */
+function editReceipt(path: string) {
+  return {
+    kind: 'file_mutation_result',
+    version: 1,
+    operationId: `op-${path}`,
+    receiptId: `receipt-${path}`,
+    outcome: 'applied',
+    authorityTier: 'conditional_commit',
+    actions: [
+      {
+        actionId: `action-${path}`,
+        index: 0,
+        action: 'update',
+        path,
+        outcome: 'applied',
+        beforeHash: 'before',
+        afterHash: 'after',
+      },
+    ],
+    authorityReceipt: {
+      operationId: `op-${path}`,
+      receiptId: `receipt-${path}`,
+      actions: [{ actionId: `action-${path}` }],
+    },
+    errors: [],
+    freshCapabilities: [],
+  }
+}
+
 function buildContentMarker(absolutePath: string): string {
   const data = readFileSync(absolutePath)
   const hash = createHash('sha256').update(data).digest('hex')
@@ -632,7 +668,7 @@ describe('base-deep gate lifecycle parity with base2', () => {
     // After the step produces a file change: git_status → run_file_change_hooks.
     const afterStep = gen.next({
       stepsComplete: true,
-      toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+      toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
     } as any)
     expect(afterStep.value).toMatchObject({ toolName: 'git_status' })
     const afterGit = gen.next({
@@ -771,7 +807,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -802,7 +838,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(gen.next().value).toBe('STEP')
     const afterStep = gen.next({
       stepsComplete: true,
-      toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+      toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
     } as any)
     expect(afterStep.value).toMatchObject({ toolName: 'git_status' })
     const afterGit = gen.next({
@@ -858,7 +894,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(gen.next().value).toBe('STEP')
     const afterStep = gen.next({
       stepsComplete: true,
-      toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+      toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
     } as any)
     expect(afterStep.value).toMatchObject({ toolName: 'git_status' })
     const afterGit = gen.next({
@@ -982,7 +1018,7 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         stepsComplete: true,
         toolResult: [
-          { type: 'json', value: { file: `file://${absolutePath}` } },
+          { type: 'json', value: editReceipt(`file://${absolutePath}`) },
         ],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
@@ -1049,7 +1085,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -1096,7 +1132,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -1542,7 +1578,7 @@ describe('base2 verification and reviewer gates', () => {
     const stepResult = gen.next({
       stepsComplete: true,
       hitStepCap: true,
-      toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+      toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
     } as any)
 
     // The generator must break out (return done) rather than yield the
@@ -1752,7 +1788,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/new.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/new.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     const afterGit = gen.next({
@@ -2481,7 +2517,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     const skipDiagnostic = gen.next({
@@ -2533,7 +2569,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     const skipDiagnostic = gen.next({
@@ -2918,7 +2954,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -3012,7 +3048,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -3068,7 +3104,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -3122,7 +3158,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -3189,7 +3225,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -3265,7 +3301,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -3558,7 +3594,7 @@ describe('base2 verification and reviewer gates', () => {
         toolResult: [
           {
             type: 'json',
-            value: { file: 'sdk/src/policy/terminal-command-policy.ts' },
+            value: editReceipt('sdk/src/policy/terminal-command-policy.ts'),
           },
         ],
       } as any).value,
@@ -3647,7 +3683,7 @@ describe('base2 verification and reviewer gates', () => {
         toolResult: [
           {
             type: 'json',
-            value: { file: 'sdk/src/policy/terminal-command-policy.ts' },
+            value: editReceipt('sdk/src/policy/terminal-command-policy.ts'),
           },
         ],
       } as any).value,
@@ -3767,7 +3803,7 @@ describe('base2 verification and reviewer gates', () => {
         toolResult: [
           {
             type: 'json',
-            value: { file: 'sdk/src/policy/terminal-command-policy.ts' },
+            value: editReceipt('sdk/src/policy/terminal-command-policy.ts'),
           },
         ],
       } as any).value,
@@ -3822,7 +3858,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -3866,7 +3902,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -3909,7 +3945,7 @@ describe('base2 verification and reviewer gates', () => {
       expect(
         gen.next({
           stepsComplete: true,
-          toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+          toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
         } as any).value,
       ).toMatchObject({ toolName: 'git_status' })
       expect(
@@ -3956,7 +3992,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -4050,7 +4086,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -4139,7 +4175,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -4190,8 +4226,11 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         stepsComplete: true,
         toolResult: [
-          { type: 'json', value: { file: 'agents/base2/base2.ts' } },
-          { type: 'json', value: { file: 'agents/__tests__/base2.test.ts' } },
+          { type: 'json', value: editReceipt('agents/base2/base2.ts') },
+          {
+            type: 'json',
+            value: editReceipt('agents/__tests__/base2.test.ts'),
+          },
         ],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
@@ -4339,7 +4378,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -4442,7 +4481,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -4581,7 +4620,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
@@ -4640,7 +4679,7 @@ describe('base2 validation-first reviewer snapshots', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     const validation = gen.next({
@@ -4739,9 +4778,14 @@ describe('base2 repair-loop gate-state telemetry (M6.4)', () => {
     ).toMatchObject({ toolName: 'spawn_agent_inline' })
     expect(gen.next().value).toBe('STEP')
 
-    // Step completes; the post-step git_status reports a pending change.
+    // Step completes with a canonical edit receipt so src/a.ts enters
+    // changedFiles before the mid-turn git-status sweep; the post-step
+    // git_status then reports the same pending change.
     expect(
-      gen.next({ stepsComplete: true, toolResult: [] } as any).value,
+      gen.next({
+        stepsComplete: true,
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
+      } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
       gen.next({
@@ -4870,7 +4914,7 @@ describe('base2 test-writer aux-gate completion path', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     // The prompt requires tests, so the test-writer aux gate fires before the
@@ -4975,7 +5019,7 @@ describe('base2 test-writer aux-gate completion path', () => {
     expect(
       gen.next({
         stepsComplete: true,
-        toolResult: [{ type: 'json', value: { file: 'src/a.ts' } }],
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
