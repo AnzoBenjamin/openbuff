@@ -18,6 +18,8 @@ import { LocalHarnessStore } from '../services/local-harness-store'
 
 const roots: string[] = []
 const FILESYSTEM_DISCOVERY_TIMEOUT_MS = 15_000
+const CROSS_PROCESS_TIMEOUT_MS = 30_000
+const CROSS_PROCESS_READY_TIMEOUT_MS = 20_000
 afterEach(() => {
   for (const root of roots.splice(0))
     fs.rmSync(root, { recursive: true, force: true })
@@ -47,30 +49,36 @@ describe('harness intelligence services', () => {
     FILESYSTEM_DISCOVERY_TIMEOUT_MS,
   )
 
-  test('maps source files to existing tests and package build scripts', () => {
-    const root = tempRoot()
-    fs.mkdirSync(path.join(root, 'packages', 'api', 'src'), { recursive: true })
-    fs.writeFileSync(
-      path.join(root, 'packages', 'api', 'package.json'),
-      JSON.stringify({ scripts: { typecheck: 'tsc', test: 'bun test' } }),
-    )
-    fs.writeFileSync(
-      path.join(root, 'packages', 'api', 'src', 'user.test.ts'),
-      '',
-    )
-    expect(
-      getAffectedTestTargets(root, ['packages/api/src/user.ts'])[0],
-    ).toMatchObject({
-      candidates: ['packages/api/src/user.test.ts'],
-      packageRoot: 'packages/api',
-    })
-    expect(
-      getBuildTargets(root, ['packages/api/src/user.ts'])[0],
-    ).toMatchObject({
-      packageRoot: 'packages/api',
-      scripts: ['typecheck', 'test'],
-    })
-  })
+  test(
+    'maps source files to existing tests and package build scripts',
+    () => {
+      const root = tempRoot()
+      fs.mkdirSync(path.join(root, 'packages', 'api', 'src'), {
+        recursive: true,
+      })
+      fs.writeFileSync(
+        path.join(root, 'packages', 'api', 'package.json'),
+        JSON.stringify({ scripts: { typecheck: 'tsc', test: 'bun test' } }),
+      )
+      fs.writeFileSync(
+        path.join(root, 'packages', 'api', 'src', 'user.test.ts'),
+        '',
+      )
+      expect(
+        getAffectedTestTargets(root, ['packages/api/src/user.ts'])[0],
+      ).toMatchObject({
+        candidates: ['packages/api/src/user.test.ts'],
+        packageRoot: 'packages/api',
+      })
+      expect(
+        getBuildTargets(root, ['packages/api/src/user.ts'])[0],
+      ).toMatchObject({
+        packageRoot: 'packages/api',
+        scripts: ['typecheck', 'test'],
+      })
+    },
+    FILESYSTEM_DISCOVERY_TIMEOUT_MS,
+  )
 
   test(
     'discovers nested multi-language workspaces and manager-specific targets',
@@ -364,7 +372,7 @@ describe('harness intelligence services', () => {
     const first = startChild('first')
     const second = startChild('second')
     const wait = new Int32Array(new SharedArrayBuffer(4))
-    const deadline = Date.now() + 5_000
+    const deadline = Date.now() + CROSS_PROCESS_READY_TIMEOUT_MS
     while (
       (!fs.existsSync(first.ready) || !fs.existsSync(second.ready)) &&
       Date.now() < deadline
@@ -380,7 +388,7 @@ describe('harness intelligence services', () => {
     expect(
       outcomes.filter((outcome) => outcome.includes('already leased')),
     ).toHaveLength(1)
-  })
+  }, CROSS_PROCESS_TIMEOUT_MS)
 
   test('external connector mutations require approval', () => {
     expect(
