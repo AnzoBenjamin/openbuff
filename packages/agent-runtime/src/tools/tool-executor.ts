@@ -1529,7 +1529,7 @@ export async function executeToolCall<T extends ToolName>(
         onResponseChunk({
           type: 'error',
           message:
-            'Spawning `git-committer` is not available yet. This is normal ordering, not a failure: the validation/reviewer gate re-arms whenever code changes, so a fresh edit sets it back to pending and the committer is withheld until that gate passes for the changed files. The gate runs and clears automatically — do not retry the spawn now. Wait for the gate to report passed for the pending files, then spawn git-committer; the commit will succeed on the next attempt.',
+            'git-committer withheld: the validation/reviewer gate has not reported passed yet (it re-arms on every edit and runs across turns — hooks first, then the reviewer). Wait until the pinned gate status shows phase=final_response_allowed for the pending files, then spawn git-committer once. Do not retry now or predict the gate\'s progress.',
         })
         if (filteredAgents.length === 0) {
           return abortablePreviousToolCallFinished

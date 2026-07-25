@@ -606,24 +606,25 @@ describe('runAgentStep - set_output tool', () => {
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'error',
+        message: expect.stringContaining('git-committer withheld'),
+      }),
+    )
+    // Pin the reworded gate-block guidance: the message names the gate stage
+    // (hooks first, then the reviewer) and tells the agent to wait for the
+    // pinned final_response_allowed phase rather than predicting, so this
+    // behavior-changing wording stays covered.
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
         message: expect.stringContaining(
-          'Spawning `git-committer` is not available yet',
+          'Wait until the pinned gate status shows phase=final_response_allowed',
         ),
       }),
     )
-    // Pin the reworded gate-block guidance: the message frames the block as
-    // normal ordering (the gate re-arms per edit and clears automatically),
-    // not a failure, so this behavior-changing wording stays covered.
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'error',
-        message: expect.stringContaining('normal ordering, not a failure'),
-      }),
-    )
-    expect(chunks).toContainEqual(
-      expect.objectContaining({
-        type: 'error',
-        message: expect.stringContaining('clears automatically'),
+        message: expect.stringContaining('hooks first, then the reviewer'),
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -702,9 +703,7 @@ describe('runAgentStep - set_output tool', () => {
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'error',
-        message: expect.stringContaining(
-          'Spawning `git-committer` is not available yet',
-        ),
+        message: expect.stringContaining('git-committer withheld'),
       }),
     )
     // The spawn_agents tool_call proceeds with only the helper agent.
@@ -1516,16 +1515,25 @@ describe('runAgentStep - set_output tool', () => {
         ...runAgentStepBaseParams,
         onResponseChunk: (chunk) => chunks.push(chunk),
       }
+      // The spawned git-committer re-invokes this stream; end_turn on recursion
+      // to avoid infinite spawn recursion (mirrors the neighboring allow/bypass
+      // tests).
+      let streamCallCount = 0
       runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
-        yield createToolCallChunk('spawn_agents', {
-          agents: [
-            {
-              agent_type: 'git-committer',
-              prompt: 'Commit the changes',
-              params: { owned_paths: [ownedPath] },
-            },
-          ],
-        })
+        streamCallCount += 1
+        if (streamCallCount === 1) {
+          yield createToolCallChunk('spawn_agents', {
+            agents: [
+              {
+                agent_type: 'git-committer',
+                prompt: 'Commit the changes',
+                params: { owned_paths: [ownedPath] },
+              },
+            ],
+          })
+        } else {
+          yield createToolCallChunk('end_turn', {})
+        }
         return promptSuccess('mock-message-id')
       }
 

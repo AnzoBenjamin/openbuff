@@ -2171,6 +2171,9 @@ ${specialistRoutingSection}
           runValidationGate &&
           !validationInfrastructureBypassed
         ) {
+          setGateProgress(
+            `gate: validation hooks running for ${Array.from(pendingGateFiles).length} file(s)`,
+          )
           const verify = yield {
             toolName: 'run_file_change_hooks',
             input: { files: Array.from(pendingGateFiles) },
@@ -2396,7 +2399,6 @@ ${specialistRoutingSection}
                 input: {},
               } as any
               const repairChangedFiles = extractGitStatusFiles(
-
                 (repairGitStatus as any)?.toolResult,
               ).filter(
                 (file: string) =>
@@ -2620,7 +2622,6 @@ ${specialistRoutingSection}
                     !gatePassedFiles.has(file),
                 )
                 if (escalateChangedFiles.length > 0) {
-
                   recordChangedFiles(escalateChangedFiles, { fromRepair: true })
                   activeWorkState.latestWorkSummary = `Escalation editor fixed: ${escalateChangedFiles.join(', ')}`
                   markActiveWorkStateChanged()
@@ -2843,6 +2844,9 @@ ${specialistRoutingSection}
         ) {
           activeWorkState.lastReviewerGateSkipReason = ''
           markActiveWorkStateChanged()
+          setGateProgress(
+            `gate: validation passed; reviewer ${requiredReviewerAgentType} running`,
+          )
           const review = yield {
             toolName: 'spawn_agents',
             input: {
@@ -3246,7 +3250,6 @@ ${specialistRoutingSection}
               buildGateSnapshotDetails(
                 Array.from(pendingGateFiles),
                 validationSummary,
-
               ),
             )
             if (repairedSnapshotFingerprint === reviewSnapshotFingerprint) {
@@ -3328,6 +3331,9 @@ ${specialistRoutingSection}
           reviewerFinalizationVerdict =
             getReviewerFinalizationVerdict(reviewerToolResult)
           if (reviewerFinalizationVerdict) {
+            setGateProgress(
+              `gate: reviewer verdict ${reviewerFinalizationVerdict}; finalizing`,
+            )
             recordSuccessfulReviewReceipt(
               reviewerToolResult,
               requiredReviewerAgentType,
@@ -3474,6 +3480,11 @@ ${specialistRoutingSection}
           }
           let activeWorkStateChanged = false
           if (passedPendingFiles.length > 0 && reviewerFinalizationVerdict) {
+            // Record the transient pass line, then immediately reset the
+            // durable progress line so a stale 'passed'/mid-gate line cannot
+            // persist into the next edit cycle.
+            setGateProgress('gate: passed')
+            activeWorkState.gateProgressLine = ''
             activeWorkState.openReviewerBlockers = []
             activeWorkState.openReviewerFindings = []
             activeWorkState.requiredReviewerRevalidation = undefined
@@ -3633,6 +3644,19 @@ ${specialistRoutingSection}
       }
       function markActiveWorkStateChanged(): void {
         activeWorkState.lastPinnedStateMessage = ''
+      }
+
+      // Durable one-line mid-turn gate-progress note. Rendered by
+      // buildPinnedActiveWorkMessage as a "Gate progress:" line inside the
+      // existing pinned active-work message — no new yield/add_message is
+      // introduced. Dedupes so repeated identical updates do not churn the
+      // pinned state. Self-contained inline helper (handleSteps is serialized
+      // via .toString() + new Function(...), so it must not reference
+      // module-scope imports).
+      function setGateProgress(line: string): void {
+        if (activeWorkState.gateProgressLine === line) return
+        activeWorkState.gateProgressLine = line
+        markActiveWorkStateChanged()
       }
 
       // Inline helpers for gate-state telemetry/diagnostics. Kept inside
@@ -4870,6 +4894,15 @@ ${specialistRoutingSection}
         if (!hasUnresolvedGateWork && !hasIncompleteWorkflowTodos) return ''
 
         const sections: string[] = [`Current phase: ${state.currentPhase}`]
+        sections.push(
+          `Gate status: phase=${state.currentPhase}; validation hooks ran=${state.lastValidationSummary ? 'yes' : 'no'}; this is a durable snapshot at turn start, not a live process — the validation/reviewer gate runs across turns; do not infer progress or predict when it will pass.`,
+        )
+        if (
+          typeof state.gateProgressLine === 'string' &&
+          state.gateProgressLine.length > 0
+        ) {
+          sections.push(`Gate progress: ${state.gateProgressLine}`)
+        }
         if (hasUnresolvedGateWork) {
           sections.push(
             'suggest_followups: BLOCKED — the validation/reviewer gate has not passed yet. Do not call it until this line disappears.',

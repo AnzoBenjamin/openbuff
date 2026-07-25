@@ -117,9 +117,7 @@ describe('shared craftsmanship prompt sections', () => {
     expect(gitDisciplineSection).toContain('literally `owned_paths`')
     expect(gitDisciplineSection).toContain('filePaths')
     expect(gitDisciplineSection).toContain('Missing required: owned_paths')
-    expect(gitDisciplineSection).toContain(
-      'Spawning git-committer is not available yet',
-    )
+    expect(gitDisciplineSection).toContain('git-committer withheld')
     // Wait-and-commit guidance added for gate ergonomics: the gate re-arms per
     // edit, the block is normal ordering (not an error), and the commit lands
     // automatically once the gate clears.
@@ -159,7 +157,10 @@ describe('shared craftsmanship prompt sections', () => {
     expect(gateAwarenessSection).toContain('git-committer')
     expect(gateAwarenessSection).toContain('re-arms on every new edit')
     expect(gateAwarenessSection).toContain('tight-loop')
-    expect(gateAwarenessSection).toContain('not available yet')
+    // "Observe, don't predict" bullet: pin the durable-snapshot guidance —
+    // commit/finalize only when the pinned gate state reports the passed phase.
+    expect(gateAwarenessSection).toContain('Observe, don\'t predict')
+    expect(gateAwarenessSection).toContain('final_response_allowed')
     // 4) Pending-set authority: full pendingGateFiles set, not last-edited file.
     expect(gateAwarenessSection).toContain('pendingGateFiles')
     expect(gateAwarenessSection).toContain('full related set')

@@ -75,6 +75,17 @@ export type Base2GateState = {
    */
   reviewedReviewableFingerprint?: string
   lastReviewerGateSkipReason: string
+  /**
+   * Durable one-line mid-turn gate-progress note (e.g. "gate: validation
+   * passed; reviewer code-reviewer running"). Written only through the inline
+   * setGateProgress helper in base2.ts and rendered by
+   * buildPinnedActiveWorkMessage as a "Gate progress:" line in the existing
+   * pinned active-work message — no new yield/add_message is introduced.
+   * Reset to '' when the gate passes so the next edit cycle starts fresh.
+   * Backward-compatible: older serialized state lacks this field (treated as
+   * unset).
+   */
+  gateProgressLine?: string
 }
 
 export type Base2ActiveWorkState = Base2GateState & {

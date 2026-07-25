@@ -2691,6 +2691,215 @@ describe('base2 verification and reviewer gates', () => {
     ).toMatchObject({ toolName: 'spawn_agents' })
   })
 
+  test('pinned gate-status line reports validation hooks ran=yes when lastValidationSummary is set', () => {
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2',
+      base2ActiveWork: {
+        changedFiles: ['src/a.ts'],
+        touchedFiles: ['src/a.ts'],
+        pendingGateFiles: ['src/a.ts'],
+        currentPhase: 'awaiting_validation',
+        latestWorkSummary: '',
+        openReviewerBlockers: [],
+        lastValidationSummary: 'typecheck passed for src/a.ts',
+        nextRequiredAction: '',
+        lastPinnedStateMessage: '',
+      },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Finish the previous response.',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    const pinned = gen.next()
+    expect(pinned.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    const text = (pinned.value as any).input.content as string
+    // New durable gate-status line: emitted right after the Current phase line.
+    expect(text).toContain('Gate status: phase=awaiting_validation')
+    expect(text).toContain('validation hooks ran=yes')
+    expect(text).toContain('do not infer progress or predict when it will pass')
+  })
+
+  test('pinned gate-status line reports validation hooks ran=no when lastValidationSummary is empty', () => {
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2',
+      base2ActiveWork: {
+        changedFiles: ['src/a.ts'],
+        touchedFiles: ['src/a.ts'],
+        pendingGateFiles: ['src/a.ts'],
+        currentPhase: 'awaiting_validation',
+        latestWorkSummary: '',
+        openReviewerBlockers: [],
+        lastValidationSummary: '',
+        nextRequiredAction: '',
+        lastPinnedStateMessage: '',
+      },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Finish the previous response.',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    const pinned = gen.next()
+    expect(pinned.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    const text = (pinned.value as any).input.content as string
+    expect(text).toContain('Gate status: phase=awaiting_validation')
+    expect(text).toContain('validation hooks ran=no')
+    expect(text).toContain('do not infer progress or predict when it will pass')
+  })
+
+  test('pinned active-work message renders Gate progress line when gateProgressLine is set', () => {
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2',
+      base2ActiveWork: {
+        changedFiles: ['src/a.ts'],
+        touchedFiles: ['src/a.ts'],
+        pendingGateFiles: ['src/a.ts'],
+        currentPhase: 'awaiting_validation',
+        latestWorkSummary: '',
+        openReviewerBlockers: [],
+        lastValidationSummary: 'typecheck passed for src/a.ts',
+        nextRequiredAction: '',
+        lastPinnedStateMessage: '',
+        gateProgressLine: 'gate: validation passed; reviewer code-reviewer running',
+      },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Finish the previous response.',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    const pinned = gen.next()
+    expect(pinned.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    const text = (pinned.value as any).input.content as string
+    expect(text).toContain(
+      'Gate progress: gate: validation passed; reviewer code-reviewer running',
+    )
+  })
+
+  test('pinned active-work message omits Gate progress line when gateProgressLine is empty', () => {
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2',
+      base2ActiveWork: {
+        changedFiles: ['src/a.ts'],
+        touchedFiles: ['src/a.ts'],
+        pendingGateFiles: ['src/a.ts'],
+        currentPhase: 'awaiting_validation',
+        latestWorkSummary: '',
+        openReviewerBlockers: [],
+        lastValidationSummary: 'typecheck passed for src/a.ts',
+        nextRequiredAction: '',
+        lastPinnedStateMessage: '',
+        gateProgressLine: '',
+      },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Finish the previous response.',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    const pinned = gen.next()
+    expect(pinned.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    const text = (pinned.value as any).input.content as string
+    // Sanity: unresolved gate work is present so the pinned message is emitted.
+    expect(text).toContain('Gate status: phase=awaiting_validation')
+    expect(text).not.toContain('Gate progress:')
+  })
+
+  test('gate-state type round-trips gateProgressLine through JSON and is optional on older state', () => {
+    const state: Base2ActiveWorkState = {
+      pendingGateFiles: ['src/a.ts'],
+      gatePassedFiles: [],
+      gatePassedPendingFiles: [],
+      gatePassedReviewerVerdict: '',
+      gatePassedValidationSummary: '',
+      gatePassedFingerprint: '',
+      lastReviewerGateSkipReason: '',
+      touchedFiles: ['src/a.ts'],
+      changedFiles: ['src/a.ts'],
+      currentPhase: 'awaiting_validation',
+      latestWorkSummary: '',
+      openReviewerBlockers: [],
+      lastValidationSummary: '',
+      nextRequiredAction: '',
+      lastPinnedStateMessage: '',
+      gateProgressLine: 'gate: reviewer verdict LOOKS_GOOD; finalizing',
+    }
+    const roundTripped = JSON.parse(
+      JSON.stringify(state),
+    ) as Base2ActiveWorkState
+    expect(roundTripped.gateProgressLine).toBe(
+      'gate: reviewer verdict LOOKS_GOOD; finalizing',
+    )
+
+    // Older serialized state lacks the field entirely; it stays optional/absent.
+    const olderState: Base2ActiveWorkState = {
+      pendingGateFiles: ['src/a.ts'],
+      gatePassedFiles: [],
+      gatePassedPendingFiles: [],
+      gatePassedReviewerVerdict: '',
+      gatePassedValidationSummary: '',
+      gatePassedFingerprint: '',
+      lastReviewerGateSkipReason: '',
+      touchedFiles: ['src/a.ts'],
+      changedFiles: ['src/a.ts'],
+      currentPhase: 'awaiting_validation',
+      latestWorkSummary: '',
+      openReviewerBlockers: [],
+      lastValidationSummary: '',
+      nextRequiredAction: '',
+      lastPinnedStateMessage: '',
+    }
+    const olderRoundTripped = JSON.parse(
+      JSON.stringify(olderState),
+    ) as Base2ActiveWorkState
+    expect(olderRoundTripped.gateProgressLine).toBeUndefined()
+  })
+
   test('reviewer feedback is pinned as active work before the next step', () => {
     const base2 = createBase2('default')
     const agentState = { agentId: 'base2' }
