@@ -103,8 +103,15 @@ describe('base2 reviewer spawn conditions e2e', () => {
       input: { files: ['src/lifecycle.ts'] },
     })
 
-    const reviewerSpawn = gen.next(
+    const postValidationStatus = gen.next(
       feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }]),
+    )
+    expect(postValidationStatus.value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    const reviewerSpawn = gen.next(
+      feedJson({ status: ' M src/lifecycle.ts' }),
     )
     expect(reviewerSpawn.value).toMatchObject({
       toolName: 'spawn_agents',
