@@ -3,6 +3,7 @@ import path from 'node:path'
 import { FILE_READ_STATUS } from '@codebuff/common/old-constants'
 import {
   buildReadFilesResultV1,
+  FILESYSTEM_RESULT_CONTENT_MAX_BYTES,
   isReadFilesResultV1,
   type FilesystemError,
   type ReadFilesItemV1,
@@ -11,6 +12,7 @@ import {
 import {
   encodeReadCapabilityToken,
   getContentHash,
+  hasAuthoritativeReadCapabilityScope,
   normalizeLineEndings,
 } from '@codebuff/common/util/content-hash'
 import {
@@ -38,7 +40,7 @@ export type { FileLineRange }
 export const READ_SNAPSHOT_CONCURRENCY = 8
 export const MAX_RANGE_READ_BYTES = 4_194_304
 
-const MAX_FILE_BYTES = 10 * 1024 * 1024
+const MAX_FILE_BYTES = FILESYSTEM_RESULT_CONTENT_MAX_BYTES
 // The 10MB byte gate (MAX_FILE_BYTES) is now the single read ceiling: any file
 // that passes it renders fully (whole-file and range reads) so reviewers and
 // agents can read and attest to large source files. content.length is a
@@ -663,16 +665,18 @@ function renderWholeFileItem(
     }
   }
   const contentHash = !partial ? getContentHash(content) : undefined
+  const capabilityScope = capabilityIssuer
+    ? { ...capabilityIssuer, path: target.displayPath }
+    : undefined
   const readCapability =
-    contentHash && capabilityIssuer
+    contentHash &&
+    capabilityScope &&
+    hasAuthoritativeReadCapabilityScope(capabilityScope)
       ? encodeReadCapabilityToken({
           startLine: 1,
           endLine: normalizeLineEndings(content).split('\n').length,
           hash: contentHash,
-          scope: {
-            ...capabilityIssuer,
-            path: target.displayPath,
-          },
+          scope: capabilityScope,
         })
       : undefined
   return {
@@ -782,16 +786,18 @@ function renderRangeItem(
     body = `${body.slice(0, MAX_RENDER_CHARS)}\n\n[FILE_TOO_LARGE: This range exceeded a bounded read or render limit. Request a smaller line range before editing; do not edit from this truncated range.]`
   }
   const rangeHash = complete ? getContentHash(slice) : undefined
+  const capabilityScope = capabilityIssuer
+    ? { ...capabilityIssuer, path: target.displayPath }
+    : undefined
   const readCapability =
-    rangeHash && capabilityIssuer
+    rangeHash &&
+    capabilityScope &&
+    hasAuthoritativeReadCapabilityScope(capabilityScope)
       ? encodeReadCapabilityToken({
           startLine: desiredStart,
           endLine: desiredEnd,
           hash: rangeHash,
-          scope: {
-            ...capabilityIssuer,
-            path: target.displayPath,
-          },
+          scope: capabilityScope,
         })
       : undefined
   // Range header: emitted as a single line so normalizeReadFilesOverrideResult's

@@ -147,6 +147,7 @@ const definition: AgentDefinition = {
     const KNOWLEDGE_MEMORY_MAX_EDITS = 25
     const KNOWLEDGE_MEMORY_MAX_VALIDATION_RESULTS = 12
     const KNOWLEDGE_MEMORY_MAX_REVIEW_RECEIPTS = 12
+    const KNOWLEDGE_MEMORY_MAX_POST_EDIT_ANCHORS = 16
     const KNOWLEDGE_MEMORY_MAX_BLOCKERS = 8
     const KNOWLEDGE_MEMORY_MAX_NEXT_ACTION_CHARS = 1_000
     const KNOWLEDGE_MEMORY_ENTRY_CHARS = 480
@@ -799,6 +800,7 @@ const definition: AgentDefinition = {
       editsMade: string[] // "path: summary"
       validationResults: string[]
       reviewReceipts: string[]
+      postEditAnchors: string[]
       blockers: string[]
       nextAction: string
     }
@@ -811,6 +813,7 @@ const definition: AgentDefinition = {
         editsMade: [],
         validationResults: [],
         reviewReceipts: [],
+        postEditAnchors: [],
         blockers: [],
         nextAction: '',
       }
@@ -833,7 +836,7 @@ const definition: AgentDefinition = {
       const block = blockMatch[1]
 
       const goalMatch = block.match(
-        /Goal:\s*([\s\S]*?)(?=\nDecisions:|\nFiles Inspected:|\nEdits Made:|\nValidation Results:|\nReview Receipts:|\nBlockers:|\nNext Action:|$)/,
+        /Goal:\s*([\s\S]*?)(?=\nDecisions:|\nFiles Inspected:|\nEdits Made:|\nValidation Results:|\nReview Receipts:|\nPost-Edit Anchors:|\nBlockers:|\nNext Action:|$)/,
       )
       if (goalMatch) km.goal = goalMatch[1].trim()
 
@@ -843,7 +846,7 @@ const definition: AgentDefinition = {
       // literal, `\s` becomes a literal `s`, which silently breaks parsing
       // and causes structured fields to be lost on re-compaction.
       const SECTION_RE =
-        /^(Goal|Decisions|Files Inspected|Edits Made|Validation Results|Review Receipts|Blockers|Next Action):\s*([\s\S]*?)(?=\n(?:Goal|Decisions|Files Inspected|Edits Made|Validation Results|Review Receipts|Blockers|Next Action):|(?![\s\S]))/gm
+        /^(Goal|Decisions|Files Inspected|Edits Made|Validation Results|Review Receipts|Post-Edit Anchors|Blockers|Next Action):\s*([\s\S]*?)(?=\n(?:Goal|Decisions|Files Inspected|Edits Made|Validation Results|Review Receipts|Post-Edit Anchors|Blockers|Next Action):|(?![\s\S]))/gm
       let sectionMatch: RegExpExecArray | null
       while ((sectionMatch = SECTION_RE.exec(block)) !== null) {
         const header = sectionMatch[1]
@@ -866,6 +869,8 @@ const definition: AgentDefinition = {
           km.validationResults = items
         } else if (header === 'Review Receipts') {
           km.reviewReceipts = items
+        } else if (header === 'Post-Edit Anchors') {
+          km.postEditAnchors = items
         } else if (header === 'Blockers') {
           km.blockers = items
         }
@@ -1172,71 +1177,263 @@ const definition: AgentDefinition = {
       return hasFailureMarker(values) ? [] : requestedPaths
     }
 
+    function getEffectiveActionPath(
+      action: Record<string, unknown>,
+    ): string | null {
+      const path = action.action === 'move' ? action.destinationPath : action.path
+      return typeof path === 'string' && path.length > 0 ? path : null
+    }
+
+    function getCorrelatedReceiptAction(
+      receiptActions: unknown[],
+      action: Record<string, unknown>,
+    ): Record<string, unknown> | null {
+      if (
+        !Number.isInteger(action.index) ||
+        (action.index as number) < 0 ||
+        typeof action.actionId !== 'string' ||
+        action.actionId.length === 0
+      ) {
+        return null
+      }
+      const indexMatches = receiptActions.filter(
+        (candidate) =>
+          isRecord(candidate) && candidate.index === action.index,
+      )
+      const actionIdMatches = receiptActions.filter(
+        (candidate) =>
+          isRecord(candidate) && candidate.actionId === action.actionId,
+      )
+      return indexMatches.length === 1 &&
+        actionIdMatches.length === 1 &&
+        indexMatches[0] === actionIdMatches[0]
+        ? (indexMatches[0] as Record<string, unknown>)
+        : null
+    }
+
     function getConfirmedMutationPaths(values: unknown[]): string[] {
       const paths = new Set<string>()
-      const inspect = (value: unknown, depth = 0): void => {
-        if (depth > 6 || value === null || value === undefined) {
-          return
-        }
+      const inspect = (
+        value: unknown,
+        depth = 0,
+        allowStandaloneReceipt = true,
+      ): void => {
+        if (depth > 6 || value === null || value === undefined) return
         if (Array.isArray(value)) {
           for (const item of value) inspect(item, depth + 1)
           return
         }
         if (!isRecord(value)) return
-        if (
+
+        const isStandaloneReceipt =
+          allowStandaloneReceipt && value.kind === 'commit_receipt'
+        const receipt = isStandaloneReceipt
+          ? value
+          : isRecord(value.authorityReceipt)
+            ? value.authorityReceipt
+            : null
+        const actions = Array.isArray(value.actions) ? value.actions : []
+        const receiptActions =
+          receipt && Array.isArray(receipt.actions) ? receipt.actions : []
+        const finalHashes = receipt && isRecord(receipt.finalHashes)
+          ? receipt.finalHashes
+          : null
+        const validReceipt =
+          receipt?.kind === 'commit_receipt' &&
+          receipt.version === 1 &&
+          receipt.status === 'committed' &&
+          typeof receipt.operationId === 'string' &&
+          receipt.operationId.length > 0 &&
+          typeof receipt.receiptId === 'string' &&
+          receipt.receiptId.length > 0 &&
+          typeof receipt.callId === 'string' &&
+          receipt.callId.length > 0 &&
+          typeof receipt.authorityTier === 'string' &&
+          receipt.authorityTier.length > 0 &&
+          Array.isArray(receipt.actions) &&
+          finalHashes !== null
+        const validEnvelope =
+          validReceipt &&
+          (isStandaloneReceipt ||
+            (value.kind === 'file_mutation_result' &&
+              value.version === 1 &&
+              (value.outcome === 'applied' || value.outcome === 'partial') &&
+              value.operationId === receipt.operationId &&
+              value.receiptId === receipt.receiptId &&
+              value.authorityTier === receipt.authorityTier &&
+              Array.isArray(value.errors) &&
+              Array.isArray(value.freshCapabilities)))
+
+        if (validEnvelope) {
+          for (const action of actions) {
+            if (
+              !isRecord(action) ||
+              (isStandaloneReceipt
+                ? action.status !== 'committed'
+                : action.outcome !== 'applied') ||
+              typeof action.path !== 'string' ||
+              typeof action.actionId !== 'string'
+            ) {
+              continue
+            }
+            const confirmed = getCorrelatedReceiptAction(
+              receiptActions,
+              action,
+            )
+            const effectivePath = getEffectiveActionPath(action)
+            const correlated =
+              isRecord(confirmed) &&
+              confirmed.status === 'committed' &&
+              confirmed.actionId === action.actionId &&
+              confirmed.action === action.action &&
+              confirmed.path === action.path &&
+              confirmed.destinationPath === action.destinationPath &&
+              confirmed.afterHash === action.afterHash &&
+              effectivePath !== null &&
+              finalHashes[effectivePath] === action.afterHash
+            if (!correlated || effectivePath === null) continue
+            paths.add(effectivePath)
+          }
+        }
+        for (const [key, nested] of Object.entries(value)) {
+          inspect(nested, depth + 1, key !== 'authorityReceipt')
+        }
+      }
+      for (const value of values) inspect(value)
+      return [...paths]
+    }
+
+    function getConfirmedPostEditAnchorState(values: unknown[]): {
+      anchors: string[]
+      invalidatedPaths: Set<string>
+    } {
+      const anchors: string[] = []
+      const invalidatedPaths = new Set<string>()
+      const inspect = (value: unknown, depth = 0): void => {
+        if (depth > 6 || value === null || value === undefined) return
+        if (Array.isArray(value)) {
+          for (const item of value) inspect(item, depth + 1)
+          return
+        }
+        if (!isRecord(value)) return
+
+        const receipt = isRecord(value.authorityReceipt)
+          ? value.authorityReceipt
+          : null
+        const actions = Array.isArray(value.actions) ? value.actions : []
+        const receiptActions =
+          receipt && Array.isArray(receipt.actions) ? receipt.actions : []
+        const finalHashes = receipt && isRecord(receipt.finalHashes)
+          ? receipt.finalHashes
+          : null
+        const fullyCorrelated =
           value.kind === 'file_mutation_result' &&
           value.version === 1 &&
+          value.outcome === 'applied' &&
           typeof value.operationId === 'string' &&
           value.operationId.length > 0 &&
-          (value.authorityTier === 'portable_path' ||
-            value.authorityTier === 'conditional_commit') &&
-          (value.outcome === 'applied' ||
-            value.outcome === 'partial' ||
-            value.outcome === 'rollback_incomplete') &&
-          Array.isArray(value.actions) &&
-          value.authorityReceipt !== null &&
-          typeof value.authorityReceipt === 'object' &&
-          !Array.isArray(value.authorityReceipt) &&
-          (value.authorityReceipt as Record<string, unknown>).operationId ===
-            value.operationId &&
-          (value.authorityReceipt as Record<string, unknown>).receiptId ===
-            value.receiptId &&
-          Array.isArray(
-            (value.authorityReceipt as Record<string, unknown>).actions,
-          ) &&
-          (
-            (value.authorityReceipt as Record<string, unknown>)
-              .actions as unknown[]
-          ).length === value.actions.length &&
-          value.actions.every(
-            (action, index) =>
-              isRecord(action) &&
-              action.index === index &&
-              typeof action.actionId === 'string' &&
-              typeof action.path === 'string' &&
-              (
-                (value.authorityReceipt as Record<string, unknown>)
-                  .actions as Array<Record<string, unknown>>
-              )[index]?.actionId === action.actionId,
-          ) &&
+          typeof value.receiptId === 'string' &&
+          value.receiptId.length > 0 &&
+          actions.length > 0 &&
+          receipt?.kind === 'commit_receipt' &&
+          receipt.version === 1 &&
+          receipt.status === 'committed' &&
+          receipt.operationId === value.operationId &&
+          receipt.receiptId === value.receiptId &&
+          typeof receipt.callId === 'string' &&
+          receipt.callId.length > 0 &&
+          typeof receipt.authorityTier === 'string' &&
+          receipt.authorityTier.length > 0 &&
+          value.authorityTier === receipt.authorityTier &&
+          receiptActions.length === actions.length &&
+          finalHashes !== null &&
           Array.isArray(value.errors) &&
-          Array.isArray(value.freshCapabilities)
-        ) {
-          for (const action of value.actions) {
-            if (!isRecord(action) || action.outcome !== 'applied') continue
-            if (typeof action.path === 'string') paths.add(action.path)
+          value.errors.length === 0 &&
+          actions.every((action, index) => {
             if (
-              action.action === 'move' &&
-              typeof action.destinationPath === 'string'
+              !isRecord(action) ||
+              action.outcome !== 'applied' ||
+              action.index !== index
             ) {
-              paths.add(action.destinationPath)
+              return false
             }
+            const confirmed = getCorrelatedReceiptAction(
+              receiptActions,
+              action,
+            )
+            const effectivePath = getEffectiveActionPath(action)
+            return (
+              confirmed !== null &&
+              confirmed.status === 'committed' &&
+              confirmed.index === action.index &&
+              confirmed.actionId === action.actionId &&
+              confirmed.action === action.action &&
+              confirmed.path === action.path &&
+              confirmed.destinationPath === action.destinationPath &&
+              confirmed.afterHash === action.afterHash &&
+              typeof action.path === 'string' &&
+              effectivePath !== null &&
+              finalHashes[effectivePath] === action.afterHash
+            )
+          })
+
+        if (fullyCorrelated) {
+          for (const action of actions) {
+            if (!isRecord(action)) continue
+            const effectivePath = getEffectiveActionPath(action)
+            if (typeof action.path !== 'string' || effectivePath === null) continue
+            invalidatedPaths.add(action.path)
+            invalidatedPaths.add(effectivePath)
+            if (!isRecord(action.editAnchor)) continue
+            const anchor = action.editAnchor
+            const validAnchor =
+              Number.isInteger(anchor.startLine) &&
+              (anchor.startLine as number) >= 1 &&
+              Number.isInteger(anchor.endLine) &&
+              (anchor.endLine as number) >= (anchor.startLine as number) &&
+              typeof anchor.contentHash === 'string' &&
+              /^sha256:[a-f0-9]{64}$/i.test(anchor.contentHash) &&
+              anchor.contentHash === action.afterHash &&
+              typeof anchor.readCapability === 'string' &&
+              anchor.readCapability.startsWith('cap.v3.') &&
+              anchor.readCapability.length <= 4096
+            if (!validAnchor) continue
+            anchors.push(
+              JSON.stringify({
+                path: effectivePath,
+                contentHash: anchor.contentHash,
+                startLine: anchor.startLine,
+                endLine: anchor.endLine,
+                readCapability: anchor.readCapability,
+              }),
+            )
           }
         }
         for (const nested of Object.values(value)) inspect(nested, depth + 1)
       }
       for (const value of values) inspect(value)
-      return [...paths]
+      return { anchors, invalidatedPaths }
+    }
+
+    function redactEditResult(value: unknown, depth = 0): unknown {
+      if (depth > 8 || value === null || value === undefined) return value
+      if (Array.isArray(value)) {
+        return value.map((item) => redactEditResult(item, depth + 1))
+      }
+      if (!isRecord(value)) return value
+      const redacted: Record<string, unknown> = {}
+      for (const [key, nested] of Object.entries(value)) {
+        if (
+          key === 'editAnchor' ||
+          key === 'readCapability' ||
+          key === 'basedOnRead' ||
+          key === 'afterContent'
+        ) {
+          continue
+        }
+        redacted[key] = redactEditResult(nested, depth + 1)
+      }
+      return redacted
     }
 
     function extractFindingsSummary(text: string): string {
@@ -1284,6 +1481,13 @@ const definition: AgentDefinition = {
       if (km.reviewReceipts.length > KNOWLEDGE_MEMORY_MAX_REVIEW_RECEIPTS) {
         km.reviewReceipts = km.reviewReceipts.slice(
           -KNOWLEDGE_MEMORY_MAX_REVIEW_RECEIPTS,
+        )
+      }
+      if (
+        km.postEditAnchors.length > KNOWLEDGE_MEMORY_MAX_POST_EDIT_ANCHORS
+      ) {
+        km.postEditAnchors = km.postEditAnchors.slice(
+          -KNOWLEDGE_MEMORY_MAX_POST_EDIT_ANCHORS,
         )
       }
       if (km.blockers.length > KNOWLEDGE_MEMORY_MAX_BLOCKERS) {
@@ -1415,6 +1619,34 @@ const definition: AgentDefinition = {
       return null
     }
 
+    function normalizeStructuredFindings(
+      record: Record<string, unknown>,
+    ): Array<{ id: string; text: string }> {
+      if (!Array.isArray(record.findings)) return []
+      return record.findings.flatMap((finding) => {
+        if (typeof finding === 'string') {
+          const text = finding.trim()
+          return text ? [{ id: '', text: truncateLongText(text, 2_000) }] : []
+        }
+        if (!finding || typeof finding !== 'object') return []
+        const findingRecord = finding as Record<string, unknown>
+        const id =
+          typeof findingRecord.id === 'string' ? findingRecord.id.trim() : ''
+        const summary =
+          typeof findingRecord.summary === 'string'
+            ? findingRecord.summary.trim()
+            : ''
+        const correction =
+          typeof findingRecord.correction === 'string'
+            ? findingRecord.correction.trim()
+            : ''
+        const text = [summary, correction].filter(Boolean).join(' Correction: ')
+        return id || text
+          ? [{ id, text: truncateLongText(text || id, 2_000) }]
+          : []
+      })
+    }
+
     function formatStructuredReviewReceipt(
       agentType: string,
       value: unknown,
@@ -1430,36 +1662,24 @@ const definition: AgentDefinition = {
           : '(legacy/unattested)'
       const coverage =
         typeof record.coverage === 'string' ? record.coverage : 'n/a'
-      const findingIds = Array.isArray(record.findings)
-        ? record.findings.flatMap((finding) =>
-            finding &&
-            typeof finding === 'object' &&
-            typeof (finding as Record<string, unknown>).id === 'string'
-              ? [(finding as Record<string, string>).id]
-              : [],
-          )
-        : []
-      return `${agentType}: verdict=${verdict}; snapshot=${fingerprint}; coverage=${coverage}; findingIds=${findingIds.join(',') || '(none)'}`
+      const findings = normalizeStructuredFindings(record)
+      const findingIds = findings.map((finding) => finding.id).filter(Boolean)
+      const findingTexts = findings
+        .filter((finding) => !finding.id)
+        .map((finding) => finding.text)
+      return `${agentType}: verdict=${verdict}; snapshot=${fingerprint}; coverage=${coverage}; findingIds=${findingIds.join(',') || '(none)'}${findingTexts.length > 0 ? `; findings=${findingTexts.join(' | ')}` : ''}`
     }
 
     function isStaleSnapshotReviewerOutput(value: unknown): boolean {
       const record = findStructuredReviewerOutput(value)
-      if (!record || !Array.isArray(record.findings)) return false
-      return record.findings.some((finding) => {
-        if (!finding || typeof finding !== 'object') return false
-        const findingRecord = finding as Record<string, unknown>
-        const id =
-          typeof findingRecord.id === 'string'
-            ? findingRecord.id.toLowerCase()
-            : ''
-        const summary =
-          typeof findingRecord.summary === 'string'
-            ? findingRecord.summary.toLowerCase()
-            : ''
+      if (!record) return false
+      return normalizeStructuredFindings(record).some((finding) => {
+        const id = finding.id.toLowerCase()
+        const text = finding.text.toLowerCase()
         return (
           id.endsWith(':stale-snapshot') ||
-          (summary.includes('snapshot') &&
-            (summary.includes('stale') || summary.includes('does not match')))
+          (text.includes('snapshot') &&
+            (text.includes('stale') || text.includes('does not match')))
         )
       })
     }
@@ -1570,6 +1790,17 @@ const definition: AgentDefinition = {
     }
 
     function extractReviewerFindingSummary(value: unknown): string {
+      const structured = findStructuredReviewerOutput(value)
+      if (structured) {
+        const findings = normalizeStructuredFindings(structured)
+        if (findings.length > 0) {
+          return findings
+            .map((finding) =>
+              finding.id ? `${finding.id}: ${finding.text}` : finding.text,
+            )
+            .join('\n')
+        }
+      }
       const reviewerOutput = reviewerOutputToText(value)
       const actionableLines = extractActionableReviewerLines(reviewerOutput)
       if (actionableLines.length > 0) {
@@ -1622,6 +1853,13 @@ const definition: AgentDefinition = {
             .join('\n')}`,
         )
       }
+      if (km.postEditAnchors.length > 0) {
+        sections.push(
+          `Post-Edit Anchors:\n${km.postEditAnchors
+            .map((anchor) => `  - ${anchor}`)
+            .join('\n')}`,
+        )
+      }
       if (km.blockers.length > 0) {
         sections.push(
           `Blockers:\n${km.blockers.map((b) => `  - ${b}`).join('\n')}`,
@@ -1647,6 +1885,7 @@ const definition: AgentDefinition = {
         km.editsMade.length > 0 ||
         km.validationResults.length > 0 ||
         km.reviewReceipts.length > 0 ||
+        km.postEditAnchors.length > 0 ||
         km.blockers.length > 0 ||
         km.nextAction.length > 0
       )
@@ -2081,6 +2320,30 @@ const definition: AgentDefinition = {
                     `${path}: ${toolName}`,
                   )
                 }
+                const postEditState =
+                  getConfirmedPostEditAnchorState(resultValues)
+                knowledgeMemory.postEditAnchors =
+                  knowledgeMemory.postEditAnchors.filter((entry) => {
+                    try {
+                      return !postEditState.invalidatedPaths.has(
+                        JSON.parse(entry).path,
+                      )
+                    } catch {
+                      return false
+                    }
+                  })
+                for (const anchor of postEditState.anchors) {
+                  const path = JSON.parse(anchor).path
+                  knowledgeMemory.postEditAnchors =
+                    knowledgeMemory.postEditAnchors.filter((entry) => {
+                      try {
+                        return JSON.parse(entry).path !== path
+                      } catch {
+                        return false
+                      }
+                    })
+                  knowledgeMemory.postEditAnchors.push(anchor)
+                }
               }
             }
           }
@@ -2172,7 +2435,7 @@ const definition: AgentDefinition = {
               }
 
               if (EDIT_TOOLS.includes(toolMessage.toolName)) {
-                const resultStr = JSON.stringify(value)
+                const resultStr = JSON.stringify(redactEditResult(value))
                 const truncatedResult = truncateLongText(
                   resultStr,
                   EDIT_RESULT_DETAIL_CHARS,
@@ -2237,8 +2500,9 @@ const definition: AgentDefinition = {
                 )
               }
               for (const reviewerResult of reviewerResults) {
+                const agentType = reviewerResult.agentType ?? 'reviewer'
                 const receipt = formatStructuredReviewReceipt(
-                  reviewerResult.agentType ?? 'reviewer',
+                  agentType,
                   reviewerResult.value?.value,
                 )
                 const findingSummary = extractReviewerFindingSummary(
@@ -2261,7 +2525,12 @@ const definition: AgentDefinition = {
                 if (staleSnapshot) {
                   addUniqueEntry(
                     knowledgeMemory.validationResults,
-                    `${reviewerResult.agentType}: stale snapshot review discarded; refresh the review bundle before retrying.`,
+                    `${agentType}: stale snapshot review discarded; refresh the review bundle before retrying.`,
+                  )
+                } else if (structured) {
+                  const reviewerPrefix = `${agentType}: `
+                  knowledgeMemory.blockers = knowledgeMemory.blockers.filter(
+                    (blocker) => !blocker.startsWith(reviewerPrefix),
                   )
                 }
                 if (
@@ -2271,10 +2540,10 @@ const definition: AgentDefinition = {
                 ) {
                   addUniqueEntry(
                     knowledgeMemory.blockers,
-                    `${reviewerResult.agentType}: ${findingSummary}`,
+                    `${agentType}: ${findingSummary}`,
                   )
                   entryParts.push(
-                    `Reviewer findings from ${reviewerResult.agentType}:\n${truncateLongText(
+                    `Reviewer findings from ${agentType}:\n${truncateLongText(
                       findingSummary,
                       REVIEWER_RESULT_LIMIT,
                     )}`,
@@ -2328,6 +2597,11 @@ const definition: AgentDefinition = {
               addUniqueEntry(
                 knowledgeMemory.validationResults,
                 `${agentType}: stale snapshot review discarded; refresh the review bundle before retrying.`,
+              )
+            } else if (structured) {
+              const reviewerPrefix = `${agentType}: `
+              knowledgeMemory.blockers = knowledgeMemory.blockers.filter(
+                (blocker) => !blocker.startsWith(reviewerPrefix),
               )
             }
             if (

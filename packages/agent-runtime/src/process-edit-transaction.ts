@@ -1,4 +1,4 @@
-import { applyPatch, createPatch } from 'diff'
+import { applyPatch, createPatch, diffChars } from 'diff'
 import {
   decodeReadCapabilityToken,
   getContentHash,
@@ -45,8 +45,9 @@ type TransactionEdit =
       capabilityHash: string
       readCapability: string
       newContent: string
-      /** Internal original-snapshot bounds retained when prior range edits shift this edit. */
+      /** Internal immutable-snapshot bounds and exact mapped working span. */
       originalRange?: { startLine: number; endLine: number }
+      mappedRange?: { startOffset: number; endOffset: number }
     }
   | {
       id?: string
@@ -108,12 +109,9 @@ export async function processEditTransaction(params: {
   } = params
   const workingContentByPath = new Map(initialContentByPath)
   const messagesByPath = new Map<string, string[]>()
-  const successfulReplaceRangesByPath = new Map<
-    string,
-    { startLine: number; endLine: number; lineDelta: number }[]
-  >()
   const failures: TransactionFailure[] = []
-  const pathsWithNonRangeEdit = new Set<string>()
+  const transformationLedgerByPath = new Map<string, TransformationLedgerEntry[]>()
+  const unmappableOriginalPaths = new Set<string>()
   for (let editIndex = 0; editIndex < edits.length; editIndex++) {
     const edit = edits[editIndex]
     if (!edit) continue
@@ -133,7 +131,9 @@ export async function processEditTransaction(params: {
 
     const rangeAdjustment = getEffectiveReplaceRangeEdit(
       effectiveEdit,
-      successfulReplaceRangesByPath.get(effectiveEdit.path) ?? [],
+      initialContentByPath.get(effectiveEdit.path) ?? null,
+      transformationLedgerByPath.get(effectiveEdit.path) ?? [],
+      unmappableOriginalPaths.has(effectiveEdit.path),
     )
     if ('error' in rangeAdjustment) {
       failures.push({
@@ -141,25 +141,6 @@ export async function processEditTransaction(params: {
         ...(effectiveEdit.id && { id: effectiveEdit.id }),
         path: effectiveEdit.path,
         errorMessage: rangeAdjustment.error,
-      })
-      break
-    }
-
-    // A replace_range authenticates against ORIGINAL-snapshot coordinates, but a
-    // prior non-replace_range content edit on the same path changes the working
-    // line count without being reflected in those coordinates. Rather than try to
-    // compute str_replace/structured/patch line deltas, block the replace_range so
-    // it can never silently splice the wrong lines while its capability hash check
-    // (validated against the original snapshot) still passes.
-    if (
-      effectiveEdit.type === 'replace_range' &&
-      pathsWithNonRangeEdit.has(effectiveEdit.path)
-    ) {
-      failures.push({
-        editIndex,
-        ...(effectiveEdit.id && { id: effectiveEdit.id }),
-        path: effectiveEdit.path,
-        errorMessage: `replace_range blocked for ${effectiveEdit.path}: a prior non-replace_range edit changed this file earlier in the transaction, so replace_range's original-snapshot line coordinates can no longer be safely applied. Split this into a separate transaction or use str_replace/rewrite_symbol for this path.`,
       })
       break
     }
@@ -194,25 +175,17 @@ export async function processEditTransaction(params: {
       break
     }
 
+    const priorContent = currentContent ?? ''
     workingContentByPath.set(effectiveEdit.path, result.content)
-    if (rangeAdjustment.edit.type !== 'replace_range') {
-      pathsWithNonRangeEdit.add(effectiveEdit.path)
-    }
-    if (rangeAdjustment.edit.type === 'replace_range') {
-      const originalRange = rangeAdjustment.edit.originalRange ?? {
-        startLine: rangeAdjustment.edit.startLine,
-        endLine: rangeAdjustment.edit.endLine,
-      }
-      successfulReplaceRangesByPath.set(effectiveEdit.path, [
-        ...(successfulReplaceRangesByPath.get(effectiveEdit.path) ?? []),
-        {
-          ...originalRange,
-          lineDelta:
-            normalizeLineEndings(rangeAdjustment.edit.newContent).split('\n')
-              .length -
-            (originalRange.endLine - originalRange.startLine + 1),
-        },
-      ])
+    const ledgerResult = appendTransformationLedgerEntries(
+      transformationLedgerByPath.get(effectiveEdit.path) ?? [],
+      normalizeLineEndings(priorContent),
+      normalizeLineEndings(result.content),
+    )
+    if ('error' in ledgerResult) {
+      unmappableOriginalPaths.add(effectiveEdit.path)
+    } else {
+      transformationLedgerByPath.set(effectiveEdit.path, ledgerResult.ledger)
     }
     messagesByPath.set(effectiveEdit.path, [
       ...(messagesByPath.get(effectiveEdit.path) ?? []),
@@ -332,32 +305,218 @@ function resolveFailedEdit(
   }
 }
 
+type TransformationLedgerEntry = {
+  actionIndex: number
+  originalStart: number
+  originalEnd: number
+  beforeStart: number
+  beforeEnd: number
+  afterStart: number
+  afterEnd: number
+}
+
+function originalLineSpan(
+  content: string,
+  startLine: number,
+  endLine: number,
+): { startOffset: number; endOffset: number } | null {
+  const normalized = normalizeLineEndings(content)
+  const lines = normalized.split('\n')
+  const visibleLineCount =
+    normalized.length === 0 ? 0 : lines.at(-1) === '' ? lines.length - 1 : lines.length
+  if (startLine < 1 || endLine < startLine || endLine > visibleLineCount) {
+    return null
+  }
+  let startOffset = 0
+  for (let index = 0; index < startLine - 1; index++) {
+    startOffset += lines[index]!.length + 1
+  }
+  let endOffset = startOffset
+  for (let index = startLine - 1; index < endLine; index++) {
+    endOffset += lines[index]!.length
+    if (index < endLine - 1) endOffset += 1
+  }
+  return { startOffset, endOffset }
+}
+
+function mapOriginalOffset(
+  originalOffset: number,
+  ledger: TransformationLedgerEntry[],
+  affinity: 'left' | 'right',
+): number | null {
+  let currentOffset = originalOffset
+  for (const entry of ledger) {
+    const isInsertion = entry.originalStart === entry.originalEnd
+    if (
+      originalOffset > entry.originalStart &&
+      originalOffset < entry.originalEnd
+    ) {
+      return null
+    }
+    if (
+      originalOffset > entry.originalEnd ||
+      (originalOffset === entry.originalEnd && !isInsertion) ||
+      (isInsertion &&
+        originalOffset === entry.originalStart &&
+        affinity === 'right')
+    ) {
+      currentOffset +=
+        entry.afterEnd - entry.afterStart - (entry.beforeEnd - entry.beforeStart)
+    }
+  }
+  return currentOffset
+}
+
 function getEffectiveReplaceRangeEdit(
   edit: TransactionEdit,
-  priorRanges: { startLine: number; endLine: number; lineDelta: number }[],
+  originalContent: string | null,
+  ledger: TransformationLedgerEntry[],
+  originalPathIsUnmappable: boolean,
 ): { edit: TransactionEdit } | { error: string } {
   if (edit.type !== 'replace_range') return { edit }
+  if (originalContent === null) return { edit }
+  if (originalPathIsUnmappable) {
+    return {
+      error: `replace_range blocked for ${edit.path}: an earlier transaction action changed text without uniquely representable original-snapshot provenance.`,
+    }
+  }
 
-  let lineShift = 0
-  for (const priorRange of priorRanges) {
-    if (priorRange.endLine < edit.startLine) {
-      lineShift += priorRange.lineDelta
-    } else if (priorRange.startLine <= edit.endLine) {
+  const originalSpan = originalLineSpan(
+    originalContent,
+    edit.startLine,
+    edit.endLine,
+  )
+  if (!originalSpan) return { edit }
+  for (const entry of ledger) {
+    const insertionInside =
+      entry.originalStart === entry.originalEnd &&
+      entry.originalStart > originalSpan.startOffset &&
+      entry.originalStart < originalSpan.endOffset
+    const changedBytesOverlap =
+      entry.originalStart < originalSpan.endOffset &&
+      entry.originalEnd > originalSpan.startOffset
+    if (insertionInside || changedBytesOverlap) {
       return {
-        error: `replace_range blocked for ${edit.path}: lines ${edit.startLine}-${edit.endLine} overlap a prior replace_range in this transaction and cannot be applied from the original snapshot.`,
+        error: `replace_range blocked for ${edit.path}: original lines ${edit.startLine}-${edit.endLine} overlap bytes changed earlier in this transaction, so exact provenance is unavailable.`,
       }
     }
   }
-  if (lineShift === 0) return { edit }
-
+  const startOffset = mapOriginalOffset(originalSpan.startOffset, ledger, 'right')
+  const endOffset = mapOriginalOffset(originalSpan.endOffset, ledger, 'left')
+  if (startOffset === null || endOffset === null || endOffset < startOffset) {
+    return {
+      error: `replace_range blocked for ${edit.path}: original lines ${edit.startLine}-${edit.endLine} do not map uniquely into current transaction content.`,
+    }
+  }
   return {
     edit: {
       ...edit,
-      startLine: edit.startLine + lineShift,
-      endLine: edit.endLine + lineShift,
       originalRange: { startLine: edit.startLine, endLine: edit.endLine },
+      mappedRange: { startOffset, endOffset },
     },
   }
+}
+
+function mapWorkingOffsetToOriginal(
+  workingOffset: number,
+  ledger: TransformationLedgerEntry[],
+  affinity: 'left' | 'right',
+): number | null {
+  let offset = workingOffset
+  for (let index = ledger.length - 1; index >= 0; ) {
+    const actionIndex = ledger[index]!.actionIndex
+    let firstIndex = index
+    while (firstIndex > 0 && ledger[firstIndex - 1]!.actionIndex === actionIndex) {
+      firstIndex--
+    }
+    let actionDelta = 0
+    for (let entryIndex = firstIndex; entryIndex <= index; entryIndex++) {
+      const entry = ledger[entryIndex]!
+      const isDeletion = entry.afterStart === entry.afterEnd
+      if (offset > entry.afterStart && offset < entry.afterEnd) return null
+      if (
+        offset > entry.afterEnd ||
+        (offset === entry.afterEnd && !isDeletion) ||
+        (isDeletion && offset === entry.afterStart && affinity === 'right')
+      ) {
+        actionDelta +=
+          entry.afterEnd - entry.afterStart - (entry.beforeEnd - entry.beforeStart)
+      }
+    }
+    offset -= actionDelta
+    index = firstIndex - 1
+  }
+  return offset
+}
+
+function appendTransformationLedgerEntries(
+  existingLedger: TransformationLedgerEntry[],
+  beforeContent: string,
+  afterContent: string,
+): { ledger: TransformationLedgerEntry[] } | { error: string } {
+  if (beforeContent === afterContent) return { ledger: existingLedger }
+  const actionIndex = (existingLedger.at(-1)?.actionIndex ?? -1) + 1
+  const entries: TransformationLedgerEntry[] = []
+  let beforeOffset = 0
+  let afterOffset = 0
+  let pending:
+    | { beforeStart: number; beforeEnd: number; afterStart: number; afterEnd: number }
+    | undefined
+  const flush = (): boolean => {
+    if (!pending) return true
+    const originalStart = mapWorkingOffsetToOriginal(
+      pending.beforeStart,
+      existingLedger,
+      'right',
+    )
+    const originalEnd = mapWorkingOffsetToOriginal(
+      pending.beforeEnd,
+      existingLedger,
+      'left',
+    )
+    if (originalStart === null || originalEnd === null || originalEnd < originalStart) {
+      return false
+    }
+    entries.push({
+      ...pending,
+      actionIndex,
+      originalStart,
+      originalEnd,
+    })
+    pending = undefined
+    return true
+  }
+  for (const part of diffChars(beforeContent, afterContent)) {
+    if (!part.added && !part.removed) {
+      if (!flush()) {
+        return {
+          error: 'a changed interval originated in text introduced by a prior edit',
+        }
+      }
+      beforeOffset += part.value.length
+      afterOffset += part.value.length
+      continue
+    }
+    pending ??= {
+      beforeStart: beforeOffset,
+      beforeEnd: beforeOffset,
+      afterStart: afterOffset,
+      afterEnd: afterOffset,
+    }
+    if (part.removed) {
+      beforeOffset += part.value.length
+      pending.beforeEnd = beforeOffset
+    } else {
+      afterOffset += part.value.length
+      pending.afterEnd = afterOffset
+    }
+  }
+  if (!flush()) {
+    return {
+      error: 'a changed interval originated in text introduced by a prior edit',
+    }
+  }
+  return { ledger: [...existingLedger, ...entries] }
 }
 
 async function processTransactionEdit(params: {
@@ -434,16 +593,16 @@ async function processTransactionEdit(params: {
         if (typeof decoded === 'string') {
           return { error: decoded }
         }
-        // Invariant: the runtime always supplies readCapabilityIssuer in
-        // production, so project/path/run scope is enforced by the scope check
-        // below. Do not hard-require the issuer here: non-runtime/test callers
-        // may omit it. When it is absent the capability metadata match plus the
-        // observed-content-hash freshness check still gate the edit, but
-        // cross-scope replay is not detectable in that case.
-        const scope = readCapabilityIssuer
-          ? { ...readCapabilityIssuer, path: edit.path }
-          : undefined
-        if (scope && !readCapabilityMatchesScope(decoded, scope)) {
+        if (
+          !readCapabilityIssuer?.projectId ||
+          !readCapabilityIssuer.runId
+        ) {
+          return {
+            error: `replace_range blocked for ${edit.path}: authenticated readCapability scope is unavailable. Re-read the target in a runtime with a nonempty project and run scope.`,
+          }
+        }
+        const scope = { ...readCapabilityIssuer, path: edit.path }
+        if (!readCapabilityMatchesScope(decoded, scope)) {
           return {
             error: `replace_range blocked for ${edit.path}: the readCapability belongs to a different project, path, or agent run. Re-read lines ${edit.startLine}-${edit.endLine} in this run and copy the new capability.`,
           }
@@ -479,9 +638,10 @@ async function processTransactionEdit(params: {
         }
       }
       if (
-        edit.startLine < 1 ||
-        edit.endLine < edit.startLine ||
-        edit.endLine > visibleLineCount
+        !edit.mappedRange &&
+        (edit.startLine < 1 ||
+          edit.endLine < edit.startLine ||
+          edit.endLine > visibleLineCount)
       ) {
         return {
           error: `replace_range ${edit.startLine}-${edit.endLine} is outside ${edit.path} (${visibleLineCount} lines).`,
@@ -493,16 +653,22 @@ async function processTransactionEdit(params: {
       const narrowedTargetSuffix = narrowedTarget
         ? ' within the readCapability-covered range'
         : ''
-      const replacementLines = normalizeLineEndings(edit.newContent).split('\n')
-      lines.splice(
-        edit.startLine - 1,
-        edit.endLine - edit.startLine + 1,
-        ...replacementLines,
-      )
+      const replacementContent = normalizeLineEndings(edit.newContent)
+      const content = edit.mappedRange
+        ? `${normalized.slice(0, edit.mappedRange.startOffset)}${replacementContent}${normalized.slice(edit.mappedRange.endOffset)}`
+        : (() => {
+            const replacementLines = replacementContent.split('\n')
+            lines.splice(
+              edit.startLine - 1,
+              edit.endLine - edit.startLine + 1,
+              ...replacementLines,
+            )
+            return lines.join('\n')
+          })()
       return {
-        content: lines.join('\n'),
+        content,
         messages: [
-          `Replaced lines ${edit.startLine}-${edit.endLine} in ${edit.path}${narrowedTargetSuffix}.`,
+          `Replaced lines ${authorizationTarget.startLine}-${authorizationTarget.endLine} in ${edit.path}${narrowedTargetSuffix}.`,
         ],
       }
     }

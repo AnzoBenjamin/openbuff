@@ -28,7 +28,7 @@ import {
   type AuthorizedFilesystemPath,
 } from './filesystem-authority'
 import { resolveFilePathForFileSystemOperation } from './path-utils'
-import { buildFreshWholeFileCapability } from './mutation-capabilities'
+import { buildFreshWholeFileMutationAuthority } from './mutation-capabilities'
 
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
@@ -100,6 +100,12 @@ export async function changeFile(params: {
 
   if (result.status === 'created' || result.status === 'modified') {
     const action = result.status === 'created' ? 'create' : 'update'
+    const postEditAuthority = buildFreshWholeFileMutationAuthority({
+      canonicalPath: result.canonicalPath,
+      path: result.file,
+      content: result.finalContent,
+      capabilityIssuer,
+    })
     return [
       {
         type: 'json',
@@ -117,7 +123,12 @@ export async function changeFile(params: {
               outcome: 'applied',
               beforeHash: result.beforeHash,
               afterHash: result.afterHash,
-              afterContent: result.finalContent,
+              ...(postEditAuthority
+                ? {
+                    afterContent: postEditAuthority.afterContent,
+                    editAnchor: postEditAuthority.editAnchor,
+                  }
+                : {}),
               ...(fileChange.type === 'patch'
                 ? { patch: fileChange.content }
                 : {}),
@@ -127,15 +138,8 @@ export async function changeFile(params: {
           receiptId: result.authorityReceipt.receiptId,
           authorityReceipt: result.authorityReceipt,
           errors: [],
-          freshCapabilities: capabilityIssuer
-            ? [
-                buildFreshWholeFileCapability({
-                  canonicalPath: result.canonicalPath,
-                  path: result.file,
-                  content: result.finalContent,
-                  capabilityIssuer,
-                }),
-              ]
+          freshCapabilities: postEditAuthority
+            ? [postEditAuthority.capability]
             : [],
         }),
       },
@@ -527,31 +531,41 @@ export async function changeFiles(params: {
         expectedFinalHashes,
       })
       authority.finishCommit(begun.lease, { succeeded: true })
+      const postEditAuthorities = new Map(
+        prepared.flatMap((change) => {
+          if (change.afterContent === null) return []
+          const postEditAuthority = buildFreshWholeFileMutationAuthority({
+            canonicalPath:
+              change.destination?.canonicalPath ?? change.source.canonicalPath,
+            path: change.destinationPath ?? change.path,
+            content: change.afterContent,
+            capabilityIssuer,
+          })
+          return postEditAuthority
+            ? ([[change.index, postEditAuthority] as const] as const)
+            : []
+        }),
+      )
       return [
         {
           type: 'json',
           value: buildFileMutationResultFromReceiptV1(
             receipt,
             [],
-            prepared.flatMap((change) => {
-              if (change.afterContent === null || !capabilityIssuer) return []
-              return [
-                buildFreshWholeFileCapability({
-                  canonicalPath:
-                    change.destination?.canonicalPath ??
-                    change.source.canonicalPath,
-                  path: change.destinationPath ?? change.path,
-                  content: change.afterContent,
-                  capabilityIssuer,
-                }),
-              ]
-            }),
+            [...postEditAuthorities.values()].map(
+              (authority) => authority.capability,
+            ),
             new Map<number | string, string>(
-              prepared.flatMap((change) =>
-                change.afterContent === null
-                  ? []
-                  : [[change.index, change.afterContent] as const],
-              ),
+              [...postEditAuthorities].map(([index, authority]) => [
+                index,
+                authority.afterContent,
+              ]),
+            ),
+            new Map(
+              [...postEditAuthorities].map(([index, authority]) => [
+                index,
+                authority.editAnchor,
+              ]),
             ),
           ),
         },

@@ -79,17 +79,139 @@ function getTransactionFiles(toolBlock: ToolBlock): TransactionFile[] {
     .filter((entry): entry is TransactionFile => Boolean(entry))
 }
 
+const REDACTED_CAPABILITY = '[REDACTED]'
+
+function redactCapabilityText(text: string): string {
+  return text
+    .replace(
+      /(\b(?:basedOnRead|readCapability)\b\s*(?:=|:)\s*)(?:"[^"]*"|'[^']*'|[^\s,}\]]+)/gi,
+      `$1${REDACTED_CAPABILITY}`,
+    )
+    .replace(/cap\.v3\.[A-Za-z0-9._-]+/g, REDACTED_CAPABILITY)
+}
+
 function getTransactionError(toolBlock: ToolBlock): string | null {
   const value = getTransactionValue(toolBlock)
-  if (value && typeof value.errorMessage === 'string') return value.errorMessage
-  if (value && typeof value.error === 'string') return value.error
+  if (value && typeof value.errorMessage === 'string') {
+    return redactCapabilityText(value.errorMessage)
+  }
+  if (value && typeof value.error === 'string') {
+    return redactCapabilityText(value.error)
+  }
   const errors = getStructuredErrorMessages(toolBlock.outputRaw)
-  return errors.length > 0 ? errors.join('\n') : null
+  return errors.length > 0
+    ? redactCapabilityText(errors.join('\n'))
+    : null
+}
+
+function getPostEditAnchorLabel(
+  action: Record<string, unknown>,
+  mutation: Record<string, unknown>,
+): string {
+  const anchor = action.editAnchor
+  const receipt = mutation.authorityReceipt
+  if (
+    action.outcome !== 'applied' ||
+    !anchor ||
+    typeof anchor !== 'object' ||
+    Array.isArray(anchor) ||
+    !receipt ||
+    typeof receipt !== 'object' ||
+    Array.isArray(receipt)
+  ) {
+    return ''
+  }
+  const value = anchor as Record<string, unknown>
+  const authority = receipt as Record<string, unknown>
+  const receiptActions = Array.isArray(authority.actions)
+    ? authority.actions
+    : []
+  const finalHashes =
+    authority.finalHashes &&
+    typeof authority.finalHashes === 'object' &&
+    !Array.isArray(authority.finalHashes)
+      ? (authority.finalHashes as Record<string, unknown>)
+      : null
+  const effectiveTarget =
+    action.action === 'move' ? action.destinationPath : action.path
+  const indexMatches = receiptActions.filter(
+    (candidate) =>
+      candidate &&
+      typeof candidate === 'object' &&
+      !Array.isArray(candidate) &&
+      (candidate as Record<string, unknown>).index === action.index,
+  )
+  const actionIdMatches = receiptActions.filter(
+    (candidate) =>
+      candidate &&
+      typeof candidate === 'object' &&
+      !Array.isArray(candidate) &&
+      (candidate as Record<string, unknown>).actionId === action.actionId,
+  )
+  const committed =
+    indexMatches.length === 1 &&
+    actionIdMatches.length === 1 &&
+    indexMatches[0] === actionIdMatches[0]
+      ? (indexMatches[0] as Record<string, unknown>)
+      : null
+  if (
+    mutation.kind !== 'file_mutation_result' ||
+    mutation.version !== 1 ||
+    (mutation.outcome !== 'applied' && mutation.outcome !== 'partial') ||
+    mutation.operationId !== authority.operationId ||
+    mutation.receiptId !== authority.receiptId ||
+    mutation.authorityTier !== authority.authorityTier ||
+    !Array.isArray(mutation.errors) ||
+    !Array.isArray(mutation.freshCapabilities) ||
+    authority.kind !== 'commit_receipt' ||
+    authority.version !== 1 ||
+    authority.status !== 'committed' ||
+    typeof authority.operationId !== 'string' ||
+    authority.operationId.length === 0 ||
+    typeof authority.receiptId !== 'string' ||
+    authority.receiptId.length === 0 ||
+    typeof authority.callId !== 'string' ||
+    authority.callId.length === 0 ||
+    typeof authority.authorityTier !== 'string' ||
+    authority.authorityTier.length === 0 ||
+    !Array.isArray(authority.actions) ||
+    finalHashes === null ||
+    !Number.isInteger(action.index) ||
+    (action.index as number) < 0 ||
+    typeof action.actionId !== 'string' ||
+    action.actionId.length === 0 ||
+    committed === null ||
+    committed.status !== 'committed' ||
+    committed.action !== action.action ||
+    committed.path !== action.path ||
+    committed.destinationPath !== action.destinationPath ||
+    committed.afterHash !== action.afterHash ||
+    typeof effectiveTarget !== 'string' ||
+    effectiveTarget.length === 0 ||
+    typeof action.afterHash !== 'string' ||
+    finalHashes[effectiveTarget] !== action.afterHash ||
+    !Number.isInteger(value.startLine) ||
+    (value.startLine as number) < 1 ||
+    !Number.isInteger(value.endLine) ||
+    (value.endLine as number) < (value.startLine as number) ||
+    value.contentHash !== action.afterHash ||
+    !/^sha256:[a-f0-9]{64}$/i.test(value.contentHash as string) ||
+    typeof value.readCapability !== 'string' ||
+    !value.readCapability.startsWith('cap.v3.') ||
+    value.readCapability.length > 4096
+  ) {
+    return ''
+  }
+  const shortHash = (value.contentHash as string)
+    .slice('sha256:'.length)
+    .slice(0, 16)
+  return ` • post-edit ${shortHash} • fresh capability available`
 }
 
 function getTransactionRows(toolBlock: ToolBlock): string[] {
   const canonical = getCanonicalMutationResult(toolBlock.outputRaw)
   if (canonical && Array.isArray(canonical.actions)) {
+    const mutation = canonical as Record<string, unknown>
     return canonical.actions.map((raw) => {
       const action = raw as Record<string, unknown>
       const rollback = action.rollback as Record<string, unknown> | undefined
@@ -98,7 +220,11 @@ function getTransactionRows(toolBlock: ToolBlock): string[] {
         action.action === 'move' && typeof action.destinationPath === 'string'
           ? `${String(action.path)} → ${action.destinationPath}`
           : String(action.path)
-      return `${String(action.index)}. ${pathLabel} • ${String(action.action)} • ${String(action.outcome)}${rollback?.attempted ? ` • rollback ${rollback.succeeded ? 'succeeded' : 'failed'}` : ''}${error?.message ? ` • ${String(error.message)}` : ''}`
+      const actionNumber =
+        typeof action.index === 'number' && action.index >= 0
+          ? action.index + 1
+          : '?'
+      return `${String(actionNumber)}. ${pathLabel} • ${String(action.action)} • ${String(action.outcome)}${getPostEditAnchorLabel(action, mutation)}${rollback?.attempted ? ` • rollback ${rollback.succeeded ? 'succeeded' : 'failed'}` : ''}${error?.message ? ` • ${redactCapabilityText(String(error.message))}` : ''}`
     })
   }
   const value = getTransactionValue(toolBlock)
@@ -109,7 +235,7 @@ function getTransactionRows(toolBlock: ToolBlock): string[] {
       typeof failure.editIndex === 'number' && failure.editIndex >= 0
         ? failure.editIndex + 1
         : '?'
-    return `${String(editNumber)}. ${String(failure.path ?? failure.id ?? 'unknown')} • ${String(failure.errorMessage ?? failure.error ?? 'failed')}`
+    return `${String(editNumber)}. ${String(failure.path ?? failure.id ?? 'unknown')} • ${redactCapabilityText(String(failure.errorMessage ?? failure.error ?? 'failed'))}`
   })
 }
 

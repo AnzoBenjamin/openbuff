@@ -2,6 +2,7 @@ import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-run
 import { editTransactionParams } from '@codebuff/common/tools/params/tool/edit-transaction'
 import { buildReadFilesResultV1 } from '@codebuff/common/tools/results/filesystem'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
+import { getExactContentHash } from '@codebuff/common/util/content-hash'
 import { describe, expect, it } from 'bun:test'
 
 import { handleEditTransaction } from '../tools/handlers/tool/edit-transaction'
@@ -9,7 +10,10 @@ import { strictEditAuthorizationError } from '../tools/handlers/tool/edit-read-s
 import { handleReadFiles } from '../tools/handlers/tool/read-files'
 import { handleReplaceRange } from '../tools/handlers/tool/replace-range'
 import { handleStrReplace } from '../tools/handlers/tool/str-replace'
-import { handleWriteFile } from '../tools/handlers/tool/write-file'
+import {
+  handleWriteFile,
+  normalizeToolPath,
+} from '../tools/handlers/tool/write-file'
 import {
   encodeReadCapabilityToken,
   getContentHash,
@@ -18,6 +22,7 @@ import { processStream } from '../tools/stream-parser'
 import { createMockStreamWithToolCalls, mockFileContext } from './test-utils'
 
 import type { FileProcessingState } from '../tools/handlers/tool/write-file'
+import type { CommitReceiptV1 } from '@codebuff/common/tools/results/filesystem'
 import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
@@ -30,6 +35,16 @@ const logger: Logger = {
   info: () => {},
   warn: () => {},
   error: () => {},
+}
+
+const defaultTestAuthorityScope = {
+  projectId: mockFileContext.projectRoot,
+  runId: 'read-files-edit-state-test-run',
+}
+
+const defaultTestHandlerAuthority = {
+  fileContext: mockFileContext,
+  runId: defaultTestAuthorityScope.runId,
 }
 
 function createFileProcessingState(): FileProcessingState {
@@ -77,45 +92,169 @@ function buildWholeFileReadResultV1(
   )
 }
 
-function confirmedMutationOutput(toolCall: any) {
+function confirmedMutationOutput(
+  toolCall: any,
+  expectedContentByPath: Record<string, string>,
+  scope: { projectId: string; runId: string } = defaultTestAuthorityScope,
+) {
   const changes = Array.isArray(toolCall.input)
     ? toolCall.input
     : [toolCall.input]
+  const operationId = toolCall.toolCallId
+  const receiptId = `${operationId}-receipt`
+  type SyntheticAction = {
+    actionId: string
+    index: number
+    action: 'create' | 'update' | 'delete' | 'move'
+    path: string
+    destinationPath?: string
+    beforeHash: string | null
+  } & (
+    | { afterHash: null }
+    | {
+        afterHash: string
+        afterContent: string
+        editAnchor: {
+          startLine: number
+          endLine: number
+          contentHash: string
+          readCapability: string
+        }
+      }
+  )
+  const actions: SyntheticAction[] = changes.map((change: any, index: number) => {
+    const action =
+      change.type === 'delete' || change.type === 'move'
+        ? change.type
+        : change.expectedHash === null
+          ? 'create'
+          : 'update'
+    const finalPath = change.destinationPath ?? change.path
+    const finalContent =
+      action === 'delete' ? undefined : expectedContentByPath[finalPath]
+    if (action !== 'delete' && finalContent === undefined) {
+      throw new Error(`Missing expected post-edit content for ${finalPath}`)
+    }
+    const endLine = finalContent
+      ?.replace(/\r\n?/g, '\n')
+      .split('\n').length
+    const editAnchor =
+      finalContent === undefined
+        ? undefined
+        : {
+            startLine: 1,
+            endLine: endLine!,
+            contentHash: getContentHash(finalContent),
+            readCapability: encodeReadCapabilityToken({
+              startLine: 1,
+              endLine: endLine!,
+              hash: getContentHash(finalContent),
+              scope: {
+                projectId: scope.projectId,
+                path: finalPath,
+                runId: scope.runId,
+              },
+            }),
+          }
+    return {
+      actionId: `${operationId}:${index}`,
+      index,
+      action,
+      path: change.path,
+      ...(change.destinationPath
+        ? { destinationPath: change.destinationPath }
+        : {}),
+      beforeHash: change.expectedHash ?? null,
+      afterHash:
+        action === 'delete' ? null : getExactContentHash(finalContent!),
+      ...(finalContent === undefined
+        ? {}
+        : { afterContent: finalContent, editAnchor }),
+    } as SyntheticAction
+  })
+  const receipt = {
+    kind: 'commit_receipt' as const,
+    version: 1 as const,
+    receiptId,
+    operationId,
+    callId: operationId,
+    authorityTier: 'portable_path' as const,
+    status: 'committed' as const,
+    actions: actions.map((action) => ({
+      actionId: action.actionId,
+      index: action.index,
+      action: action.action,
+      path: action.path,
+      ...('destinationPath' in action
+        ? { destinationPath: action.destinationPath }
+        : {}),
+      status: 'committed' as const,
+      beforeHash: action.beforeHash,
+      afterHash: action.afterHash,
+    })),
+    finalHashes: Object.fromEntries(
+      actions.map((action) => [
+        'destinationPath' in action ? action.destinationPath : action.path,
+        action.afterHash,
+      ]),
+    ),
+  }
+  const canonicalProject = mockFileContext.projectRoot
+    .replaceAll('\\', '/')
+    .replace(/\/+$/, '')
+  const freshCapabilities = actions.flatMap((action) => {
+    if (action.afterHash === null || !('editAnchor' in action)) return []
+    const finalPath = action.destinationPath ?? action.path
+    return [
+      {
+        kind: 'whole_file' as const,
+        version: 1 as const,
+        token: action.editAnchor.readCapability,
+        snapshot: {
+          kind: 'file_snapshot' as const,
+          version: 1 as const,
+          canonicalPath: `${canonicalProject}/${finalPath
+            .replaceAll('\\', '/')
+            .replace(/^\.\//, '')}`,
+          contentHash: action.afterHash,
+          sizeBytes: Buffer.byteLength(action.afterContent),
+          encoding: 'utf8' as const,
+          readGeneration: Date.now(),
+        },
+      },
+    ]
+  })
   return [
     {
       type: 'json' as const,
       value: {
         kind: 'file_mutation_result',
         version: 1,
-        operationId: toolCall.toolCallId,
+        operationId,
         outcome: 'applied',
-        actions: changes.map((change: any, index: number) => ({
-          actionId: `${toolCall.toolCallId}:${index}`,
-          index,
-          action:
-            change.type === 'delete' || change.type === 'move'
-              ? change.type
-              : change.expectedHash === null
-                ? 'create'
-                : 'update',
-          path: change.path,
-          ...(change.destinationPath
-            ? { destinationPath: change.destinationPath }
-            : {}),
-          outcome: 'applied',
-          beforeHash: change.expectedHash ?? 'before',
-          afterHash: change.type === 'delete' ? null : 'after',
+        actions: actions.map((action) => ({
+          ...action,
+          outcome: 'applied' as const,
         })),
         authorityTier: 'portable_path',
-        receiptId: toolCall.toolCallId,
+        receiptId,
+        authorityReceipt: receipt,
         errors: [],
-        freshCapabilities: [],
+        freshCapabilities,
       },
     },
   ]
 }
 
 describe('read_files edit-state recovery', () => {
+  it('canonicalizes separators without accepting whitespace path aliases', () => {
+    expect(normalizeToolPath('./src//value.ts')).toBe('src/value.ts')
+    expect(normalizeToolPath('src\\value.ts')).toBe('src/value.ts')
+    expect(normalizeToolPath(' src/value.ts')).toBe('')
+    expect(normalizeToolPath('src/value.ts ')).toBe('')
+    expect(normalizeToolPath('src/other.ts')).toBe('src/other.ts')
+  })
+
   it('[PERF-L05] caps transaction snapshot reads at eight concurrent paths', async () => {
     const paths = Array.from(
       { length: 10 },
@@ -130,7 +269,7 @@ describe('read_files edit-state recovery', () => {
     let maxActive = 0
     let started = 0
 
-    const transactionPromise = handleEditTransaction({
+    const transactionPromise = handleEditTransaction({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'bounded-snapshots',
@@ -192,7 +331,7 @@ describe('read_files edit-state recovery', () => {
       }),
     ]
 
-    const result = await handleReadFiles({
+    const result = await handleReadFiles({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'read-dot-slash',
@@ -248,6 +387,54 @@ describe('read_files edit-state recovery', () => {
     }
   })
 
+  it('logs reuse-eligible telemetry for an immediate confirmed post-edit reread', async () => {
+    const path = 'src/confirmed.ts'
+    const diskContent = 'export const value = 2\n'
+    const contentHash = getContentHash(diskContent)
+    const debugCalls: unknown[][] = []
+    const telemetryLogger = {
+      ...logger,
+      debug: (...args: unknown[]) => debugCalls.push(args),
+    } as Logger
+    const fileProcessingState = createFileProcessingState()
+    fileProcessingState.strictReadBeforeEdit = true
+    fileProcessingState.readAuthorizationsByPath = { [path]: true }
+    fileProcessingState.readAuthorizationHashesByPath = { [path]: contentHash }
+    fileProcessingState.confirmedPostEditAnchorsByPath = {
+      [path]: {
+        startLine: 1,
+        endLine: 2,
+        contentHash,
+        readCapability: 'redacted-test-capability',
+      },
+    }
+    fileProcessingState.promisesByPath[path] = []
+
+    await handleReadFiles({ ...defaultTestHandlerAuthority,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'redundant-confirmed-reread',
+        toolName: 'read_files',
+        input: { paths: [path] },
+      },
+      fileContext: mockFileContext,
+      fileProcessingState,
+      requestFiles: async ({ filePaths }: { filePaths: string[] }) =>
+        buildWholeFileReadResultV1(filePaths, () => diskContent),
+      logger: telemetryLogger,
+    } as any)
+
+    expect(debugCalls).toContainEqual([
+      {
+        path,
+        reason: 'immediate_post_edit_reread',
+        category: 'reuse_eligible',
+      },
+      expect.any(String),
+    ])
+    expect(fileProcessingState.confirmedPostEditAnchorsByPath[path]).toBeUndefined()
+  })
+
   it('does not clear failed-edit gate or grant authorization when read_files cannot load the file', async () => {
     const path = 'src/missing.ts'
     const fileProcessingState = createFileProcessingState()
@@ -262,7 +449,7 @@ describe('read_files edit-state recovery', () => {
       }),
     ]
 
-    const result = await handleReadFiles({
+    const result = await handleReadFiles({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'read-missing-file',
@@ -296,7 +483,7 @@ describe('read_files edit-state recovery', () => {
       }),
     ]
 
-    const result = await handleReadFiles({
+    const result = await handleReadFiles({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'read-blocked-file',
@@ -358,7 +545,7 @@ describe('read_files edit-state recovery', () => {
       }),
     ]
 
-    const result = await handleReadFiles({
+    const result = await handleReadFiles({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'read-symbol-only',
@@ -394,7 +581,7 @@ describe('read_files edit-state recovery', () => {
     fileProcessingState.strictReadBeforeEdit = true
     fileProcessingState.failedEditRequiresReadByPath[path] = true
 
-    const result = await handleReadFiles({
+    const result = await handleReadFiles({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'read-missing-symbol',
@@ -441,7 +628,7 @@ describe('read_files edit-state recovery', () => {
     const fileProcessingState = createFileProcessingState()
     fileProcessingState.strictReadBeforeEdit = true
 
-    const result = await handleReadFiles({
+    const result = await handleReadFiles({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'read-truncated-canonical',
@@ -478,7 +665,7 @@ describe('read_files edit-state recovery', () => {
     const fileProcessingState = createFileProcessingState()
     fileProcessingState.strictReadBeforeEdit = true
 
-    const result = await handleReadFiles({
+    const result = await handleReadFiles({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'read-mismatched-canonical',
@@ -525,7 +712,7 @@ describe('read_files edit-state recovery', () => {
     const fileProcessingState = createFileProcessingState()
     fileProcessingState.strictReadBeforeEdit = true
 
-    const result = await handleReadFiles({
+    const result = await handleReadFiles({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'read-range-only',
@@ -582,7 +769,7 @@ describe('read_files edit-state recovery', () => {
     const fileProcessingState = createFileProcessingState()
     fileProcessingState.strictReadBeforeEdit = true
 
-    await handleReadFiles({
+    await handleReadFiles({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'read-full-file-range',
@@ -627,7 +814,7 @@ describe('read_files edit-state recovery', () => {
     const fileProcessingState = createFileProcessingState()
     const appliedPatches: string[] = []
 
-    const result = await handleStrReplace({
+    const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'empty-client-result-replace',
@@ -678,7 +865,7 @@ describe('read_files edit-state recovery', () => {
       [path]: getContentHash(diskContent),
     }
 
-    const result = await handleStrReplace({
+    const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'rejected-client-replace',
@@ -732,7 +919,7 @@ describe('read_files edit-state recovery', () => {
       expectedHash?: string | null
     }> = []
 
-    const result = await handleWriteFile({
+    const result = await handleWriteFile({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'empty-client-result-write',
@@ -790,7 +977,7 @@ describe('read_files edit-state recovery', () => {
       [path]: getContentHash(diskContent),
     }
 
-    const result = await handleWriteFile({
+    const result = await handleWriteFile({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'rejected-client-write',
@@ -841,7 +1028,7 @@ describe('read_files edit-state recovery', () => {
     fileProcessingState.strictReadBeforeEdit = true
     fileProcessingState.readAuthorizationsByPath = { [path]: true }
 
-    const result = await handleWriteFile({
+    const result = await handleWriteFile({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'late-client-error-write',
@@ -890,7 +1077,7 @@ describe('read_files edit-state recovery', () => {
       releasePreviousTool = resolve
     })
 
-    const resultPromise = handleWriteFile({
+    const resultPromise = handleWriteFile({ ...defaultTestHandlerAuthority,
       previousToolCallFinished,
       toolCall: {
         toolCallId: 'queued-write-before-previous-finished',
@@ -954,7 +1141,7 @@ describe('read_files edit-state recovery', () => {
     const appliedPatches: string[] = []
     let optionalFileReadCount = 0
 
-    const firstResultPromise = handleWriteFile({
+    const firstResultPromise = handleWriteFile({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'same-path-first-write',
@@ -988,7 +1175,7 @@ describe('read_files edit-state recovery', () => {
       writeToClient: () => {},
     } as any)
 
-    const secondResultPromise = handleWriteFile({
+    const secondResultPromise = handleWriteFile({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: firstResultPromise.then(() => {}),
       toolCall: {
         toolCallId: 'same-path-second-write',
@@ -1056,7 +1243,7 @@ describe('read_files edit-state recovery', () => {
     const fileProcessingState = createFileProcessingState()
     const appliedPatches: string[] = []
 
-    const strReplaceResult = await handleStrReplace({
+    const strReplaceResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'replace-before-transaction',
@@ -1078,14 +1265,16 @@ describe('read_files edit-state recovery', () => {
         filePath === path ? diskContent : null,
       requestClientToolCall: async (toolCall: any) => {
         appliedPatches.push(toolCall.input.content)
-        return confirmedMutationOutput(toolCall)
+        return confirmedMutationOutput(toolCall, {
+          [path]: 'export const value = 2\nexport const other = 1\n',
+        })
       },
       writeToClient: () => {},
     } as any)
 
     expect(strReplaceResult.output[0]?.type).toBe('json')
 
-    const transactionResult = await handleEditTransaction({
+    const transactionResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'transaction-after-replace',
@@ -1113,7 +1302,9 @@ describe('read_files edit-state recovery', () => {
         filePath === path ? diskContent : null,
       requestClientToolCall: async (toolCall: any) => {
         appliedPatches.push(toolCall.input[0].content)
-        return confirmedMutationOutput(toolCall)
+        return confirmedMutationOutput(toolCall, {
+          [path]: 'export const value = 3\nexport const other = 1\n',
+        })
       },
     } as any)
 
@@ -1133,7 +1324,7 @@ describe('read_files edit-state recovery', () => {
     const fileProcessingState = createFileProcessingState()
     const appliedPatches: string[] = []
 
-    const transactionResult = await handleEditTransaction({
+    const transactionResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'transaction-1',
@@ -1161,14 +1352,16 @@ describe('read_files edit-state recovery', () => {
         filePath === path ? diskContent : null,
       requestClientToolCall: async (toolCall: any) => {
         appliedPatches.push(toolCall.input[0].content)
-        return confirmedMutationOutput(toolCall)
+        return confirmedMutationOutput(toolCall, {
+          [path]: 'export const value = 2\nexport const other = 1\n',
+        })
       },
     } as any)
 
     expect(transactionResult.output[0]?.type).toBe('json')
     expect(fileProcessingState.promisesByPath[path]).toHaveLength(1)
 
-    const strReplaceResult = await handleStrReplace({
+    const strReplaceResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'replace-after-transaction',
@@ -1223,7 +1416,7 @@ describe('read_files edit-state recovery', () => {
       [path]: getContentHash(diskContent),
     }
 
-    const transactionResult = await handleEditTransaction({
+    const transactionResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'transaction-preflight-failed',
@@ -1264,7 +1457,7 @@ describe('read_files edit-state recovery', () => {
     expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
 
     let followUpApplied = false
-    const strReplaceResult = await handleStrReplace({
+    const strReplaceResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'replace-after-failed-preflight',
@@ -1286,7 +1479,9 @@ describe('read_files edit-state recovery', () => {
         filePath === path ? diskContent : null,
       requestClientToolCall: async (clientToolCall: any) => {
         followUpApplied = true
-        return confirmedMutationOutput(clientToolCall)
+        return confirmedMutationOutput(clientToolCall, {
+          [path]: 'export const value = 2\n',
+        })
       },
       writeToClient: () => {},
     } as any)
@@ -1318,7 +1513,7 @@ describe('read_files edit-state recovery', () => {
       [otherPath]: getContentHash(diskContentByPath[otherPath]),
     }
 
-    const transactionResult = await handleEditTransaction({
+    const transactionResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'transaction-rejected',
@@ -1386,7 +1581,7 @@ describe('read_files edit-state recovery', () => {
     expect(fileProcessingState.readAuthorizationsByPath?.[otherPath]).toBe(true)
 
     let followUpApplied = false
-    const strReplaceResult = await handleStrReplace({
+    const strReplaceResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'replace-after-rejected-transaction',
@@ -1408,7 +1603,9 @@ describe('read_files edit-state recovery', () => {
         diskContentByPath[filePath] ?? null,
       requestClientToolCall: async (clientToolCall: any) => {
         followUpApplied = true
-        return confirmedMutationOutput(clientToolCall)
+        return confirmedMutationOutput(clientToolCall, {
+          [path]: 'export const value = 3\n',
+        })
       },
       writeToClient: () => {},
     } as any)
@@ -1438,7 +1635,7 @@ describe('read_files edit-state recovery', () => {
     const fileProcessingState = createFileProcessingState()
     let appliedPatch = ''
 
-    const transactionResult = await handleEditTransaction({
+    const transactionResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'tsx-import-type-transaction',
@@ -1466,7 +1663,12 @@ describe('read_files edit-state recovery', () => {
         filePath === path ? diskContent : null,
       requestClientToolCall: async (toolCall: any) => {
         appliedPatch = toolCall.input[0].content
-        return confirmedMutationOutput(toolCall)
+        return confirmedMutationOutput(toolCall, {
+          [path]: diskContent.replace(
+            "import React from 'react'\n",
+            "import React from 'react'\nimport type { KeyEvent } from '@opentui/core'\n",
+          ),
+        })
       },
     } as any)
 
@@ -1496,7 +1698,7 @@ describe('read_files edit-state recovery', () => {
     ].join('\n')
     const fileProcessingState = createFileProcessingState()
 
-    const transactionResult = await handleEditTransaction({
+    const transactionResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'tsx-malformed-import-transaction',
@@ -1556,7 +1758,7 @@ describe('read_files edit-state recovery', () => {
     }
     const fileProcessingState = createFileProcessingState()
 
-    const transactionResult = await handleEditTransaction({
+    const transactionResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'transaction-throws',
@@ -1651,7 +1853,7 @@ describe('read_files edit-state recovery', () => {
 
     let appliedPatchContent = ''
     let requestOptionalFileLineCount = 0
-    const strReplaceResult = await handleStrReplace({
+    const strReplaceResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'replace-anchored',
@@ -1679,7 +1881,16 @@ describe('read_files edit-state recovery', () => {
       },
       requestClientToolCall: async (toolCall: any) => {
         appliedPatchContent = toolCall.input.content
-        return confirmedMutationOutput(toolCall)
+        return confirmedMutationOutput(
+          toolCall,
+          {
+            [path]: diskContent.replace(
+              'const target = 1;',
+              'const target = 2;',
+            ),
+          },
+          { projectId: mockFileContext.projectRoot, runId: 'test-run-id' },
+        )
       },
       writeToClient: () => {},
     } as any)
@@ -1758,7 +1969,7 @@ describe('read_files edit-state recovery', () => {
         },
       ])
 
-    await handleReadFiles({
+    await handleReadFiles({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'read-1',
@@ -1779,7 +1990,7 @@ describe('read_files edit-state recovery', () => {
     ).toBeUndefined()
     expect(fileProcessingState.promisesByPath[path]).toBeUndefined()
 
-    const strReplaceResult = await handleStrReplace({
+    const strReplaceResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'replace-1',
@@ -1803,7 +2014,16 @@ describe('read_files edit-state recovery', () => {
       requestOptionalFile,
       requestClientToolCall: async (toolCall: any) => {
         appliedPatchContent = toolCall.input.content
-        return confirmedMutationOutput(toolCall)
+        return confirmedMutationOutput(
+          toolCall,
+          {
+            [path]: diskContent.replace(
+              'const target = 1;',
+              'const target = 2;',
+            ),
+          },
+          { projectId: mockFileContext.projectRoot, runId: 'test-run-id' },
+        )
       },
       writeToClient: () => {},
     } as any)
@@ -1867,7 +2087,7 @@ describe('read_files edit-state recovery', () => {
     })
     let appliedPatchContent = ''
 
-    const readPromise = handleReadFiles({
+    const readPromise = handleReadFiles({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'read-1',
@@ -1905,7 +2125,7 @@ describe('read_files edit-state recovery', () => {
       logger,
     } as any)
 
-    const strReplacePromise = handleStrReplace({
+    const strReplacePromise = handleStrReplace({ ...defaultTestHandlerAuthority,
       previousToolCallFinished: readPromise.then(() => undefined),
       toolCall: {
         toolCallId: 'replace-1',
@@ -1967,7 +2187,7 @@ describe('read_files edit-state recovery', () => {
       const fileProcessingState = createFileProcessingState()
       let applied = false
 
-      const result = await handleStrReplace({
+      const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'default-non-strict',
@@ -2014,7 +2234,7 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.strictReadBeforeEdit = true
       let applied = false
 
-      const result = await handleStrReplace({
+      const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-auto-reread',
@@ -2036,7 +2256,9 @@ describe('read_files edit-state recovery', () => {
           filePath === path ? diskContent : null,
         requestClientToolCall: async (toolCall: any) => {
           applied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: 'export const value = 2\n',
+          })
         },
         writeToClient: () => {},
       } as any)
@@ -2068,7 +2290,7 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.strictReadBeforeEdit = true
 
       // Fail auto-reread apply path: ambiguous/missing match leaves no sticky.
-      const failResult = await handleStrReplace({
+      const failResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'auto-reread-fail-no-sticky',
@@ -2099,7 +2321,7 @@ describe('read_files edit-state recovery', () => {
       ).toBeUndefined()
 
       let writeApplied = false
-      const writeResult = await handleWriteFile({
+      const writeResult = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'write-after-failed-auto-reread',
@@ -2125,12 +2347,14 @@ describe('read_files edit-state recovery', () => {
       expect(writeApplied).toBe(false)
       expect(writeResult.output[0]?.type).toBe('json')
       if (writeResult.output[0]?.type === 'json') {
-        expect(String((writeResult.output[0].value as any).errorMessage)).toContain(
-          'write_file blocked',
-        )
-        expect(String((writeResult.output[0].value as any).errorMessage)).toContain(
-          'basedOnRead=',
-        )
+        const value = writeResult.output[0].value as {
+          basedOnRead?: string
+          errorMessage?: string
+        }
+        expect(String(value.errorMessage)).toContain('write_file blocked')
+        expect(String(value.errorMessage)).toContain('read_files')
+        expect(String(value.errorMessage)).not.toContain('cap.v3.')
+        expect(value).not.toHaveProperty('basedOnRead')
       }
     })
 
@@ -2139,7 +2363,7 @@ describe('read_files edit-state recovery', () => {
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
 
-      const result = await handleStrReplace({
+      const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-auto-reread-missing',
@@ -2184,7 +2408,7 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.strictReadBeforeEdit = true
       let applied = false
 
-      const result = await handleStrReplace({
+      const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-allow-multiple-no-auto-reread',
@@ -2231,7 +2455,7 @@ describe('read_files edit-state recovery', () => {
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
 
-      const readResult = await handleReadFiles({
+      const readResult = await handleReadFiles({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-capability-read',
@@ -2257,7 +2481,7 @@ describe('read_files edit-state recovery', () => {
       delete fileProcessingState.readAuthorizationsByPath?.[path]
       delete fileProcessingState.readAuthorizationHashesByPath?.[path]
       let applied = false
-      const editResult = await handleStrReplace({
+      const editResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-capability-edit',
@@ -2281,7 +2505,11 @@ describe('read_files edit-state recovery', () => {
         requestOptionalFile: async () => diskContent,
         requestClientToolCall: async (toolCall: any) => {
           applied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(
+            toolCall,
+            { [path]: 'export const value = 2\n' },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
         },
         writeToClient: () => {},
       } as any)
@@ -2305,7 +2533,7 @@ describe('read_files edit-state recovery', () => {
       }
       let applied = false
 
-      const result = await handleStrReplace({
+      const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'stale-whole-file-auth',
@@ -2360,7 +2588,7 @@ describe('read_files edit-state recovery', () => {
       }
       let applied = false
 
-      const result = await handleStrReplace({
+      const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'stale-auth-scoped-recovery',
@@ -2393,7 +2621,11 @@ describe('read_files edit-state recovery', () => {
         requestOptionalFile: async () => diskContent,
         requestClientToolCall: async (toolCall: any) => {
           applied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(
+            toolCall,
+            { [path]: 'export const value = 3\n' },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
         },
         writeToClient: () => {},
       } as any)
@@ -2419,7 +2651,7 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationsByPath = { [path]: true }
       let applied = false
 
-      const result = await handleStrReplace({
+      const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'legacy-boolean-only-auth',
@@ -2440,7 +2672,9 @@ describe('read_files edit-state recovery', () => {
         requestOptionalFile: async () => diskContent,
         requestClientToolCall: async (toolCall: any) => {
           applied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: 'export const value = 2\n',
+          })
         },
         writeToClient: () => {},
       } as any)
@@ -2463,7 +2697,7 @@ describe('read_files edit-state recovery', () => {
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
 
-      await handleReadFiles({
+      await handleReadFiles({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-read',
@@ -2485,7 +2719,7 @@ describe('read_files edit-state recovery', () => {
       )
 
       let firstApplyCount = 0
-      const firstResult = await handleStrReplace({
+      const firstResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-first-edit',
@@ -2507,7 +2741,9 @@ describe('read_files edit-state recovery', () => {
           filePath === path ? diskContent : null,
         requestClientToolCall: async (toolCall: any) => {
           firstApplyCount += 1
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: 'export const value = 2\n',
+          })
         },
         writeToClient: () => {},
       } as any)
@@ -2531,7 +2767,7 @@ describe('read_files edit-state recovery', () => {
       // A second str_replace without re-reading must now SUCCEED using the
       // sticky auth granted by the original read_files call.
       let secondApplyCount = 0
-      const secondResult = await handleStrReplace({
+      const secondResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-second-edit-sticky',
@@ -2553,7 +2789,9 @@ describe('read_files edit-state recovery', () => {
           filePath === path ? diskContent : null,
         requestClientToolCall: async (toolCall: any) => {
           secondApplyCount += 1
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: 'export const value = 3\n',
+          })
         },
         writeToClient: () => {},
       } as any)
@@ -2579,7 +2817,7 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.strictReadBeforeEdit = true
 
       // Single read_files call grants the initial per-path authorization.
-      await handleReadFiles({
+      await handleReadFiles({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'sticky-read-init',
@@ -2610,7 +2848,7 @@ describe('read_files edit-state recovery', () => {
       let totalApplies = 0
 
       for (const [i, step] of edits.entries()) {
-        const result = await handleStrReplace({
+        const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
           previousToolCallFinished: Promise.resolve(),
           toolCall: {
             toolCallId: `sticky-edit-${i}`,
@@ -2632,7 +2870,9 @@ describe('read_files edit-state recovery', () => {
             filePath === path ? diskContent : null,
           requestClientToolCall: async (toolCall: any) => {
             totalApplies += 1
-            return confirmedMutationOutput(toolCall)
+            return confirmedMutationOutput(toolCall, {
+              [path]: `export const value = ${step.to}\n`,
+            })
           },
           writeToClient: () => {},
         } as any)
@@ -2662,7 +2902,7 @@ describe('read_files edit-state recovery', () => {
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
 
-      await handleReadFiles({
+      await handleReadFiles({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-read-dot-slash',
@@ -2684,7 +2924,7 @@ describe('read_files edit-state recovery', () => {
       ).toBeUndefined()
 
       let applied = false
-      const result = await handleStrReplace({
+      const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-edit-normalized-path',
@@ -2706,7 +2946,9 @@ describe('read_files edit-state recovery', () => {
           filePath === path ? diskContent : null,
         requestClientToolCall: async (toolCall: any) => {
           applied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: 'export const value = 2\n',
+          })
         },
         writeToClient: () => {},
       } as any)
@@ -2738,7 +2980,7 @@ describe('read_files edit-state recovery', () => {
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
 
-      await handleReadFiles({
+      await handleReadFiles({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-transaction-read-normalized',
@@ -2761,7 +3003,7 @@ describe('read_files edit-state recovery', () => {
       )
 
       let applied = false
-      const result = await handleEditTransaction({
+      const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-transaction-normalized',
@@ -2799,7 +3041,10 @@ describe('read_files edit-state recovery', () => {
           diskContentByPath[filePath] ?? null,
         requestClientToolCall: async (toolCall: any) => {
           applied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: 'export const value = 2\n',
+            [otherPath]: 'export const other = 2\n',
+          })
         },
       } as any)
 
@@ -2835,7 +3080,7 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.strictReadBeforeEdit = true
       let applied = false
 
-      const result = await handleEditTransaction({
+      const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-transaction-auto-reread',
@@ -2873,7 +3118,10 @@ describe('read_files edit-state recovery', () => {
           diskContentByPath[filePath] ?? null,
         requestClientToolCall: async (toolCall: any) => {
           applied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: 'export const value = 2\n',
+            [otherPath]: 'export const other = 2\n',
+          })
         },
       } as any)
 
@@ -2898,7 +3146,7 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.strictReadBeforeEdit = true
       let applied = false
 
-      const result = await handleEditTransaction({
+      const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-tx-allow-multiple-no-auto-reread',
@@ -2926,10 +3174,17 @@ describe('read_files edit-state recovery', () => {
         requestOptionalFile: async () => diskContent,
         requestClientToolCall: async () => {
           applied = true
-          return confirmedMutationOutput({
-            toolCallId: 'must-not-apply-allow-multiple',
-            input: {},
-          } as any)
+          return confirmedMutationOutput(
+            {
+              toolCallId: 'must-not-apply-allow-multiple',
+              input: {},
+            } as any,
+            {},
+            {
+              projectId: mockFileContext.projectRoot,
+              runId: 'tx-allow-multiple-no-auto-reread-run',
+            },
+          )
         },
       } as any)
 
@@ -2938,25 +3193,36 @@ describe('read_files edit-state recovery', () => {
       expect(output.type).toBe('json')
       if (output.type === 'json') {
         const value = output.value as {
+          basedOnRead?: string
           errorMessage?: string
           failures?: Array<{ errorMessage?: string; basedOnRead?: string }>
         }
-        expect(String(value.errorMessage)).toContain('no read authorization')
-        expect(String(value.failures?.[0]?.errorMessage)).toContain(path)
-        // Residual/auth-miss recovery may still echo basedOnRead when content known.
-        expect(value.failures?.[0]?.basedOnRead).toMatch(/^cap\.v3\./)
+        const errorText = [
+          value.errorMessage,
+          ...(value.failures?.map((failure) => failure.errorMessage) ?? []),
+        ]
+          .map(String)
+          .join('\n')
+        expect(errorText).toContain('no read authorization')
+        expect(errorText).toContain(path)
+        expect(errorText).toContain('read_files')
+        expect(errorText).not.toContain('cap.v3.')
+        expect(value).not.toHaveProperty('basedOnRead')
+        for (const failure of value.failures ?? []) {
+          expect(failure).not.toHaveProperty('basedOnRead')
+        }
       }
       expect(
         fileProcessingState.readAuthorizationsByPath?.[path],
       ).toBeUndefined()
     })
 
-    it('create-on-existing lifecycle error mentions write_file and mints basedOnRead', async () => {
+    it('create-on-existing lifecycle error requires write_file recovery after read_files', async () => {
       const path = 'src/exists.ts'
       const diskContent = 'export const value = 1\n'
       const fileProcessingState = createFileProcessingState()
 
-      const result = await handleEditTransaction({
+      const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'create-exists',
@@ -2985,32 +3251,38 @@ describe('read_files edit-state recovery', () => {
       expect(output.type).toBe('json')
       if (output.type === 'json') {
         const value = output.value as {
+          basedOnRead?: string
           errorMessage?: string
           failures?: Array<{ errorMessage?: string; basedOnRead?: string }>
         }
-        const failureMsg = String(value.failures?.[0]?.errorMessage)
+        const errorText = [
+          value.errorMessage,
+          ...(value.failures?.map((failure) => failure.errorMessage) ?? []),
+        ]
+          .map(String)
+          .join('\n')
         expect(String(value.errorMessage)).toContain('lifecycle preflight')
-        expect(failureMsg).toContain('write_file')
-        expect(failureMsg).toContain('str_replace')
-        expect(failureMsg).toContain('basedOnRead=')
-        expect(failureMsg).toMatch(/Retry with type "write_file"/)
-        // Capability-present recovery must not steer to exploratory re-read first.
-        expect(failureMsg).not.toMatch(/Call read_files paths:.*first/)
-        expect(failureMsg).toContain(
-          'Do not exploratory re-read first when basedOnRead is provided',
-        )
-        expect(value.failures?.[0]?.basedOnRead).toMatch(/^cap\.v3\./)
+        expect(errorText).toContain('write_file')
+        expect(errorText).toContain('read_files')
+        expect(errorText).toMatch(/read_files.*retry(?:ing)? with type "write_file"/is)
+        expect(errorText).not.toContain('cap.v3.')
+        expect(errorText).not.toContain('basedOnRead=')
+        expect(errorText).not.toContain('Do not exploratory re-read first')
+        expect(value).not.toHaveProperty('basedOnRead')
+        for (const failure of value.failures ?? []) {
+          expect(failure).not.toHaveProperty('basedOnRead')
+        }
       }
     })
 
-    it('create-on-existing basedOnRead authorizes a following write_file overwrite', async () => {
+    it('create-on-existing cannot authorize overwrite before a complete read_files read', async () => {
       const path = 'src/exists-overwrite.ts'
       const diskContent = 'export const value = 1\n'
       const runId = 'create-exists-write-run'
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
 
-      const createResult = await handleEditTransaction({
+      const createResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'create-exists-for-write',
@@ -3038,23 +3310,75 @@ describe('read_files edit-state recovery', () => {
       const createOutput = createResult.output[0]
       expect(createOutput.type).toBe('json')
       if (createOutput.type !== 'json') return
-      const basedOnRead = (
-        createOutput.value as {
-          failures?: Array<{ basedOnRead?: string }>
-        }
-      ).failures?.[0]?.basedOnRead
-      expect(basedOnRead).toMatch(/^cap\.v3\./)
+      expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBeUndefined()
 
       let writeApplied = false
-      const writeResult = await handleWriteFile({
+      const blockedWriteResult = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
-          toolCallId: 'write-after-create-exists',
+          toolCallId: 'write-after-create-exists-without-read',
           toolName: 'write_file',
           input: {
             path,
             content: 'export const value = 3\n',
-            basedOnRead,
+          },
+        },
+        agentState: { messageHistory: [] },
+        clientSessionId: 'test-session',
+        fileContext: mockFileContext,
+        runId,
+        fileProcessingState,
+        fingerprintId: 'test-fingerprint',
+        logger,
+        prompt: undefined,
+        userId: undefined,
+        userInputId: 'test-input',
+        requestOptionalFile: async () => diskContent,
+        requestClientToolCall: async () => {
+          writeApplied = true
+          throw new Error('must not apply write without read authority')
+        },
+        writeToClient: () => {},
+      } as any)
+
+      expect(writeApplied).toBe(false)
+      expect(blockedWriteResult.output[0]?.type).toBe('json')
+      if (blockedWriteResult.output[0]?.type === 'json') {
+        const value = blockedWriteResult.output[0].value as {
+          basedOnRead?: string
+          errorMessage?: string
+        }
+        expect(String(value.errorMessage)).toContain('read_files')
+        expect(String(value.errorMessage)).not.toContain('cap.v3.')
+        expect(value).not.toHaveProperty('basedOnRead')
+      }
+
+      const readResult = await handleReadFiles({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'read-before-write-after-create-exists',
+          toolName: 'read_files',
+          input: { paths: [path] },
+        },
+        fileContext: mockFileContext,
+        runId,
+        fileProcessingState,
+        requestFiles: async () =>
+          buildWholeFileReadResultV1([path], () => diskContent),
+        logger,
+      } as any)
+
+      expect(readResult.output[0]?.type).toBe('json')
+      expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
+
+      const writeResult = await handleWriteFile({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'write-after-create-exists-and-read',
+          toolName: 'write_file',
+          input: {
+            path,
+            content: 'export const value = 3\n',
           },
         },
         agentState: { messageHistory: [] },
@@ -3070,7 +3394,11 @@ describe('read_files edit-state recovery', () => {
         requestOptionalFile: async () => diskContent,
         requestClientToolCall: async (toolCall: any) => {
           writeApplied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(
+            toolCall,
+            { [path]: 'export const value = 3\n' },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
         },
         writeToClient: () => {},
       } as any)
@@ -3100,7 +3428,7 @@ describe('read_files edit-state recovery', () => {
       })
 
       let applied = false
-      const result = await handleWriteFile({
+      const result = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'write-with-whole-file-cap',
@@ -3124,7 +3452,11 @@ describe('read_files edit-state recovery', () => {
         requestOptionalFile: async () => diskContent,
         requestClientToolCall: async (toolCall: any) => {
           applied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(
+            toolCall,
+            { [path]: 'export const value = 2\n' },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
         },
         writeToClient: () => {},
       } as any)
@@ -3155,7 +3487,7 @@ describe('read_files edit-state recovery', () => {
       })
 
       let applied = false
-      const result = await handleWriteFile({
+      const result = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'write-stale-hash-cap',
@@ -3211,7 +3543,7 @@ describe('read_files edit-state recovery', () => {
       })
 
       let applied = false
-      const result = await handleEditTransaction({
+      const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'tx-write-with-cap',
@@ -3234,7 +3566,11 @@ describe('read_files edit-state recovery', () => {
         requestOptionalFile: async () => diskContent,
         requestClientToolCall: async (toolCall: any) => {
           applied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(
+            toolCall,
+            { [path]: 'export const value = 2\n' },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
         },
       } as any)
 
@@ -3253,7 +3589,7 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.strictReadBeforeEdit = true
       let applied = false
 
-      const result = await handleEditTransaction({
+      const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-transaction-write-no-auth',
@@ -3275,10 +3611,17 @@ describe('read_files edit-state recovery', () => {
         requestOptionalFile: async () => diskContent,
         requestClientToolCall: async () => {
           applied = true
-          return confirmedMutationOutput({
-            toolCallId: 'must-not-apply',
-            input: {},
-          } as any)
+          return confirmedMutationOutput(
+            {
+              toolCallId: 'must-not-apply',
+              input: {},
+            } as any,
+            {},
+            {
+              projectId: mockFileContext.projectRoot,
+              runId: 'write-no-auth-run',
+            },
+          )
         },
       } as any)
 
@@ -3287,12 +3630,24 @@ describe('read_files edit-state recovery', () => {
       expect(output.type).toBe('json')
       if (output.type === 'json') {
         const value = output.value as {
+          basedOnRead?: string
           errorMessage?: string
           failures?: Array<{ errorMessage?: string; basedOnRead?: string }>
         }
-        expect(String(value.errorMessage)).toContain('no read authorization')
-        expect(String(value.failures?.[0]?.errorMessage)).toContain(path)
-        expect(value.failures?.[0]?.basedOnRead).toMatch(/^cap\.v3\./)
+        const errorText = [
+          value.errorMessage,
+          ...(value.failures?.map((failure) => failure.errorMessage) ?? []),
+        ]
+          .map(String)
+          .join('\n')
+        expect(errorText).toContain('no read authorization')
+        expect(errorText).toContain(path)
+        expect(errorText).toContain('read_files')
+        expect(errorText).not.toContain('cap.v3.')
+        expect(value).not.toHaveProperty('basedOnRead')
+        for (const failure of value.failures ?? []) {
+          expect(failure).not.toHaveProperty('basedOnRead')
+        }
       }
       // Auto-reread must not mint sticky auth for write_file auth misses.
       expect(
@@ -3315,7 +3670,7 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.strictReadBeforeEdit = true
 
       let applied = false
-      const result = await handleEditTransaction({
+      const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-transaction-anchored',
@@ -3345,7 +3700,11 @@ describe('read_files edit-state recovery', () => {
           filePath === path ? diskContent : null,
         requestClientToolCall: async (toolCall: any) => {
           applied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(
+            toolCall,
+            { [path]: 'export const value = 2\n' },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
         },
       } as any)
 
@@ -3382,7 +3741,7 @@ describe('read_files edit-state recovery', () => {
       })
 
       let applied = false
-      const result = await handleEditTransaction({
+      const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-transaction-range-anchored',
@@ -3397,7 +3756,11 @@ describe('read_files edit-state recovery', () => {
           filePath === path ? diskContent : null,
         requestClientToolCall: async (toolCall: any) => {
           applied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(
+            toolCall,
+            { [path]: 'export const value = 2\n' },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
         },
       } as any)
 
@@ -3416,7 +3779,7 @@ describe('read_files edit-state recovery', () => {
       const runId = 'strict-stale-anchor-run'
       let applied = false
 
-      const result = await handleStrReplace({
+      const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-stale-anchor',
@@ -3475,7 +3838,7 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationsByPath = { [path]: true }
 
       let clientApplyCount = 0
-      const result = await handleStrReplace({
+      const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-failed-edit-partial-capabilities',
@@ -3538,7 +3901,7 @@ describe('read_files edit-state recovery', () => {
       const runId = 'strict-stale-transaction-run'
       let applied = false
 
-      const result = await handleEditTransaction({
+      const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-stale-transaction',
@@ -3599,7 +3962,7 @@ describe('read_files edit-state recovery', () => {
     it('write_file blocks traversal paths before reading or applying', async () => {
       const fileProcessingState = createFileProcessingState()
 
-      const result = await handleWriteFile({
+      const result = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'write-traversal-blocked',
@@ -3648,7 +4011,7 @@ describe('read_files edit-state recovery', () => {
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
 
-      const result = await handleWriteFile({
+      const result = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-write-blocked',
@@ -3707,7 +4070,7 @@ describe('read_files edit-state recovery', () => {
       ]
 
       let clientApplyCount = 0
-      const result = await handleWriteFile({
+      const result = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'whole-write-after-range-edit',
@@ -3749,7 +4112,7 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationsByPath = { [path]: true }
 
       let clientApplyCount = 0
-      const result = await handleWriteFile({
+      const result = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'blocked-after-failed-write',
@@ -3788,7 +4151,7 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.strictReadBeforeEdit = true
 
       let applied = false
-      const result = await handleWriteFile({
+      const result = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-write-new-file',
@@ -3835,7 +4198,7 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.strictReadBeforeEdit = true
 
       let writeApplied = false
-      const writeResult = await handleWriteFile({
+      const writeResult = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-write-new-file-grants-auth',
@@ -3857,7 +4220,9 @@ describe('read_files edit-state recovery', () => {
         requestOptionalFile: async () => null,
         requestClientToolCall: async (toolCall: any) => {
           writeApplied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: writtenContent,
+          })
         },
         writeToClient: () => {},
       } as any)
@@ -3877,7 +4242,7 @@ describe('read_files edit-state recovery', () => {
       // A follow-up str_replace must succeed using the just-granted auth
       // without the agent having to call read_files separately.
       let strReplaceApplied = false
-      const strReplaceResult = await handleStrReplace({
+      const strReplaceResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-edit-after-new-write',
@@ -3899,7 +4264,9 @@ describe('read_files edit-state recovery', () => {
           filePath === path ? writtenContent : null,
         requestClientToolCall: async (toolCall: any) => {
           strReplaceApplied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: 'export const value = 2\n',
+          })
         },
         writeToClient: () => {},
       } as any)
@@ -3917,7 +4284,7 @@ describe('read_files edit-state recovery', () => {
       // because the strict gate only re-enables after a failed edit or an
       // externally-changed file (anchored with a fresh basedOnRead capability).
       let thirdApplyCount = 0
-      const thirdResult = await handleStrReplace({
+      const thirdResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-edit-sticky-after-write',
@@ -3939,7 +4306,9 @@ describe('read_files edit-state recovery', () => {
           filePath === path ? writtenContent : null,
         requestClientToolCall: async (toolCall: any) => {
           thirdApplyCount += 1
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: 'export const value = 3\n',
+          })
         },
         writeToClient: () => {},
       } as any)
@@ -3962,7 +4331,7 @@ describe('read_files edit-state recovery', () => {
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
 
-      await handleReadFiles({
+      await handleReadFiles({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-write-read',
@@ -3981,7 +4350,7 @@ describe('read_files edit-state recovery', () => {
       expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
 
       let applied = false
-      const result = await handleWriteFile({
+      const result = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-write-authorized',
@@ -4004,7 +4373,9 @@ describe('read_files edit-state recovery', () => {
           filePath === path ? diskContent : null,
         requestClientToolCall: async (toolCall: any) => {
           applied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: 'export const value = 2\n',
+          })
         },
         writeToClient: () => {},
       } as any)
@@ -4026,7 +4397,7 @@ describe('read_files edit-state recovery', () => {
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
 
-      const result = await handleReplaceRange({
+      const result = await handleReplaceRange({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'replace-range-blocked',
@@ -4067,7 +4438,7 @@ describe('read_files edit-state recovery', () => {
         [path]: getContentHash(diskContent),
       }
 
-      const successResult = await handleReplaceRange({
+      const successResult = await handleReplaceRange({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'replace-range-success',
@@ -4084,7 +4455,7 @@ describe('read_files edit-state recovery', () => {
         requestOptionalFile: async () => diskContent,
         requestClientToolCall: async (toolCall: any) => {
           diskContent = 'export const value = 2\n'
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, { [path]: diskContent })
         },
       } as any)
 
@@ -4095,7 +4466,7 @@ describe('read_files edit-state recovery', () => {
         fileProcessingState.failedEditRequiresReadByPath[path],
       ).toBeUndefined()
 
-      const errorResult = await handleReplaceRange({
+      const errorResult = await handleReplaceRange({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'replace-range-error',
@@ -4136,7 +4507,7 @@ describe('read_files edit-state recovery', () => {
       // No read authorization registered — only expectedHash as anchor.
 
       let applied = false
-      const result = await handleReplaceRange({
+      const result = await handleReplaceRange({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'replace-range-anchor',
@@ -4152,7 +4523,9 @@ describe('read_files edit-state recovery', () => {
         fileProcessingState,
         requestClientToolCall: async (toolCall: any) => {
           applied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: 'export const value = 2\n',
+          })
         },
       } as any)
 
@@ -4185,7 +4558,7 @@ describe('read_files edit-state recovery', () => {
         scope,
       })
       let applied = false
-      const result = await handleReplaceRange({
+      const result = await handleReplaceRange({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'replace-range-bound-anchor',
@@ -4205,7 +4578,11 @@ describe('read_files edit-state recovery', () => {
         requestOptionalFile: async () => 'export const value = 1\n',
         requestClientToolCall: async (toolCall: any) => {
           applied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(
+            toolCall,
+            { [path]: 'export const value = 2\n' },
+            { projectId: mockFileContext.projectRoot, runId: scope.runId },
+          )
         },
       } as any)
 
@@ -4219,7 +4596,7 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.strictReadBeforeEdit = true
 
       // File missing so auto-reread fails closed and surfaces the auth error.
-      const result = await handleStrReplace({
+      const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'strict-msg-check',
@@ -4275,7 +4652,7 @@ describe('read_files edit-state recovery', () => {
 
       // A range capability is not sufficient proof for replacing the whole
       // file. Strict mode requires a successful whole-file read authorization.
-      const writeResult = await handleWriteFile({
+      const writeResult = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'e-bypass-write',
@@ -4335,7 +4712,7 @@ describe('read_files edit-state recovery', () => {
       const stateA = createFileProcessingState()
       stateA.strictReadBeforeEdit = strictReadBeforeEdit
 
-      await handleReadFiles({
+      await handleReadFiles({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'cross-turn-read',
@@ -4370,7 +4747,7 @@ describe('read_files edit-state recovery', () => {
       // --- Turn 2: str_replace on the fresh state B must succeed without
       // requiring the agent to re-read the file. ---
       let applyCount = 0
-      const result = await handleStrReplace({
+      const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'cross-turn-edit',
@@ -4392,7 +4769,9 @@ describe('read_files edit-state recovery', () => {
           filePath === path ? diskContent : null,
         requestClientToolCall: async (toolCall: any) => {
           applyCount += 1
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: 'export const value = 2\n',
+          })
         },
         writeToClient: () => {},
       } as any)
@@ -4417,7 +4796,7 @@ describe('read_files edit-state recovery', () => {
 
       const stateA = createFileProcessingState()
       stateA.strictReadBeforeEdit = true
-      await handleReadFiles({
+      await handleReadFiles({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'bug-demo-read',
@@ -4439,7 +4818,7 @@ describe('read_files edit-state recovery', () => {
       expect(stateB.readAuthorizationsByPath?.[path]).toBeUndefined()
 
       let applyCount = 0
-      const result = await handleStrReplace({
+      const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'bug-demo-edit-auto-reread',
@@ -4461,7 +4840,9 @@ describe('read_files edit-state recovery', () => {
           filePath === path ? diskContent : null,
         requestClientToolCall: async (toolCall: any) => {
           applyCount += 1
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: 'export const value = 2\n',
+          })
         },
         writeToClient: () => {},
       } as any)
@@ -4495,7 +4876,7 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.failedEditRequiresReadByPath[path] = true
 
       let writeApplied = false
-      const writeResult = await handleWriteFile({
+      const writeResult = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'write-after-compaction',
@@ -4522,8 +4903,9 @@ describe('read_files edit-state recovery', () => {
       expect(writeResult.output[0]?.type).toBe('json')
       if (writeResult.output[0]?.type === 'json') {
         const msg = String((writeResult.output[0].value as any).errorMessage)
-        expect(msg).toMatch(/context compaction|read_files|basedOnRead/i)
-        expect(msg).toContain('basedOnRead=')
+        expect(msg).toMatch(/context compaction|read_files/i)
+        expect(msg).not.toContain('cap.v3.')
+        expect(msg).not.toContain('basedOnRead=')
       }
       // Marker must remain until a real whole-file re-read or valid basedOnRead.
       expect(
@@ -4532,7 +4914,7 @@ describe('read_files edit-state recovery', () => {
 
       // str_replace unique may still apply on hash-fresh and clear the marker.
       let replaceApplied = false
-      const replaceResult = await handleStrReplace({
+      const replaceResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'str-replace-after-compaction',
@@ -4553,7 +4935,9 @@ describe('read_files edit-state recovery', () => {
         requestOptionalFile: async () => diskContent,
         requestClientToolCall: async (toolCall: any) => {
           replaceApplied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: 'export const value = 3\n',
+          })
         },
         writeToClient: () => {},
       } as any)
@@ -4568,9 +4952,9 @@ describe('read_files edit-state recovery', () => {
       ).toBeUndefined()
     })
 
-    it('failed str_replace after compaction leaves context_compacted so write_file stays blocked', async () => {
-      // COMPACTION-MARKER-CLEARED-BY-HASHFRESH-STRREPLACE-ATTEMPT: a no-match
-      // unique attempt must not clear the marker before apply.
+    it('failed str_replace after compaction revokes authorization so write_file stays blocked', async () => {
+      // A failed no-match may strengthen context_compacted to stale_capability,
+      // but it must revoke authority and keep whole-file overwrite blocked.
       const path = 'src/compacted-failed-replace.ts'
       const diskContent = 'export const value = 1\n'
       const fileProcessingState = createFileProcessingState()
@@ -4584,7 +4968,7 @@ describe('read_files edit-state recovery', () => {
       }
       fileProcessingState.failedEditRequiresReadByPath[path] = true
 
-      const failResult = await handleStrReplace({
+      const failResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'failed-replace-after-compaction',
@@ -4612,10 +4996,14 @@ describe('read_files edit-state recovery', () => {
       expect(failResult.output[0]?.type).toBe('json')
       expect(
         fileProcessingState.editRereadRequirementsByPath?.[path]?.reason,
-      ).toBe('context_compacted')
+      ).toBe('stale_capability')
+      expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBeUndefined()
+      expect(
+        fileProcessingState.readAuthorizationHashesByPath?.[path],
+      ).toBeUndefined()
 
       let writeApplied = false
-      const writeResult = await handleWriteFile({
+      const writeResult = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'write-after-failed-compacted-replace',
@@ -4647,7 +5035,7 @@ describe('read_files edit-state recovery', () => {
       }
       expect(
         fileProcessingState.editRereadRequirementsByPath?.[path]?.reason,
-      ).toBe('context_compacted')
+      ).toBe('stale_capability')
     })
 
     it('proper-subset range read after compaction does not clear context_compacted', async () => {
@@ -4667,7 +5055,7 @@ describe('read_files edit-state recovery', () => {
       }
       fileProcessingState.failedEditRequiresReadByPath[path] = true
 
-      await handleReadFiles({
+      await handleReadFiles({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'range-after-compaction',
@@ -4705,7 +5093,7 @@ describe('read_files edit-state recovery', () => {
       ).toBe('context_compacted')
 
       let writeApplied = false
-      const writeResult = await handleWriteFile({
+      const writeResult = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'write-after-compacted-range',
@@ -4749,7 +5137,7 @@ describe('read_files edit-state recovery', () => {
       }
       fileProcessingState.failedEditRequiresReadByPath[path] = true
 
-      await handleReadFiles({
+      await handleReadFiles({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'whole-read-after-compaction',
@@ -4771,7 +5159,7 @@ describe('read_files edit-state recovery', () => {
       expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
 
       let writeApplied = false
-      const writeResult = await handleWriteFile({
+      const writeResult = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'write-after-compacted-whole-read',
@@ -4789,7 +5177,9 @@ describe('read_files edit-state recovery', () => {
         requestOptionalFile: async () => diskContent,
         requestClientToolCall: async (toolCall: any) => {
           writeApplied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(toolCall, {
+            [path]: 'export const value = 2\n',
+          })
         },
         writeToClient: () => {},
       } as any)
@@ -4827,7 +5217,7 @@ describe('read_files edit-state recovery', () => {
       })
 
       let writeApplied = false
-      const writeResult = await handleWriteFile({
+      const writeResult = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'write-compacted-with-basedonread',
@@ -4851,7 +5241,11 @@ describe('read_files edit-state recovery', () => {
         requestOptionalFile: async () => diskContent,
         requestClientToolCall: async (toolCall: any) => {
           writeApplied = true
-          return confirmedMutationOutput(toolCall)
+          return confirmedMutationOutput(
+            toolCall,
+            { [path]: 'export const value = 2\n' },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
         },
         writeToClient: () => {},
       } as any)
@@ -4903,13 +5297,13 @@ describe('read_files edit-state recovery', () => {
       )
     })
 
-    it('strict edit_transaction write_file auth-miss prefers basedOnRead over Call read_files first', async () => {
+    it('strict edit_transaction blind write returns no capability and requires complete read_files', async () => {
       const path = 'src/write-auth-miss-msg.ts'
       const diskContent = 'export const value = 1\n'
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
 
-      const result = await handleEditTransaction({
+      const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'write-auth-miss-msg',
@@ -4942,13 +5336,13 @@ describe('read_files edit-state recovery', () => {
           failures?: Array<{ errorMessage?: string; basedOnRead?: string }>
         }
         const failureMsg = String(value.failures?.[0]?.errorMessage)
-        expect(failureMsg).toContain('Retry with write_file basedOnRead')
-        expect(failureMsg).toContain('basedOnRead=')
-        expect(failureMsg).not.toMatch(/Call read_files with paths:.*before retrying/)
+        expect(failureMsg).toContain('Call read_files with paths:')
+        expect(failureMsg).not.toContain('cap.v3.')
+        expect(failureMsg).not.toContain('basedOnRead=')
         expect(String(value.errorMessage)).toContain(
-          'retry with that capability first',
+          'Complete a model-visible read_files refresh',
         )
-        expect(value.failures?.[0]?.basedOnRead).toMatch(/^cap\.v3\./)
+        expect(value.failures?.[0]).not.toHaveProperty('basedOnRead')
       }
     })
 
@@ -4966,7 +5360,7 @@ describe('read_files edit-state recovery', () => {
       }
       fileProcessingState.failedEditRequiresReadByPath[path] = true
 
-      const failResult = await handleEditTransaction({
+      const failResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'tx-autoreread-fail-compacted',
@@ -5000,15 +5394,27 @@ describe('read_files edit-state recovery', () => {
       expect(failResult.output[0]?.type).toBe('json')
       if (failResult.output[0]?.type === 'json') {
         const value = failResult.output[0].value as {
+          basedOnRead?: string
           errorMessage?: string
           failures?: Array<{ basedOnRead?: string; errorMessage?: string }>
         }
+        const errorText = [
+          value.errorMessage,
+          ...(value.failures?.map((failure) => failure.errorMessage) ?? []),
+        ]
+          .map(String)
+          .join('\n')
         expect(value).toHaveProperty('errorMessage')
-        // Residual process failure should echo basedOnRead when content known.
-        expect(value.failures?.[0]?.basedOnRead).toMatch(/^cap\.v3\./)
-        expect(String(value.failures?.[0]?.errorMessage)).toContain(
-          'basedOnRead=',
-        )
+        expect(errorText).toContain('Candidate 1: lines')
+        expect(errorText).toContain('read_files ranges')
+        expect(errorText).toContain(diskContent.trim())
+        expect(errorText).not.toContain('cap.v3.')
+        expect(errorText).not.toContain('readCapability=')
+        expect(errorText).not.toContain('basedOnRead=')
+        expect(value).not.toHaveProperty('basedOnRead')
+        for (const failure of value.failures ?? []) {
+          expect(failure).not.toHaveProperty('basedOnRead')
+        }
       }
       // Marker must survive failed auto-reread preflight (no pre-apply clear).
       expect(
@@ -5016,7 +5422,7 @@ describe('read_files edit-state recovery', () => {
       ).toBe('context_compacted')
 
       let writeApplied = false
-      const writeResult = await handleWriteFile({
+      const writeResult = await handleWriteFile({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'write-after-failed-tx-autoreread',
@@ -5051,7 +5457,7 @@ describe('read_files edit-state recovery', () => {
       ).toBe('context_compacted')
     })
 
-    it('process residual failure path includes basedOnRead on failures when content known', async () => {
+    it('process residual failure path does not mint basedOnRead from snapshot content', async () => {
       const path = 'src/process-residual-basedonread.ts'
       const diskContent = 'export const value = 1\n'
       const fileProcessingState = createFileProcessingState()
@@ -5061,7 +5467,7 @@ describe('read_files edit-state recovery', () => {
         [path]: getContentHash(diskContent),
       }
 
-      const result = await handleEditTransaction({
+      const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'process-residual-basedonread',
@@ -5096,14 +5502,27 @@ describe('read_files edit-state recovery', () => {
       expect(output.type).toBe('json')
       if (output.type === 'json') {
         const value = output.value as {
+          basedOnRead?: string
           errorMessage?: string
           failures?: Array<{ basedOnRead?: string; errorMessage?: string }>
         }
+        const errorText = [
+          value.errorMessage,
+          ...(value.failures?.map((failure) => failure.errorMessage) ?? []),
+        ]
+          .map(String)
+          .join('\n')
         expect(value).toHaveProperty('errorMessage')
-        expect(value.failures?.[0]?.basedOnRead).toMatch(/^cap\.v3\./)
-        expect(String(value.failures?.[0]?.errorMessage)).toContain(
-          'basedOnRead=',
-        )
+        expect(errorText).toContain('Candidate 1: lines')
+        expect(errorText).toContain('read_files ranges')
+        expect(errorText).toContain(diskContent.trim())
+        expect(errorText).not.toContain('cap.v3.')
+        expect(errorText).not.toContain('readCapability=')
+        expect(errorText).not.toContain('basedOnRead=')
+        expect(value).not.toHaveProperty('basedOnRead')
+        for (const failure of value.failures ?? []) {
+          expect(failure).not.toHaveProperty('basedOnRead')
+        }
       }
     })
   })
@@ -5162,17 +5581,22 @@ describe('processStream cross-turn read-before-edit', () => {
         ) {
           await new Promise((resolve) => setTimeout(resolve, 10))
           appliedPatches.push(params.input?.content ?? '')
+          const output = confirmedMutationOutput(
+            {
+              toolCallId: params.callId,
+              input: params.input,
+            },
+            { [targetPath]: 'export const value = 2\n' },
+            {
+              projectId: mockFileContext.projectRoot,
+              runId: 'test-run-id',
+            },
+          )
+          const canonicalReceipt: CommitReceiptV1 =
+            output[0].value.authorityReceipt
+          return { output, canonicalReceipt }
         }
-        return {
-          output:
-            params.toolName === 'str_replace' ||
-            params.toolName === 'write_file'
-              ? confirmedMutationOutput({
-                  toolCallId: `client-${params.toolName}`,
-                  input: params.input,
-                })
-              : [],
-        }
+        return { output: [] }
       },
     } as AgentRuntimeDeps & AgentRuntimeScopedDeps
 

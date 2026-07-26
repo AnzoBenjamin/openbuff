@@ -1,8 +1,4 @@
-import {
-  encodeReadCapabilityToken,
-  getContentHash,
-  normalizeLineEndings,
-} from '@codebuff/common/util/content-hash'
+import { getContentHash } from '@codebuff/common/util/content-hash'
 
 import {
   formatUnsafeToolPathError,
@@ -262,26 +258,12 @@ export const handleStrReplace = (async (
     !hadFreshWholeFileAuthorization
 
   if (requireFreshReadCapability && !hasAnyReadCapability) {
-    const freshReadCapability =
-      typeof latestContent === 'string'
-        ? encodeReadCapabilityToken({
-            startLine: 1,
-            endLine: normalizeLineEndings(latestContent).split('\n').length,
-            hash: getContentHash(latestContent),
-            scope: {
-              projectId: params.fileContext?.projectRoot ?? '',
-              path,
-              runId: params.runId ?? '',
-            },
-          })
-        : undefined
     const authorizationError = strictEditAuthorizationError({
       fileProcessingState,
       path,
       toolName: 'str_replace',
       hasFreshWholeFileAuthorization: false,
       authorizationWasStale: hasStoredWholeFileAuthorization,
-      freshReadCapability,
     })
     return {
       output: [
@@ -376,28 +358,16 @@ export const handleStrReplace = (async (
           sourceTool: 'str_replace',
         })
       }
-      // After auto-reread-once, still-failed unique/ambiguous matches mint a
-      // whole-file basedOnRead so the agent can retry without another disk thrash.
-      if (autoRereadAttempted && typeof latestContent === 'string') {
-        const basedOnRead = encodeReadCapabilityToken({
-          startLine: 1,
-          endLine: normalizeLineEndings(latestContent).split('\n').length,
-          hash: getContentHash(latestContent),
-          scope: {
-            projectId: params.fileContext?.projectRoot ?? '',
-            path,
-            runId: params.runId ?? '',
-          },
-        })
+      // Internal auto-reread content may authorize only this attempt. A failed
+      // attempt must recover through a complete, model-visible read_files read.
+      if (autoRereadAttempted) {
         strReplaceResult.error = [
           strReplaceResult.error,
-          'Auto-re-read once failed to apply; retry with basedOnRead below.',
-          `basedOnRead="${basedOnRead}"`,
+          `Auto-re-read once failed to apply. Call read_files with paths: ["${path}"] for a complete read before retrying str_replace.`,
           JSON.stringify({
             recovery: {
               tool: 'read_files',
               input: { paths: [path] },
-              basedOnRead,
             },
           }),
         ].join('\n')
@@ -444,6 +414,8 @@ export const handleStrReplace = (async (
     toolName: 'str_replace',
     fileProcessingState,
     paths: [path],
+    projectId: params.fileContext?.projectRoot ?? '',
+    runId: params.runId ?? '',
     rejectionRequiresRead: false,
     // Deterministic processing failures and explicit client rejections preserve
     // valid read authorization. Stale capability and uncertain application

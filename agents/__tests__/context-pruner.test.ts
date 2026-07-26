@@ -23,7 +23,10 @@ function withCommittedReceipt(value: any): any {
         status: 'committed',
       })),
       finalHashes: Object.fromEntries(
-        value.actions.map((action: any) => [action.path, action.afterHash]),
+        value.actions.map((action: any) => [
+          action.action === 'move' ? action.destinationPath : action.path,
+          action.afterHash,
+        ]),
       ),
     },
   }
@@ -592,6 +595,623 @@ describe('context-pruner handleSteps', () => {
     expect(content).toContain('RECOVERY_TAIL: re-read the exact range')
     expect(content).toContain('[...truncated')
     expect(content).not.toContain('x'.repeat(2500))
+  })
+
+  test('persists only hash-correlated committed actions from partial receipts', () => {
+    const partial = withCommittedReceipt({
+      kind: 'file_mutation_result',
+      version: 1,
+      operationId: 'partial-commit',
+      outcome: 'partial',
+      authorityTier: 'portable_path',
+      actions: [
+        {
+          actionId: 'partial-commit:0',
+          index: 0,
+          action: 'update',
+          path: 'src/committed.ts',
+          outcome: 'applied',
+          afterHash: 'committed-hash',
+        },
+        {
+          actionId: 'partial-commit:1',
+          index: 1,
+          action: 'update',
+          path: 'src/failed.ts',
+          outcome: 'failed',
+          afterHash: 'failed-hash',
+        },
+      ],
+      errors: [{ message: 'second action failed' }],
+      freshCapabilities: [],
+    })
+    partial.authorityReceipt.actions[1].status = 'failed'
+    delete partial.authorityReceipt.finalHashes['src/failed.ts']
+
+    const uncommitted = structuredClone(partial)
+    uncommitted.operationId = 'uncommitted'
+    uncommitted.receiptId = 'uncommitted:receipt'
+    uncommitted.authorityReceipt.operationId = 'uncommitted'
+    uncommitted.authorityReceipt.receiptId = 'uncommitted:receipt'
+    uncommitted.authorityReceipt.status = 'prepared'
+    uncommitted.actions[0].path = 'src/uncommitted.ts'
+    uncommitted.authorityReceipt.actions[0].path = 'src/uncommitted.ts'
+    uncommitted.authorityReceipt.finalHashes = {
+      'src/uncommitted.ts': 'committed-hash',
+    }
+
+    const mismatched = structuredClone(partial)
+    mismatched.operationId = 'mismatched'
+    mismatched.receiptId = 'mismatched:receipt'
+    mismatched.authorityReceipt.operationId = 'mismatched'
+    mismatched.authorityReceipt.receiptId = 'mismatched:receipt'
+    mismatched.actions[0].path = 'src/mismatched.ts'
+    mismatched.authorityReceipt.actions[0].path = 'src/mismatched.ts'
+    mismatched.authorityReceipt.finalHashes = {
+      'src/mismatched.ts': 'wrong-hash',
+    }
+
+    const messages: Message[] = [createMessage('user', 'Apply partial edits')]
+    for (const [id, value] of [
+      ['partial', partial],
+      ['uncommitted', uncommitted],
+      ['mismatched', mismatched],
+    ] as const) {
+      messages.push(
+        createToolCallMessage(id, 'edit_transaction', { edits: [] }),
+        createToolResultMessage(id, 'edit_transaction', value),
+      )
+    }
+
+    const content = runHandleSteps(messages, 50_000, 10_000)[0].input
+      .messages[0].content[0].text
+    const knowledgeMemory =
+      content.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
+      ''
+
+    expect(knowledgeMemory).toContain('src/committed.ts: edit_transaction')
+    expect(knowledgeMemory).not.toContain('src/failed.ts: edit_transaction')
+    expect(knowledgeMemory).not.toContain('src/uncommitted.ts: edit_transaction')
+    expect(knowledgeMemory).not.toContain('src/mismatched.ts: edit_transaction')
+  })
+
+  test('rejects receipts with missing authority fields or ambiguous action correlation', () => {
+    const canonical = withCommittedReceipt({
+      kind: 'file_mutation_result',
+      version: 1,
+      operationId: 'adversarial',
+      outcome: 'applied',
+      authorityTier: 'portable_path',
+      actions: [
+        {
+          actionId: 'adversarial:0',
+          index: 0,
+          action: 'update',
+          path: 'src/adversarial.ts',
+          outcome: 'applied',
+          afterHash: 'after',
+        },
+      ],
+      errors: [],
+      freshCapabilities: [],
+    })
+    const missingCallId = structuredClone(canonical)
+    delete missingCallId.authorityReceipt.callId
+    const missingAuthorityTier = structuredClone(canonical)
+    delete missingAuthorityTier.authorityReceipt.authorityTier
+    const duplicateIndex = structuredClone(canonical)
+    duplicateIndex.authorityReceipt.actions.push({
+      ...duplicateIndex.authorityReceipt.actions[0],
+      actionId: 'adversarial:conflicting-index',
+    })
+    const duplicateActionId = structuredClone(canonical)
+    duplicateActionId.authorityReceipt.actions.push({
+      ...duplicateActionId.authorityReceipt.actions[0],
+      index: 1,
+    })
+
+    const messages: Message[] = [
+      createMessage('user', 'Do not trust malformed edit receipts'),
+    ]
+    for (const [callId, value] of [
+      ['missing-call-id', missingCallId],
+      ['missing-authority-tier', missingAuthorityTier],
+      ['duplicate-index', duplicateIndex],
+      ['duplicate-action-id', duplicateActionId],
+    ] as const) {
+      messages.push(
+        createToolCallMessage(callId, 'edit_transaction', { edits: [] }),
+        createToolResultMessage(callId, 'edit_transaction', value),
+      )
+    }
+
+    const content = runHandleSteps(messages, 50_000, 10_000)[0].input
+      .messages[0].content[0].text
+    const knowledgeMemory =
+      content.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
+      ''
+
+    expect(knowledgeMemory).not.toContain('src/adversarial.ts: edit_transaction')
+  })
+
+  test('persists edits from a standalone canonical commit receipt', () => {
+    const receipt = {
+      kind: 'commit_receipt',
+      version: 1,
+      receiptId: 'standalone-commit',
+      operationId: 'op-standalone',
+      callId: 'call-standalone',
+      authorityTier: 'conditional_commit',
+      status: 'committed',
+      actions: [
+        {
+          actionId: 'a1',
+          index: 0,
+          action: 'update',
+          path: 'src/from-commit-receipt.ts',
+          status: 'committed',
+          beforeHash: 'before',
+          afterHash: 'after',
+        },
+      ],
+      finalHashes: {
+        'src/from-commit-receipt.ts': 'after',
+      },
+    }
+    const messages = [
+      createMessage('user', 'Apply the edit'),
+      createToolCallMessage('call-standalone', 'edit_transaction', { edits: [] }),
+      createToolResultMessage('call-standalone', 'edit_transaction', receipt),
+    ]
+
+    const content = runHandleSteps(messages, 50_000, 10_000)[0].input
+      .messages[0].content[0].text
+    const knowledgeMemory =
+      content.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
+      ''
+
+    expect(knowledgeMemory).toContain(
+      'src/from-commit-receipt.ts: edit_transaction',
+    )
+  })
+
+  test('retains only fully applied receipt-correlated post-edit anchors', () => {
+    const makeResult = (
+      operationId: string,
+      outcome: string,
+      actionOutcome: string,
+      editAnchor: Record<string, unknown>,
+    ) =>
+      withCommittedReceipt({
+        kind: 'file_mutation_result',
+        version: 1,
+        operationId,
+        outcome,
+        authorityTier: 'portable_path',
+        actions: [
+          {
+            actionId: `${operationId}:0`,
+            index: 0,
+            action: 'update',
+            path: `src/${operationId}.ts`,
+            outcome: actionOutcome,
+            beforeHash: 'sha256:' + '0'.repeat(64),
+            afterHash: 'sha256:' + 'a'.repeat(64),
+            editAnchor,
+          },
+        ],
+        errors: [],
+        freshCapabilities: [],
+      })
+    const validToken = 'cap.v3.confirmed-anchor-token'
+    const afterContent = 'POST_EDIT_BODY_MUST_NOT_SURVIVE'
+    const validAnchor = {
+      startLine: 2,
+      endLine: 9,
+      contentHash: 'sha256:' + 'a'.repeat(64),
+      readCapability: validToken,
+      afterContent,
+    }
+    const partialToken = 'cap.v3.partial-token'
+    const rollbackToken = 'cap.v3.rollback-token'
+    const malformedToken = 'cap.v3.malformed-token'
+    const mismatchedHashToken = 'cap.v3.mismatched-hash-token'
+    const unmatchedToken = 'cap.v3.unmatched-token'
+    const unmatched = makeResult(
+      'unmatched',
+      'applied',
+      'applied',
+      { ...validAnchor, readCapability: unmatchedToken },
+    )
+    unmatched.authorityReceipt.operationId = 'different-operation'
+
+    const calls: Array<[string, any]> = [
+      ['confirmed', makeResult('confirmed', 'applied', 'applied', validAnchor)],
+      [
+        'partial',
+        makeResult('partial', 'partial', 'applied', {
+          ...validAnchor,
+          readCapability: partialToken,
+        }),
+      ],
+      [
+        'rollback',
+        makeResult('rollback', 'rollback_incomplete', 'rollback_incomplete', {
+          ...validAnchor,
+          readCapability: rollbackToken,
+        }),
+      ],
+      [
+        'malformed',
+        makeResult('malformed', 'applied', 'applied', {
+          contentHash: 'not-a-hash',
+          readCapability: malformedToken,
+        }),
+      ],
+      [
+        'mismatched-hash',
+        makeResult('mismatched-hash', 'applied', 'applied', {
+          ...validAnchor,
+          contentHash: 'sha256:' + 'b'.repeat(64),
+          readCapability: mismatchedHashToken,
+        }),
+      ],
+      ['unmatched', unmatched],
+    ]
+    const messages: Message[] = [
+      createMessage('user', 'Apply and retain only confirmed edit anchors'),
+    ]
+    for (const [callId, result] of calls) {
+      messages.push(
+        createToolCallMessage(callId, 'edit_transaction', { edits: [] }),
+        createToolResultMessage(callId, 'edit_transaction', result),
+      )
+    }
+
+    const results = runHandleSteps(messages, 50000, 10000)
+    const content = results[0].input.messages[0].content[0].text
+    const knowledgeMemory =
+      content.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
+      ''
+
+    expect(knowledgeMemory).toContain('Post-Edit Anchors:')
+    expect(knowledgeMemory).toContain('src/confirmed.ts')
+    expect(knowledgeMemory).toContain(validToken)
+    expect(knowledgeMemory).toContain('"startLine":2')
+    expect(knowledgeMemory).toContain('"endLine":9')
+    expect(knowledgeMemory).toContain('sha256:' + 'a'.repeat(64))
+    expect(knowledgeMemory).not.toContain(partialToken)
+    expect(knowledgeMemory).not.toContain(rollbackToken)
+    expect(knowledgeMemory).not.toContain(malformedToken)
+    expect(knowledgeMemory).not.toContain(mismatchedHashToken)
+    expect(knowledgeMemory).not.toContain(unmatchedToken)
+    expect(content).not.toContain(afterContent)
+    expect(content).not.toContain('afterContent')
+
+    const repeated = runHandleSteps(
+      [results[0].input.messages[0], createMessage('assistant', 'Continue')],
+      50000,
+      10000,
+    )[0].input.messages[0].content[0].text
+    expect(repeated).toContain('src/confirmed.ts')
+    expect(repeated).toContain(validToken)
+    expect(repeated).not.toContain(afterContent)
+    expect(repeated.match(/Post-Edit Anchors:/g)).toHaveLength(1)
+  })
+
+  test('evicts a retained anchor after a committed delete', () => {
+    const oldToken = 'cap.v3.deleted-source-token'
+    const anchoredUpdate = withCommittedReceipt({
+      kind: 'file_mutation_result',
+      version: 1,
+      operationId: 'anchor-before-delete',
+      outcome: 'applied',
+      authorityTier: 'portable_path',
+      actions: [
+        {
+          actionId: 'anchor-before-delete:0',
+          index: 0,
+          action: 'update',
+          path: 'src/deleted.ts',
+          outcome: 'applied',
+          beforeHash: 'sha256:' + '0'.repeat(64),
+          afterHash: 'sha256:' + 'a'.repeat(64),
+          editAnchor: {
+            startLine: 1,
+            endLine: 3,
+            contentHash: 'sha256:' + 'a'.repeat(64),
+            readCapability: oldToken,
+          },
+        },
+      ],
+      errors: [],
+      freshCapabilities: [],
+    })
+    const retained = runHandleSteps(
+      [
+        createMessage('user', 'Update the file'),
+        createToolCallMessage('anchor-before-delete', 'edit_transaction', {
+          edits: [],
+        }),
+        createToolResultMessage(
+          'anchor-before-delete',
+          'edit_transaction',
+          anchoredUpdate,
+        ),
+      ],
+      50_000,
+      10_000,
+    )[0].input.messages[0]
+    const deleteResult = withCommittedReceipt({
+      kind: 'file_mutation_result',
+      version: 1,
+      operationId: 'delete-anchored-file',
+      outcome: 'applied',
+      authorityTier: 'portable_path',
+      actions: [
+        {
+          actionId: 'delete-anchored-file:0',
+          index: 0,
+          action: 'delete',
+          path: 'src/deleted.ts',
+          outcome: 'applied',
+          beforeHash: 'sha256:' + 'a'.repeat(64),
+          afterHash: 'sha256:' + '0'.repeat(64),
+        },
+      ],
+      errors: [],
+      freshCapabilities: [],
+    })
+
+    const content = runHandleSteps(
+      [
+        retained,
+        createToolCallMessage('delete-anchored-file', 'edit_transaction', {
+          edits: [],
+        }),
+        createToolResultMessage(
+          'delete-anchored-file',
+          'edit_transaction',
+          deleteResult,
+        ),
+      ],
+      50_000,
+      10_000,
+    )[0].input.messages[0].content[0].text
+    const anchorMemory = content.split('Post-Edit Anchors:')[1] ?? ''
+
+    expect(anchorMemory).not.toContain('src/deleted.ts')
+    expect(anchorMemory).not.toContain(oldToken)
+  })
+
+  test('evicts source and destination anchors before retaining a moved anchor', () => {
+    const sourceToken = 'cap.v3.move-old-source-token'
+    const destinationToken = 'cap.v3.move-old-destination-token'
+    const movedToken = 'cap.v3.move-new-destination-token'
+    const anchoredUpdates = withCommittedReceipt({
+      kind: 'file_mutation_result',
+      version: 1,
+      operationId: 'anchors-before-move',
+      outcome: 'applied',
+      authorityTier: 'portable_path',
+      actions: [
+        {
+          actionId: 'anchors-before-move:0',
+          index: 0,
+          action: 'update',
+          path: 'src/move-source.ts',
+          outcome: 'applied',
+          beforeHash: 'sha256:' + '0'.repeat(64),
+          afterHash: 'sha256:' + 'a'.repeat(64),
+          editAnchor: {
+            startLine: 1,
+            endLine: 2,
+            contentHash: 'sha256:' + 'a'.repeat(64),
+            readCapability: sourceToken,
+          },
+        },
+        {
+          actionId: 'anchors-before-move:1',
+          index: 1,
+          action: 'update',
+          path: 'src/move-destination.ts',
+          outcome: 'applied',
+          beforeHash: 'sha256:' + '0'.repeat(64),
+          afterHash: 'sha256:' + 'b'.repeat(64),
+          editAnchor: {
+            startLine: 1,
+            endLine: 4,
+            contentHash: 'sha256:' + 'b'.repeat(64),
+            readCapability: destinationToken,
+          },
+        },
+      ],
+      errors: [],
+      freshCapabilities: [],
+    })
+    const retained = runHandleSteps(
+      [
+        createMessage('user', 'Update both files'),
+        createToolCallMessage('anchors-before-move', 'edit_transaction', {
+          edits: [],
+        }),
+        createToolResultMessage(
+          'anchors-before-move',
+          'edit_transaction',
+          anchoredUpdates,
+        ),
+      ],
+      50_000,
+      10_000,
+    )[0].input.messages[0]
+    const moveResult = withCommittedReceipt({
+      kind: 'file_mutation_result',
+      version: 1,
+      operationId: 'move-anchored-file',
+      outcome: 'applied',
+      authorityTier: 'portable_path',
+      actions: [
+        {
+          actionId: 'move-anchored-file:0',
+          index: 0,
+          action: 'move',
+          path: 'src/move-source.ts',
+          destinationPath: 'src/move-destination.ts',
+          outcome: 'applied',
+          beforeHash: 'sha256:' + 'a'.repeat(64),
+          afterHash: 'sha256:' + 'c'.repeat(64),
+          editAnchor: {
+            startLine: 1,
+            endLine: 2,
+            contentHash: 'sha256:' + 'c'.repeat(64),
+            readCapability: movedToken,
+          },
+        },
+      ],
+      errors: [],
+      freshCapabilities: [],
+    })
+
+    const content = runHandleSteps(
+      [
+        retained,
+        createToolCallMessage('move-anchored-file', 'edit_transaction', {
+          edits: [],
+        }),
+        createToolResultMessage(
+          'move-anchored-file',
+          'edit_transaction',
+          moveResult,
+        ),
+      ],
+      50_000,
+      10_000,
+    )[0].input.messages[0].content[0].text
+    const knowledgeMemory =
+      content.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
+      ''
+    const anchorMemory = knowledgeMemory.split('Post-Edit Anchors:')[1] ?? ''
+
+    expect(anchorMemory).not.toContain('src/move-source.ts')
+    expect(anchorMemory).not.toContain(sourceToken)
+    expect(anchorMemory).not.toContain(destinationToken)
+    expect(anchorMemory).toContain('src/move-destination.ts')
+    expect(anchorMemory).toContain(movedToken)
+  })
+
+  test('persists move edits and anchors under the destination path', () => {
+    const destinationToken = 'cap.v3.move-destination-token'
+    const moveResult = withCommittedReceipt({
+      kind: 'file_mutation_result',
+      version: 1,
+      operationId: 'move-edit',
+      outcome: 'applied',
+      authorityTier: 'portable_path',
+      actions: [
+        {
+          actionId: 'move-edit:0',
+          index: 0,
+          action: 'move',
+          path: 'src/old-name.ts',
+          destinationPath: 'src/new-name.ts',
+          outcome: 'applied',
+          beforeHash: 'sha256:' + '0'.repeat(64),
+          afterHash: 'sha256:' + 'b'.repeat(64),
+          editAnchor: {
+            startLine: 1,
+            endLine: 4,
+            contentHash: 'sha256:' + 'b'.repeat(64),
+            readCapability: destinationToken,
+          },
+        },
+      ],
+      errors: [],
+      freshCapabilities: [],
+    })
+    const messages = [
+      createMessage('user', 'Move the file'),
+      createToolCallMessage('move-edit', 'edit_transaction', { edits: [] }),
+      createToolResultMessage('move-edit', 'edit_transaction', moveResult),
+    ]
+
+    const content = runHandleSteps(messages, 50_000, 10_000)[0].input
+      .messages[0].content[0].text
+    const knowledgeMemory =
+      content.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
+      ''
+
+    expect(knowledgeMemory).toContain('src/new-name.ts: edit_transaction')
+    expect(knowledgeMemory).toContain(
+      `"path":"src/new-name.ts","contentHash":"sha256:${'b'.repeat(64)}"`,
+    )
+    expect(knowledgeMemory).toContain(destinationToken)
+    expect(knowledgeMemory).not.toContain('src/old-name.ts')
+  })
+
+  test('rejects move facts and anchors with action or destination receipt mismatches', () => {
+    const makeMoveResult = (operationId: string, token: string) =>
+      withCommittedReceipt({
+        kind: 'file_mutation_result',
+        version: 1,
+        operationId,
+        outcome: 'applied',
+        authorityTier: 'portable_path',
+        actions: [
+          {
+            actionId: `${operationId}:0`,
+            index: 0,
+            action: 'move',
+            path: `src/${operationId}-old.ts`,
+            destinationPath: `src/${operationId}-new.ts`,
+            outcome: 'applied',
+            beforeHash: 'sha256:' + '0'.repeat(64),
+            afterHash: 'sha256:' + 'c'.repeat(64),
+            editAnchor: {
+              startLine: 1,
+              endLine: 2,
+              contentHash: 'sha256:' + 'c'.repeat(64),
+              readCapability: token,
+            },
+          },
+        ],
+        errors: [],
+        freshCapabilities: [],
+      })
+    const actionToken = 'cap.v3.action-mismatch-token'
+    const destinationToken = 'cap.v3.destination-mismatch-token'
+    const actionMismatch = makeMoveResult('action-mismatch', actionToken)
+    actionMismatch.authorityReceipt.actions[0].action = 'update'
+    const destinationMismatch = makeMoveResult(
+      'destination-mismatch',
+      destinationToken,
+    )
+    destinationMismatch.authorityReceipt.actions[0].destinationPath =
+      'src/unauthorized-destination.ts'
+    const messages: Message[] = [createMessage('user', 'Move both files')]
+    for (const [callId, result] of [
+      ['action-mismatch', actionMismatch],
+      ['destination-mismatch', destinationMismatch],
+    ] as const) {
+      messages.push(
+        createToolCallMessage(callId, 'edit_transaction', { edits: [] }),
+        createToolResultMessage(callId, 'edit_transaction', result),
+      )
+    }
+
+    const content = runHandleSteps(messages, 50_000, 10_000)[0].input
+      .messages[0].content[0].text
+    const knowledgeMemory =
+      content.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
+      ''
+
+    expect(knowledgeMemory).not.toContain(
+      'src/action-mismatch-new.ts: edit_transaction',
+    )
+    expect(knowledgeMemory).not.toContain(
+      'src/destination-mismatch-new.ts: edit_transaction',
+    )
+    expect(knowledgeMemory).not.toContain(actionToken)
+    expect(knowledgeMemory).not.toContain(destinationToken)
   })
 
   test('treats applied false edit results as failures, not edits made', () => {
@@ -2858,6 +3478,132 @@ describe('context-pruner threshold behavior', () => {
     expect(content).toContain(
       'findingIds=dependency-reviewer:manifest:lockfile',
     )
+  })
+
+  test('clears a reviewer blocker after a fresh LOOKS_GOOD receipt across repeated compaction', () => {
+    const compact = (messages: Message[]): Message =>
+      runHandleSteps(messages, 250_000, 200_000, {
+        assistantToolBudget: 1,
+        userBudget: 1,
+        toolFactsBudget: 1,
+      })[0].input.messages[0]
+    const blockingFingerprint = 'd'.repeat(64)
+    const clearedFingerprint = 'e'.repeat(64)
+    const blocker = 'code-reviewer: RF-TEST: Fix the stale authority leak.'
+    const unrelatedBlocker =
+      'security-reviewer: RF-SECURITY: Keep the authorization check.'
+
+    const firstSummary = compact([
+      createToolCallMessage('review-blocking', 'spawn_agents', {
+        agents: [
+          { agent_type: 'code-reviewer' },
+          { agent_type: 'security-reviewer' },
+        ],
+      }),
+      createToolResultMessage('review-blocking', 'spawn_agents', [
+        {
+          agentType: 'code-reviewer',
+          value: {
+            type: 'structuredOutput',
+            value: {
+              verdict: 'BLOCKING',
+              snapshotFingerprint: blockingFingerprint,
+              coverage: 'covered',
+              findings: [
+                { id: 'RF-TEST', summary: 'Fix the stale authority leak.' },
+              ],
+            },
+          },
+        },
+        {
+          agentType: 'security-reviewer',
+          value: {
+            type: 'structuredOutput',
+            value: {
+              verdict: 'BLOCKING',
+              snapshotFingerprint: blockingFingerprint,
+              coverage: 'covered',
+              findings: [
+                {
+                  id: 'RF-SECURITY',
+                  summary: 'Keep the authorization check.',
+                },
+              ],
+            },
+          },
+        },
+      ]),
+    ])
+    const firstMemory = (firstSummary.content[0] as { text: string }).text.match(
+      /<knowledge_memory>[\s\S]*?<\/knowledge_memory>/,
+    )?.[0]
+    expect(firstMemory).toContain(blocker)
+    expect(firstMemory).toContain(unrelatedBlocker)
+
+    const secondSummary = compact([
+      firstSummary,
+      createToolCallMessage('review-cleared', 'spawn_agent_inline', {
+        agent_type: 'code-reviewer',
+      }),
+      createToolResultMessage('review-cleared', 'spawn_agent_inline', {
+        verdict: 'LOOKS_GOOD',
+        snapshotFingerprint: clearedFingerprint,
+        coverage: 'covered',
+        findings: [],
+      }),
+    ])
+    const secondMemory = (secondSummary.content[0] as { text: string }).text.match(
+      /<knowledge_memory>[\s\S]*?<\/knowledge_memory>/,
+    )?.[0]
+    expect(secondMemory).not.toContain(blocker)
+    expect(secondMemory).toContain(unrelatedBlocker)
+    expect(secondMemory).toContain(
+      `code-reviewer: verdict=BLOCKING; snapshot=${blockingFingerprint}`,
+    )
+    expect(secondMemory).toContain(
+      `code-reviewer: verdict=LOOKS_GOOD; snapshot=${clearedFingerprint}`,
+    )
+
+    const thirdSummary = compact([
+      secondSummary,
+      createMessage('assistant', 'Continue after reviewer clearance.'),
+    ])
+    const thirdMemory = (thirdSummary.content[0] as { text: string }).text.match(
+      /<knowledge_memory>[\s\S]*?<\/knowledge_memory>/,
+    )?.[0]
+    expect(thirdMemory).not.toContain(blocker)
+    expect(thirdMemory).toContain(unrelatedBlocker)
+    expect(thirdMemory).toContain(
+      `code-reviewer: verdict=LOOKS_GOOD; snapshot=${clearedFingerprint}`,
+    )
+  })
+
+  test('preserves schemaVersion 1 string findings as actionable reviewer memory', () => {
+    const finding =
+      'The mutation receipt is not correlated with final hashes. Require committed action and hash matching before persisting the edit.'
+    const messages: Message[] = [
+      createToolCallMessage('review-string', 'spawn_agent_inline', {
+        agent_type: 'code-reviewer',
+      }),
+      createToolResultMessage('review-string', 'spawn_agent_inline', {
+        schemaVersion: 1,
+        verdict: 'BLOCKING',
+        snapshotFingerprint: 'b'.repeat(64),
+        coverage: 'covered',
+        findings: [finding],
+      }),
+    ]
+
+    const results = runHandleSteps(messages, 250_000, 200_000)
+    const content = results[0].input.messages[0].content[0].text
+    const knowledgeMemory = content.match(
+      /<knowledge_memory>[\s\S]*?<\/knowledge_memory>/,
+    )?.[0]
+
+    expect(knowledgeMemory).toContain('findingIds=(none)')
+    expect(knowledgeMemory).toContain(`findings=${finding}`)
+    expect(knowledgeMemory).toContain('Blockers:')
+    expect(knowledgeMemory).toContain(`code-reviewer: ${finding}`)
   })
 
   test('records stale snapshot reviews as refresh signals, not blockers', () => {

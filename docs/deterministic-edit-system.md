@@ -79,15 +79,19 @@ common cause of "I already read this file, why is my edit blocked?":
   The one sanctioned mixed form — a whole-file capability paired with narrower
   caller bounds — is described under "Capability minting and the default
   replace_range flow" below.
-- A successful edit keeps the path-level authorization during the editing
-  flow, and exact-match edits chain from the latest prepared content. This
-  authorization is not a content-freshness proof; carry forward the echoed
-  post-edit `basedOnRead` for the same region or re-read before a
-  large/ambiguous follow-up edit.
-- On a stale-anchor or anchor-not-found failure, re-read the exact target
-  range and retry with the new `basedOnRead` rather than guessing from
-  memory. The diagnostic always lists the closest candidate range to
-  re-read.
+- Every fully applied action may return an action-local post-edit `editAnchor`
+  containing the confirmed post-edit bounds, content hash, and reusable
+  `readCapability`. It describes that action's resulting content, not the
+  transaction's pre-edit snapshot. The runtime also writes confirmed post-edit
+  content into automatic whole-file authorization when it has enough evidence.
+  Prefer that automatic authorization or the action's
+  `editAnchor.readCapability` for follow-up work; a successful mutation does
+  not require an unconditional reread.
+- Reread when the next edit needs a different region, the action anchor is
+  missing or oversized, external activity may have made filesystem state
+  stale, or a stale/ambiguous diagnostic explicitly asks for a fresh range.
+  On stale-anchor or anchor-not-found failures, read the named target range and
+  retry with the new capability rather than guessing from memory.
 - For a one-file recovery request, the harness accepts
   `{ paths: ["file"], ranges: [{ startLine, endLine }] }` and safely infers the
   omitted range path. It still rejects missing range paths when multiple files
@@ -211,6 +215,44 @@ field-specific: range-capability conflicts show the capability's actual bounds,
 and `skipIfMissing` errors identify its deletion-only contract without appending
 unrelated array/stringification instructions.
 
+### Edit intent and canonical mixed-mode compilation
+
+Use `str_replace` by default for localized exact edits. Use `rewrite_symbol`
+only when the replacement is a complete symbol, including its full declaration
+and body. Use `replace_range` when changing an authenticated range returned
+directly by `read_files`; pass that read's capability rather than reconstructing
+line/hash metadata.
+
+A transaction may mix these modes on one file only when their spans in the
+original snapshot are disjoint and the compiler can map every action
+unambiguously. Canonical transaction compilation resolves all original spans,
+rejects overlap or ambiguous provenance, and then maps accepted actions through
+prior edits deterministically. Splitting an overlapping rewrite into different
+edit variants does not bypass this rule.
+
+### Post-edit anchors and reread telemetry
+
+Confirmed action-local anchors are reusable operational state. Semantic
+compaction retains a bounded set of fully applied, receipt-correlated anchors
+without retaining `afterContent`; partial, rollback, malformed, unconfirmed, and
+uncorrelated results are discarded. Capability tokens belong only in model
+operational memory. User-facing CLI rows show a short post-edit hash and whether
+a fresh capability exists, never the token or post-edit body.
+
+Immediate rereads after a successful local mutation are telemetry-classified so
+unnecessary reread loops can be distinguished from legitimate recovery:
+
+- `different_region`: the next operation needs bytes outside the confirmed
+  action anchor;
+- `missing_or_oversized_anchor`: no reusable bounded action anchor was emitted;
+- `external_or_stale_state`: another actor or uncertain filesystem result may
+  have changed the file;
+- `explicit_diagnostics`: a stale, ambiguous, or recovery diagnostic requested
+  a fresh read.
+
+The default category is reuse: automatic confirmed whole-file authorization or
+the action-local capability is sufficient, so no immediate reread is issued.
+
 ### Capability minting and the default replace_range flow
 
 The default flow is read -> capability -> edit. In the common case an agent
@@ -233,51 +275,27 @@ follows one of three paths:
 The rest of this section is the reference detail behind that flow.
 
 A complete range read mints a `readCapability` bound to exactly the
-requested line bounds and the hash of the returned slice. When the runtime
-supplies a capability issuer the token is scope-signed (cap.v3 binds the
-project, path, line bounds, content hash, and run); without an issuer it
-stays an unsigned bounds+hash token. Truncated or render-clamped reads mint
-nothing, so a partial observation can never be reused as edit
-authorization.
+requested line bounds and the hash of the returned slice. The runtime mints
+only authenticated cap.v3 tokens from a nonempty capability issuer; each token
+binds the project, path, line bounds, content hash, and run. If authoritative
+project/run scope is unavailable, no edit capability is minted. Truncated or
+render-clamped reads likewise mint nothing, so a partial or unscoped observation
+can never be reused as edit authorization.
 
-A proper-subset range read served from a full-file snapshot also mints a
-`wholeFileReadCapability`: a cap.v3 token over lines 1-N of the entire
-normalized file. Its `endLine` counts the trailing-newline segment, so a
-file whose content ends in a newline yields N+1 while the visible
-`totalLines` stays N. The token travels as a separate structured field on
-the range result; the range header keeps advertising the scoped range
-capability. It is minted only when every one of these gates holds:
+Structured-v1 range results expose the scoped capability only as
+`editAnchor.readCapability`, alongside diagnostic bounds and content hash. They
+do not expose a separate whole-file capability. A proper-subset range therefore
+remains scoped to the observed range and cannot grant whole-file overwrite
+authority. To obtain reusable whole-file authorization or a whole-file-covering
+cap.v3 token, perform a complete whole-file paths read or a complete full-file
+range read.
 
-- an issuer was supplied;
-- the snapshot covered the whole file (never for oversized range-window
-  reads);
-- the requested range is a proper subset of the file;
-- the rendered range was complete, not clamped at the render limit; and
-- the whole file itself fits within the render limit.
-
-The security invariant behind those gates is that whole-file edit authority
-is never derived from content the model only partially observed.
-
-On the edit side, `edit_transaction` resolves a `replace_range` capability
-during input-schema validation, before preflight:
-
-- **Default flow (capability only).** With no caller `startLine`/`endLine`,
-  the transform derives the bounds and `expectedHash` from the decoded
-  token and leaves `wholeFileCapabilityHash` undefined, so the runtime
-  preflight uses the ordinary exact-match branch. Caller bounds that
-  exactly match the token resolve the same way.
-- **Whole-file sub-range flow.** A whole-file capability (its bounds start
-  at line 1) may be paired with narrower caller `startLine`/`endLine`. The
-  transform keeps the caller's bounds, clears `expectedHash`, and carries
-  the token hash as `wholeFileCapabilityHash`; the runtime's
-  wholeFileCapabilitySubRange preflight branch verifies the whole-file hash
-  against current content and accepts the requested sub-range without a
-  re-read.
-- **Rejections.** `expectedHash` is never accepted alongside a capability —
-  the token's hash attests the capability's own bounds, not a caller
-  sub-range. A strict sub-range capability cannot be combined with
-  different bounds, and passing only one of `startLine`/`endLine` alongside
-  a capability is ambiguous and rejected.
+On the edit side, the shipped structured-v1 `edit_transaction` `replace_range`
+input is capability-only: pass `{ readCapability, newContent }`. During input
+normalization the runtime authenticates the token and derives its exact bounds
+and expected content hash before preflight. Caller-supplied bounds or
+`expectedHash` are not part of this structured-v1 form; re-read the desired
+range when different bounds are needed.
 
 ## Explicit elision markers
 
@@ -288,8 +306,8 @@ Each literal segment must contain at least 10 non-whitespace characters,
 and the full elided range must resolve to exactly one deterministic match.
 Ambiguous or weak elision anchors fail with recovery guidance rather than
 falling back to broad fuzzy matching. `replace_range` remains strict: it
-uses explicit `startLine`, `endLine`, and `expectedHash`, and does not
-accept `...` in place of a range or hash.
+uses the bounds and content hash authenticated by `readCapability`, and does
+not accept `...` in place of a capability.
 
 ## Reviewer / validation gate semantics
 

@@ -29,6 +29,7 @@ import type {
 } from '@codebuff/common/tools/list'
 import type { RequestOptionalFileFn } from '@codebuff/common/types/contracts/client'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
+import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ProjectFileContext } from '@codebuff/common/util/file'
 
 type ToolName = 'read_files'
@@ -41,6 +42,7 @@ export const handleReadFiles = (async (
     previousToolCallFinished: Promise<void>
     toolCall: CodebuffToolCall<ToolName>
     requestOptionalFile: RequestOptionalFileFn
+    logger: Logger
 
     fileContext: ProjectFileContext
     fileProcessingState: FileProcessingState
@@ -129,6 +131,27 @@ export const handleReadFiles = (async (
     if ((fileProcessingState.promisesByPath[path]?.length ?? 0) > 0) {
       editedSinceLastRead.add(path)
     }
+    const anchor = fileProcessingState.confirmedPostEditAnchorsByPath?.[path]
+    const storedHash = fileProcessingState.readAuthorizationHashesByPath?.[path]
+    const selectorCategory = paths.includes(path)
+      ? 'whole_file'
+      : ranges.some((range) => range.path === path)
+        ? 'range'
+        : 'symbols'
+    const category =
+      !anchor || !storedHash
+        ? 'missing'
+        : anchor.contentHash !== storedHash
+          ? 'stale'
+          : selectorCategory === 'whole_file'
+            ? 'reuse_eligible'
+            : 'different_region'
+    if (editedSinceLastRead.has(path) || anchor) {
+      params.logger.debug(
+        { path, reason: 'immediate_post_edit_reread', category },
+        'read_files requested a path with current confirmed post-edit authorization',
+      )
+    }
   }
 
   const fileReadResult = await getFileReadingUpdates({
@@ -212,6 +235,7 @@ export const handleReadFiles = (async (
       typeof result.content === 'string'
     ) {
       wholeFileGrantPaths.add(result.path)
+      delete fileProcessingState.confirmedPostEditAnchorsByPath?.[result.path]
       if (fileProcessingState.strictReadBeforeEdit) {
         grantWholeFileReadAuthorization(
           fileProcessingState,
@@ -246,6 +270,7 @@ export const handleReadFiles = (async (
             : null
         if (wholeFileContent !== null) {
           wholeFileGrantPaths.add(result.path)
+          delete fileProcessingState.confirmedPostEditAnchorsByPath?.[result.path]
           if (fileProcessingState.strictReadBeforeEdit) {
             grantWholeFileReadAuthorization(
               fileProcessingState,

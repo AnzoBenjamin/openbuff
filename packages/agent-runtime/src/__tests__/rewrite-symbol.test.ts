@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
+import { getExactContentHash } from '@codebuff/common/util/content-hash'
+
 import { handleRewriteSymbol } from '../tools/handlers/tool/rewrite-symbol'
 
 import type { FileProcessingState } from '../tools/handlers/tool/write-file'
@@ -11,6 +13,9 @@ const noopLogger = {
   warn() {},
   error() {},
 } as unknown as Logger
+
+const PROJECT_ROOT = '/test/project'
+const RUN_ID = 'rewrite-symbol-test'
 
 function freshState(): FileProcessingState {
   return {
@@ -59,6 +64,8 @@ async function captureRewritePatch(params: {
         occurrence: params.occurrence,
       },
     },
+    fileContext: { projectRoot: PROJECT_ROOT },
+    runId: RUN_ID,
     fileProcessingState: freshState(),
     logger: noopLogger,
     requestClientToolCall: async (toolCall: any) => {
@@ -101,6 +108,8 @@ describe('rewrite_symbol handler', () => {
             'export function greet(name: string) {\n  return `hello, ${name}!`\n}',
         },
       },
+      fileContext: { projectRoot: PROJECT_ROOT },
+      runId: RUN_ID,
       fileProcessingState: freshState(),
       logger: noopLogger,
       requestClientToolCall,
@@ -124,6 +133,17 @@ describe('rewrite_symbol handler', () => {
     state.consecutiveStrReplaceFailuresByPath['svc.ts'] = 3
     state.failedEditRequiresReadByPath['svc.ts'] = true
     let capturedPatch: string | undefined
+    const finalContent = [
+      'export function greet(name: string) {',
+      '  return `recovered ${name}`',
+      '}',
+      '',
+      'export function other() {',
+      '  return 2',
+      '}',
+    ].join('\n')
+    const beforeHash = getExactContentHash(SRC)
+    const afterHash = getExactContentHash(finalContent)
 
     const result = await handleRewriteSymbol({
       previousToolCallFinished: Promise.resolve(),
@@ -136,6 +156,8 @@ describe('rewrite_symbol handler', () => {
             'export function greet(name: string) {\n  return `recovered ${name}`\n}',
         },
       },
+      fileContext: { projectRoot: PROJECT_ROOT },
+      runId: RUN_ID,
       fileProcessingState: state,
       logger: noopLogger,
       requestClientToolCall: async (toolCall: any) => {
@@ -155,12 +177,33 @@ describe('rewrite_symbol handler', () => {
                   action: 'update',
                   path: toolCall?.input?.path,
                   outcome: 'applied',
-                  beforeHash: 'before',
-                  afterHash: 'after',
+                  beforeHash,
+                  afterHash,
                 },
               ],
               authorityTier: 'portable_path',
-              receiptId: 'structural-recovery',
+              receiptId: 'structural-recovery-receipt',
+              authorityReceipt: {
+                kind: 'commit_receipt',
+                version: 1,
+                operationId: 'structural-recovery',
+                callId: 'structural-recovery',
+                receiptId: 'structural-recovery-receipt',
+                authorityTier: 'portable_path',
+                status: 'committed',
+                actions: [
+                  {
+                    actionId: 'structural-recovery:0',
+                    index: 0,
+                    action: 'update',
+                    path: toolCall?.input?.path,
+                    status: 'committed',
+                    beforeHash,
+                    afterHash,
+                  },
+                ],
+                finalHashes: { 'svc.ts': afterHash },
+              },
               errors: [],
               freshCapabilities: [],
             },
@@ -191,6 +234,8 @@ describe('rewrite_symbol handler', () => {
             'export function greet(name: string) {\n  return `recovered ${name}`\n}',
         },
       },
+      fileContext: { projectRoot: PROJECT_ROOT },
+      runId: RUN_ID,
       fileProcessingState: state,
       logger: noopLogger,
       requestClientToolCall: async () => [
@@ -217,6 +262,8 @@ describe('rewrite_symbol handler', () => {
         toolCallId: 't2',
         input: { path: 'svc.ts', symbol: 'missing', content: 'x' },
       },
+      fileContext: { projectRoot: PROJECT_ROOT },
+      runId: RUN_ID,
       fileProcessingState: freshState(),
       logger: noopLogger,
       requestClientToolCall: async () => [],
@@ -238,6 +285,8 @@ describe('rewrite_symbol handler', () => {
           content: 'function x() {\n  return "updated"\n}',
         },
       },
+      fileContext: { projectRoot: PROJECT_ROOT },
+      runId: RUN_ID,
       fileProcessingState: freshState(),
       logger: noopLogger,
       requestClientToolCall: async (toolCall: any) => {
@@ -280,6 +329,8 @@ describe('rewrite_symbol handler', () => {
             'export default function HeroSeedling() {\n  const open = useRef(1)\n  return <GardenFloor />\n}',
         },
       },
+      fileContext: { projectRoot: PROJECT_ROOT },
+      runId: RUN_ID,
       fileProcessingState: freshState(),
       logger: noopLogger,
       requestClientToolCall: async (toolCall: any) => {
@@ -337,6 +388,8 @@ describe('rewrite_symbol handler', () => {
             '/**\n * New doc.\n */\nexport function documented() {\n  return 2\n}',
         },
       },
+      fileContext: { projectRoot: PROJECT_ROOT },
+      runId: RUN_ID,
       fileProcessingState: freshState(),
       logger: noopLogger,
       requestClientToolCall,

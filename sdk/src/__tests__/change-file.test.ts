@@ -6,6 +6,11 @@ import { getContentHash } from '@codebuff/common/util/content-hash'
 import { changeFile, changeFiles } from '../tools/change-file'
 import { MAX_FILE_CHANGES_PER_TRANSACTION } from '@codebuff/common/actions'
 
+const capabilityIssuer = {
+  projectId: '/repo',
+  runId: 'change-file-tests',
+}
+
 describe('changeFile', () => {
   test('returns a canonical authority-backed result for string replacements', async () => {
     const fs = createMockFs({
@@ -22,6 +27,7 @@ describe('changeFile', () => {
       },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -34,6 +40,12 @@ describe('changeFile', () => {
           path: 'src/file.ts',
           outcome: 'applied',
           afterContent: 'const value = 2\n',
+          editAnchor: expect.objectContaining({
+            startLine: 1,
+            endLine: 2,
+            contentHash: getContentHash('const value = 2\n'),
+            readCapability: expect.stringContaining('cap.v3.'),
+          }),
         }),
       ],
     })
@@ -57,6 +69,7 @@ describe('changeFile', () => {
       },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -86,6 +99,7 @@ describe('changeFile', () => {
       },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -114,6 +128,7 @@ describe('changeFile', () => {
       },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -142,6 +157,7 @@ describe('changeFile', () => {
       },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -167,6 +183,7 @@ describe('changeFile', () => {
       },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -196,6 +213,7 @@ describe('changeFile', () => {
       parameters: { type: 'file', path: 'src/file.ts', content: 'after\n' },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(conditionalCalls).toBe(1)
@@ -219,6 +237,7 @@ describe('changeFile', () => {
       },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -267,6 +286,7 @@ describe('changeFile', () => {
       ],
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -316,6 +336,7 @@ describe('changeFile', () => {
       ],
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     const output = result[0]
@@ -333,7 +354,9 @@ describe('changeFile', () => {
       })
       expect(
         output.value.actions.every(
-          (action) => action.afterContent === undefined,
+          (action) =>
+            action.afterContent === undefined &&
+            action.editAnchor === undefined,
         ),
       ).toBe(true)
     }
@@ -537,6 +560,7 @@ describe('changeFile', () => {
       ],
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -558,6 +582,11 @@ describe('changeFile', () => {
           path: 'source.txt',
           destinationPath: 'moved.txt',
           afterContent: 'move me',
+          editAnchor: expect.objectContaining({
+            startLine: 1,
+            endLine: 1,
+            contentHash: getContentHash('move me'),
+          }),
         }),
       ],
     })

@@ -675,9 +675,11 @@ describe('applyPatchTool', () => {
     if (result[0]?.type !== 'json') {
       throw new Error('Expected JSON tool result')
     }
-    expect(getMutationErrorMessage(result)).toContain(
-      'Large-file apply_patch blocked',
-    )
+    const message = getMutationErrorMessage(result)
+    expect(message).toContain('Large-file apply_patch blocked')
+    expect(message).toContain('editAnchor.readCapability cap.v3 token')
+    expect(message).toContain('operation.basedOnRead token array')
+    expect(message).not.toContain('{ startLine, endLine, hash: rangeHash }')
     expect(await fs.readFile('/repo/src/large.ts', 'utf-8')).toBe(
       lines.join('\n'),
     )
@@ -797,9 +799,11 @@ describe('applyPatchTool', () => {
     if (result[0]?.type !== 'json') {
       throw new Error('Expected JSON tool result')
     }
-    expect(getMutationErrorMessage(result)).toContain(
-      'the basedOnRead range is stale',
-    )
+    const message = getMutationErrorMessage(result)
+    expect(message).toContain('the basedOnRead range is stale')
+    expect(message).toContain('editAnchor.readCapability cap.v3 token')
+    expect(message).toContain('operation.basedOnRead token array')
+    expect(message).not.toContain('retry with the new rangeHash')
     expect(await fs.readFile('/repo/src/large.ts', 'utf-8')).toBe(
       lines.join('\n'),
     )

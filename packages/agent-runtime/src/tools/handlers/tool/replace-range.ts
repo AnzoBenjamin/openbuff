@@ -149,6 +149,8 @@ export const handleReplaceRange = (async (params) => {
   const application = await coordinateEditApplication<'replace_range'>({
     toolName: 'replace_range',
     fileProcessingState,
+    projectId: params.fileContext?.projectRoot ?? '',
+    runId: params.runId ?? '',
     paths: [path],
     apply: () => requestClientToolCall(clientToolCall),
   })

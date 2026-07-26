@@ -15,8 +15,12 @@ import {
   fileCapabilityAuthorizesV1,
   fileMutationResultV1Schema,
   filesystemErrorCodeSchema,
+  FILESYSTEM_RESULT_AGGREGATE_CONTENT_MAX_BYTES,
+  FILESYSTEM_RESULT_CONTENT_MAX_BYTES,
+  FILESYSTEM_RESULT_MAX_ACTIONS,
   getConfirmedAppliedActionsV1,
   isReadFilesResultV1,
+  mutationResultExceedsCheapBoundsV1,
   nativeToolResultErrorOutputV1Schema,
   readFilesResultV1Schema,
   reconcileFileMutationResultV1,
@@ -456,6 +460,55 @@ describe('mutation receipts and reconciliation', () => {
     }
   })
 
+  it('rejects empty and duplicate commit action IDs as authority evidence', () => {
+    const cases: Array<
+      [string, Array<(typeof portableReceipt.actions)[number]>]
+    > = [
+      [
+        'empty',
+        [{ ...portableReceipt.actions[0], actionId: '' }],
+      ],
+      [
+        'duplicate',
+        [
+          portableReceipt.actions[0],
+          {
+            ...portableReceipt.actions[0],
+            index: 1,
+            path: 'src/b.ts',
+          },
+        ],
+      ],
+    ]
+
+    for (const [, actions] of cases) {
+      const receipt = {
+        ...portableReceipt,
+        actions,
+        finalHashes: {
+          'src/a.ts': 'sha256:after',
+          'src/b.ts': 'sha256:after',
+        },
+      }
+
+      expect(commitReceiptV1Schema.safeParse(receipt).success).toBe(false)
+      const reconciled = reconcileFileMutationResultV1({
+        lifecycle: {
+          kind: 'tool_lifecycle',
+          version: 1,
+          callId: 'call-1',
+          sequence: 2,
+          state: 'succeeded',
+        },
+        operationId: 'operation-1',
+        handlerResult: 'done',
+        receipt,
+      })
+      expect(reconciled.mutation.outcome).toBe('unconfirmed')
+      expect(getConfirmedAppliedActionsV1(reconciled.mutation)).toEqual([])
+    }
+  })
+
   it('reconstructs applied mutation truth despite a failed lifecycle and malformed handler result', () => {
     const lifecycle = {
       kind: 'tool_lifecycle' as const,
@@ -479,27 +532,29 @@ describe('mutation receipts and reconciliation', () => {
     expect(getConfirmedAppliedActionsV1(reconciled.mutation)).toHaveLength(1)
   })
 
-  it('preserves hash-correlated handler content and fresh capabilities with a matching receipt', () => {
+  it('reconciles exact CRLF receipt hashes with normalized action anchors', () => {
     const afterContent = 'const value = 2\r\n'
     const afterHash = getExactContentHash(afterContent)
+    const normalizedHash = getContentHash(afterContent)
     const receipt = {
       ...portableReceipt,
       actions: [{ ...portableReceipt.actions[0], afterHash }],
       finalHashes: { 'src/a.ts': afterHash },
     }
+    const token = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: 2,
+      hash: normalizedHash,
+      scope: {
+        projectId: '/project',
+        path: 'src/a.ts',
+        runId: 'run-1',
+      },
+    })
     const freshCapability = {
       kind: 'whole_file' as const,
       version: 1 as const,
-      token: encodeReadCapabilityToken({
-        startLine: 1,
-        endLine: 1,
-        hash: afterHash,
-        scope: {
-          projectId: '/project',
-          path: 'src/a.ts',
-          runId: 'run-1',
-        },
-      }),
+      token,
       snapshot: {
         kind: 'file_snapshot' as const,
         version: 1 as const,
@@ -510,11 +565,18 @@ describe('mutation receipts and reconciliation', () => {
         readGeneration: 1,
       },
     }
+    const editAnchor = {
+      startLine: 1,
+      endLine: 2,
+      contentHash: normalizedHash,
+      readCapability: token,
+    }
     const handlerResult = buildFileMutationResultFromReceiptV1(
       receipt,
       [],
       [freshCapability],
       new Map([[0, afterContent]]),
+      new Map([[0, editAnchor]]),
     )
 
     const reconciled = reconcileFileMutationResultV1({
@@ -531,8 +593,12 @@ describe('mutation receipts and reconciliation', () => {
       capabilityScope: { projectId: '/project', runId: 'run-1' },
     })
 
-    expect(reconciled.handlerResultValid).toBe(true)
-    expect(reconciled.mutation.actions[0]?.afterContent).toBe(afterContent)
+    expect(afterHash).not.toBe(normalizedHash)
+    expect(reconciled.mutation.actions[0]).toMatchObject({
+      afterHash,
+      afterContent,
+      editAnchor,
+    })
     expect(reconciled.mutation.freshCapabilities).toEqual([freshCapability])
   })
 
@@ -544,19 +610,20 @@ describe('mutation receipts and reconciliation', () => {
       actions: [{ ...portableReceipt.actions[0], afterHash }],
       finalHashes: { 'src/a.ts': afterHash },
     }
+    const wrongPathToken = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: 2,
+      hash: getContentHash(afterContent),
+      scope: {
+        projectId: '/project',
+        path: 'other/src/a.ts',
+        runId: 'run-1',
+      },
+    })
     const wrongPathCapability = {
       kind: 'whole_file' as const,
       version: 1 as const,
-      token: encodeReadCapabilityToken({
-        startLine: 1,
-        endLine: 1,
-        hash: afterHash,
-        scope: {
-          projectId: '/project',
-          path: 'other/src/a.ts',
-          runId: 'run-1',
-        },
-      }),
+      token: wrongPathToken,
       snapshot: {
         kind: 'file_snapshot' as const,
         version: 1 as const,
@@ -571,6 +638,18 @@ describe('mutation receipts and reconciliation', () => {
       receipt,
       [],
       [wrongPathCapability],
+      new Map([[0, afterContent]]),
+      new Map([
+        [
+          0,
+          {
+            startLine: 1,
+            endLine: 2,
+            contentHash: getContentHash(afterContent),
+            readCapability: wrongPathToken,
+          },
+        ],
+      ]),
     )
 
     const reconciled = reconcileFileMutationResultV1({
@@ -587,6 +666,8 @@ describe('mutation receipts and reconciliation', () => {
       capabilityScope: { projectId: '/project', runId: 'run-1' },
     })
 
+    expect(reconciled.mutation.actions[0]?.afterContent).toBeUndefined()
+    expect(reconciled.mutation.actions[0]?.editAnchor).toBeUndefined()
     expect(reconciled.mutation.freshCapabilities).toEqual([])
   })
 
@@ -629,7 +710,56 @@ describe('mutation receipts and reconciliation', () => {
     expect(getConfirmedAppliedActionsV1(reconciled.mutation)).toEqual([])
   })
 
-  it('maps missing authority evidence to unconfirmed and grants no capabilities', () => {
+  it('maps missing authority evidence to unconfirmed and strips action authority', () => {
+    const afterContent = 'confirmed only with receipt\n'
+    const afterHash = getExactContentHash(afterContent)
+    const contentHash = getContentHash(afterContent)
+    const token = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: 2,
+      hash: contentHash,
+      scope: {
+        projectId: '/project',
+        path: 'src/a.ts',
+        runId: 'run-1',
+      },
+    })
+    const receipt = {
+      ...portableReceipt,
+      actions: [{ ...portableReceipt.actions[0], afterHash }],
+      finalHashes: { 'src/a.ts': afterHash },
+    }
+    const capability = {
+      kind: 'whole_file' as const,
+      version: 1 as const,
+      token,
+      snapshot: {
+        kind: 'file_snapshot' as const,
+        version: 1 as const,
+        canonicalPath: '/project/src/a.ts',
+        contentHash: afterHash,
+        sizeBytes: Buffer.byteLength(afterContent),
+        encoding: 'utf8' as const,
+        readGeneration: 1,
+      },
+    }
+    const handlerResult = buildFileMutationResultFromReceiptV1(
+      receipt,
+      [],
+      [capability],
+      new Map([[0, afterContent]]),
+      new Map([
+        [
+          0,
+          {
+            startLine: 1,
+            endLine: 2,
+            contentHash,
+            readCapability: token,
+          },
+        ],
+      ]),
+    )
     const reconciled = reconcileFileMutationResultV1({
       lifecycle: {
         kind: 'tool_lifecycle',
@@ -639,14 +769,19 @@ describe('mutation receipts and reconciliation', () => {
         state: 'failed',
       },
       operationId: 'operation-1',
-      handlerResult: buildFileMutationResultFromReceiptV1(portableReceipt),
+      handlerResult,
     })
 
     expect(reconciled.handlerResultValid).toBe(true)
     expect(reconciled.mutation.outcome).toBe('unconfirmed')
     expect(reconciled.mutation.authorityTier).toBeNull()
+    expect(reconciled.mutation.actions[0]).toMatchObject({
+      afterHash: null,
+      outcome: 'unconfirmed',
+    })
+    expect(reconciled.mutation.actions[0]?.afterContent).toBeUndefined()
+    expect(reconciled.mutation.actions[0]?.editAnchor).toBeUndefined()
     expect(reconciled.mutation.freshCapabilities).toEqual([])
-    expect(getConfirmedAppliedActionsV1(reconciled.mutation)).toEqual([])
   })
 
   it('rejects a receipt correlated to a different lifecycle call', () => {
@@ -667,9 +802,15 @@ describe('mutation receipts and reconciliation', () => {
     expect(reconciled.mutation.receiptId).toBeUndefined()
   })
 
-  it('correlates optional post-edit content with the action afterHash', () => {
+  it('requires post-edit content and action authority to remain paired', () => {
     const afterContent = 'const value = 2\n'
     const afterHash = getContentHash(afterContent)
+    const editAnchor = {
+      startLine: 1,
+      endLine: 2,
+      contentHash: afterHash,
+      readCapability: 'cap.v3.test',
+    }
     const mutation = buildFileMutationResultFromReceiptV1(
       {
         ...portableReceipt,
@@ -679,31 +820,36 @@ describe('mutation receipts and reconciliation', () => {
       [],
       [],
       new Map<number | string, string>([[0, afterContent]]),
+      new Map([[0, editAnchor]]),
     )
 
-    expect(mutation.actions[0]?.afterContent).toBe(afterContent)
+    expect(mutation.actions[0]).toMatchObject({ afterContent, editAnchor })
     expect(
       fileMutationResultV1Schema.safeParse({
         ...mutation,
-        actions: [{ ...mutation.actions[0], afterContent: 'mismatch' }],
+        actions: [{ ...mutation.actions[0], afterContent: undefined }],
+      }).success,
+    ).toBe(false)
+    expect(
+      fileMutationResultV1Schema.safeParse({
+        ...mutation,
+        actions: [{ ...mutation.actions[0], editAnchor: undefined }],
       }).success,
     ).toBe(false)
     expect(
       fileMutationResultV1Schema.safeParse({
         ...mutation,
         actions: [
-          { ...mutation.actions[0], afterHash: null, afterContent: undefined },
+          {
+            ...mutation.actions[0],
+            afterHash: null,
+            afterContent: undefined,
+            editAnchor: undefined,
+          },
         ],
         authorityReceipt: undefined,
       }).success,
     ).toBe(true)
-    expect(
-      fileMutationResultV1Schema.safeParse({
-        ...mutation,
-        actions: [{ ...mutation.actions[0], afterHash: null }],
-        authorityReceipt: undefined,
-      }).success,
-    ).toBe(false)
   })
 
   it('rejects aggregate/action outcome drift and malformed receipts', () => {
@@ -721,6 +867,111 @@ describe('mutation receipts and reconciliation', () => {
         actions: [{ ...portableReceipt.actions[0], status: 'failed' }],
       }).success,
     ).toBe(false)
+  })
+
+  it('rejects mutation inputs at per-action, aggregate, and array bounds before reconciliation', () => {
+    expect(
+      mutationResultExceedsCheapBoundsV1({
+        actions: [
+          {
+            afterContent: 'x'.repeat(
+              FILESYSTEM_RESULT_CONTENT_MAX_BYTES + 1,
+            ),
+          },
+        ],
+        freshCapabilities: [],
+      }),
+    ).toBe(true)
+    const halfAggregate = Math.floor(
+      FILESYSTEM_RESULT_AGGREGATE_CONTENT_MAX_BYTES / 2,
+    )
+    expect(
+      mutationResultExceedsCheapBoundsV1({
+        actions: [
+          { afterContent: 'a'.repeat(halfAggregate) },
+          { afterContent: 'b'.repeat(halfAggregate + 1) },
+        ],
+        freshCapabilities: [],
+      }),
+    ).toBe(true)
+    expect(
+      mutationResultExceedsCheapBoundsV1({
+        actions: new Array(FILESYSTEM_RESULT_MAX_ACTIONS + 1).fill({}),
+        freshCapabilities: [],
+      }),
+    ).toBe(true)
+  })
+
+  it('rejects duplicate capability tokens during action-anchor reconciliation', () => {
+    const afterContent = 'same bytes\n'
+    const afterHash = getExactContentHash(afterContent)
+    const contentHash = getContentHash(afterContent)
+    const receipt = {
+      ...portableReceipt,
+      workspaceRevision: 7,
+      workspaceSnapshotId: 'snapshot-7',
+      actions: [
+        { ...portableReceipt.actions[0], afterHash },
+        {
+          ...portableReceipt.actions[0],
+          actionId: 'action-2',
+          index: 1,
+          path: 'src/b.ts',
+          afterHash,
+        },
+      ],
+      finalHashes: { 'src/a.ts': afterHash, 'src/b.ts': afterHash },
+    }
+    const token = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: 2,
+      hash: contentHash,
+      scope: { projectId: '/project', path: 'src/a.ts', runId: 'run-1' },
+    })
+    const capability = {
+      kind: 'whole_file' as const,
+      version: 1 as const,
+      token,
+      snapshot: {
+        kind: 'file_snapshot' as const,
+        version: 1 as const,
+        canonicalPath: '/project/src/a.ts',
+        contentHash: afterHash,
+        sizeBytes: Buffer.byteLength(afterContent),
+        encoding: 'utf8' as const,
+        readGeneration: 1,
+      },
+    }
+    const anchor = {
+      startLine: 1,
+      endLine: 2,
+      contentHash,
+      readCapability: token,
+    }
+    const handlerResult = buildFileMutationResultFromReceiptV1(
+      receipt,
+      [],
+      [capability],
+      new Map([[0, afterContent], [1, afterContent]]),
+      new Map([[0, anchor], [1, anchor]]),
+    )
+    const reconciled = reconcileFileMutationResultV1({
+      lifecycle: {
+        kind: 'tool_lifecycle',
+        version: 1,
+        callId: 'call-1',
+        sequence: 2,
+        state: 'succeeded',
+      },
+      operationId: 'operation-1',
+      handlerResult,
+      receipt,
+      capabilityScope: { projectId: '/project', runId: 'run-1' },
+    })
+
+    expect(reconciled.mutation.actions[0]?.editAnchor).toEqual(anchor)
+    expect(reconciled.mutation.actions[1]?.editAnchor).toBeUndefined()
+    expect(reconciled.mutation.freshCapabilities).toEqual([capability])
   })
 
   it('derives partial, rolled-back, and rollback-incomplete action truth', () => {

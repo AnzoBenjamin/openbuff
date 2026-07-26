@@ -1,4 +1,14 @@
-import { getContentHash } from '@codebuff/common/util/content-hash'
+import {
+  fileMutationResultV1Schema,
+  getConfirmedAppliedActionsV1,
+} from '@codebuff/common/tools/results/filesystem'
+import {
+  decodeReadCapabilityToken,
+  getContentHash,
+  getExactContentHash,
+  normalizeLineEndings,
+  readCapabilityMatchesScope,
+} from '@codebuff/common/util/content-hash'
 
 import {
   clearEditRereadRequirement,
@@ -9,8 +19,19 @@ import type { FileProcessingState } from './write-file'
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { ToolName } from '@codebuff/common/tools/constants'
 
+type ConfirmedPostEditAnchor = {
+  startLine: number
+  endLine: number
+  contentHash: string
+  readCapability: string
+}
+
 type CoordinatedApplication<T extends ToolName> =
-  | { status: 'applied'; output: CodebuffToolOutput<T> }
+  | {
+      status: 'applied'
+      output: CodebuffToolOutput<T>
+      confirmedAnchorsByPath: ReadonlyMap<string, ConfirmedPostEditAnchor>
+    }
   | { status: 'rejected'; output: CodebuffToolOutput<T> }
   | { status: 'threw'; error: unknown }
 
@@ -38,52 +59,104 @@ function hasExplicitError(value: unknown, depth = 0): boolean {
   )
 }
 
-function hasPositiveApplicationEvidence(
+function getPositiveApplicationEvidence(
   value: unknown,
   paths: ReadonlySet<string>,
+  projectId: string,
+  runId: string,
+  wholeFileContentByPath?: ReadonlyMap<string, string>,
   depth = 0,
-): boolean {
-  if (depth > 6 || value === null || value === undefined) return false
+): ReadonlyMap<string, ConfirmedPostEditAnchor> | null {
+  if (depth > 6 || value === null || value === undefined) return null
   if (Array.isArray(value)) {
-    return value.some((item) =>
-      hasPositiveApplicationEvidence(item, paths, depth + 1),
-    )
+    for (const item of value) {
+      const evidence = getPositiveApplicationEvidence(
+        item,
+        paths,
+        projectId,
+        runId,
+        wholeFileContentByPath,
+        depth + 1,
+      )
+      if (evidence) return evidence
+    }
+    return null
   }
-  if (typeof value !== 'object') return false
-  const record = value as Record<string, unknown>
-  if (
-    record.kind === 'file_mutation_result' &&
-    (record.outcome === 'applied' ||
-      record.outcome === 'partial' ||
-      record.outcome === 'rollback_incomplete') &&
-    record.authorityTier !== null &&
-    Array.isArray(record.actions)
-  ) {
+  const parsed = fileMutationResultV1Schema.safeParse(value)
+  if (parsed.success) {
+    if (
+      parsed.data.outcome !== 'applied' ||
+      parsed.data.authorityReceipt?.status !== 'committed'
+    ) {
+      return null
+    }
+    const confirmedActions = getConfirmedAppliedActionsV1(parsed.data)
     const confirmedPaths = new Set<string>()
-    for (const action of record.actions) {
-      if (
-        !action ||
-        typeof action !== 'object' ||
-        (action as Record<string, unknown>).outcome !== 'applied'
-      ) {
-        continue
+    const confirmedAnchorsByPath = new Map<string, ConfirmedPostEditAnchor>()
+    for (const action of confirmedActions) {
+      confirmedPaths.add(action.path)
+      if (action.action === 'move' && action.destinationPath) {
+        confirmedPaths.add(action.destinationPath)
       }
-      const actionRecord = action as Record<string, unknown>
-      if (typeof actionRecord.path === 'string') {
-        confirmedPaths.add(actionRecord.path)
-      }
+      const targetPath = action.destinationPath ?? action.path
+      const actionRecord = action as unknown as Record<string, unknown>
+      const anchor = actionRecord.editAnchor
+      if (!anchor || typeof anchor !== 'object' || Array.isArray(anchor)) continue
+      const record = anchor as Record<string, unknown>
+      const content = wholeFileContentByPath?.get(targetPath)
+      const readCapability = record.readCapability
+      const decoded =
+        typeof readCapability === 'string'
+          ? decodeReadCapabilityToken(readCapability)
+          : null
       if (
-        actionRecord.action === 'move' &&
-        typeof actionRecord.destinationPath === 'string'
+        typeof content === 'string' &&
+        typeof readCapability === 'string' &&
+        record.startLine === 1 &&
+        record.endLine === normalizeLineEndings(content).split('\n').length &&
+        record.contentHash === getContentHash(content) &&
+        decoded !== null &&
+        typeof decoded !== 'string' &&
+        readCapabilityMatchesScope(decoded, { projectId, path: targetPath, runId }) &&
+        decoded.startLine === record.startLine &&
+        decoded.endLine === record.endLine &&
+        decoded.hash === record.contentHash
       ) {
-        confirmedPaths.add(actionRecord.destinationPath)
+        confirmedAnchorsByPath.set(targetPath, {
+          startLine: 1,
+          endLine: record.endLine,
+          contentHash: record.contentHash,
+          readCapability,
+        })
       }
     }
-    return [...paths].every((path) => confirmedPaths.has(path))
+    if (![...paths].every((path) => confirmedPaths.has(path))) return null
+    for (const [path, content] of wholeFileContentByPath ?? []) {
+      const matchingAction = confirmedActions.find(
+        (action) => (action.destinationPath ?? action.path) === path,
+      )
+      if (
+        !matchingAction ||
+        matchingAction.afterHash !== getExactContentHash(content)
+      ) {
+        return null
+      }
+    }
+    return confirmedAnchorsByPath
   }
-  return Object.values(record).some((nested) =>
-    hasPositiveApplicationEvidence(nested, paths, depth + 1),
-  )
+  if (typeof value !== 'object') return null
+  for (const nested of Object.values(value as Record<string, unknown>)) {
+    const evidence = getPositiveApplicationEvidence(
+      nested,
+      paths,
+      projectId,
+      runId,
+      wholeFileContentByPath,
+      depth + 1,
+    )
+    if (evidence) return evidence
+  }
+  return null
 }
 
 function unconfirmedApplicationOutput<T extends ToolName>(
@@ -188,21 +261,31 @@ export function commitAppliedEditPaths(params: {
   fileProcessingState: FileProcessingState
   paths: Iterable<string>
   wholeFileContentByPath?: ReadonlyMap<string, string>
+  confirmedAnchorsByPath?: ReadonlyMap<string, ConfirmedPostEditAnchor>
 }): void {
-  const { fileProcessingState, paths, wholeFileContentByPath } = params
+  const {
+    fileProcessingState,
+    paths,
+    wholeFileContentByPath,
+    confirmedAnchorsByPath,
+  } = params
   for (const path of new Set(paths)) {
     if (!path) continue
     clearEditRereadRequirement(fileProcessingState, path)
     const wholeFileContent = wholeFileContentByPath?.get(path)
+    const confirmedAnchor = confirmedAnchorsByPath?.get(path)
     if (
       typeof wholeFileContent === 'string' &&
+      confirmedAnchor &&
       fileProcessingState.strictReadBeforeEdit
     ) {
       fileProcessingState.readAuthorizationsByPath ??= {}
       fileProcessingState.readAuthorizationHashesByPath ??= {}
+      fileProcessingState.confirmedPostEditAnchorsByPath ??= {}
       fileProcessingState.readAuthorizationsByPath[path] = true
       fileProcessingState.readAuthorizationHashesByPath[path] =
-        getContentHash(wholeFileContent)
+        confirmedAnchor.contentHash
+      fileProcessingState.confirmedPostEditAnchorsByPath[path] = confirmedAnchor
     }
   }
 }
@@ -211,6 +294,8 @@ export async function coordinateEditApplication<T extends ToolName>(params: {
   toolName: T
   fileProcessingState: FileProcessingState
   paths: Iterable<string>
+  projectId: string
+  runId: string
   apply: () => Promise<CodebuffToolOutput<T>>
   wholeFileContentByPath?: ReadonlyMap<string, string>
   onApplied?: () => void
@@ -281,7 +366,14 @@ export async function coordinateEditApplication<T extends ToolName>(params: {
     return { status: 'rejected', output }
   }
 
-  if (!hasPositiveApplicationEvidence(output, confirmationPaths)) {
+  const confirmedAnchorsByPath = getPositiveApplicationEvidence(
+    output,
+    confirmationPaths,
+    params.projectId,
+    params.runId,
+    params.wholeFileContentByPath,
+  )
+  if (!confirmedAnchorsByPath) {
     invalidatePreparedEditPaths({
       fileProcessingState: params.fileProcessingState,
       paths,
@@ -298,7 +390,8 @@ export async function coordinateEditApplication<T extends ToolName>(params: {
     fileProcessingState: params.fileProcessingState,
     paths,
     wholeFileContentByPath: params.wholeFileContentByPath,
+    confirmedAnchorsByPath,
   })
   params.onApplied?.()
-  return { status: 'applied', output }
+  return { status: 'applied', output, confirmedAnchorsByPath }
 }

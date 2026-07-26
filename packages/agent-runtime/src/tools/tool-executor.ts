@@ -10,6 +10,7 @@ import {
   buildNativeToolResultErrorOutputV1,
   buildReadFilesResultV1,
   fileMutationResultV1Schema,
+  mutationResultExceedsCheapBoundsV1,
   reconcileFileMutationResultV1,
   type ReadFilesItemV1,
 } from '@codebuff/common/tools/results/filesystem'
@@ -186,9 +187,26 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
   if (canonicalHandlerFailure) {
     return { valid: true, output: params.output, issues: [] }
   }
-  const parsed = toolParams[params.toolName].outputSchema.safeParse(
-    params.output,
-  )
+  const oversizedMutationResult =
+    getToolMetadata(params.toolName).resultContract === 'mutation_v1' &&
+    params.output.some(
+      (part) =>
+        part.type === 'json' && mutationResultExceedsCheapBoundsV1(part.value),
+    )
+  if (oversizedMutationResult) {
+    return {
+      valid: false,
+      output: buildNativeToolResultErrorOutputV1({
+        toolName: params.toolName,
+        callId: params.toolCallId,
+        issueCount: 1,
+        message:
+          'The native mutation result exceeded bounded action, capability, or content limits. No mutation authority was accepted.',
+      }) as CodebuffToolOutput<T>,
+      issues: [{ message: 'mutation result exceeded cheap input bounds' }],
+    }
+  }
+  const parsed = toolParams[params.toolName].outputSchema.safeParse(params.output)
   if (parsed.success) {
     if (getToolMetadata(params.toolName).resultContract === 'mutation_v1') {
       const mutationPart = params.output.find(
@@ -2057,7 +2075,46 @@ export async function executeToolCall<T extends ToolName>(
           signal: params.signal,
         })
         canonicalReceipt = clientToolResult.canonicalReceipt
-        return clientToolResult.output as CodebuffToolOutput<T>
+        const clientOutput = clientToolResult.output as CodebuffToolOutput<T>
+        if (getToolMetadata(toolName).resultContract !== 'mutation_v1') {
+          return clientOutput
+        }
+        const mutationPart = clientOutput.find(
+          (part) => part.type === 'json' && part.value,
+        )
+        const receiptRecord =
+          canonicalReceipt && typeof canonicalReceipt === 'object'
+            ? (canonicalReceipt as Record<string, unknown>)
+            : undefined
+        const mutationRecord =
+          mutationPart?.type === 'json' &&
+          mutationPart.value &&
+          typeof mutationPart.value === 'object'
+            ? (mutationPart.value as Record<string, unknown>)
+            : undefined
+        const operationId =
+          typeof mutationRecord?.operationId === 'string'
+            ? mutationRecord.operationId
+            : typeof receiptRecord?.operationId === 'string'
+              ? receiptRecord.operationId
+              : `${clientToolCall.toolCallId}:unconfirmed`
+        const reconciled = reconcileFileMutationResultV1({
+          lifecycle: {
+            kind: 'tool_lifecycle',
+            version: 1,
+            callId: clientToolCall.toolCallId,
+            sequence: 0,
+            state: 'succeeded',
+          },
+          operationId,
+          handlerResult: mutationRecord,
+          receipt: canonicalReceipt,
+          capabilityScope: {
+            projectId: params.fileContext.projectRoot,
+            runId: params.runId,
+          },
+        })
+        return jsonToolResult(reconciled.mutation) as CodebuffToolOutput<T>
       }) as any,
     }),
   )

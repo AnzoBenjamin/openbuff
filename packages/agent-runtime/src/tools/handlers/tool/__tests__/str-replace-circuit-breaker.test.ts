@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test'
+import { getExactContentHash } from '@codebuff/common/util/content-hash'
 
+import { mockFileContext } from '../../../../__tests__/test-utils'
 import { handleStrReplace } from '../str-replace'
 import { getFileProcessingValues } from '../write-file'
 import {
@@ -28,16 +30,145 @@ function makeStrReplaceCall(
   } as unknown as CodebuffToolCall<'str_replace'>
 }
 
+const applicationScope = { projectId: '/project', runId: 'circuit-breaker-run' }
+const handlerAuthority = {
+  fileContext: {
+    ...mockFileContext,
+    projectRoot: applicationScope.projectId,
+  },
+  runId: applicationScope.runId,
+}
+
 const noopWriteToClient = (_chunk: string) => {}
-const confirmedRequestClientToolCall = async (toolCall: any) =>
-  [
-    {
-      type: 'json' as const,
-      value: { file: toolCall.input.path, message: 'client confirmed edit' },
-    },
-  ] as CodebuffToolOutput<'str_replace'>
+const confirmedRequestClientToolCall =
+  (expectedFinalContentByPath: Record<string, string>) =>
+  async (toolCall: any) => {
+    const requestedChanges = Array.isArray(toolCall.input.changes)
+      ? toolCall.input.changes
+      : [toolCall.input]
+    const actions = requestedChanges.map(
+      (change: { path: string; content: string }, index: number) => {
+        const finalContent = expectedFinalContentByPath[change.path] ?? ''
+        const afterHash = getExactContentHash(finalContent)
+        const editAnchor = {
+          startLine: 1,
+          endLine: finalContent.split('\n').length,
+          contentHash: getContentHash(finalContent),
+          readCapability: encodeReadCapabilityToken({
+            startLine: 1,
+            endLine: finalContent.split('\n').length,
+            hash: getContentHash(finalContent),
+            scope: { ...applicationScope, path: change.path },
+          }),
+        }
+
+        return {
+          actionId: `circuit-breaker-action-${index}`,
+          index,
+          action: 'update' as const,
+          path: change.path,
+          outcome: 'applied' as const,
+          beforeHash: 'before',
+          afterHash,
+          afterContent: finalContent,
+          editAnchor,
+        }
+      },
+    )
+    const receipt = {
+      kind: 'commit_receipt' as const,
+      version: 1 as const,
+      receiptId: 'circuit-breaker-receipt',
+      operationId: 'circuit-breaker-operation',
+      callId: toolCall.toolCallId,
+      authorityTier: 'portable_path' as const,
+      status: 'committed' as const,
+      actions: actions.map((action: (typeof actions)[number]) => ({
+        actionId: action.actionId,
+        index: action.index,
+        action: action.action,
+        path: action.path,
+        status: 'committed' as const,
+        beforeHash: action.beforeHash,
+        afterHash: action.afterHash,
+        afterContent: action.afterContent,
+        editAnchor: action.editAnchor,
+      })),
+      finalHashes: Object.fromEntries(
+        actions.map((action: (typeof actions)[number]) => [
+          action.path,
+          action.afterHash,
+        ]),
+      ),
+    }
+
+    return [
+      {
+        type: 'json' as const,
+        value: {
+          kind: 'file_mutation_result' as const,
+          version: 1 as const,
+          operationId: 'circuit-breaker-operation',
+          outcome: 'applied' as const,
+          actions,
+          authorityTier: 'portable_path' as const,
+          receiptId: 'circuit-breaker-receipt',
+          authorityReceipt: receipt,
+          message: 'client confirmed edit',
+          errors: [],
+          freshCapabilities: [],
+        },
+      },
+    ] as CodebuffToolOutput<'str_replace'>
+  }
+
+const unreachableRequestClientToolCall = confirmedRequestClientToolCall({})
 
 describe('handleStrReplace circuit breaker (Fix C)', () => {
+  it('does not mint reusable authority when strict internal auto-reread fails', async () => {
+    const path = 'strict-auto-reread-failure.ts'
+    const fileContent = 'const x = 1\n'
+    const fileProcessingState = getFileProcessingValues({
+      strictReadBeforeEdit: true,
+    })
+
+    const result = await handleStrReplace({
+      previousToolCallFinished: Promise.resolve(),
+      ...handlerAuthority,
+      toolCall: makeStrReplaceCall({
+        path,
+        atomic: false,
+        replacements: [
+          {
+            oldString: 'const missing = 1',
+            newString: 'const missing = 2',
+            allowMultiple: false,
+          },
+        ],
+      }),
+      fileProcessingState,
+      logger: silentLogger,
+      requestClientToolCall: unreachableRequestClientToolCall,
+      requestOptionalFile: async () => fileContent,
+      writeToClient: noopWriteToClient,
+    })
+
+    const value = result.output[0]?.value as
+      | {
+          basedOnRead?: string
+          errorMessage?: string
+          recovery?: { basedOnRead?: string; tool?: string }
+        }
+      | undefined
+    const serializedResult = JSON.stringify(result.output)
+    expect(value?.errorMessage).toContain('complete read')
+    expect(value?.errorMessage).toContain('read_files')
+    expect(value).not.toHaveProperty('basedOnRead')
+    expect(value?.recovery).not.toHaveProperty('basedOnRead')
+    expect(serializedResult).not.toContain('cap.v3.')
+    expect(serializedResult).not.toContain('basedOnRead')
+  })
+
   it('returns a circuit-breaker errorMessage when the per-path failure budget reaches the limit', async () => {
     const path = 'blocked.ts'
     // STR_REPLACE_MAX_CONSECUTIVE_FAILURES is 5 in source. Pre-set the counter
@@ -50,6 +181,7 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
 
     const result = await handleStrReplace({
       previousToolCallFinished: Promise.resolve(),
+      ...handlerAuthority,
       toolCall: makeStrReplaceCall({
         path,
         atomic: false,
@@ -63,7 +195,7 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
       }),
       fileProcessingState,
       logger: silentLogger,
-      requestClientToolCall: confirmedRequestClientToolCall,
+      requestClientToolCall: unreachableRequestClientToolCall,
       // Never reached because the breaker short-circuits first.
       requestOptionalFile: async () => null,
       writeToClient: noopWriteToClient,
@@ -88,6 +220,7 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
 
     const result = await handleStrReplace({
       previousToolCallFinished: Promise.resolve(),
+      ...handlerAuthority,
       toolCall: makeStrReplaceCall({
         path,
         atomic: false,
@@ -101,7 +234,7 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
       }),
       fileProcessingState,
       logger: silentLogger,
-      requestClientToolCall: confirmedRequestClientToolCall,
+      requestClientToolCall: unreachableRequestClientToolCall,
       // No file on disk -> processStrReplace reports "does not exist", which is
       // NOT the circuit-breaker message.
       requestOptionalFile: async () => null,
@@ -135,10 +268,11 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
       startLine: 1,
       endLine: 2,
       hash: getContentHash(fileContent),
-      scope: { projectId: '', path, runId: '' },
+      scope: { ...applicationScope, path },
     })
     const result = await handleStrReplace({
       previousToolCallFinished: Promise.resolve(),
+      ...handlerAuthority,
       toolCall: makeStrReplaceCall({
         path,
         atomic: false,
@@ -153,7 +287,7 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
       }),
       fileProcessingState,
       logger: silentLogger,
-      requestClientToolCall: confirmedRequestClientToolCall,
+      requestClientToolCall: unreachableRequestClientToolCall,
       requestOptionalFile: async () => fileContent,
       writeToClient: noopWriteToClient,
     })
@@ -191,13 +325,14 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
       startLine: 1,
       endLine: 2,
       hash: getContentHash(fileContent),
-      scope: { projectId: '', path, runId: '' },
+      scope: { ...applicationScope, path },
     })
     // An oldString that does NOT exist in the file forces processStrReplace to
     // return a hard error, which increments the counter. The basedOnRead is
     // valid (fresh read) but cannot rescue a wrong oldString.
     const result = await handleStrReplace({
       previousToolCallFinished: Promise.resolve(),
+      ...handlerAuthority,
       toolCall: makeStrReplaceCall({
         path,
         atomic: false,
@@ -212,7 +347,7 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
       }),
       fileProcessingState,
       logger: silentLogger,
-      requestClientToolCall: confirmedRequestClientToolCall,
+      requestClientToolCall: unreachableRequestClientToolCall,
       requestOptionalFile: async () => fileContent,
       writeToClient: noopWriteToClient,
     })
@@ -240,10 +375,11 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
       startLine: 1,
       endLine: 2,
       hash: getContentHash(fileContent),
-      scope: { projectId: '', path, runId: '' },
+      scope: { ...applicationScope, path },
     })
     const result2 = await handleStrReplace({
       previousToolCallFinished: Promise.resolve(),
+      ...handlerAuthority,
       toolCall: makeStrReplaceCall({
         path,
         atomic: false,
@@ -258,7 +394,7 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
       }),
       fileProcessingState,
       logger: silentLogger,
-      requestClientToolCall: confirmedRequestClientToolCall,
+      requestClientToolCall: unreachableRequestClientToolCall,
       requestOptionalFile: async () => fileContent,
       writeToClient: noopWriteToClient,
     })
@@ -288,6 +424,7 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
 
     const result = await handleStrReplace({
       previousToolCallFinished: Promise.resolve(),
+      ...handlerAuthority,
       toolCall: makeStrReplaceCall({
         path,
         atomic: false,
@@ -301,7 +438,9 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
       }),
       fileProcessingState,
       logger: silentLogger,
-      requestClientToolCall: confirmedRequestClientToolCall,
+      requestClientToolCall: confirmedRequestClientToolCall({
+        [path]: 'const x = 2\nconst y = 2\n',
+      }),
       requestOptionalFile: async () => fileContent,
       writeToClient: noopWriteToClient,
     })
@@ -326,6 +465,7 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
 
     const result = await handleStrReplace({
       previousToolCallFinished: Promise.resolve(),
+      ...handlerAuthority,
       toolCall: makeStrReplaceCall({
         path,
         atomic: false,
@@ -344,7 +484,9 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
       }),
       fileProcessingState,
       logger: silentLogger,
-      requestClientToolCall: confirmedRequestClientToolCall,
+      requestClientToolCall: confirmedRequestClientToolCall({
+        [path]: 'const x = 2\nconst y = 2\n',
+      }),
       requestOptionalFile: async () => fileContent,
       writeToClient: noopWriteToClient,
     })
