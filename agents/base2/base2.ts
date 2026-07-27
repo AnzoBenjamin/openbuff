@@ -5174,7 +5174,7 @@ ${specialistRoutingSection}
 
         const sections: string[] = [`Current phase: ${state.currentPhase}`]
         sections.push(
-          `Gate status: phase=${state.currentPhase}; validation hooks ran=${state.lastValidationSummary ? 'yes' : 'no'}; this is a durable snapshot captured at turn start; the validation/reviewer gate runs inline and locally when you end your turn (it is not a backend/async job and does not run between turns on its own), so do not infer progress or predict when it will pass — just finish your work and let it run.`,
+          `Gate status: phase=${state.currentPhase}; validation hooks ran=${state.lastValidationSummary ? 'yes' : 'no'}; this is a durable snapshot captured at turn start; the validation/reviewer gate runs inline and locally when you end your turn (it is not a backend/async job and does not run between turns on its own), so do not infer progress or predict when it will pass — just finish your work and let it run; and NEVER tell the user the reviewer/validation "is running in the background" or is running asynchronously — you have not started it, it is not a background job, and it must never be described as in-flight or pending-after-turn, so just finish and stop.`,
         )
         if (
           typeof state.gateProgressLine === 'string' &&

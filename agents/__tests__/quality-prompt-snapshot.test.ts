@@ -26,6 +26,9 @@ import {
 describe('shared craftsmanship prompt sections', () => {
   test('qualitySection is byte-stable (snapshot)', () => {
     expect(qualitySection).toMatchSnapshot()
+    // Guard that the byte-frozen craftsmanship section was not polluted by
+    // gate-awareness wording (which belongs only in gateAwarenessSection).
+    expect(qualitySection).not.toContain('background job')
   })
 
   test('qualitySection contains the required craftsmanship headings', () => {
@@ -167,6 +170,17 @@ describe('shared craftsmanship prompt sections', () => {
     expect(gateAwarenessSection).toContain(
       'authoritative over conversational memory',
     )
+    // 5) Anti-background-narration: the gate runs inline the moment the turn
+    // ends, so the model must never describe it as a background/async job,
+    // including in gate-disabled modes where no reviewer runs at all.
+    expect(gateAwarenessSection).toContain(
+      'Never narrate the gate as a background job',
+    )
+    expect(gateAwarenessSection).toContain('is running in the background')
+    expect(gateAwarenessSection).toContain(
+      'runs inline the moment your turn ends',
+    )
+    expect(gateAwarenessSection).toContain('gate-disabled modes')
   })
 
   test('securityReviewSection contains the required security-review topics (not byte-frozen)', () => {
