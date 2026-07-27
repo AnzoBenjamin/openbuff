@@ -5723,3 +5723,171 @@ describe('base2 COMMIT ANYWAY commit-scope bypass publisher', () => {
     }
   })
 })
+
+describe('base2 reviewer repair budget cap', () => {
+  test('crossing MAX_REVIEWER_REPAIR_ROUNDS blocks with an exhaustion message', () => {
+    // Seed reviewerRepairRoundCount at MAX_REVIEWER_REPAIR_ROUNDS (=3) so the
+    // very next blocking reviewer result crosses the cap (3 -> 4 > 3). The
+    // loop must yield the exhaustion add_message and break out (currentPhase
+    // blocked) instead of spawning yet another repair round. Driving four
+    // full rounds through the generator is infeasible in a unit test, so the
+    // seed-count approach from the requirements is used.
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2',
+      base2ActiveWork: { reviewerRepairRoundCount: 3 },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Make the requested change now please',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+        .value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    const maybePinned = gen.next().value
+    if (maybePinned !== 'STEP') {
+      expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+    }
+    expect(
+      gen.next({
+        stepsComplete: true,
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    const postValidationStatus = gen.next({
+      toolResult: [{ type: 'json', value: [] }],
+    } as any).value
+    expect(postValidationStatus).toMatchObject({ toolName: 'git_status' })
+    const reviewCall = gen.next({
+      toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+    } as any).value
+    expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+    const exhausted = gen.next(
+      attestedReviewerResult(reviewCall, 'BLOCKING', [
+        'Fix the persistent edge case.',
+      ]) as any,
+    )
+
+    expect(exhausted.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect((exhausted.value as any).input.content).toContain(
+      'automated repair budget exhausted',
+    )
+    expect((agentState as any).base2ActiveWork.currentPhase).toBe('blocked')
+    expect(
+      (agentState as any).base2ActiveWork.nextRequiredAction,
+    ).toContain('repair budget exhausted')
+    // The open findings are still surfaced verbatim for inspection.
+    expect((agentState as any).base2ActiveWork.openReviewerBlockers).toEqual([
+      'BLOCKING: Fix the persistent edge case.',
+    ])
+    // Exhaustion breaks out of the loop; it does not spawn another repair.
+    expect(gen.next().done).toBe(true)
+  })
+})
+
+describe('base2 content-based reviewer finding correlation', () => {
+  test('security-reviewer findings correlate to their record by content, not positional index', () => {
+    // The security-reviewer blocking path builds openReviewerFindings from the
+    // synthesized blocker strings. collectReviewerBlockers emits a blocker for
+    // a plain string finding (which has NO finding record) alongside a blocker
+    // for an object finding (which does), so the two arrays no longer line up
+    // positionally. Positional records[index] correlation would attach the
+    // object finding's id/text to the plain-string blocker; content-based
+    // correlation must attach each record to the blocker whose text/id it
+    // actually matches, and the record-less blocker must fall back to an
+    // RF-... id with its own blocker text.
+    const base2 = createBase2('default')
+    const agentState = { agentId: 'base2' }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Update sdk/src/policy/terminal-command-policy.ts.',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+        .value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    expect(gen.next().value).toBe('STEP')
+    expect(
+      gen.next({
+        stepsComplete: true,
+        toolResult: [
+          {
+            type: 'json',
+            value: editReceipt('sdk/src/policy/terminal-command-policy.ts'),
+          },
+        ],
+      } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    const securityReview = gen.next({
+      toolResult: [
+        {
+          type: 'json',
+          value: { status: ' M sdk/src/policy/terminal-command-policy.ts' },
+        },
+      ],
+    } as any)
+    expect(securityReview.value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'security-reviewer' },
+    })
+    const securityPrompt = (securityReview.value as any).input.prompt as string
+    const snapshotFingerprint = securityPrompt
+      .split('Snapshot fingerprint: ')[1]
+      .split('\n')[0]
+    const blockerMessage = gen.next({
+      toolResult: [
+        {
+          type: 'json',
+          value: {
+            schemaVersion: 1,
+            verdict: 'BLOCKING',
+            snapshotFingerprint,
+            reviewedFiles: ['sdk/src/policy/terminal-command-policy.ts'],
+            // Order: a record-less string finding FIRST, then an object
+            // finding with a record. Positional records[index] would misalign
+            // the record onto the string blocker.
+            findings: [
+              'A synthesized-style finding with no id',
+              {
+                id: 'security-reviewer:containment:real',
+                summary: 'Reject nested fixture paths.',
+              },
+            ],
+            coverage: 'covered',
+            dimensions: {},
+            requirementCoverage: [],
+          },
+        },
+      ],
+    } as any)
+
+    expect(blockerMessage.value).toMatchObject({ toolName: 'add_message' })
+    const findings = (agentState as any).base2ActiveWork
+      .openReviewerFindings as Array<{ id: string; text: string }>
+    expect(findings).toHaveLength(2)
+    // Record-less blocker falls back to an RF-... id and keeps its own text.
+    expect(findings[0].id).toMatch(/^RF-/)
+    expect(findings[0].text).toBe(
+      'BLOCKING: A synthesized-style finding with no id',
+    )
+    // The object-finding blocker correlates by [id] to its real record.
+    expect(findings[1].id).toBe('security-reviewer:containment:real')
+    expect(findings[1].text).toBe('Reject nested fixture paths.')
+  })
+})

@@ -1553,17 +1553,19 @@ ${specialistRoutingSection}
             const records = collectReviewerFindingRecordsInline(securityToolResult)
             activeWorkState.openReviewerBlockers = securityBlockers
             activeWorkState.openReviewerFindings = securityBlockers.map(
-              (text: string, index: number) => ({
-                id:
-                  records[index]?.id ?? buildReviewerFindingId(text, index),
-                gateId: `security-reviewer:${securitySnapshotFingerprint}`,
-                text: records[index]?.text ?? text,
-                status: 'open' as const,
-                files: currentPendingGateFiles,
-                snapshotFingerprint: securitySnapshotFingerprint,
-                reviewer: 'security-reviewer' as const,
-                createdAt: new Date().toISOString(),
-              }),
+              (text: string, index: number) => {
+                const record = correlateReviewerFindingRecord(text, records)
+                return {
+                  id: record?.id ?? buildReviewerFindingId(text, index),
+                  gateId: `security-reviewer:${securitySnapshotFingerprint}`,
+                  text: record?.text ?? text,
+                  status: 'open' as const,
+                  files: currentPendingGateFiles,
+                  snapshotFingerprint: securitySnapshotFingerprint,
+                  reviewer: 'security-reviewer' as const,
+                  createdAt: new Date().toISOString(),
+                }
+              },
             )
             activeWorkState.requiredReviewerRevalidation = 'security-reviewer'
             activeWorkState.currentPhase = 'repair_loop'
@@ -1975,17 +1977,22 @@ ${specialistRoutingSection}
                     activeWorkState.currentPhase = 'blocked'
                     activeWorkState.openReviewerBlockers = blockers
                     activeWorkState.openReviewerFindings = blockers.map(
-                      (text: string, index: number) => ({
-                        id:
-                          records[index]?.id ??
-                          buildReviewerFindingId(text, index),
-                        gateId: `${agentType}:${expectedSnapshotId}`,
-                        text: records[index]?.text ?? text,
-                        status: 'open' as const,
-                        files: currentPendingGateFiles,
-                        snapshotFingerprint: expectedSnapshotId,
-                        createdAt: new Date().toISOString(),
-                      }),
+                      (text: string, index: number) => {
+                        const record = correlateReviewerFindingRecord(
+                          text,
+                          records,
+                        )
+                        return {
+                          id:
+                            record?.id ?? buildReviewerFindingId(text, index),
+                          gateId: `${agentType}:${expectedSnapshotId}`,
+                          text: record?.text ?? text,
+                          status: 'open' as const,
+                          files: currentPendingGateFiles,
+                          snapshotFingerprint: expectedSnapshotId,
+                          createdAt: new Date().toISOString(),
+                        }
+                      },
                     )
                     activeWorkState.nextRequiredAction = `Resolve ${agentType} findings before validation and finalization.`
                     activeWorkState.latestWorkSummary = `${agentType} blocked the current change snapshot.`
@@ -4733,6 +4740,33 @@ ${specialistRoutingSection}
         return collectStructuredReviewerOutputs(toolResult).flatMap(
           (entry) => entry.findingRecords ?? [],
         )
+      }
+
+      // Correlate a synthesized blocker string to the reviewer-supplied
+      // finding record it came from by CONTENT, never by positional index.
+      // collectReviewerBlockers can emit synthesized blockers (coverage
+      // missing, dimension-block, requirement missing/uncertain) that have no
+      // corresponding finding record and appear in a different order/count
+      // than collectReviewerFindingRecordsInline returns, so records[index]
+      // could attach the wrong id/text. Prefer an explicit `[id]` match, then
+      // fall back to an exact finding-text substring match. Self-contained
+      // inline helper (handleSteps is serialized via .toString() +
+      // new Function(...), so it must not reference module-scope imports).
+      function correlateReviewerFindingRecord(
+        blockerText: string,
+        records: Array<{ id: string; text: string }>,
+      ): { id: string; text: string } | undefined {
+        for (const record of records) {
+          if (record.id && blockerText.includes(`[${record.id}]`)) {
+            return record
+          }
+        }
+        for (const record of records) {
+          if (record.text && blockerText.includes(record.text)) {
+            return record
+          }
+        }
+        return undefined
       }
 
       function isStaleSnapshotReviewerResult(toolResult: unknown): boolean {
