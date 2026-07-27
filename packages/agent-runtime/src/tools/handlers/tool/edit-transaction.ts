@@ -239,6 +239,7 @@ export const handleEditTransaction = (async (
   const hasCapabilityBearingEdit = edits.some(
     (edit) =>
       (edit.type === 'replace_range' && Boolean(edit.readCapability)) ||
+      (edit.type === 'rewrite_symbol' && Boolean(edit.readCapability)) ||
       (edit.type === 'write_file' && Boolean(edit.basedOnRead)) ||
       (edit.type === 'str_replace' &&
         edit.replacements.some((replacement) => Boolean(replacement.basedOnRead))),
@@ -253,6 +254,7 @@ export const handleEditTransaction = (async (
               'edit_transaction blocked: capability-bearing edits require a nonempty authoritative projectId and runId.',
             failures: edits.flatMap((edit, editIndex) =>
               (edit.type === 'replace_range' && Boolean(edit.readCapability)) ||
+              (edit.type === 'rewrite_symbol' && Boolean(edit.readCapability)) ||
               (edit.type === 'write_file' && Boolean(edit.basedOnRead)) ||
               (edit.type === 'str_replace' &&
                 edit.replacements.some((replacement) =>
@@ -551,16 +553,19 @@ export const handleEditTransaction = (async (
         requireFreshReadCapabilityForPaths.add(edit.path)
         return
       }
-      const hasRangeReadCapability =
-        edit.type === 'replace_range' && Boolean(edit.readCapability)
-      if (hasRangeReadCapability) {
+      const hasScopedReadCapability =
+        (edit.type === 'replace_range' || edit.type === 'rewrite_symbol') &&
+        Boolean(edit.readCapability)
+      if (hasScopedReadCapability) {
         requireFreshReadCapabilityForPaths.add(edit.path)
         return
       }
       const rangeRecovery =
         edit.type === 'replace_range'
-          ? ` Call read_files with ranges: [{ "path": "${edit.path}", "startLine": ${edit.startLine}, "endLine": ${edit.endLine} }] and retry with only its readCapability plus newContent.`
-          : ''
+          ? ` Call read_files with ranges: [{ "path": "${edit.path}", "startLine": ${edit.startLine ?? 1}, "endLine": ${edit.endLine ?? edit.startLine ?? 1} }] and retry with only its readCapability plus newContent.`
+          : edit.type === 'rewrite_symbol'
+            ? ` Call read_files with symbols: [{ "path": "${edit.path}", "names": ["${edit.symbol}"] }] and retry with the matching slice editAnchor.readCapability.`
+            : ''
       const wholeFileRecovery = ` Call read_files with paths: ["${edit.path}"] before retrying and use the capability from that complete model-visible read.`
       failures.push({
         editIndex,
@@ -672,7 +677,7 @@ export const handleEditTransaction = (async (
       .map((failure) => failure.errorMessage)
       .join('\n')
     const requiresFreshCapability =
-      /different project, path, or agent run|Invalid basedOnRead|readCapability-covered content is stale|normalized capability metadata does not match/i.test(
+      /different project, path, or agent run|Invalid basedOnRead|readCapability-covered (?:symbol )?content is stale|normalized capability metadata does not match|readCapability does not cover the exact original symbol replacement span/i.test(
         failureText,
       )
     // Deterministic preflight failures made no writes and preserve existing

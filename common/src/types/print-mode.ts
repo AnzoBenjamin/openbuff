@@ -53,6 +53,11 @@ export const printModeToolCallSchema = z.object({
   // distinguish a "queued" write from one that is actively running but has no
   // result yet ("pending").
   queued: z.boolean().optional(),
+  // Detached background shell (process) job id assigned when this tool call
+  // launches a run_terminal_command BACKGROUND process. Lets the CLI correlate
+  // later `job_update` events (M5) to this exact tool card. Omitted for
+  // foreground tool calls that have no associated background job.
+  backgroundJobId: z.string().optional(),
 })
 export type PrintModeToolCall = z.infer<typeof printModeToolCallSchema>
 
@@ -206,6 +211,40 @@ export type PrintModeContextCompaction = z.infer<
   typeof printModeContextCompactionSchema
 >
 
+/**
+ * Live background-job update (M5). ADDITIVE, non-breaking public-contract
+ * change: this is a NEW member of the {@link printModeEventSchema}
+ * discriminated union — no existing event variant is removed, renamed, or
+ * retyped, so no consumer migration or deprecation is required.
+ *
+ * Forward-compatibility contract for `handleEvent` consumers: an exhaustive
+ * `switch`/match over `event.type` should treat unknown variants as no-ops
+ * (the SDK's own default handler only branches on `error`, and the CLI
+ * handler uses a catch-all `.otherwise`). Consumers that do not care about
+ * background-job progress can safely ignore `job_update` events entirely.
+ */
+export const printModeJobUpdateSchema = z.object({
+  type: z.literal('job_update'),
+  jobId: z.string(),
+  kind: z.enum(['process', 'agent']),
+  state: z.enum([
+    'queued',
+    'running',
+    'stopping',
+    'completed',
+    'error',
+    'stopped',
+    'lost',
+    'cancelled',
+  ]),
+  sequence: z.number(),
+  label: z.string().optional(),
+  outputDelta: z.string().optional(),
+  exitCode: z.number().nullable().optional(),
+  error: z.string().optional(),
+})
+export type PrintModeJobUpdate = z.infer<typeof printModeJobUpdateSchema>
+
 export const printModeEventSchema = z.discriminatedUnion('type', [
   printModeDownloadStatusSchema,
   printModeErrorSchema,
@@ -222,6 +261,7 @@ export const printModeEventSchema = z.discriminatedUnion('type', [
 
   printModeContextCompactionSchema,
   printModeContextWindowSchema,
+  printModeJobUpdateSchema,
   printModeReasoningDeltaSchema,
 ])
 

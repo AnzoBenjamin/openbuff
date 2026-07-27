@@ -9,16 +9,39 @@ import {
   __sweepOrphanedJobFilesForTest,
   getBackgroundJob,
   readNewJobOutput,
+  MAX_BACKGROUND_READ_BYTES,
   type BackgroundJob,
 } from '../tools/background-jobs'
-import { checkJob } from '../tools/check-job'
 import {
-  getPendingBackgroundJob,
-  upsertPendingBackgroundJob,
-} from '@codebuff/common/util/pending-background-jobs'
+  CHECK_JOB_POLL_ACCUMULATION_CAP,
+  appendBoundedCollected,
+  checkJob,
+} from '../tools/check-job'
+import { jobRegistry } from '@codebuff/common/util/job-registry'
+
+/** Flatten the unified `output` events of a checkJob result into a string. */
+function outputText(result: any): string {
+  return (result.events ?? [])
+    .filter((event: any) => event?.payload?.type === 'output')
+    .map((event: any) => event.payload.data)
+    .join('')}
 
 let counter = 0
 const tempFiles: string[] = []
+
+/** Trusted owner injected into checkJob by the run/session layer in tests. */
+const TRUSTED_OWNER = {
+  clientSessionId: 'session-1',
+  rootRunId: 'root-1',
+  parentRunId: 'parent-1',
+  parentAgentId: 'agent-1',
+}
+const FOREIGN_OWNER = {
+  clientSessionId: 'session-2',
+  rootRunId: 'root-2',
+  parentRunId: 'parent-2',
+  parentAgentId: 'agent-2',
+}
 
 function makeJob(overrides: Partial<BackgroundJob> = {}): BackgroundJob {
   counter += 1
@@ -35,6 +58,7 @@ function makeJob(overrides: Partial<BackgroundJob> = {}): BackgroundJob {
     exitCode: null,
     startedAt: 0,
     readOffset: 0,
+    owner: TRUSTED_OWNER,
     ...overrides,
   }
   __registerJobForTest(job)
@@ -92,8 +116,8 @@ describe('readNewJobOutput', () => {
 
   test('bounds each incremental file read', () => {
     const job = makeJob()
-    fs.appendFileSync(job.logFile, 'x'.repeat(100_001))
-    expect(readNewJobOutput(job)).toHaveLength(100_000)
+    fs.appendFileSync(job.logFile, 'x'.repeat(MAX_BACKGROUND_READ_BYTES + 1))
+    expect(readNewJobOutput(job)).toHaveLength(MAX_BACKGROUND_READ_BYTES)
     expect(readNewJobOutput(job)).toBe('x')
   })
 
@@ -117,17 +141,19 @@ describe('checkJob', () => {
     const job = makeJob()
     fs.appendFileSync(job.logFile, 'line one\n')
 
-    const first = value(await checkJob({ jobId: job.jobId }))
+    const first = value(await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }))
     expect(first).toMatchObject({
       jobId: job.jobId,
-      status: 'running',
-      newOutput: 'line one\n',
+      state: 'running',
     })
+    expect(outputText(first)).toBe('line one\n')
     expect(first.matched).toBeUndefined()
 
     fs.appendFileSync(job.logFile, 'line two\n')
-    const second = value(await checkJob({ jobId: job.jobId }))
-    expect(second.newOutput).toBe('line two\n')
+    const second = value(
+      await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+    )
+    expect(outputText(second)).toBe('line two\n')
   })
 
   test('follow mode returns matched=true once the pattern is present', async () => {
@@ -139,10 +165,97 @@ describe('checkJob', () => {
         jobId: job.jobId,
         wait_for: 'Listening on',
         timeout_seconds: 1,
+        owner: TRUSTED_OWNER,
       }),
     )
     expect(result.matched).toBe(true)
-    expect(result.newOutput).toContain('Listening on :3000')
+    expect(outputText(result)).toContain('Listening on :3000')
+  })
+
+  test('wait_for without timeout_seconds performs a single non-blocking poll', async () => {
+    // Requirement (clarified): `wait_for` without `timeout_seconds` does NOT
+    // block until the pattern appears. Blocking is governed solely by
+    // `timeout_seconds`, so with no timeout the call performs a single poll
+    // and returns immediately with `matched` reflecting the current output.
+    const job = makeJob()
+    fs.appendFileSync(job.logFile, 'still starting...\n')
+
+    const result = value(
+      await checkJob({
+        jobId: job.jobId,
+        wait_for: 'Listening on',
+        owner: TRUSTED_OWNER,
+      }),
+    )
+    // Pattern is absent, but the call returned immediately rather than blocking.
+    expect(result.matched).toBe(false)
+    expect(result.state).toBe('running')
+    expect(result.timedOut).toBeUndefined()
+    expect(outputText(result)).toContain('still starting...')
+  })
+
+  test('follow mode accumulates output across multiple poll iterations', async () => {
+    // The internal poll interval is 200ms. Emit the earlier output before the
+    // call (drained on the first iteration, no match), then append the matching
+    // line after the first interval elapses so the match happens in a LATER
+    // iteration. The returned `events` must cover the FULL window — every
+    // output event drained across every iteration — not just the final batch.
+    const job = makeJob()
+    fs.appendFileSync(job.logFile, 'starting...\n')
+
+    const timer = setTimeout(() => {
+      fs.appendFileSync(job.logFile, 'Listening on :3000\n')
+    }, 250)
+
+    let result: any
+    try {
+      result = value(
+        await checkJob({
+          jobId: job.jobId,
+          wait_for: 'Listening on',
+          timeout_seconds: 5,
+          owner: TRUSTED_OWNER,
+        }),
+      )
+    } finally {
+      clearTimeout(timer)
+    }
+
+    expect(result.matched).toBe(true)
+    const text = outputText(result)
+    // Earlier ('starting...') and later (matched) output are BOTH present, so
+    // `events` is consistent with `matched` and `nextCursor` and the caller
+    // never loses the intermediate iteration's output.
+    expect(text).toContain('starting...')
+    expect(text).toContain('Listening on :3000')
+  })
+
+  test('wait_for matches a pattern that lands mid-stream in a bounded window', async () => {
+    // Regression: bounding the match window must not drop wait_for content.
+    // readNewJobOutput caps a single read at MAX_BACKGROUND_READ_BYTES, so the
+    // first poll iteration fills the match window with filler (no match) and
+    // the needle is only reached on a later iteration. The needle sits in the
+    // middle of that later read — past the retained head and before the
+    // retained tail — so a naive truncate-then-match would drop it. Matching
+    // semantics must be preserved: the pattern is still matched despite the
+    // accumulation bound.
+    const job = makeJob()
+    const needle = 'MID-STREAM-NEEDLE'
+    fs.appendFileSync(job.logFile, 'a'.repeat(MAX_BACKGROUND_READ_BYTES))
+    fs.appendFileSync(
+      job.logFile,
+      'b'.repeat(20_000) + needle + 'c'.repeat(20_000),
+    )
+
+    const result = value(
+      await checkJob({
+        jobId: job.jobId,
+        wait_for: needle,
+        timeout_seconds: 5,
+        owner: TRUSTED_OWNER,
+      }),
+    )
+    expect(result.matched).toBe(true)
   })
 
   test('follow timeout keeps a still-running job alive by default', async () => {
@@ -163,6 +276,7 @@ describe('checkJob', () => {
           jobId: job.jobId,
           wait_for: 'never appears',
           timeout_seconds: 1,
+          owner: TRUSTED_OWNER,
         }),
       ),
     )
@@ -170,8 +284,9 @@ describe('checkJob', () => {
     expect(killedSignal).toBeUndefined()
     expect(result).toMatchObject({
       jobId: job.jobId,
-      status: 'running',
+      state: 'running',
       matched: false,
+      timedOut: true,
     })
     expect(result.killed).toBeUndefined()
     expect(job.status).toBe('running')
@@ -196,6 +311,7 @@ describe('checkJob', () => {
           wait_for: 'never appears',
           timeout_seconds: 1,
           kill_on_timeout: true,
+          owner: TRUSTED_OWNER,
         }),
       ),
     )
@@ -203,7 +319,7 @@ describe('checkJob', () => {
     expect(killCalled).toBe(true)
     expect(result).toMatchObject({
       jobId: job.jobId,
-      status: 'stopped',
+      state: 'stopped',
       matched: false,
       killed: true,
     })
@@ -225,6 +341,7 @@ describe('checkJob', () => {
           wait_for: 'never appears',
           timeout_seconds: 1,
           kill_on_timeout: true,
+          owner: TRUSTED_OWNER,
         }),
       ),
     )
@@ -237,20 +354,52 @@ describe('checkJob', () => {
   test('reports completed status and exit code', async () => {
     const job = makeJob({ status: 'completed', exitCode: 0 })
     fs.appendFileSync(job.logFile, 'done\n')
-    const result = value(await checkJob({ jobId: job.jobId }))
-    expect(result).toMatchObject({ status: 'completed', exitCode: 0 })
+    const result = value(await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }))
+    expect(result).toMatchObject({ state: 'completed', exitCode: 0 })
   })
 
   test('success output includes the job logFile for a running job', async () => {
     const job = makeJob()
     fs.appendFileSync(job.logFile, 'line one\n')
-    const result = value(await checkJob({ jobId: job.jobId }))
+    const result = value(await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }))
     expect(result.logFile).toBe(job.logFile)
   })
 
   test('returns an error for an unknown job id', async () => {
-    const result = value(await checkJob({ jobId: 'does-not-exist' }))
+    const result = value(
+      await checkJob({ jobId: 'does-not-exist', owner: TRUSTED_OWNER }),
+    )
     expect(result.errorMessage).toContain('does-not-exist')
+  })
+
+  test('refuses a foreign-owned job with a generic not_found error', async () => {
+    const job = makeJob()
+    fs.appendFileSync(job.logFile, 'secret\n')
+
+    const result = value(
+      await checkJob({ jobId: job.jobId, owner: FOREIGN_OWNER }),
+    )
+    expect(result.errorMessage).toContain(
+      `No background job found with id "${job.jobId}"`,
+    )
+    // Must not leak state/output for another session's job.
+    expect(result.state).toBeUndefined()
+    expect(outputText(result)).toBe('')
+  })
+
+  test('a model-supplied owner cannot override the trusted owner', async () => {
+    const job = makeJob()
+    fs.appendFileSync(job.logFile, 'line\n')
+
+    // Simulate the run.ts dispatch: spread the model input, then pin owner to
+    // the trusted value. Even when the input carries a foreign owner, the
+    // trusted owner wins and the job is served.
+    const modelInput = { jobId: job.jobId, owner: FOREIGN_OWNER }
+    const result = value(
+      await checkJob({ ...modelInput, owner: TRUSTED_OWNER }),
+    )
+    expect(result.errorMessage).toBeUndefined()
+    expect(result.state).toBe('running')
   })
 
   test('sweeps stale completed job files but preserves running recoverable jobs', () => {
@@ -341,12 +490,12 @@ describe('checkJob', () => {
     const recovered = getBackgroundJob(jobId)
     expect(recovered?.logFile).toBe(logFile)
 
-    const result = value(await checkJob({ jobId }))
+    const result = value(await checkJob({ jobId, owner: TRUSTED_OWNER }))
     expect(result).toMatchObject({
       jobId,
-      status: 'lost',
-      newOutput: 'ready\n',
+      state: 'lost',
     })
+    expect(outputText(result)).toBe('ready\n')
   })
 
   test('recovers persisted read offsets without duplicating historical output', async () => {
@@ -368,17 +517,17 @@ describe('checkJob', () => {
     )
     tempFiles.push(logFile, metadataFile)
 
-    const first = value(await checkJob({ jobId }))
-    expect(first.newOutput).toBe('first\n')
+    const first = value(await checkJob({ jobId, owner: TRUSTED_OWNER }))
+    expect(outputText(first)).toBe('first\n')
     __clearJobsForTest()
 
     fs.appendFileSync(logFile, 'second\n')
-    const second = value(await checkJob({ jobId }))
+    const second = value(await checkJob({ jobId, owner: TRUSTED_OWNER }))
     expect(second).toMatchObject({
       jobId,
-      status: 'lost',
-      newOutput: 'second\n',
+      state: 'lost',
     })
+    expect(outputText(second)).toBe('second\n')
   })
 
   test('preserves owner metadata when recovering a running job', () => {
@@ -408,7 +557,16 @@ describe('checkJob', () => {
     tempFiles.push(logFile, metadataFile)
 
     expect(getBackgroundJob(jobId)?.owner).toEqual(owner)
-    expect(getPendingBackgroundJob(jobId)?.owner).toEqual(owner)
+    // The unified jobRegistry is now the source of truth for live
+    // state/ownership (the pending-background-jobs mirror is the legacy
+    // store M4 removes). A recovered job is re-emitted into the registry
+    // under a fresh registry id stored on the adapter object, carrying the
+    // preserved owner.
+    const recovered = getBackgroundJob(jobId)
+    const registryJob = recovered?.registryJobId
+      ? jobRegistry.get(recovered.registryJobId)
+      : undefined
+    expect(registryJob?.owner).toEqual(owner)
   })
 
   test('clamps recovered read offsets beyond the log size', async () => {
@@ -431,12 +589,12 @@ describe('checkJob', () => {
     )
     tempFiles.push(logFile, metadataFile)
 
-    const first = value(await checkJob({ jobId }))
-    expect(first.newOutput).toBe('')
+    const first = value(await checkJob({ jobId, owner: TRUSTED_OWNER }))
+    expect(outputText(first)).toBe('')
 
     fs.appendFileSync(logFile, 'next\n')
-    const second = value(await checkJob({ jobId }))
-    expect(second.newOutput).toBe('next\n')
+    const second = value(await checkJob({ jobId, owner: TRUSTED_OWNER }))
+    expect(outputText(second)).toBe('next\n')
   })
 
   test('falls back to the beginning for invalid or missing recovered read offsets', async () => {
@@ -470,12 +628,12 @@ describe('checkJob', () => {
       )
       tempFiles.push(logFile, metadataFile)
 
-      const result = value(await checkJob({ jobId }))
+      const result = value(await checkJob({ jobId, owner: TRUSTED_OWNER }))
       expect(result).toMatchObject({
         jobId,
-        status: 'lost',
-        newOutput: `${testCase.suffix}\n`,
+        state: 'lost',
       })
+      expect(outputText(result)).toBe(`${testCase.suffix}\n`)
       __clearJobsForTest()
     }
   })
@@ -516,17 +674,13 @@ describe('checkJob', () => {
     expect(getBackgroundJob(jobId)).toBeUndefined()
   })
 
-  test('retains a settled pending entry until the TTL sweep', () => {
-    const jobId = `job-settled-retained-${++counter}`
-    // Mirror what the SDK exit/kill path now does: retain the settled job in
-    // the pending gate with a final status + a recent completedAt so the gate
-    // can still serve its final output/exit code after it finishes.
-    upsertPendingBackgroundJob({
-      jobId,
-      command: 'echo hi',
-      status: 'completed',
-      startedAt: Date.now() - 5_000,
-      completedAt: Date.now(),
+  test('retains a settled registry entry until the TTL sweep', () => {
+    // The unified registry retains a settled job (with a recent completedAt)
+    // so check_job/read_logs/kill_job can still serve its final output/exit
+    // code after it finishes.
+    const created = jobRegistry.create({
+      kind: 'process',
+      label: 'echo hi',
       owner: {
         clientSessionId: 'session-1',
         rootRunId: 'root-1',
@@ -534,10 +688,46 @@ describe('checkJob', () => {
         parentAgentId: 'agent-1',
       },
     })
+    jobRegistry.start(created.jobId)
+    jobRegistry.emit(created.jobId, {
+      type: 'lifecycle',
+      state: 'completed',
+      exitCode: 0,
+    })
 
-    // getPendingBackgroundJob sweeps first; a recent completedAt is retained.
-    const entry = getPendingBackgroundJob(jobId)
-    expect(entry?.status).toBe('completed')
+    // jobRegistry.get sweeps first; a recent completedAt is retained.
+    const entry = jobRegistry.get(created.jobId)
+    expect(entry?.state).toBe('completed')
     expect(entry?.completedAt).toBeDefined()
+  })
+})
+
+describe('appendBoundedCollected', () => {
+  test('returns the concatenation unchanged when under the cap', () => {
+    expect(appendBoundedCollected('abc', 'def')).toBe('abcdef')
+  })
+
+  test('bounds accumulation for a chatty long-running job', () => {
+    // Simulate many poll iterations, each draining a large chunk. Without a
+    // bound, `collected` would grow without limit and OOM the agent runtime.
+    let collected = ''
+    for (let i = 0; i < 1000; i += 1) {
+      collected = appendBoundedCollected(collected, 'x'.repeat(10_000))
+      // The window never grows past the cap (plus the short truncation
+      // marker) no matter how much output the job emits.
+      expect(collected.length).toBeLessThanOrEqual(
+        CHECK_JOB_POLL_ACCUMULATION_CAP + 100,
+      )
+    }
+  })
+
+  test('keeps the head and tail of the stream with a truncation marker', () => {
+    const head = 'H'.repeat(CHECK_JOB_POLL_ACCUMULATION_CAP * 2)
+    const collected = appendBoundedCollected(head, 'TAIL')
+    expect(collected.startsWith('H')).toBe(true)
+    expect(collected.endsWith('TAIL')).toBe(true)
+    expect(collected).toContain('poll truncated')
+    // Truncation genuinely shrinks the oversized stream.
+    expect(collected.length).toBeLessThan(head.length + 'TAIL'.length)
   })
 })

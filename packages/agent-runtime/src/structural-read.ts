@@ -1,7 +1,9 @@
 import {
+  decodeReadCapabilityToken,
   encodeReadCapabilityToken,
   getContentHash,
-} from './process-str-replace'
+  readCapabilityMatchesScope,
+} from '@codebuff/common/util/content-hash'
 
 import type { SymbolRange } from '@codebuff/code-map'
 import type { ReadCapabilityScope } from '@codebuff/common/util/content-hash'
@@ -151,6 +153,37 @@ export function mintSliceCapability(params: {
   }
 }
 
+export function validateRewriteSymbolReadCapability(params: {
+  readCapability: string
+  path: string
+  slice: Pick<ExtractedSlice, 'content' | 'startLine' | 'endLine'>
+  scope?: Omit<ReadCapabilityScope, 'path'>
+}): string | undefined {
+  const decoded = decodeReadCapabilityToken(params.readCapability)
+  if (typeof decoded === 'string') return decoded
+  if (!params.scope?.projectId || !params.scope.runId) {
+    return `rewrite_symbol blocked for ${params.path}: authenticated readCapability scope is unavailable.`
+  }
+  if (
+    !readCapabilityMatchesScope(decoded, {
+      ...params.scope,
+      path: params.path,
+    })
+  ) {
+    return `rewrite_symbol blocked for ${params.path}: the readCapability belongs to a different project, path, or agent run.`
+  }
+  if (
+    decoded.startLine !== params.slice.startLine ||
+    decoded.endLine !== params.slice.endLine
+  ) {
+    return `rewrite_symbol blocked for ${params.path}: the readCapability does not cover the exact original symbol replacement span ${params.slice.startLine}-${params.slice.endLine}.`
+  }
+  if (getContentHash(params.slice.content) !== decoded.hash) {
+    return `rewrite_symbol blocked for ${params.path}: the readCapability-covered symbol content is stale.`
+  }
+  return undefined
+}
+
 /** Render a tree-sitter structure list into a compact, indented outline. */
 export function renderStructureOutline(
   content: string,
@@ -198,9 +231,11 @@ export async function extractSlices(
   filePath: string,
   symbols: string[],
   maxMatchesPerSymbol: number = DEFAULT_MAX_MATCHES_PER_SYMBOL,
+  capabilityScope?: ReadCapabilityScope,
 ): Promise<ExtractedSlice[]> {
   const slices: ExtractedSlice[] = []
   const structure = await getFileStructure(rawContent, filePath)
+  const lines = rawContent.replace(/\r\n/g, '\n').split('\n')
 
   for (const symbol of symbols) {
     const astMatches =
@@ -210,16 +245,21 @@ export async function extractSlices(
 
     if (astMatches.length > 0) {
       for (const match of astMatches) {
+        const { startLine } = extendRangeToPrecedingComment(
+          lines,
+          match.startLine,
+        )
         const { readCapability, sliceContent } = mintSliceCapability({
           content: rawContent,
-          startLine: match.startLine,
+          startLine,
           endLine: match.endLine,
+          scope: capabilityScope,
         })
         slices.push({
           symbol,
           kind: match.kind,
           content: sliceContent,
-          startLine: match.startLine,
+          startLine,
           endLine: match.endLine,
           readCapability,
         })
@@ -229,14 +269,15 @@ export async function extractSlices(
 
     const fallback = regexSlice(rawContent, symbol, filePath)
     if (fallback) {
-      const lines = rawContent.replace(/\r\n/g, '\n').split('\n')
-      const sliceContent = lines
-        .slice(fallback.startLine - 1, fallback.endLine)
-        .join('\n')
+      const { startLine } = extendRangeToPrecedingComment(
+        lines,
+        fallback.startLine,
+      )
+      const sliceContent = lines.slice(startLine - 1, fallback.endLine).join('\n')
       slices.push({
         symbol,
         content: sliceContent,
-        startLine: fallback.startLine,
+        startLine,
         endLine: fallback.endLine,
       })
     }

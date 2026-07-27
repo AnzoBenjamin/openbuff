@@ -45,14 +45,17 @@ describe('editTransactionParams inputSchema transform — whole-file readCapabil
 
     expect(parsed.success).toBe(true)
     if (!parsed.success) return
-    expect(parsed.data.edits[0]).toMatchObject({
+    expect(parsed.data.edits[0]).toEqual({
       type: 'replace_range',
+      path,
+      readCapability: wholeFileCap,
       startLine: 2,
       endLine: 3,
-      capabilityStartLine: 1,
-      capabilityEndLine: 4,
-      capabilityHash: wholeFileHash,
+      newContent: 'replacement',
     })
+    expect(
+      editTransactionParams.providerInputSchema.safeParse(parsed.data).success,
+    ).toBe(true)
   })
 
   it('derives complete bounds and capabilityHash when bounds are omitted', () => {
@@ -69,14 +72,15 @@ describe('editTransactionParams inputSchema transform — whole-file readCapabil
 
     expect(parsed.success).toBe(true)
     if (!parsed.success) return
-    expect(parsed.data.edits[0]).toMatchObject({
+    expect(parsed.data.edits[0]).toEqual({
       type: 'replace_range',
-      startLine: 1,
-      endLine: 4,
-      capabilityStartLine: 1,
-      capabilityEndLine: 4,
-      capabilityHash: wholeFileHash,
+      path,
+      readCapability: wholeFileCap,
+      newContent: 'replacement',
     })
+    expect(
+      editTransactionParams.providerInputSchema.safeParse(parsed.data).success,
+    ).toBe(true)
   })
 
   it('rejects out-of-range bounds and removed hash fields', () => {

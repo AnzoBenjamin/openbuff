@@ -48,16 +48,16 @@ const inputSchema = z
       ),
   })
   .describe(
-    'Poll or follow a background agent turn started by spawn_agents({ background: true }): returns the streamed chunks produced since the last check plus the job status. Use it to observe a long-running background agent without blocking the turn.',
+    'Join/wait on a background agent turn started by spawn_agents({ background: true }): returns the sequenced agent_chunk events produced since the cursor plus the unified job state. Use it to observe a long-running background agent without blocking the turn.',
   )
 
 const description = `
-Poll or follow a background agent turn (started by spawn_agents with background: true).
+Join (poll) or wait (follow) on a background agent turn started by spawn_agents with background: true. Every call returns a unified event-slice result from the job registry: \`events\` (the new \`{type:'agent_chunk',chunkType,data}\` events since the cursor), \`nextCursor\` (pass it back on the next call), \`state\` (running|completed|error|cancelled), and the resolved result/error when finished.
 
-- Poll mode (no wait_for/timeout): returns immediately with the streamed chunks (text, tool_call, tool_result, subagent_* events) produced since your last check_background_agent for this job, plus status (running|completed|error) and the resolved result/error when finished.
-- Follow mode (wait_for and/or timeout_seconds): blocks — bounded by timeout_seconds — until wait_for appears in any new chunk payload or the job settles, then returns. \`matched\` indicates whether wait_for was seen. A follow-timeout is observational and leaves the agent running. Set \`cancel: true\` to explicitly abort it.
+- Poll mode (no wait_for/timeout): returns immediately with the agent_chunk events (text, tool_call, tool_result, subagent_* payloads) produced since the supplied cursor (or since your last poll when the cursor is omitted).
+- Follow mode (wait_for and/or timeout_seconds): blocks — bounded by timeout_seconds — until wait_for appears in any new chunk payload or the job settles, then returns. \`matched\` indicates whether wait_for was seen. A follow-timeout is observational (\`timedOut: true\`) and leaves the agent running. Set \`cancel: true\` to explicitly abort it.
 
-Chunks never repeat across calls: each check_background_agent call advances that job's read offset and returns only new chunks. Background agent turns are in-process coroutines — they cannot outlive this CLI session and are not recoverable across crashes (their partial state is preserved only via mid-turn checkpointing).
+The cursor is per-consumer: chunk events never repeat across calls that thread nextCursor. \`truncated\` flags that events at or below the cursor were evicted from the bounded buffer (\`dropped\` is the cumulative eviction count). Background agent turns are in-process coroutines — they cannot outlive this CLI session and are not recoverable across crashes (their partial state is preserved only via mid-turn checkpointing).
 
 Example:
 ${$getNativeToolCallExampleString({
@@ -81,32 +81,46 @@ export const checkBackgroundAgentParams = {
     z.union([
       z.object({
         jobId: z.string(),
-        status: z.enum(['running', 'completed', 'error', 'cancelled']),
-        newChunks: z
+        state: z.enum([
+          'queued',
+          'running',
+          'stopping',
+          'completed',
+          'error',
+          'stopped',
+          'lost',
+          'cancelled',
+        ]),
+        events: z
           .array(
             z.object({
-              type: z.string(),
               sequence: z.number().int().positive(),
-              // Opaque structured event (text/tool_call/tool_result/subagent_*);
-              // payload can be any JSON-serializable shape, so `any` is correct.
-              payload: z.any(),
+              jobId: z.string(),
               timestamp: z.number(),
+              payload: z.object({
+                type: z.literal('agent_chunk'),
+                chunkType: z.string(),
+                // Opaque structured chunk payload
+                // (text/tool_call/tool_result/subagent_*); any JSON shape.
+                data: z.any(),
+              }),
             }),
           )
           .describe(
-            'Streamed chunks since the last poll. Each has {type, payload, timestamp}.',
+            "Sequenced agent_chunk events since the consumer's cursor. Each payload is {type:'agent_chunk',chunkType,data}.",
           ),
+        nextCursor: z.number().int().nonnegative(),
+        truncated: z.boolean(),
+        dropped: z.number().int().min(0),
         // Resolved agent turn result; opaque structured value.
         result: z.any().optional().describe('Resolved value when completed.'),
-        nextCursor: z.number().int().nonnegative().optional(),
         error: z
           .string()
           .optional()
           .describe('Rejection message when errored.'),
         matched: z.boolean().optional(),
-        killed: z.boolean().optional(),
+        timedOut: z.boolean().optional(),
         cancelled: z.boolean().optional(),
-        droppedChunks: z.number().int().min(0).optional(),
       }),
       z.object({
         jobId: z.string(),

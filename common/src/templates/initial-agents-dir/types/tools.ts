@@ -340,6 +340,8 @@ export interface EditTransactionParams {
         symbol: string
         content: string
         occurrence?: number
+        /** Optional cap.v3 copied from the matching read_files symbol slice. It authorizes exactly the symbol and its contiguous preceding comment block. */
+        readCapability?: string
       }
     | {
         /** Optional stable edit identifier echoed in diagnostics. */
@@ -754,6 +756,8 @@ export interface RewriteSymbolParams {
   content: string
   /** When multiple top-level symbols share this name, the 1-indexed one to replace. */
   occurrence?: number
+  /** Optional cap.v3 copied from the matching read_files symbol slice. Under strict read-before-edit this authorizes exactly the symbol and its contiguous preceding comment block. */
+  readCapability?: string
 }
 
 /**

@@ -1,3 +1,4 @@
+import { markEditRequiresFreshRead } from './edit-read-state'
 import { handleStrReplace } from './str-replace'
 import { formatUnsafeToolPathError, normalizeToolPath } from './write-file'
 import {
@@ -5,9 +6,11 @@ import {
   extendRangeToPrecedingComment,
   getFileStructure,
   mintSliceCapability,
+  validateRewriteSymbolReadCapability,
 } from '../../../structural-read'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
+import type { FileProcessingState } from './write-file'
 import type { RequestOptionalFileFn } from '@codebuff/common/types/contracts/client'
 import type { ProjectFileContext } from '@codebuff/common/util/file'
 
@@ -29,6 +32,7 @@ export const handleRewriteSymbol = (async (params: {
     previousToolCallFinished: Promise<void>
     toolCall: any
     requestOptionalFile: RequestOptionalFileFn
+    fileProcessingState: FileProcessingState
     fileContext: ProjectFileContext
     runId: string
 }): Promise<{ output: any }> => {
@@ -38,11 +42,13 @@ export const handleRewriteSymbol = (async (params: {
     symbol,
     content: newContent,
     occurrence,
+    readCapability,
   } = toolCall.input as {
     path: string
     symbol: string
     content: string
     occurrence?: number
+    readCapability?: string
   }
   const path = normalizeToolPath(inputPath)
 
@@ -77,20 +83,21 @@ export const handleRewriteSymbol = (async (params: {
   const matches =
     astMatches.length > 0
       ? astMatches.map((match) => {
-          const { readCapability } = mintSliceCapability({
+          const extended = extendRangeToPrecedingComment(lines, match.startLine)
+          const mintedCapability = mintSliceCapability({
             content: raw,
-            startLine: match.startLine,
+            startLine: extended.startLine,
             endLine: match.endLine,
             scope: capabilityScope,
-          })
+          }).readCapability
           return {
             kind: match.kind,
-            startLine: match.startLine,
+            startLine: extended.startLine,
             endLine: match.endLine,
             oldString: lines
-              .slice(match.startLine - 1, match.endLine)
+              .slice(extended.startLine - 1, match.endLine)
               .join('\n'),
-            readCapability,
+            readCapability: mintedCapability,
           }
         })
       : (await extractSlices(raw, path, [symbol], occurrence ?? 5)).map(
@@ -115,7 +122,7 @@ export const handleRewriteSymbol = (async (params: {
       structure === null ? `rewrite_symbol could not parse ${path}, and ` : ''
     return errorResult(
       path,
-      `${parserContext}symbol "${symbol}" was not found in ${path}. Run read_outline or read_files.ranges on this file, then retry with rewrite_symbol or use replace_range with the fresh rangeHash.`,
+      `${parserContext}symbol "${symbol}" was not found in ${path}. Use read_files symbols and pass its editAnchor.readCapability to rewrite_symbol, or read the exact range and pass its readCapability to replace_range.`,
     )
   }
   if (matches.length > 1 && occurrence === undefined) {
@@ -135,30 +142,32 @@ export const handleRewriteSymbol = (async (params: {
     )
   }
 
-  // Extend the replacement range upward to include a contiguous preceding
-  // comment/doc block (JSDoc `/** ... */`, block `/* ... */`, or `//` run).
-  // Without this, rewrite_symbol would leave the old doc block orphaned while
-  // the new content's own doc block duplicates it — shifting line numbers and
-  // invalidating any cached anchors the agent holds for subsequent edits.
-  const extended = extendRangeToPrecedingComment(lines, match.startLine)
-  const oldString =
-    extended.startLine === match.startLine
-      ? match.oldString
-      : lines.slice(extended.startLine - 1, match.endLine).join('\n')
-  const basedOnRead =
-    extended.startLine === match.startLine
-      ? match.readCapability
-      : mintSliceCapability({
-          content: raw,
-          startLine: extended.startLine,
-          endLine: match.endLine,
-          scope: capabilityScope,
-        }).readCapability
+  if (readCapability) {
+    const capabilityError = validateRewriteSymbolReadCapability({
+      readCapability,
+      path,
+      slice: {
+        content: match.oldString,
+        startLine: match.startLine,
+        endLine: match.endLine,
+      },
+      scope: capabilityScope,
+    })
+    if (capabilityError) {
+      markEditRequiresFreshRead({
+        fileProcessingState: params.fileProcessingState,
+        path,
+        reason: 'stale_capability',
+        sourceTool: 'rewrite_symbol',
+      })
+      return errorResult(path, capabilityError)
+    }
+  }
 
   // Delegate to the str_replace handler: it owns atomic apply, stale detection,
-  // capability validation, and the client write. The oldString is the symbol's
-  // exact current text (plus any preceding doc block), so it matches uniquely;
-  // basedOnRead anchors large files.
+  // and the client write. A caller-provided symbol-slice capability has already
+  // been exact-span validated; zero-capability calls retain the existing minted
+  // structural anchor behavior outside strict authorization.
   return handleStrReplace({
     ...(params as any),
     previousToolCallFinished: Promise.resolve(),
@@ -170,10 +179,14 @@ export const handleRewriteSymbol = (async (params: {
         path,
         replacements: [
           {
-            oldString,
+            oldString: match.oldString,
             newString: newContent,
             allowMultiple: false,
-            basedOnRead,
+            basedOnRead:
+              readCapability ??
+              (params.fileProcessingState?.strictReadBeforeEdit
+                ? undefined
+                : match.readCapability),
           },
         ],
       },

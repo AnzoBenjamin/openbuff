@@ -704,6 +704,48 @@ ${specialistRoutingSection}
         } as any
       }
 
+      // Explicit Git delivery is the one turn type allowed to claim files that
+      // were already dirty at turn start. Keep this classifier inline because
+      // handleSteps is serialized through toString()/new Function().
+      function hasExplicitGitDeliveryIntent(value: unknown): boolean {
+        if (typeof value !== 'string') return false
+        const text = value.replace(/\s+/g, ' ').trim()
+        if (!text) return false
+        // The exact standalone bypass phrase is not a delivery intent; it
+        // authorizes committing despite unvalidated files. Matching it here
+        // would re-arm the gate and block the very commit it authorizes.
+        if (text.toUpperCase() === 'COMMIT ANYWAY') return false
+        const gitAction = String.raw`(?:commit|push|stage|staging)`
+        if (
+          new RegExp(
+            String.raw`\b(?:do not|don't|dont|never|avoid|without|no need to|not going to)\b[^.!?;\n]{0,64}\b${gitAction}\b`,
+            'i',
+          ).test(text)
+        ) {
+          return false
+        }
+        const deliveryScope =
+          String.raw`(?:changes?|files?|work|branch|working[- ]tree)`
+        const explicitImperativeDelivery =
+          new RegExp(
+            String.raw`\b(?:please|then|now|can you|could you|would you)\s+(?:also\s+)?${gitAction}\b`,
+            'i',
+          ).test(text) ||
+          new RegExp(String.raw`^(?:please\s+)?${gitAction}\b`, 'i').test(
+            text,
+          )
+        if (explicitImperativeDelivery) return true
+
+        const advisoryQuestion =
+          /(?:^|[.!?;]\s*)(?:should\b|how\s+(?:do|can|should|would)\b)/i
+        if (advisoryQuestion.test(text)) return false
+
+        return new RegExp(
+          String.raw`\b${gitAction}\b(?:\s+(?:and|then)\s+(?:commit|push))?(?:\s+(?:our|my|the|these|those|all|current|existing|pending|dirty|local))?\s+${deliveryScope}\b`,
+          'i',
+        ).test(text)
+      }
+
       const initialGitStatus = yield {
         toolName: 'git_status',
         input: {},
@@ -730,6 +772,18 @@ ${specialistRoutingSection}
         activeWorkState.openReviewerBlockers.length === 0 &&
         activeWorkState.nextRequiredAction.trim().length === 0
       const gatePassedFiles = new Set<string>(activeWorkState.gatePassedFiles)
+      if (
+        hasExplicitGitDeliveryIntent(prompt) &&
+        initialGitStatusFiles.length > 0
+      ) {
+        recordChangedFiles(initialGitStatusFiles)
+        editsHappened = true
+        finalResponseGateOpen = false
+        mutableAgentState.canSuggestFollowups = false
+        activeWorkState.currentPhase = 'awaiting_validation'
+        activeWorkState.latestWorkSummary = `Explicit Git delivery request adopted turn-start dirty files: ${initialGitStatusFiles.join(', ')}`
+        markActiveWorkStateChanged()
+      }
       // Track files previously observed dirty in git status so we can safely
       // prune them from the pending set when they disappear (committed).
       const gitStatusObservedFiles = new Set<string>()
@@ -780,7 +834,15 @@ ${specialistRoutingSection}
         for (const file of Array.from(gatePassedFiles)) {
           const storedMarker = ledgerMarkers[file]
           const currentMarker = readGateFileContentMarker(file)
-          if (storedMarker === undefined || storedMarker !== currentMarker) {
+          // Evict when: no stored marker (legacy state), marker mismatch
+          // (content drift), OR current marker is not attestable (external
+          // symlink, unreadable file, missing crypto). A stable error string
+          // must never retain credit.
+          if (
+            storedMarker === undefined ||
+            storedMarker !== currentMarker ||
+            !isAttestableContentMarker(currentMarker)
+          ) {
             gatePassedFiles.delete(file)
             delete ledgerMarkers[file]
             changedFiles.add(file)
@@ -2046,10 +2108,14 @@ ${specialistRoutingSection}
           } as any
           continue
         }
-        // Freeze the complete cumulative task-related dirty scope for this
-        // final gate attempt. pendingGateFiles remains the narrower repair and
-        // failure-target set; validation, review, and credit use gateScopeFiles.
-        const gateScopeFiles = deriveGateScopeFiles(gitStatusFiles)
+        // Freeze both the live dirty scope and the cumulative validation scope
+        // for this final gate attempt. A resumed pending file may already be
+        // committed, but it still requires validation before finalization.
+        const dirtyGateScopeFiles = deriveGateScopeFiles(gitStatusFiles)
+        const gateScopeFiles = normalizeGateFileList([
+          ...dirtyGateScopeFiles,
+          ...currentPendingGateFiles,
+        ])
         const conversationGatePass = getConversationGatePassForPendingFiles(
           currentPendingGateFiles,
           currentConversationMessages,
@@ -2238,7 +2304,10 @@ ${specialistRoutingSection}
           reviewSnapshotDetails,
         )
         let reviewableFingerprint = reviewSnapshotFingerprint
-        let frozenGateScopeFingerprint = buildGateFingerprint(gateScopeFiles, '')
+        let frozenDirtyGateScopeFingerprint = buildGateFingerprint(
+          dirtyGateScopeFiles,
+          '',
+        )
         let validationSummary =
           'No file changes were detected, so no validation hooks ran.'
         const validationInfrastructureBypassed =
@@ -2815,7 +2884,9 @@ ${specialistRoutingSection}
           postValidationScopeFiles = deriveGateScopeFiles(
             extractGitStatusFiles((postValidationGitStatus as any)?.toolResult),
           )
-          if (!gateFileSetsEqual(gateScopeFiles, postValidationScopeFiles)) {
+          if (
+            !gateFileSetsEqual(dirtyGateScopeFiles, postValidationScopeFiles)
+          ) {
             activeWorkState.currentPhase = 'awaiting_validation'
             activeWorkState.latestWorkSummary =
               'The task-related dirty scope changed during validation; validation and review were reopened.'
@@ -2833,7 +2904,10 @@ ${specialistRoutingSection}
             reviewSnapshotDetails,
           )
           reviewableFingerprint = reviewSnapshotFingerprint
-          frozenGateScopeFingerprint = buildGateFingerprint(gateScopeFiles, '')
+          frozenDirtyGateScopeFingerprint = buildGateFingerprint(
+            postValidationScopeFiles,
+            '',
+          )
         }
 
         let reviewerFinalizationVerdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | '' =
@@ -2857,33 +2931,29 @@ ${specialistRoutingSection}
             'user-authorized-reviewer-protocol-bypass'
           markActiveWorkStateChanged()
         }
-        // Fix 1/3 (R3) + Fix 3b (R5): decide whether the final code-reviewer
-        // spawn can be skipped entirely and the gate treated as green. Two
-        // cases short-circuit to the same success state the gate sets on a
-        // LOOKS_GOOD/NON_BLOCKING verdict:
-        //   - no reviewable source files in the pending set (only
-        //     bookkeeping/docs/plan artifacts like .agents/sessions/**
-        //     STATE.json/EVENTS.jsonl/STATUS.md/LESSONS.md changed), or
-        //   - the reviewable subset is unchanged from the last reviewed pass
-        //     (a git-action turn with no new source edits).
-        // Validation-hook behavior is unchanged; only the reviewer spawn is
-        // skipped. The subsequent runValidationGate success block performs the
-        // actual state clearing, fingerprint recording, and aux-flag reset.
+        // The final reviewer may be skipped for bookkeeping-only changes or
+        // when durable evidence attests the exact reviewable snapshot. A clean
+        // working tree is not review evidence: committed bytes still require a
+        // snapshot-bound review unless a matching receipt survived the prior
+        // pass.
+        const matchingReviewReceipt = activeWorkState.reviewReceipts.some(
+          (receipt) =>
+            receipt.reviewer === requiredReviewerAgentType &&
+            (receipt.verdict === 'LOOKS_GOOD' ||
+              receipt.verdict === 'NON_BLOCKING') &&
+            receipt.snapshotFingerprint === reviewableFingerprint &&
+            receipt.reviewedFileCount === reviewableGateScopeFiles.length &&
+            gateFileSetsEqual(
+              receipt.reviewedFiles,
+              reviewableGateScopeFiles,
+            ),
+        )
         const reviewableSetAlreadyReviewed =
           reviewableGateScopeFiles.length > 0 &&
           !!activeWorkState.reviewedReviewableFingerprint &&
           activeWorkState.reviewedReviewableFingerprint ===
-            reviewableFingerprint
-        // Skip the final reviewer when the reviewable pending set has no
-        // working-tree diff this turn (already committed / clean tree). Only
-        // trusted when git_status returned a real result; a dirty reviewable
-        // file (present in gitStatusFiles) keeps the reviewer spawning.
-        const reviewableSetHasNoWorkingTreeDiff =
-          isRealGitStatusResult &&
-          reviewableGateScopeFiles.length > 0 &&
-          !reviewableGateScopeFiles.some((file) =>
-            postValidationScopeFiles.includes(file),
-          )
+            reviewableFingerprint &&
+          matchingReviewReceipt
         const skipReviewerForReviewableScope =
           runReviewerGate &&
           editsHappened &&
@@ -2891,8 +2961,7 @@ ${specialistRoutingSection}
           activeWorkState.lastReviewerGateSkipReason !==
             'reviewer-protocol-attestation-failed' &&
           (reviewableGateScopeFiles.length === 0 ||
-            reviewableSetAlreadyReviewed ||
-            reviewableSetHasNoWorkingTreeDiff)
+            reviewableSetAlreadyReviewed)
         if (skipReviewerForReviewableScope) {
           reviewerFinalizationVerdict = 'NON_BLOCKING'
           activeWorkState.currentPhase = 'awaiting_review'
@@ -3580,13 +3649,16 @@ ${specialistRoutingSection}
             )
             const finalReviewedFingerprint = hashGateSnapshotDetails(
               buildGateSnapshotDetails(
-                selectReviewableGateFiles(finalGateScopeFiles),
+                selectReviewableGateFiles(gateScopeFiles),
                 '',
               ),
             )
             if (
-              !gateFileSetsEqual(gateScopeFiles, finalGateScopeFiles) ||
-              finalGateScopeFingerprint !== frozenGateScopeFingerprint ||
+              !gateFileSetsEqual(
+                postValidationScopeFiles,
+                finalGateScopeFiles,
+              ) ||
+              finalGateScopeFingerprint !== frozenDirtyGateScopeFingerprint ||
               finalReviewedFingerprint !== reviewSnapshotFingerprint
             ) {
               activeWorkState.currentPhase = 'awaiting_validation'
@@ -4955,6 +5027,19 @@ ${specialistRoutingSection}
         return extractChangedFilesFromMessages([message], 0).length > 0
       }
 
+      // Canonical SHA-256 snapshot fingerprint: v3: followed by exactly 64
+      // lowercase hex chars. Only these are reusable as durable attestation.
+      function isAttestableSnapshotFingerprint(value: string): boolean {
+        return /^v3:[a-f0-9]{64}$/.test(value)
+      }
+
+      // Canonical content marker: sha256:<64hex>:<length> for regular files,
+      // or symlink-sha256:<64hex>:<length> for safe in-project symlinks.
+      // Unreadable/missing/error markers are never attestable.
+      function isAttestableContentMarker(value: string): boolean {
+        return /^(?:symlink-)?sha256:[a-f0-9]{64}:\d+$/.test(value)
+      }
+
       function hasFreshGateFingerprintForPendingFiles(
         files: string[],
         validationSummary: string,
@@ -4969,10 +5054,14 @@ ${specialistRoutingSection}
         // reviewer/validation gate.
         const recorded = activeWorkState.gatePassedFingerprint
         if (!recorded) return false
+        // Non-attestable fingerprints (unreadable:no-crypto, etc.) can never
+        // be reused as durable gate credit.
+        if (!isAttestableSnapshotFingerprint(recorded)) return false
         const currentFingerprint = buildGateFingerprint(
           files,
           validationSummary,
         )
+        if (!isAttestableSnapshotFingerprint(currentFingerprint)) return false
         return recorded === currentFingerprint
       }
 
@@ -5615,8 +5704,13 @@ ${specialistRoutingSection}
       function creditGatePassedFiles(files: string[]): void {
         const markers = (activeWorkState.gatePassedFileMarkers ??= {})
         for (const file of files) {
+          const marker = readGateFileContentMarker(file)
+          // Only credit files with attestable content markers. External
+          // symlinks, unreadable files, and missing-crypto states produce
+          // non-attestable markers that must never enter the durable ledger.
+          if (!isAttestableContentMarker(marker)) continue
           gatePassedFiles.add(file)
-          markers[file] = readGateFileContentMarker(file)
+          markers[file] = marker
         }
       }
 
@@ -5694,22 +5788,19 @@ ${specialistRoutingSection}
         if (crypto) {
           return `v3:${crypto.createHash('sha256').update(details).digest('hex')}`
         }
-        // Serialized runtimes should expose a built-in module loader, but keep
-        // a deterministic single-line fallback so a loader failure never
-        // reintroduces a multiline attestation contract.
-        let hash = 2166136261
-        for (let index = 0; index < details.length; index += 1) {
-          hash ^= details.charCodeAt(index)
-          hash = Math.imul(hash, 16777619)
-        }
-        return `v3:fnv1a-${(hash >>> 0).toString(16).padStart(8, '0')}`
+        // Fail closed: without a collision-resistant hash the snapshot cannot
+        // be safely attested. Return a non-reusable sentinel so no durable
+        // gate credit, review receipt, or bypass challenge can match it.
+        return 'unreadable:no-crypto'
       }
 
       /**
        * Resolve a normalized gate file path against process.cwd() and return
-       * a deterministic content marker for fingerprinting. Never throws — any
-       * read/stat failure is encoded as an `unreadable:<code>` marker so the
-       * gate fails closed rather than reusing a stale durable pass.
+       * a deterministic content marker for fingerprinting. Regular files are
+       * hashed in fixed-size chunks; symlink markers additionally bind the link
+       * path to bytes read from its resolved target. Never throws: scope, read,
+       * or stat failures become `unreadable:<code>` markers so stale credit
+       * fails closed.
        */
       function readGateFileContentMarker(normalizedPath: string): string {
         if (!normalizedPath) return 'unreadable:empty-path'
@@ -5747,46 +5838,89 @@ ${specialistRoutingSection}
           typeof process.cwd === 'function'
             ? process.cwd()
             : ''
-        // Gate paths are normalized to be project-relative before reaching this
-        // helper. Absolute paths still resolve correctly because
-        // path.resolve(cwd, absolutePath) returns absolutePath.
+        if (!cwd) return 'unreadable:no-cwd'
         const absolutePath = path.resolve(cwd, normalizedPath)
+        const projectRelativePath = path.relative(cwd, absolutePath)
+        if (
+          projectRelativePath === '..' ||
+          projectRelativePath.startsWith(`..${path.sep}`) ||
+          path.isAbsolute(projectRelativePath)
+        ) {
+          return 'unreadable:outside-project'
+        }
         try {
-          const stat = fs.statSync(absolutePath)
-          if (!stat.isFile()) return 'unreadable:not-a-file'
-          // Cache the content marker by (path, mtime, size): if the file hasn't
-          // changed since the last gate evaluation, skip the read+hash. The
-          // cache lives on the function object so it persists across calls
-          // within a single generator instance (handleSteps is serialized
-          // via .toString() and rebuilt with new Function, so module-level
-          // caches would not survive reconstruction).
-          const cacheKey = `${absolutePath}\t${stat.mtimeMs}\t${stat.size}`
-          const markerCache = (
-            readGateFileContentMarker as unknown as {
-              cache?: Map<string, string>
+          const pathSegments = projectRelativePath.split(path.sep).filter(Boolean)
+          const symlinkParts: string[] = []
+          let entryPath = cwd
+          for (let index = 0; index < pathSegments.length; index += 1) {
+            entryPath = path.join(entryPath, pathSegments[index])
+            const entryStat = fs.lstatSync(entryPath)
+            if (entryStat.isSymbolicLink()) {
+              symlinkParts.push(`${index}:${fs.readlinkSync(entryPath)}`)
+              continue
             }
-          ).cache
-          if (markerCache && markerCache.has(cacheKey)) {
-            return markerCache.get(cacheKey)!
+            if (index < pathSegments.length - 1 && !entryStat.isDirectory()) {
+              return 'unreadable:not-a-directory'
+            }
+            if (index === pathSegments.length - 1 && !entryStat.isFile()) {
+              return 'unreadable:not-a-file'
+            }
           }
-          const data = fs.readFileSync(absolutePath)
-          const hash = crypto.createHash('sha256').update(data).digest('hex')
-          const marker = `sha256:${hash}:${data.length}`
-          const cacheSlot = readGateFileContentMarker as unknown as {
-            cache?: Map<string, string>
+          if (pathSegments.length === 0) return 'unreadable:not-a-file'
+
+          const resolvedPath =
+            symlinkParts.length > 0 ? fs.realpathSync(absolutePath) : absolutePath
+          // Fail closed BEFORE opening: if the resolved target escapes the
+          // project root, reject without reading. This prevents blocking on
+          // external FIFOs and unbounded I/O on large external files.
+          if (symlinkParts.length > 0) {
+            const resolvedRelative = path.relative(cwd, resolvedPath)
+            if (
+              resolvedRelative === '..' ||
+              resolvedRelative.startsWith(`..${path.sep}`) ||
+              path.isAbsolute(resolvedRelative)
+            ) {
+              return 'unreadable:outside-project-symlink'
+            }
           }
-          if (!cacheSlot.cache) cacheSlot.cache = new Map<string, string>()
-          // Bound the cache so a long-lived serialized generator touching many
-          // files cannot grow it without limit. Map preserves insertion order,
-          // so evict the oldest entry once the cap is reached. A cache miss only
-          // costs a re-read+hash, so eviction is safe.
-          const MAX_MARKER_CACHE_ENTRIES = 1000
-          if (cacheSlot.cache.size >= MAX_MARKER_CACHE_ENTRIES) {
-            const oldestKey = cacheSlot.cache.keys().next().value
-            if (oldestKey !== undefined) cacheSlot.cache.delete(oldestKey)
+          const noFollow = fs.constants.O_NOFOLLOW ?? 0
+          const fd = fs.openSync(
+            resolvedPath,
+            fs.constants.O_RDONLY | noFollow,
+          )
+          try {
+            const openedStat = fs.fstatSync(fd)
+            if (!openedStat.isFile()) return 'unreadable:not-a-file'
+            const hash = crypto.createHash('sha256')
+            if (symlinkParts.length > 0) {
+              hash.update(symlinkParts.join('\0')).update('\0')
+            }
+            const buffer = Buffer.allocUnsafe(64 * 1024)
+            let bytesReadTotal = 0
+            while (bytesReadTotal < openedStat.size) {
+              const bytesRead = fs.readSync(
+                fd,
+                buffer,
+                0,
+                Math.min(buffer.length, openedStat.size - bytesReadTotal),
+                bytesReadTotal,
+              )
+              if (bytesRead === 0) return 'unreadable:changed-during-read'
+              hash.update(buffer.subarray(0, bytesRead))
+              bytesReadTotal += bytesRead
+            }
+            if (
+              fs.fstatSync(fd).size !== openedStat.size ||
+              (symlinkParts.length > 0 &&
+                fs.realpathSync(absolutePath) !== resolvedPath)
+            ) {
+              return 'unreadable:changed-during-read'
+            }
+            const prefix = symlinkParts.length > 0 ? 'symlink-sha256' : 'sha256'
+            return `${prefix}:${hash.digest('hex')}:${bytesReadTotal}`
+          } finally {
+            fs.closeSync(fd)
           }
-          cacheSlot.cache.set(cacheKey, marker)
-          return marker
         } catch (err) {
           const code =
             err && typeof err === 'object' && 'code' in err

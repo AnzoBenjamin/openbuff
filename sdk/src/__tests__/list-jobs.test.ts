@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 
 import {
-  __clearPendingBackgroundJobsForTest,
-  upsertPendingBackgroundJob,
-} from '@codebuff/common/util/pending-background-jobs'
+  __clearJobRegistryForTest,
+  jobRegistry,
+} from '@codebuff/common/util/job-registry'
 
 import { listJobs } from '../tools/list-jobs'
 
@@ -23,49 +23,43 @@ const foreignOwner: BackgroundJobOwner = {
   parentAgentId: 'agent-2',
 }
 
+/** Seed a running registry job and return its id. */
+function seedRunningJob(command: string, jobOwner: BackgroundJobOwner): string {
+  const job = jobRegistry.create({
+    kind: 'process',
+    label: command,
+    owner: jobOwner,
+  })
+  jobRegistry.start(job.jobId)
+  return job.jobId
+}
+
+/** Seed a settled (completed) registry job and return its id. */
+function seedCompletedJob(
+  command: string,
+  jobOwner: BackgroundJobOwner,
+): { jobId: string } {
+  const jobId = seedRunningJob(command, jobOwner)
+  jobRegistry.emit(jobId, { type: 'lifecycle', state: 'completed', exitCode: 0 })
+  return { jobId }
+}
+
 function value(output: Awaited<ReturnType<typeof listJobs>>): any {
   return output[0].value
 }
 
 afterEach(() => {
-  __clearPendingBackgroundJobsForTest()
+  __clearJobRegistryForTest()
 })
 
 describe('listJobs', () => {
   test('returns only owner-scoped jobs with correct statuses and completedAt', async () => {
     // Use wall-clock-relative timestamps so the settled job stays inside the
     // retention TTL and is not swept before the assertion runs.
-    const now = Date.now()
-    const completedAtMs = now - 1000
-    upsertPendingBackgroundJob({
-      jobId: 'job-run-1',
-      command: 'bun dev',
-      status: 'running',
-      startedAt: now - 4000,
-      owner,
-    })
-    upsertPendingBackgroundJob({
-      jobId: 'job-run-2',
-      command: 'bun watch',
-      status: 'running',
-      startedAt: now - 3000,
-      owner,
-    })
-    upsertPendingBackgroundJob({
-      jobId: 'job-done-1',
-      command: 'bun build',
-      status: 'completed',
-      startedAt: now - 2000,
-      completedAt: completedAtMs,
-      owner,
-    })
-    upsertPendingBackgroundJob({
-      jobId: 'job-foreign-1',
-      command: 'bun other',
-      status: 'running',
-      startedAt: now - 1000,
-      owner: foreignOwner,
-    })
+    const running1 = seedRunningJob('bun dev', owner)
+    const running2 = seedRunningJob('bun watch', owner)
+    const done = seedCompletedJob('bun build', owner)
+    seedRunningJob('bun other', foreignOwner)
 
     const jobs = value(await listJobs({ owner })).jobs as Array<{
       jobId: string
@@ -73,19 +67,16 @@ describe('listJobs', () => {
       completedAt?: number
     }>
 
-    expect(jobs.map((job) => job.jobId).sort()).toEqual([
-      'job-done-1',
-      'job-run-1',
-      'job-run-2',
-    ])
-    expect(jobs.some((job) => job.jobId === 'job-foreign-1')).toBe(false)
+    expect(jobs.map((job) => job.jobId).sort()).toEqual(
+      [running1, running2, done.jobId].sort(),
+    )
 
-    const done = jobs.find((job) => job.jobId === 'job-done-1')
-    expect(done?.status).toBe('completed')
-    expect(done?.completedAt).toBe(completedAtMs)
+    const doneEntry = jobs.find((job) => job.jobId === done.jobId)
+    expect(doneEntry?.status).toBe('completed')
+    expect(doneEntry?.completedAt).toBeDefined()
 
-    const running = jobs.find((job) => job.jobId === 'job-run-1')
-    expect(running?.status).toBe('running')
-    expect(running?.completedAt).toBeUndefined()
+    const runningEntry = jobs.find((job) => job.jobId === running1)
+    expect(runningEntry?.status).toBe('running')
+    expect(runningEntry?.completedAt).toBeUndefined()
   })
 })

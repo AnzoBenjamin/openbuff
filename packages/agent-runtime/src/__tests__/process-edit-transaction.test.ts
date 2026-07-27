@@ -1688,6 +1688,98 @@ describe('processEditTransaction', () => {
     expect('files' in result).toBe(false)
   })
 
+  it('authorizes rewrite_symbol with the exact fresh comment-aware symbol slice', async () => {
+    const path = 'src/file.ts'
+    const initial = '/** doc */\nexport function greet() {\n  return 1\n}\n'
+    const readCapability = basedOnRead({
+      path,
+      startLine: 1,
+      endLine: 4,
+      content: '/** doc */\nexport function greet() {\n  return 1\n}',
+    })
+
+    const result = await processEditTransaction({
+      initialContentByPath: new Map([[path, initial]]),
+      logger,
+      readCapabilityIssuer: defaultReadCapabilityIssuer,
+      requireFreshReadCapabilityForPaths: new Set([path]),
+      edits: [
+        {
+          type: 'rewrite_symbol',
+          path,
+          symbol: 'greet',
+          content: '/** new doc */\nexport function greet() {\n  return 2\n}',
+          readCapability,
+        },
+      ],
+    })
+
+    expect('files' in result).toBe(true)
+    if ('files' in result) {
+      expect(result.files[0]?.content).toContain('/** new doc */')
+      expect(result.files[0]?.content).not.toContain('/** doc */')
+    }
+  })
+
+  it('rejects stale, wrong-scope, broader, and narrower rewrite_symbol capabilities', async () => {
+    const path = 'src/file.ts'
+    const initial = '/** doc */\nexport function greet() {\n  return 1\n}\n'
+    const attempts = [
+      basedOnRead({
+        path: 'src/other.ts',
+        startLine: 1,
+        endLine: 4,
+        content: '/** doc */\nexport function greet() {\n  return 1\n}',
+      }),
+      readAuthorization({
+        path,
+        startLine: 1,
+        endLine: 4,
+        content: '/** doc */\nexport function greet() {\n  return 1\n}',
+        issuer: { projectId: '/project', runId: 'other-run' },
+      }).readCapability,
+      basedOnRead({
+        path,
+        startLine: 1,
+        endLine: 5,
+        content: initial,
+      }),
+      basedOnRead({
+        path,
+        startLine: 2,
+        endLine: 4,
+        content: 'export function greet() {\n  return 1\n}',
+      }),
+      basedOnRead({
+        path,
+        startLine: 1,
+        endLine: 4,
+        content: '/** stale */\nexport function greet() {\n  return 1\n}',
+      }),
+    ]
+
+    for (const readCapability of attempts) {
+      const result = await processEditTransaction({
+        initialContentByPath: new Map([[path, initial]]),
+        logger,
+        readCapabilityIssuer: defaultReadCapabilityIssuer,
+        requireFreshReadCapabilityForPaths: new Set([path]),
+        edits: [
+          {
+            type: 'rewrite_symbol',
+            path,
+            symbol: 'greet',
+            content: 'export function greet() {\n  return 2\n}',
+            readCapability,
+          },
+        ],
+      })
+
+      expect('error' in result).toBe(true)
+      expect('files' in result).toBe(false)
+    }
+  })
+
   it('fails closed when replace_range capability scope is unavailable', async () => {
     const initial = 'one\ntwo\n'
     const result = await processEditTransaction({

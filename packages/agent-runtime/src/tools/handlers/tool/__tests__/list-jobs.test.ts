@@ -1,35 +1,49 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 
+import { __clearJobRegistryForTest } from '@codebuff/common/util/job-registry'
+import {
+  __clearBackgroundAgentJobsForTest,
+  allocateBackgroundAgentJob,
+} from '../../../../util/background-agent-jobs'
 import { handleListJobs } from '../list-jobs'
 
 import type {
-  ClientToolCall,
   CodebuffToolCall,
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
 
+afterEach(() => {
+  __clearJobRegistryForTest()
+  __clearBackgroundAgentJobsForTest()
+})
+
 describe('handleListJobs', () => {
-  test('forwards a list_jobs client tool call carrying the owner tuple', async () => {
+  test('lists background agent jobs from the unified registry (no client tool call)', async () => {
     const toolCall: CodebuffToolCall<'list_jobs'> = {
       toolName: 'list_jobs',
       toolCallId: 'tool-call-1',
       input: {},
     }
-    let forwardedToolCall: ClientToolCall<'list_jobs'> | undefined
+    const owner = {
+      clientSessionId: 'client-1',
+      rootRunId: 'root-run',
+      parentRunId: 'parent-run',
+      parentAgentId: 'parent-agent',
+      userInputId: 'input-1',
+    }
+    const agentJob = allocateBackgroundAgentJob({
+      agentType: 'researcher',
+      agentName: 'Researcher',
+      owner,
+    })
+    let clientCalled = false
 
-    await handleListJobs({
+    const { output } = await handleListJobs({
       previousToolCallFinished: Promise.resolve(),
       toolCall,
-      requestClientToolCall: async (
-        clientToolCall: ClientToolCall<'list_jobs'>,
-      ) => {
-        forwardedToolCall = clientToolCall
-        return [
-          {
-            type: 'json',
-            value: { jobs: [] },
-          },
-        ] satisfies CodebuffToolOutput<'list_jobs'>
+      requestClientToolCall: async () => {
+        clientCalled = true
+        return [] as unknown as CodebuffToolOutput<'list_jobs'>
       },
       clientSessionId: 'client-1',
       agentState: {
@@ -39,12 +53,23 @@ describe('handleListJobs', () => {
       },
     } as unknown as Parameters<typeof handleListJobs>[0])
 
-    expect(forwardedToolCall?.toolName).toBe('list_jobs')
-    expect(forwardedToolCall?.input.owner).toEqual({
-      clientSessionId: 'client-1',
-      rootRunId: 'root-run',
-      parentRunId: 'parent-run',
-      parentAgentId: 'parent-agent',
-    })
+    expect(clientCalled).toBe(false)
+    expect(output[0].type).toBe('json')
+    const jobs =
+      output[0].type === 'json'
+        ? ((output[0].value as {
+            jobs: Array<{
+              jobId: string
+              kind: string
+              command: string
+              status: string
+              startedAt: number
+              completedAt?: number
+            }>
+          }).jobs ?? [])
+        : []
+    expect(jobs).toContainEqual(
+      expect.objectContaining({ jobId: agentJob.jobId, kind: 'agent' }),
+    )
   })
 })

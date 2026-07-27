@@ -8,6 +8,10 @@ import {
 
 import { processStrReplace } from './process-str-replace'
 import { processStructuredEdit } from './process-structured-edit'
+import {
+  extractSlices,
+  validateRewriteSymbolReadCapability,
+} from './structural-read'
 
 import type { ReplacementReadCapability } from './process-str-replace'
 import type {
@@ -38,16 +42,10 @@ type TransactionEdit =
       id?: string
       type: 'replace_range'
       path: string
-      startLine: number
-      endLine: number
-      capabilityStartLine: number
-      capabilityEndLine: number
-      capabilityHash: string
+      startLine?: number
+      endLine?: number
       readCapability: string
       newContent: string
-      /** Internal immutable-snapshot bounds and exact mapped working span. */
-      originalRange?: { startLine: number; endLine: number }
-      mappedRange?: { startOffset: number; endOffset: number }
     }
   | {
       id?: string
@@ -56,6 +54,7 @@ type TransactionEdit =
       symbol: string
       content: string
       occurrence?: number
+      readCapability?: string
     }
   | { id?: string; type: 'patch'; path: string; diff: string }
   | {
@@ -65,6 +64,26 @@ type TransactionEdit =
       content: string
       basedOnRead?: string
     }
+
+type ResolvedReplaceRangeTransactionEdit = {
+  id?: string
+  type: 'replace_range'
+  path: string
+  startLine: number
+  endLine: number
+  capabilityStartLine: number
+  capabilityEndLine: number
+  capabilityHash: string
+  readCapability: string
+  newContent: string
+  /** Internal immutable-snapshot bounds and exact mapped working span. */
+  originalRange?: { startLine: number; endLine: number }
+  mappedRange?: { startOffset: number; endOffset: number }
+}
+
+type ResolvedTransactionEdit =
+  | Exclude<TransactionEdit, { type: 'replace_range' }>
+  | ResolvedReplaceRangeTransactionEdit
 
 type TransactionFailure = {
   editIndex: number
@@ -129,8 +148,18 @@ export async function processEditTransaction(params: {
       break
     }
 
+    const resolvedEdit = resolveReplaceRangeEdit(effectiveEdit)
+    if ('error' in resolvedEdit) {
+      failures.push({
+        editIndex,
+        ...(effectiveEdit.id && { id: effectiveEdit.id }),
+        path: effectiveEdit.path,
+        errorMessage: resolvedEdit.error,
+      })
+      break
+    }
     const rangeAdjustment = getEffectiveReplaceRangeEdit(
-      effectiveEdit,
+      resolvedEdit.edit,
       initialContentByPath.get(effectiveEdit.path) ?? null,
       transformationLedgerByPath.get(effectiveEdit.path) ?? [],
       unmappableOriginalPaths.has(effectiveEdit.path),
@@ -367,12 +396,39 @@ function mapOriginalOffset(
   return currentOffset
 }
 
-function getEffectiveReplaceRangeEdit(
+function resolveReplaceRangeEdit(
   edit: TransactionEdit,
+): { edit: ResolvedTransactionEdit } | { error: string } {
+  if (edit.type !== 'replace_range') return { edit }
+  const decoded = decodeReadCapabilityToken(edit.readCapability)
+  if (typeof decoded === 'string' || decoded.tokenVersion !== 'v3') {
+    return {
+      error:
+        typeof decoded === 'string'
+          ? decoded
+          : 'readCapability requires an authenticated project/path/run-bound cap.v3 token.',
+    }
+  }
+  const startLine = edit.startLine ?? decoded.startLine
+  const endLine = edit.endLine ?? decoded.endLine
+  return {
+    edit: {
+      ...edit,
+      startLine,
+      endLine,
+      capabilityStartLine: decoded.startLine,
+      capabilityEndLine: decoded.endLine,
+      capabilityHash: decoded.hash,
+    },
+  }
+}
+
+function getEffectiveReplaceRangeEdit(
+  edit: ResolvedTransactionEdit,
   originalContent: string | null,
   ledger: TransformationLedgerEntry[],
   originalPathIsUnmappable: boolean,
-): { edit: TransactionEdit } | { error: string } {
+): { edit: ResolvedTransactionEdit } | { error: string } {
   if (edit.type !== 'replace_range') return { edit }
   if (originalContent === null) return { edit }
   if (originalPathIsUnmappable) {
@@ -520,7 +576,7 @@ function appendTransformationLedgerEntries(
 }
 
 async function processTransactionEdit(params: {
-  edit: TransactionEdit
+  edit: ResolvedTransactionEdit
   initialContentPromise: Promise<string | null>
   originalContentPromise: Promise<string | null>
   logger: Logger
@@ -679,8 +735,6 @@ async function processTransactionEdit(params: {
           error: `Cannot rewrite a symbol in missing file ${edit.path}.`,
         }
       }
-      const { extractSlices, extendRangeToPrecedingComment } =
-        await import('./structural-read')
       const matches = await extractSlices(
         initialContent,
         edit.path,
@@ -696,11 +750,44 @@ async function processTransactionEdit(params: {
               : `Symbol ${edit.symbol} was not found in ${edit.path}.`,
         }
       }
+      if (requireFreshReadCapability && !edit.readCapability) {
+        return {
+          error: `rewrite_symbol blocked for ${edit.path}: strict read-before-edit requires the fresh readCapability from the matching symbol slice.`,
+        }
+      }
+      if (edit.readCapability) {
+        const originalContent = await originalContentPromise
+        const originalMatches = await extractSlices(
+          originalContent ?? '',
+          edit.path,
+          [edit.symbol],
+          edit.occurrence ?? 5,
+        )
+        const originalMatch = edit.occurrence
+          ? originalMatches[edit.occurrence - 1]
+          : originalMatches[0]
+        if (!originalMatch || (!edit.occurrence && originalMatches.length > 1)) {
+          return {
+            error: `rewrite_symbol blocked for ${edit.path}: the original symbol replacement span is no longer uniquely resolvable.`,
+          }
+        }
+        const capabilityError = validateRewriteSymbolReadCapability({
+          readCapability: edit.readCapability,
+          path: edit.path,
+          slice: originalMatch,
+          scope: readCapabilityIssuer,
+        })
+        if (capabilityError) return { error: capabilityError }
+        if (match.content !== originalMatch.content) {
+          return {
+            error: `rewrite_symbol blocked for ${edit.path}: the symbol replacement bytes were changed earlier in this transaction.`,
+          }
+        }
+      }
       const lines = normalizeLineEndings(initialContent).split('\n')
-      const extended = extendRangeToPrecedingComment(lines, match.startLine)
       lines.splice(
-        extended.startLine - 1,
-        match.endLine - extended.startLine + 1,
+        match.startLine - 1,
+        match.endLine - match.startLine + 1,
         ...normalizeLineEndings(edit.content).split('\n'),
       )
       return {

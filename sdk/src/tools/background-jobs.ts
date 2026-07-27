@@ -1,25 +1,26 @@
 import { spawn, type ChildProcess } from 'child_process'
-import { randomBytes } from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { StringDecoder } from 'string_decoder'
 
 import {
-  __clearPendingBackgroundJobsForTest,
-  restampPendingBackgroundJobOwner,
-  upsertPendingBackgroundJob,
-} from '@codebuff/common/util/pending-background-jobs'
+  jobRegistry,
+  type JobOwner,
+} from '@codebuff/common/util/job-registry'
 
 /**
- * In-memory registry of background processes started via
- * run_terminal_command(process_type: 'BACKGROUND'). The SDK runs inside the
- * long-lived client process (e.g. the CLI), so this Map persists across tool
- * calls within a session and lets check_job poll/follow a job's output.
+ * Thin ProcessJobAdapter over the shared `jobRegistry` core (M2). The
+ * registry is the single source of truth for a shell job's lifecycle state,
+ * ownership, and output/event stream; this adapter only owns the OS child
+ * process, the on-disk log file, and the write-only recovery projection
+ * (`openbuff-<jobId>.json` in the OS temp dir).
  *
  * Each job streams stdout+stderr to a temp log file; check_job reads the new
- * bytes since the last check (tracked by readOffset) so output is never
- * duplicated or lost between polls.
+ * bytes since the last check (tracked by readOffset, the adapter's own
+ * incremental-read cursor) so output is never duplicated or lost between
+ * polls. Streamed bytes are also mirrored into the registry as `output`
+ * events so registry consumers observe the same stream.
  */
 export type BackgroundJobStatus =
   | 'running'
@@ -28,12 +29,12 @@ export type BackgroundJobStatus =
   | 'lost'
   | 'stopped'
 
-export interface BackgroundJobOwner {
-  clientSessionId: string
-  rootRunId: string
-  parentRunId: string
-  parentAgentId: string
-}
+/**
+ * Ownership identity for a background job. This is the core registry's
+ * JobOwner: ownership checks go through `jobRegistry.assertOwned` rather
+ * than the old pending-background-jobs mirror.
+ */
+export type BackgroundJobOwner = JobOwner
 
 export function isProcessTreeAlive(child: Pick<ChildProcess, 'pid'>): boolean {
   if (!child.pid) return false
@@ -72,6 +73,11 @@ export interface BackgroundJob {
   child: ChildProcess
   logFile: string
   metadataFile: string
+  /**
+   * Live mirror of the registry lifecycle state for this job. The registry
+   * is authoritative; the adapter updates this field on every transition so
+   * existing consumers (check_job/kill_job/read_logs) keep working.
+   */
   status: BackgroundJobStatus
   exitCode: number | null
   startedAt: number
@@ -82,11 +88,42 @@ export interface BackgroundJob {
   owner?: BackgroundJobOwner
   /** Wall-clock time of the last throttled metadata write, if any. */
   lastMetadataWriteAt?: number
+  /**
+   * Linux `/proc/<pid>/stat` field-22 starttime captured at spawn. Used to
+   * verify a RECOVERED job's pid still belongs to the original process
+   * before a group-kill (pid reuse guard); undefined on non-Linux hosts.
+   */
+  childProcessStartTime?: string
+  /**
+   * Registry-side id backing this job when it differs from `jobId`. The
+   * registry allocates its own ids, so a cross-session-recovered job (whose
+   * `jobId` comes from the on-disk metadata file name) is re-emitted into
+   * the registry under a fresh id recorded here. Jobs spawned by this
+   * process use the registry-issued id directly and leave this undefined.
+   */
+  registryJobId?: string
 }
 
+/**
+ * Live adapter records keyed by the user-facing jobId (for jobs spawned by
+ * this process, the registry-issued id used for the temp file names). This
+ * Map only owns the OS process/log-file/recovery-projection handles —
+ * lifecycle state and events live in the shared `jobRegistry`.
+ */
 const jobs = new Map<string, BackgroundJob>()
 const metadataFilesCreatedByThisProcess = new Set<string>()
-let jobCounter = 0
+
+/**
+ * Owner stamped on jobs started without explicit run ownership (e.g. direct
+ * CLI invocations or test-registered jobs) so registry records always carry
+ * a full owner for `assertOwned`.
+ */
+const UNKNOWN_JOB_OWNER: BackgroundJobOwner = {
+  clientSessionId: 'unknown-session',
+  rootRunId: 'unknown-root',
+  parentRunId: 'unknown-parent',
+  parentAgentId: 'unknown-agent',
+}
 
 /**
  * Max age of orphaned background-job log/metadata files in /tmp before they
@@ -96,7 +133,7 @@ let jobCounter = 0
  */
 const ORPHANED_JOB_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 const MAX_BACKGROUND_LOG_BYTES = 10 * 1024 * 1024
-const MAX_BACKGROUND_READ_BYTES = 100_000
+export const MAX_BACKGROUND_READ_BYTES = 100_000
 const BACKGROUND_LOG_MONITOR_INTERVAL_MS = 250
 /**
  * Minimum interval between per-poll metadata writes in readNewJobOutput. The
@@ -247,10 +284,18 @@ function sweepOrphanedJobFiles(): void {
 }
 
 function shouldPreserveJobMetadata(metadataFile: string): boolean {
+  // FAIL CLOSED (SEC-4): any unreadable / symlink / parse-error / missing-pid
+  // metadata must PRESERVE the file rather than delete it — a destructive
+  // sweep must never act on metadata it could not fully verify.
   try {
     const rawMetadata = safeReadJobMetadataFile(metadataFile)
-    if (rawMetadata === undefined) return false
-    const metadata = JSON.parse(rawMetadata) as Partial<BackgroundJobMetadata>
+    if (rawMetadata === undefined) return true
+    let metadata: Partial<BackgroundJobMetadata>
+    try {
+      metadata = JSON.parse(rawMetadata) as Partial<BackgroundJobMetadata>
+    } catch {
+      return true
+    }
     if (metadata.status !== 'running') return false
     if (metadata.processId === null || metadata.processId === undefined) {
       // Be conservative when we cannot verify liveness.
@@ -258,12 +303,16 @@ function shouldPreserveJobMetadata(metadataFile: string): boolean {
     }
     return isProcessAlive(metadata.processId)
   } catch {
-    return false
+    return true
   }
 }
 
+/** Unlink only a real regular file (never a symlink); re-lstat immediately
+ * before unlinking to fail closed against a TOCTOU swap. */
 function removeFileIfPresent(filePath: string): void {
   try {
+    const stat = fs.lstatSync(filePath)
+    if (!stat.isFile() || stat.isSymbolicLink()) return
     fs.unlinkSync(filePath)
   } catch {
     // file vanished or permission denied — skip
@@ -306,6 +355,13 @@ function sweepOrphanedJobFilesForTest(): void {
   }
 }
 
+/**
+ * Write-only recovery projection of a job. The adapter mirrors every state
+ * transition into this file, but live state/ownership decisions never
+ * consult it — the registry is the source of truth. The file is read back
+ * only by recoverBackgroundJob on a live `get` miss (cross-session
+ * recovery).
+ */
 type BackgroundJobMetadata = {
   jobId: string
   command: string
@@ -316,6 +372,7 @@ type BackgroundJobMetadata = {
   startedAt: number
   readOffset?: number
   owner?: BackgroundJobOwner
+  childProcessStartTime?: string
 }
 
 function writeBackgroundJobMetadata(job: BackgroundJob): void {
@@ -329,6 +386,7 @@ function writeBackgroundJobMetadata(job: BackgroundJob): void {
     startedAt: job.startedAt,
     readOffset: job.readOffset,
     owner: job.owner,
+    childProcessStartTime: job.childProcessStartTime,
   }
   try {
     safeWriteJobMetadata(job.metadataFile, metadata)
@@ -337,9 +395,39 @@ function writeBackgroundJobMetadata(job: BackgroundJob): void {
   }
 }
 
-function nextJobId(): string {
-  jobCounter += 1
-  return `job-${process.pid}-${jobCounter}-${randomBytes(8).toString('hex')}`
+/** Registry-side id backing `job` (recovered jobs are remapped; see above). */
+function registryJobIdFor(job: BackgroundJob): string {
+  return job.registryJobId ?? job.jobId
+}
+
+/**
+ * Fold a terminal lifecycle transition into the registry and mirror it onto
+ * the adapter object + the write-only disk projection. All terminal paths
+ * (exit, error, kill, log-quota) funnel through here; the registry ignores
+ * lifecycle events after a terminal state, so exactly one transition wins
+ * even when several paths race (e.g. quota kill followed by the exit event).
+ */
+function settleBackgroundJob(
+  job: BackgroundJob,
+  status: BackgroundJobStatus,
+  exitCode: number | null,
+  error?: string,
+): void {
+  job.status = status
+  job.exitCode = exitCode
+  jobRegistry.emit(registryJobIdFor(job), {
+    type: 'lifecycle',
+    state: status,
+    exitCode,
+    ...(error !== undefined ? { error } : {}),
+  })
+  writeBackgroundJobMetadata(job)
+}
+
+/** Mirror a chunk of streamed log bytes into the registry as an output event. */
+function emitJobOutput(job: BackgroundJob, data: string): void {
+  if (data.length === 0) return
+  jobRegistry.emit(registryJobIdFor(job), { type: 'output', data })
 }
 
 function getBackgroundJobFilePath(
@@ -374,29 +462,43 @@ export function startBackgroundJob(params: {
   owner?: BackgroundJob['owner']
 }): BackgroundJob {
   const { command, shell, shellArgs, cwd, env } = params
-  const owner = params.owner ?? {
-    clientSessionId: 'unknown-session',
-    rootRunId: 'unknown-root',
-    parentRunId: 'unknown-parent',
-    parentAgentId: 'unknown-agent',
-  }
+  const owner = params.owner ?? UNKNOWN_JOB_OWNER
   sweepOrphanedJobFiles()
-  const jobId = nextJobId()
+  // The registry issues the job id; the on-disk log/metadata file names are
+  // derived from it so cross-session recovery can find them by id.
+  const jobId = jobRegistry.create({
+    kind: 'process',
+    label: command,
+    owner,
+  }).jobId
   const logFile = getBackgroundJobFilePath(jobId, 'log')!
   const metadataFile = getBackgroundJobFilePath(jobId, 'json')!
   // Reject pre-existing symlinks at both paths before opening for write.
   // safeCreateJobLogFile/safeWriteJobMetadata also use O_EXCL + O_NOFOLLOW so
   // pre-created regular files and TOCTOU symlink swaps are rejected at open().
-  rejectIfSymlink(logFile)
-  rejectIfSymlink(metadataFile)
-  const outFd = safeCreateJobLogFile(logFile)
-
-  const child = spawn(shell, [...shellArgs, command], {
-    cwd,
-    env,
-    stdio: ['ignore', outFd, outFd],
-    detached: os.platform() !== 'win32',
-  })
+  let outFd: number
+  let child: ChildProcess
+  try {
+    rejectIfSymlink(logFile)
+    rejectIfSymlink(metadataFile)
+    outFd = safeCreateJobLogFile(logFile)
+    child = spawn(shell, [...shellArgs, command], {
+      cwd,
+      env,
+      stdio: ['ignore', outFd, outFd],
+      detached: os.platform() !== 'win32',
+    })
+  } catch (error) {
+    // Fold the failed spawn into the registry so the freshly-created id does
+    // not linger as a queued job (queued only transitions via running).
+    jobRegistry.start(jobId)
+    jobRegistry.emit(jobId, {
+      type: 'lifecycle',
+      state: 'error',
+      error: (error as Error).message,
+    })
+    throw error
+  }
 
   const job: BackgroundJob = {
     jobId,
@@ -410,15 +512,11 @@ export function startBackgroundJob(params: {
     readOffset: 0,
     decoder: new StringDecoder('utf8'),
     owner,
+    childProcessStartTime: child.pid
+      ? readProcessStartTime(child.pid)
+      : undefined,
   }
-
-  upsertPendingBackgroundJob({
-    jobId,
-    command,
-    status: job.status,
-    startedAt: job.startedAt,
-    owner,
-  })
+  jobRegistry.start(jobId)
 
   let quotaExceeded = false
   const logQuotaTimer = setInterval(() => {
@@ -427,9 +525,16 @@ export function startBackgroundJob(params: {
       if (size <= MAX_BACKGROUND_LOG_BYTES) return
       if (!quotaExceeded) {
         quotaExceeded = true
-        job.status = 'error'
+        // Quota termination is an error: emit the terminal lifecycle now so
+        // the registry settles even if the child hangs on SIGTERM. The later
+        // exit event is ignored by the registry (terminal states absorb).
+        settleBackgroundJob(
+          job,
+          'error',
+          job.exitCode,
+          `background job exceeded the ${MAX_BACKGROUND_LOG_BYTES}-byte log quota`,
+        )
         terminateProcessTree(child, 'SIGTERM')
-        writeBackgroundJobMetadata(job)
       }
       // Keep trimming while the process is unwinding so a chatty child cannot
       // regrow a sparse/oversized log between SIGTERM and exit.
@@ -453,61 +558,69 @@ export function startBackgroundJob(params: {
       // already closed
     }
   }
-  const writeMetadata = () => writeBackgroundJobMetadata(job)
-  writeMetadata()
+  writeBackgroundJobMetadata(job)
   child.on('exit', (code) => {
-    // A prior killBackgroundJob call sets status to 'stopped' synchronously
-    // before this exit fires. SIGTERM produces a non-zero exit code, so treat
-    // an already-'stopped' job as an intentional stop rather than an error and
-    // preserve the documented 'stopped' contract in both the in-memory job and
-    // the retained pending-registry entry below. Quota termination still wins.
+    // A prior killBackgroundJob call settles the job as 'stopped'
+    // synchronously before this exit fires. SIGTERM produces a non-zero exit
+    // code, so treat an already-'stopped' job as an intentional stop rather
+    // than an error and preserve the documented 'stopped' contract. Quota
+    // termination still wins (the job already settled as 'error').
     const intentionallyStopped = job.status === 'stopped'
-    job.status = quotaExceeded
+    const status = quotaExceeded
       ? 'error'
       : intentionallyStopped
         ? 'stopped'
         : code === 0
           ? 'completed'
           : 'error'
-    job.exitCode = code
     if (quotaExceeded) {
       // See the log-quota monitor above: truncation keeps the HEAD (oldest
       // bytes) and drops the newest output. Known, accepted tradeoff for a
       // job terminated for exceeding its log quota.
       try {
         fs.truncateSync(logFile, MAX_BACKGROUND_LOG_BYTES)
-      } catch {}
+      } catch {
+        // best-effort truncation; the exit path owns final cleanup
+      }
     }
-    writeMetadata()
+    // Terminal lifecycle is emitted exactly once per job: the registry folds
+    // the first transition in and ignores this one when kill/quota already
+    // settled the job, keeping the final state/exit code servable after exit.
+    settleBackgroundJob(job, status, code)
     closeLog()
-    // Retain the settled job in the pending gate (with its final status and a
-    // completedAt for the TTL sweep) so check_job/read_logs/kill_job can still
-    // serve its final output/exit code after it finishes.
-    upsertPendingBackgroundJob({
-      jobId,
-      command: job.command,
-      status: job.status,
-      startedAt: job.startedAt,
-      owner: job.owner,
-      completedAt: Date.now(),
-    })
   })
-  child.on('error', () => {
-    job.status = 'error'
-    writeMetadata()
+  child.on('error', (error) => {
+    settleBackgroundJob(job, 'error', job.exitCode, error.message)
     closeLog()
-    upsertPendingBackgroundJob({
-      jobId,
-      command: job.command,
-      status: job.status,
-      startedAt: job.startedAt,
-      owner: job.owner,
-      completedAt: Date.now(),
-    })
   })
 
   jobs.set(jobId, job)
   return job
+}
+
+/** True when an owner is the placeholder used for ownerless/test jobs. */
+function isUnknownJobOwner(owner: BackgroundJobOwner | undefined): boolean {
+  return (
+    owner === undefined ||
+    (owner.clientSessionId === UNKNOWN_JOB_OWNER.clientSessionId &&
+      owner.rootRunId === UNKNOWN_JOB_OWNER.rootRunId)
+  )
+}
+
+/**
+ * Resolve the owner to stamp on re-attach. A trusted restampOwner UPGRADES
+ * ownership only when the current owner is the placeholder/unknown owner;
+ * an already-real owner is never overwritten (prevents cross-run ownership
+ * laundering, SEC-2). Returns undefined when no upgrade applies so callers
+ * fall back to the existing owner.
+ */
+function resolveRestampedOwner(
+  currentOwner: BackgroundJobOwner | undefined,
+  restampOwner: BackgroundJobOwner | undefined,
+): BackgroundJobOwner | undefined {
+  if (!restampOwner || isUnknownJobOwner(restampOwner)) return undefined
+  if (!isUnknownJobOwner(currentOwner)) return undefined
+  return restampOwner
 }
 
 export function getBackgroundJob(
@@ -515,38 +628,60 @@ export function getBackgroundJob(
   opts?: { restampOwner?: BackgroundJobOwner },
 ): BackgroundJob | undefined {
   const existing = jobs.get(jobId)
-  if (existing) return existing
+  if (existing) {
+    // Re-attach path: a job first recovered without a trusted owner is cached
+    // in the registry under UNKNOWN_JOB_OWNER. When a later trusted caller
+    // supplies restampOwner, UPGRADE the registry record from the placeholder
+    // to the trusted owner exactly once — but NEVER overwrite an already-real
+    // owner (that would allow cross-run ownership laundering, SEC-2). Without
+    // this, the cached-job early return skips the re-stamp and the trusted
+    // caller is locked out of its own job by assertOwned. Gate on the
+    // REGISTRY record's current owner being unknown (SEC-2).
+    const registryJobId = existing.registryJobId ?? existing.jobId
+    const registryJob = jobRegistry.get(registryJobId)
+    const upgraded = registryJob
+      ? resolveRestampedOwner(registryJob.owner, opts?.restampOwner)
+      : undefined
+    if (upgraded) {
+      jobRegistry.restampOwner(registryJobId, upgraded)
+      existing.owner = upgraded
+    }
+    return existing
+  }
 
   const recovered = recoverBackgroundJob(jobId)
   if (recovered) {
     jobs.set(jobId, recovered)
-    // Cross-session re-attach: when a restampOwner is supplied, the pending
-    // gate entry is (re)stamped with the current run's owner instead of the
-    // disk metadata's original owner. Same-process callers pass no opts, so
-    // the original owner and delete-free behavior are preserved.
-    const owner = opts?.restampOwner ?? recovered.owner
-    if (recovered.status === 'running') {
-      upsertPendingBackgroundJob({
-        jobId: recovered.jobId,
-        command: recovered.command,
-        status: recovered.status,
-        startedAt: recovered.startedAt,
-        owner,
-      })
-      if (opts?.restampOwner) {
-        restampPendingBackgroundJobOwner(recovered.jobId, opts.restampOwner)
-      }
-    } else if (opts?.restampOwner) {
-      // A settled recovered job is upserted into the gate too (with a
-      // completedAt for the TTL sweep) so the re-attaching run can serve its
-      // final output/exit code.
-      upsertPendingBackgroundJob({
-        jobId: recovered.jobId,
-        command: recovered.command,
-        status: recovered.status,
-        startedAt: recovered.startedAt,
-        owner,
-        completedAt: Date.now(),
+    // Re-emit the recovered job into the registry, which is the live source
+    // of truth for state/ownership. The registry allocates its own ids, so
+    // the disk-derived jobId is remapped onto a fresh registry id stored on
+    // the adapter object. Cross-session re-attach: a supplied restampOwner
+    // UPGRADES ownership only when the disk metadata carries a placeholder /
+    // missing owner. A job already stamped with a real owner keeps it, so a
+    // re-attaching run can never launder ownership of another session's job
+    // (assertOwned then refuses it as foreign) — this mirrors the cached-job
+    // branch above (SEC-2). Same-process callers pass no opts, so the
+    // original owner is preserved either way.
+    const owner =
+      resolveRestampedOwner(recovered.owner, opts?.restampOwner) ??
+      recovered.owner ??
+      UNKNOWN_JOB_OWNER
+    recovered.owner = owner
+    const registryJobId = jobRegistry.create({
+      kind: 'process',
+      label: recovered.command,
+      owner,
+    }).jobId
+    recovered.registryJobId = registryJobId
+    jobRegistry.start(registryJobId)
+    if (recovered.status !== 'running') {
+      // A settled recovered job is folded straight into its terminal state so
+      // the re-attaching run can serve its final output/exit code from the
+      // registry.
+      jobRegistry.emit(registryJobId, {
+        type: 'lifecycle',
+        state: recovered.status,
+        exitCode: recovered.exitCode,
       })
     }
   }
@@ -601,6 +736,10 @@ function recoverBackgroundJob(jobId: string): BackgroundJob | undefined {
       readOffset,
       decoder: new StringDecoder('utf8'),
       owner,
+      childProcessStartTime:
+        typeof metadata.childProcessStartTime === 'string'
+          ? metadata.childProcessStartTime
+          : undefined,
     }
   } catch {
     return undefined
@@ -632,6 +771,35 @@ function isProcessAlive(pid: number): boolean {
       return false
     }
     return true
+  }
+}
+
+/**
+ * 0-based index of /proc stat field 22 (`starttime`) within the post-comm
+ * remainder (fields 3..22 follow the parenthesized comm field).
+ */
+const STARTTIME_FIELD_INDEX = 19
+
+/**
+ * Read the process start-time token (field 22, `starttime`) from Linux
+ * `/proc/<pid>/stat`. Returns undefined on non-Linux hosts, when /proc is
+ * absent, or when the pid cannot be inspected — i.e. whenever the pid's
+ * identity is unverifiable.
+ */
+function readProcessStartTime(pid: number): string | undefined {
+  if (os.platform() !== 'linux') return undefined
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8')
+    // The comm field (field 2) is parenthesized and may itself contain
+    // spaces/parens, so parse from the LAST ')' rather than splitting the
+    // whole line naively. Field 22 then sits at index 19 of the remainder
+    // (fields 3..22 are state, ppid, ..., starttime).
+    const closeParen = stat.lastIndexOf(')')
+    if (closeParen < 0) return undefined
+    const fields = stat.slice(closeParen + 1).trim().split(/\s+/)
+    return fields[STARTTIME_FIELD_INDEX]
+  } catch {
+    return undefined
   }
 }
 
@@ -677,28 +845,53 @@ export function killBackgroundJob(
   const pid = job.child.pid
   if (!pid) {
     job.status = 'error'
+    jobRegistry.emit(registryJobIdFor(job), {
+      type: 'lifecycle',
+      state: 'error',
+      error: `Background job "${jobId}" has no process id to kill.`,
+    })
     return {
       jobId,
       errorMessage: `Background job "${jobId}" has no process id to kill.`,
     }
   }
 
-  const killed =
-    typeof job.child.kill === 'function'
-      ? terminateProcessTree(job.child, signal)
-      : killProcess(os.platform() === 'win32' ? pid : -pid, signal)
+  let killed: boolean
+  if (typeof job.child.kill === 'function') {
+    killed = terminateProcessTree(job.child, signal)
+  } else {
+    // A recovered job has no live ChildProcess handle, so the only way to
+    // stop it is a pid(-group) signal. Verify the pid still belongs to the
+    // ORIGINAL spawned process by comparing its /proc start-time to the
+    // value captured at spawn. If it differs — or cannot be verified
+    // (non-Linux, no /proc, missing spawn-time record) — the pid may have
+    // been recycled by an unrelated process, so FAIL CLOSED: mark the job
+    // lost and REFUSE to group-kill. (SEC-3; SEC-5 HMAC metadata
+    // authenticity is a follow-up.)
+    const currentStartTime = readProcessStartTime(pid)
+    if (
+      job.childProcessStartTime === undefined ||
+      currentStartTime === undefined ||
+      currentStartTime !== job.childProcessStartTime
+    ) {
+      settleBackgroundJob(
+        job,
+        'lost',
+        job.exitCode,
+        'Could not verify the recovered process identity before killing.',
+      )
+      return {
+        jobId,
+        errorMessage: `Background job "${jobId}" could not be verified as the original process and was marked lost; refusing to kill a possibly-recycled pid.`,
+      }
+    }
+    killed = killProcess(os.platform() === 'win32' ? pid : -pid, signal)
+  }
   if (killed) {
-    // An intentional kill is not a failure, so record it as 'stopped' and
-    // retain the settled entry in the gate for post-kill status/output reads.
-    job.status = 'stopped'
-    upsertPendingBackgroundJob({
-      jobId,
-      command: job.command,
-      status: 'stopped',
-      startedAt: job.startedAt,
-      owner: job.owner,
-      completedAt: Date.now(),
-    })
+    // An intentional kill is not a failure, so record it as 'stopped'. The
+    // registry folds this terminal lifecycle in (and ignores the later exit
+    // event), keeping the settled state servable for post-kill status reads.
+    settleBackgroundJob(job, 'stopped', job.exitCode)
   }
 
   return {
@@ -724,6 +917,7 @@ export function readNewJobOutput(job: BackgroundJob): string {
       if (job.status !== 'running' && job.decoder) {
         const final = job.decoder.end()
         job.decoder = new StringDecoder('utf8')
+        emitJobOutput(job, final)
         return final
       }
       return ''
@@ -746,7 +940,9 @@ export function readNewJobOutput(job: BackgroundJob): string {
       }
     }
     job.decoder ??= new StringDecoder('utf8')
-    return job.decoder.write(buf.subarray(0, bytesRead))
+    const text = job.decoder.write(buf.subarray(0, bytesRead))
+    emitJobOutput(job, text)
+    return text
   } catch {
     return ''
   } finally {
@@ -757,6 +953,22 @@ export function readNewJobOutput(job: BackgroundJob): string {
 /** Test-only: register a job backed by an existing log file (no real process). */
 export function __registerJobForTest(job: BackgroundJob): void {
   jobs.set(job.jobId, job)
+  // Mirror the job into the registry (under a fresh registry id, like a
+  // recovered job) so registry-backed lookups see the same state.
+  const registryJobId = jobRegistry.create({
+    kind: 'process',
+    label: job.command,
+    owner: job.owner ?? UNKNOWN_JOB_OWNER,
+  }).jobId
+  job.registryJobId = registryJobId
+  jobRegistry.start(registryJobId)
+  if (job.status !== 'running') {
+    jobRegistry.emit(registryJobId, {
+      type: 'lifecycle',
+      state: job.status,
+      exitCode: job.exitCode,
+    })
+  }
 }
 
 /** Test-only: clear the registry between tests. */
@@ -764,7 +976,7 @@ export function __clearJobsForTest(): void {
   jobs.clear()
   metadataFilesCreatedByThisProcess.clear()
   orphanedJobFilesSwept = false
-  __clearPendingBackgroundJobsForTest()
+  jobRegistry.clear()
 }
 
 /** Test-only: run stale background-job temp-file cleanup deterministically. */

@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test'
+import { applyPatch } from 'diff'
 
-import { getExactContentHash } from '@codebuff/common/util/content-hash'
+import {
+  encodeReadCapabilityToken,
+  getContentHash,
+  getExactContentHash,
+} from '@codebuff/common/util/content-hash'
 
 import { handleRewriteSymbol } from '../tools/handlers/tool/rewrite-symbol'
 
@@ -270,7 +275,12 @@ describe('rewrite_symbol handler', () => {
       writeToClient: () => {},
       requestOptionalFile: async () => SRC,
     } as any)
-    expect(outputJson(result).errorMessage).toMatch(/not found/i)
+    const message = outputJson(result).errorMessage
+    expect(message).toMatch(/not found/i)
+    expect(message).toContain('read_files symbols')
+    expect(message).toContain('editAnchor.readCapability')
+    expect(message).toContain('pass its readCapability to replace_range')
+    expect(message).not.toContain('rangeHash')
   })
 
   test('falls back to a heuristic symbol slice for unparseable files', async () => {
@@ -541,6 +551,222 @@ describe('rewrite_symbol handler', () => {
     expect(fn.value.errorMessage).toBeUndefined()
     expect(fn.patch).toContain('-\treturn &Server{Name: name}')
     expect(fn.patch).toContain('+\treturn &Server{Name: "updated-" + name}')
+  })
+
+  test('requires caller read authorization for strict standalone rewrites', async () => {
+    const state = freshState()
+    state.strictReadBeforeEdit = true
+    let clientCallCount = 0
+
+    const result = await handleRewriteSymbol({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'strict-no-capability',
+        input: {
+          path: 'svc.ts',
+          symbol: 'greet',
+          content: 'export function greet(name: string) {\n  return `hello ${name}`\n}',
+        },
+      },
+      fileContext: { projectRoot: PROJECT_ROOT },
+      runId: RUN_ID,
+      fileProcessingState: state,
+      logger: noopLogger,
+      requestClientToolCall: async () => {
+        clientCallCount++
+        return []
+      },
+      writeToClient: () => {},
+      requestOptionalFile: async () => SRC,
+    } as any)
+
+    expect(outputJson(result).errorMessage).toMatch(
+      /fresh read|read authorization/i,
+    )
+    expect(clientCallCount).toBe(0)
+  })
+
+  test('accepts only an exact caller-provided symbol capability', async () => {
+    const symbolContent =
+      '/** doc */\nexport function greet() {\n  return 1\n}'
+    const source = `${symbolContent}\nexport const tail = 2\n`
+    const capability = (params: {
+      startLine: number
+      endLine: number
+      content: string
+      path?: string
+    }) =>
+      encodeReadCapabilityToken({
+        startLine: params.startLine,
+        endLine: params.endLine,
+        hash: getContentHash(params.content),
+        scope: {
+          projectId: PROJECT_ROOT,
+          path: params.path ?? 'svc.ts',
+          runId: RUN_ID,
+        },
+      })
+    const beforeHash = getExactContentHash(source)
+    const attempts = [
+      {
+        readCapability: capability({
+          startLine: 1,
+          endLine: 4,
+          content: symbolContent,
+        }),
+        shouldSucceed: true,
+      },
+      {
+        readCapability: capability({
+          startLine: 1,
+          endLine: 5,
+          content: `${symbolContent}\nexport const tail = 2`,
+        }),
+        shouldSucceed: false,
+      },
+      {
+        readCapability: capability({
+          startLine: 2,
+          endLine: 4,
+          content: 'export function greet() {\n  return 1\n}',
+        }),
+        shouldSucceed: false,
+      },
+      {
+        readCapability: capability({
+          startLine: 1,
+          endLine: 4,
+          content: symbolContent,
+          path: 'other.ts',
+        }),
+        shouldSucceed: false,
+      },
+      {
+        readCapability: capability({
+          startLine: 1,
+          endLine: 4,
+          content: '/** stale */\nexport function greet() {\n  return 1\n}',
+        }),
+        shouldSucceed: false,
+      },
+    ]
+
+    for (const attempt of attempts) {
+      let clientCallCount = 0
+      const state = freshState()
+      state.readAuthorizationsByPath = { 'svc.ts': true }
+      state.readAuthorizationHashesByPath = {
+        'svc.ts': getContentHash(source),
+      }
+      state.modelVisibleReadAuthorizationHashesByPath = {
+        'svc.ts': getContentHash(source),
+      }
+      const result = await handleRewriteSymbol({
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'capability-rewrite',
+          input: {
+            path: 'svc.ts',
+            symbol: 'greet',
+            content: 'export function greet() {\n  return 2\n}',
+            readCapability: attempt.readCapability,
+          },
+        },
+        fileContext: { projectRoot: PROJECT_ROOT },
+        runId: RUN_ID,
+        fileProcessingState: state,
+        logger: noopLogger,
+        requestClientToolCall: async (toolCall: any) => {
+          clientCallCount++
+          const appliedContent = applyPatch(source, toolCall.input.content)
+          if (appliedContent === false) {
+            throw new Error('rewrite_symbol emitted an invalid patch')
+          }
+          const afterHash = getExactContentHash(appliedContent)
+          return [
+            {
+              type: 'json' as const,
+              value: {
+                kind: 'file_mutation_result',
+                version: 1,
+                operationId: 'capability-rewrite',
+                outcome: 'applied',
+                actions: [
+                  {
+                    actionId: 'capability-rewrite:0',
+                    index: 0,
+                    action: 'update',
+                    path: toolCall?.input?.path,
+                    outcome: 'applied',
+                    beforeHash,
+                    afterHash,
+                  },
+                ],
+                authorityTier: 'portable_path',
+                receiptId: 'capability-rewrite-receipt',
+                authorityReceipt: {
+                  kind: 'commit_receipt',
+                  version: 1,
+                  operationId: 'capability-rewrite',
+                  callId: 'capability-rewrite',
+                  receiptId: 'capability-rewrite-receipt',
+                  authorityTier: 'portable_path',
+                  status: 'committed',
+                  actions: [
+                    {
+                      actionId: 'capability-rewrite:0',
+                      index: 0,
+                      action: 'update',
+                      path: toolCall?.input?.path,
+                      status: 'committed',
+                      beforeHash,
+                      afterHash,
+                    },
+                  ],
+                  finalHashes: { 'svc.ts': afterHash },
+                },
+                errors: [],
+                freshCapabilities: [],
+              },
+            },
+          ]
+        },
+        writeToClient: () => {},
+        requestOptionalFile: async () => source,
+      } as any)
+
+      expect(outputJson(result).errorMessage === undefined).toBe(
+        attempt.shouldSucceed,
+      )
+      if (attempt.shouldSucceed) {
+        expect(clientCallCount).toBe(1)
+        expect(state.failedEditRequiresReadByPath['svc.ts']).toBeUndefined()
+        expect(
+          state.editRereadRequirementsByPath?.['svc.ts'],
+        ).toBeUndefined()
+        expect(state.readAuthorizationsByPath?.['svc.ts']).toBe(true)
+        expect(state.readAuthorizationHashesByPath?.['svc.ts']).toBe(
+          getContentHash(source),
+        )
+        expect(
+          state.modelVisibleReadAuthorizationHashesByPath?.['svc.ts'],
+        ).toBe(getContentHash(source))
+      } else {
+        expect(clientCallCount).toBe(0)
+        expect(state.failedEditRequiresReadByPath['svc.ts']).toBe(true)
+        expect(state.editRereadRequirementsByPath?.['svc.ts']).toEqual({
+          reason: 'stale_capability',
+          sourceTool: 'rewrite_symbol',
+        })
+        expect(state.readAuthorizationsByPath?.['svc.ts']).toBeUndefined()
+        expect(
+          state.readAuthorizationHashesByPath?.['svc.ts'],
+        ).toBeUndefined()
+        expect(
+          state.modelVisibleReadAuthorizationHashesByPath?.['svc.ts'],
+        ).toBeUndefined()
+      }
+    }
   })
 
   test('rewrites parser-supported Java and C# methods', async () => {

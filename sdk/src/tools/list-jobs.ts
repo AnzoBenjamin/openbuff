@@ -1,24 +1,28 @@
-import { listBackgroundJobs } from '@codebuff/common/util/pending-background-jobs'
+import { jobRegistry } from '@codebuff/common/util/job-registry'
 
 import type { BackgroundJobOwner } from './background-jobs'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 
 export async function listJobs(params: {
-  owner?: BackgroundJobOwner
+  /**
+   * REQUIRED trusted owner, injected from run/session state by the caller
+   * (never from model/tool input). list_jobs can never list unscoped.
+   */
+  owner: BackgroundJobOwner
 }): Promise<CodebuffToolOutput<'list_jobs'>> {
-  const entries = listBackgroundJobs(
-    params.owner
-      ? {
-          clientSessionId: params.owner.clientSessionId,
-          rootRunId: params.owner.rootRunId,
-        }
-      : undefined,
-  )
+  const owner = {
+    clientSessionId: params.owner.clientSessionId,
+    rootRunId: params.owner.rootRunId,
+  }
+  const entries = jobRegistry
+    .list(owner)
+    .filter((job) => job.kind === 'process')
   const jobs = entries.map((entry) => ({
     jobId: entry.jobId,
-    command: entry.command,
-    status: entry.status,
-    startedAt: entry.startedAt,
+    kind: entry.kind,
+    command: entry.label,
+    status: entry.state,
+    startedAt: entry.startedAt ?? entry.createdAt,
     ...(entry.completedAt !== undefined
       ? { completedAt: entry.completedAt }
       : {}),

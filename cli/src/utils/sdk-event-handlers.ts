@@ -60,6 +60,7 @@ import type {
   PrintModeContextWindow,
   PrintModeContextCompaction,
   PrintModeEvent as SDKEvent,
+  PrintModeJobUpdate,
   PrintModeFinish,
   PrintModePhase,
   PrintModeSubagentFinish,
@@ -389,6 +390,11 @@ const handleRegularToolCall = (
     // waiting on a prior same-path write (queued) from one that is actively
     // running but has no result yet (pending). Omitted when not queued.
     ...(event.queued !== undefined && { queued: event.queued }),
+    // Correlate a run_terminal_command BACKGROUND card with its detached job so
+    // live `job_update` events (M5) can update its lifecycle/output in place.
+    ...(event.backgroundJobId !== undefined && {
+      backgroundJobId: event.backgroundJobId,
+    }),
     lifecycle: event.queued === true ? 'queued' : 'running',
   }
 
@@ -752,6 +758,120 @@ const handleToolResult = (
   updateStreamingAgents(state, { remove: event.toolCallId })
 }
 
+/** Max accumulated live output kept on a background tool card (tail-bounded). */
+const JOB_OUTPUT_CHAR_CAP = 50_000
+
+/**
+ * Maps a job-registry lifecycle state to the tool block's lifecycle vocabulary
+ * (`'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'`).
+ */
+const jobStateToToolLifecycle = (
+  state: PrintModeJobUpdate['state'],
+): ToolContentBlock['lifecycle'] => {
+  switch (state) {
+    case 'queued':
+      return 'queued'
+    case 'running':
+    case 'stopping':
+      return 'running'
+    case 'completed':
+      return 'succeeded'
+    case 'error':
+    case 'lost':
+      return 'failed'
+    case 'stopped':
+    case 'cancelled':
+      return 'cancelled'
+  }
+}
+
+/**
+ * Maps a job-registry lifecycle state to the agent block's status vocabulary
+ * (`'running' | 'complete' | 'failed' | 'cancelled'`).
+ */
+const jobStateToAgentStatus = (
+  state: PrintModeJobUpdate['state'],
+): AgentContentBlock['status'] => {
+  switch (state) {
+    case 'queued':
+    case 'running':
+    case 'stopping':
+      return 'running'
+    case 'completed':
+      return 'complete'
+    case 'error':
+    case 'lost':
+      return 'failed'
+    case 'stopped':
+    case 'cancelled':
+      return 'cancelled'
+  }
+}
+
+const handleJobUpdate = (
+  state: EventHandlerState,
+  event: Extract<SDKEvent, { type: 'job_update' }>,
+) => {
+  // A failed background job carries a human-readable `error` (mirrors
+  // markAgentFailed). Surface it on the correlated card; lifecycle error/lost
+  // transitions fire once, so appending is idempotent-friendly.
+  const errorText =
+    typeof event.error === 'string' && event.error.length > 0
+      ? event.error
+      : undefined
+  const updateBlock = (block: ContentBlock): ContentBlock => {
+    if (block.type === 'tool' && block.backgroundJobId === event.jobId) {
+      const base = block.output ?? ''
+      const withDelta =
+        event.outputDelta !== undefined ? base + event.outputDelta : base
+      const combined =
+        errorText !== undefined ? `${withDelta}\n${errorText}` : withDelta
+      const nextOutput =
+        event.outputDelta !== undefined || errorText !== undefined
+          ? combined.slice(-JOB_OUTPUT_CHAR_CAP)
+          : block.output
+      return {
+        ...block,
+        lifecycle: jobStateToToolLifecycle(event.state),
+        ...(nextOutput !== undefined ? { output: nextOutput } : {}),
+      }
+    }
+    if (block.type === 'agent') {
+      if (block.backgroundJobId === event.jobId) {
+        const status = jobStateToAgentStatus(event.state)
+        if (errorText !== undefined) {
+          const truncatedError = errorText.split('\n').slice(0, 6).join('\n')
+          const existingBlocks = block.blocks ?? []
+          const lastChild = existingBlocks[existingBlocks.length - 1]
+          const alreadyAppended =
+            lastChild?.type === 'text' && lastChild.content === truncatedError
+          return {
+            ...block,
+            status,
+            blocks: alreadyAppended
+              ? existingBlocks
+              : [
+                  ...existingBlocks,
+                  {
+                    type: 'text',
+                    textType: 'text',
+                    content: truncatedError,
+                  } as ContentBlock,
+                ],
+          }
+        }
+        return { ...block, status }
+      }
+      if (block.blocks) {
+        return { ...block, blocks: block.blocks.map(updateBlock) }
+      }
+    }
+    return block
+  }
+
+  state.message.updater.updateAiMessageBlocks((blocks) => blocks.map(updateBlock))
+}
+
 const handlePhase = (state: EventHandlerState, event: PrintModePhase) => {
   // Phase events provide structured progress info for the status bar.
   // The detail field carries a human-readable description (e.g. "reading 5 files").
@@ -951,5 +1071,6 @@ export const createEventHandler =
       .with({ type: 'context_compaction' }, (e) =>
         handleContextCompaction(state, e),
       )
+      .with({ type: 'job_update' }, (e) => handleJobUpdate(state, e))
       .otherwise(() => undefined)
   }

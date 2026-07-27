@@ -3959,6 +3959,108 @@ describe('read_files edit-state recovery', () => {
       }
     })
 
+    it('stale rewrite_symbol capability requires fresh reads for every transaction target', async () => {
+      const symbolPath = 'src/stale-symbol.ts'
+      const otherPath = 'src/atomic-peer.ts'
+      const symbolContent = 'export function target() {\n  return 1\n}\n'
+      const otherContent = 'export const peer = 1\n'
+      const runId = 'stale-symbol-atomic-recovery-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+      fileProcessingState.readAuthorizationsByPath = {
+        [symbolPath]: true,
+        [otherPath]: true,
+      }
+      fileProcessingState.readAuthorizationHashesByPath = {
+        [symbolPath]: getContentHash(symbolContent),
+        [otherPath]: getContentHash(otherContent),
+      }
+      const staleSymbolCapability = encodeReadCapabilityToken({
+        startLine: 1,
+        endLine: 3,
+        hash: getContentHash('export function target() {\n  return 0\n}'),
+        scope: {
+          projectId: mockFileContext.projectRoot,
+          path: symbolPath,
+          runId,
+        },
+      })
+      let clientMutationCalls = 0
+
+      const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'stale-symbol-atomic-recovery',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'rewrite_symbol',
+                path: symbolPath,
+                symbol: 'target',
+                content: 'export function target() {\n  return 2\n}',
+                readCapability: staleSymbolCapability,
+              },
+              {
+                type: 'str_replace',
+                path: otherPath,
+                replacements: [
+                  {
+                    oldString: 'export const peer = 1',
+                    newString: 'export const peer = 2',
+                    allowMultiple: false,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+          filePath === symbolPath ? symbolContent : otherContent,
+        requestClientToolCall: async () => {
+          clientMutationCalls += 1
+          return []
+        },
+      } as any)
+
+      expect(clientMutationCalls).toBe(0)
+      for (const path of [symbolPath, otherPath]) {
+        expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
+        expect(
+          fileProcessingState.editRereadRequirementsByPath?.[path],
+        ).toMatchObject({
+          reason: 'stale_capability',
+          sourceTool: 'edit_transaction',
+        })
+        expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBeUndefined()
+        expect(
+          fileProcessingState.readAuthorizationHashesByPath?.[path],
+        ).toBeUndefined()
+      }
+      expect(result.output[0]?.type).toBe('json')
+      if (result.output[0]?.type === 'json') {
+        const value = result.output[0].value as {
+          errorMessage?: string
+          failures?: Array<{ errorMessage?: string }>
+        }
+        expect(String(value.failures?.[0]?.errorMessage)).toContain(
+          'readCapability-covered symbol content is stale',
+        )
+        expect(String(value.errorMessage)).toContain(
+          'Atomic recovery requires fresh read state for every transaction target',
+        )
+        expect(String(value.errorMessage)).toContain(
+          'Re-read all targets and rebuild the complete transaction',
+        )
+        expect(String(value.errorMessage)).toContain(symbolPath)
+        expect(String(value.errorMessage)).toContain(otherPath)
+      }
+    })
+
     it('write_file blocks traversal paths before reading or applying', async () => {
       const fileProcessingState = createFileProcessingState()
 

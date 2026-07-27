@@ -360,7 +360,10 @@ export const handleReadFiles = (async (
     }
 
     const slices = (
-      await extractSlices(rawContent, request.path, request.names)
+      await extractSlices(rawContent, request.path, request.names, undefined, {
+        ...capabilityIssuer,
+        path: request.path,
+      })
     ).map((slice) => {
       if (!slice.readCapability) return slice
       const contentHash = getContentHash(slice.content)

@@ -4,6 +4,7 @@ import type { EditTransactionParams, ReplaceRangeParams } from '../../../../../a
 
 import { editTransactionParams } from '../tool/edit-transaction'
 import { replaceRangeParams } from '../tool/replace-range'
+import { rewriteSymbolParams } from '../tool/rewrite-symbol'
 import {
   encodeReadCapabilityToken,
   getContentHash,
@@ -150,14 +151,15 @@ describe('range capability edit inputs', () => {
       ],
     })
 
-    expect(parsed.edits[0]).toMatchObject({
+    expect(parsed.edits[0]).toEqual({
       type: 'replace_range',
-      startLine: 17,
-      endLine: 19,
-      capabilityStartLine: 17,
-      capabilityEndLine: 19,
-      capabilityHash: hash,
+      path: 'PLAN.md',
+      readCapability,
+      newContent: '- [ ] P6.3 new task',
     })
+    expect(
+      editTransactionParams.providerInputSchema?.safeParse(parsed).success,
+    ).toBe(true)
   })
 
   it('rejects legacy explicit range tuples at every transaction boundary', () => {
@@ -200,6 +202,26 @@ describe('range capability edit inputs', () => {
       startLine: 18,
       endLine: 18,
     })
+  })
+
+  it('accepts readCapability on standalone and transaction rewrite_symbol inputs', () => {
+    const direct = {
+      path: 'PLAN.md',
+      symbol: 'renderPlan',
+      content: 'function renderPlan() {}',
+      readCapability,
+    }
+    const transaction = {
+      edits: [{ type: 'rewrite_symbol' as const, ...direct }],
+    }
+
+    expect(rewriteSymbolParams.inputSchema.safeParse(direct).success).toBe(true)
+    expect(editTransactionParams.inputSchema.safeParse(transaction).success).toBe(
+      true,
+    )
+    expect(
+      editTransactionParams.providerInputSchema.safeParse(transaction).success,
+    ).toBe(true)
   })
 
   it('exposes contained cap.v3 range edits to providers', () => {

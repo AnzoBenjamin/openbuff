@@ -1,0 +1,3 @@
+{"ts":"2026-07-27T09:28:59.884Z","kind":"task_update","summary":"Updated 1 task line(s): M0.1 Dispatch discovery shard pairs","payload":{"matched":["M0.1 Dispatch discovery shard pairs"]}}
+{"ts":"2026-07-27T09:28:59.884Z","kind":"session_status","summary":"Session status -> active","payload":{"status":"active"}}
+{"ts":"2026-07-27T09:28:59.884Z","kind":"current_task","summary":"Current task -> \"M0.1 Dispatch discovery shard pairs\"","payload":{"currentTask":"M0.1 Dispatch discovery shard pairs"}}
