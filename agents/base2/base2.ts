@@ -488,6 +488,7 @@ ${specialistRoutingSection}
       const reviewerAgentType = 'code-reviewer'
       const MAX_REPAIR_ROUNDS = 3
       const MAX_REVIEWER_NO_VERDICT_RETRIES = 1
+      const MAX_REVIEWER_REPAIR_ROUNDS = 3
       const existingActiveWorkState = mutableAgentState.base2ActiveWork
       const hadPendingGateFiles =
         !!existingActiveWorkState &&
@@ -3150,6 +3151,38 @@ ${specialistRoutingSection}
             activeWorkState.reviewerRepairRoundCount = Number(
               activeWorkState.reviewerRepairRoundCount ?? 0,
             ) + 1
+            // Hard round cap for the reviewer -> repair -> re-review loop,
+            // mirroring MAX_REPAIR_ROUNDS for validation repairs. The
+            // snapshot-progress guard below already breaks when a repair makes
+            // no fingerprint change; this adds an explicit upper bound so a
+            // repair that keeps producing snapshot-visible churn without ever
+            // clearing the finding cannot loop indefinitely.
+            if (
+              Number(activeWorkState.reviewerRepairRoundCount ?? 0) >
+              MAX_REVIEWER_REPAIR_ROUNDS
+            ) {
+              activeWorkState.openReviewerBlockers = blockers
+              activeWorkState.currentPhase = 'blocked'
+              activeWorkState.nextRequiredAction =
+                `Reviewer repair budget exhausted (${MAX_REVIEWER_REPAIR_ROUNDS}/${MAX_REVIEWER_REPAIR_ROUNDS}); the reviewer findings are still open. Stop retrying automatically and inspect the findings or handoff.`
+              activeWorkState.latestWorkSummary = `Reviewer repair budget exhausted for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`
+              markActiveWorkStateChanged()
+              yield {
+                toolName: 'add_message',
+                input: {
+                  role: 'user',
+                  content: [
+                    `Reviewer gate: automated repair budget exhausted after ${MAX_REVIEWER_REPAIR_ROUNDS} round(s); the following findings are still open and were not cleared:`,
+                    '',
+                    ...blockers,
+                    '',
+                    'Stop retrying automatically. Inspect the findings directly, fix them, or explicitly authorize a different path.',
+                  ].join('\n'),
+                },
+                includeToolCall: false,
+              } as any
+              break
+            }
             activeWorkState.openReviewerBlockers = blockers
             activeWorkState.openReviewerFindings = blockers.map(
               (text: string, index: number) => ({
