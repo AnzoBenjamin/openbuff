@@ -183,7 +183,7 @@ export interface AskUserParams {
 }
 
 /**
- * Poll or follow a background agent turn started by spawn_agents({ background: true }): returns the streamed chunks produced since the last check plus the job status. Use it to observe a long-running background agent without blocking the turn.
+ * Join/wait on a background agent turn started by spawn_agents({ background: true }): returns the sequenced agent_chunk events produced since the cursor plus the unified job state. Use it to observe a long-running background agent without blocking the turn.
  */
 export interface CheckBackgroundAgentParams {
   /** The jobId returned by spawn_agents({ background: true }) for the background agent turn. */
@@ -199,18 +199,11 @@ export interface CheckBackgroundAgentParams {
 }
 
 /**
- * Poll or follow a background job started by run_terminal_command: returns the output produced since the last check plus the job status and exit code. Use it to observe a long-running process without blocking the turn. To watch an arbitrary log file, start a `tail -f <file>` BACKGROUND job and check_job it with a wait_for pattern.
+ * Join/wait on a background job started by run_terminal_command: returns the sequenced output events produced since the last check plus the unified job state and exit code. Use it to observe a long-running process without blocking the turn. To watch an arbitrary log file, start a `tail -f <file>` BACKGROUND job and check_job it with a wait_for pattern.
  */
 export interface CheckJobParams {
   /** The jobId returned by run_terminal_command with process_type: BACKGROUND. */
   jobId: string
-  /** Runtime-managed background job owner; agents must omit. */
-  owner?: {
-    clientSessionId: string
-    rootRunId: string
-    parentRunId: string
-    parentAgentId: string
-  }
   /** Optional substring to wait for in the new output before returning (follow mode). Returns early as soon as it appears (e.g. "Listening on" / "compiled successfully"). */
   wait_for?: string
   /** Max seconds to wait for new output / the wait_for pattern. 0 (default) returns immediately with whatever new output exists (poll mode); >0 blocks up to this long (follow mode). */
@@ -575,13 +568,6 @@ export interface KillJobParams {
   jobId: string
   /** Signal to send. Defaults to SIGTERM; use SIGKILL only if graceful termination fails. */
   signal?: 'SIGTERM' | 'SIGKILL'
-  /** Runtime-managed background job owner; agents must omit. */
-  owner?: {
-    clientSessionId: string
-    rootRunId: string
-    parentRunId: string
-    parentAgentId: string
-  }
 }
 
 /**
@@ -593,17 +579,9 @@ export interface ListDirectoryParams {
 }
 
 /**
- * List this run's background shell jobs (running and settled) and their statuses.
+ * List this run's background jobs (shell processes and background agents, running and settled) and their statuses.
  */
-export interface ListJobsParams {
-  /** Runtime-managed; agents must omit. */
-  owner?: {
-    clientSessionId: string
-    rootRunId: string
-    parentRunId: string
-    parentAgentId: string
-  }
-}
+export interface ListJobsParams {}
 
 /**
  * Retrieve information about an agent by ID
@@ -697,13 +675,6 @@ export interface ReadLogsParams {
   path?: string
   /** Background job id returned by run_terminal_command(process_type: BACKGROUND). When provided, reads the job log file directly. */
   jobId?: string
-  /** Runtime-managed background job owner; agents must omit. */
-  owner?: {
-    clientSessionId: string
-    rootRunId: string
-    parentRunId: string
-    parentAgentId: string
-  }
   /** Number of trailing lines to read. Defaults to 200. */
   lines?: number
   /** Maximum characters to return. Defaults to 20,000. */
