@@ -576,33 +576,56 @@ change.
 
 ### Background shell jobs (`check_job` / `read_logs` / `kill_job` / `list_jobs`)
 
-Background shell jobs are started with `run_terminal_command` using
-`process_type: BACKGROUND`, which returns a `jobId` immediately. Four read/manage
-tools operate on those jobs:
+Background jobs are unified behind a single `JobRegistry` (in the `common`
+package) that is the single source of truth for every background job, whether
+it is a shell process started with `run_terminal_command` using `process_type:
+BACKGROUND` (tagged `kind: 'process'`) or a background agent started with
+`spawn_agents({ background: true })` (tagged `kind: 'agent'`). Every job moves
+through one lifecycle state machine: `queued -> running -> stopping ->
+{completed | error | stopped | lost | cancelled}`. Starting a shell background
+job returns a `jobId` immediately. Four read/manage tools operate on shell
+jobs:
 
 - `check_job` polls or follows a job's new output and status, and returns the
-  job's `logFile` path in its success output.
+  job's `logFile` path in its success output. It returns sequenced output
+  events (`{type:'output',data}`) with a per-consumer `nextCursor` (plus
+  `truncated`/`dropped` bounds) rather than a job-global read offset, so each
+  consumer advances its own cursor. Follow mode (`wait_for` with a bounded
+  `timeout_seconds`) waits on that event stream until a readiness/error
+  predicate matches.
 - `read_logs` reads the trailing lines of a job's log (or an arbitrary file).
 - `kill_job` stops a running job (status becomes `stopped`).
 - `list_jobs` lists the current run's background jobs — both running and
-  recently settled — so an agent that lost a `jobId` (for example after context
-  compaction) can rediscover them. It takes no agent-supplied input; the owner
-  field is runtime-managed and agents must omit it.
+  recently settled, across BOTH shell (`kind: 'process'`) and background-agent
+  (`kind: 'agent'`) jobs — so an agent that lost a `jobId` (for example after
+  context compaction) can rediscover them. It takes no agent-supplied input;
+  the owner field is runtime-managed and agents must omit it.
+
+Background agents are inspected with `check_background_agent`, which emits
+`{type:'agent_chunk',chunkType,data}` events over the same sequenced per-consumer
+cursor model.
 
 Settled shell jobs remain checkable within the session/TTL: `check_job`,
 `read_logs`, and `kill_job` now work after a job has completed (returning its
 final status, exit code, and output) rather than failing once it finishes.
-Settled entries are retained in the pending registry with a `completedAt`
+Settled entries are retained in the registry with a `completedAt`
 timestamp and swept on a TTL, and `list_jobs` reports them until they are swept.
 
-Job ownership is scoped to the run that started the job. When a job has a live
-pending entry owned by another run, these tools reject it as "unavailable to
-this run" to preserve live-job isolation. On a true pending-miss (no entry —
-typically after a session restart), the runtime forwards the call with the
-current run's owner so the SDK can recover the job from its persisted disk
-metadata and re-stamp ownership. This cross-session recovery reattaches to a
-still-running job (a recovered job whose process is still alive stays
-`running`; one whose process is gone reports `lost`).
+Ownership is a job attribute enforced inside the registry via
+`jobRegistry.assertOwned`: a job owned by another run is rejected as a generic
+not-found (unavailable) to preserve live-job isolation. Cross-session recovery
+re-attaches to a still-running job via `JobRegistry.restampOwner`, which only
+upgrades a placeholder owner to the current run's trusted owner and never
+launders an already-owned job (a real owner is never overwritten). A recovered
+live process stays `running`; one whose process is gone reconciles to `lost`.
+
+Live job status and output reach the CLI without the agent polling: the run
+loop consumes the registry event stream in-process and surfaces live job status
+and output to the CLI as additive `job_update` events, so users see progress on
+their own. `job_update` is an additive, non-breaking member of the print-mode
+event union with shape `{ type:'job_update', jobId, kind:'process'|'agent',
+state, sequence, label?, outputDelta?, exitCode?, error? }`. It is owner-scoped:
+only the run that owns a job receives its updates.
 
 ### `query_index`
 

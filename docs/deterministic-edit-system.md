@@ -25,7 +25,7 @@ no-ops, while output-changing or effectful flags remain rejected.
 
 ## Background jobs at turn boundaries
 
-`run_terminal_command` with `process_type: "BACKGROUND"` registers running jobs in a shared process registry. `end_turn` surfaces any still-running job IDs so agents do not silently leak dev servers, watchers, or log tails across turns. Use `check_job`, `read_logs`, or `kill_job` to inspect or stop them before finishing when appropriate.
+`run_terminal_command` with `process_type: "BACKGROUND"` registers running jobs in the unified `JobRegistry` (in the `common` package), the single source of truth for every background job — shell processes (`kind: 'process'`) and background agents (`kind: 'agent'`) alike — driven by one lifecycle state machine (`queued -> running -> stopping -> {completed | error | stopped | lost | cancelled}`). `end_turn` surfaces any still-running job IDs so agents do not silently leak dev servers, watchers, or log tails across turns. Use `check_job`, `read_logs`, or `kill_job` to inspect or stop them before finishing when appropriate. Live job status and output are streamed to the CLI via additive `job_update` events, so users see progress without the agent polling.
 
 ## Staged read-before-edit enforcement
 

@@ -43,6 +43,20 @@
         "Test fails without implementation",
         "No broad fixture churn"
       ]
+    },
+    {
+      "id": "background-job-lifecycle",
+      "title": "Background job lifecycle",
+      "prompt": "Start a long-running process (e.g. a dev server or watcher) as a background job with run_terminal_command process_type BACKGROUND, follow it with check_job using a wait_for readiness pattern and a bounded timeout_seconds, read its recent output with read_logs, then stop it with kill_job. Do not block the turn with a SYNC command and do not manually sleep-poll.",
+      "repository": { "name": "codebuff" },
+      "bucket": "background-job-lifecycle",
+      "validationCommands": ["bun test <focused-test-file>"],
+      "scoringNotes": [
+        "Uses process_type BACKGROUND (never a blocking SYNC dev server)",
+        "Follows readiness via check_job wait_for with a bounded timeout",
+        "Rediscovers the job via list_jobs if the jobId is lost",
+        "Stops the job with kill_job before finishing (no leaked process)"
+      ]
     }
   ]
 }
