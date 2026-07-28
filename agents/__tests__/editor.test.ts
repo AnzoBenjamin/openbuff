@@ -23,7 +23,10 @@ describe('editor agent', () => {
           status: 'committed',
         })),
         finalHashes: Object.fromEntries(
-          value.actions.map((action: any) => [action.path, action.afterHash]),
+          value.actions.map((action: any) => [
+            action.action === 'move' ? action.destinationPath : action.path,
+            action.afterHash,
+          ]),
         ),
       },
     }
@@ -80,6 +83,12 @@ describe('editor agent', () => {
       )
       expect(editor.instructionsPrompt).toContain(
         "Treat the spawn prompt's implementation-scoped requirements",
+      )
+      expect(editor.instructionsPrompt).toContain(
+        'Treat changed tests as first-class review targets',
+      )
+      expect(editor.instructionsPrompt).toContain(
+        'report missing coverage only when no covering test exists',
       )
       expect(editor.instructionsPrompt).toContain(
         'Do not perform or attempt parent-orchestrator responsibilities',
@@ -197,6 +206,36 @@ describe('editor agent', () => {
       expect(editor.instructionsPrompt).toContain('"oldString"')
       expect(editor.instructionsPrompt).toContain('"newString"')
       expect(editor.instructionsPrompt).not.toContain('    },\n  ]')
+    })
+
+    test('explains edit intents, mixed-mode constraints, and post-edit reuse', () => {
+      expect(editor.instructionsPrompt).toContain(
+        'default to str_replace for localized exact edits',
+      )
+      expect(editor.instructionsPrompt).toContain(
+        'use rewrite_symbol only when replacing a complete',
+      )
+      expect(editor.instructionsPrompt).toContain(
+        'use replace_range for an authenticated range returned directly',
+      )
+      expect(editor.instructionsPrompt).toContain(
+        'original spans are disjoint and provenance maps unambiguously',
+      )
+      expect(editor.instructionsPrompt).toContain(
+        "action's post-edit editAnchor.readCapability",
+      )
+      expect(editor.instructionsPrompt).toContain(
+        'automatic confirmed whole-file authorization',
+      )
+      expect(editor.instructionsPrompt).toContain(
+        'Re-read only when you need a different region',
+      )
+      expect(editor.instructionsPrompt).toContain(
+        'action anchor is missing or oversized',
+      )
+      expect(editor.instructionsPrompt).not.toContain(
+        're-read the region before the next edit',
+      )
     })
 
     test('contains replace_range guidance and format example', () => {
@@ -473,6 +512,125 @@ describe('editor agent', () => {
       expect((result.value as any).input.output.changedFiles).toEqual([])
     })
 
+    test('ignores malformed, uncommitted, mismatched, and non-edit receipt payloads', () => {
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        params: {},
+      })
+      generator.next()
+
+      const committed = withCommittedReceipt({
+        kind: 'file_mutation_result',
+        version: 1,
+        operationId: 'forged',
+        outcome: 'applied',
+        authorityTier: 'portable_path',
+        actions: [
+          {
+            actionId: 'forged:0',
+            index: 0,
+            action: 'update',
+            path: 'src/forged.ts',
+            outcome: 'applied',
+            afterHash: 'after',
+          },
+        ],
+        errors: [],
+        freshCapabilities: [],
+      })
+      const uncommitted = structuredClone(committed)
+      uncommitted.authorityReceipt.status = 'prepared'
+      const mismatched = structuredClone(committed)
+      mismatched.authorityReceipt.finalHashes['src/forged.ts'] = 'different'
+
+      const result = generator.next({
+        agentState: createMockAgentState([
+          {
+            role: 'tool',
+            toolName: 'read_files',
+            content: [{ type: 'json', value: { nested: committed } }],
+          },
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            content: [
+              { type: 'json', value: { kind: 'commit_receipt', actions: [] } },
+              { type: 'json', value: uncommitted },
+              { type: 'json', value: mismatched },
+            ],
+          },
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect((result.value as any).input.output.changedFiles).toEqual([])
+      expect((result.value as any).input.output.status).toBe('blocked')
+    })
+
+    test('rejects receipts with missing authority fields or ambiguous action correlation', () => {
+      const canonical = withCommittedReceipt({
+        kind: 'file_mutation_result',
+        version: 1,
+        operationId: 'adversarial',
+        outcome: 'applied',
+        authorityTier: 'portable_path',
+        actions: [
+          {
+            actionId: 'adversarial:0',
+            index: 0,
+            action: 'update',
+            path: 'src/adversarial.ts',
+            outcome: 'applied',
+            afterHash: 'after',
+          },
+        ],
+        errors: [],
+        freshCapabilities: [],
+      })
+      const missingCallId = structuredClone(canonical)
+      delete missingCallId.authorityReceipt.callId
+      const missingAuthorityTier = structuredClone(canonical)
+      delete missingAuthorityTier.authorityReceipt.authorityTier
+      const duplicateIndex = structuredClone(canonical)
+      duplicateIndex.authorityReceipt.actions.push({
+        ...duplicateIndex.authorityReceipt.actions[0],
+        actionId: 'adversarial:conflicting-index',
+      })
+      const duplicateActionId = structuredClone(canonical)
+      duplicateActionId.authorityReceipt.actions.push({
+        ...duplicateActionId.authorityReceipt.actions[0],
+        index: 1,
+      })
+
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        params: {},
+      })
+      generator.next()
+      const result = generator.next({
+        agentState: createMockAgentState([
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            content: [
+              { type: 'json', value: missingCallId },
+              { type: 'json', value: missingAuthorityTier },
+              { type: 'json', value: duplicateIndex },
+              { type: 'json', value: duplicateActionId },
+            ],
+          },
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect((result.value as any).input.output.changedFiles).toEqual([])
+      expect((result.value as any).input.output.status).toBe('blocked')
+    })
+
     test('reports apply_patch and apply_smart_patch paths as changed files', () => {
       const mockAgentState = createMockAgentState([])
       const mockLogger = {
@@ -607,6 +765,178 @@ describe('editor agent', () => {
       expect((result.value as any).input.output.status).toBe('completed')
     })
 
+    test('reports the destination from a committed move receipt', () => {
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        params: {},
+      })
+      generator.next()
+
+      const result = generator.next({
+        agentState: createMockAgentState([
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            content: [
+              {
+                type: 'json',
+                value: withCommittedReceipt({
+                  kind: 'file_mutation_result',
+                  version: 1,
+                  operationId: 'editor-move',
+                  outcome: 'applied',
+                  authorityTier: 'portable_path',
+                  actions: [
+                    {
+                      actionId: 'move',
+                      index: 0,
+                      action: 'move',
+                      path: 'src/old-name.ts',
+                      destinationPath: 'src/new-name.ts',
+                      outcome: 'applied',
+                      beforeHash: 'before',
+                      afterHash: 'after',
+                    },
+                  ],
+                  errors: [],
+                  freshCapabilities: [],
+                }),
+              },
+            ],
+          },
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect((result.value as any).input.output.changedFiles).toEqual([
+        'src/new-name.ts',
+      ])
+      expect((result.value as any).input.output.status).toBe('completed')
+    })
+
+    test('rejects move evidence with action or destination receipt mismatches', () => {
+      const makeMoveResult = (operationId: string) =>
+        withCommittedReceipt({
+          kind: 'file_mutation_result',
+          version: 1,
+          operationId,
+          outcome: 'applied',
+          authorityTier: 'portable_path',
+          actions: [
+            {
+              actionId: `${operationId}:0`,
+              index: 0,
+              action: 'move',
+              path: `src/${operationId}-old.ts`,
+              destinationPath: `src/${operationId}-new.ts`,
+              outcome: 'applied',
+              beforeHash: 'before',
+              afterHash: 'after',
+            },
+          ],
+          errors: [],
+          freshCapabilities: [],
+        })
+      const actionMismatch = makeMoveResult('action-mismatch')
+      actionMismatch.authorityReceipt.actions[0].action = 'update'
+      const destinationMismatch = makeMoveResult('destination-mismatch')
+      destinationMismatch.authorityReceipt.actions[0].destinationPath =
+        'src/unauthorized-destination.ts'
+
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        params: {},
+      })
+      generator.next()
+      const result = generator.next({
+        agentState: createMockAgentState([
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            content: [
+              { type: 'json', value: actionMismatch },
+              { type: 'json', value: destinationMismatch },
+            ],
+          },
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect((result.value as any).input.output.changedFiles).toEqual([])
+      expect((result.value as any).input.output.status).toBe('blocked')
+    })
+
+    test('does not attest findings from committed edits covering every finding file', () => {
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        params: {
+          handoff: {
+            findings: [
+              {
+                id: 'review-finding',
+                files: ['src/finding.ts', 'src/finding.test.ts'],
+              },
+            ],
+          },
+        },
+      } as any)
+      generator.next()
+
+      const result = generator.next({
+        agentState: createMockAgentState([
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            content: [
+              {
+                type: 'json',
+                value: withCommittedReceipt({
+                  kind: 'file_mutation_result',
+                  version: 1,
+                  operationId: 'unrelated-all-files',
+                  outcome: 'applied',
+                  authorityTier: 'portable_path',
+                  actions: [
+                    {
+                      actionId: 'source',
+                      index: 0,
+                      action: 'update',
+                      path: 'src/finding.ts',
+                      outcome: 'applied',
+                      afterHash: 'source-after',
+                    },
+                    {
+                      actionId: 'test',
+                      index: 1,
+                      action: 'update',
+                      path: 'src/finding.test.ts',
+                      outcome: 'applied',
+                      afterHash: 'test-after',
+                    },
+                  ],
+                  errors: [],
+                  freshCapabilities: [],
+                }),
+              },
+            ],
+          },
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect((result.value as any).input.output.changedFiles).toEqual([
+        'src/finding.ts',
+        'src/finding.test.ts',
+      ])
+      expect((result.value as any).input.output.findingsAddressed).toEqual([])
+    })
+
     test('works with empty initial message history', () => {
       const mockAgentState = createMockAgentState([])
       const mockLogger = {
@@ -639,6 +969,66 @@ describe('editor agent', () => {
         input: { output: { messages: any[] } }
       }
       expect(toolCall.input.output.messages).toHaveLength(1)
+    })
+
+    test('excludes automatic target pre-read messages from output', () => {
+      const initialState = createMockAgentState([])
+      const generator = editor.handleSteps!({
+        agentState: initialState,
+        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        params: {},
+        prompt: ['Target files:', '- src/target.ts'].join('\n'),
+      } as any)
+
+      expect(generator.next().value).toEqual({
+        toolName: 'read_files',
+        input: { paths: ['src/target.ts'] },
+      })
+
+      const preReadMessages = [
+        {
+          role: 'assistant' as const,
+          content: [
+            {
+              type: 'tool-call' as const,
+              toolCallId: 'automatic-pre-read',
+              toolName: 'read_files',
+              input: { paths: ['src/target.ts'] },
+            },
+          ],
+        },
+        {
+          role: 'tool' as const,
+          toolCallId: 'automatic-pre-read',
+          toolName: 'read_files',
+          content: [
+            {
+              type: 'json' as const,
+              value: { path: 'src/target.ts', content: 'entire source file' },
+            },
+          ],
+        },
+      ]
+      const preReadState = createMockAgentState(preReadMessages)
+      expect(
+        generator.next({
+          agentState: preReadState,
+          toolResult: undefined,
+          stepsComplete: false,
+        }).value,
+      ).toBe('STEP')
+
+      const editorMessage = {
+        role: 'assistant' as const,
+        content: [{ type: 'text' as const, text: 'Subsequent editor activity' }],
+      }
+      const result = generator.next({
+        agentState: createMockAgentState([...preReadMessages, editorMessage]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect((result.value as any).input.output.messages).toEqual([editorMessage])
     })
 
     test('reports target file progress when one target remains unchanged', () => {
@@ -725,6 +1115,75 @@ describe('editor agent', () => {
         changedTargetFiles: ['agents/base2/base2.ts'],
         pendingTargetFiles: ['agents/__tests__/base2.test.ts'],
       })
+    })
+
+    test('ignores backticked non-target references outside the target section', () => {
+      const mockAgentState = createMockAgentState([])
+      const generator = editor.handleSteps!({
+        agentState: mockAgentState,
+        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        params: {},
+        prompt: [
+          'Target files:',
+          '- `src/target.ts`',
+          'Relevant pattern:',
+          '- Follow `src/reference.ts`.',
+        ].join('\n'),
+      } as any)
+
+      expect(generator.next().value).toEqual({
+        toolName: 'read_files',
+        input: { paths: ['src/target.ts'] },
+      })
+      expect(
+        generator.next({
+          agentState: mockAgentState,
+          toolResult: undefined,
+          stepsComplete: false,
+        }).value,
+      ).toBe('STEP')
+
+      const result = generator.next({
+        agentState: createMockAgentState([
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            content: [
+              {
+                type: 'json',
+                value: withCommittedReceipt({
+                  kind: 'file_mutation_result',
+                  version: 1,
+                  operationId: 'target-only',
+                  outcome: 'applied',
+                  authorityTier: 'portable_path',
+                  actions: [
+                    {
+                      actionId: 'target',
+                      index: 0,
+                      action: 'update',
+                      path: 'src/target.ts',
+                      outcome: 'applied',
+                      afterHash: 'after',
+                    },
+                  ],
+                  errors: [],
+                  freshCapabilities: [],
+                }),
+              },
+            ],
+          },
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect((result.value as any).input.output.targetFileProgress).toEqual({
+        targetFiles: ['src/target.ts'],
+        changedTargetFiles: ['src/target.ts'],
+        pendingTargetFiles: [],
+      })
+      expect((result.value as any).input.output.status).toBe('completed')
     })
 
     test('pre-reads targets from Markdown heading briefs without colons', () => {

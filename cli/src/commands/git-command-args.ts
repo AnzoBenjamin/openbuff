@@ -1,4 +1,6 @@
-const FORBIDDEN_SHELL_CHARACTERS = /[\n\r;$`|&<>()[\]{}\\]/
+// Pathspec magic such as :(exclude), brace/character classes is single-quoted
+// later by quoteShellArgument, so allow ()[]{} while still blocking shell ops.
+const FORBIDDEN_SHELL_CHARACTERS = /[\n\r;$`|&<>\\]/
 
 /** Parse a small, non-expanding argument language for convenience git commands. */
 export function parseSafeGitArgs(input: string): string[] {

@@ -36,6 +36,7 @@ const READ_TOOLS = new Set<ToolName>([
   'evaluate_audit_coverage',
   'glob',
   'list_directory',
+  'list_jobs',
   'query_index',
   'read_docs',
   'read_files',

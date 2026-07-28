@@ -263,6 +263,59 @@ describe('getChangeReviewBundle', () => {
     expect(bundle.diff.length).toBeGreaterThan(0)
   })
 
+  test('ignores .agents/sessions plan artifacts for snapshot identity and files', async () => {
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-sessions-'),
+    )
+    temporaryRoots.push(cwd)
+    const git = (...args: string[]) =>
+      spawnSync('git', args, { cwd, encoding: 'utf8' })
+    expect(git('init').status).toBe(0)
+    expect(git('config', 'user.email', 'test@example.com').status).toBe(0)
+    expect(git('config', 'user.name', 'Openbuff Test').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'source.txt'), 'initial\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'initial').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'source.txt'), 'changed\n')
+
+    const before = await getChangeReviewBundle({ cwd })
+    const beforeValue = (before[0]!.type === 'json'
+      ? before[0]!.value
+      : {}) as { snapshotId: string; files: string[] }
+
+    // (a) creating a session plan artifact must not change the snapshot id.
+    const sessionDir = path.join(cwd, '.agents', 'sessions', 'my-slug')
+    fs.mkdirSync(sessionDir, { recursive: true })
+    fs.writeFileSync(path.join(sessionDir, 'PLAN.md'), '# plan\n')
+    const afterCreate = await getChangeReviewBundle({ cwd })
+    const afterCreateValue = (afterCreate[0]!.type === 'json'
+      ? afterCreate[0]!.value
+      : {}) as { snapshotId: string; files: string[] }
+    expect(afterCreateValue.snapshotId).toBe(beforeValue.snapshotId)
+
+    // Modifying an existing session artifact also must not change the id.
+    fs.writeFileSync(path.join(sessionDir, 'PLAN.md'), '# plan updated\n')
+    const afterModify = await getChangeReviewBundle({ cwd })
+    const afterModifyValue = (afterModify[0]!.type === 'json'
+      ? afterModify[0]!.value
+      : {}) as { snapshotId: string; files: string[] }
+    expect(afterModifyValue.snapshotId).toBe(beforeValue.snapshotId)
+
+    // (c) the returned files array omits the session artifact path.
+    expect(
+      afterModifyValue.files.some((f) => f.startsWith('.agents/sessions/')),
+    ).toBe(false)
+    expect(afterModifyValue.files).toEqual(['source.txt'])
+
+    // (b) a real tracked source change still changes the snapshot id.
+    fs.writeFileSync(path.join(cwd, 'source.txt'), 'changed again\n')
+    const afterSource = await getChangeReviewBundle({ cwd })
+    const afterSourceValue = (afterSource[0]!.type === 'json'
+      ? afterSource[0]!.value
+      : {}) as { snapshotId: string }
+    expect(afterSourceValue.snapshotId).not.toBe(beforeValue.snapshotId)
+  })
+
   test('returns empty files when the worktree is clean and there is no parent commit', async () => {
     const cwd = fs.mkdtempSync(
       path.join(os.tmpdir(), 'openbuff-review-single-'),

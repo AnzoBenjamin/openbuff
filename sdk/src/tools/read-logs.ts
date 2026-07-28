@@ -1,13 +1,21 @@
 import * as fs from 'fs'
 import * as path from 'path'
 
+import { jobRegistry } from '@codebuff/common/util/job-registry'
+
 import { getBackgroundJob, safeOpenJobLogForRead } from './background-jobs'
 
+import type { BackgroundJobOwner } from './background-jobs'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 
 const DEFAULT_LINES = 200
 const DEFAULT_MAX_CHARS = 20_000
 const READ_CHUNK_BYTES = 64 * 1024
+
+/** Registry-side id backing this adapter job (recovered jobs are remapped). */
+function registryIdFor(job: { jobId: string; registryJobId?: string }): string {
+  return job.registryJobId ?? job.jobId
+}
 
 type ReadLogsParams = {
   cwd: string
@@ -15,6 +23,11 @@ type ReadLogsParams = {
   jobId?: string
   lines?: number
   max_chars?: number
+  /**
+   * REQUIRED trusted owner, injected from run/session state by the caller
+   * (never from model/tool input). Only consulted on the jobId branch.
+   */
+  owner: BackgroundJobOwner
 }
 
 export async function readLogs(
@@ -27,8 +40,26 @@ export async function readLogs(
   )
 
   if (params.jobId) {
-    const job = getBackgroundJob(params.jobId)
+    // Cross-session recovery re-stamps the registry record with the trusted
+    // owner before the ownership assertion below.
+    const job = getBackgroundJob(params.jobId, { restampOwner: params.owner })
     if (!job) {
+      return [
+        {
+          type: 'json',
+          value: {
+            path: params.path ?? '',
+            jobId: params.jobId,
+            errorMessage: `No background job found with id "${params.jobId}".`,
+          },
+        },
+      ]
+    }
+
+    // Ownership gate before serving the log tail: a foreign job is refused
+    // with the same generic not_found error as an unknown id.
+    const ownership = jobRegistry.assertOwned(registryIdFor(job), params.owner)
+    if (!ownership.ok) {
       return [
         {
           type: 'json',

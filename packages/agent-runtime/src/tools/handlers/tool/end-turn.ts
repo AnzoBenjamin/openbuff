@@ -1,6 +1,6 @@
-import { listRunningBackgroundJobs } from '@codebuff/common/util/pending-background-jobs'
+import { jobRegistry } from '@codebuff/common/util/job-registry'
 
-import { listRunningBackgroundAgentJobs } from '../../../util/background-agent-jobs'
+import { getBackgroundAgentJob } from '../../../util/background-agent-jobs'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
@@ -24,14 +24,13 @@ export const handleEndTurn = (async (params: {
   const rootRunId = agentState
     ? agentState.ancestorRunIds[0] ?? agentState.runId ?? agentState.agentId
     : undefined
-  const runningJobs =
-    clientSessionId && rootRunId
-      ? listRunningBackgroundJobs({ clientSessionId, rootRunId })
-      : listRunningBackgroundJobs()
-  const runningAgentJobs =
-    clientSessionId && rootRunId
-      ? listRunningBackgroundAgentJobs({ clientSessionId, rootRunId })
-      : listRunningBackgroundAgentJobs()
+  const owner =
+    clientSessionId && rootRunId ? { clientSessionId, rootRunId } : undefined
+  // The unified job registry lists both shell `process` jobs and `agent`
+  // coroutine jobs; end_turn must keep warning about BOTH kinds.
+  const running = jobRegistry.listRunning(owner)
+  const runningJobs = running.filter((job) => job.kind === 'process')
+  const runningAgentJobs = running.filter((job) => job.kind === 'agent')
   if (runningJobs.length === 0 && runningAgentJobs.length === 0) {
     return { output: [{ type: 'json', value: { message: 'Turn ended.' } }] }
   }
@@ -43,17 +42,19 @@ export const handleEndTurn = (async (params: {
   // hide them.
   const listed = runningJobs.slice(0, MAX_JOBS_LISTED).map((job) => ({
     jobId: job.jobId,
-    command: job.command,
-    startedAt: job.startedAt,
+    command: job.label,
+    startedAt: job.startedAt ?? job.createdAt,
   }))
   const remaining = runningJobs.length - listed.length
+  // The registry stores the agentType as the label; the display agentName
+  // lives on the adapter view (keyed by the same single job id).
   const listedAgents = runningAgentJobs
     .slice(0, MAX_JOBS_LISTED)
     .map((job) => ({
       jobId: job.jobId,
-      agentType: job.agentType,
-      agentName: job.agentName,
-      startedAt: job.startedAt,
+      agentType: job.label,
+      agentName: getBackgroundAgentJob(job.jobId)?.agentName ?? job.label,
+      startedAt: job.startedAt ?? job.createdAt,
     }))
   const remainingAgents = runningAgentJobs.length - listedAgents.length
   const summary =

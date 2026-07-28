@@ -17,6 +17,12 @@ describe('safe git convenience command arguments', () => {
     (input) => expect(() => parseSafeGitArgs(input)).toThrow(),
   )
 
+  test('allows git pathspec magic that uses parentheses, braces, and brackets', () => {
+    expect(parseSafeGitArgs(':(exclude)dist')).toEqual([':(exclude)dist'])
+    expect(parseSafeGitArgs('{a,b}.ts')).toEqual(['{a,b}.ts'])
+    expect(parseSafeGitArgs('src/**/[abc].ts')).toEqual(['src/**/[abc].ts'])
+  })
+
   test('uses a safe default for status', () => {
     expect(buildSafeGitCommand('status', '', ['--short'])).toBe(
       "git status '--short'",

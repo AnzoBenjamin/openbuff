@@ -2,7 +2,7 @@ import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 
 export const WEBSEARCH_TIMEOUT_MS = 30_000
-export const MAX_WEB_FETCH_BYTES = 512_000
+export const MAX_WEB_FETCH_BYTES = 2_000_000
 export const MAX_WEB_FETCH_REDIRECTS = 5
 
 const BLOCKED_HOSTNAMES = new Set([
@@ -138,11 +138,9 @@ export async function readResponseTextWithLimit(params: {
   maxBytes?: number
 }): Promise<{ text: string; truncated: boolean }> {
   const maxBytes = params.maxBytes ?? MAX_WEB_FETCH_BYTES
-  const declaredLength = Number(params.response.headers.get('content-length'))
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-    await params.response.body?.cancel()
-    throw new Error(`Response exceeds ${maxBytes.toLocaleString()} byte limit`)
-  }
+  // Declared content-length above the cap is not a hard error: stream and
+  // soft-truncate so callers still get a usable prefix with truncated=true.
+  // (Matching the no-content-length path.)
 
   if (!params.response.body) return { text: '', truncated: false }
   const reader = params.response.body.getReader()

@@ -40,16 +40,16 @@ const inputSchema = z
       ),
   })
   .describe(
-    'Poll or follow a background job started by run_terminal_command: returns the output produced since the last check plus the job status and exit code. Use it to observe a long-running process without blocking the turn. To watch an arbitrary log file, start a `tail -f <file>` BACKGROUND job and check_job it with a wait_for pattern.',
+    'Join/wait on a background job started by run_terminal_command: returns the sequenced output events produced since the last check plus the unified job state and exit code. Use it to observe a long-running process without blocking the turn. To watch an arbitrary log file, start a `tail -f <file>` BACKGROUND job and check_job it with a wait_for pattern.',
   )
 
 const description = `
-Poll or follow a background job (started by run_terminal_command with process_type: BACKGROUND).
+Join (poll) or wait (follow) on a background job started by run_terminal_command with process_type: BACKGROUND. Every call returns a unified event-slice result from the job registry: \`events\` (the new \`{type:'output',data}\` events since your cursor), \`nextCursor\` (pass it back on the next call), \`state\` (running|completed|error|stopped|lost|cancelled), and \`exitCode\` when finished.
 
-- Poll mode (no wait_for/timeout): returns immediately with output produced since your last check_job for this job, plus status (running|completed|error) and exitCode when finished.
-- Follow mode (wait_for and/or timeout_seconds): blocks — bounded by timeout_seconds — until wait_for appears in new output or the job exits, then returns. \`matched\` indicates whether wait_for was seen. A timeout leaves the job running by default; set kill_on_timeout to true only when the timeout should explicitly terminate it. Poll mode never kills.
+- Poll mode (no wait_for/timeout): returns immediately with the output events produced since your last check_job for this job.
+- Follow mode (wait_for and/or timeout_seconds): blocks — bounded by timeout_seconds — until wait_for appears in new output or the job exits, then returns. \`matched\` indicates whether wait_for was seen. A timeout leaves the job running by default (\`timedOut: true\`); set kill_on_timeout to true only when the timeout should explicitly terminate it. Poll mode never kills.
 
-Output never repeats lines across calls: each check_job call advances that job's read offset and returns only new output. If you need the full/latest tail without consuming incremental output, use read_logs with the jobId. Prefer check_job over blocking SYNC commands for dev servers, build watchers, and log tails.
+The cursor is per-consumer: output events never repeat across calls that thread nextCursor. \`truncated\` flags that events at or below your cursor were evicted from the bounded buffer (\`dropped\` is the cumulative eviction count). If you need the full/latest tail without consuming incremental output, use read_logs with the jobId. Prefer check_job over blocking SYNC commands for dev servers, build watchers, and log tails.
 
 Example:
 ${$getNativeToolCallExampleString({
@@ -73,11 +73,66 @@ export const checkJobParams = {
     z.union([
       z.object({
         jobId: z.string(),
-        status: z.enum(['running', 'completed', 'error', 'lost']),
-        newOutput: z.string(),
-        exitCode: z.number().optional(),
+        state: z.enum([
+          'queued',
+          'running',
+          'stopping',
+          'completed',
+          'error',
+          'stopped',
+          'lost',
+          'cancelled',
+        ]),
+        events: z
+          .array(
+            z.object({
+              sequence: z.number().int().positive(),
+              jobId: z.string(),
+              timestamp: z.number(),
+              payload: z.union([
+                z.object({
+                  type: z.literal('output'),
+                  data: z.string(),
+                }),
+                z.object({
+                  type: z.literal('agent_chunk'),
+                  chunkType: z.string(),
+                  data: z.any(),
+                }),
+                z.object({
+                  type: z.literal('lifecycle'),
+                  state: z.enum([
+                    'queued',
+                    'running',
+                    'stopping',
+                    'completed',
+                    'error',
+                    'stopped',
+                    'lost',
+                    'cancelled',
+                  ]),
+                  exitCode: z.number().nullable().optional(),
+                  error: z.string().optional(),
+                }),
+                z.object({
+                  type: z.literal('status'),
+                  message: z.string().optional(),
+                }),
+              ]),
+            }),
+          )
+          .describe(
+            "Sequenced events since the consumer's cursor. Payloads match the unified job-registry JobEventPayload union ({type:'output',data} / {type:'agent_chunk',chunkType,data} / {type:'lifecycle',state,exitCode?,error?} / {type:'status',message?}); check_job primarily emits output events.",
+          ),
+        nextCursor: z.number().int().nonnegative(),
+        truncated: z.boolean(),
+        dropped: z.number().int().min(0),
+        exitCode: z.number().nullable().optional(),
         matched: z.boolean().optional(),
+        timedOut: z.boolean().optional(),
         killed: z.boolean().optional(),
+        logFile: z.string().optional(),
+        errorMessage: z.string().optional(),
       }),
       z.object({
         jobId: z.string(),

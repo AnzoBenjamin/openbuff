@@ -35,6 +35,13 @@ type CachedUserInfo = Partial<
 
 const userInfoCache: Record<string, CachedUserInfo | null> = {}
 
+/** Clears module-level user info cache. For tests only. */
+export function clearUserInfoCacheForTests(): void {
+  for (const key of Object.keys(userInfoCache)) {
+    delete userInfoCache[key]
+  }
+}
+
 type FetchLike = (
   input: Parameters<typeof globalThis.fetch>[0],
   init?: Parameters<typeof globalThis.fetch>[1],

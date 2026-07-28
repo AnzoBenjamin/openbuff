@@ -3,14 +3,18 @@ import type {
   ClientToolCall,
   CodebuffToolCall,
   CodebuffToolOutput,
+  ProcessJobClientToolCall,
 } from '@codebuff/common/tools/list'
-import {
-  getPendingBackgroundJob,
-  pendingBackgroundJobOwnedBy,
-} from '@codebuff/common/util/pending-background-jobs'
 import type { AgentState } from '@codebuff/common/types/session-state'
 
 type ToolName = 'kill_job'
+
+/**
+ * Shell kill_job stays a client tool: the SDK adapter owns the real kill
+ * (process-group SIGTERM with SIGKILL escalation). The handler stamps a
+ * TRUSTED owner (derived from agentState — never from model input) onto the
+ * forwarded call so the SDK can gate the mutating kill on registry ownership.
+ */
 export const handleKillJob = (async ({
   previousToolCallFinished,
   toolCall,
@@ -26,33 +30,26 @@ export const handleKillJob = (async ({
   agentState: AgentState
   clientSessionId: string
 }): Promise<{ output: CodebuffToolOutput<ToolName> }> => {
-  const job = getPendingBackgroundJob(toolCall.input.jobId)
-  const owner = {
-    clientSessionId,
-    rootRunId:
-      agentState.ancestorRunIds[0] ?? agentState.runId ?? agentState.agentId,
-  }
-  if (!job || !pendingBackgroundJobOwnedBy(job, owner)) {
-    return {
-      output: [
-        {
-          type: 'json',
-          value: {
-            jobId: toolCall.input.jobId,
-            errorMessage: `Background shell job "${toolCall.input.jobId}" is unavailable to this run.`,
-          },
-        },
-      ],
-    }
-  }
-  const clientToolCall: ClientToolCall<ToolName> = {
+  const clientToolCall: ProcessJobClientToolCall<ToolName> = {
     toolName: 'kill_job',
     toolCallId: toolCall.toolCallId,
     input: {
       jobId: toolCall.input.jobId,
       signal: toolCall.input.signal,
+      // Trusted owner injected from agent/session state (never model input).
+      owner: {
+        clientSessionId,
+        rootRunId:
+          agentState.ancestorRunIds[0] ?? agentState.runId ?? agentState.agentId,
+        parentRunId: agentState.runId ?? agentState.agentId,
+        parentAgentId: agentState.agentId,
+      },
     },
   }
   await previousToolCallFinished
-  return { output: await requestClientToolCall(clientToolCall) }
+  return {
+    output: await requestClientToolCall(
+      clientToolCall as unknown as ClientToolCall<ToolName>,
+    ),
+  }
 }) satisfies CodebuffToolHandlerFunction<ToolName>

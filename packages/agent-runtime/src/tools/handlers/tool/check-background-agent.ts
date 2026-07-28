@@ -1,11 +1,10 @@
-import { sleep } from '@codebuff/common/util/promise'
-
 import {
-  getBackgroundAgentJob,
-  readBackgroundAgentChunks,
-  backgroundAgentJobOwnedBy,
+  assertBackgroundAgentJobOwned,
   cancelBackgroundAgentJob,
-  type BackgroundAgentChunk,
+  getBackgroundAgentJob,
+  getBackgroundAgentJobCore,
+  snapshotBackgroundAgentJob,
+  waitForBackgroundAgentJob,
 } from '../../../util/background-agent-jobs'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
@@ -14,28 +13,31 @@ import type {
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
 import type { AgentState } from '@codebuff/common/types/session-state'
+import type { JobEvent } from '@codebuff/common/util/job-registry'
 
 type ToolName = 'check_background_agent'
 
 /**
- * Flatten a chunk's payload into a searchable string for wait_for matching.
- * Payloads are opaque structured events (text, tool_call, tool_result,
- * subagent_*); we join string-coercible fields so a caller can wait for a
- * substring like 'completed' or a tool name.
+ * Flatten an event's payload into a searchable string for wait_for matching.
+ * agent_chunk payloads are opaque structured events (text, tool_call,
+ * tool_result, subagent_*); we join string-coercible fields so a caller can
+ * wait for a substring like 'completed' or a tool name.
  */
-function chunkToSearchString(chunk: BackgroundAgentChunk): string {
-  const { type, payload } = chunk
-  if (typeof payload === 'string') {
-    return `${type} ${payload}`
+function eventToSearchString(event: JobEvent): string {
+  const payload = event.payload
+  if (payload.type !== 'agent_chunk') return ''
+  const { chunkType, data } = payload
+  if (typeof data === 'string') {
+    return `${chunkType} ${data}`
   }
-  if (payload && typeof payload === 'object') {
+  if (data && typeof data === 'object') {
     try {
-      return `${type} ${JSON.stringify(payload)}`
+      return `${chunkType} ${JSON.stringify(data)}`
     } catch {
-      return type
+      return chunkType
     }
   }
-  return type
+  return chunkType
 }
 
 export const handleCheckBackgroundAgent = (async ({
@@ -58,36 +60,33 @@ export const handleCheckBackgroundAgent = (async ({
     cancel = false,
     cursor,
   } = toolCall.input
-  const job = getBackgroundAgentJob(jobId)
-  if (!job) {
-    return {
-      output: {
-        type: 'json',
-        value: {
-          jobId,
-          errorMessage: `No background agent job found with id "${jobId}".`,
-        },
-      } as unknown as CodebuffToolOutput<ToolName>,
-    }
-  }
   const rootRunId =
     agentState.ancestorRunIds[0] ?? agentState.runId ?? agentState.agentId
-  if (!backgroundAgentJobOwnedBy(job, { clientSessionId, rootRunId })) {
+  const owner = { clientSessionId, rootRunId }
+
+  // Ownership is enforced inside the unified core registry via assertOwned;
+  // the legacy owned/foreign/recover gate is gone.
+  const owned = assertBackgroundAgentJobOwned(jobId, owner)
+  if (!owned.ok) {
     return {
       output: {
         type: 'json',
-        value: {
-          jobId,
-          errorMessage:
-            'Background agent job is not owned by this client session/root run.',
-        },
+        value:
+          owned.reason === 'not_found'
+            ? {
+                jobId,
+                errorMessage: `No background agent job found with id "${jobId}".`,
+              }
+            : {
+                jobId,
+                errorMessage:
+                  'Background agent job is not owned by this client session/root run.',
+              },
       } as unknown as CodebuffToolOutput<ToolName>,
     }
   }
-  const consumerId = `${clientSessionId}:${agentState.agentId}`
-  const readChunks = () =>
-    readBackgroundAgentChunks({ job, consumerId, cursor })
 
+  // cancel:true maps to the registry's cancel + the adapter's AbortController.
   if (cancel) {
     const cancelResult = cancelBackgroundAgentJob(jobId)
     if ('errorMessage' in cancelResult) {
@@ -106,127 +105,63 @@ export const handleCheckBackgroundAgent = (async ({
       intent.completedAt = Date.now()
       intent.error = 'Cancelled by check_background_agent.'
     }
-    const read = readChunks()
-    return {
-      output: {
-        type: 'json',
-        value: {
-          jobId,
-          status: job.status,
-          newChunks: read.chunks,
-          nextCursor: read.nextCursor,
-          cancelled: true,
-          droppedChunks: read.droppedChunks,
-          error: job.error,
-        },
-      } as unknown as CodebuffToolOutput<ToolName>,
-    }
   }
 
-  // Poll mode: return immediately with whatever new chunks exist.
-  if (!wait_for && (!timeout_seconds || timeout_seconds <= 0)) {
-    const read = readChunks()
-    return {
-      output: {
-        type: 'json',
-        value: {
-          jobId,
-          status: job.status,
-          newChunks: read.chunks,
-          nextCursor: read.nextCursor,
-          ...(job.status === 'completed' ? { result: job.result } : {}),
-          ...(job.status === 'error' ? { error: job.error } : {}),
-          ...(job.status === 'cancelled'
-            ? { error: job.error, cancelled: true }
-            : {}),
-          droppedChunks: read.droppedChunks,
-        },
-      } as unknown as CodebuffToolOutput<ToolName>,
-    }
-  }
+  const timeoutMs = Math.max(0, (timeout_seconds ?? 0) * 1000)
+  const predicate = wait_for
+    ? (event: JobEvent) => eventToSearchString(event).includes(wait_for)
+    : undefined
+  const follow = Boolean(wait_for) || timeoutMs > 0
 
-  // Follow mode: poll until wait_for matches OR the job settles OR the deadline.
-  // A single buildFollowResult helper constructs the output object so the match
-  // decision is unambiguous (early return short-circuits the loop; no reliance
-  // on `break` exiting only an inner for-loop while leaving the while-condition
-  // to re-evaluate).
-  const findMatch = (chunks: BackgroundAgentChunk[]): boolean => {
-    if (!wait_for) return false
-    for (const chunk of chunks) {
-      if (chunkToSearchString(chunk).includes(wait_for)) {
-        return true
-      }
-    }
-    return false
-  }
+  // Join/wait over the unified core event stream. Poll mode resolves
+  // immediately from the snapshot; follow mode is driven off the registry's
+  // internal notifications (no sleep-polling).
+  const result = follow
+    ? await waitForBackgroundAgentJob(jobId, {
+        cursor,
+        predicate,
+        timeoutMs: timeoutMs > 0 ? timeoutMs : undefined,
+      })
+    : (snapshotBackgroundAgentJob(jobId, cursor) ?? undefined)
 
-  let latestCursor = cursor
-  let droppedChunks = 0
-  const buildFollowResult = (
-    chunks: BackgroundAgentChunk[],
-    matched: boolean,
-  ): { output: CodebuffToolOutput<ToolName> } => ({
+  const events = result?.events ?? []
+  const nextCursor = result?.nextCursor ?? cursor ?? 0
+  const state = result?.state ?? owned.job.state
+  const dropped = result?.dropped ?? 0
+  const truncated =
+    result && 'truncated' in result ? result.truncated : dropped > 0
+  const matched = predicate ? events.some(predicate) : undefined
+  const timedOut = result && 'timedOut' in result ? result.timedOut : false
+
+  // The settled result/error comes from the core Job view (the adapter's
+  // completion handler stamps result; error is folded into the lifecycle).
+  const coreJob = getBackgroundAgentJobCore(jobId)
+  const view = getBackgroundAgentJob(jobId)
+  const cancelled = cancel || state === 'cancelled'
+  const resultValue = view?.result
+  const errorValue = coreJob?.error ?? view?.error
+
+  return {
     output: {
       type: 'json',
       value: {
         jobId,
-        status: job.status,
-        newChunks: chunks,
-        nextCursor: latestCursor,
-        ...(job.status === 'completed' ? { result: job.result } : {}),
-        ...(job.status === 'error' ? { error: job.error } : {}),
-        ...(job.status === 'cancelled'
-          ? { error: job.error, cancelled: true }
+        state,
+        events,
+        nextCursor,
+        truncated,
+        dropped,
+        ...(state === 'completed' && resultValue !== undefined
+          ? { result: resultValue }
           : {}),
-        droppedChunks,
-        matched,
-        killed: false,
+        ...(errorValue !== undefined &&
+        (state === 'error' || state === 'cancelled')
+          ? { error: errorValue }
+          : {}),
+        ...(matched !== undefined ? { matched } : {}),
+        ...(timedOut ? { timedOut: true } : {}),
+        ...(cancelled ? { cancelled: true } : {}),
       },
     } as unknown as CodebuffToolOutput<ToolName>,
-  })
-
-  const deadline = Date.now() + (timeout_seconds ?? 0) * 1000
-  const initialRead = readBackgroundAgentChunks({
-    job,
-    consumerId,
-    cursor: latestCursor,
-  })
-  let pendingChunks: BackgroundAgentChunk[] = initialRead.chunks
-  latestCursor = initialRead.nextCursor
-  droppedChunks += initialRead.droppedChunks
-
-  // Check the initial batch for an immediate match (no wait needed).
-  if (findMatch(pendingChunks)) {
-    return buildFollowResult(pendingChunks, true)
   }
-
-  // Single polling loop. Early-return on match via the helper; otherwise loop
-  // until the job settles or the deadline elapses.
-  while (job.status === 'running' && Date.now() < deadline) {
-    await sleep(200)
-    const read = readBackgroundAgentChunks({
-      job,
-      consumerId,
-      cursor: latestCursor,
-    })
-    pendingChunks = pendingChunks.concat(read.chunks)
-    latestCursor = read.nextCursor
-    droppedChunks += read.droppedChunks
-    if (findMatch(pendingChunks)) {
-      return buildFollowResult(pendingChunks, true)
-    }
-  }
-
-  // Loop exited: either the job settled or the deadline elapsed without a
-  // match. Drain any final chunks accumulated since the last read so the
-  // caller sees everything produced during the follow window.
-  const finalRead = readBackgroundAgentChunks({
-    job,
-    consumerId,
-    cursor: latestCursor,
-  })
-  pendingChunks = pendingChunks.concat(finalRead.chunks)
-  latestCursor = finalRead.nextCursor
-  droppedChunks += finalRead.droppedChunks
-  return buildFollowResult(pendingChunks, false)
 }) satisfies CodebuffToolHandlerFunction<ToolName>

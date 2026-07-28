@@ -19,6 +19,7 @@ import { handleGetChangeReviewBundle } from './tool/get-change-review-bundle'
 import { handleGlob } from './tool/glob'
 import { handleKillJob } from './tool/kill-job'
 import { handleReadLogs } from './tool/read-logs'
+import { handleListJobs } from './tool/list-jobs'
 import { handleListDirectory } from './tool/list-directory'
 import { handleLookupAgentInfo } from './tool/lookup-agent-info'
 import { handleQueryIndex } from './tool/query-index'
@@ -97,6 +98,7 @@ export const codebuffToolHandlers = {
   glob: handleGlob,
   kill_job: handleKillJob,
   read_logs: handleReadLogs,
+  list_jobs: handleListJobs,
   list_directory: handleListDirectory,
   lookup_agent_info: handleLookupAgentInfo,
   query_index: handleQueryIndex,

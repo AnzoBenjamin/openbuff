@@ -24,7 +24,7 @@ import type { FileFilter } from './read-files'
 import type { ApplyPatchOperation } from '@codebuff/common/tools/params/tool/apply-patch'
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
-import { buildFreshWholeFileCapability } from './mutation-capabilities'
+import { buildFreshWholeFileMutationAuthority } from './mutation-capabilities'
 
 type ApplyPatchResult = CodebuffToolOutput<'apply_patch'>
 type ApplyPatchJson = ApplyPatchResult[number] & { type: 'json' }
@@ -769,7 +769,7 @@ function validateReadCapabilities(params: {
         [
           `apply_patch rejected for ${path}: the basedOnRead range is stale.`,
           `Expected ${hash} for lines ${startLine}-${endLine}, but current hash is ${currentHash}.`,
-          `Re-read with read_files ranges: [{ path: "${path}", startLine: ${startLine}, endLine: ${endLine} }] and retry with the new rangeHash.`,
+          `Re-read with read_files ranges: [{ path: "${path}", startLine: ${startLine}, endLine: ${endLine} }] and copy the fresh editAnchor.readCapability cap.v3 token into the operation.basedOnRead token array.`,
         ].join('\n'),
       )
       continue
@@ -825,6 +825,15 @@ function successResult(params: {
       : params.action === 'delete'
         ? ('delete' as const)
         : ('update' as const)
+  const postEditAuthority =
+    action === 'delete' || params.finalContent === undefined
+      ? undefined
+      : buildFreshWholeFileMutationAuthority({
+          canonicalPath: params.canonicalPath ?? params.file,
+          path: params.file,
+          content: params.finalContent,
+          capabilityIssuer: params.capabilityIssuer,
+        })
   return {
     type: 'json',
     value: fileMutationResultV1Schema.parse({
@@ -841,25 +850,21 @@ function successResult(params: {
           outcome: 'applied',
           beforeHash: params.beforeHash,
           afterHash: params.receipt.actions[0]?.afterHash ?? params.afterHash,
+          ...(postEditAuthority
+            ? {
+                afterContent: postEditAuthority.afterContent,
+                editAnchor: postEditAuthority.editAnchor,
+              }
+            : {}),
         },
       ],
       authorityTier: params.receipt.authorityTier,
       receiptId: params.receipt.receiptId,
       authorityReceipt: params.receipt,
       errors: [],
-      freshCapabilities:
-        action === 'delete' ||
-        params.finalContent === undefined ||
-        !params.capabilityIssuer
-          ? []
-          : [
-              buildFreshWholeFileCapability({
-                canonicalPath: params.canonicalPath ?? params.file,
-                path: params.file,
-                content: params.finalContent,
-                capabilityIssuer: params.capabilityIssuer,
-              }),
-            ],
+      freshCapabilities: postEditAuthority
+        ? [postEditAuthority.capability]
+        : [],
     }),
   }
 }
@@ -1181,7 +1186,7 @@ export async function applyPatchTool(params: {
           return [
             `Large-file apply_patch blocked for ${operation.path}: this file has ${getLineCount(oldContent).toLocaleString()} lines and ${oldContent.length.toLocaleString()} characters.`,
             'Do not use naked apply_patch on large files.',
-            'First read every touched hunk with read_files.ranges, then retry with operation.basedOnRead containing { startLine, endLine, hash: rangeHash } for each hunk.',
+            'First read every touched hunk with read_files.ranges, then copy each fresh editAnchor.readCapability cap.v3 token into the operation.basedOnRead token array.',
           ].join('\n')
         }
 
@@ -1333,6 +1338,7 @@ export async function applyPatchTool(params: {
         afterHash: updateAfterHash,
         finalContent: await fs.readFile(authorizedPath.operationPath, 'utf-8'),
         canonicalPath: authorizedPath.canonicalPath,
+        capabilityIssuer: params.capabilityIssuer,
       }),
     ]
   } catch (error) {

@@ -95,6 +95,7 @@ export function createBase2(
       'check_job',
       'kill_job',
       'read_logs',
+      'list_jobs',
       'inspect_workspace',
       'get_task',
       'get_change_review_bundle',
@@ -286,7 +287,7 @@ Use the spawn_agents tool to spawn specialized agents to help you complete the u
     '- Spawn the debugger after repeated validation failures, runtime failures, or unclear crash behavior where focused diagnosis is needed.',
     '- Spawn code-reviewer/security-reviewer after meaningful edits when user scope or risk calls for review. Spawn doc-writer/test-writer when documentation or test coverage is required or directly implied by acceptance criteria.',
     '- Spawn bashers sequentially if the second command depends on the the first.',
-    '- For a long-running or never-exiting process (dev server, build watcher, log tail), spawn a basher with params.process_type set to BACKGROUND: it returns a jobId immediately instead of blocking. Then call the check_job tool to poll new output and status, or to follow it (pass wait_for to block until a readiness/error pattern appears, with a timeout_seconds bound). Use kill_job when a background job is no longer needed. To watch an existing log file, start a BACKGROUND `tail -f <file>` and check_job it.',
+    '- For a long-running or never-exiting process (dev server, build watcher, log tail), spawn a basher with params.process_type set to BACKGROUND: it returns a jobId immediately instead of blocking. Then call the check_job tool to poll new output and status, or to follow it (pass wait_for to block until a readiness/error pattern appears, with a timeout_seconds bound). Use kill_job when a background job is no longer needed. To watch an existing log file, start a BACKGROUND `tail -f <file>` and check_job it. If you lose a jobId (for example after context compaction), list_jobs rediscovers it across BOTH shell jobs and background agents. Live job status and output are surfaced to the user automatically, so you do not need to poll purely for the user to see progress.',
     '- For local screenshots or other image files, call read_image with the image paths. Do not call read_files on image formats. Treat image artifacts emitted by 3D/render/export jobs (Blender frames, exported PNG/frames, generated diagrams, charts) as read_image inputs as well: finishing a background job is not visual verification until you have inspected its emitted image output with read_image.',
   ).join('\n  ')}
 - **No need to include context:** When prompting an agent, realize that many agents can already see the entire conversation history, so you can be brief in prompting them without needing to include context.
@@ -435,6 +436,12 @@ ${specialistRoutingSection}
         base2ActiveWork?: Base2ActiveWorkState
         canSuggestFollowups?: boolean
         uncommittedUnvalidatedFiles?: string[]
+        commitScopeBypassAuthorized?: boolean
+        commitScopeBypassRecord?: {
+          reason: string
+          authorizedAt: string
+          unvalidatedFiles: string[]
+        }
         workspaceState?: {
           revision: number
           snapshotId: string
@@ -481,6 +488,7 @@ ${specialistRoutingSection}
       const reviewerAgentType = 'code-reviewer'
       const MAX_REPAIR_ROUNDS = 3
       const MAX_REVIEWER_NO_VERDICT_RETRIES = 1
+      const MAX_REVIEWER_REPAIR_ROUNDS = 3
       const existingActiveWorkState = mutableAgentState.base2ActiveWork
       const hadPendingGateFiles =
         !!existingActiveWorkState &&
@@ -506,6 +514,7 @@ ${specialistRoutingSection}
         nextRequiredAction: '',
         lastPinnedStateMessage: '',
         gatePassedFiles: [],
+        gatePassedFileMarkers: {},
         gatePassedPendingFiles: [],
         gatePassedReviewerVerdict: '',
         gatePassedValidationSummary: '',
@@ -532,6 +541,10 @@ ${specialistRoutingSection}
       activeWorkState.changedFiles ??= []
       activeWorkState.pendingGateFiles ??= []
       activeWorkState.gatePassedFiles ??= []
+      // Record, not a list: never routed through normalizeGateFileList. Just
+      // guarantee it is always an object so older serialized state (which
+      // lacks it) is treated as `{}`.
+      activeWorkState.gatePassedFileMarkers ??= {}
       activeWorkState.gatePassedPendingFiles ??= []
       activeWorkState.gatePassedReviewerVerdict ??= ''
       activeWorkState.gatePassedValidationSummary ??= ''
@@ -589,6 +602,11 @@ ${specialistRoutingSection}
         activeWorkState.gatePassedPendingFiles,
       )
       updateWorkflowTodoProgressFromMessages(mutableAgentState.messageHistory)
+      // Recognize a user-issued "COMMIT ANYWAY" at turn start (not only in
+      // the post-STEP messageHistory branch) so a git-committer spawned in
+      // the first step of the 'COMMIT ANYWAY' turn already sees the
+      // published bypass flag instead of being blocked by the stale value.
+      updateCommitScopeBypassFromMessages(mutableAgentState.messageHistory)
       if (!hadCurrentPhase) {
         activeWorkState.currentPhase = inferActiveWorkPhase(activeWorkState)
       }
@@ -687,6 +705,48 @@ ${specialistRoutingSection}
         } as any
       }
 
+      // Explicit Git delivery is the one turn type allowed to claim files that
+      // were already dirty at turn start. Keep this classifier inline because
+      // handleSteps is serialized through toString()/new Function().
+      function hasExplicitGitDeliveryIntent(value: unknown): boolean {
+        if (typeof value !== 'string') return false
+        const text = value.replace(/\s+/g, ' ').trim()
+        if (!text) return false
+        // The exact standalone bypass phrase is not a delivery intent; it
+        // authorizes committing despite unvalidated files. Matching it here
+        // would re-arm the gate and block the very commit it authorizes.
+        if (text.toUpperCase() === 'COMMIT ANYWAY') return false
+        const gitAction = String.raw`(?:commit|push|stage|staging)`
+        if (
+          new RegExp(
+            String.raw`\b(?:do not|don't|dont|never|avoid|without|no need to|not going to)\b[^.!?;\n]{0,64}\b${gitAction}\b`,
+            'i',
+          ).test(text)
+        ) {
+          return false
+        }
+        const deliveryScope =
+          String.raw`(?:changes?|files?|work|branch|working[- ]tree)`
+        const explicitImperativeDelivery =
+          new RegExp(
+            String.raw`\b(?:please|then|now|can you|could you|would you)\s+(?:also\s+)?${gitAction}\b`,
+            'i',
+          ).test(text) ||
+          new RegExp(String.raw`^(?:please\s+)?${gitAction}\b`, 'i').test(
+            text,
+          )
+        if (explicitImperativeDelivery) return true
+
+        const advisoryQuestion =
+          /(?:^|[.!?;]\s*)(?:should\b|how\s+(?:do|can|should|would)\b)/i
+        if (advisoryQuestion.test(text)) return false
+
+        return new RegExp(
+          String.raw`\b${gitAction}\b(?:\s+(?:and|then)\s+(?:commit|push))?(?:\s+(?:our|my|the|these|those|all|current|existing|pending|dirty|local))?\s+${deliveryScope}\b`,
+          'i',
+        ).test(text)
+      }
+
       const initialGitStatus = yield {
         toolName: 'git_status',
         input: {},
@@ -713,6 +773,18 @@ ${specialistRoutingSection}
         activeWorkState.openReviewerBlockers.length === 0 &&
         activeWorkState.nextRequiredAction.trim().length === 0
       const gatePassedFiles = new Set<string>(activeWorkState.gatePassedFiles)
+      if (
+        hasExplicitGitDeliveryIntent(prompt) &&
+        initialGitStatusFiles.length > 0
+      ) {
+        recordChangedFiles(initialGitStatusFiles)
+        editsHappened = true
+        finalResponseGateOpen = false
+        mutableAgentState.canSuggestFollowups = false
+        activeWorkState.currentPhase = 'awaiting_validation'
+        activeWorkState.latestWorkSummary = `Explicit Git delivery request adopted turn-start dirty files: ${initialGitStatusFiles.join(', ')}`
+        markActiveWorkStateChanged()
+      }
       // Track files previously observed dirty in git status so we can safely
       // prune them from the pending set when they disappear (committed).
       const gitStatusObservedFiles = new Set<string>()
@@ -727,10 +799,14 @@ ${specialistRoutingSection}
             'No configured file-change hooks ran.',
         )
       ) {
+        const reopenMarkers = (activeWorkState.gatePassedFileMarkers ??= {})
         for (const file of activeWorkState.gatePassedPendingFiles) {
           changedFiles.add(file)
           pendingGateFiles.add(file)
           gatePassedFiles.delete(file)
+          // Keep the marker ledger consistent: a file removed from
+          // gatePassedFiles must not leave an orphan marker behind.
+          delete reopenMarkers[file]
         }
         activeWorkState.pendingGateFiles = Array.from(pendingGateFiles)
         activeWorkState.gatePassedFiles = Array.from(gatePassedFiles)
@@ -744,6 +820,47 @@ ${specialistRoutingSection}
         editsHappened = true
         finalResponseGateOpen = false
         markActiveWorkStateChanged()
+      }
+      // Generalized per-file eviction ledger (hybrid Option A). In addition to
+      // the gatePassedPendingFiles fingerprint reopen above, evict ANY credited
+      // file whose current content marker no longer matches the marker captured
+      // when it was credited into gatePassedFiles. A credited file with NO
+      // stored marker (legacy serialized state predating gatePassedFileMarkers)
+      // is treated as drifted and evicted (fail closed) so a legacy ledger
+      // cannot grant an unattested commit. Runs before the
+      // uncommittedUnvalidatedFiles publication and any commit-guard evaluation.
+      {
+        const ledgerMarkers = (activeWorkState.gatePassedFileMarkers ??= {})
+        let evictedDriftedGatePassedFile = false
+        for (const file of Array.from(gatePassedFiles)) {
+          const storedMarker = ledgerMarkers[file]
+          const currentMarker = readGateFileContentMarker(file)
+          // Evict when: no stored marker (legacy state), marker mismatch
+          // (content drift), OR current marker is not attestable (external
+          // symlink, unreadable file, missing crypto). A stable error string
+          // must never retain credit.
+          if (
+            storedMarker === undefined ||
+            storedMarker !== currentMarker ||
+            !isAttestableContentMarker(currentMarker)
+          ) {
+            gatePassedFiles.delete(file)
+            delete ledgerMarkers[file]
+            changedFiles.add(file)
+            pendingGateFiles.add(file)
+            evictedDriftedGatePassedFile = true
+          }
+        }
+        if (evictedDriftedGatePassedFile) {
+          activeWorkState.pendingGateFiles = Array.from(pendingGateFiles)
+          activeWorkState.gatePassedFiles = Array.from(gatePassedFiles)
+          activeWorkState.currentPhase = 'awaiting_validation'
+          activeWorkState.latestWorkSummary =
+            'A previously gate-passed file changed after crediting; validation and review were reopened.'
+          editsHappened = true
+          finalResponseGateOpen = false
+          markActiveWorkStateChanged()
+        }
       }
       while (true) {
         yield {
@@ -779,10 +896,27 @@ ${specialistRoutingSection}
         // green gate pass, so the git-committer spawn guard in the tool executor can
         // refuse to stage never-validated changes even when the finalization gate is
         // otherwise open (a turn can end green on file A while an unrelated file B was
-        // never validated). Recomputed every iteration against the current
-        // gatePassedFiles so files validated this turn drop out of the set.
+        // never validated). Scoped to task-related files this agent actually touched
+        // (touchedFiles/changedFiles/pendingGateFiles/gatePassedFiles) so unrelated
+        // dirty files left by other agents or processes working the same codebase no
+        // longer block commits. The filter is recomputed every iteration
+        // against the current gatePassedFiles so files validated this turn drop
+        // out of the set. Note: initialGitStatusDirtyFiles is the turn-start
+        // snapshot. A task-related file dirtied at turn start and then reverted
+        // (not committed) mid-turn stays published until the next turn
+        // (fail-closed, safe), and a file dirtied only via a non-edit-tool
+        // channel (e.g. run_terminal_command) may not be re-captured into the
+        // task-related set this turn. Both directions fail safe.
+        const taskRelatedFiles = new Set<string>([
+          ...activeWorkState.touchedFiles,
+          ...activeWorkState.changedFiles,
+          ...activeWorkState.pendingGateFiles,
+          ...activeWorkState.gatePassedFiles,
+        ])
         mutableAgentState.uncommittedUnvalidatedFiles =
-          initialGitStatusDirtyFiles.filter((file) => !gatePassedFiles.has(file))
+          initialGitStatusDirtyFiles.filter(
+            (file) => taskRelatedFiles.has(file) && !gatePassedFiles.has(file),
+          )
 
         const pinnedStateMessage = buildPinnedActiveWorkMessage(activeWorkState)
         if (
@@ -825,6 +959,11 @@ ${specialistRoutingSection}
             .messageHistory
         }
         let editsThisStep = false
+        // Reset per STEP iteration (NOT hoisted across iterations): true when
+        // this step ran a terminal-mutation tool that can write files the
+        // edit-artifact channel does not capture. Used to scope the mid-turn
+        // git-status sweep's absorption below.
+        let terminalMutationThisStep = false
         const files = extractChangedFiles(
           (stepResult as any) && (stepResult as any).toolResult,
         )
@@ -836,13 +975,28 @@ ${specialistRoutingSection}
           markActiveWorkStateChanged()
         }
         const messageHistory = (stepResult as any)?.agentState?.messageHistory
+        // Capture the pre-update start index so the terminal-mutation scan
+        // below covers the SAME message delta extractChangedFilesFromMessages
+        // scans; processedMessageHistoryLength is overwritten right after. If
+        // we scanned from the post-update length the slice would be empty and
+        // the terminal signal would always be false.
+        const messageHistoryStartIndex = processedMessageHistoryLength
         const messageFiles = extractChangedFilesFromMessages(
           messageHistory,
-          processedMessageHistoryLength,
+          messageHistoryStartIndex,
         )
+        if (
+          messagesRanTerminalMutationTool(
+            messageHistory,
+            messageHistoryStartIndex,
+          )
+        ) {
+          terminalMutationThisStep = true
+        }
         if (Array.isArray(messageHistory)) {
           currentConversationMessages = messageHistory
           updateWorkflowTodoProgressFromMessages(messageHistory)
+          updateCommitScopeBypassFromMessages(messageHistory)
           processedMessageHistoryLength = messageHistory.length
         }
         if (messageFiles.length > 0) {
@@ -894,7 +1048,7 @@ ${specialistRoutingSection}
           for (const pendingFile of Array.from(pendingGateFiles)) {
             if (gitStatusObservedFiles.has(pendingFile)) {
               pendingGateFiles.delete(pendingFile)
-              gatePassedFiles.add(pendingFile)
+              creditGatePassedFiles([pendingFile])
             }
           }
         }
@@ -905,9 +1059,22 @@ ${specialistRoutingSection}
           gitStatusObservedDirty = true
         }
         for (const file of gitStatusFiles) {
+          // Concurrent-instance isolation: absorb a newly-dirty git-status
+          // file into the pending set only when this agent plausibly authored
+          // it — either it is already task-related (present in the live
+          // changedFiles set, which recordChangedFiles populated this step from
+          // edit-tool/message-history artifacts) or a terminal-mutation tool
+          // (run_terminal_command / a spawned basher) ran this step and can
+          // write files the edit-artifact channel does not capture. A file that
+          // is neither self-authored nor produced during a terminal step is
+          // attributed to a concurrent instance / external churn and excluded.
+          // The observation bookkeeping above (gitStatusObservedFiles.add and
+          // gitStatusObservedDirty) stays UNSCOPED for every git-status file so
+          // committed-file pruning keeps working.
           if (
             !initialGitStatusFiles.includes(file) &&
-            !gatePassedFiles.has(file)
+            !gatePassedFiles.has(file) &&
+            (changedFiles.has(file) || terminalMutationThisStep)
           ) {
             editsHappened = true
             recordChangedFiles([file], { fromStatusObservation: true })
@@ -1260,15 +1427,11 @@ ${specialistRoutingSection}
                   unknowns: [],
                   findings: [],
                   permissions: {
-                    readablePaths: [
-                      ...docTargets,
-                      ...docTargets.map((f: string) =>
-                        f.includes('/')
-                          ? f.split('/').slice(0, -1).join('/')
-                          : '.',
-                      ),
-                      ...docWriterScopePatterns(docTargets),
-                    ],
+                    // Mirror doc-writer's static filesystemScope.read (already '**/*') so this
+                    // per-spawn handoff does not narrow below the agent's static read ceiling.
+                    // Writes stay doc-only via docWriterScopePatterns and the agent has no
+                    // terminal/network/spawn tool, so repo-wide read grants no exfiltration path.
+                    readablePaths: ['**/*'],
                     writablePaths: docWriterScopePatterns(docTargets),
                     allowedTools: [
                       'read_files',
@@ -1390,17 +1553,19 @@ ${specialistRoutingSection}
             const records = collectReviewerFindingRecordsInline(securityToolResult)
             activeWorkState.openReviewerBlockers = securityBlockers
             activeWorkState.openReviewerFindings = securityBlockers.map(
-              (text: string, index: number) => ({
-                id:
-                  records[index]?.id ?? buildReviewerFindingId(text, index),
-                gateId: `security-reviewer:${securitySnapshotFingerprint}`,
-                text: records[index]?.text ?? text,
-                status: 'open' as const,
-                files: currentPendingGateFiles,
-                snapshotFingerprint: securitySnapshotFingerprint,
-                reviewer: 'security-reviewer' as const,
-                createdAt: new Date().toISOString(),
-              }),
+              (text: string, index: number) => {
+                const record = correlateReviewerFindingRecord(text, records)
+                return {
+                  id: record?.id ?? buildReviewerFindingId(text, index),
+                  gateId: `security-reviewer:${securitySnapshotFingerprint}`,
+                  text: record?.text ?? text,
+                  status: 'open' as const,
+                  files: currentPendingGateFiles,
+                  snapshotFingerprint: securitySnapshotFingerprint,
+                  reviewer: 'security-reviewer' as const,
+                  createdAt: new Date().toISOString(),
+                }
+              },
             )
             activeWorkState.requiredReviewerRevalidation = 'security-reviewer'
             activeWorkState.currentPhase = 'repair_loop'
@@ -1812,17 +1977,22 @@ ${specialistRoutingSection}
                     activeWorkState.currentPhase = 'blocked'
                     activeWorkState.openReviewerBlockers = blockers
                     activeWorkState.openReviewerFindings = blockers.map(
-                      (text: string, index: number) => ({
-                        id:
-                          records[index]?.id ??
-                          buildReviewerFindingId(text, index),
-                        gateId: `${agentType}:${expectedSnapshotId}`,
-                        text: records[index]?.text ?? text,
-                        status: 'open' as const,
-                        files: currentPendingGateFiles,
-                        snapshotFingerprint: expectedSnapshotId,
-                        createdAt: new Date().toISOString(),
-                      }),
+                      (text: string, index: number) => {
+                        const record = correlateReviewerFindingRecord(
+                          text,
+                          records,
+                        )
+                        return {
+                          id:
+                            record?.id ?? buildReviewerFindingId(text, index),
+                          gateId: `${agentType}:${expectedSnapshotId}`,
+                          text: record?.text ?? text,
+                          status: 'open' as const,
+                          files: currentPendingGateFiles,
+                          snapshotFingerprint: expectedSnapshotId,
+                          createdAt: new Date().toISOString(),
+                        }
+                      },
                     )
                     activeWorkState.nextRequiredAction = `Resolve ${agentType} findings before validation and finalization.`
                     activeWorkState.latestWorkSummary = `${agentType} blocked the current change snapshot.`
@@ -1946,6 +2116,14 @@ ${specialistRoutingSection}
           } as any
           continue
         }
+        // Freeze both the live dirty scope and the cumulative validation scope
+        // for this final gate attempt. A resumed pending file may already be
+        // committed, but it still requires validation before finalization.
+        const dirtyGateScopeFiles = deriveGateScopeFiles(gitStatusFiles)
+        const gateScopeFiles = normalizeGateFileList([
+          ...dirtyGateScopeFiles,
+          ...currentPendingGateFiles,
+        ])
         const conversationGatePass = getConversationGatePassForPendingFiles(
           currentPendingGateFiles,
           currentConversationMessages,
@@ -1958,8 +2136,9 @@ ${specialistRoutingSection}
           runValidationGate &&
           editsHappened &&
           conversationGatePass &&
+          gateFileSetsEqual(gateScopeFiles, currentPendingGateFiles) &&
           hasFreshGateFingerprintForPendingFiles(
-            currentPendingGateFiles,
+            gateScopeFiles,
             conversationValidationSummary,
           )
         ) {
@@ -1972,9 +2151,7 @@ ${specialistRoutingSection}
           activeWorkState.currentPhase = 'final_response_allowed'
           activeWorkState.lastReviewerGateSkipReason = ''
           activeWorkState.lastValidationSummary = conversationValidationSummary
-          for (const file of currentPendingGateFiles) {
-            gatePassedFiles.add(file)
-          }
+          creditGatePassedFiles(gateScopeFiles)
           activeWorkState.gatePassedFiles = Array.from(gatePassedFiles)
           activeWorkState.gatePassedPendingFiles = currentPendingGateFiles
           activeWorkState.gatePassedReviewerVerdict =
@@ -2021,6 +2198,7 @@ ${specialistRoutingSection}
         if (
           runValidationGate &&
           editsHappened &&
+          gateFileSetsEqual(gateScopeFiles, currentPendingGateFiles) &&
           hasDurableGatePassForPendingFiles(currentPendingGateFiles)
         ) {
           const durableReviewerVerdict =
@@ -2125,17 +2303,19 @@ ${specialistRoutingSection}
         // re-captured at the reviewer spawn boundary below.
         const requiredReviewerAgentType =
           activeWorkState.requiredReviewerRevalidation ?? reviewerAgentType
-        let reviewablePendingFiles = selectReviewableGateFiles(
-          Array.from(pendingGateFiles),
-        )
+        let reviewableGateScopeFiles = selectReviewableGateFiles(gateScopeFiles)
         let reviewSnapshotDetails = buildGateSnapshotDetails(
-          reviewablePendingFiles,
+          reviewableGateScopeFiles,
           '',
         )
         let reviewSnapshotFingerprint = hashGateSnapshotDetails(
           reviewSnapshotDetails,
         )
         let reviewableFingerprint = reviewSnapshotFingerprint
+        let frozenDirtyGateScopeFingerprint = buildGateFingerprint(
+          dirtyGateScopeFiles,
+          '',
+        )
         let validationSummary =
           'No file changes were detected, so no validation hooks ran.'
         const validationInfrastructureBypassed =
@@ -2146,9 +2326,12 @@ ${specialistRoutingSection}
           runValidationGate &&
           !validationInfrastructureBypassed
         ) {
+          setGateProgress(
+            `gate: validation hooks running for ${gateScopeFiles.length} file(s)`,
+          )
           const verify = yield {
             toolName: 'run_file_change_hooks',
-            input: { files: Array.from(pendingGateFiles) },
+            input: { files: gateScopeFiles },
           } as any
           let failures = collectHookFailures(
             (verify as any) && (verify as any).toolResult,
@@ -2166,9 +2349,9 @@ ${specialistRoutingSection}
             activeWorkState.validationEvidence = [
               {
                 gateId: reviewSnapshotFingerprint,
-                files: Array.from(pendingGateFiles),
+                files: gateScopeFiles,
                 snapshotFingerprint: buildGateFingerprint(
-                  Array.from(pendingGateFiles),
+                  gateScopeFiles,
                   validationSummary,
                 ),
                 summary: validationSummary,
@@ -2371,7 +2554,6 @@ ${specialistRoutingSection}
                 input: {},
               } as any
               const repairChangedFiles = extractGitStatusFiles(
-
                 (repairGitStatus as any)?.toolResult,
               ).filter(
                 (file: string) =>
@@ -2595,7 +2777,6 @@ ${specialistRoutingSection}
                     !gatePassedFiles.has(file),
                 )
                 if (escalateChangedFiles.length > 0) {
-
                   recordChangedFiles(escalateChangedFiles, { fromRepair: true })
                   activeWorkState.latestWorkSummary = `Escalation editor fixed: ${escalateChangedFiles.join(', ')}`
                   markActiveWorkStateChanged()
@@ -2699,19 +2880,43 @@ ${specialistRoutingSection}
           activeWorkState.currentPhase = 'awaiting_review'
         }
 
-        // Validation has completed. Re-capture the exact source+test snapshot
-        // immediately before any final reviewer spawn or skip decision.
-        reviewablePendingFiles = selectReviewableGateFiles(
-          Array.from(pendingGateFiles),
-        )
-        reviewSnapshotDetails = buildGateSnapshotDetails(
-          reviewablePendingFiles,
-          '',
-        )
-        reviewSnapshotFingerprint = hashGateSnapshotDetails(
-          reviewSnapshotDetails,
-        )
-        reviewableFingerprint = reviewSnapshotFingerprint
+        let postValidationScopeFiles = gateScopeFiles
+        if (runValidationGate && editsHappened && gateScopeFiles.length > 0) {
+          // Hooks may mutate files or dirty-scope membership. Recompute both
+          // immediately before review and reopen the attempt on any membership
+          // change; the reviewer snapshot then freezes the post-hook bytes.
+          const postValidationGitStatus = yield {
+            toolName: 'git_status',
+            input: {},
+          } as any
+          postValidationScopeFiles = deriveGateScopeFiles(
+            extractGitStatusFiles((postValidationGitStatus as any)?.toolResult),
+          )
+          if (
+            !gateFileSetsEqual(dirtyGateScopeFiles, postValidationScopeFiles)
+          ) {
+            activeWorkState.currentPhase = 'awaiting_validation'
+            activeWorkState.latestWorkSummary =
+              'The task-related dirty scope changed during validation; validation and review were reopened.'
+            activeWorkState.nextRequiredAction =
+              'Re-run validation and review against the current dirty scope.'
+            markActiveWorkStateChanged()
+            continue
+          }
+          reviewableGateScopeFiles = selectReviewableGateFiles(gateScopeFiles)
+          reviewSnapshotDetails = buildGateSnapshotDetails(
+            reviewableGateScopeFiles,
+            '',
+          )
+          reviewSnapshotFingerprint = hashGateSnapshotDetails(
+            reviewSnapshotDetails,
+          )
+          reviewableFingerprint = reviewSnapshotFingerprint
+          frozenDirtyGateScopeFingerprint = buildGateFingerprint(
+            postValidationScopeFiles,
+            '',
+          )
+        }
 
         let reviewerFinalizationVerdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | '' =
           reviewerProtocolBypassAuthorized ? 'NON_BLOCKING' : ''
@@ -2734,30 +2939,37 @@ ${specialistRoutingSection}
             'user-authorized-reviewer-protocol-bypass'
           markActiveWorkStateChanged()
         }
-        // Fix 1/3 (R3) + Fix 3b (R5): decide whether the final code-reviewer
-        // spawn can be skipped entirely and the gate treated as green. Two
-        // cases short-circuit to the same success state the gate sets on a
-        // LOOKS_GOOD/NON_BLOCKING verdict:
-        //   - no reviewable source files in the pending set (only
-        //     bookkeeping/docs/plan artifacts like .agents/sessions/**
-        //     STATE.json/EVENTS.jsonl/STATUS.md/LESSONS.md changed), or
-        //   - the reviewable subset is unchanged from the last reviewed pass
-        //     (a git-action turn with no new source edits).
-        // Validation-hook behavior is unchanged; only the reviewer spawn is
-        // skipped. The subsequent runValidationGate success block performs the
-        // actual state clearing, fingerprint recording, and aux-flag reset.
+        // The final reviewer may be skipped for bookkeeping-only changes or
+        // when durable evidence attests the exact reviewable snapshot. A clean
+        // working tree is not review evidence: committed bytes still require a
+        // snapshot-bound review unless a matching receipt survived the prior
+        // pass.
+        const matchingReviewReceipt = activeWorkState.reviewReceipts.some(
+          (receipt) =>
+            receipt.reviewer === requiredReviewerAgentType &&
+            (receipt.verdict === 'LOOKS_GOOD' ||
+              receipt.verdict === 'NON_BLOCKING') &&
+            receipt.snapshotFingerprint === reviewableFingerprint &&
+            receipt.reviewedFileCount === reviewableGateScopeFiles.length &&
+            gateFileSetsEqual(
+              receipt.reviewedFiles,
+              reviewableGateScopeFiles,
+            ),
+        )
         const reviewableSetAlreadyReviewed =
-          reviewablePendingFiles.length > 0 &&
+          reviewableGateScopeFiles.length > 0 &&
           !!activeWorkState.reviewedReviewableFingerprint &&
           activeWorkState.reviewedReviewableFingerprint ===
-            reviewableFingerprint
+            reviewableFingerprint &&
+          matchingReviewReceipt
         const skipReviewerForReviewableScope =
           runReviewerGate &&
           editsHappened &&
           !reviewerProtocolBypassAuthorized &&
           activeWorkState.lastReviewerGateSkipReason !==
             'reviewer-protocol-attestation-failed' &&
-          (reviewablePendingFiles.length === 0 || reviewableSetAlreadyReviewed)
+          (reviewableGateScopeFiles.length === 0 ||
+            reviewableSetAlreadyReviewed)
         if (skipReviewerForReviewableScope) {
           reviewerFinalizationVerdict = 'NON_BLOCKING'
           activeWorkState.currentPhase = 'awaiting_review'
@@ -2774,7 +2986,7 @@ ${specialistRoutingSection}
             activeWorkState.staticReviewerJobId = undefined
           }
           const reviewerSkipReason =
-            reviewablePendingFiles.length === 0
+            reviewableGateScopeFiles.length === 0
               ? 'reviewer skip: no reviewable source files'
               : 'reviewer skip: reviewable source set unchanged since last review'
           markActiveWorkStateChanged()
@@ -2786,7 +2998,7 @@ ${specialistRoutingSection}
             validationStatus: 'passed',
             reviewerVerdict: reviewerFinalizationVerdict,
             skipReason:
-              reviewablePendingFiles.length === 0
+              reviewableGateScopeFiles.length === 0
                 ? 'reviewer-skip-no-reviewable-source-files'
                 : 'reviewer-skip-reviewable-set-unchanged',
           })
@@ -2799,9 +3011,9 @@ ${specialistRoutingSection}
                 formatGateStateBlock(
                   'reviewer',
                   'skipped',
-                  reviewablePendingFiles.length === 0
+                  reviewableGateScopeFiles.length === 0
                     ? `reviewer-skip-no-reviewable-source-files: pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`
-                    : `reviewer-skip-reviewable-set-unchanged: reviewable files: ${reviewablePendingFiles.join(', ') || '(none)'}`,
+                    : `reviewer-skip-reviewable-set-unchanged: reviewable files: ${reviewableGateScopeFiles.join(', ') || '(none)'}`,
                 ),
               ].join('\n'),
             },
@@ -2818,6 +3030,9 @@ ${specialistRoutingSection}
         ) {
           activeWorkState.lastReviewerGateSkipReason = ''
           markActiveWorkStateChanged()
+          setGateProgress(
+            `gate: validation passed; reviewer ${requiredReviewerAgentType} running`,
+          )
           const review = yield {
             toolName: 'spawn_agents',
             input: {
@@ -2825,9 +3040,9 @@ ${specialistRoutingSection}
                 {
                   agent_type: requiredReviewerAgentType,
                   prompt: [
-                    `Review the completed ${requiredReviewerAgentType} changes before finalization.`,
+                    `Review the completed changes as the ${requiredReviewerAgentType} before finalization.`,
                     '',
-                    `Pending changed files: ${reviewablePendingFiles.join(', ') || '(unknown)'}`,
+                    `Gate-scope changed files: ${reviewableGateScopeFiles.join(', ') || '(unknown)'}`,
                     `Snapshot fingerprint (echo exactly): ${reviewSnapshotFingerprint}`,
                     'Snapshot details (read for file membership; do not echo):',
                     reviewSnapshotDetails,
@@ -2848,7 +3063,7 @@ ${specialistRoutingSection}
             : collectReviewerAttestationIssues(
                 reviewerToolResult,
                 reviewSnapshotFingerprint,
-                reviewablePendingFiles,
+                reviewableGateScopeFiles,
               )
           if (
             attestationIssues.length > 0 &&
@@ -2870,7 +3085,7 @@ ${specialistRoutingSection}
                     prompt: [
                       `Retry the completed ${requiredReviewerAgentType} review because the prior response failed the reviewer protocol contract.`,
                       '',
-                      `Pending changed files: ${reviewablePendingFiles.join(', ') || '(unknown)'}`,
+                      `Gate-scope changed files: ${reviewableGateScopeFiles.join(', ') || '(unknown)'}`,
                       `Snapshot fingerprint (echo exactly): ${reviewSnapshotFingerprint}`,
                       'Snapshot details (read for file membership; do not echo):',
                       reviewSnapshotDetails,
@@ -2890,7 +3105,7 @@ ${specialistRoutingSection}
             attestationIssues = collectReviewerAttestationIssues(
               reviewerToolResult,
               reviewSnapshotFingerprint,
-              reviewablePendingFiles,
+              reviewableGateScopeFiles,
             )
           }
           if (attestationIssues.length > 0) {
@@ -2943,6 +3158,38 @@ ${specialistRoutingSection}
             activeWorkState.reviewerRepairRoundCount = Number(
               activeWorkState.reviewerRepairRoundCount ?? 0,
             ) + 1
+            // Hard round cap for the reviewer -> repair -> re-review loop,
+            // mirroring MAX_REPAIR_ROUNDS for validation repairs. The
+            // snapshot-progress guard below already breaks when a repair makes
+            // no fingerprint change; this adds an explicit upper bound so a
+            // repair that keeps producing snapshot-visible churn without ever
+            // clearing the finding cannot loop indefinitely.
+            if (
+              Number(activeWorkState.reviewerRepairRoundCount ?? 0) >
+              MAX_REVIEWER_REPAIR_ROUNDS
+            ) {
+              activeWorkState.openReviewerBlockers = blockers
+              activeWorkState.currentPhase = 'blocked'
+              activeWorkState.nextRequiredAction =
+                `Reviewer repair budget exhausted (${MAX_REVIEWER_REPAIR_ROUNDS}/${MAX_REVIEWER_REPAIR_ROUNDS}); the reviewer findings are still open. Stop retrying automatically and inspect the findings or handoff.`
+              activeWorkState.latestWorkSummary = `Reviewer repair budget exhausted for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`
+              markActiveWorkStateChanged()
+              yield {
+                toolName: 'add_message',
+                input: {
+                  role: 'user',
+                  content: [
+                    `Reviewer gate: automated repair budget exhausted after ${MAX_REVIEWER_REPAIR_ROUNDS} round(s); the following findings are still open and were not cleared:`,
+                    '',
+                    ...blockers,
+                    '',
+                    'Stop retrying automatically. Inspect the findings directly, fix them, or explicitly authorize a different path.',
+                  ].join('\n'),
+                },
+                includeToolCall: false,
+              } as any
+              break
+            }
             activeWorkState.openReviewerBlockers = blockers
             activeWorkState.openReviewerFindings = blockers.map(
               (text: string, index: number) => ({
@@ -3221,7 +3468,6 @@ ${specialistRoutingSection}
               buildGateSnapshotDetails(
                 Array.from(pendingGateFiles),
                 validationSummary,
-
               ),
             )
             if (repairedSnapshotFingerprint === reviewSnapshotFingerprint) {
@@ -3303,6 +3549,9 @@ ${specialistRoutingSection}
           reviewerFinalizationVerdict =
             getReviewerFinalizationVerdict(reviewerToolResult)
           if (reviewerFinalizationVerdict) {
+            setGateProgress(
+              `gate: reviewer verdict ${reviewerFinalizationVerdict}; finalizing`,
+            )
             recordSuccessfulReviewReceipt(
               reviewerToolResult,
               requiredReviewerAgentType,
@@ -3427,28 +3676,47 @@ ${specialistRoutingSection}
         if (runValidationGate) {
           const passedPendingFiles = Array.from(pendingGateFiles)
           if (passedPendingFiles.length > 0 && reviewerFinalizationVerdict) {
-            // Compare the reviewable subset (not the raw pending set) so this
-            // drift guard stays consistent with reviewSnapshotFingerprint,
-            // which is now scoped to reviewablePendingFiles. Bookkeeping-only
-            // churn must not falsely reopen validation/review.
+            const finalGateStatus = yield {
+              toolName: 'git_status',
+              input: {},
+            } as any
+            const finalGateScopeFiles = deriveGateScopeFiles(
+              extractGitStatusFiles((finalGateStatus as any)?.toolResult),
+            )
+            const finalGateScopeFingerprint = buildGateFingerprint(
+              finalGateScopeFiles,
+              '',
+            )
             const finalReviewedFingerprint = hashGateSnapshotDetails(
               buildGateSnapshotDetails(
-                selectReviewableGateFiles(passedPendingFiles),
+                selectReviewableGateFiles(gateScopeFiles),
                 '',
               ),
             )
-            if (finalReviewedFingerprint !== reviewSnapshotFingerprint) {
+            if (
+              !gateFileSetsEqual(
+                postValidationScopeFiles,
+                finalGateScopeFiles,
+              ) ||
+              finalGateScopeFingerprint !== frozenDirtyGateScopeFingerprint ||
+              finalReviewedFingerprint !== reviewSnapshotFingerprint
+            ) {
               activeWorkState.currentPhase = 'awaiting_validation'
               activeWorkState.latestWorkSummary =
-                'The reviewed files changed after the reviewer snapshot; validation and review were reopened.'
+                'The frozen gate scope or file bytes changed after review; validation and review were reopened.'
               activeWorkState.nextRequiredAction =
-                'Re-run validation and review against the current file bytes.'
+                'Re-run validation and review against the current dirty scope and file bytes.'
               markActiveWorkStateChanged()
               continue
             }
           }
           let activeWorkStateChanged = false
           if (passedPendingFiles.length > 0 && reviewerFinalizationVerdict) {
+            // Record the transient pass line, then immediately reset the
+            // durable progress line so a stale 'passed'/mid-gate line cannot
+            // persist into the next edit cycle.
+            setGateProgress('gate: passed')
+            activeWorkState.gateProgressLine = ''
             activeWorkState.openReviewerBlockers = []
             activeWorkState.openReviewerFindings = []
             activeWorkState.requiredReviewerRevalidation = undefined
@@ -3456,9 +3724,7 @@ ${specialistRoutingSection}
             activeWorkState.pendingGateFiles = []
             activeWorkState.latestWorkSummary = ''
             editsHappened = false
-            for (const file of passedPendingFiles) {
-              gatePassedFiles.add(file)
-            }
+            creditGatePassedFiles(gateScopeFiles)
             activeWorkState.gatePassedFiles = Array.from(gatePassedFiles)
             activeWorkState.gatePassedPendingFiles = passedPendingFiles
             activeWorkState.gatePassedReviewerVerdict =
@@ -3610,6 +3876,19 @@ ${specialistRoutingSection}
         activeWorkState.lastPinnedStateMessage = ''
       }
 
+      // Durable one-line mid-turn gate-progress note. Rendered by
+      // buildPinnedActiveWorkMessage as a "Gate progress:" line inside the
+      // existing pinned active-work message — no new yield/add_message is
+      // introduced. Dedupes so repeated identical updates do not churn the
+      // pinned state. Self-contained inline helper (handleSteps is serialized
+      // via .toString() + new Function(...), so it must not reference
+      // module-scope imports).
+      function setGateProgress(line: string): void {
+        if (activeWorkState.gateProgressLine === line) return
+        activeWorkState.gateProgressLine = line
+        markActiveWorkStateChanged()
+      }
+
       // Inline helpers for gate-state telemetry/diagnostics. Kept inside
       // handleSteps because handleSteps is serialized via .toString() and
       // reconstructed with new Function(...), so module-scope closures are
@@ -3706,6 +3985,11 @@ ${specialistRoutingSection}
           changedFiles.add(file)
           pendingGateFiles.add(file)
           gatePassedFiles.delete(file)
+          // A re-edited file leaves the gate-passed ledger; drop its marker so
+          // the eviction guard cannot see a stale marker and no orphan remains.
+          if (activeWorkState.gatePassedFileMarkers) {
+            delete activeWorkState.gatePassedFileMarkers[file]
+          }
           activeWorkState.gatePassedFiles =
             activeWorkState.gatePassedFiles.filter(
               (passedFile) => passedFile !== file,
@@ -4458,6 +4742,33 @@ ${specialistRoutingSection}
         )
       }
 
+      // Correlate a synthesized blocker string to the reviewer-supplied
+      // finding record it came from by CONTENT, never by positional index.
+      // collectReviewerBlockers can emit synthesized blockers (coverage
+      // missing, dimension-block, requirement missing/uncertain) that have no
+      // corresponding finding record and appear in a different order/count
+      // than collectReviewerFindingRecordsInline returns, so records[index]
+      // could attach the wrong id/text. Prefer an explicit `[id]` match, then
+      // fall back to an exact finding-text substring match. Self-contained
+      // inline helper (handleSteps is serialized via .toString() +
+      // new Function(...), so it must not reference module-scope imports).
+      function correlateReviewerFindingRecord(
+        blockerText: string,
+        records: Array<{ id: string; text: string }>,
+      ): { id: string; text: string } | undefined {
+        for (const record of records) {
+          if (record.id && blockerText.includes(`[${record.id}]`)) {
+            return record
+          }
+        }
+        for (const record of records) {
+          if (record.text && blockerText.includes(record.text)) {
+            return record
+          }
+        }
+        return undefined
+      }
+
       function isStaleSnapshotReviewerResult(toolResult: unknown): boolean {
         const structured = collectStructuredReviewerOutputs(toolResult)
         const result = structured[structured.length - 1]
@@ -4783,6 +5094,19 @@ ${specialistRoutingSection}
         return extractChangedFilesFromMessages([message], 0).length > 0
       }
 
+      // Canonical SHA-256 snapshot fingerprint: v3: followed by exactly 64
+      // lowercase hex chars. Only these are reusable as durable attestation.
+      function isAttestableSnapshotFingerprint(value: string): boolean {
+        return /^v3:[a-f0-9]{64}$/.test(value)
+      }
+
+      // Canonical content marker: sha256:<64hex>:<length> for regular files,
+      // or symlink-sha256:<64hex>:<length> for safe in-project symlinks.
+      // Unreadable/missing/error markers are never attestable.
+      function isAttestableContentMarker(value: string): boolean {
+        return /^(?:symlink-)?sha256:[a-f0-9]{64}:\d+$/.test(value)
+      }
+
       function hasFreshGateFingerprintForPendingFiles(
         files: string[],
         validationSummary: string,
@@ -4797,10 +5121,14 @@ ${specialistRoutingSection}
         // reviewer/validation gate.
         const recorded = activeWorkState.gatePassedFingerprint
         if (!recorded) return false
+        // Non-attestable fingerprints (unreadable:no-crypto, etc.) can never
+        // be reused as durable gate credit.
+        if (!isAttestableSnapshotFingerprint(recorded)) return false
         const currentFingerprint = buildGateFingerprint(
           files,
           validationSummary,
         )
+        if (!isAttestableSnapshotFingerprint(currentFingerprint)) return false
         return recorded === currentFingerprint
       }
 
@@ -4845,6 +5173,15 @@ ${specialistRoutingSection}
         if (!hasUnresolvedGateWork && !hasIncompleteWorkflowTodos) return ''
 
         const sections: string[] = [`Current phase: ${state.currentPhase}`]
+        sections.push(
+          `Gate status: phase=${state.currentPhase}; validation hooks ran=${state.lastValidationSummary ? 'yes' : 'no'}; this is a durable snapshot captured at turn start; the validation/reviewer gate runs inline and locally when you end your turn (it is not a backend/async job and does not run between turns on its own), so do not infer progress or predict when it will pass — just finish your work and let it run; and NEVER tell the user the reviewer/validation "is running in the background" or is running asynchronously — you have not started it, it is not a background job, and it must never be described as in-flight or pending-after-turn, so just finish and stop.`,
+        )
+        if (
+          typeof state.gateProgressLine === 'string' &&
+          state.gateProgressLine.length > 0
+        ) {
+          sections.push(`Gate progress: ${state.gateProgressLine}`)
+        }
         if (hasUnresolvedGateWork) {
           sections.push(
             'suggest_followups: BLOCKED — the validation/reviewer gate has not passed yet. Do not call it until this line disappears.',
@@ -4942,6 +5279,51 @@ ${specialistRoutingSection}
         )
         activeWorkState.workflowTodoProgress = progress
         if (progressChanged) markActiveWorkStateChanged()
+      }
+
+      // Detects an exact standalone "COMMIT ANYWAY" user message and publishes
+      // a durable session-scoped bypass flag for the git-committer
+      // uncommitted-unvalidated-files commit guard in the tool executor. Text
+      // extraction mirrors hasReviewerBypassAuthorization (collectMessageText
+      // over user message content) and the match is a trim/uppercase
+      // exact-phrase compare only — never a substring match, so prose like
+      // "please commit anyway now" cannot authorize the bypass. Session-
+      // durable and scoped: once authorized it stays set for the rest of the
+      // session, but the tool executor skips the guard ONLY for the files
+      // recorded in commitScopeBypassRecord.unvalidatedFiles at authorization
+      // time — files dirtied after authorization remain blocked. Self-
+      // contained inline helper:
+      // handleSteps is serialized via .toString() + new Function(...), so it
+      // must not reference module-scope imports.
+      function updateCommitScopeBypassFromMessages(messages: unknown): void {
+        if (mutableAgentState.commitScopeBypassAuthorized === true) return
+        if (!Array.isArray(messages)) return
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          const message = messages[index]
+          if (!message || typeof message !== 'object') continue
+          const record = message as Record<string, unknown>
+          if (record.role !== 'user') continue
+          const texts: string[] = []
+          collectMessageText(record.content, texts)
+          if (
+            !texts.some(
+              (text) => text.trim().toUpperCase() === 'COMMIT ANYWAY',
+            )
+          ) {
+            continue
+          }
+          mutableAgentState.commitScopeBypassAuthorized = true
+          mutableAgentState.commitScopeBypassRecord = {
+            reason:
+              'User authorized COMMIT ANYWAY to bypass the uncommitted-unvalidated-files commit guard',
+            authorizedAt: new Date().toISOString(),
+            unvalidatedFiles: [
+              ...(mutableAgentState.uncommittedUnvalidatedFiles ?? []),
+            ],
+          }
+          markActiveWorkStateChanged()
+          return
+        }
       }
 
       function extractLatestWorkflowTodoProgress(
@@ -5182,6 +5564,62 @@ ${specialistRoutingSection}
         return normalizeGateFileList([...out])
       }
 
+      // Detects a terminal-mutation tool call in a message-history delta.
+      // Mirrors the scanning shape of extractChangedFilesFromMessages: iterate
+      // messages.slice(startIndex), and for each assistant record with an array
+      // content, return true if any part is a tool-call whose tool name is
+      // run_terminal_command, OR a spawn (spawn_agents / spawn_agent_inline)
+      // whose input names `basher` as an agent_type. Terminal writes are not
+      // captured by the edit-artifact channel, so this signal scopes the
+      // git-status sweep's absorption. Self-contained inline helper (handleSteps
+      // is serialized via .toString() + new Function(...), so it must not
+      // reference module-scope imports).
+      function messagesRanTerminalMutationTool(
+        messages: unknown,
+        startIndex: number,
+      ): boolean {
+        if (!Array.isArray(messages)) return false
+        const spawnsBasher = (input: unknown): boolean => {
+          if (!input || typeof input !== 'object') return false
+          const record = input as Record<string, unknown>
+          if (record.agent_type === 'basher') return true
+          if (Array.isArray(record.agents)) {
+            for (const agent of record.agents) {
+              if (
+                agent &&
+                typeof agent === 'object' &&
+                (agent as Record<string, unknown>).agent_type === 'basher'
+              ) {
+                return true
+              }
+            }
+          }
+          return false
+        }
+        for (const message of messages.slice(startIndex)) {
+          if (!message || typeof message !== 'object') continue
+          const record = message as Record<string, unknown>
+          if (record.role !== 'assistant') continue
+          if (!Array.isArray(record.content)) continue
+          for (const part of record.content) {
+            if (!part || typeof part !== 'object') continue
+            const toolCall = part as Record<string, unknown>
+            if (toolCall.type !== 'tool-call') continue
+            const toolName =
+              typeof toolCall.toolName === 'string' ? toolCall.toolName : ''
+            if (toolName === 'run_terminal_command') return true
+            if (
+              (toolName === 'spawn_agents' ||
+                toolName === 'spawn_agent_inline') &&
+              spawnsBasher(toolCall.input)
+            ) {
+              return true
+            }
+          }
+        }
+        return false
+      }
+
       function visitToolValue(value: unknown, out: Set<string>): void {
         if (!value) return
         if (Array.isArray(value)) {
@@ -5323,6 +5761,43 @@ ${specialistRoutingSection}
         return normalizeGateFileList([...files])
       }
 
+      // Credit files into the local gate-passed ledger AND record the content
+      // marker captured at credit time, so the generalized per-file eviction
+      // guard can detect later drift and reopen the gate for exactly the
+      // re-edited file. Reuses the existing single-file readGateFileContentMarker
+      // helper. Self-contained inline helper (handleSteps is serialized via
+      // .toString() + new Function(...), so it must not reference module-scope
+      // imports).
+      function creditGatePassedFiles(files: string[]): void {
+        const markers = (activeWorkState.gatePassedFileMarkers ??= {})
+        for (const file of files) {
+          const marker = readGateFileContentMarker(file)
+          // Only credit files with attestable content markers. External
+          // symlinks, unreadable files, and missing-crypto states produce
+          // non-attestable markers that must never enter the durable ledger.
+          if (!isAttestableContentMarker(marker)) continue
+          gatePassedFiles.add(file)
+          markers[file] = marker
+        }
+      }
+
+      // Derive the cumulative final-gate scope from the live dirty set and the
+      // complete task-related path ledger. This helper is inline because
+      // handleSteps is serialized through toString()/new Function().
+      function deriveGateScopeFiles(dirtyFiles: string[]): string[] {
+        const taskRelatedFiles = new Set(
+          normalizeGateFileList([
+            ...activeWorkState.touchedFiles,
+            ...activeWorkState.changedFiles,
+            ...activeWorkState.pendingGateFiles,
+            ...activeWorkState.gatePassedFiles,
+          ]),
+        )
+        return normalizeGateFileList(dirtyFiles).filter((file) =>
+          taskRelatedFiles.has(file),
+        )
+      }
+
       /**
        * Build a durable gate fingerprint from the normalized pending files,
        * their current git status lines (if known), per-file working-tree
@@ -5380,22 +5855,19 @@ ${specialistRoutingSection}
         if (crypto) {
           return `v3:${crypto.createHash('sha256').update(details).digest('hex')}`
         }
-        // Serialized runtimes should expose a built-in module loader, but keep
-        // a deterministic single-line fallback so a loader failure never
-        // reintroduces a multiline attestation contract.
-        let hash = 2166136261
-        for (let index = 0; index < details.length; index += 1) {
-          hash ^= details.charCodeAt(index)
-          hash = Math.imul(hash, 16777619)
-        }
-        return `v3:fnv1a-${(hash >>> 0).toString(16).padStart(8, '0')}`
+        // Fail closed: without a collision-resistant hash the snapshot cannot
+        // be safely attested. Return a non-reusable sentinel so no durable
+        // gate credit, review receipt, or bypass challenge can match it.
+        return 'unreadable:no-crypto'
       }
 
       /**
        * Resolve a normalized gate file path against process.cwd() and return
-       * a deterministic content marker for fingerprinting. Never throws — any
-       * read/stat failure is encoded as an `unreadable:<code>` marker so the
-       * gate fails closed rather than reusing a stale durable pass.
+       * a deterministic content marker for fingerprinting. Regular files are
+       * hashed in fixed-size chunks; symlink markers additionally bind the link
+       * path to bytes read from its resolved target. Never throws: scope, read,
+       * or stat failures become `unreadable:<code>` markers so stale credit
+       * fails closed.
        */
       function readGateFileContentMarker(normalizedPath: string): string {
         if (!normalizedPath) return 'unreadable:empty-path'
@@ -5433,46 +5905,89 @@ ${specialistRoutingSection}
           typeof process.cwd === 'function'
             ? process.cwd()
             : ''
-        // Gate paths are normalized to be project-relative before reaching this
-        // helper. Absolute paths still resolve correctly because
-        // path.resolve(cwd, absolutePath) returns absolutePath.
+        if (!cwd) return 'unreadable:no-cwd'
         const absolutePath = path.resolve(cwd, normalizedPath)
+        const projectRelativePath = path.relative(cwd, absolutePath)
+        if (
+          projectRelativePath === '..' ||
+          projectRelativePath.startsWith(`..${path.sep}`) ||
+          path.isAbsolute(projectRelativePath)
+        ) {
+          return 'unreadable:outside-project'
+        }
         try {
-          const stat = fs.statSync(absolutePath)
-          if (!stat.isFile()) return 'unreadable:not-a-file'
-          // Cache the content marker by (path, mtime, size): if the file hasn't
-          // changed since the last gate evaluation, skip the read+hash. The
-          // cache lives on the function object so it persists across calls
-          // within a single generator instance (handleSteps is serialized
-          // via .toString() and rebuilt with new Function, so module-level
-          // caches would not survive reconstruction).
-          const cacheKey = `${absolutePath}\t${stat.mtimeMs}\t${stat.size}`
-          const markerCache = (
-            readGateFileContentMarker as unknown as {
-              cache?: Map<string, string>
+          const pathSegments = projectRelativePath.split(path.sep).filter(Boolean)
+          const symlinkParts: string[] = []
+          let entryPath = cwd
+          for (let index = 0; index < pathSegments.length; index += 1) {
+            entryPath = path.join(entryPath, pathSegments[index])
+            const entryStat = fs.lstatSync(entryPath)
+            if (entryStat.isSymbolicLink()) {
+              symlinkParts.push(`${index}:${fs.readlinkSync(entryPath)}`)
+              continue
             }
-          ).cache
-          if (markerCache && markerCache.has(cacheKey)) {
-            return markerCache.get(cacheKey)!
+            if (index < pathSegments.length - 1 && !entryStat.isDirectory()) {
+              return 'unreadable:not-a-directory'
+            }
+            if (index === pathSegments.length - 1 && !entryStat.isFile()) {
+              return 'unreadable:not-a-file'
+            }
           }
-          const data = fs.readFileSync(absolutePath)
-          const hash = crypto.createHash('sha256').update(data).digest('hex')
-          const marker = `sha256:${hash}:${data.length}`
-          const cacheSlot = readGateFileContentMarker as unknown as {
-            cache?: Map<string, string>
+          if (pathSegments.length === 0) return 'unreadable:not-a-file'
+
+          const resolvedPath =
+            symlinkParts.length > 0 ? fs.realpathSync(absolutePath) : absolutePath
+          // Fail closed BEFORE opening: if the resolved target escapes the
+          // project root, reject without reading. This prevents blocking on
+          // external FIFOs and unbounded I/O on large external files.
+          if (symlinkParts.length > 0) {
+            const resolvedRelative = path.relative(cwd, resolvedPath)
+            if (
+              resolvedRelative === '..' ||
+              resolvedRelative.startsWith(`..${path.sep}`) ||
+              path.isAbsolute(resolvedRelative)
+            ) {
+              return 'unreadable:outside-project-symlink'
+            }
           }
-          if (!cacheSlot.cache) cacheSlot.cache = new Map<string, string>()
-          // Bound the cache so a long-lived serialized generator touching many
-          // files cannot grow it without limit. Map preserves insertion order,
-          // so evict the oldest entry once the cap is reached. A cache miss only
-          // costs a re-read+hash, so eviction is safe.
-          const MAX_MARKER_CACHE_ENTRIES = 1000
-          if (cacheSlot.cache.size >= MAX_MARKER_CACHE_ENTRIES) {
-            const oldestKey = cacheSlot.cache.keys().next().value
-            if (oldestKey !== undefined) cacheSlot.cache.delete(oldestKey)
+          const noFollow = fs.constants.O_NOFOLLOW ?? 0
+          const fd = fs.openSync(
+            resolvedPath,
+            fs.constants.O_RDONLY | noFollow,
+          )
+          try {
+            const openedStat = fs.fstatSync(fd)
+            if (!openedStat.isFile()) return 'unreadable:not-a-file'
+            const hash = crypto.createHash('sha256')
+            if (symlinkParts.length > 0) {
+              hash.update(symlinkParts.join('\0')).update('\0')
+            }
+            const buffer = Buffer.allocUnsafe(64 * 1024)
+            let bytesReadTotal = 0
+            while (bytesReadTotal < openedStat.size) {
+              const bytesRead = fs.readSync(
+                fd,
+                buffer,
+                0,
+                Math.min(buffer.length, openedStat.size - bytesReadTotal),
+                bytesReadTotal,
+              )
+              if (bytesRead === 0) return 'unreadable:changed-during-read'
+              hash.update(buffer.subarray(0, bytesRead))
+              bytesReadTotal += bytesRead
+            }
+            if (
+              fs.fstatSync(fd).size !== openedStat.size ||
+              (symlinkParts.length > 0 &&
+                fs.realpathSync(absolutePath) !== resolvedPath)
+            ) {
+              return 'unreadable:changed-during-read'
+            }
+            const prefix = symlinkParts.length > 0 ? 'symlink-sha256' : 'sha256'
+            return `${prefix}:${hash.digest('hex')}:${bytesReadTotal}`
+          } finally {
+            fs.closeSync(fd)
           }
-          cacheSlot.cache.set(cacheKey, marker)
-          return marker
         } catch (err) {
           const code =
             err && typeof err === 'object' && 'code' in err

@@ -12,6 +12,20 @@ import { readLogs } from '../tools/read-logs'
 
 const tempDirs: string[] = []
 
+/** Trusted owner injected into readLogs by the run/session layer in tests. */
+const TRUSTED_OWNER = {
+  clientSessionId: 'session-1',
+  rootRunId: 'root-1',
+  parentRunId: 'parent-1',
+  parentAgentId: 'agent-1',
+}
+const FOREIGN_OWNER = {
+  clientSessionId: 'session-2',
+  rootRunId: 'root-2',
+  parentRunId: 'parent-2',
+  parentAgentId: 'agent-2',
+}
+
 const makeTempDir = () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-read-logs-'))
   tempDirs.push(dir)
@@ -42,7 +56,13 @@ describe('readLogs', () => {
     fs.writeFileSync(path.join(cwd, 'app.log'), 'one\ntwo\nthree\nfour\n')
 
     const result = value(
-      await readLogs({ cwd, path: 'app.log', lines: 2, max_chars: 1_000 }),
+      await readLogs({
+        cwd,
+        path: 'app.log',
+        lines: 2,
+        max_chars: 1_000,
+        owner: TRUSTED_OWNER,
+      }),
     )
 
     expect(result.errorMessage).toBeUndefined()
@@ -59,6 +79,7 @@ describe('readLogs', () => {
       await readLogs({
         cwd,
         path: path.relative(cwd, path.join(outside, 'secret.log')),
+        owner: TRUSTED_OWNER,
       }),
     )
 
@@ -71,7 +92,9 @@ describe('readLogs', () => {
     const outsideFile = path.join(outside, 'secret.log')
     fs.writeFileSync(outsideFile, 'secret\n')
 
-    const result = value(await readLogs({ cwd, path: outsideFile }))
+    const result = value(
+      await readLogs({ cwd, path: outsideFile, owner: TRUSTED_OWNER }),
+    )
 
     expect(result.errorMessage).toContain('outside the project directory')
   })
@@ -83,7 +106,9 @@ describe('readLogs', () => {
     fs.writeFileSync(outsideFile, 'secret\n')
     fs.symlinkSync(outsideFile, path.join(cwd, 'link.log'))
 
-    const result = value(await readLogs({ cwd, path: 'link.log' }))
+    const result = value(
+      await readLogs({ cwd, path: 'link.log', owner: TRUSTED_OWNER }),
+    )
 
     expect(result.errorMessage).toContain('outside the project directory')
   })
@@ -103,11 +128,18 @@ describe('readLogs', () => {
       exitCode: null,
       startedAt: 0,
       readOffset: 0,
+      owner: TRUSTED_OWNER,
     }
     __registerJobForTest(job)
 
     const result = value(
-      await readLogs({ cwd, jobId: job.jobId, lines: 2, max_chars: 1_000 }),
+      await readLogs({
+        cwd,
+        jobId: job.jobId,
+        lines: 2,
+        max_chars: 1_000,
+        owner: TRUSTED_OWNER,
+      }),
     )
 
     expect(result.errorMessage).toBeUndefined()
@@ -136,12 +168,15 @@ describe('readLogs', () => {
       exitCode: null,
       startedAt: 0,
       readOffset: 0,
+      owner: TRUSTED_OWNER,
     }
     __registerJobForTest(job)
     fs.rmSync(logFile, { force: true })
     fs.symlinkSync(secretLog, logFile)
 
-    const result = value(await readLogs({ cwd, jobId: job.jobId, lines: 10 }))
+    const result = value(
+      await readLogs({ cwd, jobId: job.jobId, lines: 10, owner: TRUSTED_OWNER }),
+    )
 
     expect(result.errorMessage).toContain('Path is not a regular file')
     expect(result.content).toBeUndefined()
@@ -150,10 +185,78 @@ describe('readLogs', () => {
   test('rejects unsafe jobId values without reading derived paths', async () => {
     const cwd = makeTempDir()
     const result = value(
-      await readLogs({ cwd, jobId: 'job-read-logs/../../secret', lines: 10 }),
+      await readLogs({
+        cwd,
+        jobId: 'job-read-logs/../../secret',
+        lines: 10,
+        owner: TRUSTED_OWNER,
+      }),
     )
 
     expect(result.errorMessage).toContain('No background job found')
+  })
+
+  test('refuses a foreign-owned job log with a generic not_found error', async () => {
+    const cwd = makeTempDir()
+    const logFile = path.join(os.tmpdir(), 'openbuff-read-logs-job.log')
+    fs.writeFileSync(logFile, 'secret\n')
+
+    const job: BackgroundJob = {
+      jobId: 'job-read-logs-foreign',
+      command: 'echo test',
+      child: { pid: 1234 } as unknown as BackgroundJob['child'],
+      logFile,
+      metadataFile: `${logFile}.json`,
+      status: 'running',
+      exitCode: null,
+      startedAt: 0,
+      readOffset: 0,
+      owner: TRUSTED_OWNER,
+    }
+    __registerJobForTest(job)
+
+    const result = value(
+      await readLogs({ cwd, jobId: job.jobId, lines: 10, owner: FOREIGN_OWNER }),
+    )
+
+    expect(result.errorMessage).toContain(
+      `No background job found with id "${job.jobId}"`,
+    )
+    expect(result.content).toBeUndefined()
+
+    fs.rmSync(logFile, { force: true })
+  })
+
+  test('a model-supplied owner cannot override the trusted owner for a jobId read', async () => {
+    const cwd = makeTempDir()
+    const logFile = path.join(os.tmpdir(), 'openbuff-read-logs-job.log')
+    fs.writeFileSync(logFile, 'safe\n')
+
+    const job: BackgroundJob = {
+      jobId: 'job-read-logs-override',
+      command: 'echo test',
+      child: { pid: 1234 } as unknown as BackgroundJob['child'],
+      logFile,
+      metadataFile: `${logFile}.json`,
+      status: 'running',
+      exitCode: null,
+      startedAt: 0,
+      readOffset: 0,
+      owner: TRUSTED_OWNER,
+    }
+    __registerJobForTest(job)
+
+    // Simulate the run.ts dispatch: spread the (hostile) model input, then
+    // pin owner to the trusted value. The trusted owner wins.
+    const modelInput = { jobId: job.jobId, owner: FOREIGN_OWNER }
+    const result = value(
+      await readLogs({ ...modelInput, cwd, lines: 10, owner: TRUSTED_OWNER }),
+    )
+
+    expect(result.errorMessage).toBeUndefined()
+    expect(result.content).toBe('safe\n')
+
+    fs.rmSync(logFile, { force: true })
   })
 
   test('does not trust recovered background job metadata with an unexpected log path', async () => {
@@ -175,7 +278,9 @@ describe('readLogs', () => {
       }),
     )
 
-    const result = value(await readLogs({ cwd, jobId, lines: 10 }))
+    const result = value(
+      await readLogs({ cwd, jobId, lines: 10, owner: TRUSTED_OWNER }),
+    )
 
     expect(result.errorMessage).toContain('No background job found')
     expect(result.content).toBeUndefined()
@@ -202,7 +307,9 @@ describe('readLogs', () => {
       }),
     )
 
-    const result = value(await readLogs({ cwd, jobId, lines: 10 }))
+    const result = value(
+      await readLogs({ cwd, jobId, lines: 10, owner: TRUSTED_OWNER }),
+    )
 
     expect(result.errorMessage).toContain('No background job found')
     expect(result.content).toBeUndefined()

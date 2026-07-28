@@ -6,6 +6,11 @@ import { getContentHash } from '@codebuff/common/util/content-hash'
 import { changeFile, changeFiles } from '../tools/change-file'
 import { MAX_FILE_CHANGES_PER_TRANSACTION } from '@codebuff/common/actions'
 
+const capabilityIssuer = {
+  projectId: '/repo',
+  runId: 'change-file-tests',
+}
+
 describe('changeFile', () => {
   test('returns a canonical authority-backed result for string replacements', async () => {
     const fs = createMockFs({
@@ -22,6 +27,7 @@ describe('changeFile', () => {
       },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -34,6 +40,12 @@ describe('changeFile', () => {
           path: 'src/file.ts',
           outcome: 'applied',
           afterContent: 'const value = 2\n',
+          editAnchor: expect.objectContaining({
+            startLine: 1,
+            endLine: 2,
+            contentHash: getContentHash('const value = 2\n'),
+            readCapability: expect.stringContaining('cap.v3.'),
+          }),
         }),
       ],
     })
@@ -42,7 +54,7 @@ describe('changeFile', () => {
     )
   })
 
-  test('rejects absolute prompt paths even when they point inside the project', async () => {
+  test('accepts absolute prompt paths when they resolve inside the project', async () => {
     const fs = createMockFs({
       files: {
         '/repo/src/file.ts': 'const value = 1\n',
@@ -57,15 +69,22 @@ describe('changeFile', () => {
       },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
       kind: 'file_mutation_result',
-      outcome: 'not_applied',
-      errors: [expect.objectContaining({ code: 'blocked' })],
+      outcome: 'applied',
+      actions: [
+        expect.objectContaining({
+          action: 'update',
+          outcome: 'applied',
+          afterContent: 'const value = 2\n',
+        }),
+      ],
     })
     expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe(
-      'const value = 1\n',
+      'const value = 2\n',
     )
   })
 
@@ -80,6 +99,7 @@ describe('changeFile', () => {
       },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -97,7 +117,7 @@ describe('changeFile', () => {
     )
   })
 
-  test('rejects absolute file-write prompt paths inside the project', async () => {
+  test('accepts absolute file-write prompt paths when they resolve inside the project', async () => {
     const fs = createMockFs()
 
     const result = await changeFile({
@@ -108,13 +128,22 @@ describe('changeFile', () => {
       },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
       kind: 'file_mutation_result',
-      outcome: 'not_applied',
+      outcome: 'applied',
+      actions: [
+        expect.objectContaining({
+          action: 'create',
+          afterContent: 'const value = 1\n',
+        }),
+      ],
     })
-    await expect(fs.readFile('/repo/src/file.ts', 'utf-8')).rejects.toThrow()
+    expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe(
+      'const value = 1\n',
+    )
   })
 
   test('accepts paths whose file names start with two dots inside the project', async () => {
@@ -128,6 +157,7 @@ describe('changeFile', () => {
       },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -153,6 +183,7 @@ describe('changeFile', () => {
       },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -182,6 +213,7 @@ describe('changeFile', () => {
       parameters: { type: 'file', path: 'src/file.ts', content: 'after\n' },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(conditionalCalls).toBe(1)
@@ -205,6 +237,7 @@ describe('changeFile', () => {
       },
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -253,6 +286,7 @@ describe('changeFile', () => {
       ],
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -302,6 +336,7 @@ describe('changeFile', () => {
       ],
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     const output = result[0]
@@ -319,7 +354,9 @@ describe('changeFile', () => {
       })
       expect(
         output.value.actions.every(
-          (action) => action.afterContent === undefined,
+          (action) =>
+            action.afterContent === undefined &&
+            action.editAnchor === undefined,
         ),
       ).toBe(true)
     }
@@ -523,6 +560,7 @@ describe('changeFile', () => {
       ],
       cwd: '/repo',
       fs,
+      capabilityIssuer,
     })
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
@@ -544,6 +582,11 @@ describe('changeFile', () => {
           path: 'source.txt',
           destinationPath: 'moved.txt',
           afterContent: 'move me',
+          editAnchor: expect.objectContaining({
+            startLine: 1,
+            endLine: 1,
+            contentHash: getContentHash('move me'),
+          }),
         }),
       ],
     })

@@ -9,19 +9,23 @@ import {
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 
 /**
- * Prompt-supplied filesystem paths are project-relative portable paths. Reject
- * ambiguous platform-specific absolute forms and traversal before any I/O.
+ * Prompt-supplied filesystem paths. Reject ambiguous platform-specific absolute
+ * forms (Windows drive/UNC), NUL bytes, and `..` traversal before any I/O.
+ * Absolute POSIX paths are allowed through; containment is enforced by
+ * resolveProjectPath*.
  */
 export function isSafeProjectRelativePath(input: string): boolean {
   if (!input || input.includes('\0')) return false
+  // Reject Windows drive / UNC forms (ambiguous for portable project-relative policy).
   if (
-    path.isAbsolute(input) ||
     /^[a-zA-Z]:[\\/]/.test(input) ||
     input.startsWith('\\\\') ||
     input.startsWith('//')
   ) {
     return false
   }
+  // Allow absolute POSIX paths; containment is enforced by resolveProjectPath*.
+  // Still reject path segments that are '..'.
   return !input.split(/[\\/]+/).includes('..')
 }
 

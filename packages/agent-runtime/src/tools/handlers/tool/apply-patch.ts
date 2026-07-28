@@ -189,6 +189,8 @@ export const handleApplyPatch = (async (params) => {
     toolName: 'apply_patch',
     fileProcessingState,
     paths: [path],
+    projectId: params.fileContext?.projectRoot ?? '',
+    runId: params.runId ?? '',
     apply: () => requestClientToolCall(clientToolCall),
   })
   if (application.status === 'threw') {

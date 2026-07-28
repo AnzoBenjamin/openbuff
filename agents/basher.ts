@@ -54,7 +54,7 @@ const basher: AgentDefinition = {
         process_type: {
           type: 'string',
           description:
-            'SYNC (default, waits and returns output) or BACKGROUND (starts a detached job and returns a jobId immediately). Use BACKGROUND for long-running or never-exiting commands (dev servers, watchers, log tails); poll/follow the returned jobId with the check_job tool.',
+            'SYNC (default, waits and returns output) or BACKGROUND (starts a detached job and returns a jobId immediately). Use BACKGROUND for long-running or never-exiting commands (dev servers, watchers, log tails); poll/follow the returned jobId with the check_job tool. The returned jobId can be rediscovered via list_jobs and inspected with check_job/read_logs/kill_job.',
         },
         cwd: {
           type: 'string',

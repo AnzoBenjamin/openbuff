@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 2,
+  "slug": "unified-background-jobs",
+  "status": "active",
+  "currentTask": "M0.1 Dispatch discovery shard pairs",
+  "revision": 1,
+  "checkpoint": null,
+  "createdAt": "2026-07-27T09:28:59.883Z",
+  "updatedAt": "2026-07-27T09:28:59.883Z"
+}

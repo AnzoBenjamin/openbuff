@@ -174,6 +174,7 @@ export const OptionalScreenshotConfigSchema = z.object({
   screenshotCompression: z.enum(['jpeg', 'png']).optional(),
   screenshotCompressionQuality: z.number().optional(),
   compressScreenshotData: z.boolean().optional(),
+  screenshotPurpose: z.enum(['smoke', 'design']).optional(),
 })
 
 // Maximum size for a single WebSocket message (10MB)
@@ -499,6 +500,15 @@ export const BrowserPixelDiffActionSchema = z
   })
   .merge(OptionalBrowserConfigSchema)
 
+export const BrowserDesignTokensActionSchema = z
+  .object({
+    type: z.literal('design_tokens'),
+    selector: z.string().min(1).optional(),
+    maxElements: z.number().optional(),
+  })
+  .merge(OptionalBrowserConfigSchema)
+  .merge(FrameTargetSchema)
+
 // First define the base action schemas without the diagnostic step
 const BaseBrowserActionSchema = z.discriminatedUnion('type', [
   BrowserStartActionSchema,
@@ -524,6 +534,7 @@ const BaseBrowserActionSchema = z.discriminatedUnion('type', [
   BrowserRecordingActionSchema,
   BrowserPdfActionSchema,
   BrowserPixelDiffActionSchema,
+  BrowserDesignTokensActionSchema,
   BrowserStopActionSchema,
 ])
 
@@ -578,6 +589,7 @@ export const BrowserActionSchema = z.discriminatedUnion('type', [
   BrowserRecordingActionSchema,
   BrowserPdfActionSchema,
   BrowserPixelDiffActionSchema,
+  BrowserDesignTokensActionSchema,
   BrowserStopActionSchema,
   BrowserDiagnoseActionSchema,
 ])
@@ -606,6 +618,7 @@ const BrowserActionTypeSchema = z.enum([
   'recording',
   'pdf',
   'pixel_diff',
+  'design_tokens',
   'stop',
   'diagnose',
 ])
@@ -684,6 +697,8 @@ export const BrowserActionInputSchema = z
     screenshotCompression: z.enum(['jpeg', 'png']).optional(),
     screenshotCompressionQuality: z.number().optional(),
     compressScreenshotData: z.boolean().optional(),
+    screenshotPurpose: z.enum(['smoke', 'design']).optional(),
+    maxElements: z.number().optional(),
     visible: z.boolean().optional(),
     pollInterval: z.number().optional(),
     paths: z.array(z.string().min(1)).min(1).optional(),

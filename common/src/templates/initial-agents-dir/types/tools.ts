@@ -28,6 +28,7 @@ export type ToolName =
   | 'glob'
   | 'kill_job'
   | 'list_directory'
+  | 'list_jobs'
   | 'lookup_agent_info'
   | 'query_index'
   | 'read_docs'
@@ -87,6 +88,7 @@ export interface ToolParamsMap {
   glob: GlobParams
   kill_job: KillJobParams
   list_directory: ListDirectoryParams
+  list_jobs: ListJobsParams
   lookup_agent_info: LookupAgentInfoParams
   query_index: QueryIndexParams
   read_docs: ReadDocsParams
@@ -181,7 +183,7 @@ export interface AskUserParams {
 }
 
 /**
- * Poll or follow a background agent turn started by spawn_agents({ background: true }): returns the streamed chunks produced since the last check plus the job status. Use it to observe a long-running background agent without blocking the turn.
+ * Join/wait on a background agent turn started by spawn_agents({ background: true }): returns the sequenced agent_chunk events produced since the cursor plus the unified job state. Use it to observe a long-running background agent without blocking the turn.
  */
 export interface CheckBackgroundAgentParams {
   /** The jobId returned by spawn_agents({ background: true }) for the background agent turn. */
@@ -197,7 +199,7 @@ export interface CheckBackgroundAgentParams {
 }
 
 /**
- * Poll or follow a background job started by run_terminal_command: returns the output produced since the last check plus the job status and exit code. Use it to observe a long-running process without blocking the turn. To watch an arbitrary log file, start a `tail -f <file>` BACKGROUND job and check_job it with a wait_for pattern.
+ * Join/wait on a background job started by run_terminal_command: returns the sequenced output events produced since the last check plus the unified job state and exit code. Use it to observe a long-running process without blocking the turn. To watch an arbitrary log file, start a `tail -f <file>` BACKGROUND job and check_job it with a wait_for pattern.
  */
 export interface CheckJobParams {
   /** The jobId returned by run_terminal_command with process_type: BACKGROUND. */
@@ -331,6 +333,8 @@ export interface EditTransactionParams {
         symbol: string
         content: string
         occurrence?: number
+        /** Optional cap.v3 copied from the matching read_files symbol slice. It authorizes exactly the symbol and its contiguous preceding comment block. */
+        readCapability?: string
       }
     | {
         /** Optional stable edit identifier echoed in diagnostics. */
@@ -575,6 +579,11 @@ export interface ListDirectoryParams {
 }
 
 /**
+ * List this run's background jobs (shell processes and background agents, running and settled) and their statuses.
+ */
+export interface ListJobsParams {}
+
+/**
  * Retrieve information about an agent by ID
  */
 export interface LookupAgentInfoParams {
@@ -718,6 +727,8 @@ export interface RewriteSymbolParams {
   content: string
   /** When multiple top-level symbols share this name, the 1-indexed one to replace. */
   occurrence?: number
+  /** Optional cap.v3 copied from the matching read_files symbol slice. Under strict read-before-edit this authorizes exactly the symbol and its contiguous preceding comment block. */
+  readCapability?: string
 }
 
 /**
@@ -838,7 +849,7 @@ export interface SkillParams {
 }
 
 /**
- * Spawn up to 8 agents and send a prompt and/or parameters to each of them. These agents will run in parallel. Note that that means they will run independently. Split larger work into bounded waves. If you need to run agents sequentially, use spawn_agents with one agent at a time instead.
+ * Spawn up to 12 agents and send a prompt and/or parameters to each of them. These agents will run in parallel. Note that that means they will run independently. Split larger work into bounded waves. If you need to run agents sequentially, use spawn_agents with one agent at a time instead.
  */
 export interface SpawnAgentsParams {
   agents: {

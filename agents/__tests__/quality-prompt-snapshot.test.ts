@@ -26,6 +26,9 @@ import {
 describe('shared craftsmanship prompt sections', () => {
   test('qualitySection is byte-stable (snapshot)', () => {
     expect(qualitySection).toMatchSnapshot()
+    // Guard that the byte-frozen craftsmanship section was not polluted by
+    // gate-awareness wording (which belongs only in gateAwarenessSection).
+    expect(qualitySection).not.toContain('background job')
   })
 
   test('qualitySection contains the required craftsmanship headings', () => {
@@ -117,9 +120,7 @@ describe('shared craftsmanship prompt sections', () => {
     expect(gitDisciplineSection).toContain('literally `owned_paths`')
     expect(gitDisciplineSection).toContain('filePaths')
     expect(gitDisciplineSection).toContain('Missing required: owned_paths')
-    expect(gitDisciplineSection).toContain(
-      'Spawning git-committer is not available yet',
-    )
+    expect(gitDisciplineSection).toContain('git-committer withheld')
     // Wait-and-commit guidance added for gate ergonomics: the gate re-arms per
     // edit, the block is normal ordering (not an error), and the commit lands
     // automatically once the gate clears.
@@ -159,13 +160,27 @@ describe('shared craftsmanship prompt sections', () => {
     expect(gateAwarenessSection).toContain('git-committer')
     expect(gateAwarenessSection).toContain('re-arms on every new edit')
     expect(gateAwarenessSection).toContain('tight-loop')
-    expect(gateAwarenessSection).toContain('not available yet')
+    // "Observe, don't predict" bullet: pin the durable-snapshot guidance —
+    // commit/finalize only when the pinned gate state reports the passed phase.
+    expect(gateAwarenessSection).toContain('Observe, don\'t predict')
+    expect(gateAwarenessSection).toContain('final_response_allowed')
     // 4) Pending-set authority: full pendingGateFiles set, not last-edited file.
     expect(gateAwarenessSection).toContain('pendingGateFiles')
     expect(gateAwarenessSection).toContain('full related set')
     expect(gateAwarenessSection).toContain(
       'authoritative over conversational memory',
     )
+    // 5) Anti-background-narration: the gate runs inline the moment the turn
+    // ends, so the model must never describe it as a background/async job,
+    // including in gate-disabled modes where no reviewer runs at all.
+    expect(gateAwarenessSection).toContain(
+      'Never narrate the gate as a background job',
+    )
+    expect(gateAwarenessSection).toContain('is running in the background')
+    expect(gateAwarenessSection).toContain(
+      'runs inline the moment your turn ends',
+    )
+    expect(gateAwarenessSection).toContain('gate-disabled modes')
   })
 
   test('securityReviewSection contains the required security-review topics (not byte-frozen)', () => {

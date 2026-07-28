@@ -895,12 +895,16 @@ describe('getFilesStructured', () => {
       })
       expect(parsed.edits[0]).toMatchObject({
         type: 'replace_range',
+        path: 'src/trailing.ts',
+        readCapability: wholeFileCap,
         startLine: 2,
         endLine: 4,
-        capabilityStartLine: 1,
-        capabilityEndLine: 4,
-        capabilityHash: getContentHash(content),
+        newContent: 'line 2\nline 3\nline 3b',
       })
+      // Capability decoding (capabilityStartLine/capabilityEndLine/
+      // capabilityHash) now happens downstream in resolveReplaceRangeEdit,
+      // not at schema-parse time, so the parsed edit must not carry them.
+      expect(parsed.edits[0]).not.toHaveProperty('capabilityHash')
       expect(() =>
         editTransactionParams.inputSchema.parse({
           edits: [
@@ -961,15 +965,17 @@ describe('getFilesStructured', () => {
         string,
         unknown
       >
+      // A capability-only replace_range preserves the readCapability and
+      // newContent at parse time; exact bounds/hash are derived downstream in
+      // resolveReplaceRangeEdit, so the parsed edit must not carry the
+      // capability* fields (or explicit bounds it was not given).
       expect(transformed).toMatchObject({
         type: 'replace_range',
         path: 'src/multi-trail.ts',
-        startLine: decoded.startLine,
-        endLine: decoded.endLine,
-        capabilityStartLine: decoded.startLine,
-        capabilityEndLine: decoded.endLine,
-        capabilityHash: decoded.hash,
+        readCapability: wholeFileCap,
+        newContent: 'line 1\nline 2\nline 3\nline four\n',
       })
+      expect(transformed).not.toHaveProperty('capabilityHash')
       expect(transformed).not.toHaveProperty('expectedHash')
     })
   })

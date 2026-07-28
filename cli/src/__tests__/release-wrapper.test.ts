@@ -5,14 +5,17 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
-import { spawnSync } from 'child_process'
+import { spawn, spawnSync } from 'child_process'
 import { createHash } from 'crypto'
 import { createRequire } from 'module'
+import { Readable } from 'stream'
 
 import { describe, expect, test } from 'bun:test'
 
@@ -105,6 +108,41 @@ function writeValidTreeSitterAssets(configDir: string) {
     path.join(configDir, 'tree-sitter-manifest.json'),
     JSON.stringify({ schemaVersion: 1, files: hashes }),
   )
+}
+
+function createDownloadHarness(tempDir: string, wrapperName: WrapperName) {
+  const binaryName = getWrapperBinaryName(wrapperName)
+  return {
+    config: {
+      configDir: tempDir,
+      binaryName,
+      binaryPath: path.join(tempDir, binaryName),
+      metadataPath: path.join(tempDir, getWrapperMetadataName(wrapperName)),
+      tempDownloadDir: path.join(tempDir, '.download-temp-test'),
+    },
+    fileName: `${binaryName}-linux-x64.tar.gz`,
+  }
+}
+
+function mockResponse(bytes: Buffer) {
+  return Object.assign(Readable.from([bytes]), {
+    headers: { 'content-length': String(bytes.length) },
+    statusCode: 200,
+  })
+}
+
+function createMockHttpGet(fileName: string, archive: Buffer, checksum?: string) {
+  const digest =
+    checksum || createHash('sha256').update(archive).digest('hex')
+  return async (url: string) =>
+    url.endsWith('/SHA256SUMS')
+      ? mockResponse(Buffer.from(`${digest}  ${fileName}\n`))
+      : mockResponse(archive)
+}
+
+function extractValidRelease(cwd: string, binaryName: string) {
+  writeFileSync(path.join(cwd, binaryName), 'installed-binary')
+  writeValidTreeSitterAssets(cwd)
 }
 
 function runWrapperWithMockPlatform({
@@ -590,12 +628,23 @@ describe('release wrapper update safety', () => {
   )
 
   test.each(wrappers)(
-    '%s compares prerelease versions without forcing an update loop',
+    '%s compares SemVer prerelease boundaries',
     (_, wrapperPath) => {
       const { compareVersions } = require(path.join(repoRoot, wrapperPath))
-      expect(compareVersions('1.2.4-beta.2', '1.2.4-beta.2')).toBe(0)
-      expect(compareVersions('1.2.4-beta.2', '1.2.4-beta.3')).toBe(-1)
-      expect(compareVersions('1.2.4-beta.3', '1.2.4')).toBe(-1)
+      const cases = [
+        ['1.2.4-beta.2', '1.2.4-beta.2', 0],
+        ['1.2.4-beta.2', '1.2.4-beta.3', -1],
+        ['1.2.4-beta.3', '1.2.4', -1],
+        ['1.0.0-1', '1.0.0-alpha', -1],
+        ['1.0.0-alpha', '1.0.0-1', 1],
+        ['1.0.0-1abc', '1.0.0-2', 1],
+        ['1.0.0-alpha', '1.0.0-alpha.1', -1],
+        ['1.0.0-beta.11', '1.0.0-rc.1', -1],
+      ] as const
+
+      for (const [left, right, expected] of cases) {
+        expect(compareVersions(left, right)).toBe(expected)
+      }
     },
   )
 
@@ -623,16 +672,430 @@ describe('release wrapper update safety', () => {
   )
 
   test.each(wrappers)(
-    '%s never kills the active child during update checks',
-    (_, wrapperPath) => {
-      const source = readFileSync(path.join(repoRoot, wrapperPath), 'utf8')
-      const updateFunction = source.slice(
-        source.indexOf('async function checkForUpdates'),
-        source.indexOf('function printCrashDiagnostics'),
-      )
+    '%s installs a verified binary and every tree-sitter asset',
+    async (wrapperName, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-install-'))
+      const archive = Buffer.from('release-archive')
+      const { config, fileName } = createDownloadHarness(tempDir, wrapperName)
+      try {
+        const { downloadBinary, getTreeSitterAssetProblems } = require(
+          path.join(repoRoot, wrapperPath),
+        )
+        await downloadBinary('2.0.0', {
+          config,
+          platformKey: 'linux-x64',
+          httpGet: createMockHttpGet(fileName, archive),
+          extractArchive: ({ cwd }: { cwd: string }) =>
+            extractValidRelease(cwd, config.binaryName),
+        })
 
-      expect(updateFunction).not.toContain('runningProcess.kill')
-      expect(updateFunction).toContain('next launch')
+        expect(readFileSync(config.binaryPath, 'utf8')).toBe('installed-binary')
+        expect(getTreeSitterAssetProblems(tempDir)).toEqual([])
+        expect(JSON.parse(readFileSync(config.metadataPath, 'utf8'))).toEqual({
+          version: '2.0.0',
+          platformKey: 'linux-x64',
+        })
+        expect(existsSync(config.tempDownloadDir)).toBe(false)
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s repairs missing or corrupt assets and consumes pending metadata',
+    async (wrapperName, wrapperPath) => {
+      for (const damage of ['missing', 'corrupt'] as const) {
+        const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-repair-'))
+        const archive = Buffer.from(`repair-archive-${damage}`)
+        const { config, fileName } = createDownloadHarness(tempDir, wrapperName)
+        try {
+          writeValidTreeSitterAssets(tempDir)
+          writeFileSync(config.binaryPath, 'existing')
+          const damagedAsset = path.join(tempDir, 'tree-sitter-python.wasm')
+          if (damage === 'missing') rmSync(damagedAsset)
+          else writeFileSync(damagedAsset, 'corrupt')
+          writeFileSync(
+            config.metadataPath,
+            JSON.stringify({
+              version: '1.0.0',
+              platformKey: 'linux-x64',
+              pendingVersion: '1.1.0',
+            }),
+          )
+          const { downloadBinary, ensureBinaryExists } = require(
+            path.join(repoRoot, wrapperPath),
+          )
+          await ensureBinaryExists({
+            config,
+            currentVersion: '1.0.0',
+            packagedVersion: null,
+            downloadBinary: (version: string) =>
+              downloadBinary(version, {
+                config,
+                platformKey: 'linux-x64',
+                httpGet: createMockHttpGet(fileName, archive),
+                extractArchive: ({ cwd }: { cwd: string }) =>
+                  extractValidRelease(cwd, config.binaryName),
+              }),
+          })
+
+          expect(readFileSync(config.binaryPath, 'utf8')).toBe(
+            'installed-binary',
+          )
+          expect(JSON.parse(readFileSync(config.metadataPath, 'utf8'))).toEqual(
+            { version: '1.1.0', platformKey: 'linux-x64' },
+          )
+        } finally {
+          rmSync(tempDir, { recursive: true, force: true })
+        }
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s repairs damaged assets when no version source requests an update',
+    async (wrapperName, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-repair-only-'))
+      const archive = Buffer.from('repair-only-archive')
+      const { config, fileName } = createDownloadHarness(tempDir, wrapperName)
+      const downloadedVersions: string[] = []
+      try {
+        writeValidTreeSitterAssets(tempDir)
+        writeFileSync(config.binaryPath, 'existing')
+        rmSync(path.join(tempDir, 'tree-sitter-python.wasm'))
+        writeFileSync(
+          config.metadataPath,
+          JSON.stringify({ version: '1.0.0', platformKey: 'linux-x64' }),
+        )
+        const { downloadBinary, ensureBinaryExists, getTreeSitterAssetProblems } =
+          require(path.join(repoRoot, wrapperPath))
+
+        await ensureBinaryExists({
+          config,
+          currentVersion: '1.0.0',
+          packagedVersion: null,
+          pendingVersion: null,
+          downloadBinary: async (version: string) => {
+            downloadedVersions.push(version)
+            await downloadBinary(version, {
+              config,
+              platformKey: 'linux-x64',
+              httpGet: createMockHttpGet(fileName, archive),
+              extractArchive: ({ cwd }: { cwd: string }) =>
+                extractValidRelease(cwd, config.binaryName),
+            })
+          },
+        })
+
+        expect(downloadedVersions).toEqual(['1.0.0'])
+        expect(getTreeSitterAssetProblems(tempDir)).toEqual([])
+        expect(JSON.parse(readFileSync(config.metadataPath, 'utf8'))).toEqual({
+          version: '1.0.0',
+          platformKey: 'linux-x64',
+        })
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s bounds update telemetry without user paths or raw errors',
+    (wrapperName, wrapperPath) => {
+      const { getUpdateFailureProperties } = require(
+        path.join(repoRoot, wrapperPath),
+      )
+      const secretUrl = 'https://user:token@mirror.example/releases'
+      const properties = getUpdateFailureProperties('2.0.0', {
+        stage: 'background_check',
+        detail: secretUrl,
+      })
+      const serialized = JSON.stringify(properties)
+
+      expect(properties.error).toBe('unknown')
+      expect(properties.distinct_id).toBe(
+        wrapperName === 'release'
+          ? 'anonymous-openbuff-release'
+          : 'anonymous-codecane-release',
+      )
+      expect(serialized).not.toContain(secretUrl)
+      expect(serialized).not.toContain(tmpdir())
+      expect(Object.keys(properties).sort()).toEqual(
+        wrapperName === 'release-staging'
+          ? ['arch', 'distinct_id', 'error', 'isStaging', 'platform', 'version']
+          : ['arch', 'distinct_id', 'error', 'platform', 'version'],
+      )
+    },
+  )
+
+  test.each(wrappers)(
+    '%s restores the prior installation when a sibling commit fails',
+    async (wrapperName, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-rollback-'))
+      const archive = Buffer.from('rollback-archive')
+      const { config, fileName } = createDownloadHarness(tempDir, wrapperName)
+      try {
+        writeValidTreeSitterAssets(tempDir)
+        writeFileSync(config.binaryPath, 'existing-binary')
+        writeFileSync(
+          config.metadataPath,
+          JSON.stringify({ version: '1.0.0', platformKey: 'linux-x64' }),
+        )
+        const installedNames = [
+          config.binaryName,
+          path.basename(config.metadataPath),
+          ...readdirSync(tempDir).filter((name) => name.startsWith('tree-sitter')),
+        ]
+        const before = Object.fromEntries(
+          installedNames.map((name) => [
+            name,
+            readFileSync(path.join(tempDir, name)),
+          ]),
+        )
+        const { downloadBinary, getTreeSitterAssetProblems } = require(
+          path.join(repoRoot, wrapperPath),
+        )
+
+        await expect(
+          downloadBinary('2.0.0', {
+            config,
+            platformKey: 'linux-x64',
+            httpGet: createMockHttpGet(fileName, archive),
+            extractArchive: ({ cwd }: { cwd: string }) =>
+              extractValidRelease(cwd, config.binaryName),
+            rename: (source: string, target: string) => {
+              if (
+                source.startsWith(config.tempDownloadDir) &&
+                path.basename(source) === 'tree-sitter-python.wasm'
+              ) {
+                throw new Error('injected sibling commit failure')
+              }
+              renameSync(source, target)
+            },
+          }),
+        ).rejects.toThrow('injected sibling commit failure')
+
+        for (const [name, bytes] of Object.entries(before)) {
+          expect(readFileSync(path.join(tempDir, name))).toEqual(bytes)
+        }
+        expect(getTreeSitterAssetProblems(tempDir)).toEqual([])
+        expect(JSON.parse(readFileSync(config.metadataPath, 'utf8'))).toEqual({
+          version: '1.0.0',
+          platformKey: 'linux-x64',
+        })
+        expect(existsSync(config.tempDownloadDir)).toBe(false)
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s prints foreground install failure guidance',
+    async (_, wrapperPath) => {
+      const { ensureBinaryExists } = require(path.join(repoRoot, wrapperPath))
+      const connectivityGuidance =
+        'Please check your internet connection and try again'
+      const proxyGuidance =
+        'If you are behind a proxy, set the HTTPS_PROXY environment variable'
+      const exit = (code: number): never => {
+        throw new Error(`exit ${code}`)
+      }
+
+      for (const failure of ['version', 'download'] as const) {
+        for (const proxyUrl of [null, 'http://proxy.test'] as const) {
+          const errors: string[] = []
+          const options = {
+            currentVersion: null,
+            pendingVersion: null,
+            packagedVersion: null,
+            getLatestVersion: async () =>
+              failure === 'version' ? null : '2.0.0',
+            downloadBinary: async () => {
+              throw new Error('download failed')
+            },
+            getProxyUrl: () => proxyUrl,
+            consoleError: (...args: unknown[]) =>
+              errors.push(args.map(String).join(' ')),
+            exit,
+          }
+
+          await expect(ensureBinaryExists(options)).rejects.toThrow('exit 1')
+          expect(errors).toContain(connectivityGuidance)
+          if (proxyUrl) {
+            expect(errors).not.toContain(proxyGuidance)
+          } else {
+            expect(errors).toContain(proxyGuidance)
+          }
+        }
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s rejects checksum failures without installing and cleans temporary state',
+    async (wrapperName, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-checksum-'))
+      const archive = Buffer.from('untrusted-archive')
+      const { config, fileName } = createDownloadHarness(tempDir, wrapperName)
+      try {
+        const { downloadBinary } = require(path.join(repoRoot, wrapperPath))
+        await expect(
+          downloadBinary('2.0.0', {
+            config,
+            platformKey: 'linux-x64',
+            httpGet: createMockHttpGet(fileName, archive, '0'.repeat(64)),
+            extractArchive: () => {
+              throw new Error('must not extract')
+            },
+          }),
+        ).rejects.toThrow('Checksum verification failed')
+
+        expect(existsSync(config.binaryPath)).toBe(false)
+        expect(existsSync(config.metadataPath)).toBe(false)
+        expect(existsSync(config.tempDownloadDir)).toBe(false)
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s rejects symlinked managed entries without mutating the installation',
+    async (wrapperName, wrapperPath) => {
+      const symlinkedNames = [
+        getWrapperBinaryName(wrapperName),
+        'tree-sitter-manifest.json',
+        'tree-sitter-python.wasm',
+        'rg',
+        'libopentui.dylib',
+        getWrapperMetadataName(wrapperName),
+      ]
+
+      for (const symlinkedName of symlinkedNames) {
+        const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-symlink-'))
+        const archive = Buffer.from(`symlink-archive-${symlinkedName}`)
+        const { config, fileName } = createDownloadHarness(tempDir, wrapperName)
+        const externalPath = path.join(tempDir, 'external-target')
+        try {
+          writeValidTreeSitterAssets(tempDir)
+          writeFileSync(config.binaryPath, 'existing-binary')
+          writeFileSync(
+            config.metadataPath,
+            JSON.stringify({ version: '1.0.0', platformKey: 'linux-x64' }),
+          )
+          const installedNames = [
+            config.binaryName,
+            path.basename(config.metadataPath),
+            ...readdirSync(tempDir).filter((name) =>
+              name.startsWith('tree-sitter'),
+            ),
+          ]
+          const before = Object.fromEntries(
+            installedNames.map((name) => [
+              name,
+              readFileSync(path.join(tempDir, name)),
+            ]),
+          )
+          writeFileSync(externalPath, 'external-content')
+          const { downloadBinary } = require(path.join(repoRoot, wrapperPath))
+
+          await expect(
+            downloadBinary('2.0.0', {
+              config,
+              platformKey: 'linux-x64',
+              httpGet: createMockHttpGet(fileName, archive),
+              extractArchive: ({ cwd }: { cwd: string }) => {
+                extractValidRelease(cwd, config.binaryName)
+                const symlinkPath = path.join(cwd, symlinkedName)
+                rmSync(symlinkPath, { force: true })
+                symlinkSync(externalPath, symlinkPath)
+              },
+            }),
+          ).rejects.toThrow('must be a regular file')
+
+          for (const [name, bytes] of Object.entries(before)) {
+            expect(readFileSync(path.join(tempDir, name))).toEqual(bytes)
+          }
+          expect(readFileSync(externalPath, 'utf8')).toBe('external-content')
+          expect(existsSync(config.tempDownloadDir)).toBe(false)
+        } finally {
+          rmSync(tempDir, { recursive: true, force: true })
+        }
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s cleans downloaded state when extraction fails',
+    async (wrapperName, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-extract-'))
+      const archive = Buffer.from('valid-archive')
+      const { config, fileName } = createDownloadHarness(tempDir, wrapperName)
+      try {
+        const { downloadBinary } = require(path.join(repoRoot, wrapperPath))
+        await expect(
+          downloadBinary('2.0.0', {
+            config,
+            platformKey: 'linux-x64',
+            httpGet: createMockHttpGet(fileName, archive),
+            extractArchive: () => {
+              throw new Error('extract failed')
+            },
+          }),
+        ).rejects.toThrow('extract failed')
+
+        expect(existsSync(config.tempDownloadDir)).toBe(false)
+        expect(existsSync(config.binaryPath)).toBe(false)
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s defers updates without terminating the active child',
+    async (_, wrapperPath) => {
+      const activeChild = spawn(
+        process.execPath,
+        ['-e', 'setTimeout(() => {}, 10_000)'],
+        { stdio: 'ignore' },
+      )
+      const pending: string[] = []
+      const { checkForUpdates } = require(path.join(repoRoot, wrapperPath))
+      const isChildAlive = () => {
+        if (activeChild.pid === undefined) return false
+        try {
+          process.kill(activeChild.pid, 0)
+          return true
+        } catch {
+          return false
+        }
+      }
+
+      try {
+        expect(isChildAlive()).toBe(true)
+
+        await checkForUpdates({
+          currentVersion: '1.0.0',
+          getLatestVersion: async () => '1.1.0',
+          writePendingUpdateVersion: (version: string) =>
+            pending.push(version),
+        })
+
+        expect(pending).toEqual(['1.1.0'])
+        expect(isChildAlive()).toBe(true)
+      } finally {
+        activeChild.kill()
+        await new Promise<void>((resolve) => {
+          if (activeChild.exitCode !== null || activeChild.signalCode !== null) {
+            resolve()
+          } else {
+            activeChild.once('exit', () => resolve())
+          }
+        })
+      }
     },
   )
 

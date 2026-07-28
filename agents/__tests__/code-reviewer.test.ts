@@ -31,6 +31,25 @@ describe('code-reviewer prompt isolation', () => {
     expect(reviewer.instructionsPrompt).toContain('read_files with ranges')
   })
 
+  test('includes anti-loop attestation and single-pass instructions', () => {
+    const reviewer = createReviewer('anthropic/claude-opus-4.7')
+
+    expect(reviewer.instructionsPrompt).toContain(
+      'read every file in the pending list',
+    )
+    expect(reviewer.instructionsPrompt).toContain(
+      'reviewedFiles must list every pending file',
+    )
+    // Assert on backtick-free substrings around the escaped `uncertain`.
+    expect(reviewer.instructionsPrompt).toContain('Never return')
+    expect(reviewer.instructionsPrompt).toContain(
+      'for a requirement you have not verified',
+    )
+    expect(reviewer.instructionsPrompt).toContain(
+      'Report every blocker and coverage gap in a single pass',
+    )
+  })
+
   test('requires set_output instead of an ambiguous textual verdict', () => {
     const reviewer = createReviewer('anthropic/claude-opus-4.7')
 

@@ -209,11 +209,36 @@ function getPostHogConfig() {
   return { apiKey, host }
 }
 
+const UPDATE_ERROR_CATEGORIES = new Set([
+  'platform_check',
+  'checksum_manifest',
+  'http_download',
+  'checksum_verify',
+  'extraction',
+])
+
+function getUpdateFailureProperties(version, context = {}) {
+  const category = UPDATE_ERROR_CATEGORIES.has(context.stage)
+    ? context.stage
+    : 'unknown'
+  return {
+    distinct_id: 'anonymous-codecane-release',
+    error: category,
+    version: version || 'unknown',
+    platform: process.platform,
+    arch: process.arch,
+    isStaging: true,
+    ...(category === 'http_download' && Number.isInteger(context.statusCode)
+      ? { statusCode: context.statusCode }
+      : {}),
+  }
+}
+
 /**
  * Track update failure event to PostHog.
  * Fire-and-forget - errors are silently ignored.
  */
-function trackUpdateFailed(errorMessage, version, context = {}) {
+function trackUpdateFailed(_errorMessage, version, context = {}) {
   try {
     const posthogConfig = getPostHogConfig()
     if (!posthogConfig) {
@@ -223,15 +248,7 @@ function trackUpdateFailed(errorMessage, version, context = {}) {
     const payload = JSON.stringify({
       api_key: posthogConfig.apiKey,
       event: 'cli.update_codecane_failed',
-      properties: {
-        distinct_id: `anonymous-${CONFIG.homeDir}`,
-        error: errorMessage,
-        version: version || 'unknown',
-        platform: process.platform,
-        arch: process.arch,
-        isStaging: true,
-        ...context,
-      },
+      properties: getUpdateFailureProperties(version, context),
       timestamp: new Date().toISOString(),
     })
 
@@ -620,21 +637,24 @@ function compareVersions(v1, v2) {
       i < Math.max(p1.prerelease.length, p2.prerelease.length);
       i++
     ) {
-      const pr1 = p1.prerelease[i] || ''
-      const pr2 = p2.prerelease[i] || ''
+      if (i >= p1.prerelease.length) return -1
+      if (i >= p2.prerelease.length) return 1
 
-      const isNum1 = !isNaN(parseInt(pr1))
-      const isNum2 = !isNaN(parseInt(pr2))
+      const pr1 = p1.prerelease[i]
+      const pr2 = p2.prerelease[i]
+
+      const isNum1 = /^\d+$/.test(pr1)
+      const isNum2 = /^\d+$/.test(pr2)
 
       if (isNum1 && isNum2) {
-        const num1 = parseInt(pr1)
-        const num2 = parseInt(pr2)
+        const num1 = Number(pr1)
+        const num2 = Number(pr2)
         if (num1 < num2) return -1
         if (num1 > num2) return 1
       } else if (isNum1 && !isNum2) {
-        return 1
-      } else if (!isNum1 && isNum2) {
         return -1
+      } else if (!isNum1 && isNum2) {
+        return 1
       } else if (pr1 < pr2) {
         return -1
       } else if (pr1 > pr2) {
@@ -666,8 +686,8 @@ function getReleaseAssetBase(version) {
   return `${downloadBase}/v${version}`
 }
 
-async function getExpectedChecksum(version, fileName) {
-  const checksumResponse = await httpGet(
+async function getExpectedChecksum(version, fileName, httpGetFn = httpGet) {
+  const checksumResponse = await httpGetFn(
     `${getReleaseAssetBase(version)}/SHA256SUMS`,
   )
   if (checksumResponse.statusCode !== 200) {
@@ -728,8 +748,35 @@ function downloadResponseToFile(response, destination, totalSize) {
   })
 }
 
-async function downloadBinary(version) {
-  const platformKey = getPlatformKey()
+function assertExtractedRegularFile(extractionDir, filePath) {
+  const root = path.resolve(extractionDir)
+  const resolved = path.resolve(filePath)
+  if (resolved === root || !resolved.startsWith(`${root}${path.sep}`)) {
+    throw new Error(`Release archive entry escapes extraction directory: ${filePath}`)
+  }
+
+  let stat
+  try {
+    stat = fs.lstatSync(resolved)
+  } catch (error) {
+    if (error.code === 'ENOENT') return false
+    throw error
+  }
+  if (!stat.isFile()) {
+    throw new Error(
+      `Release archive entry must be a regular file: ${path.basename(filePath)}`,
+    )
+  }
+  return true
+}
+
+async function downloadBinary(version, options = {}) {
+  const config = options.config || CONFIG
+  const httpGetFn = options.httpGet || httpGet
+  const extractArchive =
+    options.extractArchive || ((tarOptions) => require('tar').x(tarOptions))
+  const rename = options.rename || fs.renameSync
+  const platformKey = options.platformKey || getPlatformKey()
   const fileName = PLATFORM_TARGETS[platformKey]
 
   if (!fileName) {
@@ -744,151 +791,185 @@ async function downloadBinary(version) {
   }
 
   const downloadUrl = `${getReleaseAssetBase(version)}/${fileName}`
-
-  // Ensure config directory exists
-  fs.mkdirSync(CONFIG.configDir, { recursive: true })
-
-  // Clean up any previous temp download directory
-  if (fs.existsSync(CONFIG.tempDownloadDir)) {
-    fs.rmSync(CONFIG.tempDownloadDir, { recursive: true })
+  fs.mkdirSync(config.configDir, { recursive: true })
+  if (fs.existsSync(config.tempDownloadDir)) {
+    fs.rmSync(config.tempDownloadDir, { recursive: true })
   }
-  fs.mkdirSync(CONFIG.tempDownloadDir, { recursive: true })
-
+  fs.mkdirSync(config.tempDownloadDir, { recursive: true })
   term.write('Downloading...')
 
-  let expectedChecksum
   try {
-    expectedChecksum = await getExpectedChecksum(version, fileName)
-  } catch (error) {
-    fs.rmSync(CONFIG.tempDownloadDir, { recursive: true })
-    trackUpdateFailed(error.message, version, { stage: 'checksum_manifest' })
-    throw error
-  }
-
-  const res = await httpGet(downloadUrl)
-
-  if (res.statusCode !== 200) {
-    fs.rmSync(CONFIG.tempDownloadDir, { recursive: true })
-    const error = new Error(`Download failed: HTTP ${res.statusCode}`)
-    trackUpdateFailed(error.message, version, {
-      stage: 'http_download',
-      statusCode: res.statusCode,
-    })
-    throw error
-  }
-
-  const totalSize = parseInt(res.headers['content-length'] || '0', 10)
-  const archivePath = path.join(CONFIG.tempDownloadDir, fileName)
-  await downloadResponseToFile(res, archivePath, totalSize)
-
-  const actualChecksum = await hashFile(archivePath)
-  if (actualChecksum !== expectedChecksum) {
-    fs.rmSync(CONFIG.tempDownloadDir, { recursive: true })
-    const error = new Error(
-      `Checksum verification failed for ${fileName}: expected ${expectedChecksum}, received ${actualChecksum}`,
-    )
-    trackUpdateFailed(error.message, version, { stage: 'checksum_verify' })
-    throw error
-  }
-
-  // Extract only after the archive has passed integrity verification.
-  const tar = require('tar')
-  await tar.x({
-    cwd: CONFIG.tempDownloadDir,
-    file: archivePath,
-    preservePaths: false,
-    strict: true,
-  })
-
-  const extractedAssetProblems = getTreeSitterAssetProblems(
-    CONFIG.tempDownloadDir,
-  )
-  if (extractedAssetProblems.length) {
-    throw new Error(
-      `Release archive has incomplete tree-sitter assets: ${extractedAssetProblems.join(', ')}`,
-    )
-  }
-
-  const tempBinaryPath = path.join(CONFIG.tempDownloadDir, CONFIG.binaryName)
-
-  // Verify the binary was extracted
-  if (!fs.existsSync(tempBinaryPath)) {
-    const files = fs.readdirSync(CONFIG.tempDownloadDir)
-    fs.rmSync(CONFIG.tempDownloadDir, { recursive: true })
-    const error = new Error(
-      `Binary not found after extraction. Expected: ${CONFIG.binaryName}, Available files: ${files.join(', ')}`,
-    )
-    trackUpdateFailed(error.message, version, { stage: 'extraction' })
-    throw error
-  }
-
-  // Set executable permissions
-  if (process.platform !== 'win32') {
-    fs.chmodSync(tempBinaryPath, 0o755)
-  }
-
-  // Move binary to final location
-  try {
-    if (fs.existsSync(CONFIG.binaryPath)) {
-      try {
-        fs.unlinkSync(CONFIG.binaryPath)
-      } catch (err) {
-        // Fallback: try renaming the locked/undeletable binary (Windows)
-        const backupPath = CONFIG.binaryPath + `.old.${Date.now()}`
-        try {
-          fs.renameSync(CONFIG.binaryPath, backupPath)
-        } catch (renameErr) {
-          throw new Error(
-            `Failed to replace existing binary. ` +
-              `unlink error: ${err.code || err.message}, ` +
-              `rename error: ${renameErr.code || renameErr.message}`,
-          )
-        }
-      }
-    }
-    fs.renameSync(tempBinaryPath, CONFIG.binaryPath)
-
-    for (const siblingName of getManagedSiblingNames(CONFIG.tempDownloadDir)) {
-      const tempSiblingPath = path.join(CONFIG.tempDownloadDir, siblingName)
-      if (!fs.existsSync(tempSiblingPath)) continue
-      const targetSiblingPath = path.join(
-        path.dirname(CONFIG.binaryPath),
-        siblingName,
+    let expectedChecksum
+    try {
+      expectedChecksum = await getExpectedChecksum(
+        version,
+        fileName,
+        httpGetFn,
       )
-      try {
-        if (fs.existsSync(targetSiblingPath)) fs.unlinkSync(targetSiblingPath)
-      } catch {
-        // best effort; rename below will surface the real error if it matters
-      }
-      fs.renameSync(tempSiblingPath, targetSiblingPath)
-      if (process.platform !== 'win32' && siblingName === 'rg') {
-        fs.chmodSync(targetSiblingPath, 0o755)
-      }
+    } catch (error) {
+      trackUpdateFailed(error.message, version, { stage: 'checksum_manifest' })
+      throw error
     }
 
-    // Save version metadata for fast version checking
+    const res = await httpGetFn(downloadUrl)
+    if (res.statusCode !== 200) {
+      res.resume()
+      const error = new Error(`Download failed: HTTP ${res.statusCode}`)
+      trackUpdateFailed(error.message, version, {
+        stage: 'http_download',
+        statusCode: res.statusCode,
+      })
+      throw error
+    }
+
+    const totalSize = parseInt(res.headers['content-length'] || '0', 10)
+    const archivePath = path.join(config.tempDownloadDir, fileName)
+    await downloadResponseToFile(res, archivePath, totalSize)
+
+    const actualChecksum = await hashFile(archivePath)
+    if (actualChecksum !== expectedChecksum) {
+      const error = new Error(
+        `Checksum verification failed for ${fileName}: expected ${expectedChecksum}, received ${actualChecksum}`,
+      )
+      trackUpdateFailed(error.message, version, { stage: 'checksum_verify' })
+      throw error
+    }
+
+    await extractArchive({
+      cwd: config.tempDownloadDir,
+      file: archivePath,
+      preservePaths: false,
+      strict: true,
+    })
+
+    const tempBinaryPath = path.join(config.tempDownloadDir, config.binaryName)
+    if (!assertExtractedRegularFile(config.tempDownloadDir, tempBinaryPath)) {
+      const files = fs.readdirSync(config.tempDownloadDir)
+      const error = new Error(
+        `Binary not found after extraction. Expected: ${config.binaryName}, Available files: ${files.join(', ')}`,
+      )
+      trackUpdateFailed(error.message, version, { stage: 'extraction' })
+      throw error
+    }
+
+    const managedSiblings = getManagedSiblingNames(config.tempDownloadDir)
+      .map((name) => ({
+        name,
+        source: path.join(config.tempDownloadDir, name),
+        target: path.join(path.dirname(config.binaryPath), name),
+      }))
+      .filter(({ source }) =>
+        assertExtractedRegularFile(config.tempDownloadDir, source),
+      )
+    const tempMetadataPath = path.join(
+      config.tempDownloadDir,
+      path.basename(config.metadataPath),
+    )
+    assertExtractedRegularFile(config.tempDownloadDir, tempMetadataPath)
+
+    const extractedAssetProblems = getTreeSitterAssetProblems(
+      config.tempDownloadDir,
+    )
+    if (extractedAssetProblems.length) {
+      throw new Error(
+        `Release archive has incomplete tree-sitter assets: ${extractedAssetProblems.join(', ')}`,
+      )
+    }
+
+    if (process.platform !== 'win32') fs.chmodSync(tempBinaryPath, 0o755)
+
+    const installFiles = [
+      { source: tempBinaryPath, target: config.binaryPath },
+      ...managedSiblings,
+    ]
     fs.writeFileSync(
-      CONFIG.metadataPath,
+      tempMetadataPath,
       JSON.stringify({ version, platformKey }, null, 2),
     )
+    installFiles.push({ source: tempMetadataPath, target: config.metadataPath })
+
+    for (const file of installFiles) {
+      if (process.platform !== 'win32' && file.name === 'rg') {
+        fs.chmodSync(file.source, 0o755)
+      }
+    }
+
+    const committed = []
+    try {
+      for (const [index, file] of installFiles.entries()) {
+        const backup = `${file.target}.rollback-${process.pid}-${index}`
+        const hadExisting = fs.existsSync(file.target)
+        if (hadExisting) rename(file.target, backup)
+        try {
+          rename(file.source, file.target)
+        } catch (error) {
+          if (hadExisting && fs.existsSync(backup)) rename(backup, file.target)
+          throw error
+        }
+        committed.push({ ...file, backup: hadExisting ? backup : null })
+      }
+    } catch (error) {
+      for (const file of committed.reverse()) {
+        if (fs.existsSync(file.target)) fs.unlinkSync(file.target)
+        if (file.backup && fs.existsSync(file.backup)) {
+          fs.renameSync(file.backup, file.target)
+        }
+      }
+      throw error
+    }
+
+    for (const file of committed) {
+      if (!file.backup) continue
+      try {
+        fs.unlinkSync(file.backup)
+      } catch {
+        // A stale backup is harmless and can be removed on a later launch.
+      }
+    }
+
+    term.clearLine()
+    console.log('Download complete! Starting Codecane...')
   } finally {
-    // Clean up temp directory even if rename fails
-    if (fs.existsSync(CONFIG.tempDownloadDir)) {
-      fs.rmSync(CONFIG.tempDownloadDir, { recursive: true })
+    if (fs.existsSync(config.tempDownloadDir)) {
+      fs.rmSync(config.tempDownloadDir, { recursive: true })
     }
   }
-
-  term.clearLine()
-  console.log('Download complete! Starting Codecane...')
 }
 
-async function ensureBinaryExists() {
-  const currentVersion = getCurrentVersion()
+function printInstallFailureGuidance(resolveProxyUrl, logError) {
+  logError('Please check your internet connection and try again')
+  if (!resolveProxyUrl()) {
+    logError('If you are behind a proxy, set the HTTPS_PROXY environment variable')
+  }
+}
+
+async function ensureBinaryExists(options = {}) {
+  const config = options.config || CONFIG
+  const logError = options.consoleError || console.error
+  const resolveProxyUrl = options.getProxyUrl || getProxyUrl
+  const exit = options.exit || process.exit
+  const currentVersion =
+    options.currentVersion === undefined
+      ? getCurrentVersion()
+      : options.currentVersion
   const assetProblems = currentVersion
-    ? getTreeSitterAssetProblems(CONFIG.configDir)
+    ? getTreeSitterAssetProblems(config.configDir)
     : []
-  const pendingVersion = getPendingUpdateVersion()
-  const packagedVersion = getLocalPackageVersion()
+  let pendingVersion = options.pendingVersion
+  if (pendingVersion === undefined) {
+    try {
+      pendingVersion = fs.existsSync(config.metadataPath)
+        ? JSON.parse(fs.readFileSync(config.metadataPath, 'utf8'))
+            .pendingVersion || null
+        : null
+    } catch {
+      pendingVersion = null
+    }
+  }
+  const packagedVersion =
+    options.packagedVersion === undefined
+      ? getLocalPackageVersion()
+      : options.packagedVersion
   const packagedUpdate =
     packagedVersion &&
     (currentVersion === null ||
@@ -900,60 +981,54 @@ async function ensureBinaryExists() {
     packagedUpdate ||
     (assetProblems.length ? currentVersion : null)
 
-  if (currentVersion !== null && !requestedVersion) {
-    return
-  }
+  if (currentVersion !== null && !requestedVersion) return
 
   if (assetProblems.length) {
-    console.error(
+    logError(
       `Repairing incomplete tree-sitter assets: ${assetProblems.join(', ')}`,
     )
   }
 
-  const version = requestedVersion || (await getLatestVersion())
+  const version =
+    requestedVersion ||
+    (await (options.getLatestVersion || getLatestVersion)())
   if (!version) {
-    console.error('❌ Failed to determine latest version')
-    console.error('Please check your internet connection and try again')
-    if (!getProxyUrl()) {
-      console.error(
-        'If you are behind a proxy, set the HTTPS_PROXY environment variable',
-      )
-    }
-    process.exit(1)
+    logError('❌ Failed to determine latest version')
+    printInstallFailureGuidance(resolveProxyUrl, logError)
+    exit(1)
   }
 
+  const download =
+    options.downloadBinary ||
+    ((requestedVersion) => downloadBinary(requestedVersion, { config }))
   try {
-    await downloadBinary(version)
+    await download(version)
   } catch (error) {
     term.clearLine()
-    console.error('❌ Failed to download codecane:', error.message)
-    console.error('Please check your internet connection and try again')
-    if (!getProxyUrl()) {
-      console.error(
-        'If you are behind a proxy, set the HTTPS_PROXY environment variable',
-      )
-    }
-    process.exit(1)
+    logError('❌ Failed to download codecane:', error.message)
+    printInstallFailureGuidance(resolveProxyUrl, logError)
+    exit(1)
   }
 }
 
-async function checkForUpdates() {
+async function checkForUpdates(options = {}) {
   try {
-    const currentVersion = getCurrentVersion()
-
-    const latestVersion = await getLatestVersion()
+    const currentVersion =
+      options.currentVersion === undefined
+        ? getCurrentVersion()
+        : options.currentVersion
+    const latestVersion = await (
+      options.getLatestVersion || getLatestVersion
+    )()
     if (!latestVersion) return
 
     if (
-      // Download new version if current version is unknown or outdated.
       currentVersion === null ||
       compareVersions(currentVersion, latestVersion) < 0
     ) {
-      term.clearLine()
-      console.error(
-        `Codecane update available: ${currentVersion ?? 'unknown'} → ${latestVersion}. It will be installed on the next launch.`,
-      )
-      writePendingUpdateVersion(latestVersion)
+      const persistPending =
+        options.writePendingUpdateVersion || writePendingUpdateVersion
+      persistPending(latestVersion)
     }
   } catch (error) {
     trackUpdateFailed(error.message, null, { stage: 'background_check' })
@@ -1077,11 +1152,15 @@ if (require.main === module) {
 }
 
 module.exports = {
+  checkForUpdates,
   cleanupOldBinaryBackups,
   compareVersions,
+  downloadBinary,
+  ensureBinaryExists,
   getIllegalInstructionGuidance,
   getManagedSiblingNames,
   getTreeSitterAssetProblems,
+  getUpdateFailureProperties,
   parseExpectedChecksum,
   parseLinuxCpuInfo,
   resolveConfigDir,

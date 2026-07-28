@@ -28,10 +28,11 @@ import { AgentOutputSchema } from '@codebuff/common/types/session-state'
 import { advanceWorkspaceState } from '@codebuff/common/types/workspace-state'
 import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
 import { extractApiErrorDetails } from '@codebuff/common/util/error'
-import { listRunningBackgroundJobs } from '@codebuff/common/util/pending-background-jobs'
+import { jobRegistry } from '@codebuff/common/util/job-registry'
 import { cloneDeep } from 'lodash'
 
 import { getErrorStatusCode } from './error-utils'
+import { createJobUpdateForwarder } from './job-update-forwarder'
 import { getHarnessStateDir } from './credentials'
 import { getAgentRuntimeImpl } from './impl/agent-runtime'
 import { initialSessionState, applyOverridesToSessionState } from './run-state'
@@ -118,8 +119,10 @@ import type {
 } from '@codebuff/common/types/messages/content-part'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { SessionState } from '@codebuff/common/types/session-state'
+import type { JobOwner } from '@codebuff/common/util/job-registry'
 import type { Source } from '@codebuff/common/types/source'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+import { listJobs } from './tools/list-jobs'
 
 /**
  * Wraps content for user messages, ensuring text is wrapped in <user_message> tags.
@@ -477,6 +480,9 @@ async function runOnce({
   }
   const preparedContent = wrapContentForUserMessage(content)
 
+  // Per-run client session id (also the trusted process-job owner session).
+  const promptId = Math.random().toString(36).substring(2, 15)
+
   // Init session state
   let agentId
   if (typeof agent !== 'string') {
@@ -516,6 +522,30 @@ async function runOnce({
       logger,
     })
   }
+  // Trusted ownership identity for every process-job operation. Derived
+  // ONLY from run/session state (the per-run promptId + the runtime's own
+  // run/agent ids) — NEVER from model or tool input — and injected into
+  // check_job/kill_job/read_logs/list_jobs/run_terminal_command below.
+  const trustedJobOwner: JobOwner = {
+    clientSessionId: promptId,
+    rootRunId:
+      sessionState.mainAgentState.runId ?? sessionState.mainAgentState.agentId,
+    parentRunId:
+      sessionState.mainAgentState.runId ?? sessionState.mainAgentState.agentId,
+    parentAgentId: sessionState.mainAgentState.agentId,
+  }
+  // M5: forward this run's own live background-job activity to the host via
+  // handleEvent. Subscribe once here (never inside a loop) and dispose on
+  // every terminal path so the process-wide registry singleton never leaks
+  // dead listeners across runs. The disposer is idempotent.
+  const unsubscribeJobEvents = jobRegistry.subscribeAll(
+    createJobUpdateForwarder({
+      owner: trustedJobOwner,
+      handleEvent: (event) => handleEvent?.(event),
+      shouldForward: () =>
+        callbacksEnabled && !runSignal.aborted && !!handleEvent,
+    }),
+  )
   let workspaceJournal = cwd
     ? await WorkspaceJournalService.create({
         rootDir: resolvedHarnessStateDir,
@@ -731,6 +761,7 @@ async function runOnce({
           fs,
           fileFilter,
           filesystemPolicy,
+          trustedJobOwner,
           capabilityIssuer: cwd
             ? {
                 projectId: cwd,
@@ -929,8 +960,6 @@ async function runOnce({
     },
   })
 
-  const promptId = Math.random().toString(36).substring(2, 15)
-
   if (timeoutEnabled) {
     timeoutHandle = setTimeout(() => {
       const message = `Run timed out after ${runTimeoutMs}ms`
@@ -958,6 +987,7 @@ async function runOnce({
     const terminalState = await terminalPromise
     await callbackQueue
     callbacksEnabled = false
+    unsubscribeJobEvents()
     if (timeoutHandle) clearTimeout(timeoutHandle)
     return terminalState
   }
@@ -1027,6 +1057,7 @@ async function runOnce({
   await promptExecution
   await callbackQueue
   callbacksEnabled = false
+  unsubscribeJobEvents()
   if (timeoutHandle) clearTimeout(timeoutHandle)
   await stopBrowserSessionsByOwner({ clientSessionId: promptId })
   const cleanupLibrarianClone = (cloneDir: string) => {
@@ -1119,6 +1150,7 @@ async function handleToolCall({
   fs,
   fileFilter,
   filesystemPolicy,
+  trustedJobOwner,
   capabilityIssuer,
   env,
   harnessStateDir,
@@ -1142,6 +1174,8 @@ async function handleToolCall({
   fs: CodebuffFileSystem
   fileFilter?: FileFilter
   filesystemPolicy?: FilesystemAuthorityPolicy
+  /** Trusted owner injected into every process-job op; never model-derived. */
+  trustedJobOwner: JobOwner
   capabilityIssuer?: import('@codebuff/common/util/content-hash').ReadCapabilityIssuer
   env?: Record<string, string>
   harnessStateDir: string
@@ -1319,7 +1353,9 @@ async function handleToolCall({
         )
       }
     } else if (toolName === 'end_turn') {
-      const runningJobs = listRunningBackgroundJobs()
+      const runningJobs = jobRegistry
+        .listRunning()
+        .filter((job) => job.kind === 'process')
       result = [
         {
           type: 'json',
@@ -1330,8 +1366,8 @@ async function handleToolCall({
                   message: `Turn ended. ${runningJobs.length} background job(s) are still running. Use check_job/read_logs/kill_job to manage them.`,
                   pendingBackgroundJobs: runningJobs.slice(0, 5).map((job) => ({
                     jobId: job.jobId,
-                    command: job.command,
-                    startedAt: job.startedAt,
+                    command: job.label,
+                    startedAt: job.startedAt ?? job.createdAt,
                   })),
                   ...(runningJobs.length > 5
                     ? { pendingBackgroundJobsTruncated: runningJobs.length - 5 }
@@ -1407,6 +1443,9 @@ async function handleToolCall({
       }
       result = await runTerminalCommand({
         ...terminalInput,
+        // Ownership identity is runtime-injected from trusted run state; any
+        // model-supplied `owner` in terminalInput is overridden here.
+        owner: trustedJobOwner,
         cwd: path.resolve(projectRoot, terminalInput.cwd ?? '.'),
         projectRoot,
         env,
@@ -1447,7 +1486,9 @@ async function handleToolCall({
               values.indexOf(value) === index,
           )
           const snapshotId = getWorkspaceState()?.snapshotId
-          const rootRunId = terminalInput.owner?.rootRunId
+          // Approval binding uses the TRUSTED root run id (run/session
+          // state), never a model-supplied owner.
+          const rootRunId = trustedJobOwner.rootRunId
           if (!snapshotId || !rootRunId || !harnessWorkspaceIdentity) {
             return {
               allowed: false as const,
@@ -1610,7 +1651,7 @@ async function handleToolCall({
       }
       result = await browserLogs(
         browserAction as Parameters<typeof browserLogs>[0],
-        _browserOwner,
+        { ..._browserOwner, projectRoot: cwd },
       )
     } else if (toolName === 'code_search') {
       if (fs.hostProcessView === false) {
@@ -1673,15 +1714,30 @@ async function handleToolCall({
         fileSystem: fs,
       })
     } else if (toolName === 'check_job') {
-      result = await checkJob(input as Parameters<typeof checkJob>[0])
+      // The trusted owner overrides any model-supplied owner in the input.
+      result = await checkJob({
+        ...(input as Omit<Parameters<typeof checkJob>[0], 'owner'>),
+        owner: trustedJobOwner,
+      })
     } else if (toolName === 'kill_job') {
-      result = await killJob(input as Parameters<typeof killJob>[0])
+      result = await killJob({
+        ...(input as Omit<Parameters<typeof killJob>[0], 'owner'>),
+        owner: trustedJobOwner,
+      })
     } else if (toolName === 'read_logs') {
-      const readLogsInput = input as Omit<Parameters<typeof readLogs>[0], 'cwd'>
+      const readLogsInput = input as Omit<
+        Parameters<typeof readLogs>[0],
+        'cwd' | 'owner'
+      >
       result = await readLogs({
         ...readLogsInput,
         cwd: requireCwd(cwd, 'read_logs'),
+        owner: trustedJobOwner,
       })
+    } else if (toolName === 'list_jobs') {
+      // Any model-supplied `input.owner` is ignored entirely; scoping always
+      // comes from the trusted run owner.
+      result = await listJobs({ owner: trustedJobOwner })
     } else if (toolName === 'git_status') {
       const gitStatusInput = input as Omit<
         Parameters<typeof gitStatus>[0],

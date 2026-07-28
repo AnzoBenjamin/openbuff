@@ -12,6 +12,7 @@ import { codeSearchParams } from './params/tool/code-search'
 import { gitBranchParams } from './params/tool/git-branch'
 import { gitStatusParams } from './params/tool/git-status'
 import { killJobParams } from './params/tool/kill-job'
+import { listJobsParams } from './params/tool/list-jobs'
 import { readLogsParams } from './params/tool/read-logs'
 import { createPlanParams } from './params/tool/create-plan'
 import { editTransactionParams } from './params/tool/edit-transaction'
@@ -92,6 +93,7 @@ const canonicalToolParams = {
   inspect_feature_completeness: inspectFeatureCompletenessParams,
   evaluate_audit_coverage: evaluateAuditCoverageParams,
   kill_job: killJobParams,
+  list_jobs: listJobsParams,
   read_logs: readLogsParams,
   create_plan: createPlanParams,
   edit_transaction: editTransactionParams,
@@ -187,6 +189,10 @@ export const clientToolCallSchema = z.discriminatedUnion('toolName', [
   z.object({
     toolName: z.literal('read_logs'),
     input: toolParams.read_logs.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('list_jobs'),
+    input: toolParams.list_jobs.inputSchema,
   }),
   z.object({
     toolName: z.literal('git_status'),
@@ -322,5 +328,37 @@ export type ClientToolCall<T extends ClientToolName = ClientToolName> = Extract<
   { toolName: T }
 > &
   Pick<ToolCallPart, 'toolCallId' | 'toolName' | 'providerOptions'>
+
+/**
+ * Ownership identity injected at runtime (from trusted run/session state,
+ * NEVER from model input) onto the forwarded client call for the process-job
+ * tools, so the SDK can assert it against the unified job registry.
+ */
+export type RuntimeJobOwner = {
+  clientSessionId: string
+  rootRunId: string
+  parentRunId: string
+  parentAgentId: string
+}
+
+/**
+ * The process-job client tools (check_job / kill_job / read_logs) carry a
+ * runtime-injected owner that is NOT part of the model-facing input schema.
+ *
+ * This is deliberately a standalone structural type rather than one derived
+ * from `ClientToolCall<T>['input']`. Intersecting an indexed access over the
+ * ~35-member client-tool input union with `{ owner }` forces TypeScript to
+ * eagerly expand the whole union and produces "union type too complex to
+ * represent" (TS2590). The three process-job handlers only ever need
+ * `{ toolName, toolCallId, input: { ...jobInput, owner } }`, so the handler
+ * builds that shape and casts to `ClientToolCall<T>` at the forward boundary
+ * (the wire/validation schema is unchanged; owner is stripped by the SDK
+ * after the ownership assert).
+ */
+export type ProcessJobClientToolCall<T extends ClientToolName> = {
+  toolName: T
+  toolCallId: string
+  input: Record<string, unknown> & { owner: RuntimeJobOwner }
+}
 
 export type PublishedClientToolName = ClientToolName & PublishedToolName

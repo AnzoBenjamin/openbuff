@@ -231,6 +231,48 @@ describe('findFilesMatchingContent', () => {
     }
   })
 
+  it('expands combined short flags like -ni into safe individual switches', async () => {
+    for (const flags of ['-ni', ['-ni']]) {
+      const searchPromise = findFilesMatchingContent({
+        projectPath,
+        pattern: 'needle',
+        flags,
+      })
+
+      mockProcess.stdout.emit('data', Buffer.from('src/a.ts\n'))
+      mockProcess.emit('close', 0)
+
+      await searchPromise
+      const args = mockSpawn.mock.calls.at(-1)![1] as string[]
+      // -n is a no-op (line numbers are managed by the tool); -i must remain.
+      expect(args).toContain('-i')
+      expect(args).not.toContain('-ni')
+    }
+  })
+
+  it('accepts invert-match and count output flags', async () => {
+    for (const flags of ['-v', ['-v'], '-c', ['--count-matches']]) {
+      const searchPromise = findFilesMatchingContent({
+        projectPath,
+        pattern: 'needle',
+        flags,
+      })
+
+      mockProcess.stdout.emit('data', Buffer.from('src/a.ts\n'))
+      mockProcess.emit('close', 0)
+
+      await searchPromise
+      const args = mockSpawn.mock.calls.at(-1)![1] as string[]
+      if (flags === '-v' || (Array.isArray(flags) && flags[0] === '-v')) {
+        expect(args).toContain('-v')
+      } else if (flags === '-c') {
+        expect(args).toContain('-c')
+      } else {
+        expect(args).toContain('--count-matches')
+      }
+    }
+  })
+
   it('still rejects dangerous flags after outer-quote repair', async () => {
     const result = await findFilesMatchingContent({
       projectPath,

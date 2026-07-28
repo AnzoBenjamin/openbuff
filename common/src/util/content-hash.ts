@@ -68,18 +68,33 @@ const BASE64URL_SHA256_PATTERN = /^[A-Za-z0-9_-]{43}$/
 const READ_CAPABILITY_SIGNING_KEY = randomBytes(32)
 
 function normalizeScopeComponent(value: string): string {
-  return String(value ?? '')
-    .trim()
-    .replaceAll('\\', '/')
-    .replace(/\/+$/, '')
+  const withForwardSlashes = String(value ?? '').replaceAll('\\', '/')
+  const rootPrefix = withForwardSlashes.startsWith('/') ? '/' : ''
+  return (
+    rootPrefix +
+    withForwardSlashes
+      .split('/')
+      .filter((segment) => segment !== '' && segment !== '.')
+      .join('/')
+  )
+}
+
+export function hasAuthoritativeReadCapabilityScope(
+  scope: ReadCapabilityScope,
+): boolean {
+  return (
+    normalizeScopeComponent(scope.projectId) !== '' &&
+    normalizeScopeComponent(scope.path) !== '' &&
+    normalizeScopeComponent(scope.runId) !== ''
+  )
 }
 
 export function getReadCapabilityScopeFingerprint(
   scope: ReadCapabilityScope,
 ): string {
   const projectId = normalizeScopeComponent(scope.projectId)
-  const targetPath = normalizeScopeComponent(scope.path).replace(/^\.\//, '')
-  const runId = String(scope.runId ?? '').trim()
+  const targetPath = normalizeScopeComponent(scope.path)
+  const runId = String(scope.runId ?? '')
   return createHash('sha256')
     .update(`${projectId}\0${targetPath}\0${runId}`)
     .digest('base64url')
@@ -108,6 +123,12 @@ export function encodeReadCapabilityToken(params: {
   scope: ReadCapabilityScope
 }): string {
   const { startLine, endLine, hash, scope } = params
+  if (!hasAuthoritativeReadCapabilityScope(scope)) {
+    throw new Error(
+      'Read capabilities require nonempty normalized projectId, path, and runId scope components.',
+    )
+  }
+
   const sha256Match = hash.match(SHA256_HEX_PATTERN)
   if (!sha256Match) {
     throw new Error(

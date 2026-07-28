@@ -29,7 +29,13 @@ export const terminalCommandOutputSchema = z.union([
   z.object({
     command: z.string(),
     processId: z.number(),
-    backgroundProcessStatus: z.enum(['running', 'completed', 'error', 'lost']),
+    backgroundProcessStatus: z.enum([
+      'running',
+      'completed',
+      'error',
+      'lost',
+      'stopped',
+    ]),
     detached: z.boolean().optional(),
     /** Job id to poll/follow with the check_job tool. */
     jobId: z.string().optional(),

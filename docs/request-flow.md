@@ -251,6 +251,42 @@ exposes a stable structured contract to the user:
 - Explicit reviewer bypasses retain the reason, authorization timestamp,
   pending files, fingerprint, and completed validation summary.
 
+### Git-committer commit guard and COMMIT ANYWAY bypass
+
+When the gate system is active (`canSuggestFollowups !== undefined`), the
+tool executor (`packages/agent-runtime/src/tools/tool-executor.ts`) runs two
+independent `git-committer` spawn guards:
+
+- **Gate-not-green guard:** while the validation/reviewer gate has not
+  passed (`canSuggestFollowups === false`), `git-committer` spawns are
+  blocked outright. This guard has no bypass.
+- **Uncommitted-unvalidated-files guard:** a `git-committer` spawn is
+  blocked when one of its `owned_path`s covers a dirty working-tree file
+  that has not passed the gate. Path matching is canonicalized on both
+  sides and fails closed: an uncertain dirty set or an `owned_path` that
+  cannot be canonicalized blocks the commit.
+- The published dirty set is scoped to agent-touched files. base2
+  (`agents/base2/base2.ts`) publishes `uncommittedUnvalidatedFiles`
+  filtered to files the agent actually touched (`touchedFiles`/
+  `changedFiles`/`pendingGateFiles`/`gatePassedFiles`), so unrelated files
+  left dirty by other agents or processes sharing the repo do not block
+  commits.
+- When blocked, the error names the specific unvalidated file(s) and
+  points at the bypass phrase.
+
+Replying with the exact standalone user message `COMMIT ANYWAY` (trimmed,
+case-insensitive exact match only — substring prose and assistant/tool-role
+messages do not authorize) durably publishes `commitScopeBypassAuthorized`
+plus a `commitScopeBypassRecord` capturing the `unvalidatedFiles` at
+authorization time. The bypass:
+
+- skips **only** the uncommitted-unvalidated-files guard, never the
+  gate-not-green guard — a commit can never land while validation/review
+  is pending or failing;
+- is scoped to the recorded file set — a commit claiming a file dirtied
+  after authorization is still blocked;
+- is durable for the session.
+
 ## Session State
 
 Session state persists across prompts within a conversation:

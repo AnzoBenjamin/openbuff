@@ -47,7 +47,7 @@ export function findFilesMatchingContent({
   pattern,
   flags,
   cwd,
-  maxFiles = 100,
+  maxFiles = 250,
   groupBySymbol = false,
   timeoutSeconds = 15,
   logger,
@@ -631,6 +631,15 @@ export function parseSafeRipgrepFlags(
     tokenList = reparsed.tokens
   }
 
+  // Expand pure single-dash alpha bundles (e.g. -ni -> -n -i). Do not expand
+  // --long forms or value-bearing tokens like -g*.ts.
+  tokenList = tokenList.flatMap((token) => {
+    if (/^-[a-zA-Z]{2,}$/.test(token)) {
+      return [...token.slice(1)].map((char) => `-${char}`)
+    }
+    return [token]
+  })
+
   const result: string[] = []
   const switchesWithoutValue = new Set([
     '-i',
@@ -646,6 +655,11 @@ export function parseSafeRipgrepFlags(
     '-U',
     '--multiline',
     '--multiline-dotall',
+    '-v',
+    '--invert-match',
+    '-c',
+    '--count',
+    '--count-matches',
     ...(options?.extraSwitchesWithoutValue ?? []),
   ])
   const switchesWithValue = new Set([
@@ -716,7 +730,7 @@ function unsupportedFlag(
       ? 'Use code_search only when you need its documented context flags.'
       : 'Use only the documented safe flags; line numbers are already enabled automatically.'
   return {
-    errorMessage: `Unsupported ripgrep flag '${token}'. Allowed flags: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not. ${recovery}`,
+    errorMessage: `Unsupported ripgrep flag '${token}'. Allowed flags: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -v/--invert-match, -c/--count, --count-matches, -g/--glob, -t/--type, -T/--type-not. ${recovery}`,
   }
 }
 

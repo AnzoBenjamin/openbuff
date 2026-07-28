@@ -39,11 +39,40 @@ Cross-cutting orchestration policy:
 - Ask the user before destructive commands, public API/contract changes, dependency additions, schema/data migrations, release/publish/deploy actions, production-affecting scripts, or ambiguous product behavior.
 - Terminal execution is enforced by runtime permission profiles, not prompt text alone: `read-only`, the clone-scoped `librarian-read-only`, `workspace-write`, and explicit `full-access`. Background commands are request-owned unless `detach` is explicitly requested.
 - Browser-use defaults to `params.interactionPolicy: "read-only"`. Clicks, typing, uploads, evaluation, and other browser-state mutations require `allow-interactions`; each run receives an isolated browser session that is closed with the owning SDK run.
-- `base2-plan` can spawn `basher`, `browser-use`, `debugger`, and `general-agent` for deep analysis. Plan-only authority propagates through descendants: terminal-capable children are clamped to the read-only terminal profile and browser interactions remain denied even if a child requests `allow-interactions`. Mutation agents and direct edit/terminal tools remain unavailable. The eight-agent batch limit is a concurrency bound; planners may launch additional joined waves until coverage is complete and can poll/cancel detached analysis with `check_background_agent`.
+- `base2-plan` can spawn `basher`, `browser-use`, `debugger`, and `general-agent` for deep analysis. Plan-only authority propagates through descendants: terminal-capable children are clamped to the read-only terminal profile and browser interactions remain denied even if a child requests `allow-interactions`. Mutation agents and direct edit/terminal tools remain unavailable. The spawn batch limit (`MAX_SPAWN_BATCH_SIZE`, currently 12) is a concurrency bound; planners may launch additional joined waves until coverage is complete and can poll/cancel detached analysis with `check_background_agent`.
 - Prefer dedicated tools over shell fallbacks: `git_status` for repo state, file/read/search tools for inspection, `read_image` for images, deterministic edit tools for edits, configured hooks for validation, and browser/CLI visual agents for smoke checks.
 - Maintain durable plan artifacts in EXECUTE_PLAN at phase boundaries, blockers, validation/review results, and finalization.
 - Parallelism is allowed for independent discovery shards, independent validation commands, and static review that does not depend on validation output. Dependent edits, fragile debug loops, and validation-repair cycles stay sequential.
 - The orchestrator must join all required results before completion. Reviewers running alongside validation provide static review only; failed or timed-out validation still blocks a green finish.
+
+### Agent restriction policy (relaxed vs keep)
+
+Runtime agent restrictions keep real security boundaries while removing over-strict friction that blocked legitimate local work. Vulnerability reporting stays in [SECURITY.md](../SECURITY.md); this section is product policy only.
+
+**Keep (real security value):**
+
+- SSRF host/IP/redirect revalidation on network fetches
+- Denials for `.env`, private keys/credentials, and real `.tfstate` paths
+- Project-path containment for reads/writes/spawned work
+- `cap.v3` HMAC signing with project/path/run scope binding
+- `replace_range` authority chain (authenticated capability, not prose hashes)
+- Plan-only terminal attenuation (descendants stay on the read-only terminal profile)
+- Force/delete/default-branch push gating
+- Privilege-escalation, system-package, and env-dump bans
+- Large-file scoped `basedOnRead` hard-fail when the anchor is required and invalid
+- `str_replace` circuit-breaker non-draining success (limit 5)
+
+**Relaxed (intentional friction reductions):**
+
+- Empty handoff `readablePaths` / `writablePaths` no longer invent `[]` lockouts
+- Handoff preserves static `spawnableAgents` and `programmaticToolNames`
+- Git commit guide uses multiple `-m` flags (HEREDOC and `$()` remain blocked under the git-commit profile)
+- Ripgrep expands combined short flags such as `-ni` and allows `-v` / `-c`
+- `/git` pathspec allows `()[]{}` while still blocking shell operators
+- Sensitive-path matching is more precise: no false positives on public certs/docs/examples/`yarnrc`; kubeconfig/tfstate use exact or suffix rules (real secret denials remain)
+- In-project absolute POSIX paths are allowed; containment remains authoritative
+- Higher throughput defaults with truncation/backstops kept: range read 4MB, live subtree 5000 nodes (`LIVE_SUBTREE_MAX_NODES`), web fetch 2MB / 150KB text, `code_search` `maxResults` 30, `find_files` `maxFiles` 250, spawn batch 12 (`MAX_SPAWN_BATCH_SIZE`)
+- Small-file unique stale `basedOnRead` is auto-stripped so a unique exact match can proceed
 
 ### Harness control plane and specialist intelligence
 
@@ -545,6 +574,59 @@ an agent that provides the capability (for example, spawn `code-searcher` for
 codebase search). Do not retry the same unavailable name — the result will not
 change.
 
+### Background shell jobs (`check_job` / `read_logs` / `kill_job` / `list_jobs`)
+
+Background jobs are unified behind a single `JobRegistry` (in the `common`
+package) that is the single source of truth for every background job, whether
+it is a shell process started with `run_terminal_command` using `process_type:
+BACKGROUND` (tagged `kind: 'process'`) or a background agent started with
+`spawn_agents({ background: true })` (tagged `kind: 'agent'`). Every job moves
+through one lifecycle state machine: `queued -> running -> stopping ->
+{completed | error | stopped | lost | cancelled}`. Starting a shell background
+job returns a `jobId` immediately. Four read/manage tools operate on shell
+jobs:
+
+- `check_job` polls or follows a job's new output and status, and returns the
+  job's `logFile` path in its success output. It returns sequenced output
+  events (`{type:'output',data}`) with a per-consumer `nextCursor` (plus
+  `truncated`/`dropped` bounds) rather than a job-global read offset, so each
+  consumer advances its own cursor. Follow mode (`wait_for` with a bounded
+  `timeout_seconds`) waits on that event stream until a readiness/error
+  predicate matches.
+- `read_logs` reads the trailing lines of a job's log (or an arbitrary file).
+- `kill_job` stops a running job (status becomes `stopped`).
+- `list_jobs` lists the current run's background jobs — both running and
+  recently settled, across BOTH shell (`kind: 'process'`) and background-agent
+  (`kind: 'agent'`) jobs — so an agent that lost a `jobId` (for example after
+  context compaction) can rediscover them. It takes no agent-supplied input;
+  the owner field is runtime-managed and agents must omit it.
+
+Background agents are inspected with `check_background_agent`, which emits
+`{type:'agent_chunk',chunkType,data}` events over the same sequenced per-consumer
+cursor model.
+
+Settled shell jobs remain checkable within the session/TTL: `check_job`,
+`read_logs`, and `kill_job` now work after a job has completed (returning its
+final status, exit code, and output) rather than failing once it finishes.
+Settled entries are retained in the registry with a `completedAt`
+timestamp and swept on a TTL, and `list_jobs` reports them until they are swept.
+
+Ownership is a job attribute enforced inside the registry via
+`jobRegistry.assertOwned`: a job owned by another run is rejected as a generic
+not-found (unavailable) to preserve live-job isolation. Cross-session recovery
+re-attaches to a still-running job via `JobRegistry.restampOwner`, which only
+upgrades a placeholder owner to the current run's trusted owner and never
+launders an already-owned job (a real owner is never overwritten). A recovered
+live process stays `running`; one whose process is gone reconciles to `lost`.
+
+Live job status and output reach the CLI without the agent polling: the run
+loop consumes the registry event stream in-process and surfaces live job status
+and output to the CLI as additive `job_update` events, so users see progress on
+their own. `job_update` is an additive, non-breaking member of the print-mode
+event union with shape `{ type:'job_update', jobId, kind:'process'|'agent',
+state, sequence, label?, outputDelta?, exitCode?, error? }`. It is owner-scoped:
+only the run that owns a job receives its updates.
+
 ### `query_index`
 
 `query_index` queries the local codebase graph index. It is intended for retrieval-led context gathering before reading or editing files.
@@ -763,7 +845,7 @@ while the structured anchor carries freshness metadata without prose parsing.
 it never falls back to the host process filesystem. When no live view is
 available, cached tree entries are returned with `provenance: "cached"` and
 `stale: true`, while cache misses return a typed `unsupported` error. Live
-walks reserve their 1,000-node budget before scheduling work, traverse sorted
+walks reserve their 5,000-node budget (`LIVE_SUBTREE_MAX_NODES`) before scheduling work, traverse sorted
 entries deterministically, stop admitting work at the limit, and report typed
 per-path I/O/cancellation errors plus an aggregate `partial` status.
 

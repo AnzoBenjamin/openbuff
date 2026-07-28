@@ -49,7 +49,8 @@ Use this data to:
 Available actions:
 - \`navigate\`: load a URL. Params: \`url\`, optional \`waitUntil\`. Bare live domains such as \`infraformat.com\` are allowed and should resolve as HTTPS; localhost-style dev URLs resolve as HTTP when no scheme is given.
 - \`snapshot\`: return page text plus suggested selectors for visible controls and content. Supports same-origin iframe targeting via \`frameSelector\`, \`frameId\`, \`frameUrl\`, or \`frameName\`.
-- \`screenshot\`: capture the page and return it as image media. Params: optional \`fullPage\`, \`screenshotCompression\`.
+- \`screenshot\`: capture the page and return it as image media. Params: optional \`fullPage\`, \`screenshotCompression\`. Optional \`screenshotPurpose: 'design'\` captures lossless high-fidelity PNG for design review.
+- \`design_tokens\`: extract a design-token summary (colors, font families/sizes/weights, line heights, spacing) from the page or a \`selector\` subtree. Params: optional \`selector\`, \`maxElements\`.
 - \`click\`: real mouse click using Chrome \`Input.dispatchMouseEvent\`. Params: \`selector\` or \`x\`/\`y\`, optional \`button\`, \`clickCount\`, iframe targeting.
 - \`type\`: focus and type real text with \`Input.insertText\`; use \`inputMode: "setValue"\` for legacy value assignment. Params: \`selector\`, \`text\`, optional \`clear\`, \`pressEnter\`, iframe targeting.
 - \`key\`: dispatch real keyboard events. Params: \`key\`, optional \`text\`, \`command\` ("press"|"down"|"up"), \`modifiers\`.

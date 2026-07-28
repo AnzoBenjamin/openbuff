@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 
 import {
-  __clearPendingBackgroundJobsForTest,
-  upsertPendingBackgroundJob,
-} from '@codebuff/common/util/pending-background-jobs'
+  __clearJobRegistryForTest,
+  jobRegistry,
+} from '@codebuff/common/util/job-registry'
 
 import {
   __clearBackgroundAgentJobsForTest,
@@ -12,9 +12,42 @@ import {
 import { handleEndTurn } from '../tools/handlers/tool/end-turn'
 
 afterEach(() => {
-  __clearPendingBackgroundJobsForTest()
+  __clearJobRegistryForTest()
   __clearBackgroundAgentJobsForTest()
 })
+
+/** Seed a running shell (process) job into the unified registry. */
+function seedShellJob(params: {
+  command: string
+  startedAt?: number
+  completed?: boolean
+  owner?: {
+    clientSessionId: string
+    rootRunId: string
+    parentRunId: string
+    parentAgentId: string
+  }
+}): string {
+  const job = jobRegistry.create({
+    kind: 'process',
+    label: params.command,
+    owner: params.owner ?? {
+      clientSessionId: 'unknown-session',
+      rootRunId: 'unknown-root',
+      parentRunId: 'unknown-parent',
+      parentAgentId: 'unknown-agent',
+    },
+  })
+  jobRegistry.start(job.jobId)
+  if (params.completed) {
+    jobRegistry.emit(job.jobId, {
+      type: 'lifecycle',
+      state: 'completed',
+      exitCode: 0,
+    })
+  }
+  return job.jobId
+}
 
 const runHandler = async (params?: {
   clientSessionId: string
@@ -52,26 +85,18 @@ describe('handleEndTurn', () => {
     expect(value).toEqual({ message: 'Turn ended.' })
   })
 
-  test('surfaces running background jobs in the end_turn output', async () => {
-    upsertPendingBackgroundJob({
-      jobId: 'job-test-1',
-      command: 'echo hi',
-      status: 'running',
-      startedAt: 1,
-    })
-    upsertPendingBackgroundJob({
-      jobId: 'job-test-2',
-      command: 'sleep 100',
-      status: 'running',
-      startedAt: 2,
-    })
+  test('surfaces running background shell jobs in the end_turn output', async () => {
+    const job1 = seedShellJob({ command: 'echo hi' })
+    const job2 = seedShellJob({ command: 'sleep 100' })
 
     const value = await runHandler()
     expect(value.message).toContain('2 shell job(s)')
-    expect(value.pendingBackgroundJobs).toEqual([
-      { jobId: 'job-test-1', command: 'echo hi', startedAt: 1 },
-      { jobId: 'job-test-2', command: 'sleep 100', startedAt: 2 },
-    ])
+    expect(value.pendingBackgroundJobs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ jobId: job1, command: 'echo hi' }),
+        expect.objectContaining({ jobId: job2, command: 'sleep 100' }),
+      ]),
+    )
     expect(value.pendingBackgroundJobsTruncated).toBeUndefined()
   })
 
@@ -84,12 +109,10 @@ describe('handleEndTurn', () => {
     const value = await runHandler()
     expect(value.message).toContain('1 agent job(s)')
     expect(value.pendingBackgroundAgentJobs).toEqual([
-      {
+      expect.objectContaining({
         jobId: job.jobId,
         agentType: 'researcher-web',
-        agentName: 'Web researcher',
-        startedAt: job.startedAt,
-      },
+      }),
     ])
   })
 
@@ -121,23 +144,16 @@ describe('handleEndTurn', () => {
       runId: owner.rootRunId,
     })
     expect(value.pendingBackgroundAgentJobs).toEqual([
-      {
+      expect.objectContaining({
         jobId: owned.jobId,
         agentType: 'researcher',
-        agentName: 'Owned researcher',
-        startedAt: owned.startedAt,
-      },
+      }),
     ])
   })
 
   test('truncates the listed jobs when more than five are running', async () => {
     for (let i = 0; i < 7; i++) {
-      upsertPendingBackgroundJob({
-        jobId: `job-${i}`,
-        command: `cmd ${i}`,
-        status: 'running',
-        startedAt: i,
-      })
+      seedShellJob({ command: `cmd ${i}` })
     }
 
     const value = await runHandler()
@@ -146,22 +162,15 @@ describe('handleEndTurn', () => {
   })
 
   test('ignores completed/errored jobs that are still registered', async () => {
-    upsertPendingBackgroundJob({
-      jobId: 'job-running',
-      command: 'echo running',
-      status: 'running',
-      startedAt: 1,
-    })
-    upsertPendingBackgroundJob({
-      jobId: 'job-done',
-      command: 'echo done',
-      status: 'completed',
-      startedAt: 2,
-    })
+    const running = seedShellJob({ command: 'echo running' })
+    seedShellJob({ command: 'echo done', completed: true })
 
     const value = await runHandler()
-    expect(value.pendingBackgroundJobs).toEqual([
-      { jobId: 'job-running', command: 'echo running', startedAt: 1 },
-    ])
+    expect(value.pendingBackgroundJobs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ jobId: running, command: 'echo running' }),
+      ]),
+    )
+    expect(value.pendingBackgroundJobs).toHaveLength(1)
   })
 })

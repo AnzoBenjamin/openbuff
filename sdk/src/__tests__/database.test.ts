@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 
-import { getUserInfoFromApiKey } from '../impl/database'
+import * as databaseModule from '../impl/database'
 
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 
@@ -14,7 +14,15 @@ describe('getUserInfoFromApiKey', () => {
       error: mock(() => {}),
     }) as unknown as Logger
 
+  // Full-suite isolation: other SDK tests spyOn getUserInfoFromApiKey and leave
+  // module-level userInfoCache entries. Restore spies and clear cache before each case.
+  beforeEach(() => {
+    mock.restore()
+    databaseModule.clearUserInfoCacheForTests()
+  })
+
   afterEach(() => {
+    databaseModule.clearUserInfoCacheForTests()
     mock.restore()
   })
 
@@ -36,7 +44,7 @@ describe('getUserInfoFromApiKey', () => {
       return new Response(JSON.stringify({ id: 'user-123' }), { status: 200 })
     }
     const apiKey = `database-fields-test-key-${randomUUID()}`
-    const result = await getUserInfoFromApiKey({
+    const result = await databaseModule.getUserInfoFromApiKey({
       apiKey,
       fields: ['id'],
       logger: createLoggerMocks(),
@@ -73,7 +81,7 @@ describe('getUserInfoFromApiKey', () => {
     }
     const logger = createLoggerMocks()
 
-    const first = await getUserInfoFromApiKey({
+    const first = await databaseModule.getUserInfoFromApiKey({
       apiKey: 'cache-test-api-key',
       fields: ['id'],
       logger,
@@ -81,7 +89,7 @@ describe('getUserInfoFromApiKey', () => {
     })
     expect(first).toEqual({ id: 'user-123' })
 
-    const second = await getUserInfoFromApiKey({
+    const second = await databaseModule.getUserInfoFromApiKey({
       apiKey: 'cache-test-api-key',
       fields: ['email'],
       logger,
@@ -89,7 +97,7 @@ describe('getUserInfoFromApiKey', () => {
     })
     expect(second).toEqual({ email: 'user@example.com' })
 
-    const third = await getUserInfoFromApiKey({
+    const third = await databaseModule.getUserInfoFromApiKey({
       apiKey: 'cache-test-api-key',
       fields: ['id', 'email'],
       logger,

@@ -454,6 +454,269 @@ describe('sdk-event-handlers', () => {
     expect(captured).toEqual([{ used: 150000, max: 200000 }])
   })
 
+  test('tool_call wires backgroundJobId in production so job_update correlates without manual mutation', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    // A run_terminal_command BACKGROUND launch carries its detached job id on
+    // the tool_call event itself; no test-only block mutation is required.
+    handleEvent({
+      type: 'tool_call',
+      toolCallId: 'term-bg',
+      toolName: 'run_terminal_command',
+      input: { command: 'npm run dev', mode: 'BACKGROUND' },
+      backgroundJobId: 'job-bg',
+    } as any)
+
+    expect(getMessages()[0].blocks?.[0]).toMatchObject({
+      type: 'tool',
+      backgroundJobId: 'job-bg',
+      lifecycle: 'running',
+    })
+
+    handleEvent({
+      type: 'job_update',
+      jobId: 'job-bg',
+      kind: 'process',
+      state: 'running',
+      sequence: 1,
+      outputDelta: 'listening\n',
+    } as any)
+    handleEvent({
+      type: 'job_update',
+      jobId: 'job-bg',
+      kind: 'process',
+      state: 'completed',
+      sequence: 2,
+      exitCode: 0,
+    } as any)
+
+    expect(getMessages()[0].blocks?.[0]).toMatchObject({
+      type: 'tool',
+      lifecycle: 'succeeded',
+      output: 'listening\n',
+    })
+  })
+
+  test('job_update updates a correlated tool block lifecycle and appends bounded output', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    handleEvent({
+      type: 'tool_call',
+      toolCallId: 'term-1',
+      toolName: 'run_terminal_command',
+      input: { command: 'npm test' },
+    } as any)
+    // Correlate the run_terminal_command card with a background job id.
+    ctx.message.updater.updateAiMessageBlocks((blocks) =>
+      blocks.map((block) =>
+        block.type === 'tool' && block.toolCallId === 'term-1'
+          ? { ...block, backgroundJobId: 'job-1' }
+          : block,
+      ),
+    )
+
+    handleEvent({
+      type: 'job_update',
+      jobId: 'job-1',
+      kind: 'process',
+      state: 'running',
+      sequence: 1,
+      outputDelta: 'first line\n',
+    } as any)
+    handleEvent({
+      type: 'job_update',
+      jobId: 'job-1',
+      kind: 'process',
+      state: 'running',
+      sequence: 2,
+      outputDelta: 'second line\n',
+    } as any)
+
+    let block = getMessages()[0].blocks?.[0] as any
+    expect(block).toMatchObject({
+      type: 'tool',
+      lifecycle: 'running',
+      output: 'first line\nsecond line\n',
+    })
+
+    handleEvent({
+      type: 'job_update',
+      jobId: 'job-1',
+      kind: 'process',
+      state: 'completed',
+      sequence: 3,
+      exitCode: 0,
+    } as any)
+    block = getMessages()[0].blocks?.[0] as any
+    expect(block).toMatchObject({ lifecycle: 'succeeded' })
+  })
+
+  test('job_update caps the accumulated tool output at the tail ceiling', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    handleEvent({
+      type: 'tool_call',
+      toolCallId: 'term-cap',
+      toolName: 'run_terminal_command',
+      input: { command: 'noisy' },
+    } as any)
+    ctx.message.updater.updateAiMessageBlocks((blocks) =>
+      blocks.map((block) =>
+        block.type === 'tool' && block.toolCallId === 'term-cap'
+          ? { ...block, backgroundJobId: 'job-cap' }
+          : block,
+      ),
+    )
+
+    handleEvent({
+      type: 'job_update',
+      jobId: 'job-cap',
+      kind: 'process',
+      state: 'running',
+      sequence: 1,
+      outputDelta: 'A'.repeat(60_000),
+    } as any)
+    handleEvent({
+      type: 'job_update',
+      jobId: 'job-cap',
+      kind: 'process',
+      state: 'running',
+      sequence: 2,
+      outputDelta: 'B'.repeat(5_000),
+    } as any)
+
+    const block = getMessages()[0].blocks?.[0] as any
+    expect(block.output.length).toBe(50_000)
+    // The tail (most recent output) is retained.
+    expect(block.output.endsWith('B'.repeat(5_000))).toBe(true)
+  })
+
+  test('job_update updates a correlated agent block status', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    handleEvent({
+      type: 'subagent_start',
+      agentId: 'agent-1',
+      agentType: 'researcher-web',
+      displayName: 'Researcher',
+      onlyChild: true,
+    } as any)
+    ctx.message.updater.updateAiMessageBlocks((blocks) =>
+      blocks.map((block) =>
+        block.type === 'agent' && block.agentId === 'agent-1'
+          ? { ...block, backgroundJobId: 'job-agent' }
+          : block,
+      ),
+    )
+
+    handleEvent({
+      type: 'job_update',
+      jobId: 'job-agent',
+      kind: 'agent',
+      state: 'completed',
+      sequence: 1,
+    } as any)
+
+    expect(getMessages()[0].blocks?.[0]).toMatchObject({
+      type: 'agent',
+      status: 'complete',
+      backgroundJobId: 'job-agent',
+    })
+  })
+
+  test('job_update is a no-op when no block correlates to the jobId', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    handleEvent({
+      type: 'tool_call',
+      toolCallId: 'term-x',
+      toolName: 'run_terminal_command',
+      input: { command: 'ls' },
+    } as any)
+    const before = JSON.stringify(getMessages())
+
+    handleEvent({
+      type: 'job_update',
+      jobId: 'unknown-job',
+      kind: 'process',
+      state: 'running',
+      sequence: 1,
+      outputDelta: 'foreign output',
+    } as any)
+
+    expect(JSON.stringify(getMessages())).toBe(before)
+  })
+
+  test('job_update surfaces a failed tool job error in the card output', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    handleEvent({
+      type: 'tool_call',
+      toolCallId: 'term-err',
+      toolName: 'run_terminal_command',
+      input: { command: 'boom' },
+    } as any)
+    ctx.message.updater.updateAiMessageBlocks((blocks) =>
+      blocks.map((block) =>
+        block.type === 'tool' && block.toolCallId === 'term-err'
+          ? { ...block, backgroundJobId: 'job-err' }
+          : block,
+      ),
+    )
+
+    handleEvent({
+      type: 'job_update',
+      jobId: 'job-err',
+      kind: 'process',
+      state: 'error',
+      sequence: 1,
+      outputDelta: 'partial output\n',
+      error: 'command failed with exit code 1',
+    } as any)
+
+    const block = getMessages()[0].blocks?.[0] as any
+    expect(block).toMatchObject({ type: 'tool', lifecycle: 'failed' })
+    expect(block.output).toContain('partial output')
+    expect(block.output).toContain('command failed with exit code 1')
+  })
+
+  test('job_update appends a single error block to a failed agent job without duplicating', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    handleEvent({
+      type: 'subagent_start',
+      agentId: 'agent-err',
+      agentType: 'researcher-web',
+      displayName: 'Researcher',
+      onlyChild: true,
+    } as any)
+    ctx.message.updater.updateAiMessageBlocks((blocks) =>
+      blocks.map((block) =>
+        block.type === 'agent' && block.agentId === 'agent-err'
+          ? { ...block, backgroundJobId: 'job-agent-err' }
+          : block,
+      ),
+    )
+
+    const errorEvent = {
+      type: 'job_update',
+      jobId: 'job-agent-err',
+      kind: 'agent',
+      state: 'error',
+      sequence: 1,
+      error: 'agent crashed',
+    }
+    handleEvent(errorEvent as any)
+    handleEvent(errorEvent as any)
+
+    const agentBlock = getMessages()[0].blocks?.[0] as any
+    expect(agentBlock).toMatchObject({ type: 'agent', status: 'failed' })
+    const errorTextBlocks = (agentBlock.blocks ?? []).filter(
+      (b: any) => b.type === 'text' && b.content === 'agent crashed',
+    )
+    expect(errorTextBlocks.length).toBe(1)
+  })
+
   test('persists context compaction details in the assistant message', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)

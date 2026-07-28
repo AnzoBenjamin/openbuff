@@ -102,7 +102,9 @@ describe('runTerminalCommand cwd containment', () => {
     controller.abort()
     await new Promise((resolve) => setTimeout(resolve, 20))
     const job = getBackgroundJob(value.jobId!)
-    expect(job?.status).toBe('error')
+    // An abort-initiated kill is an intentional stop, recorded as 'stopped'
+    // (distinct from an error/non-zero natural exit).
+    expect(job?.status).toBe('stopped')
     killBackgroundJob(value.jobId!, 'SIGKILL')
   })
 

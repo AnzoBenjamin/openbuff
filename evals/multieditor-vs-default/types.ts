@@ -18,6 +18,7 @@ export const multieditorEvalTaskSchema = z.object({
     'config-schema-update',
     'ambiguous-path-discovery',
     'refactor-lite',
+    'background-job-lifecycle',
   ]),
   validationCommands: z.array(z.string().min(1)).default([]),
   scoringNotes: z.array(z.string().min(1)).default([]),

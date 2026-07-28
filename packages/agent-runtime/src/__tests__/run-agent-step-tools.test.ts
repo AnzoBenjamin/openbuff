@@ -606,24 +606,25 @@ describe('runAgentStep - set_output tool', () => {
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'error',
+        message: expect.stringContaining('git-committer withheld'),
+      }),
+    )
+    // Pin the reworded gate-block guidance: the message names the gate stage
+    // (hooks first, then the reviewer) and tells the agent to wait for the
+    // pinned final_response_allowed phase rather than predicting, so this
+    // behavior-changing wording stays covered.
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
         message: expect.stringContaining(
-          'Spawning `git-committer` is not available yet',
+          'Wait until the pinned gate status shows phase=final_response_allowed',
         ),
       }),
     )
-    // Pin the reworded gate-block guidance: the message frames the block as
-    // normal ordering (the gate re-arms per edit and clears automatically),
-    // not a failure, so this behavior-changing wording stays covered.
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'error',
-        message: expect.stringContaining('normal ordering, not a failure'),
-      }),
-    )
-    expect(chunks).toContainEqual(
-      expect.objectContaining({
-        type: 'error',
-        message: expect.stringContaining('clears automatically'),
+        message: expect.stringContaining('hooks first, then the reviewer'),
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -702,9 +703,7 @@ describe('runAgentStep - set_output tool', () => {
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'error',
-        message: expect.stringContaining(
-          'Spawning `git-committer` is not available yet',
-        ),
+        message: expect.stringContaining('git-committer withheld'),
       }),
     )
     // The spawn_agents tool_call proceeds with only the helper agent.
@@ -787,7 +786,7 @@ describe('runAgentStep - set_output tool', () => {
       expect.objectContaining({
         type: 'error',
         message: expect.stringContaining(
-          'would stage changes that have not passed the validation/reviewer gate',
+          'git-committer blocked by unvalidated dirty file(s): src/b.ts',
         ),
       }),
     )
@@ -869,7 +868,7 @@ describe('runAgentStep - set_output tool', () => {
         expect.objectContaining({
           type: 'error',
           message: expect.stringContaining(
-            'would stage changes that have not passed the validation/reviewer gate',
+            'git-committer blocked by unvalidated dirty file(s):',
           ),
         }),
       )
@@ -940,22 +939,22 @@ describe('runAgentStep - set_output tool', () => {
       expect.objectContaining({
         type: 'error',
         message: expect.stringContaining(
-          'would stage changes that have not passed the validation/reviewer gate',
+          'git-committer blocked by unvalidated dirty file(s): src/b.ts',
         ),
       }),
     )
-    // Pin the reworded uncommitted-unvalidated gate-block guidance: normal
-    // ordering framing plus the auto-clearing explanation.
+    // Pin the distinct uncommitted-unvalidated block message: it names the
+    // blocking dirty file(s) and points at the "COMMIT ANYWAY" bypass hint.
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'error',
-        message: expect.stringContaining('normal ordering, not a failure'),
+        message: expect.stringContaining('COMMIT ANYWAY'),
       }),
     )
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'error',
-        message: expect.stringContaining('clears automatically'),
+        message: expect.stringContaining('src/b.ts'),
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -1027,10 +1026,384 @@ describe('runAgentStep - set_output tool', () => {
       expect.objectContaining({
         type: 'error',
         message: expect.stringContaining(
-          'would stage changes that have not passed the validation/reviewer gate',
+          'git-committer blocked by unvalidated dirty file(s):',
         ),
       }),
     )
+    const spawnCall = chunks.find(
+      (chunk) =>
+        chunk &&
+        typeof chunk === 'object' &&
+        (chunk as Record<string, unknown>).type === 'tool_call' &&
+        (chunk as Record<string, unknown>).toolName === 'spawn_agents',
+    ) as Record<string, unknown> | undefined
+    expect(spawnCall).toBeDefined()
+    const spawnInput = spawnCall?.input as {
+      agents: Array<{ agent_type: string }>
+    }
+    expect(spawnInput.agents).toHaveLength(1)
+    expect(spawnInput.agents[0]?.agent_type).toBe('git-committer')
+  })
+
+  it('allows git-committer despite an uncommitted-unvalidated file when commitScopeBypassAuthorized is true', async () => {
+    // The durable COMMIT ANYWAY bypass: once base2 publishes
+    // commitScopeBypassAuthorized === true, the uncommitted-unvalidated-files
+    // guard is skipped for the files recorded at authorization time —
+    // git-committer is not filtered out and no block error is emitted, even
+    // when owned_paths cover the recorded dirty file.
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    // The spawned git-committer re-invokes this stream; end_turn on recursion
+    // to avoid infinite spawn recursion (mirrors the allow-test above).
+    let streamCallCount = 0
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      streamCallCount += 1
+      if (streamCallCount === 1) {
+        yield createToolCallChunk('spawn_agents', {
+          agents: [
+            {
+              agent_type: 'git-committer',
+              prompt: 'Commit the changes despite the dirty file',
+              params: { owned_paths: ['src/b.ts'] },
+            },
+          ],
+        })
+      } else {
+        yield createToolCallChunk('end_turn', {})
+      }
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState =
+      sessionState.mainAgentState as typeof sessionState.mainAgentState & {
+        canSuggestFollowups?: boolean
+        uncommittedUnvalidatedFiles?: string[]
+        commitScopeBypassAuthorized?: boolean
+        commitScopeBypassRecord?: {
+          reason: string
+          authorizedAt: string
+          unvalidatedFiles: string[]
+        }
+      }
+    agentState.canSuggestFollowups = true
+    // src/b.ts is dirty+unvalidated and the commit claims it directly...
+    agentState.uncommittedUnvalidatedFiles = ['src/b.ts']
+    // ...but the durable COMMIT ANYWAY bypass skips the dirty-file guard for
+    // the recorded file set, which contains src/b.ts.
+    agentState.commitScopeBypassAuthorized = true
+    agentState.commitScopeBypassRecord = {
+      reason: 'test',
+      authorizedAt: new Date().toISOString(),
+      unvalidatedFiles: ['src/b.ts'],
+    }
+    const committerAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'test-committer-agent',
+      toolNames: ['spawn_agents', 'end_turn'],
+      spawnableAgents: ['git-committer'],
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'test-committer-agent',
+      localAgentTemplates: { 'test-committer-agent': committerAgent },
+      agentTemplate: committerAgent,
+      agentState,
+      prompt: 'Commit src/b.ts with the bypass authorized',
+    })
+
+    // No commit-guard error: the bypassed guard emits nothing...
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining(
+          'git-committer blocked by unvalidated dirty file(s):',
+        ),
+      }),
+    )
+    // ...and the spawn_agents call proceeds with the git-committer entry intact.
+    const spawnCall = chunks.find(
+      (chunk) =>
+        chunk &&
+        typeof chunk === 'object' &&
+        (chunk as Record<string, unknown>).type === 'tool_call' &&
+        (chunk as Record<string, unknown>).toolName === 'spawn_agents',
+    ) as Record<string, unknown> | undefined
+    expect(spawnCall).toBeDefined()
+    const spawnInput = spawnCall?.input as {
+      agents: Array<{ agent_type: string }>
+    }
+    expect(spawnInput.agents).toHaveLength(1)
+    expect(spawnInput.agents[0]?.agent_type).toBe('git-committer')
+  })
+
+  it('blocks git-committer for a post-authorization dirty file even when commitScopeBypassAuthorized is true', async () => {
+    // The COMMIT ANYWAY bypass is scoped to the file set recorded at
+    // authorization time: src/b.ts was dirty when the bypass was authorized
+    // (and is in the recorded set), but src/c.ts became dirty afterwards and
+    // is NOT recorded. A git-committer claiming src/c.ts must still be
+    // blocked by the uncommitted-unvalidated guard despite the bypass.
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    // The spawned git-committer re-invokes this stream; end_turn on recursion
+    // to avoid infinite spawn recursion (mirrors the allow-test above).
+    let streamCallCount = 0
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      streamCallCount += 1
+      if (streamCallCount === 1) {
+        yield createToolCallChunk('spawn_agents', {
+          agents: [
+            {
+              agent_type: 'git-committer',
+              prompt: 'Commit the post-authorization dirty file',
+              params: { owned_paths: ['src/c.ts'] },
+            },
+          ],
+        })
+      } else {
+        yield createToolCallChunk('end_turn', {})
+      }
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState =
+      sessionState.mainAgentState as typeof sessionState.mainAgentState & {
+        canSuggestFollowups?: boolean
+        uncommittedUnvalidatedFiles?: string[]
+        commitScopeBypassAuthorized?: boolean
+        commitScopeBypassRecord?: {
+          reason: string
+          authorizedAt: string
+          unvalidatedFiles: string[]
+        }
+      }
+    agentState.canSuggestFollowups = true
+    // src/b.ts was dirty at authorization time; src/c.ts became dirty after.
+    agentState.uncommittedUnvalidatedFiles = ['src/b.ts', 'src/c.ts']
+    agentState.commitScopeBypassAuthorized = true
+    // The recorded bypass set contains ONLY src/b.ts.
+    agentState.commitScopeBypassRecord = {
+      reason: 'test',
+      authorizedAt: new Date().toISOString(),
+      unvalidatedFiles: ['src/b.ts'],
+    }
+    const committerAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'test-committer-agent',
+      toolNames: ['spawn_agents', 'end_turn'],
+      spawnableAgents: ['git-committer'],
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'test-committer-agent',
+      localAgentTemplates: { 'test-committer-agent': committerAgent },
+      agentTemplate: committerAgent,
+      agentState,
+      prompt:
+        'Commit src/c.ts, which became dirty after the bypass was authorized',
+    })
+
+    // src/c.ts is outside the recorded bypass set, so the commit is still
+    // blocked with the distinct unvalidated-dirty-file message...
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining(
+          'git-committer blocked by unvalidated dirty file(s):',
+        ),
+      }),
+    )
+    // ...and no spawn_agents tool_call with a surviving git-committer went
+    // through (the single-entry batch was filtered to empty).
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'spawn_agents',
+      }),
+    )
+  })
+
+  it('blocks git-committer when owned_paths mix a recorded and an unrecorded dirty file under an authorized bypass', async () => {
+    // The COMMIT ANYWAY bypass is scoped to the file set recorded at
+    // authorization time: a git-committer whose owned_paths mix a recorded
+    // file (src/b.ts) with an unrecorded dirty file (src/c.ts) is NOT fully
+    // contained in the recorded set, so the scoped-bypass `every` check fails
+    // and the normal dirty-coverage check still blocks the commit.
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    // The spawned git-committer re-invokes this stream; end_turn on recursion
+    // to avoid infinite spawn recursion (mirrors the allow-test above).
+    let streamCallCount = 0
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      streamCallCount += 1
+      if (streamCallCount === 1) {
+        yield createToolCallChunk('spawn_agents', {
+          agents: [
+            {
+              agent_type: 'git-committer',
+              prompt: 'Commit the recorded and unrecorded dirty files',
+              params: { owned_paths: ['src/b.ts', 'src/c.ts'] },
+            },
+          ],
+        })
+      } else {
+        yield createToolCallChunk('end_turn', {})
+      }
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState =
+      sessionState.mainAgentState as typeof sessionState.mainAgentState & {
+        canSuggestFollowups?: boolean
+        uncommittedUnvalidatedFiles?: string[]
+        commitScopeBypassAuthorized?: boolean
+        commitScopeBypassRecord?: {
+          reason: string
+          authorizedAt: string
+          unvalidatedFiles: string[]
+        }
+      }
+    agentState.canSuggestFollowups = true
+    // src/b.ts was dirty at authorization time; src/c.ts became dirty after.
+    agentState.uncommittedUnvalidatedFiles = ['src/b.ts', 'src/c.ts']
+    agentState.commitScopeBypassAuthorized = true
+    // The recorded bypass set contains ONLY src/b.ts.
+    agentState.commitScopeBypassRecord = {
+      reason: 'test',
+      authorizedAt: new Date().toISOString(),
+      unvalidatedFiles: ['src/b.ts'],
+    }
+    const committerAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'test-committer-agent',
+      toolNames: ['spawn_agents', 'end_turn'],
+      spawnableAgents: ['git-committer'],
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'test-committer-agent',
+      localAgentTemplates: { 'test-committer-agent': committerAgent },
+      agentTemplate: committerAgent,
+      agentState,
+      prompt:
+        'Commit src/b.ts and src/c.ts, the latter outside the recorded bypass set',
+    })
+
+    // src/c.ts is outside the recorded bypass set, so the commit is still
+    // blocked with the distinct unvalidated-dirty-file message...
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining(
+          'git-committer blocked by unvalidated dirty file(s):',
+        ),
+      }),
+    )
+    // ...and no spawn_agents tool_call with a surviving git-committer went
+    // through (the single-entry batch was filtered to empty).
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'spawn_agents',
+      }),
+    )
+  })
+
+  it('allows git-committer with empty owned_paths under an authorized bypass', async () => {
+    // An EMPTY owned_paths array is an array, so it passes the non-array
+    // guard and reaches the scoped COMMIT ANYWAY bypass check, where
+    // `[].every(...)` is vacuously true: an authorized bypass with
+    // owned_paths: [] stages nothing outside the recorded set, so the
+    // git-committer is allowed through without the dirty-file block error.
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    // The spawned git-committer re-invokes this stream; end_turn on recursion
+    // to avoid infinite spawn recursion (mirrors the allow-test above).
+    let streamCallCount = 0
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      streamCallCount += 1
+      if (streamCallCount === 1) {
+        yield createToolCallChunk('spawn_agents', {
+          agents: [
+            {
+              agent_type: 'git-committer',
+              prompt: 'Commit with an empty owned_paths set',
+              params: { owned_paths: [] },
+            },
+          ],
+        })
+      } else {
+        yield createToolCallChunk('end_turn', {})
+      }
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState =
+      sessionState.mainAgentState as typeof sessionState.mainAgentState & {
+        canSuggestFollowups?: boolean
+        uncommittedUnvalidatedFiles?: string[]
+        commitScopeBypassAuthorized?: boolean
+        commitScopeBypassRecord?: {
+          reason: string
+          authorizedAt: string
+          unvalidatedFiles: string[]
+        }
+      }
+    agentState.canSuggestFollowups = true
+    // src/b.ts is dirty+unvalidated, but the commit claims an empty
+    // owned_paths set under an authorized bypass recorded against src/b.ts.
+    agentState.uncommittedUnvalidatedFiles = ['src/b.ts']
+    agentState.commitScopeBypassAuthorized = true
+    agentState.commitScopeBypassRecord = {
+      reason: 'test',
+      authorizedAt: new Date().toISOString(),
+      unvalidatedFiles: ['src/b.ts'],
+    }
+    const committerAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'test-committer-agent',
+      toolNames: ['spawn_agents', 'end_turn'],
+      spawnableAgents: ['git-committer'],
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'test-committer-agent',
+      localAgentTemplates: { 'test-committer-agent': committerAgent },
+      agentTemplate: committerAgent,
+      agentState,
+      prompt: 'Commit with empty owned_paths under the authorized bypass',
+    })
+
+    // No commit-guard error: the empty owned_paths set is vacuously contained
+    // in the recorded bypass set...
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining(
+          'git-committer blocked by unvalidated dirty file(s):',
+        ),
+      }),
+    )
+    // ...and the spawn_agents call proceeds with the git-committer entry intact.
     const spawnCall = chunks.find(
       (chunk) =>
         chunk &&
@@ -1099,7 +1472,7 @@ describe('runAgentStep - set_output tool', () => {
       expect.objectContaining({
         type: 'error',
         message: expect.stringContaining(
-          'would stage changes that have not passed the validation/reviewer gate',
+          'git-committer blocked by unvalidated dirty file(s):',
         ),
       }),
     )
@@ -1142,16 +1515,25 @@ describe('runAgentStep - set_output tool', () => {
         ...runAgentStepBaseParams,
         onResponseChunk: (chunk) => chunks.push(chunk),
       }
+      // The spawned git-committer re-invokes this stream; end_turn on recursion
+      // to avoid infinite spawn recursion (mirrors the neighboring allow/bypass
+      // tests).
+      let streamCallCount = 0
       runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
-        yield createToolCallChunk('spawn_agents', {
-          agents: [
-            {
-              agent_type: 'git-committer',
-              prompt: 'Commit the changes',
-              params: { owned_paths: [ownedPath] },
-            },
-          ],
-        })
+        streamCallCount += 1
+        if (streamCallCount === 1) {
+          yield createToolCallChunk('spawn_agents', {
+            agents: [
+              {
+                agent_type: 'git-committer',
+                prompt: 'Commit the changes',
+                params: { owned_paths: [ownedPath] },
+              },
+            ],
+          })
+        } else {
+          yield createToolCallChunk('end_turn', {})
+        }
         return promptSuccess('mock-message-id')
       }
 
@@ -1183,7 +1565,7 @@ describe('runAgentStep - set_output tool', () => {
         expect.objectContaining({
           type: 'error',
           message: expect.stringContaining(
-            'would stage changes that have not passed the validation/reviewer gate',
+            'git-committer blocked by unvalidated dirty file(s): src/b.ts',
           ),
         }),
       )
@@ -1256,7 +1638,7 @@ describe('runAgentStep - set_output tool', () => {
       expect.objectContaining({
         type: 'error',
         message: expect.stringContaining(
-          'would stage changes that have not passed the validation/reviewer gate',
+          'git-committer blocked by unvalidated dirty file(s):',
         ),
       }),
     )

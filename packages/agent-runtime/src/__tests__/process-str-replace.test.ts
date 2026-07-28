@@ -1279,11 +1279,8 @@ function test3() {
       expect(result.error).toContain('Candidate 1: lines')
       expect(result.error).toContain('Candidate 2: lines')
       expect(result.error).toContain('targetAlpha')
-      expect(result.error).toContain(
-        'Recovery capability for candidate 1: readCapability=cap.v3.',
-      )
-      expect(result.error).toContain('Preferred block retry: replace_range')
-      expect(result.error).toContain('no separate read is needed')
+      expect(result.error).toContain('Recovery read: read_files ranges:')
+      expect(result.error).not.toContain('cap.v3.')
     }
   })
 
@@ -1529,29 +1526,38 @@ function test3() {
     }
   })
 
-  it('does not mint authorization from a stale basedOnRead failure', async () => {
-    const lines = Array.from({ length: 1_001 }, (_, index) =>
-      index === 300 || index === 700
-        ? 'const target = 1;'
-        : `const filler${index} = ${index};`,
-    )
-    const initialContent = lines.join('\n')
-    const staleToken = readCapability({
-      path: 'large.ts',
-      startLine: 301,
-      endLine: 301,
-      content: 'const target = 0;',
+  it('does not mint authorization from a strict stale-capability failure', async () => {
+    const initialContent = 'const first = 1;\nconst second = 1;\n'
+    const broadCapability = readCapability({
+      path: 'strict.ts',
+      startLine: 1,
+      endLine: 2,
+      content: 'const first = 1;\nconst second = 1;',
+    })
+    const staleNestedCapability = readCapability({
+      path: 'strict.ts',
+      startLine: 2,
+      endLine: 2,
+      content: 'const second = 0;',
     })
 
     const result = await processStrReplace({
-      path: 'large.ts',
-      readCapabilityScope: readScope('large.ts'),
+      path: 'strict.ts',
+      readCapabilityScope: readScope('strict.ts'),
+      requireFreshReadCapability: true,
+      atomic: true,
       replacements: [
         {
-          oldString: 'const target = 1;',
-          newString: 'const target = 2;',
+          oldString: 'const first = 1;',
+          newString: 'const first = 2;',
           allowMultiple: false,
-          basedOnRead: staleToken,
+          basedOnRead: broadCapability,
+        },
+        {
+          oldString: 'const second = 1;',
+          newString: 'const second = 2;',
+          allowMultiple: false,
+          basedOnRead: staleNestedCapability,
         },
       ],
       initialContentPromise: Promise.resolve(initialContent),
@@ -1560,11 +1566,11 @@ function test3() {
 
     expect('error' in result).toBe(true)
     if ('error' in result) {
-      expect(result.error).not.toContain('readCapability=cap.')
-      expect(result.error).toContain(
-        'No replacement capability is minted from a stale-read failure',
-      )
-      expect(result.error).toContain('Re-read with read_files ranges')
+      expect(result.error).toContain('Strict read-before-edit blocked')
+      expect(result.error).toContain('read_files')
+      expect(result.error).not.toContain('cap.v3.')
+      expect(result.error).not.toMatch(/readCapability\s*=/)
+      expect(result.error).not.toMatch(/basedOnRead\s*=/)
     }
   })
 
@@ -1724,8 +1730,9 @@ function test3() {
       expect(result.error).toContain('const missing = 1;')
       expect(result.error).toContain('Re-read the exact current ranges')
       expect(result.error).toContain(
-        'use replace_range with the supplied readCapability',
+        're-read the exact current lines with read_files',
       )
+      expect(result.error).not.toContain('cap.v3.')
       expect(result.error).not.toContain('+const first = 2;')
     }
   })
@@ -2066,8 +2073,40 @@ function test3() {
     }
   })
 
-  it('rejects stale basedOnRead on small files instead of expanding scope', async () => {
+  it('auto-strips stale basedOnRead on small files when oldString is unique', async () => {
     const initialContent = 'const x = 1;\nconst y = 2;\n'
+
+    const result = await processStrReplace({
+      path: 'small.ts',
+      readCapabilityScope: readScope('small.ts'),
+      replacements: [
+        {
+          oldString: 'const y = 2;',
+          newString: 'const y = 3;',
+          allowMultiple: false,
+          basedOnRead: readCapability({
+            path: 'small.ts',
+            startLine: 1,
+            endLine: 1,
+            content: 'totally stale content',
+          }),
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(false)
+    if (!('error' in result)) {
+      expect(result.content).toContain('const y = 3;')
+      expect(result.messages.some((msg) => msg.includes('stale basedOnRead'))).toBe(
+        true,
+      )
+    }
+  })
+
+  it('rejects stale basedOnRead on small files when oldString is ambiguous', async () => {
+    const initialContent = 'const y = 2;\nconst y = 2;\n'
 
     const result = await processStrReplace({
       path: 'small.ts',
@@ -2127,15 +2166,20 @@ function test3() {
     }
   })
 
-  describe('echoed fresh anchors on write (large files)', () => {
-    it('echoes a reusable regionAnchor readCapability after a large-file edit', async () => {
+  describe('successful edit authority', () => {
+    it('does not mint pre-confirmation authority after a scoped large-file edit', async () => {
       const lines = Array.from({ length: 1_001 }, (_, index) =>
         index === 500
           ? 'const target = 1;'
           : `const filler${index} = ${index};`,
       )
       const initialContent = lines.join('\n')
-      const scope = readScope('large.ts')
+      const token = readCapability({
+        path: 'large.ts',
+        startLine: 501,
+        endLine: 501,
+        content: 'const target = 1;',
+      })
 
       const result = await processStrReplace({
         path: 'large.ts',
@@ -2144,52 +2188,26 @@ function test3() {
             oldString: 'const target = 1;',
             newString: 'const target = 2;',
             allowMultiple: false,
+            basedOnRead: token,
           },
         ],
         initialContentPromise: Promise.resolve(initialContent),
-        readCapabilityScope: scope,
+        readCapabilityScope: readScope('large.ts'),
         logger,
       })
 
       expect('content' in result).toBe(true)
-      if (!('content' in result)) return
-
-      const anchorMessage = result.messages.find((msg) =>
-        msg.includes('readCapability='),
-      )
-      expect(anchorMessage).toBeDefined()
-
-      // The echoed token must validate against the POST-edit content exactly as
-      // a freshly-read anchor would: a second edit using it must apply.
-      const tokenMatch = anchorMessage!.match(
-        /readCapability=(cap\.[A-Za-z0-9_-]+)/,
-      )
-      expect(tokenMatch).not.toBeNull()
-      const echoedToken = tokenMatch![1]
-
-      const followUp = await processStrReplace({
-        path: 'large.ts',
-        replacements: [
-          {
-            oldString: 'const target = 2;',
-            newString: 'const target = 3;',
-            allowMultiple: false,
-            basedOnRead: echoedToken,
-          },
-        ],
-        initialContentPromise: Promise.resolve(result.content),
-        readCapabilityScope: scope,
-        logger,
-      })
-
-      expect('content' in followUp).toBe(true)
-      if ('content' in followUp) {
-        expect(followUp.content).toContain('const target = 3;')
-        expect(followUp.content).not.toContain('const target = 2;')
+      if ('content' in result) {
+        expect(result.content).toContain('const target = 2;')
+        expect(result.patch).toContain('+const target = 2;')
+        const messages = result.messages.join('\n')
+        expect(messages).not.toContain('cap.v3.')
+        expect(messages).not.toMatch(/readCapability\s*=/)
+        expect(messages).not.toMatch(/basedOnRead\s*=/)
       }
     })
 
-    it('does not echo an anchor for small-file edits', async () => {
+    it('does not emit authority after a small-file edit', async () => {
       const initialContent = 'const x = 1;\nconst y = 2;\n'
       const result = await processStrReplace({
         path: 'small.ts',
@@ -2201,14 +2219,16 @@ function test3() {
           },
         ],
         initialContentPromise: Promise.resolve(initialContent),
+        readCapabilityScope: readScope('small.ts'),
         logger,
       })
 
       expect('content' in result).toBe(true)
       if ('content' in result) {
-        expect(
-          result.messages.some((msg) => msg.includes('readCapability=')),
-        ).toBe(false)
+        const messages = result.messages.join('\n')
+        expect(messages).not.toContain('cap.v3.')
+        expect(messages).not.toMatch(/readCapability\s*=/)
+        expect(messages).not.toMatch(/basedOnRead\s*=/)
       }
     })
   })

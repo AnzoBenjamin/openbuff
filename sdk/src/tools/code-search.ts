@@ -40,7 +40,7 @@ export function codeSearch({
   pattern,
   flags,
   cwd,
-  maxResults = 15,
+  maxResults = 30,
   globalMaxResults = 250,
   maxOutputStringLength = 20_000,
   timeoutSeconds = 10,

@@ -350,8 +350,10 @@ export const handleSpawnAgents = (async (
       startedAt: job.startedAt,
     })
 
-    // Detached coroutine: do NOT await. The registry tracks lifecycle and
-    // buffers streamed chunks for check_background_agent to poll.
+    // Detached coroutine: do NOT await. The unified job-registry core (via
+    // the background-agent adapter) is the source of truth for lifecycle
+    // and the buffered chunk stream that check_background_agent polls; the
+    // adapter owns only this job's AbortController and capacity limits.
     const detachedPromise = executeSubagent({
       ...contextParams,
       signal: backgroundSignal,

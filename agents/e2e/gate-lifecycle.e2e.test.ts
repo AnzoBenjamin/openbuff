@@ -30,8 +30,44 @@ function finishStepWithToolResult(value: unknown) {
   } as any
 }
 
+/**
+ * Canonical file_mutation_result receipt (the real production edit-artifact
+ * shape) for `path`. Feed this instead of a bare `{ file }` so the edited file
+ * lands in the live changedFiles set before the mid-turn git-status sweep.
+ */
+function editReceipt(path: string) {
+  return {
+    kind: 'file_mutation_result',
+    version: 1,
+    operationId: `op-${path}`,
+    receiptId: `receipt-${path}`,
+    outcome: 'applied',
+    authorityTier: 'conditional_commit',
+    actions: [
+      {
+        actionId: `action-${path}`,
+        index: 0,
+        action: 'update',
+        path,
+        outcome: 'applied',
+        beforeHash: 'before',
+        afterHash: 'after',
+      },
+    ],
+    authorityReceipt: {
+      operationId: `op-${path}`,
+      receiptId: `receipt-${path}`,
+      actions: [{ actionId: `action-${path}` }],
+    },
+    errors: [],
+    freshCapabilities: [],
+  }
+}
+
 const SCRATCH_ROOT = '.e2e-scratch/base2-gate-lifecycle'
 const LIFECYCLE_FILE = `${SCRATCH_ROOT}/lifecycle.ts`
+const MULTI_BATCH_FILE_A = `${SCRATCH_ROOT}/multi-batch-a.ts`
+const MULTI_BATCH_FILE_B = `${SCRATCH_ROOT}/multi-batch-b.ts`
 
 afterEach(() => {
   rmSync(SCRATCH_ROOT, { recursive: true, force: true })
@@ -113,7 +149,7 @@ describe('base2 deterministic gate lifecycle e2e', () => {
 
     // Invariant 1: an edit detected after a model step opens the validation gate.
     expect(
-      gen.next(finishStepWithToolResult({ file: LIFECYCLE_FILE })).value,
+      gen.next(finishStepWithToolResult(editReceipt(LIFECYCLE_FILE))).value,
     ).toMatchObject({ toolName: 'git_status', input: {} })
     expect(
       gen.next(feedJson({ status: ` M ${LIFECYCLE_FILE}` })).value,
@@ -173,7 +209,7 @@ describe('base2 deterministic gate lifecycle e2e', () => {
 
     // Invariant 5: the model can apply a validation fix in the recovery step.
     expect(
-      gen.next(finishStepWithToolResult({ file: LIFECYCLE_FILE })).value,
+      gen.next(finishStepWithToolResult(editReceipt(LIFECYCLE_FILE))).value,
     ).toMatchObject({ toolName: 'git_status' })
 
     // Invariant 6: passing validation advances to reviewer instead of finalizing.
@@ -183,8 +219,15 @@ describe('base2 deterministic gate lifecycle e2e', () => {
       toolName: 'run_file_change_hooks',
       input: { files: [LIFECYCLE_FILE] },
     })
-    const blockingReviewerSpawn = gen.next(
+    const postValidationStatus = gen.next(
       feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }]),
+    )
+    expect(postValidationStatus.value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    const blockingReviewerSpawn = gen.next(
+      feedJson({ status: ` M ${LIFECYCLE_FILE}` }),
     )
     expect(blockingReviewerSpawn.value).toMatchObject({
       toolName: 'spawn_agents',
@@ -315,8 +358,15 @@ describe('base2 deterministic gate lifecycle e2e', () => {
       input: { files: [LIFECYCLE_FILE] },
     })
     // After validation passes, the fresh reviewer runs.
-    const finalReviewerSpawn = gen.next(
+    const finalPostValidationStatus = gen.next(
       feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }]),
+    )
+    expect(finalPostValidationStatus.value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    const finalReviewerSpawn = gen.next(
+      feedJson({ status: ` M ${LIFECYCLE_FILE}` }),
     )
     expect(finalReviewerSpawn.value).toMatchObject({
       toolName: 'spawn_agents',
@@ -329,7 +379,7 @@ describe('base2 deterministic gate lifecycle e2e', () => {
     )
 
     // Invariant 11: a non-blocking reviewer verdict permits finalization.
-    const gatePassed = gen.next(
+    const finalPreCreditStatus = gen.next(
       reviewerResult({
         snapshotFingerprint: reviewerFingerprintFromSpawn(
           finalReviewerSpawn.value,
@@ -337,6 +387,13 @@ describe('base2 deterministic gate lifecycle e2e', () => {
         reviewedFiles: [LIFECYCLE_FILE],
         verdict: 'NON_BLOCKING',
       }),
+    )
+    expect(finalPreCreditStatus.value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    const gatePassed = gen.next(
+      feedJson({ status: ` M ${LIFECYCLE_FILE}` }),
     )
     expect(gatePassed.value).toMatchObject({
       toolName: 'add_message',
@@ -361,5 +418,119 @@ describe('base2 deterministic gate lifecycle e2e', () => {
       gatePassedReviewerVerdict: 'NON_BLOCKING',
     })
     expect((agentState as any).canSuggestFollowups).toBe(true)
+  })
+
+  test('validates and credits the cumulative dirty scope for a multi-batch task', () => {
+    mkdirSync(SCRATCH_ROOT, { recursive: true })
+    writeFileSync(MULTI_BATCH_FILE_A, 'export const batchA = "dirty"\n')
+    writeFileSync(MULTI_BATCH_FILE_B, 'export const batchB = "dirty"\n')
+
+    const dirtyStatus = ` M ${MULTI_BATCH_FILE_A}\n M ${MULTI_BATCH_FILE_B}`
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2-custom',
+      base2ActiveWork: {
+        changedFiles: [MULTI_BATCH_FILE_A, MULTI_BATCH_FILE_B],
+        touchedFiles: [MULTI_BATCH_FILE_A, MULTI_BATCH_FILE_B],
+        pendingGateFiles: [MULTI_BATCH_FILE_B],
+        gatePassedFiles: [],
+        gatePassedFileMarkers: {},
+        currentPhase: 'awaiting_validation',
+        latestWorkSummary: '',
+        openReviewerBlockers: [],
+        lastValidationSummary: '',
+        nextRequiredAction: '',
+        lastPinnedStateMessage: '',
+      },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Finish the previous lifecycle work.',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next(feedJson({ status: dirtyStatus })).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+    expect(gen.next().value).toBe('STEP')
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+
+    const hooks = gen.next(feedJson({ status: dirtyStatus }))
+    expect(hooks.value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+      input: { files: [MULTI_BATCH_FILE_A, MULTI_BATCH_FILE_B] },
+    })
+    expect((agentState as any).base2ActiveWork.pendingGateFiles).toEqual([
+      MULTI_BATCH_FILE_B,
+    ])
+
+    const postValidationStatus = gen.next(
+      feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }]),
+    )
+    expect(postValidationStatus.value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    const reviewerSpawn = gen.next(feedJson({ status: dirtyStatus }))
+    expect(reviewerSpawn.value).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'code-reviewer' }] },
+    })
+    const reviewerPrompt = (reviewerSpawn.value as any).input.agents[0]
+      .prompt as string
+    expect(reviewerPrompt).toContain(
+      `Gate-scope changed files: ${MULTI_BATCH_FILE_A}, ${MULTI_BATCH_FILE_B}`,
+    )
+    expect(reviewerPrompt).toContain(`${MULTI_BATCH_FILE_A}\tsha256:`)
+    expect(reviewerPrompt).toContain(`${MULTI_BATCH_FILE_B}\tsha256:`)
+    expect((agentState as any).base2ActiveWork.pendingGateFiles).toEqual([
+      MULTI_BATCH_FILE_B,
+    ])
+
+    const finalPreCreditStatus = gen.next(
+      reviewerResult({
+        snapshotFingerprint: reviewerFingerprintFromSpawn(reviewerSpawn.value),
+        reviewedFiles: [MULTI_BATCH_FILE_A, MULTI_BATCH_FILE_B],
+        verdict: 'LOOKS_GOOD',
+      }),
+    )
+    expect(finalPreCreditStatus.value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    const gatePassed = gen.next(feedJson({ status: dirtyStatus }))
+    expect(gatePassed.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+
+    const activeWork = (agentState as any).base2ActiveWork
+    expect(activeWork).toMatchObject({
+      gatePassedFiles: [MULTI_BATCH_FILE_A, MULTI_BATCH_FILE_B],
+      pendingGateFiles: [],
+      gatePassedPendingFiles: [MULTI_BATCH_FILE_B],
+      currentPhase: 'final_response_allowed',
+    })
+    expect(activeWork.gatePassedFileMarkers).toMatchObject({
+      [MULTI_BATCH_FILE_A]: expect.any(String),
+      [MULTI_BATCH_FILE_B]: expect.any(String),
+    })
+
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: { include_diff: true },
+    })
+    expect(gen.next(feedJson({ status: dirtyStatus })).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    gen.next()
+    expect((agentState as any).uncommittedUnvalidatedFiles).toEqual([])
   })
 })

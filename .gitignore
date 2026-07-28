@@ -35,5 +35,8 @@ docs/bot-detection.md
 # Local Bun install cache
 .bun-install/
 
+# Base2 gate-test scratch
+.base2-test-scratch/
+
 # Local image/screenshot scratch
 󰎞_*.webp

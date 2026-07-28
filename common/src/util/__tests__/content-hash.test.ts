@@ -49,6 +49,43 @@ describe('read capabilities', () => {
     }
   })
 
+  it('normalizes only canonical path separators and dot segments', () => {
+    const token = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: 1,
+      hash: getContentHash('value'),
+      scope: { ...scope, path: './src//value.ts' },
+    })
+    const decoded = decodeReadCapabilityToken(token)
+    expect(typeof decoded).toBe('object')
+    if (typeof decoded !== 'string') {
+      expect(
+        readCapabilityMatchesScope(decoded, {
+          ...scope,
+          path: 'src\\value.ts',
+        }),
+      ).toBe(true)
+      expect(
+        readCapabilityMatchesScope(decoded, {
+          ...scope,
+          path: ' src/value.ts',
+        }),
+      ).toBe(false)
+      expect(
+        readCapabilityMatchesScope(decoded, {
+          ...scope,
+          path: 'src/value.ts ',
+        }),
+      ).toBe(false)
+      expect(
+        readCapabilityMatchesScope(decoded, {
+          ...scope,
+          path: 'src/other.ts',
+        }),
+      ).toBe(false)
+    }
+  })
+
   it('accepts harmless wrappers copied from a read result', () => {
     const token = encodeReadCapabilityToken({
       startLine: 1,
@@ -71,6 +108,25 @@ describe('read capabilities', () => {
         scope,
       }),
     ).toThrow('canonical sha256')
+  })
+
+  it('rejects empty normalized scope fields before signing', () => {
+    const invalidScopes: Array<typeof scope> = [
+      { ...scope, projectId: './' },
+      { ...scope, path: './/' },
+      { ...scope, runId: '.' },
+    ]
+
+    for (const invalidScope of invalidScopes) {
+      expect(() =>
+        encodeReadCapabilityToken({
+          startLine: 1,
+          endLine: 1,
+          hash: getContentHash('value'),
+          scope: invalidScope,
+        }),
+      ).toThrow('nonempty normalized projectId, path, and runId')
+    }
   })
 
   it('rejects tampered cap.v3 capability payloads', () => {

@@ -7,16 +7,12 @@ const SENSITIVE_EXTENSIONS = new Set([
   '.pfx',
   '.jks',
   '.keystore',
-  '.crt',
-  '.cer',
 ])
 const SENSITIVE_BASENAMES = new Set([
   '.htpasswd',
   '.netrc',
   'credentials',
   '.npmrc',
-  '.yarnrc',
-  '.yarnrc.yml',
   'auth.json',
   '.pypirc',
   'terraform.tfvars',
@@ -56,8 +52,12 @@ export function isMandatorySensitiveReadPath(filePath: string): boolean {
     (/^id_(rsa|ed25519|dsa|ecdsa)/.test(basename) &&
       !basename.endsWith('.pub')) ||
     basename.endsWith('_credentials') ||
-    basename.includes('kubeconfig') ||
-    basename.includes('.tfstate')
+    // kubeconfig: exact credential filenames, not docs/scripts that mention the word
+    basename === 'kubeconfig' ||
+    basename.endsWith('.kubeconfig') ||
+    // real terraform state artifacts only
+    basename.endsWith('.tfstate') ||
+    basename.endsWith('.tfstate.backup')
   )
 }
 

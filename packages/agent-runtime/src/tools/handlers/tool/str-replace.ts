@@ -1,8 +1,4 @@
-import {
-  encodeReadCapabilityToken,
-  getContentHash,
-  normalizeLineEndings,
-} from '@codebuff/common/util/content-hash'
+import { getContentHash } from '@codebuff/common/util/content-hash'
 
 import {
   formatUnsafeToolPathError,
@@ -40,10 +36,11 @@ import type { ProjectFileContext } from '@codebuff/common/util/file'
 // Fix C: after this many str_replace attempts on the same path in one turn
 // return an error or an auto-corrected near-match, hard-block further
 // str_replace calls on that path and direct the agent to a whole-symbol or
-// whole-file edit instead. Successful edits deliberately do not erase this
-// failure budget: alternating failure/success cascades are the common way a
-// stale multi-replacement batch evades a purely consecutive-failure counter.
-const STR_REPLACE_MAX_CONSECUTIVE_FAILURES = 3
+// whole-file edit instead. Clean exact-match successes leave the budget
+// unchanged (non-draining) rather than full-reset or drain-by-1, so
+// fail↔success oscillation cannot evade the breaker. Limit=5 reduces
+// mid-refactor lockout friction while still forcing tool switches.
+const STR_REPLACE_MAX_CONSECUTIVE_FAILURES = 5
 
 const NEAR_MATCH_AUTOCORRECT_MARKER = 'auto-corrected a near-match edit'
 
@@ -261,26 +258,12 @@ export const handleStrReplace = (async (
     !hadFreshWholeFileAuthorization
 
   if (requireFreshReadCapability && !hasAnyReadCapability) {
-    const freshReadCapability =
-      typeof latestContent === 'string'
-        ? encodeReadCapabilityToken({
-            startLine: 1,
-            endLine: normalizeLineEndings(latestContent).split('\n').length,
-            hash: getContentHash(latestContent),
-            scope: {
-              projectId: params.fileContext?.projectRoot ?? '',
-              path,
-              runId: params.runId ?? '',
-            },
-          })
-        : undefined
     const authorizationError = strictEditAuthorizationError({
       fileProcessingState,
       path,
       toolName: 'str_replace',
       hasFreshWholeFileAuthorization: false,
       authorizationWasStale: hasStoredWholeFileAuthorization,
-      freshReadCapability,
     })
     return {
       output: [
@@ -375,28 +358,16 @@ export const handleStrReplace = (async (
           sourceTool: 'str_replace',
         })
       }
-      // After auto-reread-once, still-failed unique/ambiguous matches mint a
-      // whole-file basedOnRead so the agent can retry without another disk thrash.
-      if (autoRereadAttempted && typeof latestContent === 'string') {
-        const basedOnRead = encodeReadCapabilityToken({
-          startLine: 1,
-          endLine: normalizeLineEndings(latestContent).split('\n').length,
-          hash: getContentHash(latestContent),
-          scope: {
-            projectId: params.fileContext?.projectRoot ?? '',
-            path,
-            runId: params.runId ?? '',
-          },
-        })
+      // Internal auto-reread content may authorize only this attempt. A failed
+      // attempt must recover through a complete, model-visible read_files read.
+      if (autoRereadAttempted) {
         strReplaceResult.error = [
           strReplaceResult.error,
-          'Auto-re-read once failed to apply; retry with basedOnRead below.',
-          `basedOnRead="${basedOnRead}"`,
+          `Auto-re-read once failed to apply. Call read_files with paths: ["${path}"] for a complete read before retrying str_replace.`,
           JSON.stringify({
             recovery: {
               tool: 'read_files',
               input: { paths: [path] },
-              basedOnRead,
             },
           }),
         ].join('\n')
@@ -419,9 +390,10 @@ export const handleStrReplace = (async (
     }
   } else {
     // Fix C: an auto-corrected near-match is a weak/suspect outcome and also
-    // counts toward the circuit breaker. A clean exact-match success keeps any
-    // existing failure budget intact so failure -> success -> failure loops
-    // cannot run forever. The state naturally resets at the next turn.
+    // counts toward the circuit breaker. Clean exact-match success leaves the
+    // budget intact (non-draining) rather than full-reset or drain-by-1 so
+    // fail↔success oscillation cannot evade the breaker. Full reset still only
+    // happens at the next turn (or structural recovery below).
     hadAutoCorrect = strReplaceResult.messages.some((msg) =>
       msg.includes(NEAR_MATCH_AUTOCORRECT_MARKER),
     )
@@ -429,6 +401,8 @@ export const handleStrReplace = (async (
       fileProcessingState.consecutiveStrReplaceFailuresByPath[path] =
         (fileProcessingState.consecutiveStrReplaceFailuresByPath[path] ?? 0) + 1
     }
+    // else: clean exact-match success — leave consecutiveStrReplaceFailuresByPath
+    // unchanged so prior failures keep climbing toward the limit.
     // Strict read-before-edit: read authorization is sticky once granted by
     // read_files or write_file. Successful edits on the same path remain
     // authorized for subsequent edits; only a failed edit (which sets
@@ -440,6 +414,8 @@ export const handleStrReplace = (async (
     toolName: 'str_replace',
     fileProcessingState,
     paths: [path],
+    projectId: params.fileContext?.projectRoot ?? '',
+    runId: params.runId ?? '',
     rejectionRequiresRead: false,
     // Deterministic processing failures and explicit client rejections preserve
     // valid read authorization. Stale capability and uncertain application

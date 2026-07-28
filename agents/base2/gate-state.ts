@@ -67,6 +67,18 @@ export type Base2GateState = {
   gatePassedValidationSummary: string
   gatePassedFingerprint: string
   /**
+   * Per-file content markers for every file currently credited into
+   * gatePassedFiles. Maps a normalized project-relative file path to the
+   * content marker (see readGateFileContentMarker) captured at the moment the
+   * file was credited. Used by the generalized per-file eviction guard to
+   * detect that a credited file drifted after crediting and reopen the gate
+   * for exactly that file. Backward-compatible: older serialized state lacks
+   * this field, so it is treated as `{}`; a credited file with no stored
+   * marker is treated as drifted (fail closed). MUST stay a plain
+   * JSON-serializable record (never a Map/Set).
+   */
+  gatePassedFileMarkers?: Record<string, string>
+  /**
    * Content fingerprint of the reviewable-source subset the last time the
    * final code-reviewer gate passed. Used to skip re-review when a
    * subsequent turn (e.g. a git-action turn with no new source edits)
@@ -75,6 +87,17 @@ export type Base2GateState = {
    */
   reviewedReviewableFingerprint?: string
   lastReviewerGateSkipReason: string
+  /**
+   * Durable one-line mid-turn gate-progress note (e.g. "gate: validation
+   * passed; reviewer code-reviewer running"). Written only through the inline
+   * setGateProgress helper in base2.ts and rendered by
+   * buildPinnedActiveWorkMessage as a "Gate progress:" line in the existing
+   * pinned active-work message — no new yield/add_message is introduced.
+   * Reset to '' when the gate passes so the next edit cycle starts fresh.
+   * Backward-compatible: older serialized state lacks this field (treated as
+   * unset).
+   */
+  gateProgressLine?: string
 }
 
 export type Base2ActiveWorkState = Base2GateState & {

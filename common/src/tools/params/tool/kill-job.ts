@@ -49,7 +49,7 @@ export const killJobParams = {
     z.union([
       z.object({
         jobId: z.string(),
-        status: z.enum(['running', 'completed', 'error', 'lost']),
+        status: z.enum(['running', 'completed', 'error', 'lost', 'stopped']),
         killed: z.boolean(),
         signal: z.enum(['SIGTERM', 'SIGKILL']),
         exitCode: z.number().nullable().optional(),

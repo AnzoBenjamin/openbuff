@@ -1119,7 +1119,7 @@ describe('processEditTransaction', () => {
     }
   })
 
-  it('blocks a replace_range that follows a same-file str_replace before later edits', async () => {
+  it('maps a replace_range through a prior disjoint same-file edit', async () => {
     const initialContent = 'const a = 1\nconst b = 1\nconst c = 1\n'
     const result = await processEditTransaction({
       initialContentByPath: new Map([['src/helper.ts', initialContent]]),
@@ -1134,12 +1134,6 @@ describe('processEditTransaction', () => {
               oldString: 'const a = 1',
               newString: 'const a = 1\nconst inserted = true',
               allowMultiple: false,
-              basedOnRead: basedOnRead({
-                path: 'src/helper.ts',
-                startLine: 1,
-                endLine: 1,
-                content: 'const a = 1',
-              }),
             },
           ],
         },
@@ -1150,45 +1144,19 @@ describe('processEditTransaction', () => {
           endLine: 3,
           ...readAuthorization({
             path: 'src/helper.ts',
-            startLine: 2,
+            startLine: 3,
             endLine: 3,
-            content: 'const b = 1\nconst c = 1',
+            content: 'const c = 1',
           }),
-          newContent: 'const b = 2',
-        },
-        {
-          type: 'str_replace',
-          path: 'src/helper.ts',
-          replacements: [
-            {
-              oldString: 'const c = 1',
-              newString: 'const c = 2',
-              allowMultiple: false,
-              basedOnRead: basedOnRead({
-                path: 'src/helper.ts',
-                startLine: 3,
-                endLine: 3,
-                content: 'const c = 1',
-              }),
-            },
-          ],
+          newContent: 'const c = 2',
         },
       ],
     })
 
-    expect('error' in result).toBe(true)
-    if ('error' in result) {
-      // The replace_range at edit index 1 follows a str_replace that already
-      // changed src/helper.ts, so the line-shift guard aborts before the third
-      // edit is ever reached.
-      expect(result.failures[0]).toEqual(
-        expect.objectContaining({
-          editIndex: 1,
-          path: 'src/helper.ts',
-        }),
-      )
-      expect(result.failures[0]?.errorMessage).toContain(
-        'a prior non-replace_range edit changed this file earlier in the transaction',
+    expect('files' in result).toBe(true)
+    if ('files' in result) {
+      expect(result.files[0]?.content).toBe(
+        'const a = 1\nconst inserted = true\nconst b = 1\nconst c = 2\n',
       )
     }
   })
@@ -1355,7 +1323,7 @@ describe('processEditTransaction', () => {
       expect(result.failures[0]).toEqual(
         expect.objectContaining({ editIndex: 1, path: 'src/file.ts' }),
       )
-      expect(result.failures[0]?.errorMessage).toContain('overlap a prior replace_range')
+      expect(result.failures[0]?.errorMessage).toContain('overlap bytes changed earlier')
     }
   })
 
@@ -1714,13 +1682,135 @@ describe('processEditTransaction', () => {
         expect.objectContaining({ editIndex: 1, path: 'src/file.ts' }),
       )
       expect(result.failures[0]?.errorMessage).toContain(
-        'overlap a prior replace_range',
+        'overlap bytes changed earlier',
       )
     }
     expect('files' in result).toBe(false)
   })
 
-  it('blocks a replace_range after a prior non-replace_range edit changed the same file', async () => {
+  it('authorizes rewrite_symbol with the exact fresh comment-aware symbol slice', async () => {
+    const path = 'src/file.ts'
+    const initial = '/** doc */\nexport function greet() {\n  return 1\n}\n'
+    const readCapability = basedOnRead({
+      path,
+      startLine: 1,
+      endLine: 4,
+      content: '/** doc */\nexport function greet() {\n  return 1\n}',
+    })
+
+    const result = await processEditTransaction({
+      initialContentByPath: new Map([[path, initial]]),
+      logger,
+      readCapabilityIssuer: defaultReadCapabilityIssuer,
+      requireFreshReadCapabilityForPaths: new Set([path]),
+      edits: [
+        {
+          type: 'rewrite_symbol',
+          path,
+          symbol: 'greet',
+          content: '/** new doc */\nexport function greet() {\n  return 2\n}',
+          readCapability,
+        },
+      ],
+    })
+
+    expect('files' in result).toBe(true)
+    if ('files' in result) {
+      expect(result.files[0]?.content).toContain('/** new doc */')
+      expect(result.files[0]?.content).not.toContain('/** doc */')
+    }
+  })
+
+  it('rejects stale, wrong-scope, broader, and narrower rewrite_symbol capabilities', async () => {
+    const path = 'src/file.ts'
+    const initial = '/** doc */\nexport function greet() {\n  return 1\n}\n'
+    const attempts = [
+      basedOnRead({
+        path: 'src/other.ts',
+        startLine: 1,
+        endLine: 4,
+        content: '/** doc */\nexport function greet() {\n  return 1\n}',
+      }),
+      readAuthorization({
+        path,
+        startLine: 1,
+        endLine: 4,
+        content: '/** doc */\nexport function greet() {\n  return 1\n}',
+        issuer: { projectId: '/project', runId: 'other-run' },
+      }).readCapability,
+      basedOnRead({
+        path,
+        startLine: 1,
+        endLine: 5,
+        content: initial,
+      }),
+      basedOnRead({
+        path,
+        startLine: 2,
+        endLine: 4,
+        content: 'export function greet() {\n  return 1\n}',
+      }),
+      basedOnRead({
+        path,
+        startLine: 1,
+        endLine: 4,
+        content: '/** stale */\nexport function greet() {\n  return 1\n}',
+      }),
+    ]
+
+    for (const readCapability of attempts) {
+      const result = await processEditTransaction({
+        initialContentByPath: new Map([[path, initial]]),
+        logger,
+        readCapabilityIssuer: defaultReadCapabilityIssuer,
+        requireFreshReadCapabilityForPaths: new Set([path]),
+        edits: [
+          {
+            type: 'rewrite_symbol',
+            path,
+            symbol: 'greet',
+            content: 'export function greet() {\n  return 2\n}',
+            readCapability,
+          },
+        ],
+      })
+
+      expect('error' in result).toBe(true)
+      expect('files' in result).toBe(false)
+    }
+  })
+
+  it('fails closed when replace_range capability scope is unavailable', async () => {
+    const initial = 'one\ntwo\n'
+    const result = await processEditTransaction({
+      initialContentByPath: new Map([['src/file.ts', initial]]),
+      logger,
+      edits: [
+        {
+          type: 'replace_range',
+          path: 'src/file.ts',
+          startLine: 1,
+          endLine: 1,
+          ...readAuthorization({
+            path: 'src/file.ts',
+            startLine: 1,
+            endLine: 1,
+            content: 'one',
+          }),
+          newContent: 'ONE',
+        },
+      ],
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.failures[0]?.errorMessage).toContain(
+        'authenticated readCapability scope is unavailable',
+      )
+    }
+  })
+
+  it('blocks a replace_range whose original bytes were changed earlier', async () => {
     const initial = 'const a = 1\nconst b = 1\nconst c = 1\n'
     const issuer = { projectId: '/project', runId: 'run-nonrange-block' }
     const result = await processEditTransaction({
@@ -1733,8 +1823,8 @@ describe('processEditTransaction', () => {
           path: 'src/file.ts',
           replacements: [
             {
-              oldString: 'const a = 1',
-              newString: 'const a = 1\nconst inserted = true',
+              oldString: 'const c = 1',
+              newString: 'const c = 99',
               allowMultiple: false,
             },
           ],
@@ -1762,7 +1852,7 @@ describe('processEditTransaction', () => {
         expect.objectContaining({ editIndex: 1, path: 'src/file.ts' }),
       )
       expect(result.failures[0]?.errorMessage).toContain(
-        'a prior non-replace_range edit changed this file earlier in the transaction',
+        'overlap bytes changed earlier in this transaction',
       )
     }
     expect('files' in result).toBe(false)

@@ -246,6 +246,9 @@ const rewriteSymbolEditSchema = editBaseSchema.extend({
       'content is an explicit placeholder; provide the complete symbol source.',
   }),
   occurrence: z.number().int().positive().optional(),
+  readCapability: basedOnReadSchema.describe(
+    'Optional cap.v3 copied from the matching read_files symbol slice. It authorizes exactly the symbol and its contiguous preceding comment block.',
+  ),
 })
 
 const patchEditSchema = editBaseSchema.extend({
@@ -380,27 +383,6 @@ const inputSchema = z
       .preprocess(
         normalizeTransactionEditList,
         boundedTransactionEditListSchema,
-      )
-      .transform((edits) =>
-        edits.map((edit) => {
-          if (edit.type !== 'replace_range') return edit
-          const decoded = decodeReadCapabilityToken(edit.readCapability)
-          if (typeof decoded === 'string' || decoded.tokenVersion !== 'v3') {
-            throw new Error(
-              typeof decoded === 'string'
-                ? decoded
-                : 'readCapability requires an authenticated project/path/run-bound cap.v3 token.',
-            )
-          }
-          return {
-            ...edit,
-            startLine: edit.startLine ?? decoded.startLine,
-            endLine: edit.endLine ?? decoded.endLine,
-            capabilityStartLine: decoded.startLine,
-            capabilityEndLine: decoded.endLine,
-            capabilityHash: decoded.hash,
-          }
-        }),
       )
       .describe(
         'All edits that must preflight together. Pass an actual array of edit objects; do not JSON.stringify the array or its entries. The runtime defensively decodes complete legacy JSON encodings, but malformed or truncated strings fail closed. An omitted type is inferred only when the payload shape identifies one unambiguous operation, such as replacements implying str_replace. If any edit fails during preflight, no files are changed.',

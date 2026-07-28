@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { handleReadOutline } from '../tools/handlers/tool/read-outline'
+import { extractSlices } from '../structural-read'
+import { decodeReadCapabilityToken } from '@codebuff/common/util/content-hash'
 
 describe('read_outline handler', () => {
   it('returns outline of exports, imports, functions, classes, and types', async () => {
@@ -78,6 +80,30 @@ const myArrow = (y: string) => {
 
     const result = output[0].value
     expect(result.outline).toBe('Error: File does not exist.')
+  })
+})
+
+describe('symbol slices', () => {
+  it('covers a contiguous preceding documentation block in content and capability', async () => {
+    const content = '/** doc */\nexport function greet() {\n  return 1\n}\n'
+    const slices = await extractSlices(content, 'src/file.ts', ['greet'], 5, {
+      projectId: '/repo',
+      path: 'src/file.ts',
+      runId: 'symbol-slice-test',
+    })
+
+    expect(slices).toHaveLength(1)
+    expect(slices[0]).toMatchObject({
+      startLine: 1,
+      endLine: 4,
+      content: '/** doc */\nexport function greet() {\n  return 1\n}',
+    })
+    const decoded = decodeReadCapabilityToken(slices[0]!.readCapability ?? '')
+    expect(typeof decoded).toBe('object')
+    if (typeof decoded !== 'string') {
+      expect(decoded.startLine).toBe(1)
+      expect(decoded.endLine).toBe(4)
+    }
   })
 })
 

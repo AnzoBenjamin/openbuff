@@ -54,6 +54,14 @@ export type ToolContentBlock = {
   lifecycle?: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
   /** The run was interrupted before this authoritative result arrived. */
   interrupted?: boolean
+  /**
+   * Detached background shell (process) job associated with this tool card.
+   * Wired in production from the `tool_call` print-mode event's
+   * `backgroundJobId` for a run_terminal_command BACKGROUND call so live
+   * `job_update` events (M5) can correlate to this card and update its
+   * lifecycle/output in place.
+   */
+  backgroundJobId?: string
 }
 export type AgentContentBlock = {
   type: 'agent'

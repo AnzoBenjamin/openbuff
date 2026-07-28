@@ -26,7 +26,7 @@ import type {
 } from '@codebuff/common/util/file'
 
 type ToolName = 'read_subtree'
-const LIVE_SUBTREE_MAX_NODES = 1000
+const LIVE_SUBTREE_MAX_NODES = 5000
 
 type LiveScanState = {
   count: number

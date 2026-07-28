@@ -2,10 +2,27 @@ import z from 'zod/v4'
 
 import {
   decodeReadCapabilityToken,
+  getContentHash,
   getExactContentHash,
+  normalizeLineEndings,
   readCapabilityMatchesScope,
   type ReadCapabilityScope,
 } from '../../util/content-hash'
+
+export const FILESYSTEM_RESULT_CONTENT_MAX_BYTES = 10 * 1024 * 1024
+export const FILESYSTEM_RESULT_AGGREGATE_CONTENT_MAX_BYTES = 20 * 1024 * 1024
+export const FILESYSTEM_RESULT_MAX_ACTIONS = 128
+export const FILESYSTEM_RESULT_MAX_CAPABILITIES = 128
+
+const boundedMutationContentSchema = z
+  .string()
+  .max(FILESYSTEM_RESULT_CONTENT_MAX_BYTES)
+  .refine(
+    (content) =>
+      new TextEncoder().encode(content).byteLength <=
+      FILESYSTEM_RESULT_CONTENT_MAX_BYTES,
+    'mutation content exceeds the per-action byte limit',
+  )
 
 export const filesystemErrorCodeSchema = z.enum([
   'not_found',
@@ -137,6 +154,13 @@ export const fileCapabilityV1Schema = z.union([
   readOnlyCapabilityV1Schema,
 ])
 
+export const readFilesEditAnchorSchema = z.object({
+  startLine: z.number().int().positive(),
+  endLine: z.number().int().positive(),
+  contentHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  readCapability: z.string().min(1),
+})
+
 export const fileActionKindV1Schema = z.enum([
   'create',
   'update',
@@ -162,8 +186,9 @@ export const fileMutationActionV1Schema = z
     outcome: mutationActionOutcomeV1Schema,
     beforeHash: z.string().min(1).nullable(),
     afterHash: z.string().min(1).nullable(),
-    afterContent: z.string().optional(),
-    patch: z.string().optional(),
+    afterContent: boundedMutationContentSchema.optional(),
+    editAnchor: readFilesEditAnchorSchema.optional(),
+    patch: boundedMutationContentSchema.optional(),
     error: filesystemErrorSchema.optional(),
     rollback: z
       .object({
@@ -201,6 +226,30 @@ export const fileMutationActionV1Schema = z
         message: 'action afterContent must match afterHash',
       })
     }
+    if (
+      (value.editAnchor !== undefined) !== (value.afterContent !== undefined)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'action afterContent and editAnchor must be exposed or omitted together',
+      })
+    }
+    if (
+      value.editAnchor &&
+      (value.outcome !== 'applied' ||
+        value.action === 'delete' ||
+        value.editAnchor.startLine !== 1 ||
+        value.editAnchor.endLine !==
+          normalizeLineEndings(value.afterContent ?? '').split('\n').length ||
+        value.editAnchor.contentHash !== getContentHash(value.afterContent ?? ''))
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'action editAnchor must describe the complete visible applied text',
+      })
+    }
   })
 
 export const fileMutationOutcomeV1Schema = z.enum([
@@ -218,14 +267,18 @@ export const fileMutationResultV1Schema = z
     version: z.literal(1),
     operationId: z.string().min(1),
     outcome: fileMutationOutcomeV1Schema,
-    actions: fileMutationActionV1Schema.array(),
+    actions: fileMutationActionV1Schema
+      .array()
+      .max(FILESYSTEM_RESULT_MAX_ACTIONS),
     authorityTier: authorityCapabilityTierSchema.nullable(),
     receiptId: z.string().min(1).optional(),
     workspaceRevision: z.number().int().nonnegative().optional(),
     workspaceSnapshotId: z.string().min(1).optional(),
     authorityReceipt: z.lazy(() => commitReceiptV1Schema).optional(),
     errors: filesystemErrorSchema.array(),
-    freshCapabilities: fileCapabilityV1Schema.array(),
+    freshCapabilities: fileCapabilityV1Schema
+      .array()
+      .max(FILESYSTEM_RESULT_MAX_CAPABILITIES),
   })
   .superRefine((value, ctx) => {
     if (value.actions.some((action, index) => action.index !== index)) {
@@ -262,6 +315,37 @@ export const fileMutationResultV1Schema = z
       ctx.addIssue({
         code: 'custom',
         message: 'mutation aggregate outcome does not match action outcomes',
+      })
+    }
+
+    if (
+      value.outcome !== 'applied' &&
+      (value.freshCapabilities.length > 0 ||
+        value.actions.some(
+          (action) =>
+            action.afterContent !== undefined || action.editAnchor !== undefined,
+        ))
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'only fully applied mutations may expose post-edit content or capabilities',
+      })
+    }
+    if (
+      value.freshCapabilities.some(
+        (capability) =>
+          capability.kind === 'whole_file' &&
+          !value.actions.some(
+            (action) =>
+              action.outcome === 'applied' &&
+              action.editAnchor?.readCapability === capability.token,
+          ),
+      )
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'whole-file fresh capabilities require a matching action anchor',
       })
     }
 
@@ -355,7 +439,9 @@ export const commitReceiptV1Schema = z
     callId: z.string().min(1),
     authorityTier: authorityCapabilityTierSchema,
     status: commitReceiptStatusV1Schema,
-    actions: commitActionReceiptV1Schema.array(),
+    actions: commitActionReceiptV1Schema
+      .array()
+      .max(FILESYSTEM_RESULT_MAX_ACTIONS),
     finalHashes: z.record(z.string(), z.string().min(1).nullable()),
     workspaceRevision: z.number().int().nonnegative().optional(),
     workspaceSnapshotId: z.string().min(1).optional(),
@@ -365,6 +451,21 @@ export const commitReceiptV1Schema = z
       ctx.addIssue({
         code: 'custom',
         message: 'commit action indexes must be contiguous and ordered',
+      })
+    }
+    if (value.actions.some((action) => action.actionId.length === 0)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'commit action IDs must be nonempty',
+      })
+    }
+    if (
+      new Set(value.actions.map((action) => action.actionId)).size !==
+      value.actions.length
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'commit action IDs must be unique',
       })
     }
 
@@ -399,13 +500,6 @@ export const commitReceiptV1Schema = z
       })
     }
   })
-
-export const readFilesEditAnchorSchema = z.object({
-  startLine: z.number().int().positive(),
-  endLine: z.number().int().positive(),
-  contentHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
-  readCapability: z.string().min(1),
-})
 
 export const readFilesSliceSchema = z
   .object({
@@ -830,6 +924,7 @@ function mutationActionFromReceipt(
   action: CommitActionReceiptV1,
   receiptStatus: CommitReceiptV1['status'],
   afterContent?: string,
+  editAnchor?: z.infer<typeof readFilesEditAnchorSchema>,
 ): FileMutationActionV1 {
   let outcome: FileMutationActionV1['outcome']
   if (action.status === 'committed') {
@@ -844,6 +939,13 @@ function mutationActionFromReceipt(
     outcome = 'not_applied'
   }
 
+  const exposeAfterState =
+    receiptStatus === 'committed' &&
+    action.status === 'committed' &&
+    typeof afterContent === 'string' &&
+    new TextEncoder().encode(afterContent).byteLength <=
+      FILESYSTEM_RESULT_CONTENT_MAX_BYTES
+
   return {
     actionId: action.actionId,
     index: action.index,
@@ -855,10 +957,8 @@ function mutationActionFromReceipt(
     outcome,
     beforeHash: action.beforeHash,
     afterHash: action.afterHash,
-    ...(receiptStatus === 'committed' &&
-    action.status === 'committed' &&
-    typeof afterContent === 'string'
-      ? { afterContent }
+    ...(exposeAfterState
+      ? { afterContent, ...(editAnchor ? { editAnchor } : {}) }
       : {}),
     ...(action.error ? { error: action.error } : {}),
     ...(action.status === 'rolled_back' || action.status === 'rollback_failed'
@@ -878,11 +978,17 @@ export type FileMutationActionContentsV1 = ReadonlyMap<
   string
 >
 
+export type FileMutationActionEditAnchorsV1 = ReadonlyMap<
+  number | string,
+  z.infer<typeof readFilesEditAnchorSchema>
+>
+
 export function buildFileMutationResultFromReceiptV1(
   receipt: CommitReceiptV1,
   additionalErrors: FilesystemError[] = [],
   freshCapabilities: FileCapabilityV1[] = [],
   actionContents?: FileMutationActionContentsV1,
+  actionEditAnchors?: FileMutationActionEditAnchorsV1,
 ): FileMutationResultV1 {
   const validatedReceipt = commitReceiptV1Schema.parse(receipt)
   const actions = validatedReceipt.actions.map((action) =>
@@ -890,6 +996,8 @@ export function buildFileMutationResultFromReceiptV1(
       action,
       validatedReceipt.status,
       actionContents?.get(action.index) ?? actionContents?.get(action.actionId),
+      actionEditAnchors?.get(action.index) ??
+        actionEditAnchors?.get(action.actionId),
     ),
   )
   const outcome: FileMutationOutcomeV1 =
@@ -913,6 +1021,12 @@ export function buildFileMutationResultFromReceiptV1(
     actions,
     authorityTier: validatedReceipt.authorityTier,
     receiptId: validatedReceipt.receiptId,
+    ...(validatedReceipt.workspaceRevision !== undefined
+      ? { workspaceRevision: validatedReceipt.workspaceRevision }
+      : {}),
+    ...(validatedReceipt.workspaceSnapshotId !== undefined
+      ? { workspaceSnapshotId: validatedReceipt.workspaceSnapshotId }
+      : {}),
     authorityReceipt: validatedReceipt,
     errors: [
       ...validatedReceipt.actions.flatMap((action) =>
@@ -922,6 +1036,37 @@ export function buildFileMutationResultFromReceiptV1(
     ],
     freshCapabilities,
   })
+}
+
+export function mutationResultExceedsCheapBoundsV1(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  if (
+    (Array.isArray(record.actions) &&
+      record.actions.length > FILESYSTEM_RESULT_MAX_ACTIONS) ||
+    (Array.isArray(record.freshCapabilities) &&
+      record.freshCapabilities.length > FILESYSTEM_RESULT_MAX_CAPABILITIES)
+  ) {
+    return true
+  }
+
+  let aggregateBytes = 0
+  for (const action of Array.isArray(record.actions) ? record.actions : []) {
+    if (!action || typeof action !== 'object' || Array.isArray(action)) continue
+    const actionRecord = action as Record<string, unknown>
+    for (const field of ['afterContent', 'patch'] as const) {
+      const content = actionRecord[field]
+      if (typeof content !== 'string') continue
+      if (content.length > FILESYSTEM_RESULT_CONTENT_MAX_BYTES) return true
+      const bytes = new TextEncoder().encode(content).byteLength
+      if (bytes > FILESYSTEM_RESULT_CONTENT_MAX_BYTES) return true
+      aggregateBytes += bytes
+      if (aggregateBytes > FILESYSTEM_RESULT_AGGREGATE_CONTENT_MAX_BYTES) {
+        return true
+      }
+    }
+  }
+  return false
 }
 
 export type ReconciledFileMutationV1 = {
@@ -962,60 +1107,114 @@ export function reconcileFileMutationResultV1({
 
   if (matchingReceipt) {
     const correlatedActions = new Map<number | string, string>()
-    const committedTargets = matchingReceipt.actions.flatMap((action) =>
-      action.status === 'committed' && action.afterHash
-        ? [
-            {
-              path: action.destinationPath ?? action.path,
-              afterHash: action.afterHash,
-            },
-          ]
-        : [],
-    )
-    if (parsedHandlerResult.success) {
+    const correlatedAnchors = new Map<
+      number | string,
+      z.infer<typeof readFilesEditAnchorSchema>
+    >()
+    const validatedCapabilities: FileCapabilityV1[] = []
+
+    const usedTokens = new Set<string>()
+    if (
+      parsedHandlerResult.success &&
+      matchingReceipt.status === 'committed' &&
+      parsedHandlerResult.data.workspaceRevision ===
+        matchingReceipt.workspaceRevision &&
+      parsedHandlerResult.data.workspaceSnapshotId ===
+        matchingReceipt.workspaceSnapshotId
+    ) {
       for (const receiptAction of matchingReceipt.actions) {
-        const handlerAction = parsedHandlerResult.data.actions.find(
+        const matchingHandlerActions = parsedHandlerResult.data.actions.filter(
           (action) =>
             action.index === receiptAction.index &&
             action.actionId === receiptAction.actionId &&
             action.action === receiptAction.action &&
             action.path === receiptAction.path &&
             action.destinationPath === receiptAction.destinationPath &&
+            action.beforeHash === receiptAction.beforeHash &&
             action.afterHash === receiptAction.afterHash,
         )
+        if (matchingHandlerActions.length !== 1) continue
+        const handlerAction = matchingHandlerActions[0]
+        const afterContent = handlerAction.afterContent
+        const editAnchor = handlerAction.editAnchor
         if (
-          handlerAction?.afterContent !== undefined &&
-          receiptAction.afterHash ===
-            getExactContentHash(handlerAction.afterContent)
+          receiptAction.status !== 'committed' ||
+          receiptAction.afterHash === null ||
+          afterContent === undefined ||
+          editAnchor === undefined ||
+          new TextEncoder().encode(afterContent).byteLength >
+            FILESYSTEM_RESULT_CONTENT_MAX_BYTES ||
+          getExactContentHash(afterContent) !== receiptAction.afterHash
         ) {
-          correlatedActions.set(receiptAction.index, handlerAction.afterContent)
+          continue
+        }
+
+        const matchingCapabilities =
+          parsedHandlerResult.data.freshCapabilities.filter(
+            (candidate) =>
+              candidate.kind === 'whole_file' &&
+              candidate.token === editAnchor.readCapability,
+          )
+        if (
+          matchingCapabilities.length !== 1 ||
+          usedTokens.has(editAnchor.readCapability) ||
+          capabilityScope === undefined
+        ) {
+          continue
+        }
+        const capability = matchingCapabilities[0]!
+        const decoded = decodeReadCapabilityToken(capability.token)
+        if (typeof decoded === 'string') continue
+
+        const targetPath = receiptAction.destinationPath ?? receiptAction.path
+        const normalizedHash = getContentHash(afterContent)
+        const endLine = normalizeLineEndings(afterContent).split('\n').length
+        const canonicalProject = capabilityScope.projectId
+          .replaceAll('\\', '/')
+          .replace(/\/+$/, '')
+        const canonicalTarget = targetPath
+          .replaceAll('\\', '/')
+          .replace(/^\.\//, '')
+        const expectedCanonicalPath = `${canonicalProject}/${canonicalTarget}`
+        if (
+          matchingReceipt.finalHashes[targetPath] !== receiptAction.afterHash ||
+          !readCapabilityMatchesScope(decoded, {
+            ...capabilityScope,
+            path: targetPath,
+          }) ||
+          capability.snapshot.canonicalPath.replaceAll('\\', '/') !==
+            expectedCanonicalPath ||
+          capability.snapshot.contentHash !== receiptAction.afterHash ||
+          capability.snapshot.sizeBytes !==
+            new TextEncoder().encode(afterContent).byteLength ||
+          capability.snapshot.encoding !== 'utf8' ||
+          decoded.hash !== normalizedHash ||
+          decoded.startLine !== 1 ||
+          decoded.endLine !== endLine ||
+          editAnchor.startLine !== 1 ||
+          editAnchor.endLine !== endLine ||
+          editAnchor.contentHash !== normalizedHash
+        ) {
+          continue
+        }
+
+        usedTokens.add(editAnchor.readCapability)
+        correlatedActions.set(receiptAction.index, afterContent)
+        correlatedAnchors.set(receiptAction.index, editAnchor)
+        if (!validatedCapabilities.includes(capability)) {
+          validatedCapabilities.push(capability)
         }
       }
     }
-    const freshCapabilities = parsedHandlerResult.success
-      ? parsedHandlerResult.data.freshCapabilities.filter((capability) => {
-          const decoded = decodeReadCapabilityToken(capability.token)
-          if (typeof decoded === 'string') return false
-          return committedTargets.some(
-            (target) =>
-              capabilityScope !== undefined &&
-              readCapabilityMatchesScope(decoded, {
-                ...capabilityScope,
-                path: target.path,
-              }) &&
-              decoded.hash === target.afterHash &&
-              target.afterHash === capability.snapshot.contentHash,
-          )
-        })
-      : []
 
     return {
       lifecycle,
       mutation: buildFileMutationResultFromReceiptV1(
         matchingReceipt,
         parsedHandlerResult.success ? [] : [malformedError],
-        freshCapabilities,
+        validatedCapabilities,
         correlatedActions,
+        correlatedAnchors,
       ),
       handlerResultValid: parsedHandlerResult.success,
     }
@@ -1037,6 +1236,7 @@ export function reconcileFileMutationResultV1({
         beforeHash: null,
         afterHash: null,
         afterContent: undefined,
+        editAnchor: undefined,
         rollback: undefined,
       })),
       authorityTier: null,

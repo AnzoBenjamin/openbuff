@@ -12,6 +12,11 @@ import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
 const normalizeFile = (file: string) =>
   file.replace(/\\/g, '/').replace(/^\.\//, '')
 
+const isSessionArtifactPath = (file: string): boolean => {
+  const normalized = file.replace(/\\/g, '/').replace(/^\.\//, '')
+  return normalized.startsWith('.agents/sessions/')
+}
+
 async function buildSnapshotId(params: {
   cwd: string
   headCommit: string
@@ -23,7 +28,7 @@ async function buildSnapshotId(params: {
   // Presentation diffs are intentionally bounded. Snapshot identity must not
   // be: hash the complete tracked diff plus the bytes of untracked files.
   const fullDiff = await runGit(
-    ['diff', '--binary', 'HEAD', '--'],
+    ['diff', '--binary', 'HEAD', '--', '.', ':(exclude).agents/sessions/**'],
     params.cwd,
     params.signal,
   )
@@ -85,8 +90,32 @@ export async function getChangeReviewBundle(params: {
   const headCommit = head.stdout.trim()
   const status = value.status
   let diff = value.diff ?? ''
-  let files = status
+  // Derive `files` and the identity status from an uncollapsed porcelain
+  // listing. `gitStatus` runs `git status --short --branch`, which collapses a
+  // fully untracked directory into a single shallow entry (e.g. `?? .agents/`)
+  // that would slip past `isSessionArtifactPath`. `-uall` lists every untracked
+  // file individually so session artifacts are matched and filtered reliably.
+  const porcelain = await runGit(
+    ['status', '--porcelain', '-uall'],
+    params.cwd,
+    params.signal,
+  )
+  if (porcelain.exitCode !== 0) {
+    return [
+      {
+        type: 'json',
+        value: {
+          errorMessage:
+            porcelain.stderr.trim() ||
+            `git status exited with code ${porcelain.exitCode}.`,
+        },
+      },
+    ]
+  }
+  const identityLines = porcelain.stdout
     .split('\n')
+    .filter((line) => line.trim() !== '')
+  let files = identityLines
     .map((line) => line.slice(3).split(' -> ').at(-1)?.trim() ?? '')
     .filter(Boolean)
   // Fallback: when the worktree is clean (changes already committed), review
@@ -115,12 +144,23 @@ export async function getChangeReviewBundle(params: {
       }
     }
   }
+  // Session plan artifacts under `.agents/sessions/**` are written mid-review
+  // and must not drift the snapshot identity or leak into the reviewed files.
+  files = files.filter((f) => !isSessionArtifactPath(f))
+  // Drop session-artifact lines from the porcelain status used for identity
+  // while still returning the real, unfiltered status for display/debugging.
+  const identityStatus = identityLines
+    .filter((line) => {
+      const p = line.slice(3).split(' -> ').at(-1)?.trim() ?? ''
+      return p ? !isSessionArtifactPath(p) : true
+    })
+    .join('\n')
   let snapshotId: string
   try {
     snapshotId = await buildSnapshotId({
       cwd: params.cwd,
       headCommit,
-      status,
+      status: identityStatus,
       files,
       workspaceState: params.workspaceState,
       signal: params.signal,

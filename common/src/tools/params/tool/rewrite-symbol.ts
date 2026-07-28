@@ -5,6 +5,7 @@ import {
   isObviousEditPlaceholder,
   jsonToolResultSchema,
 } from '../utils'
+import { basedOnReadSchema } from '../based-on-read'
 import { updateFileResultSchema } from './str-replace'
 
 import type { $ToolParams } from '../../constants'
@@ -42,6 +43,9 @@ const inputSchema = z
       .describe(
         'When multiple top-level symbols share this name, the 1-indexed one to replace.',
       ),
+    readCapability: basedOnReadSchema.describe(
+      'Optional cap.v3 copied from the matching read_files symbol slice. Under strict read-before-edit this authorizes exactly the symbol and its contiguous preceding comment block.',
+    ),
   })
   .describe(
     "Replace a whole symbol's definition by name using the file's syntax tree, without copying its current text. Resolves the exact AST range and applies it through the safe str_replace path (atomic, anchored).",
