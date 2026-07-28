@@ -119,6 +119,19 @@ common cause of "I already read this file, why is my edit blocked?":
   blocks `Move destination already exists`. The client-echoed anchor is
   preferred when valid but is never itself trusted to authorize — it is only
   reused after passing the 7-point verification.
+- A `ConfirmedPostEditAnchor` (recorded in `confirmedPostEditAnchorsByPath`)
+  is definitionally whole-file-verified: it is only minted when the 7-point
+  check confirms whole-file coverage (`startLine === 1` and
+  `endLine === totalLines`) with a hash matching the runtime-known post-edit
+  bytes. There is no scoped/partial confirmed post-edit anchor — a confirmed
+  apply re-anchors to whole-file because the full post-edit content is always
+  runtime-known (`processEditTransaction` computes it from gate-verified
+  initial bytes). This is why a confirmed apply may grant whole-file sticky
+  authorization even for a localized edit: the granted hash pins the exact
+  full post-edit bytes, and every consumer re-hashes the current file and
+  fails closed on drift. A destructive `delete`/`move` additionally requires
+  the anchor to be whole-file (`startLine === 1`) as a defensive guard, so a
+  future partial anchor could never authorize a whole-file delete/move.
 - Reread when the next edit needs a different region, the action anchor is
   missing or oversized, external activity may have made filesystem state
   stale, or a stale/ambiguous diagnostic explicitly asks for a fresh range.

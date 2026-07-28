@@ -47,7 +47,7 @@ import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type { ProjectFileContext } from '@codebuff/common/util/file'
 
-export const TRANSACTION_SNAPSHOT_CONCURRENCY = 8
+const TRANSACTION_SNAPSHOT_CONCURRENCY = 8
 
 async function mapWithConcurrency<T, R>(
   values: readonly T[],
@@ -78,6 +78,7 @@ function isCapabilityBearingEdit(edit: TransactionEdit): boolean {
     (edit.type === 'rewrite_symbol' && Boolean(edit.readCapability)) ||
     (edit.type === 'write_file' && Boolean(edit.basedOnRead)) ||
     (edit.type === 'str_replace' &&
+      Array.isArray(edit.replacements) &&
       edit.replacements.some((replacement) => Boolean(replacement.basedOnRead)))
   )
 }
@@ -184,6 +185,39 @@ export const handleEditTransaction = (async (
     }
   }
 
+  // Capability-bearing edits fail closed with zero I/O when the runtime has
+  // no authoritative project/run scope. isCapabilityBearingEdit only needs the
+  // normalized edits array, so this guard runs immediately after the
+  // unsafe-path check — before previousToolCallFinished and snapshot loading.
+  const projectId = params.fileContext?.projectRoot ?? ''
+  const runId = params.runId ?? ''
+  const hasCapabilityBearingEdit = edits.some(isCapabilityBearingEdit)
+  if (hasCapabilityBearingEdit && (!projectId || !runId)) {
+    return {
+      output: [
+        {
+          type: 'json',
+          value: {
+            errorMessage:
+              'edit_transaction blocked: capability-bearing edits require a nonempty authoritative projectId and runId.',
+            failures: edits.flatMap((edit, editIndex) =>
+              isCapabilityBearingEdit(edit)
+                ? [
+                    {
+                      editIndex,
+                      path: edit.path,
+                      errorMessage:
+                        'Authenticated capability scope is unavailable; re-read and retry in a runtime with a nonempty project and run scope.',
+                    },
+                  ]
+                : [],
+            ),
+          },
+        },
+      ],
+    }
+  }
+
   await previousToolCallFinished
 
   const uniquePaths = Array.from(requestedPaths)
@@ -241,34 +275,6 @@ export const handleEditTransaction = (async (
     }
   }
 
-  const projectId = params.fileContext?.projectRoot ?? ''
-  const runId = params.runId ?? ''
-  const hasCapabilityBearingEdit = edits.some(isCapabilityBearingEdit)
-  if (hasCapabilityBearingEdit && (!projectId || !runId)) {
-    return {
-      output: [
-        {
-          type: 'json',
-          value: {
-            errorMessage:
-              'edit_transaction blocked: capability-bearing edits require a nonempty authoritative projectId and runId.',
-            failures: edits.flatMap((edit, editIndex) =>
-              isCapabilityBearingEdit(edit)
-                ? [
-                    {
-                      editIndex,
-                      path: edit.path,
-                      errorMessage:
-                        'Authenticated capability scope is unavailable; re-read and retry in a runtime with a nonempty project and run scope.',
-                    },
-                  ]
-                : [],
-            ),
-          },
-        },
-      ],
-    }
-  }
   /**
    * Validate write_file basedOnRead: must be whole-file covering, scope-bound,
    * and hash-fresh against current content. Partial ranges never authorize.
@@ -304,17 +310,35 @@ export const handleEditTransaction = (async (
     return { ok: true }
   }
 
+  // Memoize per (path, token): the same write_file edit can reach this helper
+  // up to three times in one transaction (pre-loop, context_compacted branch,
+  // and the generic basedOnRead branch). Validation is O(file size) and the
+  // grant is idempotent, so caching the result avoids redundant decode+hash
+  // without changing any outcome. Keyed on path+token; content is the same
+  // snapshot within a transaction.
+  const authorizeWholeFileFromCapabilityCache = new Map<
+    string,
+    { ok: true } | { ok: false; error: string }
+  >()
   const authorizeWholeFileFromCapability = (
     path: string,
     content: string,
     token: string,
   ): { ok: true } | { ok: false; error: string } => {
+    const cacheKey = `${path}\n${token}`
+    const cached = authorizeWholeFileFromCapabilityCache.get(cacheKey)
+    if (cached) return cached
     const auth = validateWriteFileBasedOnRead(path, content, token)
-    if (!auth.ok) return auth
+    if (!auth.ok) {
+      authorizeWholeFileFromCapabilityCache.set(cacheKey, auth)
+      return auth
+    }
     freshWholeFileAuthorizationPaths.add(path)
     grantWholeFileReadAuthorization(fileProcessingState, path, content)
     clearEditRereadRequirement(fileProcessingState, path)
-    return { ok: true }
+    const result: { ok: true } = { ok: true }
+    authorizeWholeFileFromCapabilityCache.set(cacheKey, result)
+    return result
   }
 
   const freshWholeFileAuthorizationPaths = new Set<string>()
@@ -415,7 +439,8 @@ export const handleEditTransaction = (async (
       pathsNeedingAuth.add(edit.path)
     }
     for (const path of pathsNeedingAuth) {
-      if (freshWholeFileAuthorizationPaths.has(path)) continue
+      // pathsNeedingAuth already excluded fresh paths above, so no fresh
+      // re-check is needed here.
       if (staleWholeFileAuthorizationPaths.has(path)) continue
       const content = initialContentByPath.get(path)
       if (typeof content !== 'string') continue
@@ -466,7 +491,7 @@ export const handleEditTransaction = (async (
             failures.push({
               editIndex,
               path: edit.path,
-              errorMessage: `Edit blocked: ${edit.path} had its exact read content removed from the active model context (context compaction). ${auth.error} Call read_files with paths: ["${edit.path}"] and retry with the capability from that complete model-visible read.`,
+              errorMessage: `Edit blocked: ${edit.path} had its exact read content removed from the active model context (context compaction). ${auth.error} Call read_files with paths: [${JSON.stringify(edit.path)}] and retry with the capability from that complete model-visible read.`,
             })
             return
           }
@@ -474,7 +499,7 @@ export const handleEditTransaction = (async (
         failures.push({
           editIndex,
           path: edit.path,
-          errorMessage: `Edit blocked: ${edit.path} had its exact read content removed from the active model context (context compaction). Call read_files with paths: ["${edit.path}"] before a whole-file overwrite and retry with the capability from that complete model-visible read; sticky hash match alone is not sufficient for write_file.`,
+          errorMessage: `Edit blocked: ${edit.path} had its exact read content removed from the active model context (context compaction). Call read_files with paths: [${JSON.stringify(edit.path)}] before a whole-file overwrite and retry with the capability from that complete model-visible read; sticky hash match alone is not sufficient for write_file.`,
         })
         return
       }
@@ -486,15 +511,33 @@ export const handleEditTransaction = (async (
       // closed via the generic block. A move's destination needs no read
       // authorization here: it is a non-existent target whose safety is already
       // enforced by the lifecycle preflight ('Move destination already exists').
+      // The anchor MUST be whole-file (startLine === 1): a confirmed post-edit
+      // anchor is definitionally whole-file-verified, so this is a defensive
+      // guard against a future partial/scoped anchor authorizing a destructive
+      // whole-file operation (delete/move) it must never cover. This branch
+      // intentionally does NOT consult editRereadRequirementsByPath markers: a
+      // fresh whole-file anchor hash-match against the live snapshot is
+      // stronger evidence than a marker, and markers are deliberately not
+      // cleared here either (context_compacted must keep write_file blocked).
       if (edit.type === 'delete' || edit.type === 'move') {
         const anchor =
           fileProcessingState.confirmedPostEditAnchorsByPath?.[edit.path]
         const snapContent = initialContentByPath.get(edit.path)
         if (
           anchor &&
+          anchor.startLine === 1 &&
           typeof snapContent === 'string' &&
           anchor.contentHash === getContentHash(snapContent)
         ) {
+          // Clear any stale reread marker on the source key so a later move
+          // does not leave a lingering marker; preserve context_compacted,
+          // which must keep write_file blocked until a fresh whole-file read.
+          if (
+            getEditRereadRequirement(fileProcessingState, edit.path)?.reason !==
+            'context_compacted'
+          ) {
+            clearEditRereadRequirement(fileProcessingState, edit.path)
+          }
           return
         }
       }
@@ -535,7 +578,7 @@ export const handleEditTransaction = (async (
           failures.push({
             editIndex,
             path: edit.path,
-            errorMessage: `Edit blocked: ${auth.error} Call read_files with paths: ["${edit.path}"] and retry with the capability from that complete model-visible read.`,
+            errorMessage: `Edit blocked: ${auth.error} Call read_files with paths: [${JSON.stringify(edit.path)}] and retry with the capability from that complete model-visible read.`,
           })
           return
         }
@@ -562,11 +605,11 @@ export const handleEditTransaction = (async (
       }
       const rangeRecovery =
         edit.type === 'replace_range'
-          ? ` Call read_files with ranges: [{ "path": "${edit.path}", "startLine": ${edit.startLine ?? 1}, "endLine": ${edit.endLine ?? edit.startLine ?? 1} }] and retry with only its readCapability plus newContent.`
+          ? ` Call read_files with ranges: [{ "path": ${JSON.stringify(edit.path)}, "startLine": ${edit.startLine ?? 1}, "endLine": ${edit.endLine ?? edit.startLine ?? 1} }] and retry with only its readCapability plus newContent.`
           : edit.type === 'rewrite_symbol'
-            ? ` Call read_files with symbols: [{ "path": "${edit.path}", "names": ["${edit.symbol}"] }] and retry with the matching slice editAnchor.readCapability.`
+            ? ` Call read_files with symbols: [{ "path": ${JSON.stringify(edit.path)}, "names": [${JSON.stringify(edit.symbol)}] }] and retry with the matching slice editAnchor.readCapability.`
             : ''
-      const wholeFileRecovery = ` Call read_files with paths: ["${edit.path}"] before retrying and use the capability from that complete model-visible read.`
+      const wholeFileRecovery = ` Call read_files with paths: [${JSON.stringify(edit.path)}] before retrying and use the capability from that complete model-visible read.`
       failures.push({
         editIndex,
         path: edit.path,
@@ -600,7 +643,7 @@ export const handleEditTransaction = (async (
         {
           editIndex,
           path: edit.path,
-          errorMessage: `Create destination already exists at ${edit.path}. Call read_files with paths: ["${edit.path}"] before retrying with type "write_file" and its whole-file capability, or use "str_replace" for an in-place edit.`,
+          errorMessage: `Create destination already exists at ${edit.path}. Call read_files with paths: [${JSON.stringify(edit.path)}] before retrying with type "write_file" and its whole-file capability, or use "str_replace" for an in-place edit.`,
         },
       ]
     }
