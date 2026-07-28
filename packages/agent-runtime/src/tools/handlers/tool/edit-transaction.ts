@@ -69,6 +69,19 @@ async function mapWithConcurrency<T, R>(
   return results
 }
 
+type TransactionEdit =
+  CodebuffToolCall<'edit_transaction'>['input']['edits'][number]
+
+function isCapabilityBearingEdit(edit: TransactionEdit): boolean {
+  return (
+    (edit.type === 'replace_range' && Boolean(edit.readCapability)) ||
+    (edit.type === 'rewrite_symbol' && Boolean(edit.readCapability)) ||
+    (edit.type === 'write_file' && Boolean(edit.basedOnRead)) ||
+    (edit.type === 'str_replace' &&
+      edit.replacements.some((replacement) => Boolean(replacement.basedOnRead)))
+  )
+}
+
 export const handleEditTransaction = (async (
   params: {
     previousToolCallFinished: Promise<void>
@@ -173,13 +186,7 @@ export const handleEditTransaction = (async (
 
   await previousToolCallFinished
 
-  const uniquePaths = Array.from(
-    new Set(
-      edits.flatMap((edit) =>
-        edit.type === 'move' ? [edit.path, edit.destinationPath] : [edit.path],
-      ),
-    ),
-  )
+  const uniquePaths = Array.from(requestedPaths)
   const initialContentByPath = new Map<string, string | null>()
   const snapshots = await mapWithConcurrency(
     uniquePaths,
@@ -236,14 +243,7 @@ export const handleEditTransaction = (async (
 
   const projectId = params.fileContext?.projectRoot ?? ''
   const runId = params.runId ?? ''
-  const hasCapabilityBearingEdit = edits.some(
-    (edit) =>
-      (edit.type === 'replace_range' && Boolean(edit.readCapability)) ||
-      (edit.type === 'rewrite_symbol' && Boolean(edit.readCapability)) ||
-      (edit.type === 'write_file' && Boolean(edit.basedOnRead)) ||
-      (edit.type === 'str_replace' &&
-        edit.replacements.some((replacement) => Boolean(replacement.basedOnRead))),
-  )
+  const hasCapabilityBearingEdit = edits.some(isCapabilityBearingEdit)
   if (hasCapabilityBearingEdit && (!projectId || !runId)) {
     return {
       output: [
@@ -253,13 +253,7 @@ export const handleEditTransaction = (async (
             errorMessage:
               'edit_transaction blocked: capability-bearing edits require a nonempty authoritative projectId and runId.',
             failures: edits.flatMap((edit, editIndex) =>
-              (edit.type === 'replace_range' && Boolean(edit.readCapability)) ||
-              (edit.type === 'rewrite_symbol' && Boolean(edit.readCapability)) ||
-              (edit.type === 'write_file' && Boolean(edit.basedOnRead)) ||
-              (edit.type === 'str_replace' &&
-                edit.replacements.some((replacement) =>
-                  Boolean(replacement.basedOnRead),
-                ))
+              isCapabilityBearingEdit(edit)
                 ? [
                     {
                       editIndex,
@@ -310,6 +304,19 @@ export const handleEditTransaction = (async (
     return { ok: true }
   }
 
+  const authorizeWholeFileFromCapability = (
+    path: string,
+    content: string,
+    token: string,
+  ): { ok: true } | { ok: false; error: string } => {
+    const auth = validateWriteFileBasedOnRead(path, content, token)
+    if (!auth.ok) return auth
+    freshWholeFileAuthorizationPaths.add(path)
+    grantWholeFileReadAuthorization(fileProcessingState, path, content)
+    clearEditRereadRequirement(fileProcessingState, path)
+    return { ok: true }
+  }
+
   const freshWholeFileAuthorizationPaths = new Set<string>()
   const staleWholeFileAuthorizationPaths = new Set<string>()
   for (const path of uniquePaths) {
@@ -350,35 +357,20 @@ export const handleEditTransaction = (async (
       if (rereadReq?.reason === 'context_compacted') {
         const content = initialContentByPath.get(edit.path)
         if (typeof content === 'string') {
-          const auth = validateWriteFileBasedOnRead(
-            edit.path,
-            content,
-            edit.basedOnRead,
-          )
-          if (auth.ok) {
-            grantWholeFileReadAuthorization(
-              fileProcessingState,
-              edit.path,
-              content,
-            )
-            clearEditRereadRequirement(fileProcessingState, edit.path)
-          }
+          // Result intentionally discarded: an invalid capability is reported
+          // by the strict-gate re-validation below; this call only grants
+          // authorization when the capability is valid.
+          authorizeWholeFileFromCapability(edit.path, content, edit.basedOnRead)
         }
       }
       continue
     }
     const content = initialContentByPath.get(edit.path)
     if (typeof content !== 'string') continue
-    const auth = validateWriteFileBasedOnRead(
-      edit.path,
-      content,
-      edit.basedOnRead,
-    )
-    if (auth.ok) {
-      freshWholeFileAuthorizationPaths.add(edit.path)
-      grantWholeFileReadAuthorization(fileProcessingState, edit.path, content)
-      clearEditRereadRequirement(fileProcessingState, edit.path)
-    }
+    // Result intentionally discarded: an invalid capability is reported by the
+    // strict-gate re-validation below; this call only grants authorization when
+    // the capability is valid.
+    authorizeWholeFileFromCapability(edit.path, content, edit.basedOnRead)
   }
 
   // Auto-reread-once per unique path for str_replace auth misses only.
@@ -389,22 +381,25 @@ export const handleEditTransaction = (async (
   // sticky (so a later write_file cannot chain off a blind server re-read).
   // Post-apply grant of *new* content after successful application may still
   // refresh sticky from observed post-edit bytes (onApplied below).
+  // Unique-only contract: any allowMultiple:true replacement on a path is
+  // not evidence the model knows the file content. It is excluded from
+  // auto-reread authorization below, and its context_compacted marker is
+  // preserved through the apply (passed to coordinateEditApplication as
+  // preserveRereadRequirementsForPaths) so a later write_file stays blocked.
+  const pathsWithAllowMultiple = new Set<string>()
+  for (const edit of edits) {
+    if (edit.type !== 'str_replace') continue
+    if (
+      Array.isArray(edit.replacements) &&
+      edit.replacements.some(
+        (replacement) => replacement.allowMultiple === true,
+      )
+    ) {
+      pathsWithAllowMultiple.add(edit.path)
+    }
+  }
   const autoRereadAuthorizedPaths = new Set<string>()
   if (fileProcessingState.strictReadBeforeEdit) {
-    // Unique-only contract: any allowMultiple:true replacement on a path
-    // skips auto-reread authorization for that path (fail closed).
-    const pathsWithAllowMultiple = new Set<string>()
-    for (const edit of edits) {
-      if (edit.type !== 'str_replace') continue
-      if (
-        Array.isArray(edit.replacements) &&
-        edit.replacements.some(
-          (replacement) => replacement.allowMultiple === true,
-        )
-      ) {
-        pathsWithAllowMultiple.add(edit.path)
-      }
-    }
     const pathsNeedingAuth = new Set<string>()
     for (const edit of edits) {
       if (edit.type !== 'str_replace') continue
@@ -428,9 +423,9 @@ export const handleEditTransaction = (async (
       // do not add to freshWholeFileAuthorizationPaths (would authorize write_file).
       // Do not clear reread markers here — auto-reread only authorizes this
       // transaction's str_replace preflight. Markers (context_compacted /
-      // failed-edit) remain until successful unique apply (onApplied) so a
-      // failed unique/no-match still keeps write_file blocked under
-      // context_compacted.
+      // failed-edit) remain until successful non-allowMultiple apply
+      // (onApplied) so a failed unique/no-match still keeps write_file
+      // blocked under context_compacted.
       autoRereadAuthorizedPaths.add(path)
     }
   }
@@ -441,7 +436,6 @@ export const handleEditTransaction = (async (
       editIndex: number
       path: string
       errorMessage: string
-      basedOnRead?: string
     }> = []
     edits.forEach((edit, editIndex) => {
       if (
@@ -461,19 +455,12 @@ export const handleEditTransaction = (async (
         if (edit.basedOnRead) {
           const content = initialContentByPath.get(edit.path)
           if (typeof content === 'string') {
-            const auth = validateWriteFileBasedOnRead(
+            const auth = authorizeWholeFileFromCapability(
               edit.path,
               content,
               edit.basedOnRead,
             )
             if (auth.ok) {
-              freshWholeFileAuthorizationPaths.add(edit.path)
-              grantWholeFileReadAuthorization(
-                fileProcessingState,
-                edit.path,
-                content,
-              )
-              clearEditRereadRequirement(fileProcessingState, edit.path)
               return
             }
             failures.push({
@@ -490,6 +477,26 @@ export const handleEditTransaction = (async (
           errorMessage: `Edit blocked: ${edit.path} had its exact read content removed from the active model context (context compaction). Call read_files with paths: ["${edit.path}"] before a whole-file overwrite and retry with the capability from that complete model-visible read; sticky hash match alone is not sufficient for write_file.`,
         })
         return
+      }
+      // delete/move: a fresh confirmed post-edit anchor on the source path
+      // (e.g. minted when that path was created via a `create` edit earlier in
+      // the run) authorizes the delete/move without another read, but only when
+      // the anchor hash matches the transaction's snapshotted current content.
+      // A mismatch means the file changed since that confirmed apply — fail
+      // closed via the generic block. A move's destination needs no read
+      // authorization here: it is a non-existent target whose safety is already
+      // enforced by the lifecycle preflight ('Move destination already exists').
+      if (edit.type === 'delete' || edit.type === 'move') {
+        const anchor =
+          fileProcessingState.confirmedPostEditAnchorsByPath?.[edit.path]
+        const snapContent = initialContentByPath.get(edit.path)
+        if (
+          anchor &&
+          typeof snapContent === 'string' &&
+          anchor.contentHash === getContentHash(snapContent)
+        ) {
+          return
+        }
       }
       if (freshWholeFileAuthorizationPaths.has(edit.path)) {
         // Hash-fresh sticky authorizes this edit, but do not clear
@@ -517,19 +524,12 @@ export const handleEditTransaction = (async (
       if (edit.type === 'write_file' && edit.basedOnRead) {
         const content = initialContentByPath.get(edit.path)
         if (typeof content === 'string') {
-          const auth = validateWriteFileBasedOnRead(
+          const auth = authorizeWholeFileFromCapability(
             edit.path,
             content,
             edit.basedOnRead,
           )
           if (auth.ok) {
-            freshWholeFileAuthorizationPaths.add(edit.path)
-            grantWholeFileReadAuthorization(
-              fileProcessingState,
-              edit.path,
-              content,
-            )
-            clearEditRereadRequirement(fileProcessingState, edit.path)
             return
           }
           failures.push({
@@ -677,6 +677,11 @@ export const handleEditTransaction = (async (
       .map((failure) => failure.errorMessage)
       .join('\n')
     const requiresFreshCapability =
+      transactionResult.failures.some(
+        (failure) =>
+          typeof failure.failureKind === 'string' &&
+          failure.failureKind.startsWith('capability'),
+      ) ||
       /different project, path, or agent run|Invalid basedOnRead|readCapability-covered (?:symbol )?content is stale|normalized capability metadata does not match|readCapability does not cover the exact original symbol replacement span/i.test(
         failureText,
       )
@@ -857,11 +862,6 @@ export const handleEditTransaction = (async (
     }
   }
 
-  const appliedFiles: {
-    path: string
-    patch: string
-    messages: string[]
-  }[] = []
   const wholeFileContentByPath = new Map(
     transactionResult.files.map((file) => [file.path, file.content]),
   )
@@ -884,6 +884,10 @@ export const handleEditTransaction = (async (
     confirmationPaths,
     wholeFileContentByPath,
     rejectionRequiresRead: false,
+    // A blind allowMultiple str_replace apply must not clear context_compacted:
+    // it is not evidence the model knows the file content, so keep write_file
+    // blocked for those paths even after a confirmed apply.
+    preserveRereadRequirementsForPaths: pathsWithAllowMultiple,
     apply: () =>
       requestClientToolCall({
         toolCallId: toolCall.toolCallId,
@@ -893,11 +897,23 @@ export const handleEditTransaction = (async (
     onApplied: () => {
       // Paths that successfully applied a str_replace in this transaction may
       // clear context_compacted (unique oldString safety bound, post-apply only).
+      // allowMultiple (replace-all) applies do NOT clear context_compacted: a
+      // blind global replace is not evidence the model knows the file content;
+      // only a unique-anchor apply or a fresh read clears the marker.
       // write_file authorized via whole-file basedOnRead already cleared markers
       // pre-apply and refreshes sticky from post-edit content below.
-      const appliedStrReplacePaths = new Set(
+      const appliedNonAllowMultipleStrReplacePaths = new Set(
         edits
-          .filter((edit) => edit.type === 'str_replace')
+          .filter(
+            (edit) =>
+              edit.type === 'str_replace' &&
+              !(
+                Array.isArray(edit.replacements) &&
+                edit.replacements.some(
+                  (replacement) => replacement.allowMultiple === true,
+                )
+              ),
+          )
           .map((edit) => edit.path),
       )
       const appliedWriteFilePaths = new Set(
@@ -906,10 +922,10 @@ export const handleEditTransaction = (async (
           .map((edit) => edit.path),
       )
       for (const file of transactionResult.files) {
-        if (appliedStrReplacePaths.has(file.path)) {
-          clearEditRereadRequirement(fileProcessingState, file.path)
-        }
-        if (appliedWriteFilePaths.has(file.path)) {
+        if (
+          appliedWriteFilePaths.has(file.path) ||
+          appliedNonAllowMultipleStrReplacePaths.has(file.path)
+        ) {
           clearEditRereadRequirement(fileProcessingState, file.path)
         }
         const fileProcessingResult = Promise.resolve({
@@ -925,11 +941,6 @@ export const handleEditTransaction = (async (
         }
         fileProcessingState.promisesByPath[file.path].push(fileProcessingResult)
         fileProcessingState.allPromises.push(fileProcessingResult)
-        appliedFiles.push({
-          path: file.path,
-          patch: file.patch,
-          messages: file.messages,
-        })
       }
     },
   })

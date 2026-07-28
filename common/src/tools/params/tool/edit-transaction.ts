@@ -370,6 +370,17 @@ export const editTransactionResultSchema = z.union([
         basedOnRead: basedOnReadSchema.optional().describe(
           'Ready-to-paste whole-file or recovery capability echoed on residual failures.',
         ),
+        failureKind: z
+          .enum([
+            'capability_stale',
+            'capability_scope',
+            'capability_invalid',
+            'generic',
+          ])
+          .optional()
+          .describe(
+            'Structured classification of a capability freshness/scope failure; lets consumers classify without parsing errorMessage.',
+          ),
       }),
     ),
   }),

@@ -106,14 +106,21 @@ export function strictEditAuthorizationError(params: {
         : `${toolName} blocked for ${path}: a previous edit failed and requires a fresh read before retrying.`
       : authorizationWasStale
         ? `${toolName} blocked for ${path}: the file changed after its last whole-file read, so the stored authorization was revoked.`
-        : `${toolName} blocked for ${path}: strict read-before-edit is enabled and no fresh read authorization exists.`
+        : fileProcessingState.confirmedPostEditAnchorsByPath?.[path]
+          ? `${toolName} blocked for ${path}: this file was created or edited earlier in this session. Retry the edit with basedOnRead set to the readCapability from that create/edit result (its confirmed post-edit anchor), instead of re-reading the file.`
+          : `${toolName} blocked for ${path}: strict read-before-edit is enabled and no fresh read authorization exists.`
   const scopeNote = wholeFileRequired
     ? ' A prior range-anchored edit or scoped range capability cannot authorize a whole-file overwrite.'
     : ' A scoped edit may instead provide the fresh capability/hash returned by read_files.'
+  // Fall back to the confirmed post-edit anchor's capability (from a create
+  // or edit earlier this session) only when the caller did not supply one.
+  const effectiveFreshReadCapability =
+    freshReadCapability ??
+    fileProcessingState.confirmedPostEditAnchorsByPath?.[path]?.readCapability
   // Prefer capability-retry when a whole-file token is already available; keep
   // read_files only as the secondary path when no capability can be echoed.
-  const nextLine = freshReadCapability
-    ? `Next: retry with basedOnRead set to the capability below on the next edit (write_file basedOnRead, or basedOnRead on every str_replace replacement). Do not exploratory re-read first when basedOnRead is provided.\nbasedOnRead="${freshReadCapability}"`
+  const nextLine = effectiveFreshReadCapability
+    ? `Next: retry with basedOnRead set to the capability below on the next edit (write_file basedOnRead, or basedOnRead on every str_replace replacement). Do not exploratory re-read first when basedOnRead is provided.\nbasedOnRead="${effectiveFreshReadCapability}"`
     : `Next: call read_files with paths: [${JSON.stringify(path)}].`
   return {
     errorMessage: `${firstLine}\n${nextLine}${scopeNote}`,
@@ -121,7 +128,9 @@ export function strictEditAuthorizationError(params: {
     recovery: {
       tool: 'read_files',
       input: { paths: [path] },
-      ...(freshReadCapability ? { basedOnRead: freshReadCapability } : {}),
+      ...(effectiveFreshReadCapability
+        ? { basedOnRead: effectiveFreshReadCapability }
+        : {}),
     },
   }
 }
