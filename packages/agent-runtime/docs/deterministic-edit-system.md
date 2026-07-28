@@ -60,6 +60,7 @@ Tool-specific behavior while `context_compacted` is set:
 | --- | --- |
 | `write_file` (standalone or in `edit_transaction`) | Hash-fresh sticky alone is **not** enough. Overwrite is allowed after a **complete whole-file** `read_files` grant, or when the call supplies a validated whole-file-covering `basedOnRead`. Failure messages include a ready-to-paste `basedOnRead` when content is available. |
 | `str_replace` | May proceed when sticky is hash-fresh and the unique `oldString` match is the safety bound. The `context_compacted` marker is cleared only after a **successful unique apply** (not after a failed no-match attempt). |
+| `delete` / `move` (in `edit_transaction`) | The confirmed post-edit anchor branch intentionally **ignores** the `context_compacted` marker when deciding authorization: a fresh whole-file anchor whose hash matches the live snapshot is stronger evidence than the marker. The marker is deliberately **not** cleared by this branch either, so a subsequent `write_file` on the same path stays blocked until a fresh whole-file read. |
 | Partial range / symbol re-read | May clear other reread gates, but **must not** drop `context_compacted` until a complete whole-file grant. |
 
 ## Auto-reread and capability echo
@@ -126,6 +127,7 @@ Under `strictReadBeforeEdit`:
 - **str_replace**: sticky hash-fresh, or every replacement has `basedOnRead`, or auto-reread-once (transaction-local, no pre-apply durable sticky).
 - **replace_range**: requires explicit `readCapability` when not sticky-fresh.
 - **write_file**: sticky hash-fresh **or** validated whole-file-covering `basedOnRead`; blocked under `context_compacted` until whole-file re-read **or** that explicit capability (sticky alone insufficient).
+- **delete / move**: a fresh confirmed post-edit anchor on the source path authorizes without another read, but only when the anchor is whole-file (`startLine === 1`) **and** its hash matches the transaction's snapshotted current content. A hash mismatch means the file changed since that confirmed apply — the edit fails closed via the generic strict-mode block. A move's destination needs no read authorization: it must not exist, and the lifecycle preflight (`Move destination already exists`) enforces that. On anchor-authorized delete/move, any stale reread marker on the source path is cleared so a later edit does not inherit a lingering gate; `context_compacted` is deliberately **preserved** so `write_file` on that path stays blocked until a fresh whole-file read.
 - Capability / scope failures that invalidate the atomic batch require **fresh reads for every transaction target**, not only the first failed path (or paste echoed per-failure `basedOnRead` where provided).
 
 ## Agent / editor contract

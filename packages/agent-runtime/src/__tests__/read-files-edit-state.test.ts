@@ -247,6 +247,296 @@ function confirmedMutationOutput(
 }
 
 describe('read_files edit-state recovery', () => {
+  it('blocks a capability-bearing edit when the authoritative scope is empty', async () => {
+    const path = 'src/scoped.ts'
+    const diskContent = 'export const value = 1\n'
+    const fileProcessingState = createFileProcessingState()
+    let ioCalls = 0
+
+    const result = await handleEditTransaction({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'empty-scope-transaction',
+        toolName: 'edit_transaction',
+        input: {
+          edits: [
+            {
+              type: 'str_replace' as const,
+              path,
+              replacements: [
+                {
+                  oldString: 'export const value = 1',
+                  newString: 'export const value = 2',
+                  basedOnRead: 'cap.v3.test-scope-token',
+                },
+              ],
+            },
+          ],
+        },
+      },
+      // No fileContext/runId: projectId and runId both resolve to ''.
+      fileProcessingState,
+      logger,
+      requestOptionalFile: async ({ filePath }: { filePath: string }) => {
+        ioCalls += 1
+        return filePath === path ? diskContent : null
+      },
+      requestClientToolCall: async () => {
+        ioCalls += 1
+        return []
+      },
+    } as any)
+
+    expect(result.output[0]?.type).toBe('json')
+    if (result.output[0]?.type === 'json') {
+      const value = result.output[0].value as {
+        errorMessage?: string
+        failures?: Array<{
+          editIndex: number
+          path: string
+          errorMessage: string
+        }>
+      }
+      expect(value.errorMessage).toContain(
+        'capability-bearing edits require a nonempty authoritative projectId and runId',
+      )
+      // Only the capability-bearing edit is reported, at its own index.
+      expect(value.failures).toEqual([
+        {
+          editIndex: 0,
+          path,
+          errorMessage: expect.stringContaining(
+            'Authenticated capability scope is unavailable',
+          ),
+        },
+      ])
+    }
+    // The strict-gate failure must not reach the client apply path.
+    expect(ioCalls).toBe(0)
+  })
+
+  it('blocks a rewrite_symbol edit when the authoritative scope is empty', async () => {
+    const path = 'src/scoped-symbol.ts'
+    const fileProcessingState = createFileProcessingState()
+    let ioCalls = 0
+
+    const result = await handleEditTransaction({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'empty-scope-rewrite-symbol',
+        toolName: 'edit_transaction',
+        input: {
+          edits: [
+            {
+              type: 'rewrite_symbol' as const,
+              path,
+              symbol: 'value',
+              newContent: 'export const value = 2',
+              readCapability: 'cap.v3.test-symbol-token',
+            },
+          ],
+        },
+      },
+      // No fileContext/runId: projectId and runId both resolve to ''.
+      fileProcessingState,
+      logger,
+      requestOptionalFile: async () => {
+        ioCalls += 1
+        return null
+      },
+      requestClientToolCall: async () => {
+        ioCalls += 1
+        return []
+      },
+    } as any)
+
+    expect(result.output[0]?.type).toBe('json')
+    if (result.output[0]?.type === 'json') {
+      const value = result.output[0].value as {
+        errorMessage?: string
+        failures?: Array<{ editIndex: number; path: string }>
+      }
+      expect(value.errorMessage).toContain(
+        'capability-bearing edits require a nonempty authoritative projectId and runId',
+      )
+      expect(value.failures).toEqual([
+        expect.objectContaining({ editIndex: 0, path }),
+      ])
+    }
+    // The strict-gate failure must not reach the client apply path.
+    expect(ioCalls).toBe(0)
+  })
+
+  it('blocks only the capability-bearing edit indexes when scope is empty', async () => {
+    const plainPath = 'src/plain.ts'
+    const scopedPath = 'src/scoped.ts'
+    const diskContent = 'export const value = 1\n'
+    const fileProcessingState = createFileProcessingState()
+
+    const result = await handleEditTransaction({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'mixed-scope-transaction',
+        toolName: 'edit_transaction',
+        input: {
+          edits: [
+            {
+              type: 'str_replace' as const,
+              path: plainPath,
+              replacements: [
+                {
+                  oldString: 'export const value = 1',
+                  newString: 'export const value = 2',
+                },
+              ],
+            },
+            {
+              type: 'replace_range' as const,
+              path: scopedPath,
+              startLine: 1,
+              endLine: 1,
+              newContent: 'export const value = 2',
+              readCapability: 'cap.v3.test-range-token',
+            },
+          ],
+        },
+      },
+      // No fileContext/runId: projectId and runId both resolve to ''.
+      fileProcessingState,
+      logger,
+      requestOptionalFile: async () => diskContent,
+      requestClientToolCall: async () => [],
+    } as any)
+
+    expect(result.output[0]?.type).toBe('json')
+    if (result.output[0]?.type === 'json') {
+      const value = result.output[0].value as {
+        errorMessage?: string
+        failures?: Array<{ editIndex: number; path: string }>
+      }
+      expect(value.errorMessage).toContain(
+        'capability-bearing edits require a nonempty authoritative projectId and runId',
+      )
+      // The non-capability edit at index 0 must not appear in failures.
+      expect(value.failures).toEqual([
+        expect.objectContaining({ editIndex: 1, path: scopedPath }),
+      ])
+    }
+  })
+
+  it('does not block capability-free edits when the authoritative scope is empty', async () => {
+    const path = 'src/no-capability.ts'
+    const diskContent = 'export const value = 1\n'
+    const fileProcessingState = createFileProcessingState()
+    let clientCalls = 0
+
+    const result = await handleEditTransaction({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'non-capability-transaction',
+        toolName: 'edit_transaction',
+        input: {
+          edits: [
+            {
+              type: 'str_replace' as const,
+              path,
+              replacements: [
+                {
+                  oldString: 'export const value = 1',
+                  newString: 'export const value = 2',
+                },
+              ],
+            },
+          ],
+        },
+      },
+      // No fileContext/runId: empty scope must not gate capability-free edits.
+      fileProcessingState,
+      logger,
+      requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+        filePath === path ? diskContent : null,
+      requestClientToolCall: async () => {
+        clientCalls += 1
+        return [
+          {
+            type: 'json' as const,
+            value: { message: 'applied transaction batch', files: [] },
+          },
+        ]
+      },
+    } as any)
+
+    expect(clientCalls).toBe(1)
+    expect(result.output[0]?.type).toBe('json')
+    if (result.output[0]?.type === 'json') {
+      const value = result.output[0].value as { errorMessage?: string }
+      expect(value.errorMessage ?? '').not.toContain(
+        'capability-bearing edits require a nonempty authoritative projectId and runId',
+      )
+    }
+  })
+
+  it('auto-reread authorizes a fresh-path str_replace exactly once per transaction', async () => {
+    const path = 'src/auto-reread.ts'
+    const diskContent = 'export const value = 1\n'
+    const fileProcessingState = createFileProcessingState()
+    fileProcessingState.strictReadBeforeEdit = true
+    let optionalFileReads = 0
+    let clientCalls = 0
+
+    const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'auto-reread-transaction',
+        toolName: 'edit_transaction',
+        input: {
+          edits: [
+            {
+              type: 'str_replace' as const,
+              path,
+              replacements: [
+                {
+                  oldString: 'export const value = 1',
+                  newString: 'export const value = 2',
+                  allowMultiple: false,
+                },
+              ],
+            },
+          ],
+        },
+      },
+      fileProcessingState,
+      logger,
+      requestOptionalFile: async ({ filePath }: { filePath: string }) => {
+        optionalFileReads += 1
+        return filePath === path ? diskContent : null
+      },
+      requestClientToolCall: async () => {
+        clientCalls += 1
+        return [
+          {
+            type: 'json' as const,
+            value: { message: 'applied transaction batch', files: [] },
+          },
+        ]
+      },
+    } as any)
+
+    // Snapshot loads the file exactly once; the auto-reread loop must not
+    // perform a second fresh-path read for the same transaction.
+    expect(optionalFileReads).toBe(1)
+    expect(clientCalls).toBe(1)
+    expect(result.output[0]?.type).toBe('json')
+    if (result.output[0]?.type === 'json') {
+      const value = result.output[0].value as { errorMessage?: string }
+      expect(value.errorMessage ?? '').not.toContain(
+        'strict read-before-edit',
+      )
+    }
+    // Auto-reread is transaction-local: it must not mint durable sticky auth.
+    expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBeUndefined()
+  })
+
   it('canonicalizes separators without accepting whitespace path aliases', () => {
     expect(normalizeToolPath('./src//value.ts')).toBe('src/value.ts')
     expect(normalizeToolPath('src\\value.ts')).toBe('src/value.ts')
@@ -306,7 +596,11 @@ describe('read_files edit-state recovery', () => {
       ],
     } as any)
 
-    while (started < 8) await Promise.resolve()
+    // TRANSACTION_SNAPSHOT_CONCURRENCY is 8 (internal to edit-transaction.ts).
+    // Bounded wait: fail fast with a diagnosable message instead of spinning
+    // forever if concurrency ever regresses below 8.
+    const deadline = Date.now() + 5000
+    while (started < 8 && Date.now() < deadline) await Promise.resolve()
     expect(started).toBe(8)
     expect(maxActive).toBe(8)
     releaseSnapshots()
@@ -5140,6 +5434,212 @@ describe('read_files edit-state recovery', () => {
       ).toBe('stale_capability')
     })
 
+    it('allowMultiple str_replace apply does not clear context_compacted so write_file stays blocked', async () => {
+      // COMPACTION-ALLOWMULTIPLE-NO-CLEAR: a blind replace-all apply is not
+      // evidence the model knows the file content, so it must NOT clear the
+      // context_compacted marker. A subsequent whole-file overwrite stays
+      // blocked (a unique str_replace apply WOULD have cleared it).
+      const path = 'src/compacted.ts'
+      const initialContent = 'const x = 1\nconst y = 2\n'
+      const replacedContent = 'const x = 10\nconst y = 2\n'
+      const runId = 'compacted-allow-multiple-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+      fileProcessingState.readAuthorizationsByPath = { [path]: true }
+      fileProcessingState.readAuthorizationHashesByPath = {
+        [path]: getContentHash(initialContent),
+      }
+      fileProcessingState.editRereadRequirementsByPath = {
+        [path]: { reason: 'context_compacted', sourceTool: 'compaction' },
+      }
+      fileProcessingState.failedEditRequiresReadByPath[path] = true
+
+      let applied = false
+      const replaceResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'allow-multiple-replace-after-compaction',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'str_replace',
+                path,
+                replacements: [
+                  {
+                    oldString: 'const x = 1',
+                    newString: 'const x = 10',
+                    allowMultiple: true,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async () => initialContent,
+        requestClientToolCall: async (toolCall: any) => {
+          applied = true
+          return confirmedMutationOutput(
+            toolCall,
+            { [path]: replacedContent },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
+        },
+      } as any)
+
+      expect(applied).toBe(true)
+      expect(replaceResult.output[0]?.type).toBe('json')
+      if (replaceResult.output[0]?.type === 'json') {
+        expect(replaceResult.output[0].value).not.toHaveProperty('errorMessage')
+      }
+      // The blind replace-all apply must NOT clear the marker.
+      expect(
+        fileProcessingState.editRereadRequirementsByPath?.[path]?.reason,
+      ).toBe('context_compacted')
+
+      let writeApplied = false
+      const writeResult = await handleWriteFile({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'write-after-allow-multiple-compaction',
+          toolName: 'write_file',
+          input: { path, content: 'const x = 100\nconst y = 2\n' },
+        },
+        agentState: { messageHistory: [] },
+        clientSessionId: 'test-session',
+        fileProcessingState,
+        fingerprintId: 'test-fingerprint',
+        logger,
+        prompt: undefined,
+        userId: undefined,
+        userInputId: 'test-input',
+        requestOptionalFile: async () => replacedContent,
+        requestClientToolCall: async () => {
+          writeApplied = true
+          return []
+        },
+        writeToClient: () => {},
+      } as any)
+
+      expect(writeApplied).toBe(false)
+      expect(writeResult.output[0]?.type).toBe('json')
+      if (writeResult.output[0]?.type === 'json') {
+        // The block is attributed to the context_compacted reread requirement;
+        // the exact recovery wording (read_files vs basedOnRead-echo) may vary.
+        expect(
+          String((writeResult.output[0].value as any).errorMessage),
+        ).toMatch(/compaction|read_files|basedOnRead/i)
+      }
+      expect(
+        fileProcessingState.editRereadRequirementsByPath?.[path]?.reason,
+      ).toBe('context_compacted')
+    })
+
+    it('unique str_replace apply clears context_compacted so write_file can proceed', async () => {
+      // Contrast: a unique-anchor str_replace apply IS evidence the model knows
+      // the file content, so it clears the context_compacted marker and a later
+      // whole-file overwrite is authorized.
+      const path = 'src/compacted.ts'
+      const initialContent = 'const x = 1\nconst y = 2\n'
+      const replacedContent = 'const x = 10\nconst y = 2\n'
+      const runId = 'compacted-unique-replace-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+      fileProcessingState.readAuthorizationsByPath = { [path]: true }
+      fileProcessingState.readAuthorizationHashesByPath = {
+        [path]: getContentHash(initialContent),
+      }
+      fileProcessingState.editRereadRequirementsByPath = {
+        [path]: { reason: 'context_compacted', sourceTool: 'compaction' },
+      }
+      fileProcessingState.failedEditRequiresReadByPath[path] = true
+
+      let applied = false
+      const replaceResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'unique-replace-after-compaction',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'str_replace',
+                path,
+                replacements: [
+                  {
+                    oldString: 'const x = 1',
+                    newString: 'const x = 10',
+                    allowMultiple: false,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async () => initialContent,
+        requestClientToolCall: async (toolCall: any) => {
+          applied = true
+          return confirmedMutationOutput(
+            toolCall,
+            { [path]: replacedContent },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
+        },
+      } as any)
+
+      expect(applied).toBe(true)
+      expect(replaceResult.output[0]?.type).toBe('json')
+      if (replaceResult.output[0]?.type === 'json') {
+        expect(replaceResult.output[0].value).not.toHaveProperty('errorMessage')
+      }
+      // The unique-anchor apply clears the marker.
+      expect(
+        fileProcessingState.editRereadRequirementsByPath?.[path],
+      ).toBeUndefined()
+
+      let writeApplied = false
+      const writeResult = await handleWriteFile({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'write-after-unique-compaction',
+          toolName: 'write_file',
+          input: { path, content: 'const x = 100\nconst y = 2\n' },
+        },
+        agentState: { messageHistory: [] },
+        clientSessionId: 'test-session',
+        fileProcessingState,
+        fingerprintId: 'test-fingerprint',
+        logger,
+        prompt: undefined,
+        userId: undefined,
+        userInputId: 'test-input',
+        requestOptionalFile: async () => replacedContent,
+        requestClientToolCall: async (toolCall: any) => {
+          writeApplied = true
+          return confirmedMutationOutput(
+            toolCall,
+            { [path]: 'const x = 100\nconst y = 2\n' },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
+        },
+        writeToClient: () => {},
+      } as any)
+
+      expect(writeApplied).toBe(true)
+      expect(writeResult.output[0]?.type).toBe('json')
+      if (writeResult.output[0]?.type === 'json') {
+        expect(writeResult.output[0].value).not.toHaveProperty('errorMessage')
+      }
+    })
+
     it('proper-subset range read after compaction does not clear context_compacted', async () => {
       // COMPACTION-MARKER-CLEARED-BY-PARTIAL-OR-SCOPED-READ
       const path = 'src/compacted-range.ts'
@@ -5399,6 +5899,66 @@ describe('read_files edit-state recovery', () => {
       )
     })
 
+    it('strictEditAuthorizationError names the confirmed post-edit anchor for a file created or edited earlier in this session', () => {
+      const path = 'src/created-earlier.ts'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+      fileProcessingState.confirmedPostEditAnchorsByPath = {
+        [path]: {
+          startLine: 1,
+          endLine: 2,
+          contentHash: 'sha256:x',
+          readCapability: 'cap.v3.test',
+        },
+      }
+
+      const result = strictEditAuthorizationError({
+        fileProcessingState,
+        path,
+        toolName: 'write_file',
+        hasFreshWholeFileAuthorization: false,
+        authorizationWasStale: false,
+      })
+
+      expect(result).toBeDefined()
+      expect(String(result?.errorMessage)).toContain(
+        'was created or edited earlier in this session',
+      )
+      expect(String(result?.errorMessage)).toContain(
+        'Retry the edit with basedOnRead set to the readCapability from that create/edit result',
+      )
+      // The confirmed anchor's capability is echoed for recovery (no caller
+      // freshReadCapability), so the next line points at basedOnRead retry.
+      expect(String(result?.errorMessage)).toContain(
+        'Next: retry with basedOnRead',
+      )
+      expect(String(result?.errorMessage)).toContain(
+        'basedOnRead="cap.v3.test"',
+      )
+      expect(result?.recovery.basedOnRead).toBe('cap.v3.test')
+    })
+
+    it('strictEditAuthorizationError uses the generic no-fresh-read message without a confirmed post-edit anchor', () => {
+      const path = 'src/never-created.ts'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+
+      const result = strictEditAuthorizationError({
+        fileProcessingState,
+        path,
+        toolName: 'write_file',
+        hasFreshWholeFileAuthorization: false,
+        authorizationWasStale: false,
+      })
+
+      expect(result).toBeDefined()
+      expect(String(result?.errorMessage)).toContain(
+        'strict read-before-edit is enabled and no fresh read authorization exists',
+      )
+      expect(String(result?.errorMessage)).toContain('Next: call read_files')
+      expect(result?.recovery.basedOnRead).toBeUndefined()
+    })
+
     it('strict edit_transaction blind write returns no capability and requires complete read_files', async () => {
       const path = 'src/write-auth-miss-msg.ts'
       const diskContent = 'export const value = 1\n'
@@ -5626,6 +6186,1088 @@ describe('read_files edit-state recovery', () => {
           expect(failure).not.toHaveProperty('basedOnRead')
         }
       }
+    })
+
+    it('create then delete in a later step without an intervening read succeeds in strict mode', async () => {
+      const path = 'src/scratch.ts'
+      const createdContent = 'export const temp = 1\n'
+      const runId = 'create-then-delete-strict-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+
+      const createResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'create-scratch',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'create',
+                path,
+                content: createdContent,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async () => null,
+        requestClientToolCall: async (toolCall: any) =>
+          confirmedMutationOutput(
+            toolCall,
+            { [path]: createdContent },
+            { projectId: mockFileContext.projectRoot, runId },
+          ),
+      } as any)
+
+      const createOutput = createResult.output[0]
+      expect(createOutput.type).toBe('json')
+      if (createOutput.type === 'json') {
+        expect(createOutput.value).not.toHaveProperty('errorMessage')
+      }
+      // The confirmed create grants sticky auth from the runtime-known created
+      // bytes, plus a confirmed post-edit anchor a later delete can rely on.
+      expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
+      expect(fileProcessingState.readAuthorizationHashesByPath?.[path]).toBe(
+        getContentHash(createdContent),
+      )
+      expect(
+        fileProcessingState.confirmedPostEditAnchorsByPath?.[path],
+      ).toBeDefined()
+
+      // WITHOUT any read_files, a later delete must be authorized by the
+      // confirmed post-edit anchor matching the snapshotted current content.
+      let applied = false
+      const deleteResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'delete-scratch',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'delete',
+                path,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+          filePath === path ? createdContent : null,
+        requestClientToolCall: async (toolCall: any) => {
+          applied = true
+          return confirmedMutationOutput(
+            toolCall,
+            {},
+            { projectId: mockFileContext.projectRoot, runId },
+          )
+        },
+      } as any)
+
+      expect(applied).toBe(true)
+      const deleteOutput = deleteResult.output[0]
+      expect(deleteOutput.type).toBe('json')
+      if (deleteOutput.type === 'json') {
+        expect(deleteOutput.value).not.toHaveProperty('errorMessage')
+      }
+    })
+
+    it('create then str_replace in a later step without an intervening read succeeds in strict mode', async () => {
+      const path = 'src/scratch.ts'
+      const createdContent = 'export const temp = 1\n'
+      const runId = 'create-then-edit-strict-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+
+      const createResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'create-scratch',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'create',
+                path,
+                content: createdContent,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async () => null,
+        requestClientToolCall: async (toolCall: any) =>
+          confirmedMutationOutput(
+            toolCall,
+            { [path]: createdContent },
+            { projectId: mockFileContext.projectRoot, runId },
+          ),
+      } as any)
+
+      const createOutput = createResult.output[0]
+      expect(createOutput.type).toBe('json')
+      if (createOutput.type === 'json') {
+        expect(createOutput.value).not.toHaveProperty('errorMessage')
+      }
+      expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
+      expect(fileProcessingState.readAuthorizationHashesByPath?.[path]).toBe(
+        getContentHash(createdContent),
+      )
+      expect(
+        fileProcessingState.confirmedPostEditAnchorsByPath?.[path],
+      ).toBeDefined()
+
+      // WITHOUT any read_files, a later str_replace must succeed via the
+      // sticky auth granted by the confirmed create.
+      let applied = false
+      const editResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'edit-scratch',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'str_replace',
+                path,
+                replacements: [
+                  {
+                    oldString: 'export const temp = 1',
+                    newString: 'export const temp = 2',
+                    allowMultiple: false,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+          filePath === path ? createdContent : null,
+        requestClientToolCall: async (toolCall: any) => {
+          applied = true
+          return confirmedMutationOutput(
+            toolCall,
+            { [path]: 'export const temp = 2\n' },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
+        },
+      } as any)
+
+      expect(applied).toBe(true)
+      const editOutput = editResult.output[0]
+      expect(editOutput.type).toBe('json')
+      if (editOutput.type === 'json') {
+        expect(editOutput.value).not.toHaveProperty('errorMessage')
+      }
+    })
+
+    it('delete on an externally-modified created file still fails closed', async () => {
+      const path = 'src/scratch.ts'
+      const createdContent = 'export const temp = 1\n'
+      const runId = 'create-then-delete-stale-strict-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+
+      const createResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'create-scratch',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'create',
+                path,
+                content: createdContent,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async () => null,
+        requestClientToolCall: async (toolCall: any) =>
+          confirmedMutationOutput(
+            toolCall,
+            { [path]: createdContent },
+            { projectId: mockFileContext.projectRoot, runId },
+          ),
+      } as any)
+
+      const createOutput = createResult.output[0]
+      expect(createOutput.type).toBe('json')
+      if (createOutput.type === 'json') {
+        expect(createOutput.value).not.toHaveProperty('errorMessage')
+      }
+      expect(
+        fileProcessingState.confirmedPostEditAnchorsByPath?.[path],
+      ).toBeDefined()
+
+      // The file was modified externally after the create, so the confirmed
+      // anchor's contentHash no longer matches the snapshotted current
+      // content: the delete must fail closed and the client must not apply.
+      let applied = false
+      const deleteResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'delete-scratch-stale',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'delete',
+                path,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+          filePath === path ? 'export const temp = 999\n' : null,
+        requestClientToolCall: async (toolCall: any) => {
+          applied = true
+          return confirmedMutationOutput(
+            toolCall,
+            {},
+            { projectId: mockFileContext.projectRoot, runId },
+          )
+        },
+      } as any)
+
+      expect(applied).toBe(false)
+      const deleteOutput = deleteResult.output[0]
+      expect(deleteOutput.type).toBe('json')
+      if (deleteOutput.type === 'json') {
+        expect(deleteOutput.value).toHaveProperty('errorMessage')
+      }
+    })
+
+    it('a capability-bearing edit is blocked when the authoritative run scope is empty', async () => {
+      // The hasCapabilityBearingEdit && (!projectId || !runId) guard: a
+      // capability-bearing edit (here a write_file carrying basedOnRead) must
+      // fail closed BEFORE any authorization or client apply when the runtime
+      // has no authoritative project/run scope. Every other test spreads
+      // defaultTestHandlerAuthority (which sets fileContext + runId), so this
+      // omits them to exercise the empty-scope branch.
+      const path = 'src/empty-scope.ts'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+
+      let applied = false
+      const result = await handleEditTransaction({
+        // Deliberately NO defaultTestHandlerAuthority spread: no fileContext,
+        // no runId.
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'empty-scope-capability-tx',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'write_file',
+                path,
+                content: 'export const v = 1\n',
+                basedOnRead: 'cap.v3.some-token',
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        logger,
+        requestOptionalFile: async () => null,
+        requestClientToolCall: async () => {
+          applied = true
+          return []
+        },
+      } as any)
+
+      // Fail closed: the client is never asked to apply, and the output names
+      // the missing authoritative scope for the capability-bearing edit.
+      expect(applied).toBe(false)
+      const output = result.output[0]
+      expect(output.type).toBe('json')
+      if (output.type === 'json') {
+        expect(String((output.value as any).errorMessage)).toContain(
+          'capability-bearing edits require a nonempty authoritative projectId and runId',
+        )
+      }
+    })
+
+    it('a partial (scoped) post-edit anchor does not authorize a delete of the whole file', async () => {
+      const path = 'src/partial-anchor.ts'
+      const diskContent = 'line1\nline2\nline3\n'
+      const runId = 'partial-anchor-delete-strict-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+      // Partial/scoped anchor: startLine is 3 (NOT 1) but the contentHash DOES
+      // match the snapshot, so ONLY the whole-file startLine guard can block
+      // the delete. No readAuthorizationsByPath is seeded, so the delete has
+      // no other authorization source and must rely on the (partial) anchor.
+      fileProcessingState.confirmedPostEditAnchorsByPath = {
+        [path]: {
+          startLine: 3,
+          endLine: 10,
+          contentHash: getContentHash(diskContent),
+          readCapability: 'cap.v3.partial',
+        },
+      }
+
+      let applied = false
+      const deleteResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'delete-partial-anchor',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'delete',
+                path,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+          filePath === path ? diskContent : null,
+        requestClientToolCall: async (toolCall: any) => {
+          applied = true
+          return confirmedMutationOutput(
+            toolCall,
+            {},
+            { projectId: mockFileContext.projectRoot, runId },
+          )
+        },
+      } as any)
+
+      // A partial anchor must fail closed to the generic block: the client is
+      // never asked to apply the destructive whole-file delete.
+      expect(applied).toBe(false)
+      const deleteOutput = deleteResult.output[0]
+      expect(deleteOutput.type).toBe('json')
+      if (deleteOutput.type === 'json') {
+        expect(deleteOutput.value).toHaveProperty('errorMessage')
+      }
+    })
+
+    it('a whole-file (startLine 1) post-edit anchor with a matching hash authorizes a delete', async () => {
+      // Contrast: the SAME anchor as the partial case above with only
+      // startLine flipped to 1 (same contentHash, same readCapability string,
+      // still no sticky readAuthorizationsByPath). The delete is now
+      // authorized, proving the guard keys on startLine specifically.
+      const path = 'src/partial-anchor.ts'
+      const diskContent = 'line1\nline2\nline3\n'
+      const runId = 'whole-anchor-delete-strict-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+      fileProcessingState.confirmedPostEditAnchorsByPath = {
+        [path]: {
+          startLine: 1,
+          endLine: 10,
+          contentHash: getContentHash(diskContent),
+          readCapability: 'cap.v3.whole',
+        },
+      }
+
+      let applied = false
+      const deleteResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'delete-whole-anchor',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'delete',
+                path,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+          filePath === path ? diskContent : null,
+        requestClientToolCall: async (toolCall: any) => {
+          applied = true
+          return confirmedMutationOutput(
+            toolCall,
+            {},
+            { projectId: mockFileContext.projectRoot, runId },
+          )
+        },
+      } as any)
+
+      expect(applied).toBe(true)
+      const deleteOutput = deleteResult.output[0]
+      expect(deleteOutput.type).toBe('json')
+      if (deleteOutput.type === 'json') {
+        expect(deleteOutput.value).not.toHaveProperty('errorMessage')
+      }
+    })
+
+    it('create then move in a later step without an intervening read succeeds in strict mode', async () => {
+      const path = 'src/scratch.ts'
+      const destinationPath = 'src/scratch-moved.ts'
+      const createdContent = 'export const temp = 1\n'
+      const runId = 'create-then-move-strict-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+
+      const createResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'create-scratch',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'create',
+                path,
+                content: createdContent,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async () => null,
+        requestClientToolCall: async (toolCall: any) =>
+          confirmedMutationOutput(
+            toolCall,
+            { [path]: createdContent },
+            { projectId: mockFileContext.projectRoot, runId },
+          ),
+      } as any)
+
+      const createOutput = createResult.output[0]
+      expect(createOutput.type).toBe('json')
+      if (createOutput.type === 'json') {
+        expect(createOutput.value).not.toHaveProperty('errorMessage')
+      }
+      expect(
+        fileProcessingState.confirmedPostEditAnchorsByPath?.[path],
+      ).toBeDefined()
+
+      // WITHOUT any read_files, a later move must be authorized by the
+      // confirmed post-edit anchor on the SOURCE path matching the
+      // snapshotted current source content. The destination does not exist.
+      let applied = false
+      const moveResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'move-scratch',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'move',
+                path,
+                destinationPath,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+          filePath === path
+            ? createdContent
+            : filePath === destinationPath
+              ? null
+              : null,
+        requestClientToolCall: async (toolCall: any) => {
+          applied = true
+          return confirmedMutationOutput(
+            toolCall,
+            { [destinationPath]: createdContent },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
+        },
+      } as any)
+
+      expect(applied).toBe(true)
+      const moveOutput = moveResult.output[0]
+      expect(moveOutput.type).toBe('json')
+      if (moveOutput.type === 'json') {
+        expect(moveOutput.value).not.toHaveProperty('errorMessage')
+      }
+    })
+
+    it('confirmed move grants sticky auth and a post-edit anchor on the destination path', async () => {
+      const path = 'src/move-anchor-src.ts'
+      const destinationPath = 'src/move-anchor-dest.ts'
+      const createdContent = 'export const v = 1\n'
+      const runId = 'move-anchor-rekey-strict-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+
+      const createResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'create-move-anchor-src',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'create',
+                path,
+                content: createdContent,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async () => null,
+        requestClientToolCall: async (toolCall: any) =>
+          confirmedMutationOutput(
+            toolCall,
+            { [path]: createdContent },
+            { projectId: mockFileContext.projectRoot, runId },
+          ),
+      } as any)
+
+      const createOutput = createResult.output[0]
+      expect(createOutput.type).toBe('json')
+      if (createOutput.type === 'json') {
+        expect(createOutput.value).not.toHaveProperty('errorMessage')
+      }
+
+      // A confirmed move populates wholeFileContentByPath[destinationPath] from
+      // the runtime-known source bytes and confirmationPaths includes the
+      // destination, so commitAppliedEditPaths must re-key BOTH the sticky
+      // whole-file authorization AND the confirmed post-edit anchor onto the
+      // destination path (getPositiveApplicationEvidence uses
+      // action.destinationPath ?? action.path as the anchor target).
+      let applied = false
+      const moveResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'move-anchor-rekey',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'move',
+                path,
+                destinationPath,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+          filePath === path
+            ? createdContent
+            : filePath === destinationPath
+              ? null
+              : null,
+        requestClientToolCall: async (toolCall: any) => {
+          applied = true
+          return confirmedMutationOutput(
+            toolCall,
+            { [destinationPath]: createdContent },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
+        },
+      } as any)
+
+      expect(applied).toBe(true)
+      const moveOutput = moveResult.output[0]
+      expect(moveOutput.type).toBe('json')
+      if (moveOutput.type === 'json') {
+        expect(moveOutput.value).not.toHaveProperty('errorMessage')
+      }
+
+      // The confirmed post-edit anchor is re-keyed to the DESTINATION (not the
+      // now-deleted source), minted from the runtime-known source bytes.
+      const destinationAnchor =
+        fileProcessingState.confirmedPostEditAnchorsByPath?.[destinationPath]
+      expect(destinationAnchor).toBeDefined()
+      expect(destinationAnchor?.contentHash).toBe(getContentHash(createdContent))
+      expect(destinationAnchor?.readCapability).toMatch(/^cap\.v3\./)
+
+      // Sticky whole-file authorization + hash are also granted on the
+      // destination path.
+      expect(fileProcessingState.readAuthorizationsByPath?.[destinationPath]).toBe(
+        true,
+      )
+      expect(
+        fileProcessingState.readAuthorizationHashesByPath?.[destinationPath],
+      ).toBe(getContentHash(createdContent))
+    })
+
+    it('cross-turn hydration keeps sticky read authorization but not the confirmed post-edit anchor', async () => {
+      const path = 'src/cross-turn.ts'
+      const createdContent = 'export const c = 1\n'
+      const runId = 'cross-turn-hydration-strict-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+
+      const createResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'create-cross-turn',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'create',
+                path,
+                content: createdContent,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async () => null,
+        requestClientToolCall: async (toolCall: any) =>
+          confirmedMutationOutput(
+            toolCall,
+            { [path]: createdContent },
+            { projectId: mockFileContext.projectRoot, runId },
+          ),
+      } as any)
+
+      const createOutput = createResult.output[0]
+      expect(createOutput.type).toBe('json')
+      if (createOutput.type === 'json') {
+        expect(createOutput.value).not.toHaveProperty('errorMessage')
+      }
+      // After the confirmed create, state holds BOTH a sticky authorization and
+      // a confirmed post-edit anchor for the path.
+      expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
+      expect(fileProcessingState.readAuthorizationHashesByPath?.[path]).toBe(
+        getContentHash(createdContent),
+      )
+      expect(
+        fileProcessingState.confirmedPostEditAnchorsByPath?.[path],
+      ).toBeDefined()
+
+      // Simulate the per-turn hydration exactly as stream-parser.ts:222-250
+      // does: build a FRESH fileProcessingState copying ONLY the durable
+      // registry fields (readAuthorizationsByPath /
+      // readAuthorizationHashesByPath / editRereadRequirementsByPath). The
+      // confirmed post-edit anchor is turn-local and is intentionally NOT
+      // hydrated.
+      const nextTurnState = createFileProcessingState()
+      nextTurnState.strictReadBeforeEdit = true
+      nextTurnState.readAuthorizationsByPath = {
+        ...(fileProcessingState.readAuthorizationsByPath ?? {}),
+      }
+      nextTurnState.readAuthorizationHashesByPath = {
+        ...(fileProcessingState.readAuthorizationHashesByPath ?? {}),
+      }
+      nextTurnState.editRereadRequirementsByPath = {
+        ...(fileProcessingState.editRereadRequirementsByPath ?? {}),
+      }
+
+      // Sticky auth + hash survive the turn boundary.
+      expect(nextTurnState.readAuthorizationsByPath?.[path]).toBe(true)
+      expect(nextTurnState.readAuthorizationHashesByPath?.[path]).toBe(
+        getContentHash(createdContent),
+      )
+      // The confirmed post-edit anchor does NOT survive: it is turn-local and
+      // the durable hydration set omits it.
+      expect(
+        nextTurnState.confirmedPostEditAnchorsByPath?.[path],
+      ).toBeUndefined()
+    })
+
+    it('move on an externally-modified created file still fails closed', async () => {
+      const path = 'src/scratch.ts'
+      const destinationPath = 'src/scratch-moved.ts'
+      const createdContent = 'export const temp = 1\n'
+      const runId = 'create-then-move-stale-strict-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+
+      const createResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'create-scratch',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'create',
+                path,
+                content: createdContent,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async () => null,
+        requestClientToolCall: async (toolCall: any) =>
+          confirmedMutationOutput(
+            toolCall,
+            { [path]: createdContent },
+            { projectId: mockFileContext.projectRoot, runId },
+          ),
+      } as any)
+
+      const createOutput = createResult.output[0]
+      expect(createOutput.type).toBe('json')
+      if (createOutput.type === 'json') {
+        expect(createOutput.value).not.toHaveProperty('errorMessage')
+      }
+      expect(
+        fileProcessingState.confirmedPostEditAnchorsByPath?.[path],
+      ).toBeDefined()
+
+      // The source was modified externally after the create, so the confirmed
+      // anchor's contentHash no longer matches the snapshotted current source
+      // content: the move must fail closed and the client must not apply.
+      let applied = false
+      const moveResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'move-scratch-stale',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'move',
+                path,
+                destinationPath,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+          filePath === path
+            ? 'export const temp = 999\n'
+            : filePath === destinationPath
+              ? null
+              : null,
+        requestClientToolCall: async (toolCall: any) => {
+          applied = true
+          return confirmedMutationOutput(
+            toolCall,
+            { [destinationPath]: createdContent },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
+        },
+      } as any)
+
+      expect(applied).toBe(false)
+      const moveOutput = moveResult.output[0]
+      expect(moveOutput.type).toBe('json')
+      if (moveOutput.type === 'json') {
+        expect(moveOutput.value).toHaveProperty('errorMessage')
+      }
+    })
+
+    it('move to an existing destination fails closed even when the source is authorized', async () => {
+      const path = 'src/scratch.ts'
+      const destinationPath = 'src/scratch-moved.ts'
+      const createdContent = 'export const temp = 1\n'
+      const runId = 'create-then-move-existing-destination-strict-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+
+      const createResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'create-scratch',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'create',
+                path,
+                content: createdContent,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async () => null,
+        requestClientToolCall: async (toolCall: any) =>
+          confirmedMutationOutput(
+            toolCall,
+            { [path]: createdContent },
+            { projectId: mockFileContext.projectRoot, runId },
+          ),
+      } as any)
+
+      const createOutput = createResult.output[0]
+      expect(createOutput.type).toBe('json')
+      if (createOutput.type === 'json') {
+        expect(createOutput.value).not.toHaveProperty('errorMessage')
+      }
+      // The source has a confirmed post-edit anchor (source is authorized).
+      expect(
+        fileProcessingState.confirmedPostEditAnchorsByPath?.[path],
+      ).toBeDefined()
+
+      // The source is fresh/authorized, but the destination already exists.
+      // Destination safety is enforced separately by the lifecycle preflight,
+      // which must block the move with `Move destination already exists`
+      // independent of the source authorization.
+      let applied = false
+      const moveResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'move-scratch-existing-destination',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'move',
+                path,
+                destinationPath,
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+          filePath === path
+            ? createdContent
+            : filePath === destinationPath
+              ? 'export const existing = 1\n'
+              : null,
+        requestClientToolCall: async (toolCall: any) => {
+          applied = true
+          return confirmedMutationOutput(
+            toolCall,
+            { [destinationPath]: createdContent },
+            { projectId: mockFileContext.projectRoot, runId },
+          )
+        },
+      } as any)
+
+      expect(applied).toBe(false)
+      const moveOutput = moveResult.output[0]
+      expect(moveOutput.type).toBe('json')
+      if (moveOutput.type === 'json') {
+        const value = moveOutput.value as {
+          errorMessage?: string
+          failures?: Array<{ errorMessage?: string }>
+        }
+        const errorText = [
+          value.errorMessage,
+          ...(value.failures?.map((failure) => failure.errorMessage) ?? []),
+        ]
+          .map(String)
+          .join('\n')
+        expect(value).toHaveProperty('errorMessage')
+        expect(errorText).toContain('Move destination already exists')
+      }
+    })
+
+    it('capability-kind preflight failure revokes authorization even when the message would not need regex (structured kind)', async () => {
+      // The structured failureKind classifier: a replace_range whose readCapability
+      // is scoped to a DIFFERENT run fails processEditTransaction preflight with
+      // failureKind 'capability_scope'. That capability-kind tag forces
+      // requiresFreshCapability true, so the handler revokes the path's whole-file
+      // authorization and records a stale_capability reread requirement — even
+      // though the seed authorization hash itself matched disk.
+      const path = 'src/structured-capability-scope.ts'
+      const diskContent = 'export const value = 1\n'
+      const firstLine = 'export const value = 1'
+      const runId = 'structured-capability-scope-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+      // Seed a fresh whole-file authorization whose hash matches current disk.
+      fileProcessingState.readAuthorizationsByPath = { [path]: true }
+      fileProcessingState.readAuthorizationHashesByPath = {
+        [path]: getContentHash(diskContent),
+      }
+      // Mint a capability bound to a DIFFERENT run (and the authoritative
+      // project/path) so the scope check fails with capability_scope.
+      const wrongRunCapability = encodeReadCapabilityToken({
+        startLine: 1,
+        endLine: 1,
+        hash: getContentHash(firstLine),
+        scope: {
+          projectId: mockFileContext.projectRoot,
+          path,
+          runId: 'a-different-run-id',
+        },
+      })
+
+      const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'structured-capability-scope-tx',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'replace_range',
+                path,
+                readCapability: wrongRunCapability,
+                newContent: 'export const value = 2',
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+          filePath === path ? diskContent : null,
+        requestClientToolCall: async () => {
+          throw new Error('must not apply a capability_scope preflight failure')
+        },
+      } as any)
+
+      const output = result.output[0]
+      expect(output.type).toBe('json')
+      if (output.type === 'json') {
+        expect(output.value).toHaveProperty('errorMessage')
+      }
+      // Capability-kind failure: authorization is revoked and a stale_capability
+      // reread requirement is recorded for the transaction path.
+      expect(
+        fileProcessingState.readAuthorizationsByPath?.[path],
+      ).toBeUndefined()
+      expect(
+        fileProcessingState.readAuthorizationHashesByPath?.[path],
+      ).toBeUndefined()
+      expect(
+        fileProcessingState.editRereadRequirementsByPath?.[path]?.reason,
+      ).toBe('stale_capability')
+    })
+
+    it('generic (untagged) preflight failure preserves authorization', async () => {
+      // Contrast: a str_replace whose per-replacement basedOnRead is valid
+      // (correct scope/run, fresh hash) but whose oldString does not match the
+      // current content fails preflight with NO failureKind (untagged /
+      // generic). Its message does not match the capability regex either, so
+      // requiresFreshCapability stays false and the existing authorization is
+      // preserved with no stale_capability requirement.
+      const path = 'src/generic-preflight-preserved.ts'
+      // Snapshot content and the seeded authorization hash must match so the
+      // freshness pre-scan keeps the authorization (isolating the classifier's
+      // preserve behavior from the separate stale-revocation path).
+      const diskContent = 'export const value = 1\n'
+      const runId = 'generic-preflight-preserved-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+      fileProcessingState.readAuthorizationsByPath = { [path]: true }
+      fileProcessingState.readAuthorizationHashesByPath = {
+        [path]: getContentHash(diskContent),
+      }
+      // Valid capability: correct scope (this run) and a hash matching the
+      // snapshot content (the whole 1-line file).
+      const freshCapability = encodeReadCapabilityToken({
+        startLine: 1,
+        endLine: 1,
+        hash: getContentHash(diskContent),
+        scope: {
+          projectId: mockFileContext.projectRoot,
+          path,
+          runId,
+        },
+      })
+
+      const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'generic-preflight-preserved-tx',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'str_replace',
+                path,
+                replacements: [
+                  {
+                    // oldString does not match current content: a generic
+                    // no-match preflight failure, not a capability failure.
+                    oldString: 'export const value = 999',
+                    newString: 'export const value = 2',
+                    allowMultiple: false,
+                    basedOnRead: freshCapability,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+          filePath === path ? diskContent : null,
+        requestClientToolCall: async () => {
+          throw new Error('must not apply a generic no-match preflight failure')
+        },
+      } as any)
+
+      const output = result.output[0]
+      expect(output.type).toBe('json')
+      if (output.type === 'json') {
+        expect(output.value).toHaveProperty('errorMessage')
+      }
+      // Non-capability failure: authorization is preserved and no stale_capability
+      // reread requirement is recorded for the transaction path.
+      expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
+      expect(fileProcessingState.readAuthorizationHashesByPath?.[path]).toBe(
+        getContentHash(diskContent),
+      )
+      expect(
+        fileProcessingState.editRereadRequirementsByPath?.[path]?.reason,
+      ).not.toBe('stale_capability')
+      expect(
+        fileProcessingState.editRereadRequirementsByPath?.[path],
+      ).toBeUndefined()
     })
   })
 })

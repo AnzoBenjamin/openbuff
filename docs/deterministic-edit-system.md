@@ -87,6 +87,51 @@ common cause of "I already read this file, why is my edit blocked?":
   Prefer that automatic authorization or the action's
   `editAnchor.readCapability` for follow-up work; a successful mutation does
   not require an unconditional reread.
+- When a mutation is confirmed and the runtime grants post-edit anchors, the
+  mutating tool result appends one additive json part named
+  `postEditCapabilities`: an array of `{ path, contentHash, readCapability }`,
+  one per granted path. This part is model-facing (it flows into message
+  history) and is **not** rendered in the user-facing CLI rows. Each
+  `readCapability` is a scope-bound `cap.v3` token the model can pass as
+  `basedOnRead` (write_file) or per-replacement `basedOnRead` (str_replace) on
+  a follow-up edit, avoiding a redundant re-read. The part appears only when at
+  least one anchor was granted; it is omitted when no anchor could be minted
+  (for example, no runtime-known content or no authoritative scope).
+- The strict read-before-edit blocked-recovery message distinguishes a file
+  that was created or edited earlier in the session (it has a confirmed
+  post-edit anchor). Instead of the generic "no fresh read authorization
+  exists; call read_files" guidance, the message tells the model to retry with
+  `basedOnRead` set to the `readCapability` from that create/edit result's
+  confirmed post-edit anchor, and the structured `recovery.basedOnRead` echoes
+  that token. The other blocked-recovery causes (`stale_snapshot`, a prior
+  failed edit, stale-revoked, compacted, never-read) are unchanged.
+- A confirmed `create` (or any confirmed whole-file write) grants sticky
+  whole-file authorization straight from the runtime-known post-edit bytes —
+  the bytes a `create` supplies are exact, so the runtime does not need the
+  client to echo a whole-file-covering anchor. When no usable client anchor is
+  present, the runtime mints its own `cap.v3` anchor from those known bytes
+  (scope-bound to project, path, and run) and records it as the confirmed
+  post-edit anchor. A follow-up `delete` (or `move`) on that path is then
+  authorized when the anchor's content hash still matches the transaction's
+  snapshotted current content; an external modification (hash mismatch) fails
+  closed and requires a fresh read. A `move`'s destination path needs no read
+  authorization — its safety is enforced by the lifecycle preflight, which
+  blocks `Move destination already exists`. The client-echoed anchor is
+  preferred when valid but is never itself trusted to authorize — it is only
+  reused after passing the 7-point verification.
+- A `ConfirmedPostEditAnchor` (recorded in `confirmedPostEditAnchorsByPath`)
+  is definitionally whole-file-verified: it is only minted when the 7-point
+  check confirms whole-file coverage (`startLine === 1` and
+  `endLine === totalLines`) with a hash matching the runtime-known post-edit
+  bytes. There is no scoped/partial confirmed post-edit anchor — a confirmed
+  apply re-anchors to whole-file because the full post-edit content is always
+  runtime-known (`processEditTransaction` computes it from gate-verified
+  initial bytes). This is why a confirmed apply may grant whole-file sticky
+  authorization even for a localized edit: the granted hash pins the exact
+  full post-edit bytes, and every consumer re-hashes the current file and
+  fails closed on drift. A destructive `delete`/`move` additionally requires
+  the anchor to be whole-file (`startLine === 1`) as a defensive guard, so a
+  future partial anchor could never authorize a whole-file delete/move.
 - Reread when the next edit needs a different region, the action anchor is
   missing or oversized, external activity may have made filesystem state
   stale, or a stale/ambiguous diagnostic explicitly asks for a fresh range.

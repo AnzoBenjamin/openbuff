@@ -85,6 +85,12 @@ type ResolvedTransactionEdit =
   | Exclude<TransactionEdit, { type: 'replace_range' }>
   | ResolvedReplaceRangeTransactionEdit
 
+type TransactionFailureKind =
+  | 'capability_stale'
+  | 'capability_scope'
+  | 'capability_invalid'
+  | 'generic'
+
 type TransactionFailure = {
   editIndex: number
   id?: string
@@ -92,6 +98,12 @@ type TransactionFailure = {
   errorMessage: string
   /** Optional whole-file capability echoed by the handler for residual recovery. */
   basedOnRead?: string
+  /**
+   * Structured failure classification for capability freshness/scope failures.
+   * Lets consumers classify without regex-matching errorMessage. Optional and
+   * additive; older consumers ignore it (the output schema strips unknown keys).
+   */
+  failureKind?: TransactionFailureKind
 }
 
 type TransactionFileChange = {
@@ -155,6 +167,7 @@ export async function processEditTransaction(params: {
         ...(effectiveEdit.id && { id: effectiveEdit.id }),
         path: effectiveEdit.path,
         errorMessage: resolvedEdit.error,
+        ...(resolvedEdit.failureKind && { failureKind: resolvedEdit.failureKind }),
       })
       break
     }
@@ -200,6 +213,7 @@ export async function processEditTransaction(params: {
         ...(failedEdit.edit.id && { id: failedEdit.edit.id }),
         path: effectiveEdit.path,
         errorMessage: result.error,
+        ...(result.failureKind && { failureKind: result.failureKind }),
       })
       break
     }
@@ -398,7 +412,9 @@ function mapOriginalOffset(
 
 function resolveReplaceRangeEdit(
   edit: TransactionEdit,
-): { edit: ResolvedTransactionEdit } | { error: string } {
+):
+  | { edit: ResolvedTransactionEdit }
+  | { error: string; failureKind?: TransactionFailureKind } {
   if (edit.type !== 'replace_range') return { edit }
   const decoded = decodeReadCapabilityToken(edit.readCapability)
   if (typeof decoded === 'string' || decoded.tokenVersion !== 'v3') {
@@ -407,6 +423,11 @@ function resolveReplaceRangeEdit(
         typeof decoded === 'string'
           ? decoded
           : 'readCapability requires an authenticated project/path/run-bound cap.v3 token.',
+      // Only a decode failure carries the structured capability-invalid kind;
+      // a wrong-version token stays covered by the handler regex fallback.
+      ...(typeof decoded === 'string'
+        ? { failureKind: 'capability_invalid' as const }
+        : {}),
     }
   }
   const startLine = edit.startLine ?? decoded.startLine
@@ -589,6 +610,7 @@ async function processTransactionEdit(params: {
     }
   | {
       error: string
+      failureKind?: TransactionFailureKind
     }
 > {
   const {
@@ -647,7 +669,7 @@ async function processTransactionEdit(params: {
       {
         const decoded = decodeReadCapabilityToken(edit.readCapability)
         if (typeof decoded === 'string') {
-          return { error: decoded }
+          return { error: decoded, failureKind: 'capability_invalid' }
         }
         if (
           !readCapabilityIssuer?.projectId ||
@@ -661,6 +683,7 @@ async function processTransactionEdit(params: {
         if (!readCapabilityMatchesScope(decoded, scope)) {
           return {
             error: `replace_range blocked for ${edit.path}: the readCapability belongs to a different project, path, or agent run. Re-read lines ${edit.startLine}-${edit.endLine} in this run and copy the new capability.`,
+            failureKind: 'capability_scope',
           }
         }
         // Authenticate original snapshot coordinates. Prior edits may shift the
@@ -672,6 +695,7 @@ async function processTransactionEdit(params: {
         ) {
           return {
             error: `replace_range blocked for ${edit.path}: normalized capability metadata does not match the authenticated readCapability. Re-read the target and retry with the fresh token.`,
+            failureKind: 'capability_stale',
           }
         }
         const originalContent = await originalContentPromise
@@ -682,6 +706,7 @@ async function processTransactionEdit(params: {
         if (getContentHash(observedContent) !== decoded.hash) {
           return {
             error: `replace_range blocked for ${edit.path}: the readCapability-covered content is stale. Re-read lines ${edit.capabilityStartLine}-${edit.capabilityEndLine} and retry with the fresh token.`,
+            failureKind: 'capability_stale',
           }
         }
         if (
@@ -690,6 +715,7 @@ async function processTransactionEdit(params: {
         ) {
           return {
             error: `replace_range blocked for ${edit.path}: target lines ${authorizationTarget.startLine}-${authorizationTarget.endLine} are outside the observed capability range ${edit.capabilityStartLine}-${edit.capabilityEndLine}.`,
+            failureKind: 'capability_scope',
           }
         }
       }

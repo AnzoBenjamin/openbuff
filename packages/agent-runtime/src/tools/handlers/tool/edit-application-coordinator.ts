@@ -4,8 +4,10 @@ import {
 } from '@codebuff/common/tools/results/filesystem'
 import {
   decodeReadCapabilityToken,
+  encodeReadCapabilityToken,
   getContentHash,
   getExactContentHash,
+  hasAuthoritativeReadCapabilityScope,
   normalizeLineEndings,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
@@ -44,7 +46,10 @@ function hasExplicitError(value: unknown, depth = 0): boolean {
 
   const record = value as Record<string, unknown>
   if (
-    record.errorMessage !== undefined ||
+    // Only a non-empty errorMessage string signals an error; null/'' are
+    // benign diagnostic placeholders (symmetric with error: null).
+    (typeof record.errorMessage === 'string' &&
+      record.errorMessage.length > 0) ||
     (record.error !== undefined && record.error !== null) ||
     record.success === false ||
     record.applied === false ||
@@ -59,43 +64,62 @@ function hasExplicitError(value: unknown, depth = 0): boolean {
   )
 }
 
+type FileMutationResultV1 = Parameters<typeof getConfirmedAppliedActionsV1>[0]
+
+type ConfirmedAppliedActionV1 = ReturnType<
+  typeof getConfirmedAppliedActionsV1
+>[number]
+
+function collectEnvelopes(
+  value: unknown,
+  depth: number,
+  out: FileMutationResultV1[],
+): void {
+  if (depth > 6 || value === null || value === undefined) return
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectEnvelopes(item, depth + 1, out)
+    }
+    return
+  }
+  if (typeof value !== 'object') return
+  const parsed = fileMutationResultV1Schema.safeParse(value)
+  if (parsed.success) {
+    // Envelope nodes are atomic: never recurse into a parsed envelope's
+    // internals. A non-applied or non-committed envelope simply contributes
+    // nothing (explicit rejections are handled by hasExplicitError earlier).
+    if (
+      parsed.data.outcome === 'applied' &&
+      parsed.data.authorityReceipt?.status === 'committed'
+    ) {
+      out.push(parsed.data)
+    }
+    return
+  }
+  for (const nested of Object.values(value as Record<string, unknown>)) {
+    collectEnvelopes(nested, depth + 1, out)
+  }
+}
+
 function getPositiveApplicationEvidence(
   value: unknown,
   paths: ReadonlySet<string>,
   projectId: string,
   runId: string,
   wholeFileContentByPath?: ReadonlyMap<string, string>,
-  depth = 0,
 ): ReadonlyMap<string, ConfirmedPostEditAnchor> | null {
-  if (depth > 6 || value === null || value === undefined) return null
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const evidence = getPositiveApplicationEvidence(
-        item,
-        paths,
-        projectId,
-        runId,
-        wholeFileContentByPath,
-        depth + 1,
-      )
-      if (evidence) return evidence
-    }
-    return null
-  }
-  const parsed = fileMutationResultV1Schema.safeParse(value)
-  if (parsed.success) {
-    if (
-      parsed.data.outcome !== 'applied' ||
-      parsed.data.authorityReceipt?.status !== 'committed'
-    ) {
-      return null
-    }
-    const confirmedActions = getConfirmedAppliedActionsV1(parsed.data)
-    const confirmedPaths = new Set<string>()
-    const confirmedAnchorsByPath = new Map<string, ConfirmedPostEditAnchor>()
-    for (const action of confirmedActions) {
+  const envelopes: FileMutationResultV1[] = []
+  collectEnvelopes(value, 0, envelopes)
+  if (envelopes.length === 0) return null
+
+  const confirmedPaths = new Set<string>()
+  const confirmedActions: ConfirmedAppliedActionV1[] = []
+  const mergedAnchors = new Map<string, ConfirmedPostEditAnchor>()
+  for (const envelope of envelopes) {
+    for (const action of getConfirmedAppliedActionsV1(envelope)) {
+      confirmedActions.push(action)
       confirmedPaths.add(action.path)
-      if (action.action === 'move' && action.destinationPath) {
+      if (action.destinationPath) {
         confirmedPaths.add(action.destinationPath)
       }
       const targetPath = action.destinationPath ?? action.path
@@ -122,41 +146,44 @@ function getPositiveApplicationEvidence(
         decoded.endLine === record.endLine &&
         decoded.hash === record.contentHash
       ) {
-        confirmedAnchorsByPath.set(targetPath, {
+        const candidate: ConfirmedPostEditAnchor = {
           startLine: 1,
           endLine: record.endLine,
           contentHash: record.contentHash,
           readCapability,
-        })
+        }
+        const existing = mergedAnchors.get(targetPath)
+        if (!existing) {
+          mergedAnchors.set(targetPath, candidate)
+        } else if (
+          // Fail closed on conflicting anchors for the same target across
+          // envelopes: never pick a winner.
+          existing.startLine !== candidate.startLine ||
+          existing.endLine !== candidate.endLine ||
+          existing.contentHash !== candidate.contentHash ||
+          existing.readCapability !== candidate.readCapability
+        ) {
+          return null
+        }
       }
     }
-    if (![...paths].every((path) => confirmedPaths.has(path))) return null
-    for (const [path, content] of wholeFileContentByPath ?? []) {
-      const matchingAction = confirmedActions.find(
-        (action) => (action.destinationPath ?? action.path) === path,
-      )
-      if (
-        !matchingAction ||
-        matchingAction.afterHash !== getExactContentHash(content)
-      ) {
-        return null
-      }
-    }
-    return confirmedAnchorsByPath
   }
-  if (typeof value !== 'object') return null
-  for (const nested of Object.values(value as Record<string, unknown>)) {
-    const evidence = getPositiveApplicationEvidence(
-      nested,
-      paths,
-      projectId,
-      runId,
-      wholeFileContentByPath,
-      depth + 1,
+  for (const path of paths) {
+    if (!confirmedPaths.has(path)) return null
+  }
+  for (const [path, content] of wholeFileContentByPath ?? []) {
+    const expected = getExactContentHash(content)
+    const covering = confirmedActions.filter(
+      (action) => (action.destinationPath ?? action.path) === path,
     )
-    if (evidence) return evidence
+    // Fail closed across the union: at least one action must cover the path
+    // and every covering action must agree on the exact afterHash.
+    if (covering.length === 0) return null
+    for (const action of covering) {
+      if (action.afterHash !== expected) return null
+    }
   }
-  return null
+  return mergedAnchors
 }
 
 function unconfirmedApplicationOutput<T extends ToolName>(
@@ -257,37 +284,101 @@ export function invalidatePreparedEditPaths(params: {
   }
 }
 
+function synthesizePostEditAnchor(params: {
+  projectId?: string
+  runId?: string
+  path: string
+  content: string
+}): ConfirmedPostEditAnchor | null {
+  const { projectId, runId, path, content } = params
+  if (!projectId || !runId) return null
+  const scope = { projectId, path, runId }
+  if (!hasAuthoritativeReadCapabilityScope(scope)) return null
+  const contentHash = getContentHash(content)
+  const endLine = normalizeLineEndings(content).split('\n').length
+  return {
+    startLine: 1,
+    endLine,
+    contentHash,
+    readCapability: encodeReadCapabilityToken({
+      startLine: 1,
+      endLine,
+      hash: contentHash,
+      scope,
+    }),
+  }
+}
+
 export function commitAppliedEditPaths(params: {
   fileProcessingState: FileProcessingState
   paths: Iterable<string>
   wholeFileContentByPath?: ReadonlyMap<string, string>
   confirmedAnchorsByPath?: ReadonlyMap<string, ConfirmedPostEditAnchor>
-}): void {
+  projectId?: string
+  runId?: string
+  /**
+   * Paths whose reread requirement (e.g. context_compacted) must NOT be
+   * cleared by this commit. A confirmed apply normally clears the marker, but
+   * a blind allowMultiple str_replace (replace-all) is not evidence the model
+   * knows the file content, so the caller preserves the marker for those
+   * paths to keep a later write_file blocked.
+   */
+  preserveRereadRequirementsForPaths?: ReadonlySet<string>
+}): ReadonlyMap<string, ConfirmedPostEditAnchor> {
   const {
     fileProcessingState,
     paths,
     wholeFileContentByPath,
     confirmedAnchorsByPath,
+    projectId,
+    runId,
+    preserveRereadRequirementsForPaths,
   } = params
+  const grantedAnchorsByPath = new Map<string, ConfirmedPostEditAnchor>(
+    confirmedAnchorsByPath ?? [],
+  )
   for (const path of new Set(paths)) {
     if (!path) continue
-    clearEditRereadRequirement(fileProcessingState, path)
+    if (!preserveRereadRequirementsForPaths?.has(path)) {
+      clearEditRereadRequirement(fileProcessingState, path)
+    }
     const wholeFileContent = wholeFileContentByPath?.get(path)
-    const confirmedAnchor = confirmedAnchorsByPath?.get(path)
     if (
       typeof wholeFileContent === 'string' &&
-      confirmedAnchor &&
       fileProcessingState.strictReadBeforeEdit
     ) {
+      // A confirmed apply with runtime-known content (e.g. a `create`, whose
+      // bytes are exactly edit.content, already stored in
+      // wholeFileContentByPath) grants sticky whole-file authorization
+      // straight from those bytes — no client anchor evidence required. The
+      // confirmedAnchor 7-point check still governs whether a client-echoed
+      // anchor is trusted.
+      const contentHash = getContentHash(wholeFileContent)
       fileProcessingState.readAuthorizationsByPath ??= {}
       fileProcessingState.readAuthorizationHashesByPath ??= {}
-      fileProcessingState.confirmedPostEditAnchorsByPath ??= {}
       fileProcessingState.readAuthorizationsByPath[path] = true
-      fileProcessingState.readAuthorizationHashesByPath[path] =
-        confirmedAnchor.contentHash
-      fileProcessingState.confirmedPostEditAnchorsByPath[path] = confirmedAnchor
+      fileProcessingState.readAuthorizationHashesByPath[path] = contentHash
+      // Prefer the verified client-echoed anchor; otherwise mint one from the
+      // known content so a follow-up delete can be authorized and the
+      // capability can be surfaced for reuse. Skip minting when no
+      // authoritative scope is available (the sticky grant above still
+      // stands).
+      const anchor =
+        confirmedAnchorsByPath?.get(path) ??
+        synthesizePostEditAnchor({
+          projectId,
+          runId,
+          path,
+          content: wholeFileContent,
+        })
+      if (anchor) {
+        fileProcessingState.confirmedPostEditAnchorsByPath ??= {}
+        fileProcessingState.confirmedPostEditAnchorsByPath[path] = anchor
+        grantedAnchorsByPath.set(path, anchor)
+      }
     }
   }
+  return grantedAnchorsByPath
 }
 
 export async function coordinateEditApplication<T extends ToolName>(params: {
@@ -301,6 +392,7 @@ export async function coordinateEditApplication<T extends ToolName>(params: {
   onApplied?: () => void
   rejectionRequiresRead?: boolean
   confirmationPaths?: Iterable<string>
+  preserveRereadRequirementsForPaths?: ReadonlySet<string>
 }): Promise<CoordinatedApplication<T>> {
   const paths = [...new Set(params.paths)]
   const confirmationPaths =
@@ -386,12 +478,41 @@ export async function coordinateEditApplication<T extends ToolName>(params: {
     }
   }
 
-  commitAppliedEditPaths({
+  const grantedAnchorsByPath = commitAppliedEditPaths({
     fileProcessingState: params.fileProcessingState,
     paths,
     wholeFileContentByPath: params.wholeFileContentByPath,
     confirmedAnchorsByPath,
+    projectId: params.projectId,
+    runId: params.runId,
+    preserveRereadRequirementsForPaths: params.preserveRereadRequirementsForPaths,
   })
   params.onApplied?.()
-  return { status: 'applied', output, confirmedAnchorsByPath }
+  // Surface the granted post-edit capabilities to the model: this output array
+  // reaches message history but not the user-facing CLI rows, so the cap.v3
+  // token is model-visible only (matching how read_files surfaces
+  // readCapability). Purely additive — existing parts are never mutated.
+  const appliedOutput =
+    grantedAnchorsByPath.size > 0
+      ? ([
+          ...output,
+          {
+            type: 'json',
+            value: {
+              postEditCapabilities: [...grantedAnchorsByPath.entries()].map(
+                ([path, anchor]) => ({
+                  path,
+                  contentHash: anchor.contentHash,
+                  readCapability: anchor.readCapability,
+                }),
+              ),
+            },
+          },
+        ] as CodebuffToolOutput<T>)
+      : output
+  return {
+    status: 'applied',
+    output: appliedOutput,
+    confirmedAnchorsByPath: grantedAnchorsByPath,
+  }
 }
