@@ -452,10 +452,20 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       preEditSecurityReviewDone: true,
     })
 
-    // 8) Passing validation hooks advance to the code-reviewer spawn_agents
-    // gate (the FINAL reviewer gate), NOT another aux spawn.
-    const reviewerSpawn = gen.next(
+    // 8) Passing validation hooks first trigger the post-validation dirty-
+    // scope re-derivation (base2 re-runs git_status after hooks to detect
+    // hook-driven mutation before freezing the reviewer snapshot), then
+    // advance to the code-reviewer spawn_agents gate (the FINAL reviewer
+    // gate), NOT another aux spawn.
+    const postValidationStatus = gen.next(
       feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }]),
+    )
+    expect(postValidationStatus.value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    const reviewerSpawn = gen.next(
+      feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }),
     )
     expect(isAuxSpawn(reviewerSpawn.value)).toBe(false)
     expect(reviewerSpawn.value).toMatchObject({
@@ -463,12 +473,21 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       input: { agents: [{ agent_type: 'code-reviewer' }] },
     })
 
-    // 9) A LOOKS_GOOD reviewer verdict finalizes.
+    // 9) A LOOKS_GOOD reviewer verdict re-checks the final gate scope (base2
+    // re-runs git_status once more to confirm the frozen scope/bytes did not
+    // drift after review), then finalizes.
     const finalReviewerFingerprint = reviewerFingerprintFromSpawn(
       reviewerSpawn.value,
     )
-    const gatePassed = gen.next(
+    const finalGateStatus = gen.next(
       reviewerResult(finalReviewerFingerprint, [AUX_TRIPLE_FILE]),
+    )
+    expect(finalGateStatus.value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    const gatePassed = gen.next(
+      feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }),
     )
     expect(gatePassed.value).toMatchObject({
       toolName: 'add_message',
@@ -839,6 +858,223 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       testWriterGateDone: true,
       docWriterGateDone: true,
       preEditSecurityReviewDone: true,
+    })
+  })
+
+  test('revalidates an owed specialist reviewer as aux-owned across turns before the final code-reviewer', () => {
+    const base2 = createBase2('default')
+    // Seed the turn so the marker is already owed to a specialist, simulating
+    // a prior-turn blocking reliability-reviewer finding. The other aux gates
+    // are seeded done for THIS aux-relevant pending set (and
+    // auxGatesLastPendingFiles matches it) so resetAuxGateFlags does not
+    // re-arm them: the specialist revalidation is the only owed aux work.
+    const agentState = {
+      agentId: 'base2-custom',
+      base2ActiveWork: {
+        changedFiles: [AUX_TRIPLE_FILE],
+        touchedFiles: [AUX_TRIPLE_FILE],
+        pendingGateFiles: [AUX_TRIPLE_FILE],
+        currentPhase: 'awaiting_validation',
+        openReviewerBlockers: [
+          'BLOCKING: reliability-reviewer:correctness:retry-races - fix the retry race',
+        ],
+        openReviewerFindings: [
+          {
+            id: 'reliability-reviewer:correctness:retry-races',
+            gateId: 'reliability-reviewer:prior-snapshot',
+            text: 'Fix the retry race in the session refresh path.',
+            status: 'open',
+            files: [AUX_TRIPLE_FILE],
+            snapshotFingerprint: 'prior-snapshot',
+            reviewer: 'reliability-reviewer',
+            createdAt: '2025-01-01T00:00:00.000Z',
+          },
+        ],
+        lastValidationSummary: '',
+        nextRequiredAction: '',
+        lastPinnedStateMessage: '',
+        gatePassedFiles: [],
+        gatePassedPendingFiles: [],
+        gatePassedReviewerVerdict: '',
+        gatePassedValidationSummary: '',
+        gatePassedFingerprint: '',
+        lastReviewerGateSkipReason: '',
+        reviewReceipts: [],
+        // Focus the turn on specialist revalidation only.
+        testWriterGateDone: true,
+        docWriterGateDone: true,
+        securityReviewGateDone: true,
+        preEditSecurityReviewDone: true,
+        specialistReviewGatesDone: [],
+        auxGatesLastPendingFiles: [AUX_TRIPLE_FILE],
+      },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      // A NON-codebase-intent prompt: classifyProactiveRetrieval returns
+      // undefined, so there is no query_index/retrieval prelude to drive.
+      prompt: 'Please finish the pending reliability finding.',
+      params: {},
+    } as any)
+
+    // Resumed-state prelude: initial git_status -> context-pruner -> pinned
+    // active-work state -> STEP -> post-step git_status. A generator runs no
+    // body code (including setup rehydration) until the first next() call, so
+    // the marker assertion below must follow this first next().
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+
+    // Setup rehydrates the owed specialist marker from the persisted finding's
+    // reviewer provenance (a prior turn's blocking reliability-reviewer
+    // finding). It is NOT set in-turn.
+    expect(
+      (agentState as any).base2ActiveWork.requiredReviewerRevalidation,
+    ).toBe('reliability-reviewer')
+    expect(
+      gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` })).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    const pinned = gen.next()
+    expect(pinned.value).toMatchObject({ toolName: 'add_message' })
+    expect((pinned.value as any).input.content).toContain(
+      'Current phase: awaiting_validation',
+    )
+    expect(gen.next().value).toBe('STEP')
+    // The resumed model step makes no new edit; the seeded pending file stays
+    // pending, driving the post-step git_status.
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+
+    // The test/doc/security aux gates are already satisfied (and the security
+    // gate is family-guarded off while a specialist marker is owed), so the
+    // specialist aux block is the only owed work. It classifies the marker
+    // family as 'specialist', re-includes the owed reliability-reviewer into
+    // the routed specialists, freezes a fresh review bundle, and re-fires it
+    // via spawn_agents.
+    const specialistBundle = gen.next(
+      feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }),
+    )
+    expect(specialistBundle.value).toMatchObject({
+      toolName: 'get_change_review_bundle',
+      input: {},
+      includeToolCall: false,
+    })
+    const specialistSpawn = gen.next(
+      feedJson({ snapshotId: 'revalidation-snapshot', files: [AUX_TRIPLE_FILE] }),
+    )
+    // Invariant 1: the owed specialist re-fires here (reliability-reviewer with
+    // the fresh bundle's snapshot_id), NOT the final code-reviewer.
+    expect(specialistSpawn.value).toMatchObject({
+      toolName: 'spawn_agents',
+      input: {
+        agents: [
+          {
+            agent_type: 'reliability-reviewer',
+            params: { snapshot_id: 'revalidation-snapshot' },
+          },
+        ],
+      },
+      includeToolCall: false,
+    })
+
+    // A passing (NON_BLOCKING, non-stale, attesting) specialist result records
+    // the receipt, marks the specialist done, and clears the owed marker
+    // (family-guarded clear). The aux block then re-enters the loop at context
+    // pruning.
+    const reLoopContextPruner = gen.next(
+      spawnedReviewerResult(
+        'reliability-reviewer',
+        'revalidation-snapshot',
+        [AUX_TRIPLE_FILE],
+      ),
+    )
+    expect(reLoopContextPruner.value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    // Invariant 2: a passing specialist result clears the marker to undefined.
+    expect(
+      (agentState as any).base2ActiveWork.requiredReviewerRevalidation,
+    ).toBeUndefined()
+    expect(
+      (agentState as any).base2ActiveWork.specialistReviewGatesDone,
+    ).toEqual(['reliability-reviewer'])
+
+    // Re-loop: pinned state, model step (no new edits), post-step git_status.
+    expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+    expect(gen.next().value).toBe('STEP')
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+
+    // With the specialist family cleared and its gate done, no aux gate
+    // re-fires; the loop advances to the FINAL validation hooks.
+    const finalValidationGate = gen.next(
+      feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }),
+    )
+    expect(isAuxSpawn(finalValidationGate.value)).toBe(false)
+    expect(finalValidationGate.value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+      input: { files: [AUX_TRIPLE_FILE] },
+    })
+
+    // Passing hooks trigger the post-validation dirty-scope re-derivation, then
+    // the FINAL reviewer spawn.
+    const postValidationStatus = gen.next(
+      feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }]),
+    )
+    expect(postValidationStatus.value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    const reviewerSpawn = gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }))
+    // Invariant 3: the FINAL reviewer is code-reviewer, only reached after the
+    // specialist family was cleared (family is now 'none'/'code').
+    expect(isAuxSpawn(reviewerSpawn.value)).toBe(false)
+    expect(reviewerSpawn.value).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'code-reviewer' }] },
+    })
+
+    // A passing code-reviewer verdict re-checks the frozen gate scope, then
+    // finalizes.
+    const finalReviewerFingerprint = reviewerFingerprintFromSpawn(
+      reviewerSpawn.value,
+    )
+    const finalGateStatus = gen.next(
+      reviewerResult(finalReviewerFingerprint, [AUX_TRIPLE_FILE]),
+    )
+    expect(finalGateStatus.value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    const gatePassed = gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }))
+    expect(gatePassed.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect((gatePassed.value as any).input.content).toContain(
+      'Automated validation and reviewer gate passed with NON_BLOCKING',
+    )
+    expect(parseGateStateBlock((gatePassed.value as any).input.content)).toMatchObject(
+      {
+        gate: 'validation/reviewer',
+        status: 'passed',
+      },
+    )
+
+    // Invariant 4: the turn finalizes and the owed marker stays cleared.
+    expect((agentState as any).base2ActiveWork).toMatchObject({
+      currentPhase: 'final_response_allowed',
+      pendingGateFiles: [],
+      requiredReviewerRevalidation: undefined,
     })
   })
 })

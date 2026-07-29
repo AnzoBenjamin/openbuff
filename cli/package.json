@@ -16,7 +16,7 @@
   },
   "scripts": {
     "dev": "NEXT_PUBLIC_CB_ENVIRONMENT=dev NEXT_PUBLIC_CODEBUFF_APP_URL=http://localhost:3000 NEXT_PUBLIC_SUPPORT_EMAIL=support@openbuff.local NEXT_PUBLIC_POSTHOG_API_KEY=openbuff-dev NEXT_PUBLIC_POSTHOG_HOST_URL=https://app.posthog.com OPENBUFF_LOCAL_MODE=true bun run prebuild:agents && NEXT_PUBLIC_CB_ENVIRONMENT=dev NEXT_PUBLIC_CODEBUFF_APP_URL=http://localhost:3000 NEXT_PUBLIC_SUPPORT_EMAIL=support@openbuff.local NEXT_PUBLIC_POSTHOG_API_KEY=openbuff-dev NEXT_PUBLIC_POSTHOG_HOST_URL=https://app.posthog.com OPENBUFF_LOCAL_MODE=true bun run src/index.tsx --cwd ..",
-    "prebuild:agents": "bun run scripts/prebuild-agents.ts && bun run scripts/generate-init-type-sources.ts",
+    "prebuild:agents": "bun run ../scripts/generate-gate-helpers.ts --write ../agents/base2/base2.ts && bun run scripts/prebuild-agents.ts && bun run scripts/generate-init-type-sources.ts",
     "build:binary": "bun ./scripts/build-binary.ts openbuff $npm_package_version",
     "release": "bun run scripts/release.ts",
     "test": "NODE_ENV=production bun test",

@@ -1,3 +1,5 @@
+import type { SpecialistReviewerAgent } from '@codebuff/common/agents/specialist-risk-router'
+
 export type Base2ActiveWorkPhase =
   | 'idle'
   | 'awaiting_validation'
@@ -115,7 +117,7 @@ export type Base2ActiveWorkState = Base2GateState & {
     files: string[]
     snapshotFingerprint: string
     /** Reviewer family that produced this blocking finding. */
-    reviewer?: 'code-reviewer' | 'security-reviewer'
+    reviewer?: 'code-reviewer' | 'security-reviewer' | SpecialistReviewerAgent
     createdAt: string
   }>
   /**
@@ -123,7 +125,10 @@ export type Base2ActiveWorkState = Base2GateState & {
    * the workspace and validation passes. Missing legacy provenance fails closed
    * into the code-reviewer path rather than permitting finalization.
    */
-  requiredReviewerRevalidation?: 'code-reviewer' | 'security-reviewer'
+  requiredReviewerRevalidation?:
+    | 'code-reviewer'
+    | 'security-reviewer'
+    | SpecialistReviewerAgent
   validationEvidence?: Array<{
     gateId: string
     files: string[]
@@ -162,22 +167,6 @@ export type Base2ActiveWorkState = Base2GateState & {
    * Backward-compatible.
    */
   repairEscalationDone?: boolean
-  /**
-   * When true, the reviewer gate runs as a static-only review concurrently
-   * with the blocking validation hooks (M3.1). The reviewer is spawned in the
-   * background before validation and joined via check_background_agent only if
-   * validation passes; a validation failure still blocks finalization and
-   * ignores the background reviewer. Defaults to false to preserve the existing
-   * sequential validation-then-reviewer behavior. Backward-compatible.
-   */
-  staticReviewOnly?: boolean
-  /**
-   * Stashed jobId of a background-spawned static reviewer, set when the
-   * reviewer is spawned in the background before validation and consumed via
-   * check_background_agent after validation passes. Cleared whenever the gate
-   * passes. Backward-compatible: older serialized state lacks this field.
-   */
-  staticReviewerJobId?: string
   /**
    * Legacy alias for securityReviewGateDone retained for serialized-state
    * compatibility. The automated security gate is post-edit.

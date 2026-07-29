@@ -97,6 +97,7 @@ const definition: SecretAgentDefinition = {
     'read_files',
     'read_outline',
     'read_subtree',
+    'edit_transaction',
     'str_replace',
     'write_file',
     'set_output',
@@ -107,7 +108,7 @@ const definition: SecretAgentDefinition = {
 
   instructionsPrompt: `Instructions:
 1. Write only in documentation paths. You may read any file in the repository to verify the contract you are documenting, but never modify source. Prefer the explicitly supplied source_files and the parent's verified source contract as your primary evidence. Do not invent options, flags, or behaviors.
-2. If target_doc_files are given, read them first and update in place (prefer str_replace for targeted edits; write_file only for new docs). If not given, infer the doc location from neighboring docs (check docs/, README.md, package READMEs).
+2. If target_doc_files are given, read them first and update in place (all mutations go through edit_transaction — prefer str_replace edits for targeted changes and create/write_file for new docs). If not given, infer the doc location from neighboring docs (check docs/, README.md, package READMEs).
 3. Match the existing doc style: heading depth, code-fence language tags, tone, and section ordering. Look at an adjacent doc file as a style reference.
 4. Document the public contract: what it does, the inputs/outputs, usage examples, and gotchas. Skip internal implementation details unless the prompt asks for them.
 5. For code comments, document why, not what.

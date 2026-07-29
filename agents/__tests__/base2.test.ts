@@ -3902,6 +3902,68 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ stepsComplete: true, toolResult: [] } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
+    // Aux-ownership routing: the security repair set
+    // requiredReviewerRevalidation='security-reviewer' (family 'security') and
+    // reset securityReviewGateDone, so on loop re-entry the SECURITY AUX BLOCK
+    // re-fires (spawning security-reviewer inline with params) rather than the
+    // final code-reviewer.
+    const revalidationReview = gen.next({
+      toolResult: [
+        {
+          type: 'json',
+          value: { status: ' M sdk/src/policy/terminal-command-policy.ts' },
+        },
+      ],
+    } as any)
+    expect(revalidationReview.value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'security-reviewer' },
+    })
+    const revalidationPrompt = (revalidationReview.value as any).input
+      .prompt as string
+    const revalidationFingerprint = revalidationPrompt
+      .split('Snapshot fingerprint: ')[1]
+      .split('\n')[0]
+    // A passing snapshot-bound security review clears the security-family
+    // marker (requiredReviewerRevalidation -> undefined) and marks the gate
+    // done, so the loop can proceed to validation and the final code-reviewer.
+    const afterSecurityPass = gen.next({
+      toolResult: [
+        {
+          type: 'json',
+          value: {
+            schemaVersion: 1,
+            verdict: 'LOOKS_GOOD',
+            snapshotFingerprint: revalidationFingerprint,
+            reviewedFiles: ['sdk/src/policy/terminal-command-policy.ts'],
+            findings: [],
+            coverage: 'covered',
+            dimensions: {
+              inputBoundaries: 'pass',
+              authorization: 'pass',
+              secretHandling: 'pass',
+              resourceSafety: 'pass',
+              failureMode: 'pass',
+            },
+            requirementCoverage: [],
+          },
+        },
+      ],
+    } as any)
+    expect(afterSecurityPass.value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    const maybePinnedStateAfterSecurity = gen.next().value
+    if (maybePinnedStateAfterSecurity !== 'STEP') {
+      expect(maybePinnedStateAfterSecurity).toMatchObject({
+        toolName: 'add_message',
+      })
+      expect(gen.next().value).toBe('STEP')
+    }
+    expect(
+      gen.next({ stepsComplete: true, toolResult: [] } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
     expect(
       gen.next({
         toolResult: [
@@ -3930,13 +3992,33 @@ describe('base2 verification and reviewer gates', () => {
       ],
     } as any)
 
+    // The FINAL reviewer block only spawns code-reviewer now (security review
+    // was owned by the aux block above).
     expect(finalReview.value).toMatchObject({
       toolName: 'spawn_agents',
-      input: { agents: [{ agent_type: 'security-reviewer' }] },
+      input: { agents: [{ agent_type: 'code-reviewer' }] },
     })
+    const finalPreCreditStatus = gen.next(
+      attestedReviewerResult(finalReview.value) as any,
+    )
+    expect(finalPreCreditStatus.value).toMatchObject({ toolName: 'git_status' })
+    const gatePassed = gen.next({
+      toolResult: [
+        {
+          type: 'json',
+          value: { status: ' M sdk/src/policy/terminal-command-policy.ts' },
+        },
+      ],
+    } as any)
+    expect(gatePassed.value).toMatchObject({ toolName: 'add_message' })
+    expect((gatePassed.value as any).input.content).toMatch(
+      /reviewer gate passed with LOOKS_GOOD/i,
+    )
+    // Aux-ownership terminal state: the security-family marker was cleared by
+    // the aux block, NOT left as 'security-reviewer'.
     expect((agentState as any).base2ActiveWork).toMatchObject({
-      currentPhase: 'awaiting_review',
-      requiredReviewerRevalidation: 'security-reviewer',
+      currentPhase: 'final_response_allowed',
+      requiredReviewerRevalidation: undefined,
     })
   })
 
@@ -5190,11 +5272,11 @@ describe('base2 gate-passed credit ledger (Option A)', () => {
 })
 
 describe('base2 validation-first reviewer snapshots', () => {
-  test('staticReviewOnly still validates before spawning the final reviewer', () => {
+  test('validates before spawning the final reviewer', () => {
     const base2 = createBase2('default')
     const agentState = {
       agentId: 'base2-custom',
-      base2ActiveWork: { staticReviewOnly: true },
+      base2ActiveWork: {},
     }
     const gen = base2.handleSteps!({
       agentState,
@@ -5218,7 +5300,6 @@ describe('base2 validation-first reviewer snapshots', () => {
       toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
     } as any)
     expect(validation.value).toMatchObject({ toolName: 'run_file_change_hooks' })
-    expect((agentState as any).base2ActiveWork.staticReviewerJobId).toBeUndefined()
 
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
@@ -5232,67 +5313,6 @@ describe('base2 validation-first reviewer snapshots', () => {
       input: { agents: [{ agent_type: 'code-reviewer' }] },
     })
     expect((review.value as any).input.agents[0]).not.toHaveProperty('background')
-  })
-})
-
-describe('base2 static-review-only gate state (M3.1 unit tests)', () => {
-  test('staticReviewOnly defaults to false and is absent from emitted prompts', () => {
-    const base2 = createBase2('default')
-    // With no activeWorkState supplied, the default gate path must not
-    // surface the static-review-only fields in any emitted prompt.
-    expect(base2.systemPrompt).not.toContain('staticReviewOnly')
-    expect(base2.systemPrompt).not.toContain('staticReviewerJobId')
-    expect(base2.instructionsPrompt).not.toContain('staticReviewOnly')
-    expect(base2.instructionsPrompt).not.toContain('staticReviewerJobId')
-    expect(base2.stepPrompt).not.toContain('staticReviewOnly')
-    expect(base2.stepPrompt).not.toContain('staticReviewerJobId')
-  })
-
-  test('staticReviewOnly flag is surfaced on the active work state type', () => {
-    // Conditional types resolve at compile time; the asserts below fail to
-    // typecheck (build error) if the field is absent from the type, while the
-    // runtime assertion confirms the resolved literal is `true`.
-    type IsStaticReviewOnlyPresent = Base2ActiveWorkState extends {
-      staticReviewOnly?: boolean
-    }
-      ? true
-      : false
-    type IsStaticReviewerJobIdPresent = Base2ActiveWorkState extends {
-      staticReviewerJobId?: string
-    }
-      ? true
-      : false
-    const staticReviewOnlyPresent: IsStaticReviewOnlyPresent = true
-    const staticReviewerJobIdPresent: IsStaticReviewerJobIdPresent = true
-    expect(staticReviewOnlyPresent).toBe(true)
-    expect(staticReviewerJobIdPresent).toBe(true)
-  })
-
-  test('gate-state type round-trips staticReviewerJobId through JSON', () => {
-    const state: Base2ActiveWorkState = {
-      pendingGateFiles: ['src/a.ts'],
-      gatePassedFiles: [],
-      gatePassedPendingFiles: [],
-      gatePassedReviewerVerdict: '',
-      gatePassedValidationSummary: '',
-      gatePassedFingerprint: '',
-      lastReviewerGateSkipReason: '',
-      touchedFiles: ['src/a.ts'],
-      changedFiles: ['src/a.ts'],
-      currentPhase: 'awaiting_validation',
-      latestWorkSummary: '',
-      openReviewerBlockers: [],
-      lastValidationSummary: '',
-      nextRequiredAction: '',
-      lastPinnedStateMessage: '',
-      staticReviewOnly: true,
-      staticReviewerJobId: 'job-123',
-    }
-    const roundTripped = JSON.parse(
-      JSON.stringify(state),
-    ) as Base2ActiveWorkState
-    expect(roundTripped.staticReviewOnly).toBe(true)
-    expect(roundTripped.staticReviewerJobId).toBe('job-123')
   })
 })
 
