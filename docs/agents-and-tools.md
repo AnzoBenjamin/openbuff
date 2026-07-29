@@ -508,6 +508,8 @@ generated-artifact freshness, migration safety, and bounded resource use.
 
 The `code-reviewer` gate decides whether a turn may finish green. The orchestrator parses the reviewer's tool result to extract a finalization verdict (`LOOKS_GOOD`, `NON_BLOCKING`, or empty string `''`) and to surface any blocking findings. The parser prefers structured (parsed-object) verdicts over text-mode fallbacks, in this order: structured JSON verdict → line-verdict text → embedded JSON verdict in prose. The parsing helpers live in `agents/base2/gate-reviewer.ts` and are mirrored inline inside `createBase2.handleSteps` (the mirror is parity-tested by `agents/__tests__/gate-reviewer.test.ts`).
 
+The inline mirror is generated, not hand-maintained. `scripts/generate-gate-helpers.ts` is its single source of truth: it reads `agents/base2/gate-paths.ts`, `agents/base2/gate-reviewer.ts`, and `agents/base2/gate-repair.ts`, strips their `export` modifiers, and emits a deterministic block spliced into the `<gate-helpers-generated>` marker region of `agents/base2/base2.ts`. Pass `--write <path>` to refresh that region (the `prebuild:agents` script in `cli/package.json` does this automatically) or `--check <path>` to fail when it is stale; `agents/__tests__/gate-helpers-freshness.test.ts` enforces the same freshness check in CI.
+
 A reviewer may emit its verdict in either text mode or structured (JSON) mode:
 
 - **Text mode** — the first visible token of the reply is a verdict label followed by `:` (the orchestrator strips any leading `` block first):
