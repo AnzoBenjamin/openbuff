@@ -574,13 +574,68 @@ function listTopLevelScripts(root: string): string[] {
     .map((e) => e.name)
 }
 
+/**
+ * Expands the root `package.json` `workspaces` declaration into concrete
+ * project-relative subdirectories. A trailing `/*` entry (e.g. `packages/*`)
+ * is enumerated against the real directory listing so globbed members like
+ * `packages/agent-runtime` are returned instead of a literal `packages`.
+ *
+ * Missing directories and a missing/malformed `workspaces` field degrade to
+ * an empty result rather than throwing.
+ */
+function workspacePackageSubdirs(root: string): string[] {
+  const rootPkg = loadPackageJson(root, '.')
+  const patterns: unknown = Array.isArray(rootPkg?.workspaces)
+    ? rootPkg.workspaces
+    : rootPkg?.workspaces?.packages
+  if (!Array.isArray(patterns)) {
+    return []
+  }
+  const subdirs = new Set<string>()
+  for (const pattern of patterns) {
+    if (typeof pattern !== 'string' || pattern === '') {
+      continue
+    }
+    if (!pattern.endsWith('/*')) {
+      subdirs.add(pattern)
+      continue
+    }
+    const parent = pattern.slice(0, -2)
+    const parentDir = join(root, parent)
+    if (!existsSync(parentDir)) {
+      continue
+    }
+    try {
+      for (const entry of readdirSync(parentDir, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          subdirs.add(`${parent}/${entry.name}`)
+        }
+      }
+    } catch (err) {
+      console.debug(
+        `[memory-drift-guard] workspacePackageSubdirs readdir failed for ${parentDir}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      )
+    }
+  }
+  return [...subdirs]
+}
+
 export function checkScriptCoverage(root: string): Finding[] {
   const findings: Finding[] = []
   const scripts = listTopLevelScripts(root)
-  const scriptsPkg = loadPackageJson(root, 'scripts')
-  const rootPkg = loadPackageJson(root, '.')
+  // A script is covered when any workspace package wires it into its scripts —
+  // e.g. `cli/package.json` invoking `../scripts/generate-gate-helpers.ts` —
+  // so scan the root manifest plus every workspace member manifest.
+  const manifestSubdirs = new Set<string>([
+    '.',
+    'scripts',
+    ...workspacePackageSubdirs(root),
+  ])
   const scriptValues: string[] = []
-  for (const pkg of [scriptsPkg, rootPkg]) {
+  for (const subdir of manifestSubdirs) {
+    const pkg = loadPackageJson(root, subdir)
     if (pkg?.scripts && typeof pkg.scripts === 'object') {
       for (const v of Object.values(pkg.scripts)) {
         if (typeof v === 'string') {
@@ -625,12 +680,12 @@ export function checkScriptCoverage(root: string): Finding[] {
       continue
     }
     const inMarkdown = allMdContent.some((c) => c.includes(scriptName))
-    const inScriptsPkg = scriptValues.some((v) => v.includes(scriptName))
-    if (!inMarkdown && !inScriptsPkg) {
+    const inPackageJson = scriptValues.some((v) => v.includes(scriptName))
+    if (!inMarkdown && !inPackageJson) {
       findings.push({
         path: `scripts/${scriptName}`,
         line: 1,
-        message: `script not mentioned in any markdown file or scripts/package.json`,
+        message: `script not mentioned in any markdown file or workspace package.json`,
       })
     }
   }

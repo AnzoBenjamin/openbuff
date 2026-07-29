@@ -327,6 +327,90 @@ test('script-coverage checker flags unmentioned script', () => {
   expect(findings.some((f) => f.path.includes('ghost-tool.ts'))).toBe(true)
 })
 
+test('script-coverage checker does NOT flag a script wired into a non-root workspace manifest', () => {
+  mkdirSync(join(tmpRoot, 'scripts'), { recursive: true })
+  mkdirSync(join(tmpRoot, 'cli'), { recursive: true })
+  writeFileSync(
+    join(tmpRoot, 'scripts', 'generate-gate-helpers.ts'),
+    '// generator\n',
+  )
+  writeFileSync(
+    join(tmpRoot, 'scripts', 'package.json'),
+    JSON.stringify({ scripts: {} }),
+  )
+  writeFileSync(
+    join(tmpRoot, 'package.json'),
+    JSON.stringify({ name: 'root', workspaces: ['scripts', 'cli'] }),
+  )
+  writeFileSync(
+    join(tmpRoot, 'cli', 'package.json'),
+    JSON.stringify({
+      name: 'cli',
+      scripts: {
+        'prebuild:agents':
+          'bun run ../scripts/generate-gate-helpers.ts --write ../agents/base2/base2.ts',
+      },
+    }),
+  )
+  const findings = checkScriptCoverage(tmpRoot)
+  expect(
+    findings.some((f) => f.path.includes('generate-gate-helpers.ts')),
+  ).toBe(false)
+})
+
+test('script-coverage checker does NOT flag a script wired into a globbed workspace member', () => {
+  mkdirSync(join(tmpRoot, 'scripts'), { recursive: true })
+  mkdirSync(join(tmpRoot, 'packages', 'foo'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'scripts', 'globbed-tool.ts'), '// tool\n')
+  writeFileSync(
+    join(tmpRoot, 'scripts', 'package.json'),
+    JSON.stringify({ scripts: {} }),
+  )
+  writeFileSync(
+    join(tmpRoot, 'package.json'),
+    JSON.stringify({ name: 'root', workspaces: ['packages/*', 'scripts'] }),
+  )
+  writeFileSync(
+    join(tmpRoot, 'packages', 'foo', 'package.json'),
+    JSON.stringify({
+      name: 'foo',
+      scripts: { prep: 'bun run ../../scripts/globbed-tool.ts' },
+    }),
+  )
+  const findings = checkScriptCoverage(tmpRoot)
+  expect(findings.some((f) => f.path.includes('globbed-tool.ts'))).toBe(false)
+})
+
+test('script-coverage checker still flags a script referenced nowhere despite workspace scan', () => {
+  mkdirSync(join(tmpRoot, 'scripts'), { recursive: true })
+  mkdirSync(join(tmpRoot, 'packages', 'foo'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'scripts', 'ghost-tool.ts'), '// no docs\n')
+  writeFileSync(
+    join(tmpRoot, 'scripts', 'package.json'),
+    JSON.stringify({ scripts: {} }),
+  )
+  writeFileSync(
+    join(tmpRoot, 'package.json'),
+    JSON.stringify({ name: 'root', workspaces: ['packages/*', 'scripts'] }),
+  )
+  writeFileSync(
+    join(tmpRoot, 'packages', 'foo', 'package.json'),
+    JSON.stringify({
+      name: 'foo',
+      scripts: { prep: 'bun run ../../scripts/other-tool.ts' },
+    }),
+  )
+  const findings = checkScriptCoverage(tmpRoot)
+  expect(findings.some((f) => f.path.includes('ghost-tool.ts'))).toBe(true)
+  expect(
+    findings.some((f) =>
+      f.message.includes(
+        'script not mentioned in any markdown file or workspace package.json',
+      ),
+    ),
+  ).toBe(true)
+})
+
 test('script-coverage checker respects .coverage-allow allowlist', () => {
   mkdirSync(join(tmpRoot, 'scripts'), { recursive: true })
   writeFileSync(join(tmpRoot, 'scripts', 'ad-hoc-tool.ts'), '// no docs\n')
