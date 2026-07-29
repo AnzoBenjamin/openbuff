@@ -299,4 +299,143 @@ describe('replaceRange', () => {
       'line 1\r\nupdated line 2\r\nline 3\r\n',
     )
   })
+
+  test('applies resolved absolute lines for the second literal occurrence', async () => {
+    // The post-runtime shape: the agent-runtime handler already resolved
+    // occurrence targeting into absolute lines, so the applicator only sees
+    // startLine/endLine. Lines 4-4 are the SECOND "repeat();".
+    const original =
+      'const a = 1\nrepeat();\nconst b = 2\nrepeat();\nconst c = 3\n'
+    const fs = createMockFs({ files: { '/repo/src/file.ts': original } })
+
+    const result = await replaceRange({
+      parameters: {
+        path: 'src/file.ts',
+        readCapability: capability({
+          startLine: 1,
+          endLine: 5,
+          content:
+            'const a = 1\nrepeat();\nconst b = 2\nrepeat();\nconst c = 3',
+        }),
+        startLine: 4,
+        endLine: 4,
+        newContent: 'repeat(2);',
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+
+    expect(result[0]).toMatchObject({
+      type: 'json',
+      value: { kind: 'file_mutation_result', outcome: 'applied' },
+    })
+    // Only the second occurrence changed; the first is untouched.
+    expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe(
+      'const a = 1\nrepeat();\nconst b = 2\nrepeat(2);\nconst c = 3\n',
+    )
+  })
+
+  test('rejects unresolved occurrence targeting without mutating the file', async () => {
+    // occurrence alone (no startLine/endLine) is schema-valid, but the SDK
+    // applicator deliberately does not resolve occurrence: only the agent
+    // runtime does, against the content it just read.
+    const original =
+      'const a = 1\nrepeat();\nconst b = 2\nrepeat();\nconst c = 3\n'
+    const fs = createMockFs({ files: { '/repo/src/file.ts': original } })
+
+    const result = await replaceRange({
+      parameters: {
+        path: 'src/file.ts',
+        readCapability: capability({
+          startLine: 1,
+          endLine: 5,
+          content:
+            'const a = 1\nrepeat();\nconst b = 2\nrepeat();\nconst c = 3',
+        }),
+        occurrence: { match: 'repeat();', occurrence: 2 },
+        newContent: 'repeat(2);',
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+
+    expect(result[0]).toMatchObject({
+      type: 'json',
+      value: {
+        errorMessage: expect.stringContaining(
+          'must be resolved to absolute lines',
+        ),
+      },
+    })
+    expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe(original)
+  })
+
+  test('rejects occurrence combined with startLine/endLine without mutating the file', async () => {
+    // Mutual exclusion is enforced by the schema refine, so the applicator
+    // never reaches its own occurrence guard.
+    const original =
+      'const a = 1\nrepeat();\nconst b = 2\nrepeat();\nconst c = 3\n'
+    const fs = createMockFs({ files: { '/repo/src/file.ts': original } })
+
+    const result = await replaceRange({
+      parameters: {
+        path: 'src/file.ts',
+        readCapability: capability({
+          startLine: 1,
+          endLine: 5,
+          content:
+            'const a = 1\nrepeat();\nconst b = 2\nrepeat();\nconst c = 3',
+        }),
+        startLine: 4,
+        endLine: 4,
+        occurrence: { match: 'repeat();', occurrence: 2 },
+        newContent: 'repeat(2);',
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+
+    expect(result[0]).toMatchObject({
+      type: 'json',
+      value: {
+        errorMessage: 'Missing or invalid replace_range parameters.',
+      },
+    })
+    expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe(original)
+  })
+
+  test('replaces a resolved multi-line block and preserves surrounding lines', async () => {
+    const original =
+      'function a() {\n  return 1\n}\nfunction b() {\n  return 2\n}\n'
+    const fs = createMockFs({ files: { '/repo/src/file.ts': original } })
+
+    const result = await replaceRange({
+      parameters: {
+        path: 'src/file.ts',
+        readCapability: capability({
+          startLine: 1,
+          endLine: 6,
+          content:
+            'function a() {\n  return 1\n}\nfunction b() {\n  return 2\n}',
+        }),
+        startLine: 4,
+        endLine: 6,
+        newContent: 'function b() {\n  return 20\n}',
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+
+    expect(result[0]).toMatchObject({
+      type: 'json',
+      value: { kind: 'file_mutation_result', outcome: 'applied' },
+    })
+    expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe(
+      'function a() {\n  return 1\n}\nfunction b() {\n  return 20\n}\n',
+    )
+  })
 })

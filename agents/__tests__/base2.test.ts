@@ -296,6 +296,91 @@ function loadInlineParseGitStatusLine(): ParseGitStatusLine {
   return buildHelper()
 }
 
+type RepairEditorReadablePaths = (
+  paths: string[],
+  texts?: string[],
+) => string[]
+
+// repairEditorReadablePaths lives inside the serialized handleSteps generator.
+// Reconstruct it with the normalizeGateFilePath + inferWorkspaceRootFromPath
+// helpers it closes over so unit tests can assert package-root / cited-path
+// expansions without driving a full gate lifecycle.
+function loadInlineRepairEditorReadablePaths(): RepairEditorReadablePaths {
+  const base2Source = readFileSync(
+    new URL('../base2/base2.ts', import.meta.url),
+    'utf8',
+  )
+  // handleSteps helpers are TypeScript; transpile before new Function (plain JS).
+  const transpiler = new Bun.Transpiler({ loader: 'ts', target: 'bun' })
+  const combinedTs = [
+    extractInlineFunctionSource(base2Source, 'normalizeGateFilePath'),
+    extractInlineFunctionSource(base2Source, 'inferWorkspaceRootFromPath'),
+    extractInlineFunctionSource(base2Source, 'repairEditorReadablePaths'),
+    'return repairEditorReadablePaths',
+  ].join('\n')
+  const combinedJs = transpiler.transformSync(combinedTs)
+  const buildHelper = new Function(`"use strict";\n${combinedJs}`) as () => RepairEditorReadablePaths
+
+  return buildHelper()
+}
+
+describe('base2 inline repairEditorReadablePaths', () => {
+  const repairEditorReadablePaths = loadInlineRepairEditorReadablePaths()
+
+  test('expands package roots for multi-segment paths without granting project-wide **/*', () => {
+    const paths = repairEditorReadablePaths([
+      'packages/agent-runtime/src/foo.ts',
+    ])
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        'packages/agent-runtime/src/foo.ts',
+        'packages/agent-runtime/src/**/*',
+        'packages/agent-runtime/**/*',
+      ]),
+    )
+    expect(paths).not.toEqual(expect.arrayContaining(['*', '**/*']))
+  })
+
+  test('extracts cited schema/context paths from finding text into READ scope', () => {
+    // Finding files list only a packages/ path, but the finding text cites a
+    // common/ schema file that the repair editor needs as read-only context.
+    const paths = repairEditorReadablePaths(
+      ['packages/agent-runtime/src/tools/edit.ts'],
+      [
+        'BLOCKING: import is out of date; see common/src/tools/params/tool/replace-range.ts for the schema.',
+      ],
+    )
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        'packages/agent-runtime/src/tools/edit.ts',
+        'common/src/tools/params/tool/replace-range.ts',
+      ]),
+    )
+    expect(
+      paths.includes('common/**/*') ||
+        paths.includes('common/src/tools/params/tool/**/*'),
+    ).toBe(true)
+    expect(paths).not.toEqual(expect.arrayContaining(['*', '**/*']))
+  })
+
+  test('skips URL-like tokens, node_modules, and .env paths from free-text extraction', () => {
+    const paths = repairEditorReadablePaths(['src/a.ts'], [
+      'See https://example.com/src/schema.ts and node_modules/pkg/index.ts and .env.local',
+    ])
+    expect(paths).toEqual(expect.arrayContaining(['src/a.ts', 'src/**/*']))
+    expect(paths.some((p) => p.includes('node_modules'))).toBe(false)
+    expect(paths.some((p) => p.includes('.env'))).toBe(false)
+    expect(paths).not.toContain('https://example.com/src/schema.ts')
+    expect(paths).not.toEqual(expect.arrayContaining(['*', '**/*']))
+  })
+
+  test('root-level files stay file + parent-dir only (no bare **/*)', () => {
+    const paths = repairEditorReadablePaths(['README.md'])
+    expect(paths).toEqual(['README.md'])
+    expect(paths).not.toEqual(expect.arrayContaining(['*', '**/*']))
+  })
+})
+
 describe('base2 inline parseGitStatusLine', () => {
   const parseGitStatusLine = loadInlineParseGitStatusLine()
 
@@ -610,6 +695,7 @@ describe('base-deep prompt naming and tool guidance', () => {
     expect(baseDeep.toolNames).toEqual(
       expect.arrayContaining([
         'read_outline',
+        'read_blocks',
         'list_directory',
         'glob',
         'edit_transaction',
@@ -5400,15 +5486,33 @@ describe('base2 repair-loop gate-state telemetry (M6.4)', () => {
       toolResult: [typecheckFailure],
     } as any).value as any
     expect(repairSpawn).toMatchObject({ toolName: 'spawn_agents' })
+    // Package root for src/a.ts is `src`, so file + parent-dir + package-root
+    // collapse to the same readable set (order-independent).
     expect(
       repairSpawn.input.agents[0].handoff.permissions.readablePaths,
-    ).toEqual(['src/a.ts', 'src/**/*'])
+    ).toEqual(expect.arrayContaining(['src/a.ts', 'src/**/*']))
+    expect(
+      new Set(
+        repairSpawn.input.agents[0].handoff.permissions.readablePaths as string[],
+      ),
+    ).toEqual(new Set(['src/a.ts', 'src/**/*']))
     expect(
       repairSpawn.input.agents[0].handoff.permissions.readablePaths,
     ).not.toContain('.env')
     expect(
       repairSpawn.input.agents[0].handoff.permissions.readablePaths,
     ).not.toEqual(expect.arrayContaining(['*', '**/*']))
+    expect(
+      repairSpawn.input.agents[0].handoff.permissions.allowedTools,
+    ).toEqual(
+      expect.arrayContaining([
+        'read_files',
+        'read_outline',
+        'read_blocks',
+        'read_subtree',
+        'edit_transaction',
+      ]),
+    )
     expect(
       repairSpawn.input.agents[0].handoff.permissions.writablePaths,
     ).toEqual(['src/a.ts'])

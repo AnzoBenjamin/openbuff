@@ -841,6 +841,39 @@ Model-facing range content omits the transport-only `[RANGE_BLOCK ...]`
 metadata header. Exact undecorated bytes remain available as `sourceContent`,
 while the structured anchor carries freshness metadata without prose parsing.
 
+### `read_blocks`
+
+`read_blocks` is the read-side counterpart to `read_files` ranges for large
+files: it returns one or more COMPLETE, capability-minting structural blocks
+so a large file yields a usable edit anchor without a guess-shrink-retry loop.
+Every complete block returns a structured `editAnchor` (`startLine`, `endLine`,
+`contentHash`, cap.v3 `readCapability`) that can be copied verbatim to
+`basedOnRead` / `readCapability` on a follow-up edit. Partial or failed blocks
+mint no capability.
+
+Three combinable selector modes:
+
+- `windows: [{ path, windowSize?, window? }]` — split the file into complete
+  contiguous line windows (default `windowSize` 400). Omit `window` to get the
+  manifest (`totalLines`, `windowSize`, `windowCount`) plus the first window.
+- `around: [{ path, match, occurrence?, contextLines? }]` — return a complete
+  block around the 1-indexed `occurrence` (default 1) of the exact literal
+  `match`, with `contextLines` (default 40) on each side, clamped at file
+  boundaries. Robust to line-number drift.
+- `symbols: [{ path, name, occurrence? }]` — pull the Nth (default 1)
+  top-level symbol with that name, mirroring `rewrite_symbol` occurrence
+  semantics. Pair with `read_outline` to discover names.
+
+```json
+{
+  "windows": [{ "path": "path/to/large-file.ts", "window": 2 }],
+  "around": [
+    { "path": "path/to/large-file.ts", "match": "export function loadConfig(" }
+  ],
+  "symbols": [{ "path": "path/to/large-file.ts", "name": "loadConfig" }]
+}
+```
+
 ### `read_subtree`
 
 `read_subtree` uses the runtime's injected filesystem view for live discovery;
@@ -893,8 +926,11 @@ participate in staged read-before-edit enforcement:
   explicit `{ startLine, endLine, hash }` objects remain freshness anchors for
   compatible non-strict flows, but cannot authorize an otherwise unread path.
 - Model-facing `replace_range` transaction edits use
-  `{ readCapability, newContent }` or add both `startLine` and `endLine` to
-  target a contained sub-range. The authenticated cap.v3 token remains the
+  `{ readCapability, newContent }`, add both `startLine` and `endLine` to
+  target a contained sub-range, or pass `occurrence: { match, occurrence? }`
+  to target the Nth literal match inside the capability-authorized range.
+  `occurrence` is mutually exclusive with `startLine`/`endLine`. The
+  authenticated cap.v3 token remains the
   sole freshness authority; legacy `expectedHash` tuples are rejected.
 - A successful edit keeps path-level authorization during the editing flow,
   while exact-match follow-up edits chain from the latest prepared content.

@@ -1,6 +1,10 @@
 import { createPatch, diffLines } from 'diff'
 
 import { tryToDoStringReplacementWithExtraIndentation } from './generate-diffs-prompt'
+import {
+  findLiteralOccurrences,
+  nthLiteralOccurrenceIndex,
+} from './structural-read'
 
 import {
   getContentHash,
@@ -1311,34 +1315,13 @@ function formatClosestMatchDiagnostics(
     .join('\n\n')
 }
 
-function getLineNumberAtIndex(content: string, index: number): number {
-  let line = 1
-  const end = Math.min(index, content.length)
-  for (let i = 0; i < end; i++) {
-    if (content.charCodeAt(i) === 10) {
-      line++
-    }
-  }
-  return line
-}
-
 function getOccurrenceLineRanges(params: {
   initialContent: string
   oldStr: string
   limit?: number
 }): { startLine: number; endLine: number }[] {
   const { initialContent, oldStr, limit = 8 } = params
-  const ranges: { startLine: number; endLine: number }[] = []
-  let index = initialContent.indexOf(oldStr)
-
-  while (index !== -1 && ranges.length < limit) {
-    const startLine = getLineNumberAtIndex(initialContent, index)
-    const endLine = getLineNumberAtIndex(initialContent, index + oldStr.length)
-    ranges.push({ startLine, endLine })
-    index = initialContent.indexOf(oldStr, index + Math.max(1, oldStr.length))
-  }
-
-  return ranges
+  return findLiteralOccurrences(initialContent, oldStr, limit)
 }
 
 function formatOccurrenceDiagnostics(
@@ -1366,14 +1349,7 @@ function getNthOccurrenceIndex(
   oldStr: string,
   n: number,
 ): number {
-  if (!oldStr) return -1
-  let index = content.indexOf(oldStr)
-  let count = 1
-  while (index !== -1 && count < n) {
-    index = content.indexOf(oldStr, index + Math.max(1, oldStr.length))
-    count++
-  }
-  return count === n ? index : -1
+  return nthLiteralOccurrenceIndex(content, oldStr, n)
 }
 
 function getDeterministicLargeFileFallbackRange(params: {

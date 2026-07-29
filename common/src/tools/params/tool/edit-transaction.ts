@@ -196,6 +196,16 @@ const replaceRangeEditSchema = editBaseSchema
       ),
     startLine: z.number().int().min(1).optional(),
     endLine: z.number().int().min(1).optional(),
+    occurrence: z
+      .object({
+        match: z.string().min(1),
+        occurrence: z.number().int().min(1).optional(),
+      })
+      .strict()
+      .optional()
+      .describe(
+        'Optional occurrence targeting: replace the 1-indexed occurrence (default 1) of the exact literal match found inside the capability-authorized range. Mutually exclusive with startLine/endLine.',
+      ),
     newContent: z.string().refine((value) => !isObviousEditPlaceholder(value), {
       message:
         'newContent is an explicit placeholder; provide the complete range replacement.',
@@ -217,6 +227,15 @@ const replaceRangeEditSchema = editBaseSchema
     }
     const hasStart = edit.startLine !== undefined
     const hasEnd = edit.endLine !== undefined
+    if (edit.occurrence && (hasStart || hasEnd)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['occurrence'],
+        message:
+          'occurrence is mutually exclusive with startLine/endLine. Provide occurrence alone to target a repeated literal block inside the capability range.',
+      })
+      return
+    }
     if (hasStart !== hasEnd) {
       ctx.addIssue({
         code: 'custom',
@@ -302,6 +321,13 @@ const canonicalReplaceRangeEditSchema = editBaseSchema.extend({
   readCapability: z.string().min(1),
   startLine: z.number().int().min(1).optional(),
   endLine: z.number().int().min(1).optional(),
+  occurrence: z
+    .object({
+      match: z.string().min(1),
+      occurrence: z.number().int().min(1).optional(),
+    })
+    .strict()
+    .optional(),
   newContent: z.string(),
 })
 const providerTransactionEditSchema = z.discriminatedUnion('type', [

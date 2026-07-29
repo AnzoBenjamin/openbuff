@@ -31,6 +31,7 @@ export type ToolName =
   | 'list_jobs'
   | 'lookup_agent_info'
   | 'query_index'
+  | 'read_blocks'
   | 'read_docs'
   | 'read_files'
   | 'read_image'
@@ -91,6 +92,7 @@ export interface ToolParamsMap {
   list_jobs: ListJobsParams
   lookup_agent_info: LookupAgentInfoParams
   query_index: QueryIndexParams
+  read_blocks: ReadBlocksParams
   read_docs: ReadDocsParams
   read_files: ReadFilesParams
   read_image: ReadImageParams
@@ -322,6 +324,10 @@ export interface EditTransactionParams {
         readCapability: string
         startLine?: number
         endLine?: number
+        occurrence?: {
+          match: string
+          occurrence?: number
+        }
         newContent: string
       }
     | {
@@ -612,6 +618,41 @@ export interface QueryIndexParams {
 }
 
 /**
+ * Read one or more complete, capability-minting structural blocks from files: line windows, literal-anchored context blocks, or occurrence-aware symbol slices. Selector modes may be combined in one call.
+ */
+export interface ReadBlocksParams {
+  /** Windowed reads for large files. Each returned window is a COMPLETE contiguous line block that mints its own cap.v3 editAnchor, so you can edit it directly via replace_range/basedOnRead without a guess-shrink-retry loop. */
+  windows?: {
+    /** File path to read in contiguous line windows, relative to the project root. */
+    path: string
+    /** Lines per window. Defaults to 400. */
+    windowSize?: number
+    /** 1-indexed window number to return. Omit to get the window manifest (totalLines, windowSize, windowCount) plus the first window. */
+    window?: number
+  }[]
+  /** Content-anchored reads: find the Nth exact literal match and return a complete bounded block around it, minting a cap.v3 editAnchor for that block. */
+  around?: {
+    /** File path to read a content-anchored block from, relative to the project root. */
+    path: string
+    /** Exact literal string to anchor on. Robust to line-number drift. */
+    match: string
+    /** 1-indexed occurrence of `match` to anchor on. Defaults to 1. */
+    occurrence?: number
+    /** Lines of context to include on each side of the match, clamped at file boundaries. Defaults to 40. */
+    contextLines?: number
+  }[]
+  /** Occurrence-aware symbol reads: pull the Nth top-level symbol with a given name. Parser-proven slices mint a cap.v3 editAnchor. */
+  symbols?: {
+    /** File path to extract a symbol slice from, relative to the project root. */
+    path: string
+    /** Top-level symbol name (function, class, interface, method) to pull, as shown by read_outline. */
+    name: string
+    /** When multiple top-level symbols share this name, the 1-indexed one to return. Defaults to 1. Matches rewrite_symbol occurrence semantics. */
+    occurrence?: number
+  }[]
+}
+
+/**
  * Fetch up-to-date documentation for libraries and frameworks using Context7 API.
  */
 export interface ReadDocsParams {
@@ -700,7 +741,7 @@ export interface ReadSubtreeParams {
 }
 
 /**
- * Replace all or a contained sub-range of content observed through one fresh cap.v3 read capability.
+ * Replace all of, a contained sub-range of, or the Nth literal occurrence inside content observed through one fresh cap.v3 read capability.
  */
 export interface ReplaceRangeParams {
   /** The path to the file to edit. */
@@ -711,6 +752,11 @@ export interface ReplaceRangeParams {
   startLine?: number
   /** Optional 1-indexed target end within the capability-covered range. Omit with startLine to replace the complete observed range. */
   endLine?: number
+  /** Optional occurrence targeting: replace the 1-indexed occurrence (default 1) of the exact literal match found inside the capability-authorized range. Mutually exclusive with startLine/endLine. */
+  occurrence?: {
+    match: string
+    occurrence?: number
+  }
   /** Complete replacement content for the selected line range. */
   newContent: string
 }

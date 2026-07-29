@@ -10,6 +10,7 @@ import { processStrReplace } from './process-str-replace'
 import { processStructuredEdit } from './process-structured-edit'
 import {
   extractSlices,
+  resolveOccurrenceRangeInCapabilityRange,
   validateRewriteSymbolReadCapability,
 } from './structural-read'
 
@@ -44,6 +45,7 @@ type TransactionEdit =
       path: string
       startLine?: number
       endLine?: number
+      occurrence?: { match: string; occurrence?: number }
       readCapability: string
       newContent: string
     }
@@ -71,6 +73,7 @@ type ResolvedReplaceRangeTransactionEdit = {
   path: string
   startLine: number
   endLine: number
+  occurrence?: { match: string; occurrence?: number }
   capabilityStartLine: number
   capabilityEndLine: number
   capabilityHash: string
@@ -160,7 +163,10 @@ export async function processEditTransaction(params: {
       break
     }
 
-    const resolvedEdit = resolveReplaceRangeEdit(effectiveEdit)
+    const resolvedEdit = resolveReplaceRangeEdit(
+      effectiveEdit,
+      initialContentByPath.get(effectiveEdit.path) ?? null,
+    )
     if ('error' in resolvedEdit) {
       failures.push({
         editIndex,
@@ -412,6 +418,7 @@ function mapOriginalOffset(
 
 function resolveReplaceRangeEdit(
   edit: TransactionEdit,
+  currentContent?: string | null,
 ):
   | { edit: ResolvedTransactionEdit }
   | { error: string; failureKind?: TransactionFailureKind } {
@@ -432,6 +439,40 @@ function resolveReplaceRangeEdit(
   }
   const startLine = edit.startLine ?? decoded.startLine
   const endLine = edit.endLine ?? decoded.endLine
+  if (edit.occurrence) {
+    // Resolve occurrence targeting to absolute original-snapshot lines here, so
+    // the resolved bounds flow through provenance mapping and capability
+    // verification exactly like explicit line bounds.
+    if (typeof currentContent !== 'string') {
+      return {
+        error: `replace_range blocked for ${edit.path}: current content is unavailable, so the requested occurrence could not be resolved. Re-read the target range and retry.`,
+        failureKind: 'generic' as const,
+      }
+    }
+    const resolved = resolveOccurrenceRangeInCapabilityRange({
+      content: currentContent,
+      match: edit.occurrence.match,
+      occurrence: edit.occurrence.occurrence,
+      capabilityStartLine: decoded.startLine,
+      capabilityEndLine: decoded.endLine,
+    })
+    if (!resolved.range) {
+      return {
+        error: `replace_range blocked for ${edit.path}: found ${resolved.found} occurrence(s) of the requested match inside the authorized range ${decoded.startLine}-${decoded.endLine}, so occurrence ${edit.occurrence.occurrence ?? 1} does not exist. Re-read the range and target an existing occurrence or absolute lines.`,
+        failureKind: 'generic' as const,
+      }
+    }
+    return {
+      edit: {
+        ...edit,
+        startLine: resolved.range.startLine,
+        endLine: resolved.range.endLine,
+        capabilityStartLine: decoded.startLine,
+        capabilityEndLine: decoded.endLine,
+        capabilityHash: decoded.hash,
+      },
+    }
+  }
   return {
     edit: {
       ...edit,

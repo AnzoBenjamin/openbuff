@@ -278,14 +278,32 @@ describe('base2 deterministic gate lifecycle e2e', () => {
         }),
       ]),
     )
-    // Repair handoffs grant least-privilege access to the implicated file and
-    // its containing directory, never a project-wide wildcard scope.
-    expect(repairAgent.handoff.permissions.readablePaths).toEqual([
-      LIFECYCLE_FILE,
-      `${SCRATCH_ROOT}/**/*`,
-    ])
+    // Repair handoffs grant least-privilege READ access: the implicated file,
+    // its parent directory, and its package root (here `.e2e-scratch/**/*`),
+    // never a project-wide wildcard scope. Writes stay finding-file only.
+    expect(repairAgent.handoff.permissions.readablePaths).toEqual(
+      expect.arrayContaining([
+        LIFECYCLE_FILE,
+        `${SCRATCH_ROOT}/**/*`,
+        '.e2e-scratch/**/*',
+      ]),
+    )
+    expect(
+      new Set(repairAgent.handoff.permissions.readablePaths as string[]),
+    ).toEqual(
+      new Set([LIFECYCLE_FILE, `${SCRATCH_ROOT}/**/*`, '.e2e-scratch/**/*']),
+    )
     expect(repairAgent.handoff.permissions.readablePaths).not.toEqual(
       expect.arrayContaining(['*', '**/*']),
+    )
+    expect(repairAgent.handoff.permissions.allowedTools).toEqual(
+      expect.arrayContaining([
+        'read_files',
+        'read_outline',
+        'read_blocks',
+        'read_subtree',
+        'edit_transaction',
+      ]),
     )
     expect(repairAgent.handoff.permissions.writablePaths).toEqual([
       LIFECYCLE_FILE,

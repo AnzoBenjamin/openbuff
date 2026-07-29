@@ -342,6 +342,43 @@ and expected content hash before preflight. Caller-supplied bounds or
 `expectedHash` are not part of this structured-v1 form; re-read the desired
 range when different bounds are needed.
 
+### `read_blocks` and occurrence-scoped `replace_range`
+
+`read_blocks` is the read-side parity surface for large files: it returns one
+or more COMPLETE, capability-minting structural blocks so a large file yields a
+usable edit anchor without a guess-shrink-retry loop. Three selector modes may
+be combined in one call; each selector returns one result item with a
+contiguous `requestIndex` and its own `editAnchor`:
+
+- `windows: [{ path, windowSize?, window? }]` splits the file into complete
+  contiguous line windows (default `windowSize` 400). Omit `window` to get the
+  manifest (`totalLines`, `windowSize`, `windowCount`) plus the first window.
+- `around: [{ path, match, occurrence?, contextLines? }]` finds the 1-indexed
+  `occurrence` (default 1) of the exact literal `match` and returns a complete
+  block covering it plus `contextLines` (default 40) on each side, clamped at
+  file boundaries. It is robust to line-number drift.
+- `symbols: [{ path, name, occurrence? }]` pulls the Nth (default 1) top-level
+  symbol with that name, mirroring `rewrite_symbol`'s occurrence semantics.
+
+Every complete block returns a structured `editAnchor` (`startLine`, `endLine`,
+`contentHash`, and a cap.v3 `readCapability` bound to the project, path, and
+run). Copy `editAnchor.readCapability` verbatim to `basedOnRead` /
+`readCapability` on a follow-up edit. Partial or failed blocks mint NO
+capability. These are scoped (per-edit) authorizations, not whole-file grants;
+they participate in the same staged read-before-edit policy as a `read_files`
+range read.
+
+`replace_range` additionally accepts an optional
+`occurrence: { match, occurrence? }` alongside `startLine`/`endLine`. When
+present, the edit targets the 1-indexed `occurrence` (default 1) of the exact
+literal `match` found only within the capability-authorized range
+(`capabilityStartLine..capabilityEndLine`); the resolved absolute lines then
+flow through the existing freshness/hash verification and replacement path
+unchanged. `occurrence` is mutually exclusive with `startLine`/`endLine`, so a
+call provides either explicit line bounds or an occurrence target, never both.
+This applies to both the standalone `replace_range` tool and the
+`replace_range` edit kind inside `edit_transaction`.
+
 ## Explicit elision markers
 
 `str_replace.oldString` supports a narrow `...` elision marker after exact

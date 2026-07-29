@@ -2,6 +2,7 @@ import {
   decodeReadCapabilityToken,
   encodeReadCapabilityToken,
   getContentHash,
+  normalizeLineEndings,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
 
@@ -215,6 +216,128 @@ export type ExtractedSlice = {
   readCapability?: string
 }
 
+/** 1-indexed line number containing the 0-indexed character offset `index`. */
+function getLineNumberAtIndex(content: string, index: number): number {
+  let line = 1
+  const end = Math.min(index, content.length)
+  for (let i = 0; i < end; i++) {
+    if (content.charCodeAt(i) === 10) {
+      line++
+    }
+  }
+  return line
+}
+
+/**
+ * Shared exact-literal occurrence walk (indexOf-based, non-overlapping
+ * matches). Returns the 1-indexed inclusive line range of every occurrence of
+ * `match` in `content`, up to `limit`. This is the single source of truth for
+ * literal-occurrence line mapping, used by process-str-replace
+ * (occurrenceIndex targeting and diagnostics) and by the read_blocks `around`
+ * selector, so both agree on occurrence ordering and line spans.
+ */
+export function findLiteralOccurrences(
+  content: string,
+  match: string,
+  limit: number = Number.MAX_SAFE_INTEGER,
+): { startLine: number; endLine: number }[] {
+  const ranges: { startLine: number; endLine: number }[] = []
+  if (!match) return ranges
+  let index = content.indexOf(match)
+
+  while (index !== -1 && ranges.length < limit) {
+    ranges.push({
+      startLine: getLineNumberAtIndex(content, index),
+      endLine: getLineNumberAtIndex(content, index + match.length),
+    })
+    index = content.indexOf(match, index + Math.max(1, match.length))
+  }
+
+  return ranges
+}
+
+/**
+ * Returns the 0-indexed character offset of the Nth (1-indexed) exact
+ * occurrence of `match` in `content`, or -1 when fewer than N exist.
+ */
+export function nthLiteralOccurrenceIndex(
+  content: string,
+  match: string,
+  n: number,
+): number {
+  if (!match) return -1
+  let index = content.indexOf(match)
+  let count = 1
+  while (index !== -1 && count < n) {
+    index = content.indexOf(match, index + Math.max(1, match.length))
+    count++
+  }
+  return count === n ? index : -1
+}
+
+/**
+ * Returns the 1-indexed inclusive line range of the Nth (1-indexed) exact
+ * occurrence of `match` in `content`, or null when fewer than N exist.
+ */
+export function nthOccurrenceLineRange(
+  content: string,
+  match: string,
+  n: number,
+): { startLine: number; endLine: number } | null {
+  const index = nthLiteralOccurrenceIndex(content, match, n)
+  if (index === -1) return null
+  return {
+    startLine: getLineNumberAtIndex(content, index),
+    endLine: getLineNumberAtIndex(content, index + match.length),
+  }
+}
+
+/**
+ * Resolve the ABSOLUTE 1-indexed inclusive line range of the Nth (1-indexed,
+ * default 1) exact literal occurrence of `match`, searched only inside the
+ * capability-authorized line window `capabilityStartLine..capabilityEndLine`
+ * of `content`. Occurrence ordering and line spans come from the shared
+ * literal-occurrence helpers above, so replace_range agrees with read_blocks
+ * and str_replace. `found` reports how many occurrences exist inside the
+ * authorized window, for not-found diagnostics.
+ */
+export function resolveOccurrenceRangeInCapabilityRange(params: {
+  content: string
+  match: string
+  occurrence?: number
+  capabilityStartLine: number
+  capabilityEndLine: number
+}): {
+  range: { startLine: number; endLine: number } | null
+  found: number
+} {
+  const { content, match, capabilityStartLine, capabilityEndLine } = params
+  const authorizedContent = normalizeLineEndings(content)
+    .split('\n')
+    .slice(capabilityStartLine - 1, capabilityEndLine)
+    .join('\n')
+  const range = nthOccurrenceLineRange(
+    authorizedContent,
+    match,
+    params.occurrence ?? 1,
+  )
+  if (!range) {
+    return {
+      range: null,
+      found: findLiteralOccurrences(authorizedContent, match).length,
+    }
+  }
+  // Authorized-slice line numbers are relative to capabilityStartLine.
+  const lineOffset = capabilityStartLine - 1
+  return {
+    range: {
+      startLine: range.startLine + lineOffset,
+      endLine: range.endLine + lineOffset,
+    },
+    found: 1,
+  }
+}
+
 const DEFAULT_MAX_MATCHES_PER_SYMBOL = 5
 
 /**
@@ -284,6 +407,31 @@ export async function extractSlices(
   }
 
   return slices
+}
+
+/**
+ * Select a single symbol slice by name and 1-indexed occurrence, mirroring
+ * rewrite_symbol's `occurrence` semantics: when several top-level symbols
+ * share the name, `occurrence` picks that AST match (default 1). Wraps
+ * extractSlices without changing its signature or multi-match behavior.
+ * Returns null when the name (or that occurrence) is not present.
+ */
+export async function selectSymbolSlice(params: {
+  rawContent: string
+  filePath: string
+  name: string
+  occurrence?: number
+  capabilityScope?: ReadCapabilityScope
+}): Promise<ExtractedSlice | null> {
+  const occurrence = params.occurrence ?? 1
+  const slices = await extractSlices(
+    params.rawContent,
+    params.filePath,
+    [params.name],
+    occurrence,
+    params.capabilityScope,
+  )
+  return slices[occurrence - 1] ?? null
 }
 
 /**

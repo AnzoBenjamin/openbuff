@@ -80,6 +80,7 @@ export function createBase2(
       'render_3d_preview',
       'read_subtree',
       'read_outline',
+      'read_blocks',
       'inspect_codebase_structure',
       !isFast && !planOnly && 'write_todos',
       'create_plan',
@@ -210,7 +211,7 @@ ${
     ? '- **Live visual analysis:** Use browser-use only for read-only inspection of an already available URL. Do not start dev servers or request browser interactions in plan mode.'
     : '- **Live visual verification:** Visual verification extends beyond web apps. Image artifacts from 3D renders (e.g. Blender frames), image/video exports, generated diagrams, and charts must be inspected with read_image, not inferred from text logs alone. The workflow is: render/export -> poll the background job to completion -> read_image the emitted artifacts -> assess the result -> make a targeted edit -> re-render. Polling (check_job/check_background_agent/read_logs) is only the bridge to artifact inspection; do not re-poll a finished or unchanging job indefinitely. After 2-3 unmatched polls that produce no new actionable artifact or progress, proceed with independent work, cancel/retry with a targeted edit, or ask the user. For web app visual checks specifically, start any long-running dev server through a BACKGROUND basher, keep its returned jobId, use check_job to wait for readiness, then spawn browser-use for screenshots/navigation/interaction.'
 }
-- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead. For ripgrep-style content search, spawn the code-searcher agent (and file-picker for fuzzy file discovery): \`code_search\`/\`find_files_matching_content\` are registered runtime tools but are intentionally not granted to you as root, so calling them directly is rejected. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs \`params.searchQueries\` (an array of { pattern } objects) and basher needs \`params.command\` (a shell string); put these in \`params\`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).
+- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_blocks/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. For large files prefer read_blocks (windows/around/symbols) over guess-shrink-retry read_files ranges paging. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead. For ripgrep-style content search, spawn the code-searcher agent (and file-picker for fuzzy file discovery): \`code_search\`/\`find_files_matching_content\` are registered runtime tools but are intentionally not granted to you as root, so calling them directly is rejected. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs \`params.searchQueries\` (an array of { pattern } objects) and basher needs \`params.command\` (a shell string); put these in \`params\`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).
 
 # Code Editing Mandates
 
@@ -261,7 +262,7 @@ Use the spawn_agents tool to spawn specialized agents to help you complete the u
         ? 'Spawn agents deterministically at analysis boundaries: context and general agents during discovery, thinker after context for complex design choices, read-only Basher for inspection/non-emitting checks, debugger for diagnosis, and advisory reviewers for risks and coverage. Mutation agents remain implementation-only.'
         : 'Spawn agents deterministically at phase boundaries, not randomly: context agents during discovery, thinker after context for complex design choices, editor for non-trivial implementation, bashers for validation, debugger after repeated validation/runtime failures, reviewers after edits, and doc/test writers when docs or tests are part of the acceptance criteria.'
     }
-- **Context breadth:** For unclear or cross-cutting tasks, consume the runtime-injected query_index result first and deduplicate its relatedFiles/matchedSnippets. Spawn bounded, non-overlapping file-picker/code-searcher waves for explicit coverage gaps, joining each wave before deciding whether another is needed. Add web/docs researchers only for external APIs, then verify candidates with read_files/read_outline/read_subtree before editing. For tiny obvious edits, read only the directly relevant files.
+- **Context breadth:** For unclear or cross-cutting tasks, consume the runtime-injected query_index result first and deduplicate its relatedFiles/matchedSnippets. Spawn bounded, non-overlapping file-picker/code-searcher waves for explicit coverage gaps, joining each wave before deciding whether another is needed. Add web/docs researchers only for external APIs, then verify candidates with read_files/read_outline/read_blocks/read_subtree before editing. For large files prefer read_blocks (windows/around/symbols) over guess-shrink-retry read_files ranges paging. For tiny obvious edits, read only the directly relevant files.
 - **Ask-user decisions:** Ask only after context gathering, and only when the answer materially changes scope, UX, risk, data loss, migration, deployment, or API/contract behavior. Require confirmation before destructive commands, public API/contract changes, dependency additions, schema/data migrations, release/publish/deploy actions, production-affecting scripts, and ambiguous product behavior. Do not ask obvious questions; if you are >80% confident or the decision is easily reversible, choose the most conservative implementation and proceed.
 - **Editor delegation:** In default mode, use the editor for non-trivial source edits after discovery. Do not delegate tiny one-file edits or direct answers. The editor prompt must be implementation-only and self-contained; parent-only validation, review, git, terminal cleanup, and plan/todo work stays with you.
 - **Direct-edit exception:** Treat orchestrator source editing as a narrow exception. It is eligible only for one file, at most roughly 12 changed lines, no behavior/public-contract change, no required tests, no security/concurrency risk, and no open reviewer findings. Otherwise delegate implementation to editor. Validation/reviewer repairs must use repair-editor with exact diagnostics or finding IDs.
@@ -269,7 +270,7 @@ Use the spawn_agents tool to spawn specialized agents to help you complete the u
 - **Thinker delegation:** Spawn thinker only after enough context exists for complex architecture, design tradeoff, risk, debugging strategy, spec/plan critique, or repeated-failure reasoning. Do not use thinker as a substitute for reading files or for straightforward edits.
 - **Release/deployment flow:** Treat releases, deployments, publishing, migrations against shared environments, production-affecting scripts, git commits, and git pushes as high-impact actions. Do not run or ask subagents to run them unless the user explicitly requested that action in this task or confirms after you explain the exact command, target environment, and rollback/verification plan. When requested, follow the deterministic sequence: inspect worktree, fetch remote state/tags, decide rebase/merge with the user when non-fast-forward or conflicts appear, push, wait for CI/CD, trigger the release, verify artifact/tag/package publication, then sync and report local branch state.
 - **Plan artifact maintenance:** In PLAN mode create and maintain durable artifacts; in EXECUTE_PLAN keep STATUS.md and LESSONS.md current at phase boundaries, blocker discovery/resolution, validation/review results, and finalization. Use update_plan_status for incremental STATUS/LESSONS updates and create_plan for SPEC/PLAN rewrites or missing artifacts. Do not update plan artifacts for ordinary implementation mode unless the user requested plan/session work.
-- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use read_files/read_outline/read_subtree/glob/list_directory/query_index for source inspection, inspect_3d_asset/render_3d_preview for 3D assets, read_image for other screenshots/images, edit_3d_asset for guarded Blender changes, edit_transaction for text project mutations, browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. \`run_targeted_validation\` is scoped evidence only — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.
+- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use read_files/read_outline/read_blocks/read_subtree/glob/list_directory/query_index for source inspection (large files: prefer read_blocks windows/around/symbols), inspect_3d_asset/render_3d_preview for 3D assets, read_image for other screenshots/images, edit_3d_asset for guarded Blender changes, edit_transaction for text project mutations, browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. \`run_targeted_validation\` is scoped evidence only — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.
 - **Sequence agents properly:** Keep in mind dependencies when spawning different agents. Don't spawn agents in parallel that depend on each other.
 - **Subagent deadlines:** Omit top-level \`timeout_seconds\` for editor and other productive subagents; omitted and \`-1\` mean no wall-clock deadline. Set a positive deadline only when the user explicitly requests one or the child is intentionally bounded diagnostic work.
 - **Parallel join discipline:** When spawning agents in parallel, wait for every required result before moving to the next dependent phase. A timeout, failed validation, or \`BLOCKING:\` reviewer/security finding blocks completion until repaired or explicitly scoped out.
@@ -1671,13 +1672,18 @@ ${specialistRoutingSection}
                         }),
                       ),
                       permissions: {
-                        readablePaths: repairEditorReadablePaths([
-                          ...pendingGateFiles,
-                          ...activeWorkState.openReviewerFindings.flatMap(
-                            (finding: { files?: string[] }) =>
-                              finding.files ?? [],
+                        readablePaths: repairEditorReadablePaths(
+                          [
+                            ...pendingGateFiles,
+                            ...activeWorkState.openReviewerFindings.flatMap(
+                              (finding: { files?: string[] }) =>
+                                finding.files ?? [],
+                            ),
+                          ],
+                          activeWorkState.openReviewerFindings.map(
+                            (finding: { text?: string }) => finding.text ?? '',
                           ),
-                        ]),
+                        ),
                         writablePaths: Array.from(
                           new Set([
                             ...pendingGateFiles,
@@ -1690,6 +1696,8 @@ ${specialistRoutingSection}
                         allowedTools: [
                           'read_files',
                           'read_outline',
+                          'read_blocks',
+                          'read_subtree',
                           'edit_transaction',
                         ],
                       },
@@ -2549,10 +2557,13 @@ ${specialistRoutingSection}
                           }),
                         ),
                         permissions: {
-                          readablePaths: repairEditorReadablePaths([
-                            ...pendingGateFiles,
-                            ...parsed.map((p: { file: string }) => p.file),
-                          ]),
+                          readablePaths: repairEditorReadablePaths(
+                            [
+                              ...pendingGateFiles,
+                              ...parsed.map((p: { file: string }) => p.file),
+                            ],
+                            failures,
+                          ),
                           writablePaths: Array.from(
                             new Set([
                               ...pendingGateFiles,
@@ -2562,6 +2573,8 @@ ${specialistRoutingSection}
                           allowedTools: [
                             'read_files',
                             'read_outline',
+                            'read_blocks',
+                            'read_subtree',
                             'edit_transaction',
                           ],
                         },
@@ -2769,10 +2782,13 @@ ${specialistRoutingSection}
                             }),
                           ),
                           permissions: {
-                            readablePaths: repairEditorReadablePaths([
-                              ...pendingGateFiles,
-                              ...parsed.map((p: { file: string }) => p.file),
-                            ]),
+                            readablePaths: repairEditorReadablePaths(
+                              [
+                                ...pendingGateFiles,
+                                ...parsed.map((p: { file: string }) => p.file),
+                              ],
+                              failures,
+                            ),
                             writablePaths: Array.from(
                               new Set([
                                 ...pendingGateFiles,
@@ -2782,6 +2798,8 @@ ${specialistRoutingSection}
                             allowedTools: [
                               'read_files',
                               'read_outline',
+                              'read_blocks',
+                              'read_subtree',
                               'edit_transaction',
                             ],
                           },
@@ -3336,13 +3354,19 @@ ${specialistRoutingSection}
                             }),
                           ),
                           permissions: {
-                            readablePaths: repairEditorReadablePaths([
-                              ...pendingGateFiles,
-                              ...activeWorkState.openReviewerFindings.flatMap(
-                                (finding: { files?: string[] }) =>
-                                  finding.files ?? [],
+                            readablePaths: repairEditorReadablePaths(
+                              [
+                                ...pendingGateFiles,
+                                ...activeWorkState.openReviewerFindings.flatMap(
+                                  (finding: { files?: string[] }) =>
+                                    finding.files ?? [],
+                                ),
+                              ],
+                              activeWorkState.openReviewerFindings.map(
+                                (finding: { text?: string }) =>
+                                  finding.text ?? '',
                               ),
-                            ]),
+                            ),
                             writablePaths: Array.from(
                               new Set([
                                 ...pendingGateFiles,
@@ -3355,6 +3379,8 @@ ${specialistRoutingSection}
                             allowedTools: [
                               'read_files',
                               'read_outline',
+                              'read_blocks',
+                              'read_subtree',
                               'write_file',
                               'str_replace',
                               'set_output',
@@ -3421,13 +3447,19 @@ ${specialistRoutingSection}
                             }),
                           ),
                           permissions: {
-                            readablePaths: repairEditorReadablePaths([
-                              ...pendingGateFiles,
-                              ...activeWorkState.openReviewerFindings.flatMap(
-                                (finding: { files?: string[] }) =>
-                                  finding.files ?? [],
+                            readablePaths: repairEditorReadablePaths(
+                              [
+                                ...pendingGateFiles,
+                                ...activeWorkState.openReviewerFindings.flatMap(
+                                  (finding: { files?: string[] }) =>
+                                    finding.files ?? [],
+                                ),
+                              ],
+                              activeWorkState.openReviewerFindings.map(
+                                (finding: { text?: string }) =>
+                                  finding.text ?? '',
                               ),
-                            ]),
+                            ),
                             writablePaths: Array.from(
                               new Set([
                                 ...pendingGateFiles,
@@ -3440,6 +3472,8 @@ ${specialistRoutingSection}
                             allowedTools: [
                               'read_files',
                               'read_outline',
+                              'read_blocks',
+                              'read_subtree',
                               'edit_transaction',
                             ],
                           },
@@ -5156,22 +5190,50 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
         })
       }
 
-      function repairEditorReadablePaths(paths: string[]): string[] {
+      // Least-privilege repair-editor READ scope: exact finding/pending files,
+      // their parent directories, package roots (never bare **/*), and optional
+      // conservatively extracted path citations from finding/diagnostic text.
+      // WRITE scope stays exact file lists only at each call site.
+      function repairEditorReadablePaths(
+        paths: string[],
+        texts?: string[],
+      ): string[] {
+        const seedPaths = [...paths]
+        if (Array.isArray(texts)) {
+          // Conservative path-like tokens: require at least one '/' and a
+          // file-ish extension (e.g. common/src/tools/params/tool/replace-range.ts).
+          const pathLikeRe =
+            /(?:^|[\s"'`(,:=\[])((?:[\w.-]+\/)+[\w.-]+\.(?:tsx?|jsx?|mjs|cjs|py|go|rs|java|kt|kts|cs|fs|vb|json|md|mdx|yml|yaml|toml|css|scss|html|vue|svelte))\b/g
+          for (const text of texts) {
+            if (typeof text !== 'string' || !text) continue
+            let match: RegExpExecArray | null
+            while ((match = pathLikeRe.exec(text)) !== null) {
+              const candidate = match[1]
+              if (/^https?:\/\//i.test(candidate)) continue
+              if (candidate.includes('node_modules/')) continue
+              if (/(^|\/)\.env($|\.)/.test(candidate)) continue
+              seedPaths.push(candidate)
+            }
+          }
+        }
         const files = Array.from(
           new Set(
-            paths
+            seedPaths
               .map((path) => normalizeGateFilePath(path))
-              .filter((path) => path.length > 0),
+              .filter((path) => path.length > 0)
+              .filter((path) => !path.includes('node_modules/'))
+              .filter((path) => !/(^|\/)\.env($|\.)/.test(path)),
           ),
         )
-        const directories = new Set<string>()
+        const expansions = new Set<string>()
         for (const file of files) {
           const separator = file.lastIndexOf('/')
-          if (separator > 0) directories.add(file.slice(0, separator))
+          if (separator > 0) expansions.add(`${file.slice(0, separator)}/**/*`)
+          const root = inferWorkspaceRootFromPath(file)
+          // Never add bare **/* / * for root-level files (root === '.').
+          if (root !== '.') expansions.add(`${root}/**/*`)
         }
-        return Array.from(
-          new Set([...files, ...Array.from(directories, (dir) => `${dir}/**/*`)]),
-        )
+        return Array.from(new Set([...files, ...expansions]))
       }
 
       function isPublicApiSourceFile(filePath: string): boolean {
@@ -7065,7 +7127,7 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
     },
   }
 }
-const EXPLORE_PROMPT = `- Iteratively gather codebase context as needed. For broad codebase questions or tasks where relevant files are not already obvious, consume the runtime-injected query_index result first and deduplicate its candidates, matchedSnippets, and relatedFiles. Use mode: 'explain' when you need ranking rationale, mode: 'neighbors' to expand around a known file, mode: 'path' to connect two known files, mode: 'references' for blast-radius analysis (files that import or call into a seed file, using from or to), and mode: 'commands' to find package scripts, CI workflows, task runners, and validation docs. Spawn bounded parallel discovery waves for explicit domains the index result did not cover; give each file-picker/code-searcher a non-overlapping question, join the wave, and launch another when inventory or coverage evidence still has gaps. There is no fixed total-agent limit. Verify selected files with read_files/read_subtree. Use list_directory and glob only when structural/path evidence is missing, and do not substitute basher for git status or file discovery. Use read_subtree for a specific subsystem. For a large file, call read_outline first, then read_files with a symbols selector. Read all relevant files before editing.`
+const EXPLORE_PROMPT = `- Iteratively gather codebase context as needed. For broad codebase questions or tasks where relevant files are not already obvious, consume the runtime-injected query_index result first and deduplicate its candidates, matchedSnippets, and relatedFiles. Use mode: 'explain' when you need ranking rationale, mode: 'neighbors' to expand around a known file, mode: 'path' to connect two known files, mode: 'references' for blast-radius analysis (files that import or call into a seed file, using from or to), and mode: 'commands' to find package scripts, CI workflows, task runners, and validation docs. Spawn bounded parallel discovery waves for explicit domains the index result did not cover; give each file-picker/code-searcher a non-overlapping question, join the wave, and launch another when inventory or coverage evidence still has gaps. There is no fixed total-agent limit. Verify selected files with read_files/read_subtree. Use list_directory and glob only when structural/path evidence is missing, and do not substitute basher for git status or file discovery. Use read_subtree for a specific subsystem. For a large file, prefer read_blocks (windows/around/symbols) over guess-shrink-retry read_files ranges paging; use read_outline then read_files ranges only for an exact arbitrary line range. Read all relevant files before editing.`
 
 function buildImplementationInstructionsPrompt({
   isFast,
@@ -7161,7 +7223,7 @@ function buildImplementationStepPrompt({
   const gateActive = !isFast && !hasNoValidation
   return buildArray(
     'Consider loading relevant skills with the skill tool if they might help with the current task. Do not reload skills that were already loaded earlier in this conversation.',
-    'Use dedicated tools before shell fallbacks: repository status and validation gates are runtime-owned; use read_files/read_outline/read_subtree/glob/list_directory/query_index for inspection, deterministic edit tools for file changes, and basher only for commands without a dedicated tool.',
+    'Use dedicated tools before shell fallbacks: repository status and validation gates are runtime-owned; use read_files/read_outline/read_blocks/read_subtree/glob/list_directory/query_index for inspection (large files: prefer read_blocks windows/around/symbols), deterministic edit tools for file changes, and basher only for commands without a dedicated tool.',
     isDefault &&
       `For non-trivial edits, spawn the editor after context discovery with a compact implementation-only prompt containing all of these envelope fields: Requirements, Target files, Constraints/non-goals, Patterns, Risks. Use those exact field labels in the prompt so the editor can scan them as a checklist. The editor does not inherit parent conversation history, so the prompt must contain the implementation context it needs. If you cannot state the concrete implementation task, target files, and constraints yet, gather more context instead of spawning the editor. Do not put validation commands, terminal/shell cleanup, deletion requests, visual smoke tests, code review, git operations, todos, or other parent-only orchestration tasks in the editor handoff. After the editor returns, the default runtime will independently detect changed files, run configured validation hooks, and spawn code-reviewer before finalization.`,
     isDefault &&

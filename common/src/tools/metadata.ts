@@ -38,6 +38,7 @@ const READ_TOOLS = new Set<ToolName>([
   'list_directory',
   'list_jobs',
   'query_index',
+  'read_blocks',
   'read_docs',
   'read_files',
   'read_image',
@@ -105,6 +106,7 @@ const PATH_INPUTS: Partial<Record<ToolName, readonly string[]>> = {
   edit_3d_asset: ['path'],
   inspect_3d_asset: ['path'],
   render_3d_preview: ['path'],
+  read_blocks: ['windows[].path', 'around[].path', 'symbols[].path'],
   read_files: ['paths[]', 'ranges[].path', 'symbols[].path'],
   read_outline: ['path'],
   read_subtree: ['paths[]'],
@@ -150,7 +152,7 @@ function metadataFor(toolName: ToolName): ToolMetadata {
           : 'global',
     pathInputs: PATH_INPUTS[toolName] ?? [],
     resultContract:
-      toolName === 'read_files'
+      toolName === 'read_files' || toolName === 'read_blocks'
         ? 'read_v1'
         : kind === 'mutation'
           ? nonCanonicalMutationResultTools.has(toolName)

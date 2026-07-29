@@ -438,7 +438,7 @@ export const handleReadFiles = (async (
   }
 }) satisfies CodebuffToolHandlerFunction<ToolName>
 
-function classifyOptionalReadError(error: unknown): {
+export function classifyOptionalReadError(error: unknown): {
   code:
     | 'blocked'
     | 'binary'
