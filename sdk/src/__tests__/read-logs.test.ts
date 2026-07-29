@@ -4,13 +4,23 @@ import * as os from 'os'
 import * as path from 'path'
 
 import {
+  isOwnedTempPath,
+  resolveProjectPath,
+  resolveProjectPathForFileSystem,
+} from '@codebuff/common/util/project-path-containment'
+
+import {
   __clearJobsForTest,
   __registerJobForTest,
   type BackgroundJob,
 } from '../tools/background-jobs'
+import { resolveFilePathForFileSystemOperation } from '../tools/path-utils'
 import { readLogs } from '../tools/read-logs'
 
+import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+
 const tempDirs: string[] = []
+const tempFiles: string[] = []
 
 /** Trusted owner injected into readLogs by the run/session layer in tests. */
 const TRUSTED_OWNER = {
@@ -27,18 +37,49 @@ const FOREIGN_OWNER = {
 }
 
 const makeTempDir = () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-read-logs-'))
+  // Deliberately NOT an `openbuff-` prefix: that is an openbuff-owned temp
+  // namespace which the containment boundary allows by design, so these
+  // fixtures must use a neutral prefix to stand in for ordinary
+  // outside-the-project locations.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'obtest-read-logs-'))
   tempDirs.push(dir)
   return dir
 }
 
-const value = (output: Awaited<ReturnType<typeof readLogs>>): any =>
-  output[0].value
+/** Absolute temp file path removed in afterEach; unique per run. */
+const tempFilePath = (name: string) => {
+  const file = path.join(
+    os.tmpdir(),
+    `${name}-${process.pid}-${Math.random().toString(36).slice(2, 10)}.log`,
+  )
+  tempFiles.push(file)
+  return file
+}
+
+/**
+ * Shape of the `read_logs` JSON output value. Declared here (rather than
+ * accepting `any`) so a shape regression fails at typecheck instead of
+ * silently satisfying a `toBeUndefined()` assertion.
+ */
+type ReadLogsValue = {
+  jobId?: string
+  status?: string
+  resolvedPath?: string
+  content?: string
+  errorMessage?: string
+}
+
+const value = (
+  output: Awaited<ReturnType<typeof readLogs>>,
+): ReadLogsValue => output[0].value as ReadLogsValue
 
 afterEach(() => {
   __clearJobsForTest()
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true })
+  }
+  for (const file of tempFiles.splice(0)) {
+    fs.rmSync(file, { force: true })
   }
   fs.rmSync(path.join(os.tmpdir(), 'openbuff-read-logs-job.log'), {
     force: true,
@@ -113,6 +154,43 @@ describe('readLogs', () => {
     expect(result.errorMessage).toContain('outside the project directory')
   })
 
+  test('reads an openbuff-owned temp log by absolute path', async () => {
+    const cwd = makeTempDir()
+    // `openbuff-job-read-logs-*` is an openbuff-owned temp namespace, so it is
+    // reachable by path even though it lives outside the project.
+    const ownedLog = tempFilePath('openbuff-job-read-logs-owned')
+    fs.writeFileSync(ownedLog, 'one\ntwo\nthree\n')
+
+    const result = value(
+      await readLogs({
+        cwd,
+        path: ownedLog,
+        lines: 2,
+        max_chars: 1_000,
+        owner: TRUSTED_OWNER,
+      }),
+    )
+
+    expect(result.errorMessage).toBeUndefined()
+    // Compared against the realpath: on macOS `os.tmpdir()` is a symlinked
+    // `/var/folders/...` path.
+    expect(result.resolvedPath).toBe(fs.realpathSync(ownedLog))
+    expect(result.content).toBe('two\nthree\n')
+  })
+
+  test('rejects a non-owned temp path outside cwd', async () => {
+    const cwd = makeTempDir()
+    const notOwned = tempFilePath('not-owned')
+    fs.writeFileSync(notOwned, 'secret\n')
+
+    const result = value(
+      await readLogs({ cwd, path: notOwned, owner: TRUSTED_OWNER }),
+    )
+
+    expect(result.errorMessage).toContain('outside the project directory')
+    expect(result.content).toBeUndefined()
+  })
+
   test('reads a background job log by jobId', async () => {
     const cwd = makeTempDir()
     const logFile = path.join(os.tmpdir(), 'openbuff-read-logs-job.log')
@@ -147,8 +225,6 @@ describe('readLogs', () => {
     expect(result.status).toBe('running')
     expect(result.resolvedPath).toBe(logFile)
     expect(result.content).toBe('beta\ngamma\n')
-
-    fs.rmSync(logFile, { force: true })
   })
 
   test('does not follow an in-memory background job log symlink swapped in before reading', async () => {
@@ -223,8 +299,37 @@ describe('readLogs', () => {
       `No background job found with id "${job.jobId}"`,
     )
     expect(result.content).toBeUndefined()
+  })
 
-    fs.rmSync(logFile, { force: true })
+  test('refuses a foreign-owned job log read by absolute path with a generic not_found error', async () => {
+    const cwd = makeTempDir()
+    // The file name is the background-job log name for a REGISTERED job, so
+    // the path branch must run the ownership gate instead of treating it as
+    // an anonymous openbuff-owned temp file.
+    const jobId = 'job-read-logs-path-gate'
+    const logFile = path.join(os.tmpdir(), `openbuff-${jobId}.log`)
+    fs.writeFileSync(logFile, 'secret\n')
+
+    const job: BackgroundJob = {
+      jobId,
+      command: 'echo test',
+      child: { pid: 1234 } as unknown as BackgroundJob['child'],
+      logFile,
+      metadataFile: `${logFile}.json`,
+      status: 'running',
+      exitCode: null,
+      startedAt: 0,
+      readOffset: 0,
+      owner: TRUSTED_OWNER,
+    }
+    __registerJobForTest(job)
+
+    const result = value(
+      await readLogs({ cwd, path: logFile, lines: 10, owner: FOREIGN_OWNER }),
+    )
+
+    expect(result.errorMessage).toContain('No background job found with id')
+    expect(result.content).toBeUndefined()
   })
 
   test('a model-supplied owner cannot override the trusted owner for a jobId read', async () => {
@@ -255,8 +360,6 @@ describe('readLogs', () => {
 
     expect(result.errorMessage).toBeUndefined()
     expect(result.content).toBe('safe\n')
-
-    fs.rmSync(logFile, { force: true })
   })
 
   test('does not trust recovered background job metadata with an unexpected log path', async () => {
@@ -313,5 +416,64 @@ describe('readLogs', () => {
 
     expect(result.errorMessage).toContain('No background job found')
     expect(result.content).toBeUndefined()
+  })
+})
+
+describe('owned-temp containment through an injected filesystem', () => {
+  const tmpRoot = path.resolve(os.tmpdir())
+  const projectRoot = '/virtual/repo'
+
+  /**
+   * Minimal injected filesystem. `realpath` is the only hook the containment
+   * resolver uses; every path resolves to itself unless `links` remaps it, so
+   * the host-derived owned temp roots stay inside themselves (see the
+   * host-root caveat on `getOwnedTempRoots`).
+   */
+  const makeFileSystem = (links: Record<string, string> = {}) =>
+    ({
+      realpath: async (input: string) => links[input] ?? input,
+    }) as unknown as CodebuffFileSystem
+
+  test('accepts an owned temp log and pins the operation to the injected realpath', async () => {
+    const ownedLog = path.join(tmpRoot, 'openbuff-job-virtual-x.log')
+    const ownedRealLog = path.join(tmpRoot, 'openbuff-job-virtual-x-real.log')
+
+    const resolved = await resolveFilePathForFileSystemOperation(
+      projectRoot,
+      ownedLog,
+      makeFileSystem({ [ownedLog]: ownedRealLog }),
+    )
+
+    expect(resolved).not.toBeNull()
+    // Owned temp paths live outside the project, so `relativePath` is the
+    // absolute path; the operation itself is pinned to the realpath reported
+    // by the injected filesystem, never the host one.
+    expect(resolved!.relativePath).toBe(ownedLog)
+    expect(resolved!.operationPath).toBe(ownedRealLog)
+  })
+
+  test('rejects an owned-named symlink whose injected realpath escapes the temp roots', async () => {
+    const ownedLink = path.join(tmpRoot, 'openbuff-job-virtual-escape.log')
+
+    await expect(
+      resolveFilePathForFileSystemOperation(
+        projectRoot,
+        ownedLink,
+        makeFileSystem({ [ownedLink]: '/outside/secret.log' }),
+      ),
+    ).resolves.toBeNull()
+  })
+
+  test('refuses a raw .. segment identically on the sync and injected-fs paths', async () => {
+    // Built by concatenation so the `..` survives into the raw input, and it
+    // collapses back INSIDE the owned namespace: the traversal-free contract
+    // refuses it anyway, and all three entry points must agree.
+    const traversal = `${tmpRoot}/openbuff-a/../openbuff-b.log`
+
+    expect(isOwnedTempPath(traversal)).toBe(false)
+    expect(resolveProjectPath(projectRoot, traversal)).toBeNull()
+    await expect(
+      resolveProjectPathForFileSystem(projectRoot, traversal, makeFileSystem()),
+    ).resolves.toBeNull()
   })
 })

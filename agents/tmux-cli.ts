@@ -135,7 +135,7 @@ const definition: AgentDefinition = {
 3. Re-run the agent after fixing any issues
 4. Check the \`lessons\` array for advice on how to improve future runs
 
-**Note:** Capture files are saved to \`/tmp/\`. Use \`run_terminal_command\` with \`cat\` to read them if \`read_files\` doesn't support absolute paths.
+**Note:** Capture files are saved under \`/tmp/tmux-captures-<session>/\`, an openbuff-owned temp namespace, so you can read them directly with \`read_files\` or \`read_logs\` using the absolute capture paths.
 
 **When spawning this agent**, provide as much advice as possible in the prompt about how to test the CLI, including lessons from any previous runs of tmux-cli (e.g., timing adjustments, commands that didn't work, expected output patterns). This helps the agent avoid repeating mistakes.
 
