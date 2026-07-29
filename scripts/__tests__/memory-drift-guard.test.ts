@@ -212,6 +212,174 @@ test('staleness checker skips untracked knowledge.md in a git repo', () => {
   expect(findings.some((f) => f.path.includes('knowledge.md'))).toBe(false)
 })
 
+test('staleness checker does NOT flag topic-prefixed knowledge file when only topic-irrelevant sibling src changed', () => {
+  initGitRepo(tmpRoot)
+  mkdirSync(join(tmpRoot, 'cli', 'src'), { recursive: true })
+  // A topic-relevant file exists, but it was committed BEFORE the knowledge
+  // file — only the unrelated renderer changed afterwards.
+  writeFileSync(
+    join(tmpRoot, 'cli', 'src', 'tmux-runner.ts'),
+    'export const run = 1\n',
+  )
+  gitCommit(
+    tmpRoot,
+    ['cli/src/tmux-runner.ts'],
+    'add tmux runner',
+    '2023-01-01T00:00:00',
+  )
+  writeFileSync(join(tmpRoot, 'cli', 'tmux.knowledge.md'), '# tmux harness\n')
+  gitCommit(
+    tmpRoot,
+    ['cli/tmux.knowledge.md'],
+    'add tmux knowledge',
+    '2023-06-01T00:00:00',
+  )
+  writeFileSync(
+    join(tmpRoot, 'cli', 'src', 'gate-renderer.ts'),
+    'export const render = 1\n',
+  )
+  gitCommit(
+    tmpRoot,
+    ['cli/src/gate-renderer.ts'],
+    'add gate renderer',
+    '2024-06-01T00:00:00',
+  )
+  const findings = checkStaleness(tmpRoot)
+  expect(findings.some((f) => f.path.includes('tmux.knowledge.md'))).toBe(false)
+})
+
+test('staleness checker flags topic-prefixed knowledge file when a topic-relevant src file name changed', () => {
+  initGitRepo(tmpRoot)
+  mkdirSync(join(tmpRoot, 'cli', 'src'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'cli', 'tmux.knowledge.md'), '# tmux harness\n')
+  gitCommit(
+    tmpRoot,
+    ['cli/tmux.knowledge.md'],
+    'add tmux knowledge',
+    '2023-01-01T00:00:00',
+  )
+  writeFileSync(
+    join(tmpRoot, 'cli', 'src', 'tmux-runner.ts'),
+    'export const run = 1\n',
+  )
+  gitCommit(
+    tmpRoot,
+    ['cli/src/tmux-runner.ts'],
+    'change tmux runner',
+    '2024-06-01T00:00:00',
+  )
+  const findings = checkStaleness(tmpRoot)
+  expect(
+    findings.some(
+      (f) =>
+        f.path === 'cli/tmux.knowledge.md' &&
+        f.message.includes('tmux') &&
+        f.message.includes('stale'),
+    ),
+  ).toBe(true)
+})
+
+test('staleness checker flags topic-prefixed knowledge file when a topic-relevant src directory changed', () => {
+  initGitRepo(tmpRoot)
+  mkdirSync(join(tmpRoot, 'cli', 'src', 'tmux'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'cli', 'tmux.knowledge.md'), '# tmux harness\n')
+  gitCommit(
+    tmpRoot,
+    ['cli/tmux.knowledge.md'],
+    'add tmux knowledge',
+    '2023-01-01T00:00:00',
+  )
+  writeFileSync(
+    join(tmpRoot, 'cli', 'src', 'tmux', 'session.ts'),
+    'export const session = 1\n',
+  )
+  gitCommit(
+    tmpRoot,
+    ['cli/src/tmux/session.ts'],
+    'change tmux session',
+    '2024-06-01T00:00:00',
+  )
+  const findings = checkStaleness(tmpRoot)
+  expect(findings.some((f) => f.path === 'cli/tmux.knowledge.md')).toBe(true)
+})
+
+test('staleness checker matches topic-relevant src paths case-insensitively', () => {
+  initGitRepo(tmpRoot)
+  mkdirSync(join(tmpRoot, 'cli', 'src'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'cli', 'tmux.knowledge.md'), '# tmux harness\n')
+  gitCommit(
+    tmpRoot,
+    ['cli/tmux.knowledge.md'],
+    'add tmux knowledge',
+    '2023-01-01T00:00:00',
+  )
+  writeFileSync(
+    join(tmpRoot, 'cli', 'src', 'TmuxHarness.ts'),
+    'export const harness = 1\n',
+  )
+  gitCommit(
+    tmpRoot,
+    ['cli/src/TmuxHarness.ts'],
+    'change Tmux harness',
+    '2024-06-01T00:00:00',
+  )
+  const findings = checkStaleness(tmpRoot)
+  expect(findings.some((f) => f.path === 'cli/tmux.knowledge.md')).toBe(true)
+})
+
+test('staleness checker still flags plain knowledge.md for any sibling src change while sparing a topic file', () => {
+  initGitRepo(tmpRoot)
+  mkdirSync(join(tmpRoot, 'cli', 'src'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'cli', 'knowledge.md'), '# cli\n')
+  writeFileSync(join(tmpRoot, 'cli', 'tmux.knowledge.md'), '# tmux harness\n')
+  writeFileSync(
+    join(tmpRoot, 'cli', 'src', 'tmux-runner.ts'),
+    'export const run = 1\n',
+  )
+  gitCommit(
+    tmpRoot,
+    ['cli/knowledge.md', 'cli/tmux.knowledge.md', 'cli/src/tmux-runner.ts'],
+    'add cli knowledge and src',
+    '2023-01-01T00:00:00',
+  )
+  writeFileSync(
+    join(tmpRoot, 'cli', 'src', 'git-args.ts'),
+    'export const args = 1\n',
+  )
+  gitCommit(
+    tmpRoot,
+    ['cli/src/git-args.ts'],
+    'add git args parser',
+    '2024-06-01T00:00:00',
+  )
+  const findings = checkStaleness(tmpRoot)
+  expect(
+    findings.some(
+      (f) =>
+        f.path === 'cli/knowledge.md' &&
+        f.message ===
+          'knowledge.md last commit is older than sibling src/ last commit (stale)',
+    ),
+  ).toBe(true)
+  expect(findings.some((f) => f.path === 'cli/tmux.knowledge.md')).toBe(false)
+})
+
+test('staleness checker does NOT flag topic-prefixed knowledge file with no matching source under sibling src/', () => {
+  initGitRepo(tmpRoot)
+  mkdirSync(join(tmpRoot, 'cli', 'src'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'cli', 'tmux.knowledge.md'), '# tmux harness\n')
+  gitCommit(
+    tmpRoot,
+    ['cli/tmux.knowledge.md'],
+    'add tmux knowledge',
+    '2023-01-01T00:00:00',
+  )
+  writeFileSync(join(tmpRoot, 'cli', 'src', 'index.ts'), 'export const x = 1\n')
+  gitCommit(tmpRoot, ['cli/src/index.ts'], 'add src', '2024-06-01T00:00:00')
+  const findings = checkStaleness(tmpRoot)
+  expect(findings.length).toBe(0)
+})
+
 test('command checker flags missing script via --cwd subpackage', () => {
   mkdirSync(join(tmpRoot, 'cli'), { recursive: true })
   writeFileSync(
