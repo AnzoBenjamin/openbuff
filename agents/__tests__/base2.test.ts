@@ -546,6 +546,42 @@ describe('base2 validation/reviewer coordination prompts', () => {
       'Do not use the write_todos tool in plan mode',
     )
   })
+
+  test('default mode defers the single completion summary until after the gate', () => {
+    // The gate injects the post-gate finalization notice, so the pre-gate
+    // prompts must not also demand a completion summary (which produced two
+    // summaries per turn).
+    const base2 = createBase2('default')
+
+    expect(base2.instructionsPrompt).toContain(
+      'Write exactly ONE user-visible completion summary per turn',
+    )
+    expect(base2.instructionsPrompt).not.toContain(
+      'Inform the user that you have completed the task in one sentence',
+    )
+    expect(base2.instructionsPrompt).not.toContain(
+      'until after you have written a user-visible completion summary',
+    )
+    expect(base2.stepPrompt).toContain(
+      'Write your completion summary exactly once per turn',
+    )
+    expect(base2.stepPrompt).not.toContain(
+      'After completing the user request, summarize your changes',
+    )
+  })
+
+  test('fast mode keeps the original single-summary wording', () => {
+    // Gate-disabled modes never get a post-gate finalization notice, so their
+    // prompts must still ask for the summary directly.
+    const base2 = createBase2('fast')
+
+    expect(base2.instructionsPrompt).toContain(
+      'Inform the user that you have completed the task in one sentence',
+    )
+    expect(base2.stepPrompt).toContain(
+      'After completing the user request, summarize your changes',
+    )
+  })
 })
 
 describe('base-deep prompt naming and tool guidance', () => {

@@ -419,6 +419,7 @@ ${specialistRoutingSection}
         : buildImplementationStepPrompt({
             isDefault,
             isFast,
+            hasNoValidation,
           }),
 
     handleSteps: function* ({ agentState, prompt, params, config }) {
@@ -490,6 +491,15 @@ ${specialistRoutingSection}
       const MAX_REPAIR_ROUNDS = 3
       const MAX_REVIEWER_NO_VERDICT_RETRIES = 1
       const MAX_REVIEWER_REPAIR_ROUNDS = 3
+      // Single source of truth for the post-gate finalization instruction used
+      // by every gate-pass path (fresh pass, conversation reuse, durable
+      // fingerprint reuse). Worded idempotently so a model that already wrote
+      // a summary earlier in the turn adds only follow-up suggestions instead
+      // of repeating the summary. Declared inline because handleSteps is
+      // serialized via .toString() and reconstructed with new Function(...),
+      // so a module-scope binding would be undefined at reconstruction time.
+      const GATE_PASS_FINALIZATION_NOTICE =
+        'Provide your single user-visible completion summary now if you have not already written one this turn; if you already have, add only the follow-up suggestions instead of repeating it. Write at most one completion summary per turn. Do not make more edits unless absolutely necessary; any new edits will rerun the gate.'
       const existingActiveWorkState = mutableAgentState.base2ActiveWork
       const hadPendingGateFiles =
         !!existingActiveWorkState &&
@@ -2246,7 +2256,7 @@ ${specialistRoutingSection}
               role: 'user',
               content: [
                 `Previous validation and reviewer gate already passed in this conversation with ${conversationReviewerVerdict} for pending files: ${currentPendingGateFiles.join(', ')}.`,
-                'Reusing that unchanged gate result; you may now provide the final user-visible summary and optional follow-up suggestions. Do not make more edits unless absolutely necessary; any new edits will rerun the gate.',
+                `Reusing that unchanged gate result; ${GATE_PASS_FINALIZATION_NOTICE}`,
                 formatGateStateBlock(
                   'validation/reviewer',
                   'passed',
@@ -2305,7 +2315,7 @@ ${specialistRoutingSection}
               role: 'user',
               content: [
                 `Previous validation and reviewer gate already passed with ${durableReviewerVerdict} for pending files: ${currentPendingGateFiles.join(', ')}.`,
-                'You may now provide the final user-visible summary and optional follow-up suggestions. Do not make more edits unless absolutely necessary; any new edits will rerun the gate.',
+                GATE_PASS_FINALIZATION_NOTICE,
                 formatGateStateBlock(
                   'validation/reviewer',
                   'passed',
@@ -3849,7 +3859,7 @@ ${specialistRoutingSection}
                 passedPendingFiles.length > 0
                   ? 'The preceding Change review diff is the user-visible filesystem evidence for this gate. Use /diff for the full current working-tree diff, /changes for the file list, or /diff -- <path> to inspect one file.'
                   : '',
-                'You may now provide the final user-visible summary and optional follow-up suggestions. Do not make more edits unless absolutely necessary; any new edits will rerun the gate.',
+                GATE_PASS_FINALIZATION_NOTICE,
                 formatGateStateBlock(
                   'validation/reviewer',
                   'passed',
@@ -7068,6 +7078,10 @@ function buildImplementationInstructionsPrompt({
   hasNoValidation: boolean
   noAskUser: boolean
 }) {
+  // Mode-level proxy for "the automated validation/reviewer gate is active".
+  // Plan mode uses separate builders, so at prompt-build time this matches the
+  // runtime runValidationGate flag for every mode that reaches this builder.
+  const gateActive = !isFast && !hasNoValidation
   return `Act as a helpful assistant and freely respond to the user's request however would be most helpful to the user. Use your judgement to orchestrate the completion of the user's request using your specialized sub-agents and tools as needed. Take your time and be comprehensive. Don't surprise the user. For example, don't modify files if the user has not asked you to do so at least implicitly.
 
 ${buildBroadAuditSection('proceed to implementation or the answer')}
@@ -7106,8 +7120,12 @@ ${buildArray(
   !hasNoValidation &&
     `- For non-trivial or risky changes, test them by running the narrowest appropriate validation commands for the project (e.g. typechecks, tests, lints, builds, or configured hooks). Try to run independent commands in parallel, then join all results before finalizing. If validation fails or times out, repair the exact failure and rerun the relevant command before treating the task as complete. Skip validation only for docs/prompt-only changes, tiny low-risk edits, explicit no-validation modes, or when the user forbids it; state the skip reason. You may have to explore the project to find the appropriate commands.`,
   `- Treat releases, deployments, publishing, migrations against shared environments, production-affecting scripts, git commits, and git pushes as high-impact actions. Do not run them unless the user explicitly requested that action in this task or confirms after you explain the exact command, target environment, and rollback/verification plan.`,
-  `- Inform the user that you have completed the task in one sentence or a few short bullet points.`,
-  '- After successfully completing an implementation, if the suggest_followups tool is available, use it to suggest ~3 next steps the user might want to take. Do not call suggest_followups until after you have written a user-visible completion summary and, for edited code, after the automated validation/reviewer gate has passed. If suggest_followups is unavailable, still provide the final summary/end normally.',
+  gateActive
+    ? '- Write exactly ONE user-visible completion summary per turn. For edited code, that summary belongs in the final message after the automated validation/reviewer gate has passed — do not write a completion summary before the gate runs. Keep any pre-gate text to brief progress notes, not a summary of the finished work.'
+    : '- Inform the user that you have completed the task in one sentence or a few short bullet points.',
+  gateActive
+    ? '- After successfully completing an implementation, if the suggest_followups tool is available, use it to suggest ~3 next steps the user might want to take. For edited code, call it only after the automated validation/reviewer gate has passed, in the same final message as your single completion summary. If suggest_followups is unavailable, still provide the final summary/end normally.'
+    : '- After successfully completing an implementation, if the suggest_followups tool is available, use it to suggest ~3 next steps the user might want to take, in the same final message as your completion summary. If suggest_followups is unavailable, still provide the final summary/end normally.',
 ).join('\n')}`
 }
 
@@ -7132,10 +7150,15 @@ function buildExecutePlanInstructionsPrompt(params: {
 function buildImplementationStepPrompt({
   isDefault,
   isFast,
+  hasNoValidation,
 }: {
   isDefault: boolean
   isFast: boolean
+  hasNoValidation: boolean
 }) {
+  // Mode-level proxy for the runtime's runValidationGate flag; see
+  // buildImplementationInstructionsPrompt.
+  const gateActive = !isFast && !hasNoValidation
   return buildArray(
     'Consider loading relevant skills with the skill tool if they might help with the current task. Do not reload skills that were already loaded earlier in this conversation.',
     'Use dedicated tools before shell fallbacks: repository status and validation gates are runtime-owned; use read_files/read_outline/read_subtree/glob/list_directory/query_index for inspection, deterministic edit tools for file changes, and basher only for commands without a dedicated tool.',
@@ -7143,11 +7166,13 @@ function buildImplementationStepPrompt({
       `For non-trivial edits, spawn the editor after context discovery with a compact implementation-only prompt containing all of these envelope fields: Requirements, Target files, Constraints/non-goals, Patterns, Risks. Use those exact field labels in the prompt so the editor can scan them as a checklist. The editor does not inherit parent conversation history, so the prompt must contain the implementation context it needs. If you cannot state the concrete implementation task, target files, and constraints yet, gather more context instead of spawning the editor. Do not put validation commands, terminal/shell cleanup, deletion requests, visual smoke tests, code review, git operations, todos, or other parent-only orchestration tasks in the editor handoff. After the editor returns, the default runtime will independently detect changed files, run configured validation hooks, and spawn code-reviewer before finalization.`,
     isDefault &&
       'Use the phase triggers from the spawning guidelines: context agents before edits when scope is unclear, thinker for complex post-discovery reasoning, bashers for validation, debugger for repeated failures, and doc/test writers when docs or tests are required. Join all parallel validation/review results before completing.',
-    `After completing the user request, summarize your changes in a sentence${isFast ? '' : ' or a few short bullet points'}.`,
+    gateActive
+      ? 'Write your completion summary exactly once per turn. For edited code, write it in the final message after the automated validation/reviewer gate has passed — do not summarize the finished work before the gate runs.'
+      : `After completing the user request, summarize your changes in a sentence${isFast ? '' : ' or a few short bullet points'}.`,
     isDefault &&
       'Do not manually spawn code-reviewer for the same edited file set that the automated runtime gate will review. Manual review is only for user-requested extra review or pre-edit/advisory review. Spawn security-reviewer for auth, crypto, secrets, permissions, injection, sandboxing, supply-chain, or production-risk changes.',
     isDefault &&
-      'After the automated validation/reviewer gate has passed for edited code, call suggest_followups with around 3 useful next steps if that tool is available. If suggest_followups is unavailable, do not let that block the final summary/end.',
+      'After the automated validation/reviewer gate has passed for edited code, write your single completion summary and call suggest_followups with around 3 useful next steps in that same final message, if that tool is available. If suggest_followups is unavailable, do not let that block the final summary/end.',
   ).join('\n')
 }
 
@@ -7157,7 +7182,11 @@ function buildExecutePlanStepPrompt({}: {}) {
     // editor-handoff / phase-trigger / "don't manually spawn code-reviewer"
     // guidance as the DEFAULT step prompt. Compose it from the shared builder
     // instead of reimplementing so the two step prompts cannot drift.
-    buildImplementationStepPrompt({ isDefault: true, isFast: false }),
+    buildImplementationStepPrompt({
+      isDefault: true,
+      isFast: false,
+      hasNoValidation: false,
+    }),
     'You are in EXECUTE_PLAN mode. Execute or resume durable plan artifacts, using the project source editing tools when implementation work is required. Unlike PLAN mode, you may edit project source files to complete planned tasks.',
     'Treat SPEC.md, PLAN.md, STATUS.md, and LESSONS.md under the durable plan session as authoritative. Use any artifact contents already present in the conversation as the initial source of truth, confirm the next incomplete or blocked item from that context, and read artifacts directly only when contents are missing, truncated, stale, or have changed. Do not repeatedly re-read unchanged artifacts or source files after confirming the next item; continue from it unless the artifacts say completed work must be revisited.',
     'Honor the deterministic preflight included with resumed artifacts. Do not edit source when preflight reports errors. Use stable task IDs for updates, keep at most one task in_progress, respect dependencies, and do not mark a task done until its Validate gate passes and the checkpoint is recorded.',
