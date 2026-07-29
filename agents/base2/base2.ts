@@ -751,8 +751,13 @@ ${specialistRoutingSection}
           /(?:^|[.!?;]\s*)(?:should\b|how\s+(?:do|can|should|would)\b)/i
         if (advisoryQuestion.test(text)) return false
 
+        // Delivery phrasings stack determiners ("push all our current
+        // changes"), so allow 0-3 of them between the git verb and the scope
+        // noun. The repetition is bounded on purpose: an unbounded `*`/`+` on
+        // this alternation inside the larger pattern is a catastrophic-
+        // backtracking risk, and this runs on arbitrary user prompt text.
         return new RegExp(
-          String.raw`\b${gitAction}\b(?:\s+(?:and|then)\s+(?:commit|push))?(?:\s+(?:our|my|the|these|those|all|current|existing|pending|dirty|local))?\s+${deliveryScope}\b`,
+          String.raw`\b${gitAction}\b(?:\s+(?:and|then)\s+(?:commit|push))?(?:\s+(?:our|my|the|these|those|all|current|existing|pending|dirty|local)){0,3}\s+${deliveryScope}\b`,
           'i',
         ).test(text)
       }
