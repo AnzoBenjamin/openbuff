@@ -10,6 +10,8 @@ This package contains code shared across the Openbuff monorepo, especially the l
 - Agent templates may set `spawnableAgentToolMode: 'generic'` to retain spawn permissions and the compact agent catalog while omitting one provider-facing schema per child. Keep trusted harness-only capabilities in `programmaticToolNames`; do not expose them merely for generator reachability.
 - `ProjectFileContext.fileTreeSource` distinguishes live filesystem trees from authoritative virtual `projectFiles` snapshots so read tools do not probe unrelated host paths for in-memory projects.
 - Canonical `.agents/sessions/<slug>/` planning artifacts may be read through the shared sensitive-path policy, while unrelated files under ignored `.agents` directories remain protected.
+- `printModeEventSchema` in `common/src/types/print-mode.ts` carries an additive `job_update` variant (`jobId`, `kind`, `state`, `sequence`, plus optional `label`, `outputDelta`, `exitCode`, `error`) for live background-job progress. It is additive-only: no existing variant was removed, renamed, or retyped, and consumers matching exhaustively on `event.type` must treat unknown variants as no-ops, so ignoring `job_update` is safe.
+- `printModeToolCallSchema` also carries optional `queued` (the write is waiting behind a per-path write barrier, which distinguishes "queued" from "running with no result yet") and `backgroundJobId` (correlates a `run_terminal_command` BACKGROUND launch to later `job_update` events for the same tool card).
 
 ## Key Areas
 
@@ -22,6 +24,9 @@ This package contains code shared across the Openbuff monorepo, especially the l
 - **Provider config**: Shared validation and contracts for OpenAI-compatible, Anthropic-compatible, and other BYOK providers
 - **Workspace state**: `common/src/types/workspace-state.ts` tracks monotonically increasing local workspace revisions and bounded change records so SDK/runtime tools can tie mutation receipts, review bundles, and snapshot-aware validation to a stable `workspace.v1.<revision>.<digest>` identifier.
 - **Task memory**: `common/src/types/task-memory.ts` defines bounded Zod schemas for durable requirements, evidence, blockers, validation, and review notes that survive long task execution without leaking unbounded context.
+- **Job registry (`common/src/util/job-registry.ts`)**: a single `JobRegistry` tracks both detached shell jobs (`kind: 'process'`) and background agent turns (`kind: 'agent'`) under one `JobState` union (`queued`, `running`, `stopping`, `completed`, `error`, `stopped`, `lost`, `cancelled`). It enforces per-consumer event cursors, bounded per-kind event/output buffers with overflow eviction, owner assertions via `assertOwned`, and TTL sweeping of settled jobs (`SETTLED_JOB_TTL_MS`, with a separate `AGENT_JOB_SETTLED_TTL_MS`); `isTerminalJobState` is the shared terminal-state predicate.
+- **Read authorization (`common/src/tools/params/based-on-read.ts`)**: `basedOnReadSchema` accepts only an authenticated `cap.v3` `readCapability` copied verbatim from a fresh `read_files` `editAnchor`, and the token binds range and hash to the issuing project, path, and run. Range capabilities never authorize whole-file overwrites, tool runtimes still perform the final scope/freshness check, and `canonicalBasedOnReadSchema` is the shared alias used by mutation tool schemas.
+- **Git discipline prompt (`common/src/constants/git-discipline.ts`)**: `gitCommitGuidePrompt` is the shared commit-workflow contract. It requires one-line `git commit` invocations using repeated `-m` flags for subject and body, forbids HEREDOC, command substitution, pipes, redirects, and raw newlines in commit messages, and forbids amend without explicit authorization as well as AI-attribution footers.
 
 ## Scope Notes
 
