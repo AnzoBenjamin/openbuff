@@ -33,7 +33,7 @@ const statusColor = (status: GateStateStatus, theme: ChatTheme): string => {
     case 'pending':
       return theme.warning
     case 'skipped':
-      return theme.secondary
+      return theme.warning
   }
 }
 
@@ -58,6 +58,16 @@ export const GateStateBox = memo(({ block }: GateStateBoxProps) => {
       }}
     >
       <text style={{ fg: color }}>{heading}</text>
+      {block.gateStatus === 'skipped' ? (
+        <text
+          style={{
+            wrapMode: 'word',
+            fg: color,
+          }}
+        >
+          SKIPPED — gate intentionally not run
+        </text>
+      ) : null}
       {block.details ? (
         <text
           style={{

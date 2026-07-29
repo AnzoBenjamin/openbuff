@@ -106,7 +106,7 @@ export function formatPreflightErrorMessage(
 ): string {
   const toolSpecificGuidance =
     toolName === 'edit_transaction'
-      ? 'NO files were changed. Do NOT resubmit the same edit_transaction; it will fail the same way.\nFor import changes specifically, prefer structured insert_import/remove_import operations instead of rewriting an entire import block — generated multi-import rewrites are the most common cause of this error (e.g. an `import { ... }` left without a valid `from "..."`).'
+      ? 'NO files were changed. Do NOT resubmit the same edit_transaction; it will fail the same way.\nFor import changes specifically, prefer structured insert_import/remove_import operations instead of rewriting an entire import block — generated multi-import rewrites are the most common cause of this error (e.g. an `import { ... }` left without a valid `from "..."`).\nAnother common cause is a single oversized edit whose `newString`/`content` (roughly >30-50 KB) was truncated in transport, producing a mid-body syntax error like `Unexpected ,` — the reported error may be a symptom of truncation, not a real bug in the existing file. To recover, split the change into several smaller capability-anchored edits: re-read the exact target range with `read_files`, then submit `replace_range` with `readCapability` or `str_replace` with `basedOnRead` in bounded chunks (anchor each on a unique declaration) rather than one monolithic transaction.'
       : toolName === 'apply_smart_patch'
         ? 'The smart patch was NOT written to disk. Do NOT resubmit the same patch; it will fail the same way.'
         : 'The edit was NOT written to disk. Do NOT resubmit the same edit; it will fail the same way.'
