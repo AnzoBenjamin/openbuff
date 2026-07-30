@@ -30,16 +30,35 @@ export function selectSpecialistReviewers(params: {
       requirements,
     )
   ) selected.add('dependency-reviewer')
-  if (/(?:^|\/)(?:migrations?|schema|database|db)(?:\/|\.)|\.sql$|\b(?:migration|backfill|schema change|database compatibility|rollback)\b/.test(joined))
+  if (
+    /(?:^|\/)(?:migrations?|schema|database|db)(?:\/|\.)|\.sql$|\b(?:migration|backfill|schema change|database compatibility|rollback)\b/.test(
+      joined,
+    )
+  )
     selected.add('migration-reviewer')
   if (
     /\b(?:public api|backward compat|breaking change|deprecat|serialization|persisted format|config contract|environment variable|cli flag)\b/.test(requirements) ||
     files.some((file) => /(?:^|\/)(?:index|exports?|public-api)\.[^.]+$|(?:^|\/)(?:routes?|config|schemas?|types)\//.test(file))
   ) selected.add('compatibility-reviewer')
+  const isAgentsSessionArtifact = (file: string) =>
+    /(?:^|\/)\.agents\/sessions(?:\/|$)/.test(file)
+
+  const isReliabilityCodePath = (file: string) => {
+    if (isAgentsSessionArtifact(file)) return false
+    // Directory-style concurrency/runtime surfaces only (not bare state.json filenames).
+    return /(?:^|\/)(?:queues?|workers?|jobs?|cache|sessions?|state|process|async|concurrency)\//.test(
+      file,
+    )
+  }
+
   if (
-    /\b(?:race|concurr|retry|retries|cancel|abort|idempoten|deadlock|state machine|resource leak|partial failure)\b/.test(requirements) ||
-    files.some((file) => /(?:^|\/)(?:queues?|workers?|jobs?|cache|state|session|process|async|concurrency)(?:\/|\.)/.test(file))
-  ) selected.add('reliability-reviewer')
+    /\b(?:race|concurr|retry|retries|cancel|abort|idempoten|deadlock|state machine|resource leak|partial failure)\b/.test(
+      requirements,
+    ) ||
+    files.some(isReliabilityCodePath)
+  ) {
+    selected.add('reliability-reviewer')
+  }
   if (
     /\b(?:performance|latency|throughput|benchmark|profil|allocation|hot path|load test|complexity)\b/.test(requirements) ||
     files.some((file) => /(?:bench|perf|load-test|profil)/.test(file))

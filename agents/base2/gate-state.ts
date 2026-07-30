@@ -271,4 +271,19 @@ export type Base2ActiveWorkState = Base2GateState & {
    * state lacks this field (treated as empty).
    */
   auxGatesLastPendingFiles?: string[]
+  /**
+   * Pin/lag UX: count of task-related dirty reviewable files in the latest
+   * dirty snapshot (gate-passed and unreviewed). Optional for round-trip.
+   */
+  dirtyReviewableCount?: number
+  /**
+   * Pin/lag UX: task-related dirty reviewable files not yet in gatePassedFiles.
+   * When non-empty the gate must not present as clean PASSED.
+   */
+  unreviewedDirtyReviewableFiles?: string[]
+  /**
+   * Pin/lag UX: task-related dirty non-reviewable paths (docs/session/jsonl).
+   * Surfaced as excluded from the gate, not as validated or blocking commit.
+   */
+  nonReviewableDirtyTaskFiles?: string[]
 }

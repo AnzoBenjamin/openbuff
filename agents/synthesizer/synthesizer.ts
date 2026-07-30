@@ -56,6 +56,7 @@ const definition: SecretAgentDefinition = {
   spawnableAgents: [],
   toolNames: [
     'read_files',
+    'read_blocks',
     'write_file',
     'list_directory',
     'glob',

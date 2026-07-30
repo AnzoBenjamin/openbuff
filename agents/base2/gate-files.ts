@@ -81,12 +81,61 @@ export function collectToolInputFiles(input: unknown, out: Set<string>): void {
 }
 
 /**
+ * Collect paths from a schemaVersion=1 agent receipt or a runtime envelope
+ * with `agentReceipt`. Paths may be strings or `{ path: string }`.
+ *
+ * Mirrors the inline base2 P1 helper so multi-file editor spawn batches that
+ * only surface `agentReceipt.changedFiles` (without a file_mutation_result)
+ * still contribute to the gate file set.
+ */
+export function collectAgentReceiptChangedFiles(
+  record: Record<string, unknown>,
+  out: Set<string>,
+): void {
+  const collectFromChangedFiles = (changedFiles: unknown): void => {
+    if (!Array.isArray(changedFiles)) return
+    for (const item of changedFiles) {
+      if (typeof item === 'string' && item.trim()) {
+        out.add(item)
+        continue
+      }
+      if (item && typeof item === 'object') {
+        const path = (item as Record<string, unknown>).path
+        if (typeof path === 'string' && path.trim()) out.add(path)
+      }
+    }
+  }
+  const isAgentReceipt = (candidate: Record<string, unknown>): boolean =>
+    candidate.schemaVersion === 1 &&
+    typeof candidate.receiptId === 'string' &&
+    Array.isArray(candidate.changedFiles)
+  if (isAgentReceipt(record)) {
+    collectFromChangedFiles(record.changedFiles)
+  }
+  if (
+    record.agentReceipt &&
+    typeof record.agentReceipt === 'object' &&
+    !Array.isArray(record.agentReceipt)
+  ) {
+    const receipt = record.agentReceipt as Record<string, unknown>
+    if (isAgentReceipt(receipt)) {
+      collectFromChangedFiles(receipt.changedFiles)
+    } else if (Array.isArray(receipt.changedFiles)) {
+      // Runtime envelopes may omit schemaVersion on a nested receipt;
+      // still adopt changedFiles when present.
+      collectFromChangedFiles(receipt.changedFiles)
+    }
+  }
+}
+
+/**
  * Recursively visits any value (typically a tool-result or message-history
  * fragment) and adds every changed file path it finds to `out`.
  *
  * Recognized shapes:
  *   - file-changing tool calls with a structured `input`
  *   - canonical file_mutation_result actions whose outcome is `applied`
+ *   - schemaVersion=1 agent receipts / nested `agentReceipt.changedFiles`
  *   - `type: 'json'` envelope parts where the inner `value` recurses
  * Legacy mutation-shaped fields are traversed but never counted.
  */
@@ -114,6 +163,9 @@ export function visitToolValue(value: unknown, out: Set<string>): void {
       }
     }
   }
+  // P1: adopt agent receipt changedFiles (multi-file editor spawn batches
+  // that only surface agentReceipt.changedFiles, without a file_mutation_result).
+  collectAgentReceiptChangedFiles(record, out)
   for (const nested of Object.values(record)) {
     visitToolValue(nested, out)
   }

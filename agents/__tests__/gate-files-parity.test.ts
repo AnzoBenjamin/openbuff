@@ -34,6 +34,10 @@ const INLINE_HELPER_NAMES: GateFilesFunctionName[] = [
   'visitToolValue',
 ]
 
+// base2 visitToolValue calls this sibling; reconstruct it only for the base2
+// load path. Editor does not define/need it for the four-helper reconstruction.
+const BASE2_EXTRA_HELPER_NAMES = ['collectAgentReceiptChangedFiles'] as const
+
 function extractInlineFunctionSource(
   source: string,
   functionName: string,
@@ -64,13 +68,19 @@ function extractInlineFunctionSource(
 function loadInlineHelpers(
   sourcePath: string,
   nameMap: Record<GateFilesFunctionName, string>,
+  extraHelperNames: readonly string[] = [],
 ): GateFilesHelpers {
   const source = readFileSync(new URL(sourcePath, import.meta.url), 'utf8')
   const transpiler = new Bun.Transpiler({ loader: 'ts' })
   const javaScript = transpiler.transformSync(source)
-  const helperSource = INLINE_HELPER_NAMES.map((functionName) =>
-    extractInlineFunctionSource(javaScript, nameMap[functionName]),
-  ).join('\n\n')
+  const helperSource = [
+    ...INLINE_HELPER_NAMES.map((functionName) =>
+      extractInlineFunctionSource(javaScript, nameMap[functionName]),
+    ),
+    ...extraHelperNames.map((functionName) =>
+      extractInlineFunctionSource(javaScript, functionName),
+    ),
+  ].join('\n\n')
   // The `visitToolValue` canonical helper is named `visit` inside editor.ts,
   // so the return statement must reference the extracted name, not a
   // hard-coded `visitToolValue` identifier.
@@ -109,6 +119,7 @@ function loadInlineHelpers(
 function assertNoSiblingHelperReferences(
   sourcePath: string,
   nameMap: Record<GateFilesFunctionName, string>,
+  extraHelperNames: readonly string[] = [],
 ): void {
   const source = readFileSync(new URL(sourcePath, import.meta.url), 'utf8')
   const transpiler = new Bun.Transpiler({ loader: 'ts' })
@@ -128,10 +139,18 @@ function assertNoSiblingHelperReferences(
     return names
   }
 
-  const reconstructedNames = new Set(Object.values(nameMap))
-  const helperBodies = INLINE_HELPER_NAMES.map((functionName) =>
-    extractInlineFunctionSource(javaScript, nameMap[functionName]),
-  )
+  const reconstructedNames = new Set([
+    ...Object.values(nameMap),
+    ...extraHelperNames,
+  ])
+  const helperBodies = [
+    ...INLINE_HELPER_NAMES.map((functionName) =>
+      extractInlineFunctionSource(javaScript, nameMap[functionName]),
+    ),
+    ...extraHelperNames.map((functionName) =>
+      extractInlineFunctionSource(javaScript, functionName),
+    ),
+  ]
   // Callable helpers declared locally inside a reconstructed body are in scope
   // after reconstruction, so exclude them; only names declared elsewhere are
   // dangerous siblings.
@@ -142,8 +161,12 @@ function assertNoSiblingHelperReferences(
     (name) => !reconstructedNames.has(name) && !declaredInsideHelpers.has(name),
   )
 
-  for (let index = 0; index < INLINE_HELPER_NAMES.length; index += 1) {
-    const functionName = INLINE_HELPER_NAMES[index]
+  const reconstructedFunctionNames = [
+    ...INLINE_HELPER_NAMES,
+    ...extraHelperNames,
+  ]
+  for (let index = 0; index < reconstructedFunctionNames.length; index += 1) {
+    const functionName = reconstructedFunctionNames[index]
     const body = helperBodies[index]
     const referencedSiblings = siblingNames.filter((sibling) => {
       const escaped = sibling.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -169,6 +192,7 @@ describe('gate-files helpers — inline copies match canonical exports', () => {
         (acc, name) => ({ ...acc, [name]: name }),
         {} as Record<GateFilesFunctionName, string>,
       ),
+      BASE2_EXTRA_HELPER_NAMES,
     )
     assertParity(inline)
   })
@@ -189,6 +213,7 @@ describe('gate-files helpers — inline copies match canonical exports', () => {
         (acc, name) => ({ ...acc, [name]: name }),
         {} as Record<GateFilesFunctionName, string>,
       ),
+      BASE2_EXTRA_HELPER_NAMES,
     )
   })
 

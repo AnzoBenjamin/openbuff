@@ -79,6 +79,7 @@ const CUSTOM_RENDERERS = new Set<ToolName>([
   'edit_transaction',
   'query_index',
   'read_files',
+  'read_blocks',
   'read_subtree',
   'run_file_change_hooks',
   'run_terminal_command',

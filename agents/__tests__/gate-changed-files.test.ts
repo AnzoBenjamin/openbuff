@@ -45,6 +45,7 @@ function withCommittedReceipt<T extends Record<string, any>>(value: T): T {
 const INLINE_HELPER_NAMES = [
   'extractChangedFilesFromMessages',
   'visitToolValue',
+  'collectAgentReceiptChangedFiles',
   'collectToolInputFiles',
   'isFileChangingTool',
   'hasEditArtifact',
