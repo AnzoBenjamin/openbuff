@@ -223,6 +223,45 @@ export type Base2ActiveWorkState = Base2GateState & {
   docWriterGateDone?: boolean
   /** Reviewer-family specialist gates completed for the current pending set. */
   specialistReviewGatesDone?: string[]
+  /**
+   * Every reviewer family that still owes a fresh re-attestation. Superset of
+   * requiredReviewerRevalidation, which is retained as the first entry for
+   * serialized-state compatibility. Missing/legacy state is rehydrated from
+   * openReviewerFindings, so an owed reviewer can never be silently dropped.
+   * MUST stay a plain array (never a Set) so the state round-trips as JSON.
+   */
+  owedReviewerRevalidations?: Array<
+    'code-reviewer' | 'security-reviewer' | SpecialistReviewerAgent
+  >
+  /**
+   * Content fingerprint of the reviewable pending subset at the moment each
+   * specialist in specialistReviewGatesDone was credited. A credited
+   * specialist with no stored fingerprint (legacy state) or a mismatched
+   * fingerprint is treated as uncredited (fail closed), so a path-scoped
+   * legacy receipt can never attest bytes it did not review. MUST stay a plain
+   * JSON-serializable record (never a Map).
+   */
+  specialistReviewGateFingerprints?: Record<string, string>
+  /**
+   * Same snapshot binding for the security aux gate credit. Missing or
+   * mismatched (including a non-attestable sentinel) reopens the security
+   * gate rather than reusing unearned credit.
+   */
+  securityReviewGateFingerprint?: string
+  /**
+   * Repair rounds for the specialist -> repair -> re-review loop. Bounded by
+   * MAX_SPECIALIST_REPAIR_ROUNDS in base2.ts so the loop always terminates.
+   * Absent legacy state is treated as 0.
+   */
+  specialistRepairRoundCount?: number
+  /**
+   * Per-specialist consecutive no-verdict runs. Bounded by
+   * MAX_SPECIALIST_NO_VERDICT_RETRIES; while under the cap the specialist is
+   * NOT credited (fail closed) and re-runs, and once over the cap it is
+   * credited with reduced assurance so the gate cannot spin forever. MUST stay
+   * a plain JSON-serializable record.
+   */
+  specialistNoVerdictCounts?: Record<string, number>
   /** Compact source-backed receipts from successful reviewer passes. */
   reviewReceipts?: Base2ReviewReceipt[]
   /**

@@ -253,7 +253,9 @@ describe('editor agent', () => {
 
     test('contains write_file format example', () => {
       expect(editor.instructionsPrompt).toContain('write_file')
-      expect(editor.instructionsPrompt).toContain('content')
+      expect(editor.instructionsPrompt).toContain(
+        'write_file only for a necessary whole-file rewrite',
+      )
     })
 
     test('contains edit_transaction format example', () => {
@@ -284,11 +286,15 @@ describe('editor agent', () => {
     })
 
     test('mentions comprehensive changes', () => {
-      expect(editor.instructionsPrompt).toContain('comprehensive')
+      expect(editor.instructionsPrompt).toContain(
+        'Be complete and comprehensive',
+      )
     })
 
     test('mentions project conventions', () => {
-      expect(editor.instructionsPrompt).toContain('conventions')
+      expect(editor.instructionsPrompt).toContain(
+        "Follow the project's conventions and patterns",
+      )
     })
   })
 
@@ -306,9 +312,9 @@ describe('editor agent', () => {
     })
 
     test('mentions reading files for target context', () => {
-      expect(editor.spawnerPrompt).toContain('read')
-      expect(editor.spawnerPrompt).toContain('files')
-      expect(editor.spawnerPrompt).toContain('recover')
+      expect(editor.spawnerPrompt).toContain(
+        'read exact target files to recover missing or stale context',
+      )
     })
   })
 
@@ -632,7 +638,7 @@ describe('editor agent', () => {
       expect((result.value as any).input.output.status).toBe('blocked')
     })
 
-    test('reports apply_patch and apply_smart_patch paths as changed files', () => {
+    test('reports every updated path from a multi-action edit_transaction receipt', () => {
       const mockAgentState = createMockAgentState([])
       const mockLogger = {
         debug: () => {},
@@ -1073,7 +1079,7 @@ describe('editor agent', () => {
         agentState: createMockAgentState([
           {
             role: 'tool',
-            toolName: 'str_replace',
+            toolName: 'edit_transaction',
             content: [
               {
                 type: 'json',

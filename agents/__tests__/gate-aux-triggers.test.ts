@@ -59,6 +59,14 @@ interface AuxWorkState {
   preEditSecurityReviewDone: boolean
   testWriterGateDone: boolean
   docWriterGateDone: boolean
+  // The remaining flags resetAuxGateFlags writes. Asserted in the "reset
+  // clears every aux gate flag it owns" case below; fields the reset does not
+  // touch (stored fingerprints, specialist counters, repairSessionId) are
+  // deliberately absent so this stand-in cannot imply behavior that does not
+  // exist.
+  securityReviewGateDone: boolean
+  specialistReviewGatesDone: string[]
+  validationInfrastructureBypassFingerprint: string | undefined
 }
 
 type InlineHelperFactory = (processValue: typeof process) => GateAuxHelpers
@@ -166,6 +174,9 @@ function createState(over: Partial<AuxWorkState> = {}): AuxWorkState {
     preEditSecurityReviewDone: false,
     testWriterGateDone: false,
     docWriterGateDone: false,
+    specialistReviewGatesDone: [],
+    securityReviewGateDone: false,
+    validationInfrastructureBypassFingerprint: undefined,
     ...over,
   }
 }
@@ -511,6 +522,34 @@ describe('gate-aux-triggers', () => {
       ).toEqual([])
     })
 
+    test('specialist-routed source file is relevant via the test-writer predicate', () => {
+      // packages/api/src/queues/worker.ts is what the specialist risk router
+      // treats as reliability-routed. It is aux-relevant here because it is an
+      // ordinary non-test source file with a package test command — no separate
+      // router-shaped branch is needed (or wanted) for it.
+      expect(
+        helpers.selectAuxRelevantFiles(['packages/api/src/queues/worker.ts']),
+      ).toEqual(['packages/api/src/queues/worker.ts'])
+    })
+
+    test('test-writer output whose name collides with specialist routing keywords is still filtered out', () => {
+      // 'cache' is a reliability-router keyword, so a router-shaped predicate
+      // would admit this test file and reintroduce the reset -> respawn loop.
+      // The aux-output exclusion must win.
+      expect(
+        helpers.selectAuxRelevantFiles([
+          'packages/sdk/src/__tests__/cache.test.ts',
+        ]),
+      ).toEqual([])
+    })
+
+    test('doc-writer output whose name collides with specialist routing keywords is still filtered out', () => {
+      // Same collision on the doc side: 'state' is a reliability-router
+      // keyword, but docs/state.md is a doc-writer output and must stay out of
+      // the reset snapshot.
+      expect(helpers.selectAuxRelevantFiles(['docs/state.md'])).toEqual([])
+    })
+
     test('mixed set keeps only aux-relevant files, preserving first-seen order', () => {
       // A source file, its generated test file, and a docs file: only the
       // source file is aux-relevant, and it stays in input order.
@@ -549,22 +588,28 @@ describe('gate-aux-triggers', () => {
       //    detectPendingGateFileSetChange returns false and no reset + respawn
       //    happens. This is the regression guard for the infinite loop.
       const state = createState()
-      const sourceFiles = ['packages/sdk/src/run.ts']
+      const sourceFiles = ['packages/api/src/queues/worker.ts']
       const auxSnapshot = helpers.selectAuxRelevantFiles(sourceFiles)
-      expect(auxSnapshot).toEqual(['packages/sdk/src/run.ts'])
+      expect(auxSnapshot).toEqual(['packages/api/src/queues/worker.ts'])
       helpers.resetAuxGateFlags(state, auxSnapshot)
       state.testWriterGateDone = true
+      state.docWriterGateDone = true
 
-      const afterTestWriterRun = [
-        'packages/sdk/src/run.ts',
-        'packages/sdk/src/__tests__/run.test.ts',
+      // Both aux outputs carry names that collide with specialist routing
+      // keywords ('cache', 'state'), which is exactly the case that previously
+      // grew the snapshot and re-spawned the writers forever.
+      const afterWriterRuns = [
+        'packages/api/src/queues/worker.ts',
+        'packages/sdk/src/__tests__/cache.test.ts',
+        'docs/state.md',
       ]
-      const newAuxSnapshot = helpers.selectAuxRelevantFiles(afterTestWriterRun)
-      expect(newAuxSnapshot).toEqual(['packages/sdk/src/run.ts'])
+      const newAuxSnapshot = helpers.selectAuxRelevantFiles(afterWriterRuns)
+      expect(newAuxSnapshot).toEqual(['packages/api/src/queues/worker.ts'])
       expect(
         helpers.detectPendingGateFileSetChange(state, newAuxSnapshot),
       ).toBe(false)
       expect(state.testWriterGateDone).toBe(true)
+      expect(state.docWriterGateDone).toBe(true)
     })
   })
 
@@ -614,6 +659,32 @@ describe('gate-aux-triggers', () => {
       expect(
         helpers.detectPendingGateFileSetChange(state, ['b.ts', 'a.ts']),
       ).toBe(false)
+    })
+
+    test('reset clears every aux gate flag it owns', () => {
+      // Exact contract of resetAuxGateFlags: the four *Done booleans, the
+      // specialist done-list, the validation-bypass fingerprint, and the
+      // stored snapshot. Nothing else is touched.
+      const state = createState({
+        preEditSecurityReviewDone: true,
+        securityReviewGateDone: true,
+        testWriterGateDone: true,
+        docWriterGateDone: true,
+        specialistReviewGatesDone: ['reliability-reviewer'],
+        validationInfrastructureBypassFingerprint: 'stale-fingerprint',
+      })
+
+      helpers.resetAuxGateFlags(state, ['a.ts'])
+
+      expect(state).toEqual({
+        preEditSecurityReviewDone: false,
+        securityReviewGateDone: false,
+        testWriterGateDone: false,
+        docWriterGateDone: false,
+        specialistReviewGatesDone: [],
+        validationInfrastructureBypassFingerprint: undefined,
+        auxGatesLastPendingFiles: ['a.ts'],
+      })
     })
 
     test('reset clears a manually-set preEditSecurityReviewDone flag', () => {

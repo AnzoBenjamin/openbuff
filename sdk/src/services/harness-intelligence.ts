@@ -240,8 +240,40 @@ function toolVersion(
   return { available: true, ...(version ? { version } : {}) }
 }
 
-export function inspectHarnessEnvironment(cwd: string): EnvironmentInspection {
+type WorkspaceDiscovery = {
+  root: string
+  manifests: string[]
+  lockfiles: string[]
+  workspaces: ReturnType<typeof inferWorkspace>[]
+}
+
+/**
+ * Per-cwd discovery cache. `discoverNamedFiles` walks the whole project tree,
+ * and the aux gate calls inspect_environment + get_affected_tests +
+ * get_build_targets on every iteration, so the uncached cost is three full
+ * walks per iteration. Manifests/lockfiles change far more slowly than source
+ * files, so a short TTL keeps the hot path cheap while still picking up a newly
+ * added workspace. Test-file freshness is unaffected: getAffectedTestTargets
+ * still stats candidate test paths on every call.
+ */
+const discoveryCacheTtlMs = 5_000
+const discoveryCacheMaxEntries = 32
+const discoveryCache = new Map<
+  string,
+  { expiresAt: number; result: WorkspaceDiscovery }
+>()
+
+/** Drop every cached discovery result (tests, and callers that just scaffolded a workspace). */
+export function clearHarnessDiscoveryCache(): void {
+  discoveryCache.clear()
+}
+
+/** Manifest/lockfile discovery and workspace inference, without tool probes. */
+function discoverWorkspaces(cwd: string): WorkspaceDiscovery {
   const root = path.resolve(cwd)
+  const now = Date.now()
+  const cached = discoveryCache.get(root)
+  if (cached && cached.expiresAt > now) return cached.result
   const discovered = discoverNamedFiles(root)
   const discoveredSet = new Set(discovered)
   const manifests = discovered.filter((file) => {
@@ -258,6 +290,18 @@ export function inspectHarnessEnvironment(cwd: string): EnvironmentInspection {
   const workspaces = manifests.map((manifest) =>
     inferWorkspace(root, manifest, discoveredSet),
   )
+  const result: WorkspaceDiscovery = { root, manifests, lockfiles, workspaces }
+  discoveryCache.delete(root)
+  if (discoveryCache.size >= discoveryCacheMaxEntries) {
+    const oldest = discoveryCache.keys().next()
+    if (!oldest.done) discoveryCache.delete(oldest.value)
+  }
+  discoveryCache.set(root, { expiresAt: now + discoveryCacheTtlMs, result })
+  return result
+}
+
+export function inspectHarnessEnvironment(cwd: string): EnvironmentInspection {
+  const { root, manifests, lockfiles, workspaces } = discoverWorkspaces(cwd)
   const packageManager = workspaces.find(
     (workspace) =>
       workspace.root === '.' && workspace.ecosystem === 'javascript',
@@ -287,6 +331,22 @@ export function inspectHarnessEnvironment(cwd: string): EnvironmentInspection {
   }
 }
 
+/**
+ * Project-relative, POSIX-separator forms of `files`, dropping anything that is
+ * not an in-project path. `resolveProjectPath` also accepts the openbuff-owned
+ * OS temp namespace, whose result carries `scope: 'owned-temp'` and an ABSOLUTE
+ * `relativePath` that belongs to no workspace, so gate on the scope
+ * discriminator rather than treating every non-null result as project-relative.
+ */
+function toProjectRelativeFiles(cwd: string, files: string[]): string[] {
+  return files.flatMap((file) => {
+    const resolved = resolveProjectPath(cwd, file)
+    return resolved && resolved.scope === 'project'
+      ? [resolved.relativePath.replace(/\\/g, '/')]
+      : []
+  })
+}
+
 export type AffectedTestTarget = {
   source: string
   candidates: string[]
@@ -297,16 +357,8 @@ export function getAffectedTestTargets(
   cwd: string,
   files: string[],
 ): AffectedTestTarget[] {
-  const environment = inspectHarnessEnvironment(cwd)
-  return files.flatMap((source) => {
-    const resolvedSource = resolveProjectPath(cwd, source)
-    // Only in-project sources map to workspace targets. `resolveProjectPath`
-    // also accepts the openbuff-owned OS temp namespace, whose result carries
-    // `scope: 'owned-temp'` and an ABSOLUTE `relativePath` that belongs to no
-    // workspace, so gate on the scope discriminator instead of treating every
-    // non-null result as project-relative.
-    if (!resolvedSource || resolvedSource.scope !== 'project') return []
-    const normalized = resolvedSource.relativePath.replace(/\\/g, '/')
+  const { workspaces } = discoverWorkspaces(cwd)
+  return toProjectRelativeFiles(cwd, files).map((normalized) => {
     const extension = path.extname(normalized)
     const stem = normalized.slice(0, -extension.length)
     const directory = path.posix.dirname(normalized)
@@ -318,7 +370,7 @@ export function getAffectedTestTargets(
       `${directory}/__tests__/${basename}.spec${extension}`,
     ].filter((candidate) => fs.existsSync(path.join(cwd, candidate)))
     const packageRoot =
-      environment.workspaces
+      workspaces
         .filter(
           (workspace) =>
             workspace.root === '.' ||
@@ -327,7 +379,7 @@ export function getAffectedTestTargets(
         )
         .sort((left, right) => right.root.length - left.root.length)[0]?.root ??
       '.'
-    return [{ source: normalized, candidates, packageRoot }]
+    return { source: normalized, candidates, packageRoot }
   })
 }
 
@@ -341,19 +393,12 @@ export type BuildTarget = {
 }
 
 export function getBuildTargets(cwd: string, files: string[]): BuildTarget[] {
-  const environment = inspectHarnessEnvironment(cwd)
+  const { workspaces } = discoverWorkspaces(cwd)
   const targets: BuildTarget[] = []
-  const normalizedFiles = files.flatMap((file) => {
-    const resolved = resolveProjectPath(cwd, file)
-    // Same project-scope gate as `getAffectedTestTargets`: an owned-temp path
-    // resolves successfully but is not a workspace source.
-    return resolved && resolved.scope === 'project'
-      ? [resolved.relativePath.replace(/\\/g, '/')]
-      : []
-  })
-  const selected = new Map<string, (typeof environment.workspaces)[number]>()
+  const normalizedFiles = toProjectRelativeFiles(cwd, files)
+  const selected = new Map<string, (typeof workspaces)[number]>()
   for (const file of normalizedFiles) {
-    const candidates = environment.workspaces
+    const candidates = workspaces
       .filter(
         (workspace) =>
           workspace.root === '.' ||
@@ -375,10 +420,7 @@ export function getBuildTargets(cwd: string, files: string[]): BuildTarget[] {
         scripts = ['typecheck', 'test', 'lint', 'build'].filter(
           (script) => parsed.scripts?.[script],
         )
-        commands = scripts.map(
-          (script) =>
-            `${workspace.manager} ${workspace.manager === 'npm' ? 'run ' : 'run '}${script}`,
-        )
+        commands = scripts.map((script) => `${workspace.manager} run ${script}`)
       } catch {
         /* explicit unknown below */
       }
