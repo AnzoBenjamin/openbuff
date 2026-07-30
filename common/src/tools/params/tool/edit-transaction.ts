@@ -342,14 +342,105 @@ const providerTransactionEditSchema = z.discriminatedUnion('type', [
   writeFileEditSchema,
 ])
 
+/**
+ * Byte size of the model-supplied edit payload, summed per string field rather
+ * than by serializing the whole array. `JSON.stringify` + `TextEncoder.encode`
+ * would materialize two full copies of every successful transaction; the sum
+ * below is an equivalent bound on payload content (structural JSON punctuation
+ * is negligible against the limit) and allocates nothing.
+ */
+function transactionEditInputBytes(
+  edit: z.infer<typeof transactionEditSchema>,
+): number {
+  let bytes = Buffer.byteLength(edit.type) + Buffer.byteLength(edit.path)
+  if (edit.id) bytes += Buffer.byteLength(edit.id)
+  switch (edit.type) {
+    case 'str_replace':
+      for (const replacement of edit.replacements) {
+        bytes +=
+          Buffer.byteLength(replacement.oldString) +
+          Buffer.byteLength(replacement.newString)
+        if (replacement.basedOnRead) {
+          bytes += Buffer.byteLength(replacement.basedOnRead)
+        }
+      }
+      return bytes
+    case 'structured':
+      if (edit.operation.kind === 'insert_text') {
+        return bytes + Buffer.byteLength(edit.operation.text)
+      }
+      if (edit.operation.kind === 'insert_import') {
+        return bytes + Buffer.byteLength(edit.operation.importStatement)
+      }
+      if (edit.operation.importStatement) {
+        bytes += Buffer.byteLength(edit.operation.importStatement)
+      }
+      if (edit.operation.moduleSpecifier) {
+        bytes += Buffer.byteLength(edit.operation.moduleSpecifier)
+      }
+      return bytes
+    case 'create':
+      return bytes + Buffer.byteLength(edit.content)
+    case 'delete':
+      return bytes
+    case 'move':
+      return bytes + Buffer.byteLength(edit.destinationPath)
+    case 'replace_range':
+      return (
+        bytes +
+        Buffer.byteLength(edit.readCapability) +
+        Buffer.byteLength(edit.newContent) +
+        (edit.occurrence ? Buffer.byteLength(edit.occurrence.match) : 0)
+      )
+    case 'rewrite_symbol':
+      return (
+        bytes +
+        Buffer.byteLength(edit.symbol) +
+        Buffer.byteLength(edit.content) +
+        (edit.readCapability ? Buffer.byteLength(edit.readCapability) : 0)
+      )
+    case 'patch':
+      return bytes + Buffer.byteLength(edit.diff)
+    case 'write_file':
+      return (
+        bytes +
+        Buffer.byteLength(edit.content) +
+        (edit.basedOnRead ? Buffer.byteLength(edit.basedOnRead) : 0)
+      )
+  }
+}
+
 export const boundedTransactionEditListSchema = z
   .array(transactionEditSchema)
-  .min(1, 'Transaction edits cannot be empty')
-  .max(
-    MAX_FILE_CHANGES_PER_TRANSACTION,
-    `A transaction can contain at most ${MAX_FILE_CHANGES_PER_TRANSACTION} edits. Split larger changes into bounded transactions.`,
-  )
+  // The edit-count bounds live here rather than as chained .min/.max because a
+  // stringified `edits` payload fails the array type check, yet chained bounds
+  // would still measure the string's character length and emit a misleading
+  // "too many edits" diagnostic. superRefine only runs on a successfully parsed
+  // array, so all three transaction bounds (count, unique paths, input bytes)
+  // are evaluated in one place against real edits. The empty/oversized list
+  // issues deliberately keep the `too_small`/`too_big` codes that chained
+  // bounds emitted, so consumers branching on `issue.code` keep matching.
   .superRefine((edits, ctx) => {
+    if (edits.length < 1) {
+      ctx.addIssue({
+        code: 'too_small',
+        origin: 'array',
+        minimum: 1,
+        inclusive: true,
+        input: edits,
+        message: 'Transaction edits cannot be empty',
+      })
+    }
+    if (edits.length > MAX_FILE_CHANGES_PER_TRANSACTION) {
+      ctx.addIssue({
+        code: 'too_big',
+        origin: 'array',
+        maximum: MAX_FILE_CHANGES_PER_TRANSACTION,
+        inclusive: true,
+        input: edits,
+        message: `A transaction can contain at most ${MAX_FILE_CHANGES_PER_TRANSACTION} edits. Split larger changes into bounded transactions.`,
+      })
+    }
     const paths = new Set(
       edits.flatMap((edit) =>
         edit.type === 'move' ? [edit.path, edit.destinationPath] : [edit.path],
@@ -361,12 +452,15 @@ export const boundedTransactionEditListSchema = z
         message: `A transaction can touch at most ${MAX_TRANSACTION_UNIQUE_PATHS} unique paths. Split larger changes into bounded transactions.`,
       })
     }
-    const inputBytes = new TextEncoder().encode(
-      JSON.stringify(edits),
-    ).byteLength
+    let inputBytes = 0
+    for (const edit of edits) inputBytes += transactionEditInputBytes(edit)
     if (inputBytes > MAX_TRANSACTION_INPUT_BYTES) {
       ctx.addIssue({
-        code: 'custom',
+        code: 'too_big',
+        origin: 'array',
+        maximum: MAX_TRANSACTION_INPUT_BYTES,
+        inclusive: true,
+        input: edits,
         message: `Transaction input exceeds the ${MAX_TRANSACTION_INPUT_BYTES}-byte limit. Split larger changes into bounded transactions.`,
       })
     }
