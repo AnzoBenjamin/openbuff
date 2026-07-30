@@ -133,6 +133,7 @@ export const printModeReasoningDeltaSchema = z.object({
   text: z.string(),
   ancestorRunIds: z.string().array(),
   runId: z.string(),
+  agentId: z.string().optional(),
 })
 export type PrintModeReasoningDelta = z.infer<
   typeof printModeReasoningDeltaSchema

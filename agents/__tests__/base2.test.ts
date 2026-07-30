@@ -296,6 +296,91 @@ function loadInlineParseGitStatusLine(): ParseGitStatusLine {
   return buildHelper()
 }
 
+type RepairEditorReadablePaths = (
+  paths: string[],
+  texts?: string[],
+) => string[]
+
+// repairEditorReadablePaths lives inside the serialized handleSteps generator.
+// Reconstruct it with the normalizeGateFilePath + inferWorkspaceRootFromPath
+// helpers it closes over so unit tests can assert package-root / cited-path
+// expansions without driving a full gate lifecycle.
+function loadInlineRepairEditorReadablePaths(): RepairEditorReadablePaths {
+  const base2Source = readFileSync(
+    new URL('../base2/base2.ts', import.meta.url),
+    'utf8',
+  )
+  // handleSteps helpers are TypeScript; transpile before new Function (plain JS).
+  const transpiler = new Bun.Transpiler({ loader: 'ts', target: 'bun' })
+  const combinedTs = [
+    extractInlineFunctionSource(base2Source, 'normalizeGateFilePath'),
+    extractInlineFunctionSource(base2Source, 'inferWorkspaceRootFromPath'),
+    extractInlineFunctionSource(base2Source, 'repairEditorReadablePaths'),
+    'return repairEditorReadablePaths',
+  ].join('\n')
+  const combinedJs = transpiler.transformSync(combinedTs)
+  const buildHelper = new Function(`"use strict";\n${combinedJs}`) as () => RepairEditorReadablePaths
+
+  return buildHelper()
+}
+
+describe('base2 inline repairEditorReadablePaths', () => {
+  const repairEditorReadablePaths = loadInlineRepairEditorReadablePaths()
+
+  test('expands package roots for multi-segment paths without granting project-wide **/*', () => {
+    const paths = repairEditorReadablePaths([
+      'packages/agent-runtime/src/foo.ts',
+    ])
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        'packages/agent-runtime/src/foo.ts',
+        'packages/agent-runtime/src/**/*',
+        'packages/agent-runtime/**/*',
+      ]),
+    )
+    expect(paths).not.toEqual(expect.arrayContaining(['*', '**/*']))
+  })
+
+  test('extracts cited schema/context paths from finding text into READ scope', () => {
+    // Finding files list only a packages/ path, but the finding text cites a
+    // common/ schema file that the repair editor needs as read-only context.
+    const paths = repairEditorReadablePaths(
+      ['packages/agent-runtime/src/tools/edit.ts'],
+      [
+        'BLOCKING: import is out of date; see common/src/tools/params/tool/replace-range.ts for the schema.',
+      ],
+    )
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        'packages/agent-runtime/src/tools/edit.ts',
+        'common/src/tools/params/tool/replace-range.ts',
+      ]),
+    )
+    expect(
+      paths.includes('common/**/*') ||
+        paths.includes('common/src/tools/params/tool/**/*'),
+    ).toBe(true)
+    expect(paths).not.toEqual(expect.arrayContaining(['*', '**/*']))
+  })
+
+  test('skips URL-like tokens, node_modules, and .env paths from free-text extraction', () => {
+    const paths = repairEditorReadablePaths(['src/a.ts'], [
+      'See https://example.com/src/schema.ts and node_modules/pkg/index.ts and .env.local',
+    ])
+    expect(paths).toEqual(expect.arrayContaining(['src/a.ts', 'src/**/*']))
+    expect(paths.some((p) => p.includes('node_modules'))).toBe(false)
+    expect(paths.some((p) => p.includes('.env'))).toBe(false)
+    expect(paths).not.toContain('https://example.com/src/schema.ts')
+    expect(paths).not.toEqual(expect.arrayContaining(['*', '**/*']))
+  })
+
+  test('root-level files stay file + parent-dir only (no bare **/*)', () => {
+    const paths = repairEditorReadablePaths(['README.md'])
+    expect(paths).toEqual(['README.md'])
+    expect(paths).not.toEqual(expect.arrayContaining(['*', '**/*']))
+  })
+})
+
 describe('base2 inline parseGitStatusLine', () => {
   const parseGitStatusLine = loadInlineParseGitStatusLine()
 
@@ -546,6 +631,42 @@ describe('base2 validation/reviewer coordination prompts', () => {
       'Do not use the write_todos tool in plan mode',
     )
   })
+
+  test('default mode defers the single completion summary until after the gate', () => {
+    // The gate injects the post-gate finalization notice, so the pre-gate
+    // prompts must not also demand a completion summary (which produced two
+    // summaries per turn).
+    const base2 = createBase2('default')
+
+    expect(base2.instructionsPrompt).toContain(
+      'Write exactly ONE user-visible completion summary per turn',
+    )
+    expect(base2.instructionsPrompt).not.toContain(
+      'Inform the user that you have completed the task in one sentence',
+    )
+    expect(base2.instructionsPrompt).not.toContain(
+      'until after you have written a user-visible completion summary',
+    )
+    expect(base2.stepPrompt).toContain(
+      'Write your completion summary exactly once per turn',
+    )
+    expect(base2.stepPrompt).not.toContain(
+      'After completing the user request, summarize your changes',
+    )
+  })
+
+  test('fast mode keeps the original single-summary wording', () => {
+    // Gate-disabled modes never get a post-gate finalization notice, so their
+    // prompts must still ask for the summary directly.
+    const base2 = createBase2('fast')
+
+    expect(base2.instructionsPrompt).toContain(
+      'Inform the user that you have completed the task in one sentence',
+    )
+    expect(base2.stepPrompt).toContain(
+      'After completing the user request, summarize your changes',
+    )
+  })
 })
 
 describe('base-deep prompt naming and tool guidance', () => {
@@ -574,6 +695,7 @@ describe('base-deep prompt naming and tool guidance', () => {
     expect(baseDeep.toolNames).toEqual(
       expect.arrayContaining([
         'read_outline',
+        'read_blocks',
         'list_directory',
         'glob',
         'edit_transaction',
@@ -3902,6 +4024,68 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ stepsComplete: true, toolResult: [] } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
+    // Aux-ownership routing: the security repair set
+    // requiredReviewerRevalidation='security-reviewer' (family 'security') and
+    // reset securityReviewGateDone, so on loop re-entry the SECURITY AUX BLOCK
+    // re-fires (spawning security-reviewer inline with params) rather than the
+    // final code-reviewer.
+    const revalidationReview = gen.next({
+      toolResult: [
+        {
+          type: 'json',
+          value: { status: ' M sdk/src/policy/terminal-command-policy.ts' },
+        },
+      ],
+    } as any)
+    expect(revalidationReview.value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'security-reviewer' },
+    })
+    const revalidationPrompt = (revalidationReview.value as any).input
+      .prompt as string
+    const revalidationFingerprint = revalidationPrompt
+      .split('Snapshot fingerprint: ')[1]
+      .split('\n')[0]
+    // A passing snapshot-bound security review clears the security-family
+    // marker (requiredReviewerRevalidation -> undefined) and marks the gate
+    // done, so the loop can proceed to validation and the final code-reviewer.
+    const afterSecurityPass = gen.next({
+      toolResult: [
+        {
+          type: 'json',
+          value: {
+            schemaVersion: 1,
+            verdict: 'LOOKS_GOOD',
+            snapshotFingerprint: revalidationFingerprint,
+            reviewedFiles: ['sdk/src/policy/terminal-command-policy.ts'],
+            findings: [],
+            coverage: 'covered',
+            dimensions: {
+              inputBoundaries: 'pass',
+              authorization: 'pass',
+              secretHandling: 'pass',
+              resourceSafety: 'pass',
+              failureMode: 'pass',
+            },
+            requirementCoverage: [],
+          },
+        },
+      ],
+    } as any)
+    expect(afterSecurityPass.value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    const maybePinnedStateAfterSecurity = gen.next().value
+    if (maybePinnedStateAfterSecurity !== 'STEP') {
+      expect(maybePinnedStateAfterSecurity).toMatchObject({
+        toolName: 'add_message',
+      })
+      expect(gen.next().value).toBe('STEP')
+    }
+    expect(
+      gen.next({ stepsComplete: true, toolResult: [] } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
     expect(
       gen.next({
         toolResult: [
@@ -3930,13 +4114,33 @@ describe('base2 verification and reviewer gates', () => {
       ],
     } as any)
 
+    // The FINAL reviewer block only spawns code-reviewer now (security review
+    // was owned by the aux block above).
     expect(finalReview.value).toMatchObject({
       toolName: 'spawn_agents',
-      input: { agents: [{ agent_type: 'security-reviewer' }] },
+      input: { agents: [{ agent_type: 'code-reviewer' }] },
     })
+    const finalPreCreditStatus = gen.next(
+      attestedReviewerResult(finalReview.value) as any,
+    )
+    expect(finalPreCreditStatus.value).toMatchObject({ toolName: 'git_status' })
+    const gatePassed = gen.next({
+      toolResult: [
+        {
+          type: 'json',
+          value: { status: ' M sdk/src/policy/terminal-command-policy.ts' },
+        },
+      ],
+    } as any)
+    expect(gatePassed.value).toMatchObject({ toolName: 'add_message' })
+    expect((gatePassed.value as any).input.content).toMatch(
+      /reviewer gate passed with LOOKS_GOOD/i,
+    )
+    // Aux-ownership terminal state: the security-family marker was cleared by
+    // the aux block, NOT left as 'security-reviewer'.
     expect((agentState as any).base2ActiveWork).toMatchObject({
-      currentPhase: 'awaiting_review',
-      requiredReviewerRevalidation: 'security-reviewer',
+      currentPhase: 'final_response_allowed',
+      requiredReviewerRevalidation: undefined,
     })
   })
 
@@ -5190,11 +5394,11 @@ describe('base2 gate-passed credit ledger (Option A)', () => {
 })
 
 describe('base2 validation-first reviewer snapshots', () => {
-  test('staticReviewOnly still validates before spawning the final reviewer', () => {
+  test('validates before spawning the final reviewer', () => {
     const base2 = createBase2('default')
     const agentState = {
       agentId: 'base2-custom',
-      base2ActiveWork: { staticReviewOnly: true },
+      base2ActiveWork: {},
     }
     const gen = base2.handleSteps!({
       agentState,
@@ -5218,7 +5422,6 @@ describe('base2 validation-first reviewer snapshots', () => {
       toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
     } as any)
     expect(validation.value).toMatchObject({ toolName: 'run_file_change_hooks' })
-    expect((agentState as any).base2ActiveWork.staticReviewerJobId).toBeUndefined()
 
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
@@ -5232,67 +5435,6 @@ describe('base2 validation-first reviewer snapshots', () => {
       input: { agents: [{ agent_type: 'code-reviewer' }] },
     })
     expect((review.value as any).input.agents[0]).not.toHaveProperty('background')
-  })
-})
-
-describe('base2 static-review-only gate state (M3.1 unit tests)', () => {
-  test('staticReviewOnly defaults to false and is absent from emitted prompts', () => {
-    const base2 = createBase2('default')
-    // With no activeWorkState supplied, the default gate path must not
-    // surface the static-review-only fields in any emitted prompt.
-    expect(base2.systemPrompt).not.toContain('staticReviewOnly')
-    expect(base2.systemPrompt).not.toContain('staticReviewerJobId')
-    expect(base2.instructionsPrompt).not.toContain('staticReviewOnly')
-    expect(base2.instructionsPrompt).not.toContain('staticReviewerJobId')
-    expect(base2.stepPrompt).not.toContain('staticReviewOnly')
-    expect(base2.stepPrompt).not.toContain('staticReviewerJobId')
-  })
-
-  test('staticReviewOnly flag is surfaced on the active work state type', () => {
-    // Conditional types resolve at compile time; the asserts below fail to
-    // typecheck (build error) if the field is absent from the type, while the
-    // runtime assertion confirms the resolved literal is `true`.
-    type IsStaticReviewOnlyPresent = Base2ActiveWorkState extends {
-      staticReviewOnly?: boolean
-    }
-      ? true
-      : false
-    type IsStaticReviewerJobIdPresent = Base2ActiveWorkState extends {
-      staticReviewerJobId?: string
-    }
-      ? true
-      : false
-    const staticReviewOnlyPresent: IsStaticReviewOnlyPresent = true
-    const staticReviewerJobIdPresent: IsStaticReviewerJobIdPresent = true
-    expect(staticReviewOnlyPresent).toBe(true)
-    expect(staticReviewerJobIdPresent).toBe(true)
-  })
-
-  test('gate-state type round-trips staticReviewerJobId through JSON', () => {
-    const state: Base2ActiveWorkState = {
-      pendingGateFiles: ['src/a.ts'],
-      gatePassedFiles: [],
-      gatePassedPendingFiles: [],
-      gatePassedReviewerVerdict: '',
-      gatePassedValidationSummary: '',
-      gatePassedFingerprint: '',
-      lastReviewerGateSkipReason: '',
-      touchedFiles: ['src/a.ts'],
-      changedFiles: ['src/a.ts'],
-      currentPhase: 'awaiting_validation',
-      latestWorkSummary: '',
-      openReviewerBlockers: [],
-      lastValidationSummary: '',
-      nextRequiredAction: '',
-      lastPinnedStateMessage: '',
-      staticReviewOnly: true,
-      staticReviewerJobId: 'job-123',
-    }
-    const roundTripped = JSON.parse(
-      JSON.stringify(state),
-    ) as Base2ActiveWorkState
-    expect(roundTripped.staticReviewOnly).toBe(true)
-    expect(roundTripped.staticReviewerJobId).toBe('job-123')
   })
 })
 
@@ -5344,15 +5486,33 @@ describe('base2 repair-loop gate-state telemetry (M6.4)', () => {
       toolResult: [typecheckFailure],
     } as any).value as any
     expect(repairSpawn).toMatchObject({ toolName: 'spawn_agents' })
+    // Package root for src/a.ts is `src`, so file + parent-dir + package-root
+    // collapse to the same readable set (order-independent).
     expect(
       repairSpawn.input.agents[0].handoff.permissions.readablePaths,
-    ).toEqual(['src/a.ts', 'src/**/*'])
+    ).toEqual(expect.arrayContaining(['src/a.ts', 'src/**/*']))
+    expect(
+      new Set(
+        repairSpawn.input.agents[0].handoff.permissions.readablePaths as string[],
+      ),
+    ).toEqual(new Set(['src/a.ts', 'src/**/*']))
     expect(
       repairSpawn.input.agents[0].handoff.permissions.readablePaths,
     ).not.toContain('.env')
     expect(
       repairSpawn.input.agents[0].handoff.permissions.readablePaths,
     ).not.toEqual(expect.arrayContaining(['*', '**/*']))
+    expect(
+      repairSpawn.input.agents[0].handoff.permissions.allowedTools,
+    ).toEqual(
+      expect.arrayContaining([
+        'read_files',
+        'read_outline',
+        'read_blocks',
+        'read_subtree',
+        'edit_transaction',
+      ]),
+    )
     expect(
       repairSpawn.input.agents[0].handoff.permissions.writablePaths,
     ).toEqual(['src/a.ts'])

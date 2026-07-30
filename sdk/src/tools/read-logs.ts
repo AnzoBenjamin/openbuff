@@ -4,6 +4,7 @@ import * as path from 'path'
 import { jobRegistry } from '@codebuff/common/util/job-registry'
 
 import { getBackgroundJob, safeOpenJobLogForRead } from './background-jobs'
+import { resolveFilePathForOperation } from './path-utils'
 
 import type { BackgroundJobOwner } from './background-jobs'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
@@ -11,6 +12,13 @@ import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 const DEFAULT_LINES = 200
 const DEFAULT_MAX_CHARS = 20_000
 const READ_CHUNK_BYTES = 64 * 1024
+/**
+ * Exact file shape produced by `getBackgroundJobFilePath`
+ * (`openbuff-<jobId>.log` / `.json` in the OS temp dir). The path branch can
+ * legally reach these through the openbuff-owned temp namespace exception, so
+ * they must pass the same ownership gate as the jobId branch.
+ */
+const BACKGROUND_JOB_FILE_PATTERN = /^openbuff-(.+)\.(log|json)$/
 
 /** Registry-side id backing this adapter job (recovered jobs are remapped). */
 function registryIdFor(job: { jobId: string; registryJobId?: string }): string {
@@ -113,34 +121,11 @@ export async function readLogs(
   }
 
   const requested = params.path
-  let rootRealPath: string
-  try {
-    rootRealPath = fs.realpathSync(params.cwd)
-  } catch (error) {
-    return [
-      {
-        type: 'json',
-        value: {
-          path: requested,
-          errorMessage: `Could not resolve project directory: ${(error as Error).message}`,
-        },
-      },
-    ]
-  }
-
-  const resolved = path.isAbsolute(requested)
-    ? path.resolve(requested)
-    : path.resolve(rootRealPath, requested)
-
-  const isInsideRoot = (target: string) => {
-    const relative = path.relative(rootRealPath, target)
-    return (
-      relative === '' ||
-      (!relative.startsWith('..') && !path.isAbsolute(relative))
-    )
-  }
-
-  if (!isInsideRoot(resolved)) {
+  // Canonical containment check: in-project paths (including openbuff-owned
+  // OS temp namespaces such as background-job logs and tmux captures) pass;
+  // traversal, sibling-prefix and escaping-symlink paths are refused.
+  const resolved = resolveFilePathForOperation(params.cwd, requested)
+  if (!resolved) {
     return [
       {
         type: 'json',
@@ -152,34 +137,35 @@ export async function readLogs(
     ]
   }
 
-  let realResolved: string
-  try {
-    realResolved = fs.realpathSync(resolved)
-  } catch (error) {
-    return [
-      {
-        type: 'json',
-        value: {
-          path: requested,
-          errorMessage: `Could not stat log file: ${(error as Error).message}`,
+  // Ownership gate for the owned-temp exception: a resolved path that names a
+  // background-job log/metadata file exposes another session's output, owner
+  // record and full command line, so it must clear the SAME authorization the
+  // jobId branch enforces. Deliberately no `restampOwner`: a path lookup must
+  // never upgrade ownership. A foreign job is refused with the jobId branch's
+  // generic not_found text so this branch is not an existence oracle either.
+  // Names unknown to this process are unrelated `openbuff-` artifacts (e.g. a
+  // basher full log) and stay readable.
+  const jobFileMatch = path
+    .basename(resolved.operationPath)
+    .match(BACKGROUND_JOB_FILE_PATTERN)
+  if (jobFileMatch) {
+    const jobId = jobFileMatch[1]
+    const job = getBackgroundJob(jobId)
+    if (job && !jobRegistry.assertOwned(registryIdFor(job), params.owner).ok) {
+      return [
+        {
+          type: 'json',
+          value: {
+            path: requested,
+            jobId,
+            errorMessage: `No background job found with id "${jobId}".`,
+          },
         },
-      },
-    ]
+      ]
+    }
   }
 
-  if (!isInsideRoot(realResolved)) {
-    return [
-      {
-        type: 'json',
-        value: {
-          path: requested,
-          errorMessage: `Path is outside the project directory: ${requested}`,
-        },
-      },
-    ]
-  }
-
-  const tail = readTail(realResolved, lines, maxChars)
+  const tail = readTail(resolved.operationPath, lines, maxChars)
   if ('errorMessage' in tail) {
     return [
       {
@@ -197,7 +183,7 @@ export async function readLogs(
       type: 'json',
       value: {
         path: requested,
-        resolvedPath: realResolved,
+        resolvedPath: resolved.operationPath,
         ...tail,
       },
     },

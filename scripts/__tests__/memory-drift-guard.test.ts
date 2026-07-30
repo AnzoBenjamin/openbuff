@@ -212,6 +212,174 @@ test('staleness checker skips untracked knowledge.md in a git repo', () => {
   expect(findings.some((f) => f.path.includes('knowledge.md'))).toBe(false)
 })
 
+test('staleness checker does NOT flag topic-prefixed knowledge file when only topic-irrelevant sibling src changed', () => {
+  initGitRepo(tmpRoot)
+  mkdirSync(join(tmpRoot, 'cli', 'src'), { recursive: true })
+  // A topic-relevant file exists, but it was committed BEFORE the knowledge
+  // file — only the unrelated renderer changed afterwards.
+  writeFileSync(
+    join(tmpRoot, 'cli', 'src', 'tmux-runner.ts'),
+    'export const run = 1\n',
+  )
+  gitCommit(
+    tmpRoot,
+    ['cli/src/tmux-runner.ts'],
+    'add tmux runner',
+    '2023-01-01T00:00:00',
+  )
+  writeFileSync(join(tmpRoot, 'cli', 'tmux.knowledge.md'), '# tmux harness\n')
+  gitCommit(
+    tmpRoot,
+    ['cli/tmux.knowledge.md'],
+    'add tmux knowledge',
+    '2023-06-01T00:00:00',
+  )
+  writeFileSync(
+    join(tmpRoot, 'cli', 'src', 'gate-renderer.ts'),
+    'export const render = 1\n',
+  )
+  gitCommit(
+    tmpRoot,
+    ['cli/src/gate-renderer.ts'],
+    'add gate renderer',
+    '2024-06-01T00:00:00',
+  )
+  const findings = checkStaleness(tmpRoot)
+  expect(findings.some((f) => f.path.includes('tmux.knowledge.md'))).toBe(false)
+})
+
+test('staleness checker flags topic-prefixed knowledge file when a topic-relevant src file name changed', () => {
+  initGitRepo(tmpRoot)
+  mkdirSync(join(tmpRoot, 'cli', 'src'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'cli', 'tmux.knowledge.md'), '# tmux harness\n')
+  gitCommit(
+    tmpRoot,
+    ['cli/tmux.knowledge.md'],
+    'add tmux knowledge',
+    '2023-01-01T00:00:00',
+  )
+  writeFileSync(
+    join(tmpRoot, 'cli', 'src', 'tmux-runner.ts'),
+    'export const run = 1\n',
+  )
+  gitCommit(
+    tmpRoot,
+    ['cli/src/tmux-runner.ts'],
+    'change tmux runner',
+    '2024-06-01T00:00:00',
+  )
+  const findings = checkStaleness(tmpRoot)
+  expect(
+    findings.some(
+      (f) =>
+        f.path === 'cli/tmux.knowledge.md' &&
+        f.message.includes('tmux') &&
+        f.message.includes('stale'),
+    ),
+  ).toBe(true)
+})
+
+test('staleness checker flags topic-prefixed knowledge file when a topic-relevant src directory changed', () => {
+  initGitRepo(tmpRoot)
+  mkdirSync(join(tmpRoot, 'cli', 'src', 'tmux'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'cli', 'tmux.knowledge.md'), '# tmux harness\n')
+  gitCommit(
+    tmpRoot,
+    ['cli/tmux.knowledge.md'],
+    'add tmux knowledge',
+    '2023-01-01T00:00:00',
+  )
+  writeFileSync(
+    join(tmpRoot, 'cli', 'src', 'tmux', 'session.ts'),
+    'export const session = 1\n',
+  )
+  gitCommit(
+    tmpRoot,
+    ['cli/src/tmux/session.ts'],
+    'change tmux session',
+    '2024-06-01T00:00:00',
+  )
+  const findings = checkStaleness(tmpRoot)
+  expect(findings.some((f) => f.path === 'cli/tmux.knowledge.md')).toBe(true)
+})
+
+test('staleness checker matches topic-relevant src paths case-insensitively', () => {
+  initGitRepo(tmpRoot)
+  mkdirSync(join(tmpRoot, 'cli', 'src'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'cli', 'tmux.knowledge.md'), '# tmux harness\n')
+  gitCommit(
+    tmpRoot,
+    ['cli/tmux.knowledge.md'],
+    'add tmux knowledge',
+    '2023-01-01T00:00:00',
+  )
+  writeFileSync(
+    join(tmpRoot, 'cli', 'src', 'TmuxHarness.ts'),
+    'export const harness = 1\n',
+  )
+  gitCommit(
+    tmpRoot,
+    ['cli/src/TmuxHarness.ts'],
+    'change Tmux harness',
+    '2024-06-01T00:00:00',
+  )
+  const findings = checkStaleness(tmpRoot)
+  expect(findings.some((f) => f.path === 'cli/tmux.knowledge.md')).toBe(true)
+})
+
+test('staleness checker still flags plain knowledge.md for any sibling src change while sparing a topic file', () => {
+  initGitRepo(tmpRoot)
+  mkdirSync(join(tmpRoot, 'cli', 'src'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'cli', 'knowledge.md'), '# cli\n')
+  writeFileSync(join(tmpRoot, 'cli', 'tmux.knowledge.md'), '# tmux harness\n')
+  writeFileSync(
+    join(tmpRoot, 'cli', 'src', 'tmux-runner.ts'),
+    'export const run = 1\n',
+  )
+  gitCommit(
+    tmpRoot,
+    ['cli/knowledge.md', 'cli/tmux.knowledge.md', 'cli/src/tmux-runner.ts'],
+    'add cli knowledge and src',
+    '2023-01-01T00:00:00',
+  )
+  writeFileSync(
+    join(tmpRoot, 'cli', 'src', 'git-args.ts'),
+    'export const args = 1\n',
+  )
+  gitCommit(
+    tmpRoot,
+    ['cli/src/git-args.ts'],
+    'add git args parser',
+    '2024-06-01T00:00:00',
+  )
+  const findings = checkStaleness(tmpRoot)
+  expect(
+    findings.some(
+      (f) =>
+        f.path === 'cli/knowledge.md' &&
+        f.message ===
+          'knowledge.md last commit is older than sibling src/ last commit (stale)',
+    ),
+  ).toBe(true)
+  expect(findings.some((f) => f.path === 'cli/tmux.knowledge.md')).toBe(false)
+})
+
+test('staleness checker does NOT flag topic-prefixed knowledge file with no matching source under sibling src/', () => {
+  initGitRepo(tmpRoot)
+  mkdirSync(join(tmpRoot, 'cli', 'src'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'cli', 'tmux.knowledge.md'), '# tmux harness\n')
+  gitCommit(
+    tmpRoot,
+    ['cli/tmux.knowledge.md'],
+    'add tmux knowledge',
+    '2023-01-01T00:00:00',
+  )
+  writeFileSync(join(tmpRoot, 'cli', 'src', 'index.ts'), 'export const x = 1\n')
+  gitCommit(tmpRoot, ['cli/src/index.ts'], 'add src', '2024-06-01T00:00:00')
+  const findings = checkStaleness(tmpRoot)
+  expect(findings.length).toBe(0)
+})
+
 test('command checker flags missing script via --cwd subpackage', () => {
   mkdirSync(join(tmpRoot, 'cli'), { recursive: true })
   writeFileSync(
@@ -325,6 +493,90 @@ test('script-coverage checker flags unmentioned script', () => {
   const findings = checkScriptCoverage(tmpRoot)
   expect(findings.length).toBeGreaterThanOrEqual(1)
   expect(findings.some((f) => f.path.includes('ghost-tool.ts'))).toBe(true)
+})
+
+test('script-coverage checker does NOT flag a script wired into a non-root workspace manifest', () => {
+  mkdirSync(join(tmpRoot, 'scripts'), { recursive: true })
+  mkdirSync(join(tmpRoot, 'cli'), { recursive: true })
+  writeFileSync(
+    join(tmpRoot, 'scripts', 'generate-gate-helpers.ts'),
+    '// generator\n',
+  )
+  writeFileSync(
+    join(tmpRoot, 'scripts', 'package.json'),
+    JSON.stringify({ scripts: {} }),
+  )
+  writeFileSync(
+    join(tmpRoot, 'package.json'),
+    JSON.stringify({ name: 'root', workspaces: ['scripts', 'cli'] }),
+  )
+  writeFileSync(
+    join(tmpRoot, 'cli', 'package.json'),
+    JSON.stringify({
+      name: 'cli',
+      scripts: {
+        'prebuild:agents':
+          'bun run ../scripts/generate-gate-helpers.ts --write ../agents/base2/base2.ts',
+      },
+    }),
+  )
+  const findings = checkScriptCoverage(tmpRoot)
+  expect(
+    findings.some((f) => f.path.includes('generate-gate-helpers.ts')),
+  ).toBe(false)
+})
+
+test('script-coverage checker does NOT flag a script wired into a globbed workspace member', () => {
+  mkdirSync(join(tmpRoot, 'scripts'), { recursive: true })
+  mkdirSync(join(tmpRoot, 'packages', 'foo'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'scripts', 'globbed-tool.ts'), '// tool\n')
+  writeFileSync(
+    join(tmpRoot, 'scripts', 'package.json'),
+    JSON.stringify({ scripts: {} }),
+  )
+  writeFileSync(
+    join(tmpRoot, 'package.json'),
+    JSON.stringify({ name: 'root', workspaces: ['packages/*', 'scripts'] }),
+  )
+  writeFileSync(
+    join(tmpRoot, 'packages', 'foo', 'package.json'),
+    JSON.stringify({
+      name: 'foo',
+      scripts: { prep: 'bun run ../../scripts/globbed-tool.ts' },
+    }),
+  )
+  const findings = checkScriptCoverage(tmpRoot)
+  expect(findings.some((f) => f.path.includes('globbed-tool.ts'))).toBe(false)
+})
+
+test('script-coverage checker still flags a script referenced nowhere despite workspace scan', () => {
+  mkdirSync(join(tmpRoot, 'scripts'), { recursive: true })
+  mkdirSync(join(tmpRoot, 'packages', 'foo'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'scripts', 'ghost-tool.ts'), '// no docs\n')
+  writeFileSync(
+    join(tmpRoot, 'scripts', 'package.json'),
+    JSON.stringify({ scripts: {} }),
+  )
+  writeFileSync(
+    join(tmpRoot, 'package.json'),
+    JSON.stringify({ name: 'root', workspaces: ['packages/*', 'scripts'] }),
+  )
+  writeFileSync(
+    join(tmpRoot, 'packages', 'foo', 'package.json'),
+    JSON.stringify({
+      name: 'foo',
+      scripts: { prep: 'bun run ../../scripts/other-tool.ts' },
+    }),
+  )
+  const findings = checkScriptCoverage(tmpRoot)
+  expect(findings.some((f) => f.path.includes('ghost-tool.ts'))).toBe(true)
+  expect(
+    findings.some((f) =>
+      f.message.includes(
+        'script not mentioned in any markdown file or workspace package.json',
+      ),
+    ),
+  ).toBe(true)
 })
 
 test('script-coverage checker respects .coverage-allow allowlist', () => {

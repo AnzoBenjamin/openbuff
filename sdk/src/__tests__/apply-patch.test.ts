@@ -4,9 +4,13 @@ import path from 'path'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
+import { getOwnedTempRoots } from '@codebuff/common/util/project-path-containment'
 
 import { applyPatchTool, getPatchRangeContentHash } from '../tools/apply-patch'
+import { hashFileContent } from '../tools/filesystem-authority'
 import { encodeReadCapabilityToken } from '@codebuff/common/util/content-hash'
+
+import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 
 function expectAppliedAction(
   value: unknown,
@@ -1082,5 +1086,105 @@ describe('applyPatchTool symlink containment', () => {
     expect(
       fs.readFileSync(path.join(realDirectory, 'nested', 'new.txt'), 'utf8'),
     ).toBe('created')
+  })
+})
+
+describe('applyPatchTool owned-temp mutations', () => {
+  // `getOwnedTempRoots()[0]` rather than a literal `/tmp`: on macOS the OS temp
+  // dir is a symlinked `/var/folders/...` path.
+  const ownedTempRoot = getOwnedTempRoots()[0]
+
+  let projectRoot: string
+  let ownedTempDir: string
+  let ownedTempFile: string
+
+  /**
+   * `fs.promises` deliberately exposes no conditionalCommit/conditionalDelete
+   * (Node cannot combine a hash comparison with a write atomically), so it is
+   * the non-CAS adapter. This wrapper adds cooperative CAS so the companion
+   * case can prove the same update succeeds once the authority exists.
+   */
+  const casFileSystem = Object.assign(Object.create(fs.promises), {
+    mutationAuthority: 'cooperative_cas',
+    conditionalCommit: async (
+      filePath: string,
+      data: string | Uint8Array,
+      options: { expectedHash: string | null },
+    ) => {
+      const current = await fs.promises.readFile(filePath)
+      if (options.expectedHash !== hashFileContent(current)) {
+        return { applied: false }
+      }
+      await fs.promises.writeFile(filePath, data)
+      return { applied: true }
+    },
+  }) as CodebuffFileSystem
+
+  beforeEach(() => {
+    projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apply-patch-proj-'))
+    ownedTempDir = fs.mkdtempSync(
+      path.join(ownedTempRoot, 'openbuff-apply-patch-'),
+    )
+    ownedTempFile = path.join(ownedTempDir, 'scratch.txt')
+    fs.writeFileSync(ownedTempFile, 'before\n')
+  })
+
+  afterEach(() => {
+    fs.rmSync(projectRoot, { recursive: true, force: true })
+    fs.rmSync(ownedTempDir, { recursive: true, force: true })
+  })
+
+  test('refuses an owned-temp update on an adapter without conditional commit', async () => {
+    const result = await applyPatchTool({
+      parameters: {
+        operation: {
+          type: 'update_file',
+          path: ownedTempFile,
+          diff: '@@ -1,1 +1,1 @@\n-before\n+after\n',
+        },
+      },
+      cwd: projectRoot,
+      fs: fs.promises,
+    })
+
+    expect(getMutationErrorMessage(result)).toContain(
+      'owned-temp update cannot be applied safely',
+    )
+    expect(fs.readFileSync(ownedTempFile, 'utf8')).toBe('before\n')
+  })
+
+  test('applies an owned-temp update on a CAS-capable adapter', async () => {
+    const result = await applyPatchTool({
+      parameters: {
+        operation: {
+          type: 'update_file',
+          path: ownedTempFile,
+          diff: '@@ -1,1 +1,1 @@\n-before\n+after\n',
+        },
+      },
+      cwd: projectRoot,
+      fs: casFileSystem,
+    })
+
+    expectAppliedAction(result[0]?.value, 'update')
+    expect(result[0]?.value).toMatchObject({
+      authorityTier: 'conditional_commit',
+    })
+    expect(fs.readFileSync(ownedTempFile, 'utf8')).toBe('after\n')
+  })
+
+  test('refuses an owned-temp delete on an adapter without conditional delete', async () => {
+    // Same fail-closed policy as the update path: unlink-by-path after a plain
+    // revalidate cannot close the check/write race in world-writable temp space.
+    const result = await applyPatchTool({
+      parameters: { operation: { type: 'delete_file', path: ownedTempFile } },
+      cwd: projectRoot,
+      fs: fs.promises,
+    })
+
+    expect(getMutationErrorMessage(result)).toContain(
+      'owned-temp delete cannot be applied safely',
+    )
+    expect(fs.existsSync(ownedTempFile)).toBe(true)
   })
 })

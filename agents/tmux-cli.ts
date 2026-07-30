@@ -135,7 +135,7 @@ const definition: AgentDefinition = {
 3. Re-run the agent after fixing any issues
 4. Check the \`lessons\` array for advice on how to improve future runs
 
-**Note:** Capture files are saved to \`/tmp/\`. Use \`run_terminal_command\` with \`cat\` to read them if \`read_files\` doesn't support absolute paths.
+**Note:** Capture files are saved under \`/tmp/tmux-captures-<session>/\`, an openbuff-owned temp namespace, so you can read them directly with \`read_files\` or \`read_logs\` using the absolute capture paths. Captures deliberately survive teardown so you can read them after the agent returns; each session start sweeps capture directories older than 24 hours so temp state stays bounded.
 
 **When spawning this agent**, provide as much advice as possible in the prompt about how to test the CLI, including lessons from any previous runs of tmux-cli (e.g., timing adjustments, commands that didn't work, expected output patterns). This helps the agent avoid repeating mistakes.
 
@@ -391,7 +391,10 @@ case "$CMD" in
     CAPTURE_DIR="/tmp/tmux-captures-$SESSION"
     mkdir -p "$CAPTURE_DIR"
     SEQ_FILE="$CAPTURE_DIR/.seq"
-    if [[ -f "$SEQ_FILE" ]]; then SEQ=$(cat "$SEQ_FILE"); else SEQ=0; fi
+    # The counter file is untrusted input: bash arithmetic evaluates command
+    # substitution inside array subscripts, so validate before any arithmetic.
+    SEQ=$(cat "$SEQ_FILE" 2>/dev/null)
+    [[ $SEQ =~ ^[0-9]+$ ]] || SEQ=0
     SEQ=$((SEQ + 1))
     echo "$SEQ" > "$SEQ_FILE"
     SEQ_PAD=$(printf "%03d" "$SEQ")
@@ -483,10 +486,21 @@ esac
 
     logger.info('Setting up tmux session: ' + sessionName)
 
-    // Combined setup: write helper script, start session, send command (single yield to reduce round-trips)
+    // Combined setup: sweep stale capture dirs, write helper script, start
+    // session, send command (single yield to reduce round-trips).
+    //
+    // Capture directories intentionally OUTLIVE teardown so the parent agent
+    // can read them as verification evidence after this agent returns. That
+    // makes them unbounded temp state without a sweep, so each session start
+    // removes `tmux-captures-*` directories older than 24h (1440 minutes) —
+    // the same age-based cleanup idea as `sweepOrphanedJobFiles`. The sweep is
+    // best-effort: a failure must never block session setup, and `-maxdepth 1`
+    // plus the anchored `-name` keep it inside the openbuff-owned namespace.
     const escapedCommand = startCommand.replace(/'/g, "'\\''")
     const setupScript =
       'set -e\n' +
+      "find /tmp -maxdepth 1 -type d -name 'tmux-captures-*' -mmin +1440 " +
+      '-exec rm -rf {} + 2>/dev/null || true\n' +
       'cat > ' +
       helperPath +
       " << 'TMUX_HELPER_EOF'\n" +

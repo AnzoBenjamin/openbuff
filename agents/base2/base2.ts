@@ -1,4 +1,5 @@
 import { buildArray } from '@codebuff/common/util/array'
+import type { SpecialistReviewerAgent } from '@codebuff/common/agents/specialist-risk-router'
 
 import type {
   Base2ActiveWorkPhase,
@@ -79,6 +80,7 @@ export function createBase2(
       'render_3d_preview',
       'read_subtree',
       'read_outline',
+      'read_blocks',
       'inspect_codebase_structure',
       !isFast && !planOnly && 'write_todos',
       'create_plan',
@@ -209,7 +211,7 @@ ${
     ? '- **Live visual analysis:** Use browser-use only for read-only inspection of an already available URL. Do not start dev servers or request browser interactions in plan mode.'
     : '- **Live visual verification:** Visual verification extends beyond web apps. Image artifacts from 3D renders (e.g. Blender frames), image/video exports, generated diagrams, and charts must be inspected with read_image, not inferred from text logs alone. The workflow is: render/export -> poll the background job to completion -> read_image the emitted artifacts -> assess the result -> make a targeted edit -> re-render. Polling (check_job/check_background_agent/read_logs) is only the bridge to artifact inspection; do not re-poll a finished or unchanging job indefinitely. After 2-3 unmatched polls that produce no new actionable artifact or progress, proceed with independent work, cancel/retry with a targeted edit, or ask the user. For web app visual checks specifically, start any long-running dev server through a BACKGROUND basher, keep its returned jobId, use check_job to wait for readiness, then spawn browser-use for screenshots/navigation/interaction.'
 }
-- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead. For ripgrep-style content search, spawn the code-searcher agent (and file-picker for fuzzy file discovery): \`code_search\`/\`find_files_matching_content\` are registered runtime tools but are intentionally not granted to you as root, so calling them directly is rejected. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs \`params.searchQueries\` (an array of { pattern } objects) and basher needs \`params.command\` (a shell string); put these in \`params\`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).
+- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_blocks/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. For large files prefer read_blocks (windows/around/symbols) over guess-shrink-retry read_files ranges paging. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead. For ripgrep-style content search, spawn the code-searcher agent (and file-picker for fuzzy file discovery): \`code_search\`/\`find_files_matching_content\` are registered runtime tools but are intentionally not granted to you as root, so calling them directly is rejected. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs \`params.searchQueries\` (an array of { pattern } objects) and basher needs \`params.command\` (a shell string); put these in \`params\`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).
 
 # Code Editing Mandates
 
@@ -260,7 +262,7 @@ Use the spawn_agents tool to spawn specialized agents to help you complete the u
         ? 'Spawn agents deterministically at analysis boundaries: context and general agents during discovery, thinker after context for complex design choices, read-only Basher for inspection/non-emitting checks, debugger for diagnosis, and advisory reviewers for risks and coverage. Mutation agents remain implementation-only.'
         : 'Spawn agents deterministically at phase boundaries, not randomly: context agents during discovery, thinker after context for complex design choices, editor for non-trivial implementation, bashers for validation, debugger after repeated validation/runtime failures, reviewers after edits, and doc/test writers when docs or tests are part of the acceptance criteria.'
     }
-- **Context breadth:** For unclear or cross-cutting tasks, consume the runtime-injected query_index result first and deduplicate its relatedFiles/matchedSnippets. Spawn bounded, non-overlapping file-picker/code-searcher waves for explicit coverage gaps, joining each wave before deciding whether another is needed. Add web/docs researchers only for external APIs, then verify candidates with read_files/read_outline/read_subtree before editing. For tiny obvious edits, read only the directly relevant files.
+- **Context breadth:** For unclear or cross-cutting tasks, consume the runtime-injected query_index result first and deduplicate its relatedFiles/matchedSnippets. Spawn bounded, non-overlapping file-picker/code-searcher waves for explicit coverage gaps, joining each wave before deciding whether another is needed. Add web/docs researchers only for external APIs, then verify candidates with read_files/read_outline/read_blocks/read_subtree before editing. For large files prefer read_blocks (windows/around/symbols) over guess-shrink-retry read_files ranges paging. For tiny obvious edits, read only the directly relevant files.
 - **Ask-user decisions:** Ask only after context gathering, and only when the answer materially changes scope, UX, risk, data loss, migration, deployment, or API/contract behavior. Require confirmation before destructive commands, public API/contract changes, dependency additions, schema/data migrations, release/publish/deploy actions, production-affecting scripts, and ambiguous product behavior. Do not ask obvious questions; if you are >80% confident or the decision is easily reversible, choose the most conservative implementation and proceed.
 - **Editor delegation:** In default mode, use the editor for non-trivial source edits after discovery. Do not delegate tiny one-file edits or direct answers. The editor prompt must be implementation-only and self-contained; parent-only validation, review, git, terminal cleanup, and plan/todo work stays with you.
 - **Direct-edit exception:** Treat orchestrator source editing as a narrow exception. It is eligible only for one file, at most roughly 12 changed lines, no behavior/public-contract change, no required tests, no security/concurrency risk, and no open reviewer findings. Otherwise delegate implementation to editor. Validation/reviewer repairs must use repair-editor with exact diagnostics or finding IDs.
@@ -268,7 +270,7 @@ Use the spawn_agents tool to spawn specialized agents to help you complete the u
 - **Thinker delegation:** Spawn thinker only after enough context exists for complex architecture, design tradeoff, risk, debugging strategy, spec/plan critique, or repeated-failure reasoning. Do not use thinker as a substitute for reading files or for straightforward edits.
 - **Release/deployment flow:** Treat releases, deployments, publishing, migrations against shared environments, production-affecting scripts, git commits, and git pushes as high-impact actions. Do not run or ask subagents to run them unless the user explicitly requested that action in this task or confirms after you explain the exact command, target environment, and rollback/verification plan. When requested, follow the deterministic sequence: inspect worktree, fetch remote state/tags, decide rebase/merge with the user when non-fast-forward or conflicts appear, push, wait for CI/CD, trigger the release, verify artifact/tag/package publication, then sync and report local branch state.
 - **Plan artifact maintenance:** In PLAN mode create and maintain durable artifacts; in EXECUTE_PLAN keep STATUS.md and LESSONS.md current at phase boundaries, blocker discovery/resolution, validation/review results, and finalization. Use update_plan_status for incremental STATUS/LESSONS updates and create_plan for SPEC/PLAN rewrites or missing artifacts. Do not update plan artifacts for ordinary implementation mode unless the user requested plan/session work.
-- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use read_files/read_outline/read_subtree/glob/list_directory/query_index for source inspection, inspect_3d_asset/render_3d_preview for 3D assets, read_image for other screenshots/images, edit_3d_asset for guarded Blender changes, edit_transaction for text project mutations, browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. \`run_targeted_validation\` is scoped evidence only — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.
+- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use read_files/read_outline/read_blocks/read_subtree/glob/list_directory/query_index for source inspection (large files: prefer read_blocks windows/around/symbols), inspect_3d_asset/render_3d_preview for 3D assets, read_image for other screenshots/images, edit_3d_asset for guarded Blender changes, edit_transaction for text project mutations, browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. \`run_targeted_validation\` is scoped evidence only — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.
 - **Sequence agents properly:** Keep in mind dependencies when spawning different agents. Don't spawn agents in parallel that depend on each other.
 - **Subagent deadlines:** Omit top-level \`timeout_seconds\` for editor and other productive subagents; omitted and \`-1\` mean no wall-clock deadline. Set a positive deadline only when the user explicitly requests one or the child is intentionally bounded diagnostic work.
 - **Parallel join discipline:** When spawning agents in parallel, wait for every required result before moving to the next dependent phase. A timeout, failed validation, or \`BLOCKING:\` reviewer/security finding blocks completion until repaired or explicitly scoped out.
@@ -418,6 +420,7 @@ ${specialistRoutingSection}
         : buildImplementationStepPrompt({
             isDefault,
             isFast,
+            hasNoValidation,
           }),
 
     handleSteps: function* ({ agentState, prompt, params, config }) {
@@ -489,6 +492,15 @@ ${specialistRoutingSection}
       const MAX_REPAIR_ROUNDS = 3
       const MAX_REVIEWER_NO_VERDICT_RETRIES = 1
       const MAX_REVIEWER_REPAIR_ROUNDS = 3
+      // Single source of truth for the post-gate finalization instruction used
+      // by every gate-pass path (fresh pass, conversation reuse, durable
+      // fingerprint reuse). Worded idempotently so a model that already wrote
+      // a summary earlier in the turn adds only follow-up suggestions instead
+      // of repeating the summary. Declared inline because handleSteps is
+      // serialized via .toString() and reconstructed with new Function(...),
+      // so a module-scope binding would be undefined at reconstruction time.
+      const GATE_PASS_FINALIZATION_NOTICE =
+        'Provide your single user-visible completion summary now if you have not already written one this turn; if you already have, add only the follow-up suggestions instead of repeating it. Write at most one completion summary per turn. Do not make more edits unless absolutely necessary; any new edits will rerun the gate.'
       const existingActiveWorkState = mutableAgentState.base2ActiveWork
       const hadPendingGateFiles =
         !!existingActiveWorkState &&
@@ -576,12 +588,21 @@ ${specialistRoutingSection}
         activeWorkState.openReviewerFindings.length > 0 &&
         !activeWorkState.requiredReviewerRevalidation
       ) {
-        const originGateId = activeWorkState.openReviewerFindings[0].gateId
-        activeWorkState.requiredReviewerRevalidation = originGateId.startsWith(
-          'security-reviewer:',
-        )
-          ? 'security-reviewer'
-          : 'code-reviewer'
+        const originFinding = activeWorkState.openReviewerFindings[0]
+        if (originFinding.reviewer) {
+          // Authoritative reviewer family recorded on the finding.
+          activeWorkState.requiredReviewerRevalidation = originFinding.reviewer
+        } else {
+          // Legacy state without a reviewer field: infer from the gateId
+          // prefix (`${reviewerFamily}:${fingerprint}`).
+          const originGatePrefix = originFinding.gateId.split(':')[0]
+          activeWorkState.requiredReviewerRevalidation =
+            originGatePrefix === 'security-reviewer'
+              ? 'security-reviewer'
+              : originGatePrefix === 'code-reviewer'
+                ? 'code-reviewer'
+                : (originGatePrefix as SpecialistReviewerAgent)
+        }
       }
       activeWorkState.workflowTodoProgress = normalizeWorkflowTodoProgress(
         activeWorkState.workflowTodoProgress,
@@ -741,8 +762,13 @@ ${specialistRoutingSection}
           /(?:^|[.!?;]\s*)(?:should\b|how\s+(?:do|can|should|would)\b)/i
         if (advisoryQuestion.test(text)) return false
 
+        // Delivery phrasings stack determiners ("push all our current
+        // changes"), so allow 0-3 of them between the git verb and the scope
+        // noun. The repetition is bounded on purpose: an unbounded `*`/`+` on
+        // this alternation inside the larger pattern is a catastrophic-
+        // backtracking risk, and this runs on arbitrary user prompt text.
         return new RegExp(
-          String.raw`\b${gitAction}\b(?:\s+(?:and|then)\s+(?:commit|push))?(?:\s+(?:our|my|the|these|those|all|current|existing|pending|dirty|local))?\s+${deliveryScope}\b`,
+          String.raw`\b${gitAction}\b(?:\s+(?:and|then)\s+(?:commit|push))?(?:\s+(?:our|my|the|these|those|all|current|existing|pending|dirty|local)){0,3}\s+${deliveryScope}\b`,
           'i',
         ).test(text)
       }
@@ -1272,6 +1298,7 @@ ${specialistRoutingSection}
                       allowedTools: [
                         'read_files',
                         'read_outline',
+                        'edit_transaction',
                         'write_file',
                         'str_replace',
                         'set_output',
@@ -1437,6 +1464,7 @@ ${specialistRoutingSection}
                       'read_files',
                       'read_outline',
                       'read_subtree',
+                      'edit_transaction',
                       'str_replace',
                       'write_file',
                       'set_output',
@@ -1506,7 +1534,10 @@ ${specialistRoutingSection}
           editsHappened &&
           currentPendingGateFiles.length > 0 &&
           !activeWorkState.securityReviewGateDone &&
-          !activeWorkState.requiredReviewerRevalidation &&
+          (revalidationFamily(activeWorkState.requiredReviewerRevalidation) ===
+            'none' ||
+            revalidationFamily(activeWorkState.requiredReviewerRevalidation) ===
+              'security') &&
           matchesSecuritySensitiveGlob(currentPendingGateFiles)
         ) {
           auxGateFiredThisIteration = true
@@ -1641,13 +1672,18 @@ ${specialistRoutingSection}
                         }),
                       ),
                       permissions: {
-                        readablePaths: repairEditorReadablePaths([
-                          ...pendingGateFiles,
-                          ...activeWorkState.openReviewerFindings.flatMap(
-                            (finding: { files?: string[] }) =>
-                              finding.files ?? [],
+                        readablePaths: repairEditorReadablePaths(
+                          [
+                            ...pendingGateFiles,
+                            ...activeWorkState.openReviewerFindings.flatMap(
+                              (finding: { files?: string[] }) =>
+                                finding.files ?? [],
+                            ),
+                          ],
+                          activeWorkState.openReviewerFindings.map(
+                            (finding: { text?: string }) => finding.text ?? '',
                           ),
-                        ]),
+                        ),
                         writablePaths: Array.from(
                           new Set([
                             ...pendingGateFiles,
@@ -1660,6 +1696,8 @@ ${specialistRoutingSection}
                         allowedTools: [
                           'read_files',
                           'read_outline',
+                          'read_blocks',
+                          'read_subtree',
                           'edit_transaction',
                         ],
                       },
@@ -1774,6 +1812,14 @@ ${specialistRoutingSection}
           }
           activeWorkState.securityReviewGateDone = true
           activeWorkState.preEditSecurityReviewDone = true
+          // The security aux block owns security-family revalidation; clear its
+          // marker once it passes, but never clobber a code/specialist marker.
+          if (
+            revalidationFamily(activeWorkState.requiredReviewerRevalidation) ===
+            'security'
+          ) {
+            activeWorkState.requiredReviewerRevalidation = undefined
+          }
           markActiveWorkStateChanged()
         }
         // 4) deterministic reviewer-family specialist gates. Advisory
@@ -1783,10 +1829,36 @@ ${specialistRoutingSection}
           editsHappened &&
           currentPendingGateFiles.length > 0
         ) {
-          const routedSpecialists = selectSpecialistReviewersInline({
+          // Specialist-family revalidation is owned by this aux block: the
+          // owed specialist must re-review through its own snapshot/attestation
+          // path even if it already passed for this pending set. Drop it from
+          // the done-set so the existing filter does not re-exclude it, and
+          // union it into the routed list so it is re-included even if the
+          // router would not otherwise select it.
+          const owedSpecialist =
+            revalidationFamily(activeWorkState.requiredReviewerRevalidation) ===
+            'specialist'
+              ? (activeWorkState.requiredReviewerRevalidation as string)
+              : undefined
+          if (
+            owedSpecialist &&
+            activeWorkState.specialistReviewGatesDone?.includes(owedSpecialist)
+          ) {
+            activeWorkState.specialistReviewGatesDone =
+              activeWorkState.specialistReviewGatesDone.filter(
+                (agentType) => agentType !== owedSpecialist,
+              )
+            markActiveWorkStateChanged()
+          }
+          const baseRoutedSpecialists = selectSpecialistReviewersInline({
             files: currentPendingGateFiles,
             requirements: prompt ?? '',
-          }).filter(
+          })
+          const routedSpecialists = (
+            owedSpecialist
+              ? Array.from(new Set([...baseRoutedSpecialists, owedSpecialist]))
+              : baseRoutedSpecialists
+          ).filter(
             (agentType) =>
               !activeWorkState.specialistReviewGatesDone?.includes(agentType),
           )
@@ -1990,6 +2062,7 @@ ${specialistRoutingSection}
                           status: 'open' as const,
                           files: currentPendingGateFiles,
                           snapshotFingerprint: expectedSnapshotId,
+                          reviewer: agentType as SpecialistReviewerAgent,
                           createdAt: new Date().toISOString(),
                         }
                       },
@@ -2028,6 +2101,14 @@ ${specialistRoutingSection}
                       agentType,
                     ]),
                   )
+                  // The specialist aux block owns specialist-family
+                  // revalidation; clear its marker once the owed specialist
+                  // passes. This never clobbers a code/security marker.
+                  if (
+                    activeWorkState.requiredReviewerRevalidation === agentType
+                  ) {
+                    activeWorkState.requiredReviewerRevalidation = undefined
+                  }
                   markActiveWorkStateChanged()
                 }
               }
@@ -2183,7 +2264,7 @@ ${specialistRoutingSection}
               role: 'user',
               content: [
                 `Previous validation and reviewer gate already passed in this conversation with ${conversationReviewerVerdict} for pending files: ${currentPendingGateFiles.join(', ')}.`,
-                'Reusing that unchanged gate result; you may now provide the final user-visible summary and optional follow-up suggestions. Do not make more edits unless absolutely necessary; any new edits will rerun the gate.',
+                `Reusing that unchanged gate result; ${GATE_PASS_FINALIZATION_NOTICE}`,
                 formatGateStateBlock(
                   'validation/reviewer',
                   'passed',
@@ -2242,7 +2323,7 @@ ${specialistRoutingSection}
               role: 'user',
               content: [
                 `Previous validation and reviewer gate already passed with ${durableReviewerVerdict} for pending files: ${currentPendingGateFiles.join(', ')}.`,
-                'You may now provide the final user-visible summary and optional follow-up suggestions. Do not make more edits unless absolutely necessary; any new edits will rerun the gate.',
+                GATE_PASS_FINALIZATION_NOTICE,
                 formatGateStateBlock(
                   'validation/reviewer',
                   'passed',
@@ -2301,8 +2382,15 @@ ${specialistRoutingSection}
         // Validation runs before the final reviewer because hooks may mutate
         // generated or formatted output. The exact source and test snapshot is
         // re-captured at the reviewer spawn boundary below.
+        // The final block only ever spawns code-reviewer. A security/specialist
+        // marker is owned by that family's aux block, which continues the loop
+        // before reaching here, so a non-code marker must not select a
+        // non-code reviewer (which the final block can only pass a prompt to).
         const requiredReviewerAgentType =
-          activeWorkState.requiredReviewerRevalidation ?? reviewerAgentType
+          revalidationFamily(activeWorkState.requiredReviewerRevalidation) ===
+          'code'
+            ? 'code-reviewer'
+            : reviewerAgentType
         let reviewableGateScopeFiles = selectReviewableGateFiles(gateScopeFiles)
         let reviewSnapshotDetails = buildGateSnapshotDetails(
           reviewableGateScopeFiles,
@@ -2362,17 +2450,6 @@ ${specialistRoutingSection}
             activeWorkState.currentPhase = 'awaiting_review'
             markActiveWorkStateChanged()
           } else {
-            if (activeWorkState.staticReviewerJobId) {
-              yield {
-                toolName: 'check_background_agent',
-                input: {
-                  jobId: activeWorkState.staticReviewerJobId,
-                  cancel: true,
-                },
-                includeToolCall: false,
-              } as any
-              activeWorkState.staticReviewerJobId = undefined
-            }
             const repairRound = activeWorkState.repairRoundCount ?? 0
             const parsed = parseValidationFailures(failures)
             const hasParseableFailures = parsed.some((p) => p.file.length > 0)
@@ -2480,10 +2557,13 @@ ${specialistRoutingSection}
                           }),
                         ),
                         permissions: {
-                          readablePaths: repairEditorReadablePaths([
-                            ...pendingGateFiles,
-                            ...parsed.map((p: { file: string }) => p.file),
-                          ]),
+                          readablePaths: repairEditorReadablePaths(
+                            [
+                              ...pendingGateFiles,
+                              ...parsed.map((p: { file: string }) => p.file),
+                            ],
+                            failures,
+                          ),
                           writablePaths: Array.from(
                             new Set([
                               ...pendingGateFiles,
@@ -2493,6 +2573,8 @@ ${specialistRoutingSection}
                           allowedTools: [
                             'read_files',
                             'read_outline',
+                            'read_blocks',
+                            'read_subtree',
                             'edit_transaction',
                           ],
                         },
@@ -2700,10 +2782,13 @@ ${specialistRoutingSection}
                             }),
                           ),
                           permissions: {
-                            readablePaths: repairEditorReadablePaths([
-                              ...pendingGateFiles,
-                              ...parsed.map((p: { file: string }) => p.file),
-                            ]),
+                            readablePaths: repairEditorReadablePaths(
+                              [
+                                ...pendingGateFiles,
+                                ...parsed.map((p: { file: string }) => p.file),
+                              ],
+                              failures,
+                            ),
                             writablePaths: Array.from(
                               new Set([
                                 ...pendingGateFiles,
@@ -2713,6 +2798,8 @@ ${specialistRoutingSection}
                             allowedTools: [
                               'read_files',
                               'read_outline',
+                              'read_blocks',
+                              'read_subtree',
                               'edit_transaction',
                             ],
                           },
@@ -2974,17 +3061,6 @@ ${specialistRoutingSection}
           reviewerFinalizationVerdict = 'NON_BLOCKING'
           activeWorkState.currentPhase = 'awaiting_review'
           activeWorkState.nextRequiredAction = ''
-          if (activeWorkState.staticReviewerJobId) {
-            yield {
-              toolName: 'check_background_agent',
-              input: {
-                jobId: activeWorkState.staticReviewerJobId,
-                cancel: true,
-              },
-              includeToolCall: false,
-            } as any
-            activeWorkState.staticReviewerJobId = undefined
-          }
           const reviewerSkipReason =
             reviewableGateScopeFiles.length === 0
               ? 'reviewer skip: no reviewable source files'
@@ -3278,13 +3354,19 @@ ${specialistRoutingSection}
                             }),
                           ),
                           permissions: {
-                            readablePaths: repairEditorReadablePaths([
-                              ...pendingGateFiles,
-                              ...activeWorkState.openReviewerFindings.flatMap(
-                                (finding: { files?: string[] }) =>
-                                  finding.files ?? [],
+                            readablePaths: repairEditorReadablePaths(
+                              [
+                                ...pendingGateFiles,
+                                ...activeWorkState.openReviewerFindings.flatMap(
+                                  (finding: { files?: string[] }) =>
+                                    finding.files ?? [],
+                                ),
+                              ],
+                              activeWorkState.openReviewerFindings.map(
+                                (finding: { text?: string }) =>
+                                  finding.text ?? '',
                               ),
-                            ]),
+                            ),
                             writablePaths: Array.from(
                               new Set([
                                 ...pendingGateFiles,
@@ -3297,6 +3379,8 @@ ${specialistRoutingSection}
                             allowedTools: [
                               'read_files',
                               'read_outline',
+                              'read_blocks',
+                              'read_subtree',
                               'write_file',
                               'str_replace',
                               'set_output',
@@ -3363,13 +3447,19 @@ ${specialistRoutingSection}
                             }),
                           ),
                           permissions: {
-                            readablePaths: repairEditorReadablePaths([
-                              ...pendingGateFiles,
-                              ...activeWorkState.openReviewerFindings.flatMap(
-                                (finding: { files?: string[] }) =>
-                                  finding.files ?? [],
+                            readablePaths: repairEditorReadablePaths(
+                              [
+                                ...pendingGateFiles,
+                                ...activeWorkState.openReviewerFindings.flatMap(
+                                  (finding: { files?: string[] }) =>
+                                    finding.files ?? [],
+                                ),
+                              ],
+                              activeWorkState.openReviewerFindings.map(
+                                (finding: { text?: string }) =>
+                                  finding.text ?? '',
                               ),
-                            ]),
+                            ),
                             writablePaths: Array.from(
                               new Set([
                                 ...pendingGateFiles,
@@ -3382,6 +3472,8 @@ ${specialistRoutingSection}
                             allowedTools: [
                               'read_files',
                               'read_outline',
+                              'read_blocks',
+                              'read_subtree',
                               'edit_transaction',
                             ],
                           },
@@ -3633,7 +3725,6 @@ ${specialistRoutingSection}
                   },
                   includeToolCall: false,
                 } as any
-                activeWorkState.staticReviewerJobId = undefined
                 continue
               }
             } else {
@@ -3667,7 +3758,6 @@ ${specialistRoutingSection}
               } as any
             }
             if (!reviewerFinalizationVerdict) {
-              activeWorkState.staticReviewerJobId = undefined
               continue
             }
           }
@@ -3744,7 +3834,6 @@ ${specialistRoutingSection}
             activeWorkState.repairEscalationDone = undefined
             activeWorkState.validationInfrastructureBypassFingerprint =
               undefined
-            activeWorkState.staticReviewerJobId = undefined
             activeWorkState.preEditSecurityReviewDone = false
             activeWorkState.securityReviewGateDone = false
             activeWorkState.reviewerCrashCount = 0
@@ -3804,7 +3893,7 @@ ${specialistRoutingSection}
                 passedPendingFiles.length > 0
                   ? 'The preceding Change review diff is the user-visible filesystem evidence for this gate. Use /diff for the full current working-tree diff, /changes for the file list, or /diff -- <path> to inspect one file.'
                   : '',
-                'You may now provide the final user-visible summary and optional follow-up suggestions. Do not make more edits unless absolutely necessary; any new edits will rerun the gate.',
+                GATE_PASS_FINALIZATION_NOTICE,
                 formatGateStateBlock(
                   'validation/reviewer',
                   'passed',
@@ -3974,6 +4063,710 @@ ${specialistRoutingSection}
           : 'code-reviewer'
       }
 
+      // Classify a requiredReviewerRevalidation marker into the reviewer family
+      // that owns its revalidation. Self-contained pure string logic (no
+      // module-scope imports) because handleSteps is serialized via
+      // .toString() + new Function(...). 'none' means no marker; any non-empty
+      // marker that is not the code/security literal is a specialist agent
+      // type (fail-closed: a corrupted marker routes to the specialist aux
+      // block, never the final code-reviewer block).
+      function revalidationFamily(
+        marker: string | undefined,
+      ): 'code' | 'security' | 'specialist' | 'none' {
+        if (!marker) return 'none'
+        if (marker === 'code-reviewer') return 'code'
+        if (marker === 'security-reviewer') return 'security'
+        return 'specialist'
+      }
+
+// <gate-helpers-generated> DO NOT EDIT — regenerate via: bun run scripts/generate-gate-helpers.ts
+/**
+ * Pure gate path / set helpers extracted from `base2.ts`.
+ *
+ * NOTE: equivalent inline copies of these helpers still exist inside
+ * `createBase2`'s `handleSteps` generator because that function is
+ * serialized via `handleSteps.toString()` and reconstructed with
+ * `new Function(...)`. Reconstructed functions lose their module
+ * closure, so they cannot reference imports from this file. Keep the
+ * two implementations in sync.
+ */
+function normalizeGateFilePath(file: string): string {
+    let normalized = file.trim().replace(/\\/g, '/');
+    if (!normalized)
+        return '';
+    // Reject path traversal: a gate file path must stay inside the project.
+    // Any `..` segment (posix or windows, since backslashes were normalized to
+    // forward slashes above) is rejected before normalization so it can't be
+    // used to point the gate at files outside the cwd.
+    if (normalized.split('/').includes('..')) {
+        return '';
+    }
+    if (normalized.startsWith('file://')) {
+        normalized = normalized.slice('file://'.length);
+    }
+    if (/^\/[A-Za-z]:\//.test(normalized)) {
+        normalized = normalized.slice(1);
+    }
+    const cwd = typeof process === 'object' &&
+        process !== null &&
+        typeof process.cwd === 'function'
+        ? process.cwd().replace(/\\/g, '/').replace(/\/+$/, '')
+        : '';
+    const isAbsolute = normalized.startsWith('/') || /^[A-Za-z]:\//.test(normalized);
+    if (isAbsolute &&
+        (!cwd || (normalized !== cwd && !normalized.startsWith(`${cwd}/`)))) {
+        return '';
+    }
+    if (cwd && (normalized === cwd || normalized.startsWith(`${cwd}/`))) {
+        normalized = normalized.slice(cwd.length).replace(/^\/+/, '');
+    }
+    while (normalized.startsWith('./')) {
+        normalized = normalized.slice(2);
+    }
+    return normalized.trim();
+}
+
+function normalizeGateFileList(files: string[]): string[] {
+    const normalizedFiles: string[] = [];
+    const seen = new Set<string>();
+    for (const file of files) {
+        const normalized = normalizeGateFilePath(file);
+        if (!normalized || seen.has(normalized))
+            continue;
+        seen.add(normalized);
+        normalizedFiles.push(normalized);
+    }
+    return normalizedFiles;
+}
+
+function gateFileSetsEqual(left: string[], right: string[]): boolean {
+    if (left.length !== right.length)
+        return false;
+    const rightFiles = new Set(right);
+    return left.every((file) => rightFiles.has(file));
+}
+
+// Returns true for reviewable source and test files. Generated code, docs,
+// config/data files (including .jsonl bookkeeping like EVENTS.jsonl), .env
+// files, and anything under docs/, evals/, or .agents/ remain excluded so the
+// final code-reviewer gate never attests to bookkeeping/docs/plan artifacts.
+// Operates on an already-normalized path (caller normalizes).
+function isReviewableGateFile(filePath: string): boolean {
+    if (/\.generated\.tsx?$/.test(filePath))
+        return false;
+    if (/\.(md|mdx|json|jsonl|yml|yaml|toml)$/.test(filePath))
+        return false;
+    if (/(^|\/)\.env($|\.)/.test(filePath))
+        return false;
+    if (filePath.startsWith('docs/'))
+        return false;
+    if (filePath.startsWith('evals/') || filePath.startsWith('.agents/')) {
+        return false;
+    }
+    return /\.(?:tsx?|jsx?|mjs|cjs|py|go|rs|java|kt|kts|cs|fs|vb)$/.test(filePath);
+}
+
+function selectReviewableGateFiles(files: string[]): string[] {
+    const reviewableFiles: string[] = [];
+    const seen = new Set<string>();
+    for (const file of files) {
+        const normalized = normalizeGateFilePath(file);
+        if (!normalized || seen.has(normalized))
+            continue;
+        if (!isReviewableGateFile(normalized))
+            continue;
+        seen.add(normalized);
+        reviewableFiles.push(normalized);
+    }
+    return reviewableFiles;
+}
+
+// Co-changed test files remain identifiable for coverage-specific prompting,
+// but they are also first-class reviewable files and participate in the final
+// reviewer fingerprint and reviewedFiles attestation.
+function isCoverageEvidenceFile(filePath: string): boolean {
+    if (/__tests__\//.test(filePath))
+        return true;
+    if (/\.(test|spec)\.(?:tsx?|jsx?|mjs|cjs)$/.test(filePath))
+        return true;
+    return false;
+}
+
+function selectCoverageEvidenceFiles(files: string[]): string[] {
+    const evidenceFiles: string[] = [];
+    const seen = new Set<string>();
+    for (const file of files) {
+        const normalized = normalizeGateFilePath(file);
+        if (!normalized || seen.has(normalized))
+            continue;
+        if (!isCoverageEvidenceFile(normalized))
+            continue;
+        seen.add(normalized);
+        evidenceFiles.push(normalized);
+    }
+    return evidenceFiles;
+}
+
+type ReviewerStructuredVerdict = 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING';
+
+type ReviewerFinalizationVerdict = 'LOOKS_GOOD' | 'NON_BLOCKING' | '';
+
+type ReviewerCoverage = 'covered' | 'missing' | 'n/a';
+
+type StructuredReviewerOutput = {
+    verdict: ReviewerStructuredVerdict;
+    findings: string[];
+    coverage?: ReviewerCoverage;
+    dimensions?: Record<string, string>;
+    requirementCoverage?: Array<{
+        requirement: string;
+        status: string;
+        evidence: string[];
+    }>;
+    snapshotFingerprint?: string;
+    reviewedFiles?: string[];
+    schemaVersion?: number;
+    findingRecords?: ReviewerFindingRecord[];
+};
+
+type ReviewerFindingRecord = {
+    id: string;
+    text: string;
+    severity?: string;
+    dimension?: string;
+    evidence: string[];
+    correction?: string;
+};
+
+function collectReviewerFindingRecords(toolResult: unknown): ReviewerFindingRecord[] {
+    return collectStructuredReviewerOutputs(toolResult).flatMap((entry) => entry.findingRecords ?? []);
+}
+
+function collectReviewerAttestationIssues(toolResult: unknown, expectedFingerprint: string, pendingFiles: string[]): string[] {
+    // The caller passes the reviewable subset; when it is empty there is
+    // nothing to attest, so surface no attestation issues.
+    if (pendingFiles.length === 0) {
+        return [];
+    }
+    const structured = collectStructuredReviewerOutputs(toolResult);
+    if (structured.length === 0) {
+        return [
+            'BLOCKING: reviewer did not return the required structured snapshot attestation',
+        ];
+    }
+    const result = structured[structured.length - 1];
+    if (result.schemaVersion !== 1) {
+        return ['BLOCKING: reviewer returned an invalid attestation schemaVersion'];
+    }
+    const issues: string[] = [];
+    if (result.snapshotFingerprint !== expectedFingerprint) {
+        issues.push('BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree');
+    }
+    const reviewed = new Set((result.reviewedFiles ?? [])
+        .map((file) => normalizeGateFilePath(file))
+        .filter((file) => file.length > 0));
+    const missing = pendingFiles
+        .map((file) => normalizeGateFilePath(file))
+        .filter((file) => file.length > 0 && !reviewed.has(file));
+    if (missing.length > 0) {
+        issues.push(`BLOCKING: reviewer did not attest to every pending file: ${missing.join(', ')}`);
+    }
+    return issues;
+}
+
+function stripReviewerPreamble(text: string): string {
+    let remaining = text.trim();
+    // Tolerate reviewers that still emit a closed leading <think>...</think>
+    // block (or several) plus surrounding whitespace before the verdict label.
+    while (true) {
+        const match = remaining.match(/^<think\b[^>]*>[\s\S]*?<\/think>\s*/i);
+        if (!match)
+            break;
+        remaining = remaining.slice(match[0].length).trim();
+    }
+    return remaining;
+}
+
+/** True when a blocker is a pure test-coverage gap (all-coverage sets route to test-writer). */
+function isTestCoverageReviewerFinding(text: string): boolean {
+    if (typeof text !== 'string')
+        return false;
+    const t = text.toLowerCase();
+    if (t.includes('test coverage'))
+        return true;
+    if (t.includes('coverage') && /\.test\.[a-z0-9]+/.test(t))
+        return true;
+    return false;
+}
+
+function collectReviewerBlockers(toolResult: unknown): string[] {
+    // First check for structured reviewer outputs (e.g. JSON with a
+    // verdict field). When present and BLOCKING, surface findings as the
+    // blocker text so existing pinning/messaging logic still works.
+    const structured = collectStructuredReviewerOutputs(toolResult);
+    const structuredBlockers: string[] = [];
+    for (const entry of structured) {
+        if (entry.verdict === 'BLOCKING') {
+            const findings = entry.findings.length > 0 ? entry.findings : ['(no findings provided)'];
+            for (const finding of findings) {
+                structuredBlockers.push(`BLOCKING: ${finding}`);
+            }
+        }
+        // Coverage-adequacy contract (M6.3): missing test coverage for a
+        // behavior-changing edit is BLOCKING regardless of the text verdict.
+        if (entry.coverage === 'missing') {
+            structuredBlockers.push('BLOCKING: test coverage missing for changed behavior (add a case to the relevant *.test.ts)');
+        }
+        for (const [dimension, status] of Object.entries(entry.dimensions ?? {})) {
+            if (status.toLowerCase() === 'block') {
+                structuredBlockers.push(`BLOCKING: ${dimension} review dimension failed`);
+            }
+        }
+        for (const requirement of entry.requirementCoverage ?? []) {
+            if (requirement.status === 'missing' ||
+                requirement.status === 'uncertain') {
+                structuredBlockers.push(`BLOCKING: requirement ${requirement.status}: ${requirement.requirement}`);
+            }
+        }
+    }
+    if (structuredBlockers.length > 0)
+        return structuredBlockers;
+    const texts: string[] = [];
+    collectStrings(toolResult, texts);
+    return texts
+        .map((text) => stripReviewerPreamble(text))
+        .filter((text) => hasReviewerLineVerdict(text, 'BLOCKING'));
+}
+
+/**
+ * Detects whether the reviewer agent itself crashed (returned an `errorMessage`
+ * field, threw, or otherwise produced no usable output) as opposed to running
+ * successfully but failing to populate its required structured verdict. The
+ * two cases warrant very different operator messages:
+ *   - crash    → "reviewer agent crashed; verdict cannot be trusted" (retry or escalate)
+ *   - no-verdict → "reviewer returned no structured output" (automated retry)
+ *
+ * Heuristic: walks the tool-result tree looking for any object that carries an
+ * `errorMessage` string or whose `type === 'error'`. Returns the first such
+ * message so callers can surface it verbatim. Returns `null` when the result
+ * looks like a normal (possibly malformed) reviewer reply.
+ */
+function detectReviewerCrash(toolResult: unknown): string | null {
+    return findReviewerCrash(toolResult);
+}
+
+function findReviewerCrash(value: unknown, depth: number = 0): string | null {
+    // Depth cap: reviewer tool results can carry deeply nested tool-call trees
+    // (the reviewer itself may have invoked other tools). 8 is well past any
+    // realistic agent-result envelope but stops pathological recursion.
+    if (depth > 8)
+        return null;
+    if (!value)
+        return null;
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            const found = findReviewerCrash(item, depth + 1);
+            if (found)
+                return found;
+        }
+        return null;
+    }
+    if (typeof value !== 'object')
+        return null;
+    const record = value as Record<string, unknown>;
+    // NOTE: an unrelated nested `errorMessage` (e.g. a failed inner tool call
+    // the reviewer made) will also be classified as a reviewer-agent crash.
+    // This is acceptable because the caller only consults detectReviewerCrash
+    // when the reviewer also failed to emit a recognizable verdict — a
+    // reviewer whose inner tool call errored AND who produced no verdict is
+    // effectively crashed from the operator's perspective.
+    if (typeof record.errorMessage === 'string' && record.errorMessage.trim()) {
+        return record.errorMessage.trim();
+    }
+    if (record.type === 'error' && typeof record.message === 'string') {
+        return (record.message.trim() || 'reviewer agent reported an unspecified error');
+    }
+    if (record.type === 'json' && 'value' in record) {
+        const nested = findReviewerCrash(record.value, depth + 1);
+        if (nested)
+            return nested;
+    }
+    for (const nested of Object.values(record)) {
+        const found = findReviewerCrash(nested, depth + 1);
+        if (found)
+            return found;
+    }
+    return null;
+}
+
+function getReviewerFinalizationVerdict(toolResult: unknown): ReviewerFinalizationVerdict {
+    // Automated gates accept only schema-backed structured reviewer output.
+    const structured = collectStructuredReviewerOutputs(toolResult);
+    // Coverage-adequacy contract (M6.3): missing coverage blocks finalization
+    // even if the text verdict is LOOKS_GOOD / NON_BLOCKING.
+    if (structured.some((entry) => entry.coverage === 'missing')) {
+        return '';
+    }
+    for (const entry of structured) {
+        if (entry.verdict === 'LOOKS_GOOD')
+            return 'LOOKS_GOOD';
+        if (entry.verdict === 'NON_BLOCKING')
+            return 'NON_BLOCKING';
+    }
+    return '';
+}
+
+/**
+ * Walk the reviewer tool result for objects that look like a structured
+ * reviewer verdict: `{ verdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING', findings?: string | string[], coverage?: 'covered' | 'missing' | 'n/a' }`.
+ * Returns an ordered list of normalized entries. Plain text reviewer
+ * outputs return an empty list so the existing text-mode logic stays in
+ * charge.
+ */
+function collectStructuredReviewerOutputs(value: unknown): StructuredReviewerOutput[] {
+    const out: StructuredReviewerOutput[] = [];
+    visitForStructuredVerdict(value, out);
+    return out;
+}
+
+function visitForStructuredVerdict(value: unknown, out: StructuredReviewerOutput[]): void {
+    if (!value)
+        return;
+    if (Array.isArray(value)) {
+        for (const item of value)
+            visitForStructuredVerdict(item, out);
+        return;
+    }
+    if (typeof value !== 'object')
+        return;
+    const record = value as Record<string, unknown>;
+    if (record.type === 'json' && 'value' in record) {
+        visitForStructuredVerdict(record.value, out);
+        return;
+    }
+    const rawVerdict = record.verdict;
+    if (typeof rawVerdict === 'string') {
+        const upper = rawVerdict.trim().toUpperCase();
+        if (upper === 'LOOKS_GOOD' ||
+            upper === 'NON_BLOCKING' ||
+            upper === 'BLOCKING') {
+            const findings: string[] = [];
+            const rawFindings = record.findings;
+            if (typeof rawFindings === 'string') {
+                const trimmed = rawFindings.trim();
+                if (trimmed)
+                    findings.push(trimmed);
+            }
+            else if (Array.isArray(rawFindings)) {
+                for (const finding of rawFindings) {
+                    if (typeof finding === 'string' && finding.trim()) {
+                        findings.push(finding.trim());
+                    }
+                    else if (finding && typeof finding === 'object') {
+                        const findingRecord = finding as Record<string, unknown>;
+                        const id = typeof findingRecord.id === 'string'
+                            ? findingRecord.id.trim()
+                            : '';
+                        const summary = typeof findingRecord.summary === 'string'
+                            ? findingRecord.summary.trim()
+                            : typeof findingRecord.text === 'string'
+                                ? findingRecord.text.trim()
+                                : '';
+                        if (summary)
+                            findings.push(id ? `[${id}] ${summary}` : summary);
+                    }
+                }
+            }
+            let coverage: ReviewerCoverage | undefined;
+            const rawCoverage = record.coverage;
+            if (typeof rawCoverage === 'string') {
+                const lower = rawCoverage.trim().toLowerCase();
+                if (lower === 'covered' || lower === 'missing' || lower === 'n/a') {
+                    coverage = lower;
+                }
+            }
+            out.push({
+                verdict: upper as ReviewerStructuredVerdict,
+                findings,
+                coverage,
+                dimensions: record.dimensions && typeof record.dimensions === 'object'
+                    ? Object.fromEntries(Object.entries(record.dimensions as Record<string, unknown>).filter((entry): entry is [
+                        string,
+                        string
+                    ] => typeof entry[1] === 'string'))
+                    : undefined,
+                requirementCoverage: Array.isArray(record.requirementCoverage)
+                    ? record.requirementCoverage.flatMap((item) => {
+                        if (!item || typeof item !== 'object')
+                            return [];
+                        const requirement = (item as Record<string, unknown>).requirement;
+                        const status = (item as Record<string, unknown>).status;
+                        const evidence = (item as Record<string, unknown>).evidence;
+                        return typeof requirement === 'string' &&
+                            typeof status === 'string'
+                            ? [
+                                {
+                                    requirement,
+                                    status: status.toLowerCase(),
+                                    evidence: Array.isArray(evidence)
+                                        ? evidence.filter((value): value is string => typeof value === 'string')
+                                        : [],
+                                },
+                            ]
+                            : [];
+                    })
+                    : undefined,
+                snapshotFingerprint: typeof record.snapshotFingerprint === 'string'
+                    ? record.snapshotFingerprint
+                    : undefined,
+                reviewedFiles: Array.isArray(record.reviewedFiles)
+                    ? record.reviewedFiles.filter((file): file is string => typeof file === 'string')
+                    : undefined,
+                schemaVersion: typeof record.schemaVersion === 'number'
+                    ? record.schemaVersion
+                    : undefined,
+                findingRecords: Array.isArray(rawFindings)
+                    ? rawFindings.flatMap((finding) => {
+                        if (!finding || typeof finding !== 'object')
+                            return [];
+                        const item = finding as Record<string, unknown>;
+                        const id = typeof item.id === 'string' ? item.id.trim() : '';
+                        const text = typeof item.summary === 'string'
+                            ? item.summary.trim()
+                            : typeof item.text === 'string'
+                                ? item.text.trim()
+                                : '';
+                        if (!id || !text)
+                            return [];
+                        return [
+                            {
+                                id,
+                                text,
+                                ...(typeof item.severity === 'string'
+                                    ? { severity: item.severity }
+                                    : {}),
+                                ...(typeof item.dimension === 'string'
+                                    ? { dimension: item.dimension }
+                                    : {}),
+                                evidence: Array.isArray(item.evidence)
+                                    ? item.evidence.filter((value): value is string => typeof value === 'string')
+                                    : [],
+                                ...(typeof item.correction === 'string'
+                                    ? { correction: item.correction }
+                                    : {}),
+                            },
+                        ];
+                    })
+                    : undefined,
+            });
+            return;
+        }
+    }
+    for (const nested of Object.values(record)) {
+        visitForStructuredVerdict(nested, out);
+    }
+}
+
+function hasReviewerLineVerdict(text: string, verdict: ReviewerStructuredVerdict): boolean {
+    return text
+        .split(/\r?\n/)
+        .some((line) => new RegExp(`^${verdict}\\b`, 'i').test(line.trim()));
+}
+
+function collectStrings(value: unknown, out: string[]): void {
+    if (typeof value === 'string') {
+        out.push(value);
+        return;
+    }
+    if (!value)
+        return;
+    if (Array.isArray(value)) {
+        for (const item of value)
+            collectStrings(item, out);
+        return;
+    }
+    if (typeof value !== 'object')
+        return;
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+        collectStrings(nested, out);
+    }
+}
+
+/**
+ * Pure validation-failure parsing helpers extracted from `base2.ts`.
+ *
+ * These deterministically parse raw hook-failure strings (produced by
+ * `collectHookFailures` in base2.ts) into structured
+ * `{file, line, column, message, source}` records so the gate can spawn
+ * a targeted editor repair instead of surfacing raw stderr for the model
+ * to guess at.
+ *
+ * NOTE: equivalent inline copies of these helpers exist inside
+ * `createBase2`'s `handleSteps` generator because that function is
+ * serialized via `handleSteps.toString()` and reconstructed with
+ * `new Function(...)`. Reconstructed functions lose their module
+ * closure, so they cannot reference imports from this file. Keep the
+ * two implementations in sync — `agents/__tests__/gate-repair-parity.test.ts`
+ * enforces this.
+ */
+type ParsedValidationFailure = {
+    file: string;
+    line?: number;
+    column?: number;
+    message: string;
+    /** Hook name extracted from the `- {name} failed (exit N):` prefix, or 'unknown'. */
+    source: string;
+};
+
+/**
+ * Parses raw hook-failure strings into structured file:line:column records.
+ *
+ * Each input string is expected to be in one of two forms:
+ *   1. `- {hookName} failed (exit {code}):\n{stdout+stderr}` (from collectHookFailures)
+ *   2. A raw errorMessage string (no prefix)
+ *
+ * Within each failure's body, diagnostic locations are extracted in order:
+ *   - tsc:        `src/foo.ts(12,34): error TS2322: ...`
+ *   - eslint/gcc: `/path/file.js:10:5: message`
+ *   - generic:    `path:10: message` (no column)
+ *
+ * The first format that yields any matches wins per failure string (a single
+ * hook's output is typically homogeneous). Failures with no parseable
+ * file:line get an entry with `file: ''` so the caller can detect
+ * unparseable output and fall back to raw stderr surfacing.
+ *
+ * Deduplicates by `file:line:column` within a single call.
+ */
+function parseValidationFailures(failures: string[]): ParsedValidationFailure[] {
+    const out: ParsedValidationFailure[] = [];
+    const seen = new Set<string>();
+    for (const raw of failures) {
+        if (typeof raw !== 'string' || !raw.trim())
+            continue;
+        let source = 'unknown';
+        let body = raw;
+        const prefixMatch = raw.match(/^-\s+(\S+)\s+failed\s+\(exit\s+\d+\):\s*\n?/);
+        if (prefixMatch) {
+            source = prefixMatch[1];
+            body = raw.slice(prefixMatch[0].length);
+        }
+        const parsed: ParsedValidationFailure[] = [];
+        // tsc: "file.ts(line,col): error TSxxxx: message"
+        const tscRe = /^([^(]+)\((\d+),(\d+)\):\s*(error|warning)\s+(.+)$/gm;
+        let m: RegExpExecArray | null;
+        while ((m = tscRe.exec(body)) !== null) {
+            parsed.push({
+                file: m[1].trim(),
+                line: parseInt(m[2], 10),
+                column: parseInt(m[3], 10),
+                message: `${m[4]}: ${m[5]}`.trim(),
+                source,
+            });
+        }
+        if (parsed.length === 0) {
+            // eslint / gcc / rust: "file:line:col: message"
+            const unixRe = /^(\S+?):(\d+):(\d+):\s*(.+)$/gm;
+            while ((m = unixRe.exec(body)) !== null) {
+                parsed.push({
+                    file: m[1].trim(),
+                    line: parseInt(m[2], 10),
+                    column: parseInt(m[3], 10),
+                    message: m[4].trim(),
+                    source,
+                });
+            }
+        }
+        if (parsed.length === 0) {
+            // generic: "file:line: message" (no column)
+            const genericRe = /^(\S+?):(\d+):\s+(.+)$/gm;
+            while ((m = genericRe.exec(body)) !== null) {
+                parsed.push({
+                    file: m[1].trim(),
+                    line: parseInt(m[2], 10),
+                    message: m[3].trim(),
+                    source,
+                });
+            }
+        }
+        if (parsed.length > 0) {
+            for (const p of parsed) {
+                const key = `${p.file}:${p.line ?? 0}:${p.column ?? 0}`;
+                if (seen.has(key))
+                    continue;
+                seen.add(key);
+                out.push(p);
+            }
+        }
+        else {
+            const key = `::${source}:${body.slice(0, 80)}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                out.push({
+                    file: '',
+                    message: body.trim().slice(0, 500),
+                    source,
+                });
+            }
+        }
+    }
+    return out;
+}
+
+/**
+ * Builds a self-contained repair prompt for the editor agent. The editor
+ * does not inherit conversation history, so this prompt must include
+ * everything needed to make a targeted fix: the failing file:line locations,
+ * the error messages, and the pending files context.
+ *
+ * Grouped by file for easy scanning. Unparseable failures are included as
+ * raw text at the end so the editor has maximum context.
+ */
+function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles: string[]): string {
+    const fileFailures = parsed.filter((p) => p.file.length > 0);
+    const lines: string[] = [
+        'Validation hooks failed after your edits. A deterministic failure parser extracted the specific failing locations below.',
+        '',
+        'For each failure, read the exact file and line, make the minimal targeted fix, then finish. Do not refactor or make unrelated changes. The gate will re-run validation automatically after your edits.',
+        '',
+    ];
+    if (fileFailures.length > 0) {
+        lines.push('Failing locations (file:line:column — message):');
+        const byFile = new Map<string, ParsedValidationFailure[]>();
+        for (const f of fileFailures) {
+            const list = byFile.get(f.file) ?? [];
+            list.push(f);
+            byFile.set(f.file, list);
+        }
+        for (const [file, fails] of byFile) {
+            lines.push(`  ${file}:`);
+            for (const f of fails) {
+                const loc = f.line != null
+                    ? `${f.line}${f.column != null ? `:${f.column}` : ''}`
+                    : '?';
+                lines.push(`    ${loc} — [${f.source}] ${f.message}`);
+            }
+        }
+    }
+    else {
+        lines.push('No specific file:line locations could be parsed from the failure output. Read the raw failures below and the pending files, then fix.');
+    }
+    const unparsed = parsed.filter((p) => p.file.length === 0);
+    if (unparsed.length > 0) {
+        lines.push('');
+        lines.push('Raw unparsed failures:');
+        for (const u of unparsed) {
+            lines.push(`  [${u.source}] ${u.message}`);
+        }
+    }
+    if (pendingFiles.length > 0) {
+        lines.push('');
+        lines.push(`Pending changed files: ${pendingFiles.join(', ')}`);
+    }
+    return lines.join('\n');
+}
+// </gate-helpers-generated>
+
+
       function recordChangedFiles(
         files: string[],
         opts?: { fromRepair?: boolean; fromStatusObservation?: boolean },
@@ -4027,61 +4820,6 @@ ${specialistRoutingSection}
             activeWorkState.repairRoundCount = 0
           }
         }
-      }
-
-      // Mirrors of `agents/base2/gate-paths.ts`. Kept inline because
-      // `handleSteps` is serialized via `toString()` + `new Function(...)`
-      // and cannot reference module-scope imports at reconstruction time.
-      function normalizeGateFilePath(file: string): string {
-        let normalized = file.trim().replace(/\\/g, '/')
-        if (!normalized) return ''
-        // Reject path traversal: a gate file path must stay inside the project.
-        // Any `..` segment (posix or windows, since backslashes were
-        // normalized to forward slashes above) is rejected before
-        // normalization so it can't be used to point the gate at files outside
-        // the cwd.
-        if (normalized.split('/').includes('..')) {
-          return ''
-        }
-        if (normalized.startsWith('file://')) {
-          normalized = normalized.slice('file://'.length)
-        }
-        if (/^\/[A-Za-z]:\//.test(normalized)) {
-          normalized = normalized.slice(1)
-        }
-        const cwd =
-          typeof process === 'object' &&
-          process !== null &&
-          typeof process.cwd === 'function'
-            ? process.cwd().replace(/\\/g, '/').replace(/\/+$/, '')
-            : ''
-        const isAbsolute =
-          normalized.startsWith('/') || /^[A-Za-z]:\//.test(normalized)
-        if (
-          isAbsolute &&
-          (!cwd || (normalized !== cwd && !normalized.startsWith(`${cwd}/`)))
-        ) {
-          return ''
-        }
-        if (cwd && (normalized === cwd || normalized.startsWith(`${cwd}/`))) {
-          normalized = normalized.slice(cwd.length).replace(/^\/+/, '')
-        }
-        while (normalized.startsWith('./')) {
-          normalized = normalized.slice(2)
-        }
-        return normalized.trim()
-      }
-
-      function normalizeGateFileList(files: string[]): string[] {
-        const normalizedFiles: string[] = []
-        const seen = new Set<string>()
-        for (const file of files) {
-          const normalized = normalizeGateFilePath(file)
-          if (!normalized || seen.has(normalized)) continue
-          seen.add(normalized)
-          normalizedFiles.push(normalized)
-        }
-        return normalizedFiles
       }
 
       function reviewChallengeFingerprint(files: string[]): string {
@@ -4169,12 +4907,6 @@ ${specialistRoutingSection}
           }
         }
         return false
-      }
-
-      function gateFileSetsEqual(left: string[], right: string[]): boolean {
-        if (left.length !== right.length) return false
-        const rightFiles = new Set(right)
-        return left.every((file) => rightFiles.has(file))
       }
 
       function matchesSecuritySensitiveGlob(files: string[]): boolean {
@@ -4458,22 +5190,50 @@ ${specialistRoutingSection}
         })
       }
 
-      function repairEditorReadablePaths(paths: string[]): string[] {
+      // Least-privilege repair-editor READ scope: exact finding/pending files,
+      // their parent directories, package roots (never bare **/*), and optional
+      // conservatively extracted path citations from finding/diagnostic text.
+      // WRITE scope stays exact file lists only at each call site.
+      function repairEditorReadablePaths(
+        paths: string[],
+        texts?: string[],
+      ): string[] {
+        const seedPaths = [...paths]
+        if (Array.isArray(texts)) {
+          // Conservative path-like tokens: require at least one '/' and a
+          // file-ish extension (e.g. common/src/tools/params/tool/replace-range.ts).
+          const pathLikeRe =
+            /(?:^|[\s"'`(,:=\[])((?:[\w.-]+\/)+[\w.-]+\.(?:tsx?|jsx?|mjs|cjs|py|go|rs|java|kt|kts|cs|fs|vb|json|md|mdx|yml|yaml|toml|css|scss|html|vue|svelte))\b/g
+          for (const text of texts) {
+            if (typeof text !== 'string' || !text) continue
+            let match: RegExpExecArray | null
+            while ((match = pathLikeRe.exec(text)) !== null) {
+              const candidate = match[1]
+              if (/^https?:\/\//i.test(candidate)) continue
+              if (candidate.includes('node_modules/')) continue
+              if (/(^|\/)\.env($|\.)/.test(candidate)) continue
+              seedPaths.push(candidate)
+            }
+          }
+        }
         const files = Array.from(
           new Set(
-            paths
+            seedPaths
               .map((path) => normalizeGateFilePath(path))
-              .filter((path) => path.length > 0),
+              .filter((path) => path.length > 0)
+              .filter((path) => !path.includes('node_modules/'))
+              .filter((path) => !/(^|\/)\.env($|\.)/.test(path)),
           ),
         )
-        const directories = new Set<string>()
+        const expansions = new Set<string>()
         for (const file of files) {
           const separator = file.lastIndexOf('/')
-          if (separator > 0) directories.add(file.slice(0, separator))
+          if (separator > 0) expansions.add(`${file.slice(0, separator)}/**/*`)
+          const root = inferWorkspaceRootFromPath(file)
+          // Never add bare **/* / * for root-level files (root === '.').
+          if (root !== '.') expansions.add(`${root}/**/*`)
         }
-        return Array.from(
-          new Set([...files, ...Array.from(directories, (dir) => `${dir}/**/*`)]),
-        )
+        return Array.from(new Set([...files, ...expansions]))
       }
 
       function isPublicApiSourceFile(filePath: string): boolean {
@@ -4492,61 +5252,6 @@ ${specialistRoutingSection}
 
       function selectDocWriterTargets(files: string[]): string[] {
         return files.filter(isPublicApiSourceFile)
-      }
-
-      // Inline mirror of isReviewableGateFile in agents/base2/gate-paths.ts.
-      // Kept byte-identical (minus the export keyword) because handleSteps is
-      // serialized via .toString() + new Function(...) and cannot reference
-      // module-scope imports; a parity test asserts behavioral equality.
-      // Returns true for reviewable source and test files; excludes generated
-      // code, docs, config/data (.jsonl bookkeeping like EVENTS.jsonl), .env
-      // files, and docs/ / evals/ / .agents/ paths.
-      function isReviewableGateFile(filePath: string): boolean {
-        if (/\.generated\.tsx?$/.test(filePath)) return false
-        if (/\.(md|mdx|json|jsonl|yml|yaml|toml)$/.test(filePath)) return false
-        if (/(^|\/)\.env($|\.)/.test(filePath)) return false
-        if (filePath.startsWith('docs/')) return false
-        if (filePath.startsWith('evals/') || filePath.startsWith('.agents/')) {
-          return false
-        }
-        return /\.(?:tsx?|jsx?|mjs|cjs|py|go|rs|java|kt|kts|cs|fs|vb)$/.test(
-          filePath,
-        )
-      }
-
-      // Inline mirror of selectReviewableGateFiles in gate-paths.ts.
-      function selectReviewableGateFiles(files: string[]): string[] {
-        const reviewableFiles: string[] = []
-        const seen = new Set<string>()
-        for (const file of files) {
-          const normalized = normalizeGateFilePath(file)
-          if (!normalized || seen.has(normalized)) continue
-          if (!isReviewableGateFile(normalized)) continue
-          seen.add(normalized)
-          reviewableFiles.push(normalized)
-        }
-        return reviewableFiles
-      }
-
-      // Inline mirror of isCoverageEvidenceFile in gate-paths.ts.
-      function isCoverageEvidenceFile(filePath: string): boolean {
-        if (/__tests__\//.test(filePath)) return true
-        if (/\.(test|spec)\.(?:tsx?|jsx?|mjs|cjs)$/.test(filePath)) return true
-        return false
-      }
-
-      // Inline mirror of selectCoverageEvidenceFiles in gate-paths.ts.
-      function selectCoverageEvidenceFiles(files: string[]): string[] {
-        const evidenceFiles: string[] = []
-        const seen = new Set<string>()
-        for (const file of files) {
-          const normalized = normalizeGateFilePath(file)
-          if (!normalized || seen.has(normalized)) continue
-          if (!isCoverageEvidenceFile(normalized)) continue
-          seen.add(normalized)
-          evidenceFiles.push(normalized)
-        }
-        return evidenceFiles
       }
 
       // Return the subset of `files` that at least one aux gate predicate
@@ -6011,134 +6716,6 @@ ${specialistRoutingSection}
         return resolved
       }
 
-      // Inline mirror of agents/base2/gate-reviewer.ts helpers. Keep these
-      // in sync: handleSteps is serialized with .toString() and reconstructed
-      // via new Function(...), so these helpers cannot depend on imports.
-      function stripReviewerPreamble(text: string): string {
-        let remaining = text.trim()
-        // Tolerate reviewers that still emit a closed leading <think>...</think>
-        // block (or several) plus surrounding whitespace before the verdict label.
-        while (true) {
-          const match = remaining.match(/^<think\b[^>]*>[\s\S]*?<\/think>\s*/i)
-          if (!match) break
-          remaining = remaining.slice(match[0].length).trim()
-        }
-        return remaining
-      }
-
-      // Inline mirror of isTestCoverageReviewerFinding in
-      // agents/base2/gate-reviewer.ts (all-coverage → exclusive test-writer).
-      // Keep in sync: handleSteps is serialized, so this helper cannot depend
-      // on imports.
-      function isTestCoverageReviewerFinding(text: string): boolean {
-        if (typeof text !== 'string') return false
-        const t = text.toLowerCase()
-        if (t.includes('test coverage')) return true
-        if (t.includes('coverage') && /\.test\.[a-z0-9]+/.test(t)) return true
-        return false
-      }
-
-      function collectReviewerBlockers(toolResult: unknown): string[] {
-        // First check for structured reviewer outputs (e.g. JSON with a
-        // verdict field). When present and BLOCKING, surface findings as the
-        // blocker text so existing pinning/messaging logic still works.
-        const structured = collectStructuredReviewerOutputs(toolResult)
-        const structuredBlockers: string[] = []
-        for (const entry of structured) {
-          if (entry.verdict === 'BLOCKING') {
-            const findings =
-              entry.findings.length > 0
-                ? entry.findings
-                : ['(no findings provided)']
-            for (const finding of findings) {
-              structuredBlockers.push(`BLOCKING: ${finding}`)
-            }
-          }
-          if (entry.coverage === 'missing') {
-            structuredBlockers.push(
-              'BLOCKING: test coverage missing for changed behavior (add a case to the relevant *.test.ts)',
-            )
-          }
-          for (const [dimension, status] of Object.entries(
-            entry.dimensions ?? {},
-          )) {
-            if (String(status).toLowerCase() === 'block') {
-              structuredBlockers.push(
-                `BLOCKING: ${dimension} review dimension failed`,
-              )
-            }
-          }
-          for (const requirement of entry.requirementCoverage ?? []) {
-            if (
-              requirement.status === 'missing' ||
-              requirement.status === 'uncertain'
-            ) {
-              structuredBlockers.push(
-                `BLOCKING: requirement ${requirement.status}: ${requirement.requirement}`,
-              )
-            }
-          }
-        }
-        if (structuredBlockers.length > 0) return structuredBlockers
-
-        const texts: string[] = []
-        collectStrings(toolResult, texts)
-        return texts
-          .map((text) => stripReviewerPreamble(text))
-          .filter((text) => hasReviewerLineVerdict(text, 'BLOCKING'))
-      }
-
-      function collectReviewerAttestationIssues(
-        toolResult: unknown,
-        expectedFingerprint: string,
-        pendingFiles: string[],
-      ): string[] {
-        // The caller passes the reviewable subset; when it is empty there is
-        // nothing to attest, so surface no attestation issues.
-        if (pendingFiles.length === 0) {
-          return []
-        }
-        const structured = collectStructuredReviewerOutputs(toolResult)
-        if (structured.length === 0) {
-          return [
-            'BLOCKING: reviewer did not return the required structured snapshot attestation',
-          ]
-        }
-        const result = structured[structured.length - 1]
-        if (result.schemaVersion !== 1) {
-          return [
-            'BLOCKING: reviewer returned an invalid attestation schemaVersion',
-          ]
-        }
-        const issues: string[] = []
-        if (result.snapshotFingerprint !== expectedFingerprint) {
-          issues.push(
-            'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
-          )
-        }
-        const reviewed = new Set(
-          (result.reviewedFiles ?? [])
-            .map((file) => normalizeGateFilePath(file))
-            .filter((file) => file.length > 0),
-        )
-        const missing = pendingFiles
-          .map((file) => normalizeGateFilePath(file))
-          .filter((file) => file.length > 0 && !reviewed.has(file))
-        if (missing.length > 0) {
-          issues.push(
-            `BLOCKING: reviewer did not attest to every pending file: ${missing.join(', ')}`,
-          )
-        }
-        return issues
-      }
-
-      // Distinguishes reviewer-agent crashes (errorMessage / type === 'error')
-      // from a reviewer that ran but emitted no recognizable verdict. Inline
-      // mirror of detectReviewerCrash in agents/base2/gate-reviewer.ts.
-      function detectReviewerCrash(toolResult: unknown): string | null {
-        return findReviewerCrash(toolResult)
-      }
-
       function extractAgentReceipt(toolResult: unknown):
         | {
             status: string
@@ -6329,318 +6906,6 @@ ${specialistRoutingSection}
         }
         return null
       }
-      function findReviewerCrash(
-        value: unknown,
-        depth: number = 0,
-      ): string | null {
-        // Depth cap (matches gate-reviewer.ts): reviewer tool results can
-        // carry deeply nested tool-call trees; 8 is well past any realistic
-        // envelope but stops pathological recursion.
-        if (depth > 8) return null
-        if (!value) return null
-        if (Array.isArray(value)) {
-          for (const item of value) {
-            const found = findReviewerCrash(item, depth + 1)
-            if (found) return found
-          }
-          return null
-        }
-        if (typeof value !== 'object') return null
-        const record = value as Record<string, unknown>
-        // NOTE: nested errorMessage from an inner tool call the reviewer made
-        // will also classify as a reviewer crash. Acceptable because callers
-        // only consult this when no verdict was emitted — a reviewer whose
-        // inner tool errored AND who produced no verdict is effectively
-        // crashed from the operator's perspective.
-        if (
-          typeof record.errorMessage === 'string' &&
-          record.errorMessage.trim()
-        ) {
-          return record.errorMessage.trim()
-        }
-        if (record.type === 'error' && typeof record.message === 'string') {
-          return (
-            record.message.trim() ||
-            'reviewer agent reported an unspecified error'
-          )
-        }
-        if (record.type === 'json' && 'value' in record) {
-          const nested = findReviewerCrash((record as any).value, depth + 1)
-          if (nested) return nested
-        }
-        for (const nested of Object.values(record)) {
-          const found = findReviewerCrash(nested, depth + 1)
-          if (found) return found
-        }
-        return null
-      }
-
-      function getReviewerFinalizationVerdict(
-        toolResult: unknown,
-      ): 'LOOKS_GOOD' | 'NON_BLOCKING' | '' {
-        // Automated gates accept only schema-backed structured reviewer output.
-        const structured = collectStructuredReviewerOutputs(toolResult)
-        if (structured.some((entry) => entry.coverage === 'missing')) {
-          return ''
-        }
-        for (const entry of structured) {
-          if (entry.verdict === 'LOOKS_GOOD') return 'LOOKS_GOOD'
-          if (entry.verdict === 'NON_BLOCKING') return 'NON_BLOCKING'
-        }
-
-        return ''
-      }
-
-      /**
-       * Walk the reviewer tool result for objects that look like a structured
-       * reviewer verdict: `{ verdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING', findings?: string | string[], coverage?: 'covered' | 'missing' | 'n/a' }`.
-       * Returns an ordered list of normalized entries. Plain text reviewer
-       * outputs return an empty list so the existing text-mode logic stays in
-       * charge.
-       */
-      function collectStructuredReviewerOutputs(value: unknown): Array<{
-        verdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING'
-        findings: string[]
-        coverage?: 'covered' | 'missing' | 'n/a'
-        dimensions?: Record<string, string>
-        requirementCoverage?: Array<{
-          requirement: string
-          status: string
-          evidence: string[]
-        }>
-        snapshotFingerprint?: string
-        reviewedFiles?: string[]
-        schemaVersion?: number
-        findingRecords?: Array<{
-          id: string
-          text: string
-          severity?: string
-          dimension?: string
-          evidence: string[]
-          correction?: string
-        }>
-      }> {
-        const out: Array<{
-          verdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING'
-          findings: string[]
-          coverage?: 'covered' | 'missing' | 'n/a'
-          dimensions?: Record<string, string>
-          requirementCoverage?: Array<{
-            requirement: string
-            status: string
-            evidence: string[]
-          }>
-          snapshotFingerprint?: string
-          reviewedFiles?: string[]
-          schemaVersion?: number
-          findingRecords?: Array<{
-            id: string
-            text: string
-            severity?: string
-            dimension?: string
-            evidence: string[]
-            correction?: string
-          }>
-        }> = []
-        visitForStructuredVerdict(value, out)
-        return out
-      }
-
-      function visitForStructuredVerdict(
-        value: unknown,
-        out: Array<{
-          verdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING'
-          findings: string[]
-          coverage?: 'covered' | 'missing' | 'n/a'
-          dimensions?: Record<string, string>
-          requirementCoverage?: Array<{
-            requirement: string
-            status: string
-            evidence: string[]
-          }>
-          snapshotFingerprint?: string
-          reviewedFiles?: string[]
-          schemaVersion?: number
-          findingRecords?: Array<{
-            id: string
-            text: string
-            severity?: string
-            dimension?: string
-            evidence: string[]
-            correction?: string
-          }>
-        }>,
-      ): void {
-        if (!value) return
-        if (Array.isArray(value)) {
-          for (const item of value) visitForStructuredVerdict(item, out)
-          return
-        }
-        if (typeof value !== 'object') return
-        const record = value as Record<string, unknown>
-        if (record.type === 'json' && 'value' in record) {
-          visitForStructuredVerdict(record.value, out)
-          return
-        }
-        const rawVerdict = record.verdict
-        if (typeof rawVerdict === 'string') {
-          const upper = rawVerdict.trim().toUpperCase()
-          if (
-            upper === 'LOOKS_GOOD' ||
-            upper === 'NON_BLOCKING' ||
-            upper === 'BLOCKING'
-          ) {
-            const findings: string[] = []
-            const rawFindings = record.findings
-            if (typeof rawFindings === 'string') {
-              const trimmed = rawFindings.trim()
-              if (trimmed) findings.push(trimmed)
-            } else if (Array.isArray(rawFindings)) {
-              for (const finding of rawFindings) {
-                if (typeof finding === 'string' && finding.trim()) {
-                  findings.push(finding.trim())
-                } else if (finding && typeof finding === 'object') {
-                  const item = finding as Record<string, unknown>
-                  const id = typeof item.id === 'string' ? item.id.trim() : ''
-                  const text =
-                    typeof item.summary === 'string'
-                      ? item.summary.trim()
-                      : typeof item.text === 'string'
-                        ? item.text.trim()
-                        : ''
-                  if (text) findings.push(id ? `[${id}] ${text}` : text)
-                }
-              }
-            }
-            let coverage: 'covered' | 'missing' | 'n/a' | undefined
-            const rawCoverage = record.coverage
-            if (typeof rawCoverage === 'string') {
-              const lower = rawCoverage.trim().toLowerCase()
-              if (
-                lower === 'covered' ||
-                lower === 'missing' ||
-                lower === 'n/a'
-              ) {
-                coverage = lower
-              }
-            }
-            out.push({
-              verdict: upper as 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING',
-              findings,
-              coverage,
-              dimensions:
-                record.dimensions && typeof record.dimensions === 'object'
-                  ? (Object.fromEntries(
-                      Object.entries(
-                        record.dimensions as Record<string, unknown>,
-                      ).filter((entry) => typeof entry[1] === 'string'),
-                    ) as Record<string, string>)
-                  : undefined,
-              requirementCoverage: Array.isArray(record.requirementCoverage)
-                ? record.requirementCoverage.flatMap((item) => {
-                    if (!item || typeof item !== 'object') return []
-                    const requirement = (item as any).requirement
-                    const status = (item as any).status
-                    const evidence = (item as any).evidence
-                    return typeof requirement === 'string' &&
-                      typeof status === 'string'
-                      ? [
-                          {
-                            requirement,
-                            status: status.toLowerCase(),
-                            evidence: Array.isArray(evidence)
-                              ? evidence.filter(
-                                  (value: unknown): value is string =>
-                                    typeof value === 'string',
-                                )
-                              : [],
-                          },
-                        ]
-                      : []
-                  })
-                : undefined,
-              snapshotFingerprint:
-                typeof record.snapshotFingerprint === 'string'
-                  ? record.snapshotFingerprint
-                  : undefined,
-              reviewedFiles: Array.isArray(record.reviewedFiles)
-                ? record.reviewedFiles.filter(
-                    (file): file is string => typeof file === 'string',
-                  )
-                : undefined,
-              schemaVersion:
-                typeof record.schemaVersion === 'number'
-                  ? record.schemaVersion
-                  : undefined,
-              findingRecords: Array.isArray(rawFindings)
-                ? rawFindings.flatMap((finding) => {
-                    if (!finding || typeof finding !== 'object') return []
-                    const item = finding as Record<string, unknown>
-                    const id = typeof item.id === 'string' ? item.id.trim() : ''
-                    const text =
-                      typeof item.summary === 'string'
-                        ? item.summary.trim()
-                        : typeof item.text === 'string'
-                          ? item.text.trim()
-                          : ''
-                    return id && text
-                      ? [
-                          {
-                            id,
-                            text,
-                            ...(typeof item.severity === 'string'
-                              ? { severity: item.severity }
-                              : {}),
-                            ...(typeof item.dimension === 'string'
-                              ? { dimension: item.dimension }
-                              : {}),
-                            evidence: Array.isArray(item.evidence)
-                              ? item.evidence.filter(
-                                  (value): value is string =>
-                                    typeof value === 'string',
-                                )
-                              : [],
-                            ...(typeof item.correction === 'string'
-                              ? { correction: item.correction }
-                              : {}),
-                          },
-                        ]
-                      : []
-                  })
-                : undefined,
-            })
-            return
-          }
-        }
-        for (const nested of Object.values(record)) {
-          visitForStructuredVerdict(nested, out)
-        }
-      }
-
-      function hasReviewerLineVerdict(
-        text: string,
-        verdict: 'BLOCKING' | 'LOOKS_GOOD' | 'NON_BLOCKING',
-      ): boolean {
-        return text
-          .split(/\r?\n/)
-          .some((line) => new RegExp(`^${verdict}\\b`, 'i').test(line.trim()))
-      }
-
-      function collectStrings(value: unknown, out: string[]): void {
-        if (typeof value === 'string') {
-          out.push(value)
-          return
-        }
-        if (!value) return
-        if (Array.isArray(value)) {
-          for (const item of value) collectStrings(item, out)
-          return
-        }
-        if (typeof value !== 'object') return
-        for (const nested of Object.values(value as Record<string, unknown>)) {
-          collectStrings(nested, out)
-        }
-      }
 
       function collectHookFailures(toolResult: unknown): string[] {
         const failures: string[] = []
@@ -6703,166 +6968,6 @@ ${specialistRoutingSection}
           }
         }
         return hooks
-      }
-
-      // Mirrors of `agents/base2/gate-repair.ts`. Kept inline because
-      // `handleSteps` is serialized via `toString()` + `new Function(...)`
-      // and cannot reference module-scope imports at reconstruction time.
-      // `agents/__tests__/gate-repair-parity.test.ts` enforces parity.
-      function parseValidationFailures(failures: string[]): {
-        file: string
-        line?: number
-        column?: number
-        message: string
-        source: string
-      }[] {
-        const out: {
-          file: string
-          line?: number
-          column?: number
-          message: string
-          source: string
-        }[] = []
-        const seen = new Set<string>()
-        for (const raw of failures) {
-          if (typeof raw !== 'string' || !raw.trim()) continue
-          let source = 'unknown'
-          let body = raw
-          const prefixMatch = raw.match(
-            /^\-\s+(\S+)\s+failed\s+\(exit\s+\d+\):\s*\n?/,
-          )
-          if (prefixMatch) {
-            source = prefixMatch[1]
-            body = raw.slice(prefixMatch[0].length)
-          }
-          const parsed: {
-            file: string
-            line?: number
-            column?: number
-            message: string
-            source: string
-          }[] = []
-          // tsc: "file.ts(line,col): error TSxxxx: message"
-          const tscRe = /^([^(]+)\((\d+),(\d+)\):\s*(error|warning)\s+(.+)$/gm
-          let m: RegExpExecArray | null
-          while ((m = tscRe.exec(body)) !== null) {
-            parsed.push({
-              file: m[1].trim(),
-              line: parseInt(m[2], 10),
-              column: parseInt(m[3], 10),
-              message: `${m[4]}: ${m[5]}`.trim(),
-              source,
-            })
-          }
-          if (parsed.length === 0) {
-            // eslint / gcc / rust: "file:line:col: message"
-            const unixRe = /^(\S+?):(\d+):(\d+):\s*(.+)$/gm
-            while ((m = unixRe.exec(body)) !== null) {
-              parsed.push({
-                file: m[1].trim(),
-                line: parseInt(m[2], 10),
-                column: parseInt(m[3], 10),
-                message: m[4].trim(),
-                source,
-              })
-            }
-          }
-          if (parsed.length === 0) {
-            // generic: "file:line: message" (no column)
-            const genericRe = /^(\S+?):(\d+):\s+(.+)$/gm
-            while ((m = genericRe.exec(body)) !== null) {
-              parsed.push({
-                file: m[1].trim(),
-                line: parseInt(m[2], 10),
-                message: m[3].trim(),
-                source,
-              })
-            }
-          }
-          if (parsed.length > 0) {
-            for (const p of parsed) {
-              const key = `${p.file}:${p.line ?? 0}:${p.column ?? 0}`
-              if (seen.has(key)) continue
-              seen.add(key)
-              out.push(p)
-            }
-          } else {
-            const key = `::${source}:${body.slice(0, 80)}`
-            if (!seen.has(key)) {
-              seen.add(key)
-              out.push({
-                file: '',
-                message: body.trim().slice(0, 500),
-                source,
-              })
-            }
-          }
-        }
-        return out
-      }
-
-      function buildRepairEditorPrompt(
-        parsed: {
-          file: string
-          line?: number
-          column?: number
-          message: string
-          source: string
-        }[],
-        pendingFiles: string[],
-      ): string {
-        const fileFailures = parsed.filter((p) => p.file.length > 0)
-        const lines: string[] = [
-          'Validation hooks failed after your edits. A deterministic failure parser extracted the specific failing locations below.',
-          '',
-          'For each failure, read the exact file and line, make the minimal targeted fix, then finish. Do not refactor or make unrelated changes. The gate will re-run validation automatically after your edits.',
-          '',
-        ]
-        if (fileFailures.length > 0) {
-          lines.push('Failing locations (file:line:column — message):')
-          const byFile = new Map<
-            string,
-            {
-              file: string
-              line?: number
-              column?: number
-              message: string
-              source: string
-            }[]
-          >()
-          for (const f of fileFailures) {
-            const list = byFile.get(f.file) ?? []
-            list.push(f)
-            byFile.set(f.file, list)
-          }
-          for (const [file, fails] of byFile) {
-            lines.push(`  ${file}:`)
-            for (const f of fails) {
-              const loc =
-                f.line != null
-                  ? `${f.line}${f.column != null ? `:${f.column}` : ''}`
-                  : '?'
-              lines.push(`    ${loc} — [${f.source}] ${f.message}`)
-            }
-          }
-        } else {
-          lines.push(
-            'No specific file:line locations could be parsed from the failure output. Read the raw failures below and the pending files, then fix.',
-          )
-        }
-        const unparsed = parsed.filter((p) => p.file.length === 0)
-        if (unparsed.length > 0) {
-          lines.push('')
-          lines.push('Raw unparsed failures:')
-          for (const u of unparsed) {
-            lines.push(`  [${u.source}] ${u.message}`)
-          }
-        }
-        if (pendingFiles.length > 0) {
-          lines.push('')
-          lines.push(`Pending changed files: ${pendingFiles.join(', ')}`)
-        }
-        return lines.join('\n')
       }
 
       function buildEscalationEditorPrompt(
@@ -7022,7 +7127,7 @@ ${specialistRoutingSection}
     },
   }
 }
-const EXPLORE_PROMPT = `- Iteratively gather codebase context as needed. For broad codebase questions or tasks where relevant files are not already obvious, consume the runtime-injected query_index result first and deduplicate its candidates, matchedSnippets, and relatedFiles. Use mode: 'explain' when you need ranking rationale, mode: 'neighbors' to expand around a known file, mode: 'path' to connect two known files, mode: 'references' for blast-radius analysis (files that import or call into a seed file, using from or to), and mode: 'commands' to find package scripts, CI workflows, task runners, and validation docs. Spawn bounded parallel discovery waves for explicit domains the index result did not cover; give each file-picker/code-searcher a non-overlapping question, join the wave, and launch another when inventory or coverage evidence still has gaps. There is no fixed total-agent limit. Verify selected files with read_files/read_subtree. Use list_directory and glob only when structural/path evidence is missing, and do not substitute basher for git status or file discovery. Use read_subtree for a specific subsystem. For a large file, call read_outline first, then read_files with a symbols selector. Read all relevant files before editing.`
+const EXPLORE_PROMPT = `- Iteratively gather codebase context as needed. For broad codebase questions or tasks where relevant files are not already obvious, consume the runtime-injected query_index result first and deduplicate its candidates, matchedSnippets, and relatedFiles. Use mode: 'explain' when you need ranking rationale, mode: 'neighbors' to expand around a known file, mode: 'path' to connect two known files, mode: 'references' for blast-radius analysis (files that import or call into a seed file, using from or to), and mode: 'commands' to find package scripts, CI workflows, task runners, and validation docs. Spawn bounded parallel discovery waves for explicit domains the index result did not cover; give each file-picker/code-searcher a non-overlapping question, join the wave, and launch another when inventory or coverage evidence still has gaps. There is no fixed total-agent limit. Verify selected files with read_files/read_subtree. Use list_directory and glob only when structural/path evidence is missing, and do not substitute basher for git status or file discovery. Use read_subtree for a specific subsystem. For a large file, prefer read_blocks (windows/around/symbols) over guess-shrink-retry read_files ranges paging; use read_outline then read_files ranges only for an exact arbitrary line range. Read all relevant files before editing.`
 
 function buildImplementationInstructionsPrompt({
   isFast,
@@ -7035,6 +7140,10 @@ function buildImplementationInstructionsPrompt({
   hasNoValidation: boolean
   noAskUser: boolean
 }) {
+  // Mode-level proxy for "the automated validation/reviewer gate is active".
+  // Plan mode uses separate builders, so at prompt-build time this matches the
+  // runtime runValidationGate flag for every mode that reaches this builder.
+  const gateActive = !isFast && !hasNoValidation
   return `Act as a helpful assistant and freely respond to the user's request however would be most helpful to the user. Use your judgement to orchestrate the completion of the user's request using your specialized sub-agents and tools as needed. Take your time and be comprehensive. Don't surprise the user. For example, don't modify files if the user has not asked you to do so at least implicitly.
 
 ${buildBroadAuditSection('proceed to implementation or the answer')}
@@ -7073,8 +7182,12 @@ ${buildArray(
   !hasNoValidation &&
     `- For non-trivial or risky changes, test them by running the narrowest appropriate validation commands for the project (e.g. typechecks, tests, lints, builds, or configured hooks). Try to run independent commands in parallel, then join all results before finalizing. If validation fails or times out, repair the exact failure and rerun the relevant command before treating the task as complete. Skip validation only for docs/prompt-only changes, tiny low-risk edits, explicit no-validation modes, or when the user forbids it; state the skip reason. You may have to explore the project to find the appropriate commands.`,
   `- Treat releases, deployments, publishing, migrations against shared environments, production-affecting scripts, git commits, and git pushes as high-impact actions. Do not run them unless the user explicitly requested that action in this task or confirms after you explain the exact command, target environment, and rollback/verification plan.`,
-  `- Inform the user that you have completed the task in one sentence or a few short bullet points.`,
-  '- After successfully completing an implementation, if the suggest_followups tool is available, use it to suggest ~3 next steps the user might want to take. Do not call suggest_followups until after you have written a user-visible completion summary and, for edited code, after the automated validation/reviewer gate has passed. If suggest_followups is unavailable, still provide the final summary/end normally.',
+  gateActive
+    ? '- Write exactly ONE user-visible completion summary per turn. For edited code, that summary belongs in the final message after the automated validation/reviewer gate has passed — do not write a completion summary before the gate runs. Keep any pre-gate text to brief progress notes, not a summary of the finished work.'
+    : '- Inform the user that you have completed the task in one sentence or a few short bullet points.',
+  gateActive
+    ? '- After successfully completing an implementation, if the suggest_followups tool is available, use it to suggest ~3 next steps the user might want to take. For edited code, call it only after the automated validation/reviewer gate has passed, in the same final message as your single completion summary. If suggest_followups is unavailable, still provide the final summary/end normally.'
+    : '- After successfully completing an implementation, if the suggest_followups tool is available, use it to suggest ~3 next steps the user might want to take, in the same final message as your completion summary. If suggest_followups is unavailable, still provide the final summary/end normally.',
 ).join('\n')}`
 }
 
@@ -7099,22 +7212,29 @@ function buildExecutePlanInstructionsPrompt(params: {
 function buildImplementationStepPrompt({
   isDefault,
   isFast,
+  hasNoValidation,
 }: {
   isDefault: boolean
   isFast: boolean
+  hasNoValidation: boolean
 }) {
+  // Mode-level proxy for the runtime's runValidationGate flag; see
+  // buildImplementationInstructionsPrompt.
+  const gateActive = !isFast && !hasNoValidation
   return buildArray(
     'Consider loading relevant skills with the skill tool if they might help with the current task. Do not reload skills that were already loaded earlier in this conversation.',
-    'Use dedicated tools before shell fallbacks: repository status and validation gates are runtime-owned; use read_files/read_outline/read_subtree/glob/list_directory/query_index for inspection, deterministic edit tools for file changes, and basher only for commands without a dedicated tool.',
+    'Use dedicated tools before shell fallbacks: repository status and validation gates are runtime-owned; use read_files/read_outline/read_blocks/read_subtree/glob/list_directory/query_index for inspection (large files: prefer read_blocks windows/around/symbols), deterministic edit tools for file changes, and basher only for commands without a dedicated tool.',
     isDefault &&
       `For non-trivial edits, spawn the editor after context discovery with a compact implementation-only prompt containing all of these envelope fields: Requirements, Target files, Constraints/non-goals, Patterns, Risks. Use those exact field labels in the prompt so the editor can scan them as a checklist. The editor does not inherit parent conversation history, so the prompt must contain the implementation context it needs. If you cannot state the concrete implementation task, target files, and constraints yet, gather more context instead of spawning the editor. Do not put validation commands, terminal/shell cleanup, deletion requests, visual smoke tests, code review, git operations, todos, or other parent-only orchestration tasks in the editor handoff. After the editor returns, the default runtime will independently detect changed files, run configured validation hooks, and spawn code-reviewer before finalization.`,
     isDefault &&
       'Use the phase triggers from the spawning guidelines: context agents before edits when scope is unclear, thinker for complex post-discovery reasoning, bashers for validation, debugger for repeated failures, and doc/test writers when docs or tests are required. Join all parallel validation/review results before completing.',
-    `After completing the user request, summarize your changes in a sentence${isFast ? '' : ' or a few short bullet points'}.`,
+    gateActive
+      ? 'Write your completion summary exactly once per turn. For edited code, write it in the final message after the automated validation/reviewer gate has passed — do not summarize the finished work before the gate runs.'
+      : `After completing the user request, summarize your changes in a sentence${isFast ? '' : ' or a few short bullet points'}.`,
     isDefault &&
       'Do not manually spawn code-reviewer for the same edited file set that the automated runtime gate will review. Manual review is only for user-requested extra review or pre-edit/advisory review. Spawn security-reviewer for auth, crypto, secrets, permissions, injection, sandboxing, supply-chain, or production-risk changes.',
     isDefault &&
-      'After the automated validation/reviewer gate has passed for edited code, call suggest_followups with around 3 useful next steps if that tool is available. If suggest_followups is unavailable, do not let that block the final summary/end.',
+      'After the automated validation/reviewer gate has passed for edited code, write your single completion summary and call suggest_followups with around 3 useful next steps in that same final message, if that tool is available. If suggest_followups is unavailable, do not let that block the final summary/end.',
   ).join('\n')
 }
 
@@ -7124,7 +7244,11 @@ function buildExecutePlanStepPrompt({}: {}) {
     // editor-handoff / phase-trigger / "don't manually spawn code-reviewer"
     // guidance as the DEFAULT step prompt. Compose it from the shared builder
     // instead of reimplementing so the two step prompts cannot drift.
-    buildImplementationStepPrompt({ isDefault: true, isFast: false }),
+    buildImplementationStepPrompt({
+      isDefault: true,
+      isFast: false,
+      hasNoValidation: false,
+    }),
     'You are in EXECUTE_PLAN mode. Execute or resume durable plan artifacts, using the project source editing tools when implementation work is required. Unlike PLAN mode, you may edit project source files to complete planned tasks.',
     'Treat SPEC.md, PLAN.md, STATUS.md, and LESSONS.md under the durable plan session as authoritative. Use any artifact contents already present in the conversation as the initial source of truth, confirm the next incomplete or blocked item from that context, and read artifacts directly only when contents are missing, truncated, stale, or have changed. Do not repeatedly re-read unchanged artifacts or source files after confirming the next item; continue from it unless the artifacts say completed work must be revisited.',
     'Honor the deterministic preflight included with resumed artifacts. Do not edit source when preflight reports errors. Use stable task IDs for updates, keep at most one task in_progress, respect dependencies, and do not mark a task done until its Validate gate passes and the checkpoint is recorded.',

@@ -313,6 +313,14 @@ export function checkStaleness(root: string): Finding[] {
       continue
     }
     const projectPath = toProjectPath(root, filePath)
+    // `knowledge.md` documents the whole sibling `src/` tree, while a
+    // topic-prefixed `<topic>.knowledge.md` only documents the slice of that
+    // tree matching `<topic>`. An empty topic (a file literally named
+    // `.knowledge.md`) degrades to the whole-tree case rather than emitting a
+    // pathspec that matches everything.
+    const topic = base.endsWith('.knowledge.md')
+      ? base.slice(0, -'.knowledge.md'.length)
+      : ''
     try {
       // Use git commit timestamps (the real source of truth for content
       // recency) instead of filesystem mtimes. Filesystem mtimes are flaky
@@ -321,7 +329,10 @@ export function checkStaleness(root: string): Finding[] {
       // order rather than by actual content freshness. This made the
       // mtime-based check fire deterministically on every CI run.
       const srcRelative = toProjectPath(root, siblingSrc)
-      const lastCommitSource = lastCommitEpoch(root, srcRelative)
+      const lastCommitSource =
+        topic === ''
+          ? lastCommitEpoch(root, srcRelative)
+          : lastCommitEpochForTopic(root, srcRelative, topic)
       const lastCommitMd = lastCommitEpoch(root, projectPath)
       // In local remediation flows, a tracked knowledge file may be updated in
       // the working tree before the commit that refreshes its git timestamp.
@@ -340,7 +351,10 @@ export function checkStaleness(root: string): Finding[] {
         findings.push({
           path: projectPath,
           line: 1,
-          message: `knowledge.md last commit is older than sibling src/ last commit (stale)`,
+          message:
+            topic === ''
+              ? `knowledge.md last commit is older than sibling src/ last commit (stale)`
+              : `\`${base}\` last commit is older than last topic-relevant \`${srcRelative}\` commit (stale)`,
         })
       }
     } catch (err) {
@@ -370,6 +384,52 @@ function lastCommitEpoch(root: string, pathspec: string): number | null {
     stdout = execFileSync(
       'git',
       ['log', '-1', '--format=%ct', '--', pathspec],
+      {
+        cwd: root,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    )
+  } catch {
+    return null
+  }
+  const trimmed = stdout.trim()
+  if (trimmed === '') {
+    return null
+  }
+  const epoch = Number.parseInt(trimmed, 10)
+  return Number.isFinite(epoch) ? epoch : null
+}
+
+/**
+ * Returns the epoch seconds of the most recent git commit touching a
+ * topic-relevant path under `srcRelative`, or `null` when git fails or no such
+ * path exists in history (empty stdout — same fail-open signal as
+ * `lastCommitEpoch`).
+ *
+ * Two `:(glob,icase)` pathspecs are needed because `*` never crosses `/`:
+ * one matches the topic inside a file name (`cli/src/tmux-runner.ts`), the
+ * other matches it inside a directory name (`cli/src/tmux/session.ts`).
+ * Each pathspec is a separate argv element — `execFileSync` does not use a
+ * shell, so quoting them would make the quotes literal and match nothing.
+ */
+function lastCommitEpochForTopic(
+  root: string,
+  srcRelative: string,
+  topic: string,
+): number | null {
+  let stdout: string
+  try {
+    stdout = execFileSync(
+      'git',
+      [
+        'log',
+        '-1',
+        '--format=%ct',
+        '--',
+        `:(glob,icase)${srcRelative}/**/*${topic}*`,
+        `:(glob,icase)${srcRelative}/**/*${topic}*/**`,
+      ],
       {
         cwd: root,
         encoding: 'utf8',
@@ -574,13 +634,68 @@ function listTopLevelScripts(root: string): string[] {
     .map((e) => e.name)
 }
 
+/**
+ * Expands the root `package.json` `workspaces` declaration into concrete
+ * project-relative subdirectories. A trailing `/*` entry (e.g. `packages/*`)
+ * is enumerated against the real directory listing so globbed members like
+ * `packages/agent-runtime` are returned instead of a literal `packages`.
+ *
+ * Missing directories and a missing/malformed `workspaces` field degrade to
+ * an empty result rather than throwing.
+ */
+function workspacePackageSubdirs(root: string): string[] {
+  const rootPkg = loadPackageJson(root, '.')
+  const patterns: unknown = Array.isArray(rootPkg?.workspaces)
+    ? rootPkg.workspaces
+    : rootPkg?.workspaces?.packages
+  if (!Array.isArray(patterns)) {
+    return []
+  }
+  const subdirs = new Set<string>()
+  for (const pattern of patterns) {
+    if (typeof pattern !== 'string' || pattern === '') {
+      continue
+    }
+    if (!pattern.endsWith('/*')) {
+      subdirs.add(pattern)
+      continue
+    }
+    const parent = pattern.slice(0, -2)
+    const parentDir = join(root, parent)
+    if (!existsSync(parentDir)) {
+      continue
+    }
+    try {
+      for (const entry of readdirSync(parentDir, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          subdirs.add(`${parent}/${entry.name}`)
+        }
+      }
+    } catch (err) {
+      console.debug(
+        `[memory-drift-guard] workspacePackageSubdirs readdir failed for ${parentDir}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      )
+    }
+  }
+  return [...subdirs]
+}
+
 export function checkScriptCoverage(root: string): Finding[] {
   const findings: Finding[] = []
   const scripts = listTopLevelScripts(root)
-  const scriptsPkg = loadPackageJson(root, 'scripts')
-  const rootPkg = loadPackageJson(root, '.')
+  // A script is covered when any workspace package wires it into its scripts —
+  // e.g. `cli/package.json` invoking `../scripts/generate-gate-helpers.ts` —
+  // so scan the root manifest plus every workspace member manifest.
+  const manifestSubdirs = new Set<string>([
+    '.',
+    'scripts',
+    ...workspacePackageSubdirs(root),
+  ])
   const scriptValues: string[] = []
-  for (const pkg of [scriptsPkg, rootPkg]) {
+  for (const subdir of manifestSubdirs) {
+    const pkg = loadPackageJson(root, subdir)
     if (pkg?.scripts && typeof pkg.scripts === 'object') {
       for (const v of Object.values(pkg.scripts)) {
         if (typeof v === 'string') {
@@ -625,12 +740,12 @@ export function checkScriptCoverage(root: string): Finding[] {
       continue
     }
     const inMarkdown = allMdContent.some((c) => c.includes(scriptName))
-    const inScriptsPkg = scriptValues.some((v) => v.includes(scriptName))
-    if (!inMarkdown && !inScriptsPkg) {
+    const inPackageJson = scriptValues.some((v) => v.includes(scriptName))
+    if (!inMarkdown && !inPackageJson) {
       findings.push({
         path: `scripts/${scriptName}`,
         line: 1,
-        message: `script not mentioned in any markdown file or scripts/package.json`,
+        message: `script not mentioned in any markdown file or workspace package.json`,
       })
     }
   }

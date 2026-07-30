@@ -91,6 +91,22 @@ export async function replaceRange(params: {
   const lines = normalizedOldContent.split('\n')
   const displayLineCount = getDisplayLineCount(lines, normalizedOldContent)
 
+  // Occurrence targeting is resolved to absolute lines by the agent-runtime
+  // handler (`resolveOccurrenceRangeInCapabilityRange`), which resolves against
+  // the content it just read. The applicator deliberately does not re-resolve
+  // here: resolving twice against two separate reads could diverge.
+  // Guard before the capability-length check so an unresolved occurrence on a
+  // shortened file still gets the accurate "must be resolved" message rather
+  // than a misleading beyond-file-length error (occurrence leaves start/end
+  // undefined; `rawInputSchema.superRefine` also rejects occurrence combined
+  // with startLine/endLine).
+  if (input.occurrence) {
+    return errorResult(
+      relativePath,
+      'replace_range rejected: occurrence targeting must be resolved to absolute lines before the edit is applied. Re-issue the edit through the agent runtime, or pass explicit startLine/endLine.',
+    )
+  }
+
   if (
     input.capabilityStartLine > lines.length ||
     input.capabilityEndLine > lines.length
@@ -101,10 +117,15 @@ export async function replaceRange(params: {
     )
   }
 
-  if (input.startLine > lines.length || input.endLine > lines.length) {
+  // After the occurrence guard, non-occurrence schema input always has numeric
+  // startLine/endLine (filled by the input transform from capability bounds
+  // when omitted).
+  const targetStartLine = input.startLine!
+  const targetEndLine = input.endLine!
+  if (targetStartLine > lines.length || targetEndLine > lines.length) {
     return errorResult(
       relativePath,
-      `replace_range rejected: the target range ${input.startLine}-${input.endLine} is beyond the current file length (${displayLineCount} lines). Re-read the target range before editing.`,
+      `replace_range rejected: the target range ${targetStartLine}-${targetEndLine} is beyond the current file length (${displayLineCount} lines). Re-read the target range before editing.`,
     )
   }
 
@@ -118,7 +139,7 @@ export async function replaceRange(params: {
     )
   }
 
-  const currentRange = lines.slice(input.startLine - 1, input.endLine).join('\n')
+  const currentRange = lines.slice(targetStartLine - 1, targetEndLine).join('\n')
   const normalizedNewContent = normalizeLineEndings(input.newContent)
   if (currentRange === normalizedNewContent) {
     return errorResult(
@@ -128,9 +149,9 @@ export async function replaceRange(params: {
   }
 
   const updatedLines = [
-    ...lines.slice(0, input.startLine - 1),
+    ...lines.slice(0, targetStartLine - 1),
     ...normalizedNewContent.split('\n'),
-    ...lines.slice(input.endLine),
+    ...lines.slice(targetEndLine),
   ]
   const updatedContent = updatedLines.join('\n').replaceAll('\n', lineEnding)
   return changeFile({

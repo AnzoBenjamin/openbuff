@@ -1048,6 +1048,16 @@ export function getFilesystemToolPaths(
       ],
     }
   }
+  if (toolName === 'read_blocks') {
+    return {
+      access: 'read',
+      paths: [
+        ...objectPaths(input.windows),
+        ...objectPaths(input.around),
+        ...objectPaths(input.symbols),
+      ],
+    }
+  }
   if (toolName === 'read_subtree' || toolName === 'read_image') {
     const paths = strings(input.paths)
     return {

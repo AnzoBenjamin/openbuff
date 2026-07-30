@@ -11,6 +11,11 @@
 - Prefer `scripts/tmux/` helpers for CLI smoke tests because they wrap tmux session lifecycle, bracketed paste input, terminal capture, and `debug/tmux-sessions/` logging consistently.
 - Captures should include enough wait time after sending input for streaming UI updates; use labeled captures so regressions can be compared across reruns.
 
+### Staleness Guard Scope
+
+- `checkStaleness` in `scripts/memory-drift-guard.ts` pairs every `*.knowledge.md` file with its **sibling** `src/` directory. Because `cli/tmux.knowledge.md` lives in `cli/`, its sibling is `cli/src` — the same directory that backs `cli/knowledge.md`.
+- Any `cli/src` change therefore flags this file even when tmux harness behavior is untouched. When that happens and tmux behavior really is unchanged, refresh this note explicitly rather than leaving it stale, so a reviewer can tell an intentional no-change confirmation from genuine drift.
+
 ## Recommended: Use the Helper Scripts
 
 **For most CLI testing, use the helper scripts in `scripts/tmux/`** instead of raw tmux commands. These scripts handle bracketed paste mode, session management, and logging automatically.
@@ -337,4 +342,4 @@ Tests that need CLI environment variables call `tmux set-environment -g` before 
 
 When updating CLI interaction tests, keep tmux knowledge current with any changed readiness waits, input encoding, or capture behavior so the memory-drift guard can distinguish intentionally refreshed notes from stale runtime documentation.
 
-Recent CLI component/test updates did not change tmux harness behavior; the existing best-effort environment propagation and integration/e2e filename conventions remain current. Index workspace watcher changes are non-visual and do not require tmux-specific readiness, capture, or input-encoding updates.
+The CLI `src/` changes since the last refresh — safe git slash-command argument parsing, the gate-state renderer, the edit-transaction tool card, and background-job event handling — are non-visual or covered by unit tests, and none of them changed tmux readiness waits, input encoding, or capture behavior. The best-effort `tmux set-environment -g` propagation and the `*integration*.test.ts` / `*e2e*.test.ts` filename conventions remain current.

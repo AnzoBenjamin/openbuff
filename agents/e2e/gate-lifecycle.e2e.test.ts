@@ -68,6 +68,7 @@ const SCRATCH_ROOT = '.e2e-scratch/base2-gate-lifecycle'
 const LIFECYCLE_FILE = `${SCRATCH_ROOT}/lifecycle.ts`
 const MULTI_BATCH_FILE_A = `${SCRATCH_ROOT}/multi-batch-a.ts`
 const MULTI_BATCH_FILE_B = `${SCRATCH_ROOT}/multi-batch-b.ts`
+const HAPPY_PATH_FILE = `${SCRATCH_ROOT}/happy-path.ts`
 
 afterEach(() => {
   rmSync(SCRATCH_ROOT, { recursive: true, force: true })
@@ -277,14 +278,32 @@ describe('base2 deterministic gate lifecycle e2e', () => {
         }),
       ]),
     )
-    // Repair handoffs grant least-privilege access to the implicated file and
-    // its containing directory, never a project-wide wildcard scope.
-    expect(repairAgent.handoff.permissions.readablePaths).toEqual([
-      LIFECYCLE_FILE,
-      `${SCRATCH_ROOT}/**/*`,
-    ])
+    // Repair handoffs grant least-privilege READ access: the implicated file,
+    // its parent directory, and its package root (here `.e2e-scratch/**/*`),
+    // never a project-wide wildcard scope. Writes stay finding-file only.
+    expect(repairAgent.handoff.permissions.readablePaths).toEqual(
+      expect.arrayContaining([
+        LIFECYCLE_FILE,
+        `${SCRATCH_ROOT}/**/*`,
+        '.e2e-scratch/**/*',
+      ]),
+    )
+    expect(
+      new Set(repairAgent.handoff.permissions.readablePaths as string[]),
+    ).toEqual(
+      new Set([LIFECYCLE_FILE, `${SCRATCH_ROOT}/**/*`, '.e2e-scratch/**/*']),
+    )
     expect(repairAgent.handoff.permissions.readablePaths).not.toEqual(
       expect.arrayContaining(['*', '**/*']),
+    )
+    expect(repairAgent.handoff.permissions.allowedTools).toEqual(
+      expect.arrayContaining([
+        'read_files',
+        'read_outline',
+        'read_blocks',
+        'read_subtree',
+        'edit_transaction',
+      ]),
     )
     expect(repairAgent.handoff.permissions.writablePaths).toEqual([
       LIFECYCLE_FILE,
@@ -532,5 +551,109 @@ describe('base2 deterministic gate lifecycle e2e', () => {
     })
     gen.next()
     expect((agentState as any).uncommittedUnvalidatedFiles).toEqual([])
+  })
+
+  test('a happy-path single-edit turn injects the post-gate finalization notice exactly once', () => {
+    mkdirSync(path.dirname(HAPPY_PATH_FILE), { recursive: true })
+    writeFileSync(HAPPY_PATH_FILE, 'export const happyPath = "before"\n')
+    const base2 = createBase2('default')
+    const agentState = { agentId: 'base2-custom' }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Implement the happy path change.',
+      params: {},
+    } as any)
+
+    // Every yielded value is collected so the finalization notice can be
+    // counted across the whole turn, not just at the gate-pass message.
+    const yields: any[] = []
+    const drive = (input?: unknown) => {
+      const result = gen.next(input as any)
+      yields.push(result.value)
+      return result.value as any
+    }
+
+    expect(drive()).toMatchObject({
+      toolName: 'query_index',
+      input: {
+        query: 'Implement the happy path change.',
+        limit: 14,
+        mode: 'search',
+      },
+    })
+    expect(drive(feedJson([]))).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+      includeToolCall: false,
+    })
+    expect(drive(feedJson([]))).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    expect(drive(feedJson({ status: '' }))).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    // The pinned active-work message is conditional (empty when there is no
+    // unresolved gate work), so tolerate its absence.
+    const maybePinnedState = drive()
+    if (maybePinnedState !== 'STEP') {
+      expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
+      expect(drive()).toBe('STEP')
+    }
+
+    expect(
+      drive(finishStepWithToolResult(editReceipt(HAPPY_PATH_FILE))),
+    ).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(drive(feedJson({ status: ` M ${HAPPY_PATH_FILE}` }))).toMatchObject({
+      toolName: 'run_file_change_hooks',
+      input: { files: [HAPPY_PATH_FILE] },
+    })
+    expect(
+      drive(feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }])),
+    ).toMatchObject({ toolName: 'git_status', input: {} })
+    const reviewerSpawn = drive(feedJson({ status: ` M ${HAPPY_PATH_FILE}` }))
+    expect(reviewerSpawn).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'code-reviewer' }] },
+    })
+    expect(
+      drive(
+        reviewerResult({
+          snapshotFingerprint: reviewerFingerprintFromSpawn(reviewerSpawn),
+          reviewedFiles: [HAPPY_PATH_FILE],
+          verdict: 'LOOKS_GOOD',
+        }),
+      ),
+    ).toMatchObject({ toolName: 'git_status', input: {} })
+
+    // suggest_followups stays retracted right up to the gate-pass message.
+    expect((agentState as any).canSuggestFollowups).toBe(false)
+    const gatePassed = drive(feedJson({ status: ` M ${HAPPY_PATH_FILE}` }))
+    expect(gatePassed).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect((agentState as any).canSuggestFollowups).toBe(true)
+
+    const passText = gatePassed.input.content as string
+    expect(passText).toContain(
+      'Automated validation and reviewer gate passed with LOOKS_GOOD',
+    )
+    expect(passText).toContain('Write at most one completion summary per turn')
+    expect(parseGateStateBlock(passText)).toMatchObject({
+      gate: 'validation/reviewer',
+      status: 'passed',
+    })
+
+    const finalizationNotices = yields.filter(
+      (v: any) =>
+        v?.toolName === 'add_message' &&
+        typeof v?.input?.content === 'string' &&
+        v.input.content.includes(
+          'Provide your single user-visible completion summary now',
+        ),
+    )
+    expect(finalizationNotices).toHaveLength(1)
   })
 })

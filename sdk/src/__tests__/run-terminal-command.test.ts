@@ -3,6 +3,8 @@ import os from 'os'
 import path from 'path'
 import { describe, expect, it } from 'bun:test'
 
+import { getOwnedTempRoots } from '@codebuff/common/util/project-path-containment'
+
 import { getBackgroundJob, killBackgroundJob } from '../tools/background-jobs'
 import {
   findWindowsBash,
@@ -192,6 +194,39 @@ describe('runTerminalCommand cwd containment', () => {
     const value = result[0].value as { errorMessage?: string }
     expect(value.errorMessage).toContain('Invalid cwd')
     expect(value.errorMessage).toContain('outside the project directory')
+  })
+
+  it('rejects an openbuff-owned temp directory as cwd without running the command', async () => {
+    // The owned-temp exception lets tools READ openbuff's own artifacts; it
+    // must never host a child process. `resolvedCwd.scope === 'owned-temp'`
+    // is what refuses this, so the directory is created for real (an existing
+    // path that a bad implementation could actually spawn in).
+    const ownedTempDir = fs.mkdtempSync(
+      path.join(getOwnedTempRoots()[0], 'openbuff-terminal-cwd-'),
+    )
+    const sentinel = path.join(ownedTempDir, 'executed.txt')
+    try {
+      const result = await runTerminalCommand({
+        command: `printf executed > '${sentinel}'`,
+        process_type: 'SYNC',
+        cwd: ownedTempDir,
+        projectRoot: process.cwd(),
+        timeout_seconds: 5,
+      })
+      const value = result[0].value as {
+        errorMessage?: string
+        stdout?: string
+        exitCode?: number
+      }
+
+      expect(value.errorMessage).toContain('outside the project directory')
+      // Nothing ran: no captured output, no exit code, no side effect on disk.
+      expect(value.stdout).toBeUndefined()
+      expect(value.exitCode).toBeUndefined()
+      expect(fs.existsSync(sentinel)).toBe(false)
+    } finally {
+      fs.rmSync(ownedTempDir, { recursive: true, force: true })
+    }
   })
 
   it('preserves the command field in the error result for debugging', async () => {

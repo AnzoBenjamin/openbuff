@@ -300,7 +300,12 @@ export function getAffectedTestTargets(
   const environment = inspectHarnessEnvironment(cwd)
   return files.flatMap((source) => {
     const resolvedSource = resolveProjectPath(cwd, source)
-    if (!resolvedSource) return []
+    // Only in-project sources map to workspace targets. `resolveProjectPath`
+    // also accepts the openbuff-owned OS temp namespace, whose result carries
+    // `scope: 'owned-temp'` and an ABSOLUTE `relativePath` that belongs to no
+    // workspace, so gate on the scope discriminator instead of treating every
+    // non-null result as project-relative.
+    if (!resolvedSource || resolvedSource.scope !== 'project') return []
     const normalized = resolvedSource.relativePath.replace(/\\/g, '/')
     const extension = path.extname(normalized)
     const stem = normalized.slice(0, -extension.length)
@@ -340,7 +345,11 @@ export function getBuildTargets(cwd: string, files: string[]): BuildTarget[] {
   const targets: BuildTarget[] = []
   const normalizedFiles = files.flatMap((file) => {
     const resolved = resolveProjectPath(cwd, file)
-    return resolved ? [resolved.relativePath.replace(/\\/g, '/')] : []
+    // Same project-scope gate as `getAffectedTestTargets`: an owned-temp path
+    // resolves successfully but is not a workspace source.
+    return resolved && resolved.scope === 'project'
+      ? [resolved.relativePath.replace(/\\/g, '/')]
+      : []
   })
   const selected = new Map<string, (typeof environment.workspaces)[number]>()
   for (const file of normalizedFiles) {

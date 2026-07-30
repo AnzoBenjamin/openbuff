@@ -23,6 +23,7 @@ import { globParams } from './params/tool/glob'
 import { listDirectoryParams } from './params/tool/list-directory'
 import { lookupAgentInfoParams } from './params/tool/lookup-agent-info'
 import { queryIndexParams } from './params/tool/query-index'
+import { readBlocksParams } from './params/tool/read-blocks'
 import { readDocsParams } from './params/tool/read-docs'
 import { readFilesParams } from './params/tool/read-files'
 import { readImageParams } from './params/tool/read-image'
@@ -105,6 +106,7 @@ const canonicalToolParams = {
   list_directory: listDirectoryParams,
   lookup_agent_info: lookupAgentInfoParams,
   query_index: queryIndexParams,
+  read_blocks: readBlocksParams,
   read_docs: readDocsParams,
   read_files: readFilesParams,
   read_image: readImageParams,
@@ -268,7 +270,12 @@ export const clientToolCallSchema = z.discriminatedUnion('toolName', [
   }),
   z.object({
     toolName: z.literal('replace_range'),
-    input: toolParams.replace_range.inputSchema,
+    // The client wire payload is provider-shaped: the runtime handler resolves
+    // `occurrence` into absolute `startLine`/`endLine` and forwards only the
+    // provider fields. The derived `capability*` keys produced by
+    // `inputSchema`'s transform are never transmitted; the SDK applicator
+    // re-derives them via its own `inputSchema` parse downstream.
+    input: toolParams.replace_range.providerInputSchema,
   }),
   z.object({
     toolName: z.literal('run_file_change_hooks'),

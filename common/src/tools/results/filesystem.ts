@@ -525,7 +525,7 @@ export const readFilesSliceSchema = z
   })
 
 const readFilesErrorItemSchema = z.object({
-  selector: z.enum(['file', 'range', 'symbols']),
+  selector: z.enum(['file', 'range', 'symbols', 'window', 'around', 'symbol']),
   requestIndex: z.number().int().nonnegative(),
   path: z.string(),
   status: z.literal('error'),
@@ -736,6 +736,178 @@ export const readFilesResultV1Schema = z
     }
   })
 
+const readBlocksBlockBaseFields = {
+  requestIndex: z.number().int().nonnegative(),
+  path: z.string(),
+  status: z.enum(['ok', 'partial']),
+  content: z.string(),
+  /** Exact undecorated normalized block text for deterministic follow-up edits. */
+  sourceContent: z.string(),
+  startLine: z.number().int().positive(),
+  endLine: z.number().int().positive(),
+  totalLines: z.number().int().nonnegative(),
+  complete: z.boolean(),
+  editAnchor: readFilesEditAnchorSchema.optional(),
+} as const
+
+const readBlocksBlockSuperRefine = (
+  value: {
+    startLine: number
+    endLine: number
+    complete: boolean
+    editAnchor?: { startLine: number; endLine: number }
+  },
+  ctx: z.RefinementCtx,
+) => {
+  if (
+    value.editAnchor &&
+    (value.editAnchor.startLine !== value.startLine ||
+      value.editAnchor.endLine !== value.endLine)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'block editAnchor must match the block bounds',
+    })
+  }
+  if (!value.complete && value.editAnchor !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'partial blocks cannot expose edit capabilities',
+    })
+  }
+}
+
+const readBlocksWindowItemSchema = z
+  .object({
+    selector: z.literal('window'),
+    ...readBlocksBlockBaseFields,
+    windowSize: z.number().int().positive(),
+    windowCount: z.number().int().positive(),
+    window: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    readBlocksBlockSuperRefine(value, ctx)
+    if (value.window > value.windowCount) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'window index cannot exceed windowCount',
+      })
+    }
+  })
+
+const readBlocksAroundItemSchema = z
+  .object({
+    selector: z.literal('around'),
+    ...readBlocksBlockBaseFields,
+    match: z.string(),
+    /** 1-indexed matched occurrence this block was anchored on. */
+    occurrence: z.number().int().positive(),
+    totalOccurrences: z.number().int().nonnegative(),
+  })
+  .strict()
+  .superRefine(readBlocksBlockSuperRefine)
+
+const readBlocksSymbolItemSchema = z
+  .object({
+    selector: z.literal('symbol'),
+    ...readBlocksBlockBaseFields,
+    symbol: z.string(),
+    kind: z.string().optional(),
+    /** 1-indexed AST match this slice was selected from. */
+    occurrence: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine(readBlocksBlockSuperRefine)
+
+export const readBlocksItemV1Schema = z.union([
+  readBlocksWindowItemSchema,
+  readBlocksAroundItemSchema,
+  readBlocksSymbolItemSchema,
+  readFilesErrorItemSchema,
+])
+
+export const readBlocksResultV1Schema = z
+  .object({
+    kind: z.literal('read_blocks_result'),
+    version: z.literal(1),
+    status: z.enum(['ok', 'partial', 'error']),
+    summary: z.object({
+      requested: z.number().int().nonnegative(),
+      ok: z.number().int().nonnegative(),
+      partial: z.number().int().nonnegative(),
+      failed: z.number().int().nonnegative(),
+      uniquePaths: z.number().int().nonnegative(),
+    }),
+    results: readBlocksItemV1Schema.array(),
+  })
+  .superRefine((value, ctx) => {
+    const { requested, ok, partial, failed, uniquePaths } = value.summary
+    const actualOk = value.results.filter(
+      (result) => result.status === 'ok',
+    ).length
+    const actualPartial = value.results.filter(
+      (result) => result.status === 'partial',
+    ).length
+    const actualFailed = value.results.filter(
+      (result) => result.status === 'error',
+    ).length
+    if (
+      ok + partial + failed !== requested ||
+      requested !== value.results.length ||
+      ok !== actualOk ||
+      partial !== actualPartial ||
+      failed !== actualFailed
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'read_blocks summary counts must equal the number of result items',
+      })
+    }
+    if (
+      new Set(value.results.map((result) => result.path)).size !== uniquePaths
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'read_blocks summary.uniquePaths does not match results',
+      })
+    }
+    const expectedStatus =
+      failed === requested && failed > 0
+        ? 'error'
+        : failed > 0 || partial > 0
+          ? 'partial'
+          : 'ok'
+    if (value.status !== expectedStatus) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'read_blocks aggregate status does not match summary counts',
+      })
+    }
+    if (value.results.some((result, index) => result.requestIndex !== index)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'read_blocks request indexes must be contiguous and ordered',
+      })
+    }
+    for (const result of value.results) {
+      if (result.status === 'error') continue
+      if (result.status === 'ok' && !result.complete) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'ok block results must be complete',
+        })
+      }
+      if (result.status === 'partial' && result.complete) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'partial block results must be incomplete',
+        })
+      }
+    }
+  })
+
 export type FilesystemError = z.infer<typeof filesystemErrorSchema>
 export type FilesystemErrorCode = z.infer<typeof filesystemErrorCodeSchema>
 export type ToolLifecycleStateV1 = z.infer<typeof toolLifecycleStateV1Schema>
@@ -761,6 +933,8 @@ export type CommitActionReceiptV1 = z.infer<typeof commitActionReceiptV1Schema>
 export type CommitReceiptV1 = z.infer<typeof commitReceiptV1Schema>
 export type ReadFilesItemV1 = z.infer<typeof readFilesItemV1Schema>
 export type ReadFilesResultV1 = z.infer<typeof readFilesResultV1Schema>
+export type ReadBlocksItemV1 = z.infer<typeof readBlocksItemV1Schema>
+export type ReadBlocksResultV1 = z.infer<typeof readBlocksResultV1Schema>
 
 const TOOL_LIFECYCLE_TRANSITIONS: Record<
   ToolLifecycleStateV1,
@@ -1291,4 +1465,36 @@ export function isReadFilesResultV1(
   value: unknown,
 ): value is ReadFilesResultV1 {
   return readFilesResultV1Schema.safeParse(value).success
+}
+
+export function buildReadBlocksResultV1(
+  results: ReadBlocksItemV1[],
+): ReadBlocksResultV1 {
+  const ok = results.filter((result) => result.status === 'ok').length
+  const partial = results.filter((result) => result.status === 'partial').length
+  const failed = results.filter((result) => result.status === 'error').length
+  return {
+    kind: 'read_blocks_result',
+    version: 1,
+    status:
+      failed === results.length && failed > 0
+        ? 'error'
+        : failed > 0 || partial > 0
+          ? 'partial'
+          : 'ok',
+    summary: {
+      requested: results.length,
+      ok,
+      partial,
+      failed,
+      uniquePaths: new Set(results.map((result) => result.path)).size,
+    },
+    results,
+  }
+}
+
+export function isReadBlocksResultV1(
+  value: unknown,
+): value is ReadBlocksResultV1 {
+  return readBlocksResultV1Schema.safeParse(value).success
 }

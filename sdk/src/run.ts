@@ -673,7 +673,7 @@ async function runOnce({
         handleStreamChunk?.({
           type: 'reasoning_chunk',
           chunk: chunk.text,
-          agentId: chunk.runId,
+          agentId: chunk.agentId ?? chunk.runId,
           ancestorRunIds: chunk.ancestorRunIds,
         })
       } else {

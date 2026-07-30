@@ -218,7 +218,16 @@ export function runTerminalCommand({
     projectRoot ?? process.cwd(),
     cwd,
   )
-  if (resolvedCwd === null) {
+  // The helper also honors the openbuff-owned OS temp namespace exception,
+  // which exists so path-taking tools can READ openbuff's own artifacts — not
+  // so a child process can be hosted there. `evaluateTerminalCommandPolicy`
+  // below still resolves relative command tokens against `projectRoot`, so an
+  // owned-temp cwd would let a policy-clean relative token land in a
+  // world-writable directory. Require an in-project result: the resolver's
+  // `scope` discriminator marks that exception explicitly, so an owned-temp
+  // path is refused without also rejecting a project root that legitimately
+  // lives under the temp dir.
+  if (resolvedCwd === null || resolvedCwd.scope === 'owned-temp') {
     return Promise.resolve([
       {
         type: 'json',

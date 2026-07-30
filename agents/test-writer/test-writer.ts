@@ -91,6 +91,7 @@ const definition: SecretAgentDefinition = {
   toolNames: [
     'read_files',
     'read_outline',
+    'edit_transaction',
     'write_file',
     'str_replace',
     'set_output',

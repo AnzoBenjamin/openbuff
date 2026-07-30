@@ -1,7 +1,13 @@
-import { describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+
+import { getOwnedTempRoots } from '@codebuff/common/util/project-path-containment'
 
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 
+import { createNodeFileSystem } from '../tools/node-filesystem'
 import {
   FilesystemAuthority,
   MAX_COMMIT_RECEIPTS_PER_RUN,
@@ -105,6 +111,7 @@ describe('FilesystemAuthority paths and policy', () => {
         portablePath: 'link/new.ts',
         operationPath: '/real/repo/actual/new.ts',
         redactPath: false,
+        scope: 'project',
       },
     })
   })
@@ -336,5 +343,262 @@ describe('FilesystemAuthority capabilities, snapshots, and receipts', () => {
     expect(JSON.stringify(receipt)).not.toContain('secrets/token.txt')
     expect(JSON.stringify(receipt)).not.toContain('super-secret')
     expect(receipt?.error?.code).toBe('OPERATION_FAILED')
+  })
+})
+
+describe('FilesystemAuthority owned-temp namespace permits CRUD except live job artifacts', () => {
+  // The owned-temp namespace is mutable so tools can manage their own scratch
+  // artifacts. Only LIVE background-job log/metadata files stay read-only, and
+  // a move may never cross the project/owned-temp boundary.
+  const uniqueSuffix = () =>
+    `${process.pid}-${Math.random().toString(36).slice(2, 10)}`
+  // `getOwnedTempRoots()[0]` rather than a literal `/tmp`: on macOS the OS
+  // temp dir is a symlinked `/var/folders/...` path.
+  const ownedTempRoot = getOwnedTempRoots()[0]
+
+  let projectRoot: string
+  let ownedTempDir: string
+  let ownedTempLog: string
+  let ownedTempMetadata: string
+  let ownedTempScratch: string
+  let ownedTempNestedDir: string
+  let ownedTempNestedNew: string
+  let tmuxCapturesDir: string
+  let tmuxCaptureFile: string
+  let authority: FilesystemAuthority
+
+  /**
+   * Narrows an `authorizePath` result to its `AuthorizedFilesystemPath`.
+   * `authorizeMovePair` takes the real authorized values (they carry `scope`
+   * plus the canonical/portable members), so they must come from the authority
+   * rather than an object literal.
+   */
+  const authorizedPath = async (
+    input: string,
+    operation: Parameters<FilesystemAuthority['authorizePath']>[1],
+  ) => {
+    const result = await authority.authorizePath(input, operation)
+    if (!result.allowed) throw new Error(`unexpected refusal: ${result.code}`)
+    return result.path
+  }
+
+  beforeAll(() => {
+    // A NON-`openbuff-` mkdtemp prefix keeps the project scope distinct from
+    // the owned-temp scope even though both live under the temp dir.
+    projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fsauth-project-'))
+    fs.mkdirSync(path.join(projectRoot, 'src'))
+    fs.writeFileSync(path.join(projectRoot, 'src', 'file.ts'), 'export {}\n')
+
+    // Scratch artifacts live one level down, inside an owned `openbuff-`
+    // directory: `create`/`delete` authorize with `followFinalSymlink: false`,
+    // which also contains the PARENT directory, and the bare temp root is
+    // never itself owned-temp (strictly-inside rule).
+    ownedTempDir = fs.mkdtempSync(
+      path.join(ownedTempRoot, 'openbuff-fsauth-jobs-'),
+    )
+    // Job-shaped artifacts. NOTE: both sit NESTED inside the owned mkdtemp
+    // directory, which is exactly what proves the job-artifact carve-out is
+    // basename-driven rather than depth-driven — a job-shaped basename is
+    // refused at any depth inside the owned namespace.
+    ownedTempLog = path.join(ownedTempDir, `openbuff-job-${uniqueSuffix()}.log`)
+    fs.writeFileSync(ownedTempLog, 'job log line\n')
+    ownedTempMetadata = path.join(
+      ownedTempDir,
+      `openbuff-${uniqueSuffix()}.json`,
+    )
+    fs.writeFileSync(ownedTempMetadata, '{"jobId":"fsauth"}\n')
+
+    // An ordinary (non-job-shaped) scratch file: full CRUD is expected here.
+    ownedTempScratch = path.join(ownedTempDir, `scratch-${uniqueSuffix()}.txt`)
+    fs.writeFileSync(ownedTempScratch, 'scratch\n')
+
+    // A not-yet-existing path under an existing nested scratch directory.
+    ownedTempNestedDir = path.join(ownedTempDir, 'nested')
+    fs.mkdirSync(ownedTempNestedDir)
+    ownedTempNestedNew = path.join(
+      ownedTempNestedDir,
+      `new-${uniqueSuffix()}.txt`,
+    )
+
+    // `tmux-captures-<session>` must be the FIRST segment below the owned temp
+    // root for the owned-namespace patterns to match.
+    tmuxCapturesDir = path.join(
+      ownedTempRoot,
+      `tmux-captures-fsauth-${uniqueSuffix()}`,
+    )
+    fs.mkdirSync(tmuxCapturesDir)
+    tmuxCaptureFile = path.join(tmuxCapturesDir, 'capture-0001.txt')
+    fs.writeFileSync(tmuxCaptureFile, 'pane output\n')
+
+    authority = new FilesystemAuthority(
+      projectRoot,
+      createNodeFileSystem(),
+      allowAllFilesystemPolicy,
+    )
+  })
+
+  afterAll(() => {
+    fs.rmSync(projectRoot, { recursive: true, force: true })
+    fs.rmSync(ownedTempDir, { recursive: true, force: true })
+    fs.rmSync(tmuxCapturesDir, { recursive: true, force: true })
+  })
+
+  test.each(['read', 'create', 'overwrite', 'delete', 'move'] as const)(
+    'allows %s on an ordinary owned-temp scratch file',
+    async (operation) => {
+      const result = await authority.authorizePath(ownedTempScratch, operation)
+      expect(result).toMatchObject({ allowed: true })
+      // Asserting the scope rules out a false pass through the project branch
+      // (and a `path_outside_project` refusal reported as some other failure).
+      if (!result.allowed) throw new Error(result.code)
+      expect(result.path.scope).toBe('owned-temp')
+    },
+  )
+
+  test('allows create of a not-yet-existing nested owned-temp path', async () => {
+    const result = await authority.authorizePath(ownedTempNestedNew, 'create')
+    expect(result).toMatchObject({ allowed: true })
+    if (!result.allowed) throw new Error(result.code)
+    expect(result.path.scope).toBe('owned-temp')
+  })
+
+  test('allows delete of a nested owned-temp scratch directory', async () => {
+    // Tools clean up their own scratch dirs. `delete` authorizes with
+    // `followFinalSymlink: false`, so the PARENT must also be contained; the
+    // parent here is the owned `openbuff-` mkdtemp dir.
+    const result = await authority.authorizePath(ownedTempNestedDir, 'delete')
+    expect(result).toMatchObject({ allowed: true })
+    if (!result.allowed) throw new Error(result.code)
+    expect(result.path.scope).toBe('owned-temp')
+  })
+
+  test('authorizes delete of the top-level owned mkdtemp directory itself', async () => {
+    // A top-level owned entry has the BARE TEMP ROOT as its parent, and the
+    // temp root is deliberately never itself owned-temp (strictly-inside
+    // rule). `resolveFilePathFor*Operation` therefore falls back to the
+    // already-validated `realFullPath` for the no-follow parent check, so the
+    // top-level scratch dir authorizes instead of being refused with
+    // `path_outside_project`.
+    //
+    // This asserts AUTHORIZATION ONLY. No mutation tool currently performs a
+    // directory delete through this path (change_file reads the source first
+    // and would fail with EISDIR; apply_patch has no directory delete), so
+    // this case deliberately does not claim an end-to-end capability.
+    const result = await authority.authorizePath(ownedTempDir, 'delete')
+    expect(result).toMatchObject({ allowed: true })
+    if (!result.allowed) throw new Error(result.code)
+    expect(result.path.scope).toBe('owned-temp')
+  })
+
+  test.each(['create', 'overwrite', 'delete', 'move'] as const)(
+    'refuses %s on a tmux capture file',
+    async (operation) => {
+      // Captures are verification evidence the PARENT agent reads, so they get
+      // the same read-only treatment as live background-job artifacts: a
+      // subagent must not be able to rewrite a capture to forge evidence.
+      const result = await authority.authorizePath(tmuxCaptureFile, operation)
+      expect(result).toEqual({
+        allowed: false,
+        code: 'owned_temp_capture_read_only',
+      })
+    },
+  )
+
+  test('still allows read of a tmux capture file', async () => {
+    const result = await authority.authorizePath(tmuxCaptureFile, 'read')
+    expect(result).toMatchObject({ allowed: true })
+    if (!result.allowed) throw new Error(result.code)
+    expect(result.path.scope).toBe('owned-temp')
+  })
+
+  test.each(['create', 'overwrite', 'move'] as const)(
+    'refuses %s of an executable-extension owned-temp basename',
+    async (operation) => {
+      // /tmp tokens are exempt from the terminal command policy's
+      // outside-path check, so allowing a tool to write an arbitrary `.sh`
+      // into owned temp space would turn a plain file write into a
+      // terminal-policy bypass.
+      const result = await authority.authorizePath(
+        path.join(ownedTempDir, `payload-${uniqueSuffix()}.sh`),
+        operation,
+      )
+      expect(result).toEqual({
+        allowed: false,
+        code: 'owned_temp_executable_extension_refused',
+      })
+    },
+  )
+
+  test.each(['create', 'overwrite', 'delete', 'move'] as const)(
+    'refuses %s on a live background-job log',
+    async (operation) => {
+      const result = await authority.authorizePath(ownedTempLog, operation)
+      expect(result).toEqual({
+        allowed: false,
+        code: 'owned_temp_job_artifact_read_only',
+      })
+    },
+  )
+
+  test.each(['create', 'overwrite', 'delete', 'move'] as const)(
+    'refuses %s on a background-job metadata json',
+    async (operation) => {
+      const result = await authority.authorizePath(ownedTempMetadata, operation)
+      expect(result).toEqual({
+        allowed: false,
+        code: 'owned_temp_job_artifact_read_only',
+      })
+    },
+  )
+
+  test.each([
+    ['job log', () => ownedTempLog],
+    ['job metadata json', () => ownedTempMetadata],
+  ] as const)('still allows read of the %s', async (_label, getPath) => {
+    const result = await authority.authorizePath(getPath(), 'read')
+    expect(result).toMatchObject({ allowed: true })
+    if (!result.allowed) throw new Error(result.code)
+    expect(result.path.scope).toBe('owned-temp')
+  })
+
+  test('leaves the project scope unaffected', async () => {
+    const result = await authority.authorizePath('src/file.ts', 'overwrite')
+    expect(result).toMatchObject({ allowed: true })
+    if (!result.allowed) throw new Error(result.code)
+    expect(result.path.scope).toBe('project')
+  })
+
+  test('allows a move within the project scope', async () => {
+    const source = await authorizedPath('src/file.ts', 'move')
+    const destination = await authorizedPath('src/moved.ts', 'move')
+    expect(authority.authorizeMovePair(source, destination)).toEqual({
+      allowed: true,
+    })
+  })
+
+  test('allows a move within the owned-temp scope', async () => {
+    const source = await authorizedPath(ownedTempScratch, 'move')
+    const destination = await authorizedPath(ownedTempNestedNew, 'move')
+    expect(authority.authorizeMovePair(source, destination)).toEqual({
+      allowed: true,
+    })
+  })
+
+  test('refuses a move from the project into owned-temp', async () => {
+    const source = await authorizedPath('src/file.ts', 'move')
+    const destination = await authorizedPath(ownedTempScratch, 'move')
+    expect(authority.authorizeMovePair(source, destination)).toEqual({
+      allowed: false,
+      code: 'move_crosses_scope_boundary',
+    })
+  })
+
+  test('refuses a move from owned-temp into the project', async () => {
+    const source = await authorizedPath(ownedTempScratch, 'move')
+    const destination = await authorizedPath('src/file.ts', 'move')
+    expect(authority.authorizeMovePair(source, destination)).toEqual({
+      allowed: false,
+      code: 'move_crosses_scope_boundary',
+    })
   })
 })

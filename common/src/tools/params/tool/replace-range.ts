@@ -46,6 +46,16 @@ const rawInputSchema = z
       .describe(
         'Optional 1-indexed target end within the capability-covered range. Omit with startLine to replace the complete observed range.',
       ),
+    occurrence: z
+      .object({
+        match: z.string().min(1),
+        occurrence: z.number().int().min(1).optional(),
+      })
+      .strict()
+      .optional()
+      .describe(
+        'Optional occurrence targeting: replace the 1-indexed occurrence (default 1) of the exact literal match found inside the capability-authorized range. Mutually exclusive with startLine/endLine.',
+      ),
     newContent: z
       .string()
       .refine((value) => !isObviousEditPlaceholder(value), {
@@ -70,6 +80,15 @@ const rawInputSchema = z
     }
     const hasStart = input.startLine !== undefined
     const hasEnd = input.endLine !== undefined
+    if (input.occurrence && (hasStart || hasEnd)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['occurrence'],
+        message:
+          'occurrence is mutually exclusive with startLine/endLine. Provide occurrence alone to target a repeated literal block inside the capability range.',
+      })
+      return
+    }
     if (hasStart !== hasEnd) {
       ctx.addIssue({
         code: 'custom',
@@ -91,7 +110,7 @@ const rawInputSchema = z
     }
   })
   .describe(
-    'Replace all or a contained sub-range of content observed through one fresh cap.v3 read capability.',
+    'Replace all of, a contained sub-range of, or the Nth literal occurrence inside content observed through one fresh cap.v3 read capability.',
   )
 
 const inputSchema = rawInputSchema.transform((input) => {
@@ -99,10 +118,18 @@ const inputSchema = rawInputSchema.transform((input) => {
   if (typeof decoded === 'string') {
     throw new Error(decoded)
   }
+  // Occurrence targeting resolves concrete line bounds at runtime against the
+  // authorized slice of current content, so leave them underived here instead
+  // of defaulting to the full capability range.
+  const bounds = input.occurrence
+    ? { startLine: input.startLine, endLine: input.endLine }
+    : {
+        startLine: input.startLine ?? decoded.startLine,
+        endLine: input.endLine ?? decoded.endLine,
+      }
   return {
     ...input,
-    startLine: input.startLine ?? decoded.startLine,
-    endLine: input.endLine ?? decoded.endLine,
+    ...bounds,
     capabilityStartLine: decoded.startLine,
     capabilityEndLine: decoded.endLine,
     capabilityHash: decoded.hash,
@@ -117,6 +144,7 @@ Use this tool for reliable edits to an exact file range you have read. It mutate
 Important:
 - Copy the single cap.v3 readCapability token verbatim from the matching fresh read_files editAnchor.
 - The token supplies the observed line bounds and content hash. To replace only part of the observed content, pass startLine and endLine together; they must remain inside the token's range.
+- To target one instance of a repeated literal block instead of absolute lines, pass occurrence: { match, occurrence } and omit startLine/endLine. The runtime resolves the 1-indexed occurrence (default 1) of the exact literal match inside the capability-authorized range; occurrence and startLine/endLine cannot be combined.
 - Never pass expectedHash. The runtime derives and verifies freshness from the authenticated capability.
 - Do not include a trailing phantom line beyond the visible file length; if a stale-range diagnostic reports the current file length, re-read a valid range.
 - The runtime verifies the current range hash before editing and rejects stale edits before changing the file.
