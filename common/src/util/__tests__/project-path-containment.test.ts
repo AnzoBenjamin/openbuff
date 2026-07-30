@@ -68,6 +68,12 @@ describe('resolveProjectPath', () => {
     expect(result!.fullPath).toBe(path.resolve('/repo/src/nested/file.ts'))
   })
 
+  test('marks an ordinary in-project path with scope "project"', () => {
+    const result = resolveProjectPath('/repo', 'src/a.ts')
+    expect(result).not.toBeNull()
+    expect(result!.scope).toBe('project')
+  })
+
   test('handles absolute input by re-rooting it relative to the project', () => {
     const result = resolveProjectPath('/repo', '/repo/src/file.ts')
     expect(result).not.toBeNull()
@@ -179,6 +185,9 @@ describe('openbuff-owned OS temp namespace exception', () => {
       expect(isOwnedTempPath(path.join(tempRoot, 'openbuff-abc123.json'))).toBe(
         true,
       )
+      expect(
+        isOwnedTempPath(path.join(tempRoot, 'openbuff-test-job-3.log')),
+      ).toBe(true)
     })
 
     test('accepts a basher full-log name', () => {
@@ -235,6 +244,44 @@ describe('openbuff-owned OS temp namespace exception', () => {
 
       expect(isOwnedTempPath(ownedLog)).toBe(true)
     })
+
+    test('accepts an extension-free mkdtemp-created directory name', () => {
+      // mkdtemp appends random alphanumerics to the prefix and creates a
+      // DIRECTORY, so the owned name carries no dot-extension.
+      expect(
+        isOwnedTempPath(path.join(tempRoot, 'openbuff-read-logs-AbC123')),
+      ).toBe(true)
+
+      if (literalTmpIsOwnedRoot) {
+        expect(isOwnedTempPath('/tmp/openbuff-read-logs-AbC123')).toBe(true)
+      }
+    })
+
+    test('accepts a nested file beneath an mkdtemp-created directory', () => {
+      expect(
+        isOwnedTempPath(
+          path.join(
+            tempRoot,
+            'openbuff-read-logs-AbC123',
+            'inner',
+            'file.log',
+          ),
+        ),
+      ).toBe(true)
+    })
+
+    test('accepts a real mkdtemp-created directory and a file inside it', () => {
+      const ownedDir = track(
+        fs.mkdtempSync(path.join(tempRoot, 'openbuff-read-logs-')),
+      )
+      const innerDir = path.join(ownedDir, 'inner')
+      fs.mkdirSync(innerDir)
+      const innerFile = path.join(innerDir, 'file.log')
+      fs.writeFileSync(innerFile, 'line\n')
+
+      expect(isOwnedTempPath(ownedDir)).toBe(true)
+      expect(isOwnedTempPath(innerFile)).toBe(true)
+    })
   })
 
   describe('resolveProjectPath owned-temp fallback', () => {
@@ -251,6 +298,24 @@ describe('openbuff-owned OS temp namespace exception', () => {
       // "relative" path is the absolute resolved path.
       expect(result!.relativePath).toBe(path.resolve(ownedLog))
       expect(result!.fullPath).toBe(path.resolve(ownedLog))
+      expect(result!.scope).toBe('owned-temp')
+    })
+
+    test('discriminates the two scopes without inspecting relativePath', () => {
+      // Consumers must branch on `scope`, not on `path.isAbsolute(relativePath)`:
+      // the absoluteness of `relativePath` is an artifact of the owned-temp
+      // fallback, while `scope` is the documented discriminator.
+      const ownedLog = path.join(
+        tempRoot,
+        `openbuff-job-${uniqueSuffix()}.log`,
+      )
+      const ownedResult = resolveProjectPath('/some/project', ownedLog)
+      const projectResult = resolveProjectPath('/some/project', 'src/a.ts')
+
+      expect(ownedResult).not.toBeNull()
+      expect(projectResult).not.toBeNull()
+      expect(ownedResult!.scope).toBe('owned-temp')
+      expect(projectResult!.scope).toBe('project')
     })
 
     test('isPathInsideProject accepts an owned temp path', () => {
@@ -302,6 +367,41 @@ describe('openbuff-owned OS temp namespace exception', () => {
 
       if (literalTmpIsOwnedRoot) {
         expect(isOwnedTempPath('/tmp/nested/openbuff-foo.log')).toBe(false)
+      }
+    })
+
+    test('rejects an openbuff-prefixed file with a non-log/json extension', () => {
+      // The tightened patterns are anchored full-segment shapes: the
+      // file pattern only admits `.log`/`.json`, and the mkdtemp DIRECTORY
+      // pattern excludes dots, so it must not rescue a dotted name. This is
+      // asserted on the predicate/resolver, never on filesystem state.
+      const evil = path.join(tempRoot, 'openbuff-evil.sh')
+      expect(isOwnedTempPath(evil)).toBe(false)
+      expect(resolveProjectPath('/some/project', evil)).toBeNull()
+      expect(isPathInsideProject('/some/project', evil)).toBe(false)
+
+      // Also rejected for a nested path beneath the same segment.
+      expect(
+        isOwnedTempPath(path.join(tempRoot, 'openbuff-evil.sh', 'payload')),
+      ).toBe(false)
+
+      if (literalTmpIsOwnedRoot) {
+        expect(isOwnedTempPath('/tmp/openbuff-evil.sh')).toBe(false)
+      }
+    })
+
+    test('rejects other non-log/json extensions on an owned-looking name', () => {
+      const doubleExtension = path.join(tempRoot, 'openbuff-x.log.sh')
+      const textExtension = path.join(tempRoot, 'openbuff-x.txt')
+
+      expect(isOwnedTempPath(doubleExtension)).toBe(false)
+      expect(isOwnedTempPath(textExtension)).toBe(false)
+      expect(resolveProjectPath('/some/project', doubleExtension)).toBeNull()
+      expect(resolveProjectPath('/some/project', textExtension)).toBeNull()
+
+      if (literalTmpIsOwnedRoot) {
+        expect(isOwnedTempPath('/tmp/openbuff-x.log.sh')).toBe(false)
+        expect(isOwnedTempPath('/tmp/openbuff-x.txt')).toBe(false)
       }
     })
 

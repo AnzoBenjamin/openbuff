@@ -3,8 +3,6 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-import { isOwnedTempPath } from '@codebuff/common/util/project-path-containment'
-
 import {
   stripColors,
   truncateStringWithMessage,
@@ -225,15 +223,11 @@ export function runTerminalCommand({
   // so a child process can be hosted there. `evaluateTerminalCommandPolicy`
   // below still resolves relative command tokens against `projectRoot`, so an
   // owned-temp cwd would let a policy-clean relative token land in a
-  // world-writable directory. Require an in-project result: that exception is
-  // the only case where `relativePath` comes back absolute, so an owned-temp
+  // world-writable directory. Require an in-project result: the resolver's
+  // `scope` discriminator marks that exception explicitly, so an owned-temp
   // path is refused without also rejecting a project root that legitimately
   // lives under the temp dir.
-  const cwdCameFromOwnedTempException =
-    resolvedCwd !== null &&
-    path.isAbsolute(resolvedCwd.relativePath) &&
-    isOwnedTempPath(resolvedCwd.operationPath)
-  if (resolvedCwd === null || cwdCameFromOwnedTempException) {
+  if (resolvedCwd === null || resolvedCwd.scope === 'owned-temp') {
     return Promise.resolve([
       {
         type: 'json',

@@ -24,6 +24,39 @@ import {
 export const MAX_COMMIT_RECEIPTS_PER_RUN = 1000
 const MAX_REGISTERED_OPERATIONS_PER_RUN = 1000
 
+/**
+ * Exact file shape produced by `getBackgroundJobFilePath` in
+ * `./background-jobs` (`openbuff-<jobId>.log` / `.json` in the OS temp dir),
+ * mirroring `BACKGROUND_JOB_FILE_PATTERN` in `./read-logs`.
+ */
+const BACKGROUND_JOB_FILE_PATTERN = /^openbuff-(.+)\.(?:log|json)$/
+
+/**
+ * Exact directory shape created by `agents/tmux-cli.ts`
+ * (`/tmp/tmux-captures-<session>/`). Captures are verification evidence the
+ * PARENT agent reads back, so they stay read-only for the same reason live job
+ * artifacts do.
+ */
+const TMUX_CAPTURE_DIR_PATTERN = /^tmux-captures-.+$/
+
+/**
+ * Owned temp space is exempt from the terminal command policy's outside-path
+ * check (every `/tmp/...` token is allowed there), so a tool-side write of an
+ * executable-extension basename would turn a plain file write into arbitrary
+ * command execution. Refuse those basenames instead of relying on the terminal
+ * policy to catch them later.
+ */
+const OWNED_TEMP_REFUSED_EXTENSIONS = new Set([
+  '.sh',
+  '.bash',
+  '.zsh',
+  '.ksh',
+  '.command',
+  '.bat',
+  '.cmd',
+  '.ps1',
+])
+
 export type FilesystemCapability =
   | 'baseline'
   | 'range_read'
@@ -100,6 +133,7 @@ export type AuthorizedFilesystemPath = Readonly<{
   portablePath: string
   operationPath: string
   redactPath: boolean
+  scope: 'project' | 'owned-temp'
 }>
 
 export type PathAuthorizationResult =
@@ -201,7 +235,36 @@ export class FilesystemAuthority {
     )
     if (!resolved) return { allowed: false, code: 'path_outside_project' }
 
+    // The owned-temp namespace is now mutable so tools can manage their own
+    // scratch artifacts (mkdtemp dirs and their contents): create, overwrite,
+    // delete and move are permitted there. The exceptions refused below are
+    // live background-job log/metadata files, tmux capture evidence, and
+    // executable-extension basenames.
+    // /tmp is world-writable, so owned-temp mutations rely on (i) the anchored
+    // full-segment owned patterns, (ii) single-realpath containment validated
+    // in `common/src/util/project-path-containment.ts`, and (iii) the same
+    // conditional-commit / expected-state revalidation every project write
+    // goes through.
+    const ownedTempRefusal = this.ownedTempMutationRefusal(resolved, operation)
+    if (ownedTempRefusal) return ownedTempRefusal
+
     return this.toAuthorizedPath(resolved, operation, phase)
+  }
+
+  /**
+   * A move must stay within one scope. Crossing the project/owned-temp boundary
+   * would either import unreviewed temp content into the project tree (escaping
+   * the gate/review path that project files go through) or export project
+   * content into a world-writable temp namespace.
+   */
+  authorizeMovePair(
+    source: AuthorizedFilesystemPath,
+    destination: AuthorizedFilesystemPath,
+  ): { allowed: true } | { allowed: false; code: string } {
+    if (source.scope !== destination.scope) {
+      return { allowed: false, code: 'move_crosses_scope_boundary' }
+    }
+    return { allowed: true }
   }
 
   registerOperation(input: {
@@ -590,6 +653,58 @@ export class FilesystemAuthority {
     return { supported: true, result }
   }
 
+  /**
+   * Live background-job artifacts and tmux captures stay read-only, and
+   * executable-extension basenames are never writable in owned temp space.
+   *
+   * Job artifacts are owned by `./background-jobs`, which creates them with
+   * `O_CREAT|O_EXCL|O_WRONLY|O_APPEND|O_NOFOLLOW` at mode 0o600 and streams a
+   * live child process's output into them: a tool-side overwrite/delete/move
+   * would corrupt or truncate an in-flight job log, and the metadata `.json`
+   * carries the ownership record that `read_logs`/`check_job`/`kill_job`
+   * authorize against.
+   *
+   * `tmux-captures-<session>/...` files are the verification evidence that
+   * `agents/tmux-cli.ts` tells the parent agent to read back, so a mutable
+   * capture would let a subagent forge its own evidence. They get the same
+   * read-only treatment as job artifacts.
+   *
+   * Every other owned-temp path (openbuff mkdtemp directories and their nested
+   * contents) permits create, overwrite, delete and move, except that an
+   * executable-extension basename cannot be created, overwritten or moved.
+   * Deleting such a file remains allowed so tools can clean up.
+   *
+   * The basename/segment checks run on the RESOLVED path so alias forms cannot
+   * dodge them.
+   */
+  private ownedTempMutationRefusal(
+    resolved: ResolvedOperationPath,
+    operation: FilesystemOperationKind,
+  ): { allowed: false; code: string } | undefined {
+    if (resolved.scope !== 'owned-temp' || operation === 'read') return undefined
+    const basename = path.basename(resolved.operationPath)
+    if (BACKGROUND_JOB_FILE_PATTERN.test(basename)) {
+      return { allowed: false, code: 'owned_temp_job_artifact_read_only' }
+    }
+    if (
+      resolved.operationPath
+        .split(path.sep)
+        .some((segment) => TMUX_CAPTURE_DIR_PATTERN.test(segment))
+    ) {
+      return { allowed: false, code: 'owned_temp_capture_read_only' }
+    }
+    if (
+      operation !== 'delete' &&
+      OWNED_TEMP_REFUSED_EXTENSIONS.has(path.extname(basename).toLowerCase())
+    ) {
+      return {
+        allowed: false,
+        code: 'owned_temp_executable_extension_refused',
+      }
+    }
+    return undefined
+  }
+
   private async toAuthorizedPath(
     resolved: ResolvedOperationPath,
     operation: FilesystemOperationKind,
@@ -616,6 +731,7 @@ export class FilesystemAuthority {
         portablePath,
         operationPath: resolved.operationPath,
         redactPath: decision.redactPath === true,
+        scope: resolved.scope,
       },
     }
   }

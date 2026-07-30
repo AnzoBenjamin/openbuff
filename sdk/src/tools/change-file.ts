@@ -297,6 +297,21 @@ export async function changeFiles(params: {
           ),
         })
       }
+      const pair = authority.authorizeMovePair(source.path, result.path)
+      if (!pair.allowed) {
+        return transactionFailureResult({
+          authority,
+          callId: callId ?? operationId,
+          operationId,
+          changes,
+          authorityTier: tier,
+          failedIndex: authorized.length,
+          error: filesystemError(
+            'outside_project',
+            'Move must not cross the project/owned-temp boundary.',
+          ),
+        })
+      }
       destination = result.path
     }
     authorized.push({ change, source: source.path, destination })

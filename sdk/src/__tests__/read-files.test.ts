@@ -1,5 +1,6 @@
 import * as projectFileTree from '@codebuff/common/project-file-tree'
 import { createNodeError } from '@codebuff/common/testing/errors'
+import { getOwnedTempRoots } from '@codebuff/common/util/project-path-containment'
 import {
   decodeReadCapabilityToken,
   getContentHash,
@@ -26,6 +27,8 @@ import { editTransactionParams } from '@codebuff/common/tools/params/tool/edit-t
 
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { PathLike } from 'node:fs'
+
+import path from 'node:path'
 
 function createMockFs(config: {
   files?: Record<string, { content: string | Uint8Array; size?: number }>
@@ -329,6 +332,78 @@ describe('getFilesStructured', () => {
         error: { code: 'blocked' },
       })
       expect(aliased.results[0]).toMatchObject({
+        status: 'error',
+        error: { code: 'blocked' },
+      })
+    })
+
+    test('applies a host fileFilter to the owned-temp policy alias', async () => {
+      // Owned-temp results carry an ABSOLUTE relativePath, so a host filter
+      // written against project-relative globs never matches. The stable
+      // `owned-temp/<basename>` key is what a host policy can target.
+      const ownedTempPath = path.join(
+        getOwnedTempRoots()[0]!,
+        'openbuff-readfiles-alias',
+        'notes.txt',
+      )
+      const mockFs = createMockFs({
+        files: { [ownedTempPath]: { content: 'scratch\n' } },
+      })
+
+      const blockedAliases: string[] = []
+      const result = await getFilesStructured({
+        filePaths: [ownedTempPath],
+        cwd: '/project',
+        fs: mockFs,
+        fileFilter: (candidate) => {
+          if (candidate === 'owned-temp/notes.txt') {
+            blockedAliases.push(candidate)
+            return { status: 'blocked' }
+          }
+          return { status: 'allow' }
+        },
+      })
+
+      expect(blockedAliases).toEqual(['owned-temp/notes.txt'])
+      expect(result.results[0]).toMatchObject({
+        status: 'error',
+        error: { code: 'blocked' },
+      })
+    })
+
+    test('keeps the mandatory sensitive blocklist active for owned-temp basenames', async () => {
+      const ownedTempRoot = getOwnedTempRoots()[0]!
+      const keyPath = path.join(
+        ownedTempRoot,
+        'openbuff-readfiles-secrets',
+        'id_rsa',
+      )
+      const pemPath = path.join(
+        ownedTempRoot,
+        'openbuff-readfiles-secrets',
+        'server.pem',
+      )
+      const mockFs = createMockFs({
+        files: {
+          [keyPath]: { content: 'PRIVATE KEY\n' },
+          [pemPath]: { content: 'CERT\n' },
+        },
+      })
+
+      const result = await getFilesStructured({
+        filePaths: [keyPath, pemPath],
+        cwd: '/project',
+        fs: mockFs,
+        // An allow-everything host filter proves the refusal comes from the
+        // mandatory blocklist, not from host policy.
+        fileFilter: () => ({ status: 'allow' }),
+      })
+
+      expect(result.results[0]).toMatchObject({
+        status: 'error',
+        error: { code: 'blocked' },
+      })
+      expect(result.results[1]).toMatchObject({
         status: 'error',
         error: { code: 'blocked' },
       })

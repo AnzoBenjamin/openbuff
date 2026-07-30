@@ -1099,6 +1099,18 @@ export async function applyPatchTool(params: {
         if (!commitAuthorization.allowed) {
           throw new Error(`Delete denied: ${commitAuthorization.code}`)
         }
+        // Same fail-closed policy as the update path: without conditional
+        // delete the fallback is `revalidateExpectedState` + unlink-by-path,
+        // which cannot close the check/write race in world-writable temp
+        // space, so an owned-temp delete is refused rather than raced.
+        if (
+          commitAuthorization.path.scope === 'owned-temp' &&
+          !authority.capabilities.capabilities.has('conditional_delete')
+        ) {
+          throw new Error(
+            `Delete rejected for ${operation.path}: this filesystem adapter provides no conditional delete, so an owned-temp delete cannot be applied safely. No file was changed.`,
+          )
+        }
         const validation = await authority.revalidateExpectedState(
           commitAuthorization.path,
           expected,
@@ -1275,6 +1287,14 @@ export async function applyPatchTool(params: {
           })
           authority.finishCommit(begun.lease, { succeeded: true })
           return null
+        }
+        // Owned-temp paths live in world-writable temp space, so the non-CAS
+        // revalidate-then-write fallback below cannot close the check/write
+        // race (there is no O_NOFOLLOW). Refuse instead of writing. The
+        // conditional_commit branch above already returned, so reaching here
+        // means the adapter has no CAS authority.
+        if (commitAuthorization.path.scope === 'owned-temp') {
+          return `Update rejected for ${operation.path}: this filesystem adapter provides no conditional commit, so an owned-temp update cannot be applied safely. No file was changed.`
         }
         const validation = await authority.revalidateExpectedState(
           commitAuthorization.path,

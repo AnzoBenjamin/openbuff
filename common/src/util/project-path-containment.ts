@@ -13,12 +13,16 @@ import type { CodebuffFileSystem } from '../types/filesystem'
  * - `relativePath` is the project-relative form of the path, with OS-native
  *   separators (i.e. whatever `path.relative` produces). Callers can use it
  *   as a lookup key into a project file tree built with the same
- *   convention.
+ *   convention. For the owned-temp exception it is the ABSOLUTE resolved
+ *   path instead; branch on `scope` to tell the two apart rather than
+ *   inferring from absoluteness.
  */
 export type ContainedProjectPath = {
   fullPath: string
   realFullPath: string
   relativePath: string
+  /** 'project' for in-project paths; 'owned-temp' for the openbuff-owned OS temp namespace exception. */
+  scope: 'project' | 'owned-temp'
 }
 
 /**
@@ -186,9 +190,19 @@ async function realpathCachedForFileSystemRoot(
 // run_terminal_command, whose policy also exempts `/tmp/...` tokens. Granting
 // write access there would turn a plain file write into arbitrary command
 // execution, i.e. a terminal-policy bypass.
+//
+// These are ANCHORED FULL-SEGMENT patterns, so an attacker-chosen suffix on an
+// otherwise owned-looking name does not qualify: `openbuff-x/../y` never
+// reaches here (raw `..` is refused up front) and `openbuff-evil.sh` matches
+// neither the `.log|.json` file pattern nor the extension-free directory
+// pattern.
 const OWNED_TEMP_SEGMENT_PATTERNS: RegExp[] = [
-  /^openbuff-/,
-  /^tmux-captures-/,
+  // Background-job log/metadata + basher full logs: `openbuff-<id>.log|.json`.
+  /^openbuff-[A-Za-z0-9._-]+\.(?:log|json)$/,
+  // Openbuff-created temp directories (mkdtemp prefixes), no dot-extension.
+  /^openbuff-[A-Za-z0-9_-]+$/,
+  // tmux-cli capture directories.
+  /^tmux-captures-[A-Za-z0-9._-]+$/,
 ]
 
 let ownedTempRootsCache: string[] | undefined
@@ -352,6 +366,7 @@ function ownedTempContainedPath(
     fullPath,
     realFullPath,
     relativePath: fullPath,
+    scope: 'owned-temp',
   }
 }
 
@@ -374,6 +389,7 @@ async function ownedTempContainedPathForFileSystem(
     fullPath,
     realFullPath,
     relativePath: fullPath,
+    scope: 'owned-temp',
   }
 }
 
@@ -392,7 +408,8 @@ async function ownedTempContainedPathForFileSystem(
  * `isOwnedTempPath` — `openbuff-*` or `tmux-captures-*` directly under the
  * temp root) are allowed even though they are outside the project, so
  * path-taking tools can reach background-job logs, basher full logs and tmux
- * captures. Such results carry an absolute `relativePath`. That exception
+ * captures. Such results carry `scope: 'owned-temp'` and an absolute
+ * `relativePath`; consumers must branch on `scope`. That exception
  * additionally requires a traversal-free raw input, exactly like
  * `isOwnedTempPath`.
  *
@@ -431,6 +448,7 @@ export function resolveProjectPath(
     fullPath,
     realFullPath,
     relativePath: path.relative(resolvedRoot, fullPath),
+    scope: 'project',
   }
 }
 
@@ -479,6 +497,7 @@ export async function resolveProjectPathForFileSystem(
     fullPath,
     realFullPath,
     relativePath: path.relative(resolvedRoot, fullPath),
+    scope: 'project',
   }
 }
 
