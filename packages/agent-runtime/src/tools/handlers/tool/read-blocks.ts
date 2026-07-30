@@ -1,3 +1,4 @@
+import { MAX_READ_BLOCK_BYTES } from '@codebuff/common/tools/params/tool/read-blocks'
 import {
   buildReadBlocksResultV1,
   type FilesystemError,
@@ -11,7 +12,12 @@ import {
 } from '@codebuff/common/util/content-hash'
 import { jsonToolResult } from '@codebuff/common/util/messages'
 
-import { formatUnsafeToolPathError, normalizeToolPath } from './write-file'
+import {
+  formatUnsafeToolPathError,
+  grantWholeFileReadAuthorization,
+  normalizeToolPath,
+} from './write-file'
+import { classifyReadBlockAuthority } from './read-authority-ladder'
 import { classifyOptionalReadError } from './read-files'
 import {
   clearEditRereadRequirement,
@@ -177,6 +183,56 @@ export const handleReadBlocks = (async (
 
   const items: ReadBlocksItemV1[] = []
   const successfulReadPaths = new Set<string>()
+  const wholeFileGrantPaths = new Set<string>()
+
+  // Single coverage -> authority ladder call per successful block, mirroring
+  // read_files: a block that covers exactly 1..totalLines of a complete,
+  // capability-eligible read mints the same sticky whole-file authorization an
+  // identical read_files whole-file read would. Sub-file blocks grant nothing.
+  const applyBlockAuthority = (params: {
+    path: string
+    startLine: number
+    endLine: number
+    totalLines: number
+    sourceContent: string
+    capabilityEligible?: boolean
+  }) => {
+    const authority = classifyReadBlockAuthority({
+      complete: true,
+      startLine: params.startLine,
+      endLine: params.endLine,
+      totalLines: params.totalLines,
+      sourceContent: params.sourceContent,
+      ...(params.capabilityEligible === undefined
+        ? {}
+        : { capabilityEligible: params.capabilityEligible }),
+    })
+    if (authority !== 'whole_file') return
+    wholeFileGrantPaths.add(params.path)
+    delete fileProcessingState.confirmedPostEditAnchorsByPath?.[params.path]
+    if (fileProcessingState.strictReadBeforeEdit) {
+      grantWholeFileReadAuthorization(
+        fileProcessingState,
+        params.path,
+        params.sourceContent,
+      )
+    }
+  }
+
+  // A block that exceeds the byte budget mints no editAnchor and never counts
+  // as a successful read, so it cannot clear failed_edit gates.
+  const overBudgetError = (
+    blockContent: string,
+  ): FilesystemError | undefined => {
+    const byteLength = new TextEncoder().encode(blockContent).byteLength
+    if (byteLength <= MAX_READ_BLOCK_BYTES) return undefined
+    return {
+      code: 'too_large',
+      message: `read_blocks block is ${byteLength} bytes, over the ${MAX_READ_BLOCK_BYTES}-byte per-block budget. Request a smaller block (lower windowSize, or fewer contextLines) and read it in several passes.`,
+      retryable: true,
+      recovery: 'read_smaller_range',
+    }
+  }
 
   for (let index = 0; index < windowInputs.length; index++) {
     const request = windowInputs[index]!
@@ -216,6 +272,17 @@ export const handleReadBlocks = (async (
     const startLine = (window - 1) * windowSize + 1
     const endLine = Math.min(totalLines, window * windowSize)
     const blockContent = lines.slice(startLine - 1, endLine).join('\n')
+    const tooLarge = overBudgetError(blockContent)
+    if (tooLarge) {
+      items.push({
+        selector: 'window',
+        requestIndex,
+        path,
+        status: 'error',
+        error: tooLarge,
+      })
+      continue
+    }
     const editAnchor = mintBlockEditAnchor(
       path,
       startLine,
@@ -238,6 +305,13 @@ export const handleReadBlocks = (async (
       windowCount,
       window,
       ...(editAnchor ? { editAnchor } : {}),
+    })
+    applyBlockAuthority({
+      path,
+      startLine,
+      endLine,
+      totalLines,
+      sourceContent: blockContent,
     })
   }
 
@@ -281,6 +355,17 @@ export const handleReadBlocks = (async (
     const startLine = Math.max(1, matched.startLine - contextLines)
     const endLine = Math.min(totalLines, matched.endLine + contextLines)
     const blockContent = lines.slice(startLine - 1, endLine).join('\n')
+    const tooLarge = overBudgetError(blockContent)
+    if (tooLarge) {
+      items.push({
+        selector: 'around',
+        requestIndex,
+        path,
+        status: 'error',
+        error: tooLarge,
+      })
+      continue
+    }
     const editAnchor = mintBlockEditAnchor(
       path,
       startLine,
@@ -303,6 +388,13 @@ export const handleReadBlocks = (async (
       occurrence,
       totalOccurrences: occurrences.length,
       ...(editAnchor ? { editAnchor } : {}),
+    })
+    applyBlockAuthority({
+      path,
+      startLine,
+      endLine,
+      totalLines,
+      sourceContent: blockContent,
     })
   }
 
@@ -345,6 +437,17 @@ export const handleReadBlocks = (async (
       continue
     }
     const totalLines = normalizeLineEndings(loaded.content).split('\n').length
+    const tooLarge = overBudgetError(slice.content)
+    if (tooLarge) {
+      items.push({
+        selector: 'symbol',
+        requestIndex,
+        path,
+        status: 'error',
+        error: tooLarge,
+      })
+      continue
+    }
     // Mirror read_files: only parser-proven slices (which carry a minted
     // readCapability) expose an editAnchor; heuristic regex slices stay
     // read-only and require an anchored window/around read before editing.
@@ -368,14 +471,28 @@ export const handleReadBlocks = (async (
       occurrence,
       ...(editAnchor ? { editAnchor } : {}),
     })
+    // A whole-file-spanning slice may grant, but only when the slice is
+    // parser-proven; heuristic slices classify as 'none'.
+    applyBlockAuthority({
+      path,
+      startLine: slice.startLine,
+      endLine: slice.endLine,
+      totalLines,
+      sourceContent: slice.content,
+      capabilityEligible: Boolean(slice.readCapability),
+    })
   }
 
-  // Scoped block success may clear failed_edit gates but never mints
-  // whole-file auth, so it must not drop context_compacted (same rule as
-  // read_files symbol/range reads).
+  // A block covering the whole file mints the same authority an identical
+  // read_files whole-file read would, so it may clear context_compacted.
+  // Sub-file blocks may clear failed_edit gates but must not drop
+  // context_compacted (same rule as read_files range/symbol reads).
   for (const path of successfulReadPaths) {
     const rereadReq = getEditRereadRequirement(fileProcessingState, path)
-    if (rereadReq?.reason === 'context_compacted') {
+    if (
+      rereadReq?.reason === 'context_compacted' &&
+      !wholeFileGrantPaths.has(path)
+    ) {
       delete fileProcessingState.promisesByPath[path]
       continue
     }

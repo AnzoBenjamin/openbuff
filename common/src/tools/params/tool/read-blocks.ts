@@ -11,6 +11,11 @@ import type { $ToolParams } from '../../constants'
 const DEFAULT_WINDOW_SIZE = 400
 const DEFAULT_CONTEXT_LINES = 40
 
+export const MAX_WINDOW_SIZE = 5_000
+export const MAX_CONTEXT_LINES = 2_000
+/** Mirrors sdk MAX_RANGE_READ_BYTES so a block read cannot exceed the range-read budget. */
+export const MAX_READ_BLOCK_BYTES = 4_194_304
+
 const toolName = 'read_blocks'
 const endsAgentStep = true
 const inputSchema = z
@@ -28,9 +33,10 @@ const inputSchema = z
             .number()
             .int()
             .min(1)
+            .max(MAX_WINDOW_SIZE)
             .optional()
             .describe(
-              `Lines per window. Defaults to ${DEFAULT_WINDOW_SIZE}.`,
+              `Lines per window. Defaults to ${DEFAULT_WINDOW_SIZE}, capped at ${MAX_WINDOW_SIZE}.`,
             ),
           window: z
             .number()
@@ -73,9 +79,10 @@ const inputSchema = z
             .number()
             .int()
             .min(0)
+            .max(MAX_CONTEXT_LINES)
             .optional()
             .describe(
-              `Lines of context to include on each side of the match, clamped at file boundaries. Defaults to ${DEFAULT_CONTEXT_LINES}.`,
+              `Lines of context to include on each side of the match, clamped at file boundaries. Defaults to ${DEFAULT_CONTEXT_LINES}, capped at ${MAX_CONTEXT_LINES}.`,
             ),
         }),
       )
@@ -139,6 +146,7 @@ Important:
 - Content-anchored read: pass \`around: [{ path, match, occurrence?, contextLines? }]\`. Finds the 1-indexed occurrence (default 1) of the exact literal \`match\` and returns a complete block covering the match plus \`contextLines\` (default ${DEFAULT_CONTEXT_LINES}) on each side, clamped at file boundaries. Robust to line-number drift.
 - Symbol read: pass \`symbols: [{ path, name, occurrence? }]\` to pull the Nth (default 1) top-level symbol with that name, mirroring rewrite_symbol's occurrence semantics. Pair with read_outline to discover names first.
 - Line ranges are 1-indexed inclusive; totalLines is the true file line count. sourceContent is the exact undecorated normalized block text used for the block hash — use it, not memory, when an exact oldString is needed.
+- Each returned block is bounded by a ${MAX_READ_BLOCK_BYTES}-byte budget; an over-budget block returns a too_large error instead, so request a smaller windowSize/contextLines.
 
 Example:
 ${$getNativeToolCallExampleString({

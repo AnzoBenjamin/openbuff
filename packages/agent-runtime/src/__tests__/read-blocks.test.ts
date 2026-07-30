@@ -1,5 +1,10 @@
-import { decodeReadCapabilityToken } from '@codebuff/common/util/content-hash'
+import {
+  decodeReadCapabilityToken,
+  getContentHash,
+} from '@codebuff/common/util/content-hash'
 import { describe, expect, it } from 'bun:test'
+
+import { MAX_READ_BLOCK_BYTES } from '@codebuff/common/tools/params/tool/read-blocks'
 
 import { handleReadBlocks } from '../tools/handlers/tool/read-blocks'
 import { mockFileContext } from './test-utils'
@@ -98,7 +103,7 @@ type ReadBlocksResultItem = {
     contentHash: string
     readCapability: string
   }
-  error?: { code: string; message: string; retryable: boolean }
+  error?: { code: string; message: string; retryable: boolean; recovery?: string }
 }
 
 type ReadBlocksResultValue = {
@@ -564,5 +569,165 @@ describe('handleReadBlocks', () => {
       fileProcessingState.failedEditRequiresReadByPath['src/gated.ts'],
     ).toBeUndefined()
     expect(fileProcessingState.promisesByPath['src/gated.ts']).toBeUndefined()
+  })
+})
+
+describe('handleReadBlocks whole-file authority and block budget', () => {
+  // Whole-file grants only happen when strict read-before-edit is enabled.
+  function createStrictFileProcessingState(): FileProcessingState {
+    return { ...createFileProcessingState(), strictReadBeforeEdit: true }
+  }
+
+  const threeLineFile = 'l1\nl2\nl3'
+
+  it('grants sticky whole-file authorization when a window covers the whole file', async () => {
+    const fileProcessingState = createStrictFileProcessingState()
+
+    await runReadBlocks({
+      selectors: [
+        { kind: 'window', path: 'src/full.ts', windowSize: 10, window: 1 },
+      ],
+      contents: { 'src/full.ts': threeLineFile },
+      fileProcessingState,
+    })
+
+    expect(fileProcessingState.readAuthorizationsByPath?.['src/full.ts']).toBe(
+      true,
+    )
+    expect(
+      fileProcessingState.readAuthorizationHashesByPath?.['src/full.ts'],
+    ).toBe(getContentHash(threeLineFile))
+  })
+
+  it('does not grant whole-file authorization for a sub-file window but still mints a scoped editAnchor', async () => {
+    const fileProcessingState = createStrictFileProcessingState()
+    const sevenLineFile = ['l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7'].join('\n')
+
+    const value = await runReadBlocks({
+      selectors: [
+        { kind: 'window', path: 'src/sub.ts', windowSize: 3, window: 2 },
+      ],
+      contents: { 'src/sub.ts': sevenLineFile },
+      fileProcessingState,
+    })
+
+    expect(fileProcessingState.readAuthorizationsByPath?.['src/sub.ts']).toBe(
+      undefined,
+    )
+    expect(
+      fileProcessingState.readAuthorizationHashesByPath?.['src/sub.ts'],
+    ).toBeUndefined()
+    const item = value.results[0]!
+    expect(item.editAnchor).toMatchObject({ startLine: 4, endLine: 6 })
+  })
+
+  it('grants whole-file authorization when an around block spans the whole file', async () => {
+    const fileProcessingState = createStrictFileProcessingState()
+
+    await runReadBlocks({
+      selectors: [
+        {
+          kind: 'around',
+          path: 'src/around-full.ts',
+          match: 'l2',
+          contextLines: 10,
+        },
+      ],
+      contents: { 'src/around-full.ts': threeLineFile },
+      fileProcessingState,
+    })
+
+    expect(
+      fileProcessingState.readAuthorizationsByPath?.['src/around-full.ts'],
+    ).toBe(true)
+    expect(
+      fileProcessingState.readAuthorizationHashesByPath?.[
+        'src/around-full.ts'
+      ],
+    ).toBe(getContentHash(threeLineFile))
+  })
+
+  it('clears context_compacted when a whole-file-covering window grants authority', async () => {
+    const fileProcessingState = createStrictFileProcessingState()
+    fileProcessingState.editRereadRequirementsByPath = {
+      'src/compact.ts': {
+        reason: 'context_compacted',
+        sourceTool: 'context compaction',
+      },
+    }
+    fileProcessingState.failedEditRequiresReadByPath['src/compact.ts'] = true
+
+    await runReadBlocks({
+      selectors: [
+        { kind: 'window', path: 'src/compact.ts', windowSize: 10, window: 1 },
+      ],
+      contents: { 'src/compact.ts': threeLineFile },
+      fileProcessingState,
+    })
+
+    expect(
+      fileProcessingState.editRereadRequirementsByPath['src/compact.ts'],
+    ).toBeUndefined()
+  })
+
+  it('preserves context_compacted when a sub-file window does not grant whole-file authority', async () => {
+    const fileProcessingState = createStrictFileProcessingState()
+    fileProcessingState.editRereadRequirementsByPath = {
+      'src/compact-sub.ts': {
+        reason: 'context_compacted',
+        sourceTool: 'context compaction',
+      },
+    }
+    fileProcessingState.failedEditRequiresReadByPath['src/compact-sub.ts'] =
+      true
+    const sevenLineFile = ['l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7'].join('\n')
+
+    await runReadBlocks({
+      selectors: [
+        { kind: 'window', path: 'src/compact-sub.ts', windowSize: 3, window: 1 },
+      ],
+      contents: { 'src/compact-sub.ts': sevenLineFile },
+      fileProcessingState,
+    })
+
+    expect(
+      fileProcessingState.editRereadRequirementsByPath['src/compact-sub.ts']
+        ?.reason,
+    ).toBe('context_compacted')
+    expect(
+      fileProcessingState.promisesByPath['src/compact-sub.ts'],
+    ).toBeUndefined()
+  })
+
+  it('returns too_large with no editAnchor and no grant for an over-budget block', async () => {
+    const fileProcessingState = createStrictFileProcessingState()
+    fileProcessingState.failedEditRequiresReadByPath['src/big.ts'] = true
+    // A handful of lines whose single window exceeds the byte budget.
+    const overBudgetFile = Array.from(
+      { length: 5 },
+      () => 'x'.repeat(Math.ceil(MAX_READ_BLOCK_BYTES / 4)),
+    ).join('\n')
+
+    const value = await runReadBlocks({
+      selectors: [
+        { kind: 'window', path: 'src/big.ts', windowSize: 10, window: 1 },
+      ],
+      contents: { 'src/big.ts': overBudgetFile },
+      fileProcessingState,
+    })
+
+    const item = value.results[0]!
+    expect(item.status).toBe('error')
+    expect(item.error?.code).toBe('too_large')
+    expect(item.error?.recovery).toBe('read_smaller_range')
+    expect(item.editAnchor).toBeUndefined()
+    expect(value.summary.failed).toBe(1)
+    expect(fileProcessingState.readAuthorizationsByPath?.['src/big.ts']).toBe(
+      undefined,
+    )
+    // An over-budget block must not clear the failed-edit gate.
+    expect(fileProcessingState.failedEditRequiresReadByPath['src/big.ts']).toBe(
+      true,
+    )
   })
 })
