@@ -62,6 +62,13 @@ export type ToolContentBlock = {
    * lifecycle/output in place.
    */
   backgroundJobId?: string
+  /**
+   * True once a background job error has been appended to this tool card's
+   * output. Prevents duplicate error text if an error/lost job_update is
+   * delivered more than once. Omitted/undefined for blocks without a
+   * background job error (treated as not-yet-appended).
+   */
+  jobErrorAppended?: boolean
 }
 export type AgentContentBlock = {
   type: 'agent'

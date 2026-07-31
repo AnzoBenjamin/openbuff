@@ -12,6 +12,7 @@ import {
 import { tryTransformAgentToolCall } from '../tools/tool-executor'
 import { handleLookupAgentInfo } from '../tools/handlers/tool/lookup-agent-info'
 import {
+  compactToolInputSchemaForProvider,
   ensureZodSchema,
   buildToolDescription,
   getToolsInstructions,
@@ -645,6 +646,37 @@ describe('Schema handling error recovery', () => {
           edits: expect.any(Object),
         },
       })
+    })
+
+    test('compactToolInputSchemaForProvider preserves descriptions only when requested', () => {
+      const schema = (toolParams.edit_transaction.providerInputSchema ??
+        toolParams.edit_transaction.inputSchema) as z.ZodType
+
+      const containsDescriptionKey = (value: unknown): boolean => {
+        if (Array.isArray(value)) {
+          return value.some(containsDescriptionKey)
+        }
+        if (!value || typeof value !== 'object') {
+          return false
+        }
+        return Object.entries(value as Record<string, unknown>).some(
+          ([key, child]) => key === 'description' || containsDescriptionKey(child),
+        )
+      }
+      const schemaJson = (tool: unknown): unknown =>
+        (tool as { jsonSchema: unknown }).jsonSchema
+
+      const preserved = compactToolInputSchemaForProvider(schema, {
+        preserveDescriptions: true,
+      })
+      const stripped = compactToolInputSchemaForProvider(schema)
+      const strippedOmitted = compactToolInputSchemaForProvider(schema, {
+        preserveDescriptions: false,
+      })
+
+      expect(containsDescriptionKey(schemaJson(preserved))).toBe(true)
+      expect(containsDescriptionKey(schemaJson(stripped))).toBe(false)
+      expect(containsDescriptionKey(schemaJson(strippedOmitted))).toBe(false)
     })
 
     test('builtin descriptions advertise canonical transaction range anchors', () => {

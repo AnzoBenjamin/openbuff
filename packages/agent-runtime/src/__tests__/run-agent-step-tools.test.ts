@@ -1845,12 +1845,12 @@ describe('runAgentStep - set_output tool', () => {
     expect(agentState.canSuggestFollowups).toBe(false)
   })
 
-  it('emits a repair-editor recovery hint when a read is blocked by the filesystem read scope', async () => {
-    // Covers the repair-editor read-scope recovery branch in
-    // executeToolCall: a repair-editor read outside its filesystem read
-    // scope is blocked (never executed) and the error message carries the
-    // recovery guidance so the agent inspects the authorized test file that
-    // owns a synthetic fixture literal instead of retrying/widening scope.
+  it('allows in-project reads outside the repair-editor read scope', async () => {
+    // Covers the softened read-scope policy in executeToolCall: an in-project
+    // repair-editor read outside its filesystem read scope is no longer
+    // hard-blocked. The read proceeds (its tool_call is published) and no
+    // read-scope error chunk is emitted; the scope mismatch is only surfaced
+    // as a non-blocking logger.warn.
     const chunks: unknown[] = []
     runAgentStepBaseParams = {
       ...runAgentStepBaseParams,
@@ -1882,41 +1882,27 @@ describe('runAgentStep - set_output tool', () => {
       prompt: 'Read a file outside the repair-editor read scope',
     })
 
-    // The blocked read surfaces the scope error with the repair-editor
-    // recovery guidance appended.
+    // The in-project read proceeds, so its tool_call chunk is published...
     expect(chunks).toContainEqual(
-      expect.objectContaining({
-        type: 'error',
-        message: expect.stringContaining(
-          'was blocked by the repair-editor filesystem read scope',
-        ),
-      }),
-    )
-    expect(chunks).toContainEqual(
-      expect.objectContaining({
-        type: 'error',
-        message: expect.stringContaining(
-          'inspect the authorized test file that owns the literal instead',
-        ),
-      }),
-    )
-    // The blocked read is never published as a tool call.
-    expect(chunks).not.toContainEqual(
       expect.objectContaining({
         type: 'tool_call',
         toolName: 'read_files',
       }),
     )
+    // ...and no read-scope error chunk is emitted.
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining('filesystem read scope'),
+      }),
+    )
   })
 
-  it('omits the repair-editor read-recovery hint when a write escapes the project via the filesystem write scope', async () => {
-    // Complements the read-scope recovery test: the recovery guidance in
-    // executeToolCall is read-only (it is appended only when
-    // filesystemAccess.access === 'read'). The write path here escapes the
-    // project (../secret/out-of-scope.ts), which is still hard-blocked for
-    // writes with the scope error, but must NOT carry the read-only recovery
-    // guidance — telling the agent to inspect a fixture-owning test file makes
-    // no sense for a blocked write.
+  it('still hard-blocks writes that escape the project via the filesystem write scope', async () => {
+    // The real containment boundary is escaping the project root. A write path
+    // that traverses above the project (../secret/out-of-scope.ts) is still
+    // hard-blocked for writes with the scope error, regardless of the softened
+    // in-project scope-mismatch policy.
     const chunks: unknown[] = []
     runAgentStepBaseParams = {
       ...runAgentStepBaseParams,
@@ -1950,7 +1936,7 @@ describe('runAgentStep - set_output tool', () => {
       prompt: 'Write a file outside the repair-editor write scope',
     })
 
-    // The blocked write surfaces the write-scope error...
+    // The escaping write surfaces the write-scope error...
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'error',
@@ -1959,20 +1945,123 @@ describe('runAgentStep - set_output tool', () => {
         ),
       }),
     )
-    // ...but must NOT append the read-only recovery guidance.
-    expect(chunks).not.toContainEqual(
-      expect.objectContaining({
-        type: 'error',
-        message: expect.stringContaining(
-          'inspect the authorized test file that owns the literal instead',
-        ),
-      }),
-    )
-    // The blocked write is never published as a tool call.
+    // ...and is never published as a tool call.
     expect(chunks).not.toContainEqual(
       expect.objectContaining({
         type: 'tool_call',
         toolName: 'write_file',
+      }),
+    )
+  })
+
+  it('still hard-blocks reads that escape the project via the filesystem read scope', async () => {
+    // Mirrors the write-escape test for reads: a read path that traverses above
+    // the project (../out-of-scope.ts) escapes the project root and is still
+    // hard-blocked with the read-scope error. This preserves the real
+    // containment-boundary coverage now that in-project read scope mismatches
+    // are softened to warnings.
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('read_files', {
+        paths: ['../out-of-scope.ts'],
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const repairEditorAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'repair-editor',
+      toolNames: ['read_files', 'end_turn'],
+      filesystemScope: { read: ['packages/**'] },
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'repair-editor',
+      localAgentTemplates: { 'repair-editor': repairEditorAgent },
+      agentTemplate: repairEditorAgent,
+      agentState,
+      prompt: 'Read a file that escapes the project',
+    })
+
+    // The escaping read surfaces the read-scope error...
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining(
+          'was blocked by the repair-editor filesystem read scope',
+        ),
+      }),
+    )
+    // ...and is never published as a tool call.
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'read_files',
+      }),
+    )
+  })
+
+  it('hard-blocks reads that escape the project even when the agent has no filesystemScope', async () => {
+    // Pins the universal containment backstop: the project-root escape check is
+    // a runtime backstop that fires for EVERY filesystem tool call whose paths
+    // are statically known — not only when the agent declared a filesystemScope.
+    // This agent is genuinely unscoped (no filesystemScope), yet a read path
+    // that traverses above the project (../out-of-scope.ts) is still
+    // hard-blocked with the read-scope error and never published as a tool call.
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('read_files', {
+        paths: ['../out-of-scope.ts'],
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['read_files', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'unscoped-agent',
+      localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+      agentTemplate: unscopedAgent,
+      agentState,
+      prompt: 'Read a file that escapes the project with no configured scope',
+    })
+
+    // The escaping read surfaces the read-scope error even though the agent has
+    // no declared filesystemScope...
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining(
+          'was blocked by the unscoped-agent filesystem read scope',
+        ),
+      }),
+    )
+    // ...and is never published as a tool call.
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'read_files',
       }),
     )
   })

@@ -19,6 +19,7 @@ import { processStream } from '../tools/stream-parser'
 import {
   buildSpawnAgentsHandlerFailureOutput,
   buildUnavailableToolMessage,
+  executeToolCall,
   normalizeNativeToolOutput,
   parseRawCustomToolCall,
   parseRawToolCall,
@@ -498,7 +499,7 @@ describe('tool validation error handling', () => {
       rawToolCall: {
         toolName: 'str_replace',
         toolCallId: 'str-replace-atomic-string-tool-call-id',
-        input: { path: 'f.ts', atomic: 'true', replacements: [] },
+        input: { path: 'f.ts', atomic: 'yes', replacements: [] },
       },
     })
 
@@ -548,7 +549,7 @@ describe('tool validation error handling', () => {
               oldString: 'a',
               newString: 'b',
               allowMultiple: false,
-              occurrenceIndex: '1',
+              occurrenceIndex: '0',
             },
           ],
         },
@@ -1078,6 +1079,356 @@ describe('tool validation error handling', () => {
       if ('error' in result) {
         expect(result.error).toContain('detach')
       }
+    })
+
+    it('coerces a negative timeout_seconds string via the tool-specific repair', () => {
+      // Pins the documented gap on coerceInputScalarsBySchema: the generic
+      // schema walk only coerces non-negative integer strings (/^\d+$/), so a
+      // negative "-1" is intentionally NOT coerced there. Negative timeouts are
+      // instead handled by repairTerminalCommandScalars (which allows a leading
+      // minus), exactly as the comment on coerceInputScalarsBySchema states.
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'run_terminal_command',
+          toolCallId: 'terminal-negative-timeout-tool-call-id',
+          input: { command: 'echo hi', timeout_seconds: '-1' },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        expect(result.input.timeout_seconds).toBe(-1)
+      }
+    })
+  })
+
+  describe('edit_transaction scalar coercion', () => {
+    it('coerces stringified replacement scalars before validation', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'edit_transaction',
+          toolCallId: 'transaction-coerce-scalars-tool-call-id',
+          input: {
+            edits: [
+              {
+                type: 'str_replace',
+                path: 'src/a.ts',
+                replacements: [
+                  {
+                    oldString: 'a',
+                    newString: 'b',
+                    allowMultiple: 'false',
+                    occurrenceIndex: '1',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        const edit = result.input.edits[0]
+        expect(edit.type).toBe('str_replace')
+        if (edit.type === 'str_replace') {
+          expect(edit.replacements[0].allowMultiple).toBe(false)
+          expect(edit.replacements[0].occurrenceIndex).toBe(1)
+        }
+      }
+    })
+
+    it('fails closed for an ambiguous allowMultiple string', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'edit_transaction',
+          toolCallId: 'transaction-ambiguous-allowmultiple-tool-call-id',
+          input: {
+            edits: [
+              {
+                type: 'str_replace',
+                path: 'src/a.ts',
+                replacements: [
+                  {
+                    oldString: 'a',
+                    newString: 'b',
+                    allowMultiple: 'yes',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      })
+
+      expect('error' in result).toBe(true)
+    })
+  })
+
+  describe('str_replace scalar coercion', () => {
+    it('coerces stringified atomic and per-replacement scalars before validation', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'str_replace',
+          toolCallId: 'str-replace-coerce-scalars-tool-call-id',
+          input: {
+            path: 'src/a.ts',
+            atomic: 'true',
+            replacements: [
+              {
+                oldString: 'a',
+                newString: 'b',
+                allowMultiple: 'false',
+                occurrenceIndex: '1',
+              },
+              {
+                oldString: 'c',
+                newString: '',
+                skipIfMissing: 'true',
+              },
+            ],
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        expect(result.input.atomic).toBe(true)
+        expect(result.input.replacements[0].allowMultiple).toBe(false)
+        expect(result.input.replacements[0].occurrenceIndex).toBe(1)
+        expect(result.input.replacements[1].skipIfMissing).toBe(true)
+      }
+    })
+
+    it('fails closed for an ambiguous atomic string', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'str_replace',
+          toolCallId: 'str-replace-ambiguous-atomic-tool-call-id',
+          input: {
+            path: 'src/a.ts',
+            atomic: 'yes',
+            replacements: [{ oldString: 'a', newString: 'b' }],
+          },
+        },
+      })
+
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain('atomic')
+      }
+    })
+
+    it('fails closed for a zero occurrenceIndex string', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'str_replace',
+          toolCallId: 'str-replace-zero-occurrenceindex-tool-call-id',
+          input: {
+            path: 'src/a.ts',
+            replacements: [
+              { oldString: 'a', newString: 'b', occurrenceIndex: '0' },
+            ],
+          },
+        },
+      })
+
+      expect('error' in result).toBe(true)
+    })
+
+    it('never coerces content-bearing strings', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'str_replace',
+          toolCallId: 'str-replace-content-untouched-tool-call-id',
+          input: {
+            path: 'src/a.ts',
+            replacements: [{ oldString: 'true', newString: 'false' }],
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        expect(result.input.replacements[0].oldString).toBe('true')
+        expect(result.input.replacements[0].newString).toBe('false')
+      }
+    })
+  })
+
+  describe('replace_range scalar coercion', () => {
+    const hash = getContentHash('line')
+    const readCapability = encodeReadCapabilityToken({
+      startLine: 100,
+      endLine: 156,
+      hash,
+      scope: {
+        projectId: mockFileContext.projectRoot,
+        path: 'src/a.ts',
+        runId: 'test-run-id',
+      },
+    })
+
+    it('coerces stringified startLine/endLine before validation', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'replace_range',
+          toolCallId: 'replace-range-coerce-lines-tool-call-id',
+          input: {
+            path: 'src/a.ts',
+            readCapability,
+            startLine: '105',
+            endLine: '110',
+            newContent: 'replacement',
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        expect(result.input.startLine).toBe(105)
+        expect(result.input.endLine).toBe(110)
+      }
+    })
+
+    it('coerces stringified occurrence.occurrence before validation', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'replace_range',
+          toolCallId: 'replace-range-coerce-occurrence-tool-call-id',
+          input: {
+            path: 'src/a.ts',
+            readCapability,
+            occurrence: { match: 'literal block', occurrence: '2' },
+            newContent: 'replacement',
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        expect(result.input.occurrence?.occurrence).toBe(2)
+      }
+    })
+
+    it('fails closed for a non-integer startLine string', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'replace_range',
+          toolCallId: 'replace-range-ambiguous-startline-tool-call-id',
+          input: {
+            path: 'src/a.ts',
+            readCapability,
+            startLine: '1.5',
+            endLine: '110',
+            newContent: 'replacement',
+          },
+        },
+      })
+
+      expect('error' in result).toBe(true)
+    })
+
+    it('never coerces occurrence.match', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'replace_range',
+          toolCallId: 'replace-range-match-untouched-tool-call-id',
+          input: {
+            path: 'src/a.ts',
+            readCapability,
+            occurrence: { match: '123', occurrence: '1' },
+            newContent: 'replacement',
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        expect(result.input.occurrence?.match).toBe('123')
+        expect(result.input.occurrence?.occurrence).toBe(1)
+      }
+    })
+  })
+
+  describe('generic schema-driven scalar coercion', () => {
+    it('coerces a stringified integer limit for query_index', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'query_index',
+          toolCallId: 'generic-coerce-limit-tool-call-id',
+          input: { query: 'authentication', limit: '10' },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        expect(result.input.limit).toBe(10)
+      }
+    })
+
+    it('coerces stringified integer startLine/endLine in read_files ranges', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'read_files',
+          toolCallId: 'generic-coerce-range-lines-tool-call-id',
+          input: {
+            ranges: [{ path: 'a.ts', startLine: '5', endLine: '10' }],
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        const range = result.input.ranges![0]
+        expect(range.startLine).toBe(5)
+        expect(range.endLine).toBe(10)
+      }
+    })
+
+    it('fails closed for an uncoercible integer string', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'query_index',
+          toolCallId: 'generic-coerce-fail-closed-tool-call-id',
+          input: { query: 'authentication', limit: 'soon' },
+        },
+      })
+
+      expect('error' in result).toBe(true)
+    })
+
+    it('never coerces string-typed fields that look numeric', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'glob',
+          toolCallId: 'generic-coerce-string-untouched-tool-call-id',
+          input: { pattern: '123' },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        expect(result.input.pattern).toBe('123')
+      }
+    })
+
+    it('leaves negative integer strings uncoerced on the generic path (fail closed)', () => {
+      // Companion to the run_terminal_command negative-timeout test: the generic
+      // schema-driven coercion (coerceIntString, /^\d+$/) intentionally skips
+      // negative integer strings, and query_index has no tool-specific negative
+      // repair. A "-1" limit string is therefore left untouched and fails closed
+      // (the field's positive bound also rejects a coerced -1) rather than being
+      // silently guessed into a number.
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'query_index',
+          toolCallId: 'generic-negative-int-tool-call-id',
+          input: { query: 'authentication', limit: '-1' },
+        },
+      })
+
+      expect('error' in result).toBe(true)
     })
   })
 
@@ -1759,6 +2110,13 @@ describe('tool validation error handling', () => {
     expect(errorEvents[0].message).toContain(
       'this should be an array not a string',
     )
+
+    // The agent keeps the full detailed `message`; the concise `userMessage`
+    // is a calm one-liner for the CLI banner that never carries the raw
+    // validation wall.
+    expect(typeof errorEvents[0].userMessage).toBe('string')
+    expect((errorEvents[0].userMessage ?? '').length).toBeGreaterThan(0)
+    expect(errorEvents[0].userMessage).not.toContain('Raw validation issues')
 
     // Verify hadToolCallError is true so the agent loop continues
     expect(result.hadToolCallError).toBe(true)
@@ -2628,6 +2986,251 @@ describe('tool validation error handling', () => {
     )
     expect(orphanToolResults.length).toBe(0)
   })
+
+  it('emits a concise userMessage on the error event when a custom tool call fails validation', async () => {
+    // Covers the `userMessage` emission branch in executeCustomToolCall: a
+    // granted custom tool that fails input validation publishes an error event
+    // whose concise `userMessage` is a calm CLI-banner one-liner that never
+    // carries the raw validation wall (mirrors the native-tool branch covered
+    // by the spawn_agents test above).
+    const toolName = 'custom_search'
+    const agentWithCustomTool: AgentTemplate = {
+      ...testAgentTemplate,
+      toolNames: [toolName, 'end_turn'],
+    }
+
+    const invalidToolCallChunk: StreamChunk = {
+      type: 'tool-call',
+      toolName,
+      toolCallId: 'invalid-custom-tool-call-id',
+      input: {}, // missing required `query`
+    }
+
+    async function* mockStream() {
+      yield invalidToolCallChunk
+      return promptSuccess('mock-message-id')
+    }
+
+    const fileContextWithCustomTool = {
+      ...mockFileContext,
+      customToolDefinitions: {
+        [toolName]: {
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string' },
+            },
+            required: ['query'],
+            additionalProperties: false,
+          },
+          endsAgentStep: false,
+          description: 'A custom tool for userMessage coverage',
+        },
+      },
+    }
+
+    const sessionState = getInitialSessionState(fileContextWithCustomTool)
+    const agentState = sessionState.mainAgentState
+    const responseChunks: (string | PrintModeEvent)[] = []
+
+    const result = await processStream({
+      ...agentRuntimeImpl,
+      agentContext: {},
+      agentState,
+      agentStepId: 'test-step-id',
+      agentTemplate: agentWithCustomTool,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fileContext: fileContextWithCustomTool,
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { 'test-agent': agentWithCustomTool },
+      messages: [],
+      prompt: 'test prompt',
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      stream: mockStream(),
+      system: 'test system',
+      tools: {},
+      userId: 'test-user',
+      userInputId: 'test-input-id',
+      onCostCalculated: async () => {},
+      onResponseChunk: (chunk) => responseChunks.push(chunk),
+    })
+
+    const errorEvents = responseChunks.filter(
+      (chunk): chunk is Extract<PrintModeEvent, { type: 'error' }> =>
+        typeof chunk !== 'string' && chunk.type === 'error',
+    )
+    expect(errorEvents.length).toBe(1)
+    expect(errorEvents[0].message).toContain(
+      `Invalid parameters for ${toolName}`,
+    )
+    // The concise `userMessage` is a calm one-liner for the CLI banner that
+    // never carries the raw validation details.
+    expect(typeof errorEvents[0].userMessage).toBe('string')
+    expect((errorEvents[0].userMessage ?? '').length).toBeGreaterThan(0)
+    expect(errorEvents[0].userMessage).toContain(toolName)
+
+    // The agent loop continues and no tool_call/tool_result was published.
+    expect(result.hadToolCallError).toBe(true)
+    const toolEvents = responseChunks.filter(
+      (chunk): chunk is PrintModeEvent =>
+        typeof chunk !== 'string' &&
+        (chunk.type === 'tool_call' || chunk.type === 'tool_result'),
+    )
+    expect(toolEvents.length).toBe(0)
+  })
+})
+
+describe('custom tool project-root escape backstop', () => {
+  let agentRuntimeImpl: AgentRuntimeDeps & AgentRuntimeScopedDeps
+
+  beforeEach(() => {
+    agentRuntimeImpl = { ...TEST_AGENT_RUNTIME_IMPL, sendAction: () => {} }
+  })
+
+  const escapeTestAgentTemplate: AgentTemplate = {
+    id: 'test-agent',
+    displayName: 'Test Agent',
+    spawnerPrompt: 'Test agent',
+    model: 'claude-3-5-sonnet-20241022',
+    inputSchema: {},
+    outputMode: 'structured_output',
+    includeMessageHistory: true,
+    inheritParentSystemPrompt: false,
+    mcpServers: {},
+    toolNames: ['custom_fs', 'end_turn'],
+    spawnableAgents: [],
+    systemPrompt: 'Test system prompt',
+    instructionsPrompt: 'Test instructions',
+    stepPrompt: 'Test step prompt',
+  }
+
+  const fsToolName = 'custom_fs'
+
+  function buildFileContextWithFsTool() {
+    return {
+      ...mockFileContext,
+      customToolDefinitions: {
+        [fsToolName]: {
+          inputSchema: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+            },
+            required: ['path'],
+            additionalProperties: false,
+          },
+          endsAgentStep: false,
+          description: 'A custom filesystem tool for escape-backstop tests',
+        },
+      },
+    }
+  }
+
+  async function runCustomFsTool(input: Record<string, unknown>) {
+    const agentWithCustomTool: AgentTemplate = {
+      ...escapeTestAgentTemplate,
+      toolNames: [fsToolName, 'end_turn'],
+    }
+
+    const toolCallChunk: StreamChunk = {
+      type: 'tool-call',
+      toolName: fsToolName,
+      toolCallId: 'custom-fs-escape-tool-call-id',
+      input,
+    }
+
+    async function* mockStream() {
+      yield toolCallChunk
+      return promptSuccess('mock-message-id')
+    }
+
+    const fileContextWithCustomTool = buildFileContextWithFsTool()
+    const sessionState = getInitialSessionState(fileContextWithCustomTool)
+    const responseChunks: (string | PrintModeEvent)[] = []
+
+    // A no-op handler so a legitimate in-project call can proceed to publish
+    // its tool_call/tool_result without needing a real bridge.
+    agentRuntimeImpl.requestToolCall = async () => ({
+      output: jsonToolResult({ ok: true }),
+    })
+
+    await processStream({
+      ...agentRuntimeImpl,
+      agentContext: {},
+      agentState: sessionState.mainAgentState,
+      agentStepId: 'test-step-id',
+      agentTemplate: agentWithCustomTool,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fileContext: fileContextWithCustomTool,
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { 'test-agent': agentWithCustomTool },
+      messages: [],
+      prompt: 'test prompt',
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      stream: mockStream(),
+      system: 'test system',
+      tools: {},
+      userId: 'test-user',
+      userInputId: 'test-input-id',
+      onCostCalculated: async () => {},
+      onResponseChunk: (chunk) => responseChunks.push(chunk),
+    })
+
+    return responseChunks.filter(
+      (chunk): chunk is PrintModeEvent => typeof chunk !== 'string',
+    )
+  }
+
+  it('hard-blocks a custom tool whose input contains a ../ escaping path', async () => {
+    const events = await runCustomFsTool({ path: '../escape.txt' })
+
+    const errorEvents = events.filter(
+      (event): event is Extract<PrintModeEvent, { type: 'error' }> =>
+        event.type === 'error',
+    )
+    expect(errorEvents.length).toBe(1)
+    expect(errorEvents[0].message).toContain('outside the project root')
+
+    expect(events.some((event) => event.type === 'tool_call')).toBe(false)
+    expect(events.some((event) => event.type === 'tool_result')).toBe(false)
+  })
+
+  it('hard-blocks a custom tool whose input contains an absolute path', async () => {
+    const events = await runCustomFsTool({ path: '/etc/passwd' })
+
+    const errorEvents = events.filter(
+      (event): event is Extract<PrintModeEvent, { type: 'error' }> =>
+        event.type === 'error',
+    )
+    expect(errorEvents.length).toBe(1)
+    expect(errorEvents[0].message).toContain('outside the project root')
+
+    expect(events.some((event) => event.type === 'tool_call')).toBe(false)
+    expect(events.some((event) => event.type === 'tool_result')).toBe(false)
+  })
+
+  it('does not block a legitimate in-project relative path', async () => {
+    const events = await runCustomFsTool({ path: 'src/a.ts' })
+
+    const outsideRootErrors = events.filter(
+      (event) =>
+        event.type === 'error' &&
+        event.message.includes('outside the project root'),
+    )
+    expect(outsideRootErrors.length).toBe(0)
+
+    expect(events.some((event) => event.type === 'tool_call')).toBe(true)
+  })
 })
 
 describe('buildUnavailableToolMessage', () => {
@@ -2674,5 +3277,221 @@ describe('buildUnavailableToolMessage', () => {
 
     expect(message).not.toContain('Did you mean')
     expect(message).not.toContain('is a registered tool')
+  })
+
+  it('suggests a match for a single-substitution typo', () => {
+    // Regression coverage for the two-row DP levenshtein helper: a substitution
+    // (not just a trailing insertion) must still rank the granted tool closest.
+    const message = buildUnavailableToolMessage({
+      toolName: 'read_filex',
+      agentId: 'base2',
+      availableTools: ['read_files', 'query_index'],
+    })
+
+    expect(message).toContain('Did you mean `read_files`?')
+  })
+
+  it('suggests a match for a two-edit transposition typo within threshold', () => {
+    // 'read_flies' is edit-distance 2 from 'read_files' (an adjacent
+    // transposition counts as two edits in plain Levenshtein). The two-row DP
+    // must still rank it closest and within the length-scaled threshold.
+    const message = buildUnavailableToolMessage({
+      toolName: 'read_flies',
+      agentId: 'base2',
+      availableTools: ['read_files'],
+    })
+
+    expect(message).toContain('Did you mean `read_files`?')
+  })
+
+  it('offers no suggestion when the available-tool list is empty', () => {
+    const message = buildUnavailableToolMessage({
+      toolName: 'read_file',
+      agentId: 'base2',
+      availableTools: [],
+    })
+
+    expect(message).toContain('(none)')
+    expect(message).not.toContain('Did you mean')
+  })
+})
+
+describe('executeToolCall queued → running transition', () => {
+  const queuedAgentTemplate: AgentTemplate = {
+    id: 'queued-test-agent',
+    displayName: 'Queued Test Agent',
+    spawnerPrompt: 'Test agent',
+    model: 'claude-3-5-sonnet-20241022',
+    inputSchema: {},
+    outputMode: 'structured_output',
+    includeMessageHistory: true,
+    inheritParentSystemPrompt: false,
+    mcpServers: {},
+    toolNames: ['set_output', 'end_turn'],
+    spawnableAgents: [],
+    systemPrompt: 'Test system prompt',
+    instructionsPrompt: 'Test instructions',
+    stepPrompt: 'Test step prompt',
+  }
+
+  function buildQueuedParams(overrides: {
+    queued?: boolean
+    previousToolCallFinished: Promise<void>
+    onResponseChunk: (chunk: unknown) => void
+  }): Parameters<typeof executeToolCall>[0] {
+    const agentRuntimeImpl = { ...TEST_AGENT_RUNTIME_IMPL, sendAction: () => {} }
+    const sessionState = getInitialSessionState(mockFileContext)
+    return {
+      ...agentRuntimeImpl,
+      toolName: 'set_output',
+      input: { message: 'queued output' },
+      agentContext: {},
+      agentState: sessionState.mainAgentState,
+      agentStepId: 'queued-step-id',
+      ancestorRunIds: [],
+      agentTemplate: queuedAgentTemplate,
+      clientSessionId: 'test-session',
+      fileContext: mockFileContext,
+      fileProcessingState: { failedEditRequiresReadByPath: {} },
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { [queuedAgentTemplate.id]: queuedAgentTemplate },
+      previousToolCallFinished: overrides.previousToolCallFinished,
+      ...(overrides.queued !== undefined && { queued: overrides.queued }),
+      prompt: undefined,
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      system: 'test system',
+      tools: {},
+      toolCallId: 'queued-tool-call-id',
+      toolCalls: [],
+      toolCallsToAddToMessageHistory: [],
+      toolResults: [],
+      toolResultsToAddToMessageHistory: [],
+      userId: 'test-user',
+      userInputId: 'test-input-id',
+      fetch: globalThis.fetch,
+      onCostCalculated: async () => {},
+      onResponseChunk: overrides.onResponseChunk,
+    } as unknown as Parameters<typeof executeToolCall>[0]
+  }
+
+  it('flags the tool_call as queued and emits tool_start only after the barrier resolves', async () => {
+    const chunks: unknown[] = []
+    let resolveBarrier!: () => void
+    const previousToolCallFinished = new Promise<void>((resolve) => {
+      resolveBarrier = resolve
+    })
+
+    const promise = executeToolCall(
+      buildQueuedParams({
+        queued: true,
+        previousToolCallFinished,
+        onResponseChunk: (chunk) => chunks.push(chunk),
+      }),
+    )
+    promise.catch(() => {})
+
+    // The tool_call is published synchronously and carries the queued flag...
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolCallId: 'queued-tool-call-id',
+        queued: true,
+      }),
+    )
+    // ...but the queued→running tool_start transition has NOT fired while the
+    // prior-write barrier is still pending.
+    expect(
+      chunks.some(
+        (chunk) => (chunk as { type?: string }).type === 'tool_start',
+      ),
+    ).toBe(false)
+
+    resolveBarrier()
+    await promise
+
+    // Once the dependency resolves, the tool_start transition fires with the
+    // same toolCallId so the CLI can flip the block from queued to pending.
+    const startIdx = chunks.findIndex(
+      (chunk) => (chunk as { type?: string }).type === 'tool_start',
+    )
+    expect(startIdx).toBeGreaterThan(-1)
+    expect(chunks[startIdx]).toMatchObject({
+      type: 'tool_start',
+      toolCallId: 'queued-tool-call-id',
+    })
+
+    // The transition is ordered after the tool_call and before the tool_result.
+    const callIdx = chunks.findIndex(
+      (chunk) => (chunk as { type?: string }).type === 'tool_call',
+    )
+    expect(callIdx).toBeLessThan(startIdx)
+    const resultIdx = chunks.findIndex(
+      (chunk) => (chunk as { type?: string }).type === 'tool_result',
+    )
+    expect(resultIdx).toBeGreaterThan(-1)
+    expect(startIdx).toBeLessThan(resultIdx)
+  })
+
+  it('does not emit a tool_start transition for a non-queued call', async () => {
+    const chunks: unknown[] = []
+    let resolveBarrier!: () => void
+    const previousToolCallFinished = new Promise<void>((resolve) => {
+      resolveBarrier = resolve
+    })
+
+    const promise = executeToolCall(
+      buildQueuedParams({
+        previousToolCallFinished,
+        onResponseChunk: (chunk) => chunks.push(chunk),
+      }),
+    )
+    promise.catch(() => {})
+
+    // A non-queued tool_call carries no queued flag...
+    const toolCall = chunks.find(
+      (chunk) => (chunk as { type?: string }).type === 'tool_call',
+    ) as Record<string, unknown> | undefined
+    expect(toolCall).toBeDefined()
+    expect('queued' in (toolCall ?? {})).toBe(false)
+
+    resolveBarrier()
+    await promise
+
+    // ...and never emits a tool_start transition.
+    expect(
+      chunks.some(
+        (chunk) => (chunk as { type?: string }).type === 'tool_start',
+      ),
+    ).toBe(false)
+  })
+})
+
+describe('getToolSet provider schema compaction', () => {
+  it('preserves schema descriptions for mutation tools and strips them for read-only tools', async () => {
+    const { getToolSet } = await import('../tools/prompts')
+
+    const toolSet = await getToolSet({
+      toolNames: ['edit_transaction', 'read_files'],
+      additionalToolDefinitions: async () => ({}),
+      agentTools: {},
+      skills: {},
+    })
+
+    const schemaJson = (toolName: string): string => {
+      const inputSchema = (toolSet[toolName] as { inputSchema?: unknown })
+        .inputSchema as { jsonSchema?: unknown } | undefined
+      return JSON.stringify(inputSchema?.jsonSchema ?? inputSchema)
+    }
+
+    // Mutation tools (edit_transaction) keep per-field descriptions so the
+    // model still sees guidance for the bare discriminated union; this asserts
+    // the mutation-keyed `preserveDescriptions` wiring end-to-end via getToolSet.
+    expect(schemaJson('edit_transaction')).toContain('description')
+    // Read-only tools stay fully compacted: no description annotations survive.
+    expect(schemaJson('read_files')).not.toContain('description')
   })
 })
