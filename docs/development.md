@@ -65,6 +65,24 @@ For comprehensive E2E terminal testing (which requires `tmux`):
 
 - See [cli/src/**tests**/README.md](../cli/src/__tests__/README.md) for detailed instructions on E2E test runs.
 
+## CI-local / pre-push checks
+
+Before opening a PR or pushing, run the early GitHub CI gates locally:
+
+```bash
+bun run check:ci-local
+```
+
+This regenerates tool definitions (and fails if the tracked generated files drift), then runs `guard:memory-drift` and `guard:sync-agent-config`. Regenerating may mutate the working tree when schemas drift — review and commit those files if needed.
+
+Optionally install a local pre-push hook (not committed; lives under `.git/hooks/`):
+
+```bash
+bun run install:pre-push
+# overwrite a non-managed existing hook:
+bun run install:pre-push -- --force
+```
+
 ## Tree-sitter release assets
 
 The compiled CLI and published SDK ship `tree-sitter.wasm`, every language

@@ -23,6 +23,7 @@ const SKIP_DIRECTORIES = new Set([
   '.bun-install',
   '.git',
   '.next',
+  '.omx',
   'build',
   'coverage',
   'dist',
@@ -33,6 +34,7 @@ const SKIP_DIRECTORIES = new Set([
 const SKIP_PATH_PREFIXES = [
   '.agents/sessions/',
   '.kimchi/',
+  '.omx/',
   'packages/billing/',
   'packages/bigquery/',
   'evals/test-repos/',
