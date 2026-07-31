@@ -81,6 +81,13 @@ export type AgentContentBlock = {
   spawnIndex?: number
   /** Detached background-agent job associated with this card. */
   backgroundJobId?: string
+  /**
+   * True once a background job error has been appended to this agent card's
+   * blocks. Prevents duplicate error text if an error/lost job_update is
+   * delivered more than once. Omitted/undefined for blocks without a
+   * background job error (treated as not-yet-appended).
+   */
+  jobErrorAppended?: boolean
 }
 export type AgentListContentBlock = {
   type: 'agent-list'

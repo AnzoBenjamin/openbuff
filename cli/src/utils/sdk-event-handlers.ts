@@ -782,6 +782,10 @@ const jobStateToToolLifecycle = (
     case 'stopped':
     case 'cancelled':
       return 'cancelled'
+    default: {
+      const exhaustive: never = state
+      throw new Error(`Unhandled job state for tool lifecycle: ${String(exhaustive)}`)
+    }
   }
 }
 
@@ -805,6 +809,10 @@ const jobStateToAgentStatus = (
     case 'stopped':
     case 'cancelled':
       return 'cancelled'
+    default: {
+      const exhaustive: never = state
+      throw new Error(`Unhandled job state for agent status: ${String(exhaustive)}`)
+    }
   }
 }
 
@@ -842,9 +850,11 @@ const handleJobUpdate = (
         if (errorText !== undefined) {
           const truncatedError = errorText.split('\n').slice(0, 6).join('\n')
           const existingBlocks = block.blocks ?? []
-          const lastChild = existingBlocks[existingBlocks.length - 1]
-          const alreadyAppended =
-            lastChild?.type === 'text' && lastChild.content === truncatedError
+          // Mirror the tool-block flag-based dedup: track whether the error has
+          // already been appended via an explicit flag rather than comparing the
+          // last text block's content, so a genuinely new identical error is not
+          // suppressed when the prior block coincidentally matches.
+          const alreadyAppended = block.jobErrorAppended === true
           return {
             ...block,
             status,
@@ -858,6 +868,7 @@ const handleJobUpdate = (
                     content: truncatedError,
                   } as ContentBlock,
                 ],
+            ...(alreadyAppended ? {} : { jobErrorAppended: true }),
           }
         }
         return { ...block, status }
