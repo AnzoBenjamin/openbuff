@@ -843,6 +843,60 @@ describe('sdk-event-handlers', () => {
     expect(errorTextBlocks.length).toBe(1)
   })
 
+  test('job_update still appends an agent job error whose text coincidentally matches trailing streamed output', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    const handleChunk = createStreamChunkHandler(ctx)
+    // Pins the agent-block flag dedup's advantage over comparing the last text
+    // block's content: when the agent's own streamed output happens to equal
+    // the error text, a genuinely new error must still be appended. The old
+    // string comparison would see the trailing text block match the truncated
+    // error and suppress the append.
+    handleEvent({
+      type: 'subagent_start',
+      agentId: 'agent-coincidental',
+      agentType: 'researcher-web',
+      displayName: 'Researcher',
+      onlyChild: true,
+    } as any)
+    ctx.message.updater.updateAiMessageBlocks((blocks) =>
+      blocks.map((block) =>
+        block.type === 'agent' && block.agentId === 'agent-coincidental'
+          ? { ...block, backgroundJobId: 'job-agent-coincidental' }
+          : block,
+      ),
+    )
+
+    // Streamed agent output whose text coincidentally equals the error text.
+    handleChunk({
+      type: 'subagent_chunk',
+      agentId: 'agent-coincidental',
+      agentType: 'researcher-web',
+      chunk: 'agent crashed',
+    })
+    // A genuinely new error carrying the same text; it must still be appended.
+    handleEvent({
+      type: 'job_update',
+      jobId: 'job-agent-coincidental',
+      kind: 'agent',
+      state: 'error',
+      sequence: 1,
+      error: 'agent crashed',
+    } as any)
+
+    const agentBlock = getMessages()[0].blocks?.[0] as any
+    expect(agentBlock).toMatchObject({ type: 'agent', status: 'failed' })
+    const errorTextBlocks = (agentBlock.blocks ?? []).filter(
+      (b: any) => b.type === 'text' && b.content === 'agent crashed',
+    )
+    // Once from the streamed output, once from the appended error.
+    expect(errorTextBlocks.length).toBe(2)
+    expect(agentBlock.blocks?.[agentBlock.blocks.length - 1]).toMatchObject({
+      type: 'text',
+      content: 'agent crashed',
+    })
+  })
+
   test('persists context compaction details in the assistant message', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
