@@ -625,7 +625,7 @@ export interface ReadBlocksParams {
   windows?: {
     /** File path to read in contiguous line windows, relative to the project root. */
     path: string
-    /** Lines per window. Defaults to 400. */
+    /** Lines per window. Defaults to 400, capped at 5000. */
     windowSize?: number
     /** 1-indexed window number to return. Omit to get the window manifest (totalLines, windowSize, windowCount) plus the first window. */
     window?: number
@@ -638,7 +638,7 @@ export interface ReadBlocksParams {
     match: string
     /** 1-indexed occurrence of `match` to anchor on. Defaults to 1. */
     occurrence?: number
-    /** Lines of context to include on each side of the match, clamped at file boundaries. Defaults to 40. */
+    /** Lines of context to include on each side of the match, clamped at file boundaries. Defaults to 40, capped at 2000. */
     contextLines?: number
   }[]
   /** Occurrence-aware symbol reads: pull the Nth top-level symbol with a given name. Parser-proven slices mint a cap.v3 editAnchor. */

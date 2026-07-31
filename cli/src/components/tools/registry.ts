@@ -5,6 +5,7 @@ import { GlobComponent } from './glob'
 import { GitStatusComponent } from './git-status'
 import { ListDirectoryComponent } from './list-directory'
 import { QueryIndexComponent } from './query-index'
+import { ReadBlocksComponent } from './read-blocks'
 import { ReadDocsComponent } from './read-docs'
 import { ReadFilesComponent } from './read-files'
 import { ReadSubtreeComponent } from './read-subtree'
@@ -53,6 +54,7 @@ const toolComponentRegistry = new Map<ToolName, ToolComponent>([
   [KillJobComponent.toolName, KillJobComponent],
   [ReadDocsComponent.toolName, ReadDocsComponent],
   [ReadFilesComponent.toolName, ReadFilesComponent],
+  [ReadBlocksComponent.toolName, ReadBlocksComponent],
   [ReadSubtreeComponent.toolName, ReadSubtreeComponent],
   [RenderUIComponent.toolName, RenderUIComponent],
   [WriteTodosComponent.toolName, WriteTodosComponent],

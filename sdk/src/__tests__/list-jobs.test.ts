@@ -23,10 +23,14 @@ const foreignOwner: BackgroundJobOwner = {
   parentAgentId: 'agent-2',
 }
 
-/** Seed a running registry job and return its id. */
-function seedRunningJob(command: string, jobOwner: BackgroundJobOwner): string {
+/** Seed a running process job and return its id. */
+function seedRunningJob(
+  command: string,
+  jobOwner: BackgroundJobOwner,
+  kind: 'process' | 'agent' = 'process',
+): string {
   const job = jobRegistry.create({
-    kind: 'process',
+    kind,
     label: command,
     owner: jobOwner,
   })
@@ -34,13 +38,17 @@ function seedRunningJob(command: string, jobOwner: BackgroundJobOwner): string {
   return job.jobId
 }
 
-/** Seed a settled (completed) registry job and return its id. */
+/** Seed a settled (completed) process job and return its id. */
 function seedCompletedJob(
   command: string,
   jobOwner: BackgroundJobOwner,
 ): { jobId: string } {
   const jobId = seedRunningJob(command, jobOwner)
-  jobRegistry.emit(jobId, { type: 'lifecycle', state: 'completed', exitCode: 0 })
+  jobRegistry.emit(jobId, {
+    type: 'lifecycle',
+    state: 'completed',
+    exitCode: 0,
+  })
   return { jobId }
 }
 
@@ -78,5 +86,54 @@ describe('listJobs', () => {
     const runningEntry = jobs.find((job) => job.jobId === running1)
     expect(runningEntry?.status).toBe('running')
     expect(runningEntry?.completedAt).toBeUndefined()
+  })
+
+  test('includes agent jobs owned by the trusted owner and excludes foreign agents', async () => {
+    const processJob = seedRunningJob('bun dev', owner, 'process')
+    const agentJob = seedRunningJob('researcher', owner, 'agent')
+    seedRunningJob('foreign-agent', foreignOwner, 'agent')
+
+    const jobs = value(await listJobs({ owner })).jobs as Array<{
+      jobId: string
+      kind: string
+    }>
+
+    expect(jobs.map((job) => job.jobId).sort()).toEqual(
+      [processJob, agentJob].sort(),
+    )
+    expect(jobs.find((job) => job.jobId === agentJob)?.kind).toBe('agent')
+    expect(jobs.find((job) => job.jobId === processJob)?.kind).toBe('process')
+  })
+
+  test('lists a root-owned process job for the root owner and not for a foreign owner', async () => {
+    // Regression for the smoke failure class: check/kill work by jobId, but
+    // list must still rediscover via (clientSessionId, rootRunId) ownership.
+    const jobId = seedRunningJob('smoke-loop', owner, 'process')
+
+    const rootJobs = value(await listJobs({ owner })).jobs as Array<{
+      jobId: string
+    }>
+    expect(rootJobs.map((job) => job.jobId)).toContain(jobId)
+
+    const foreignJobs = value(await listJobs({ owner: foreignOwner })).jobs as Array<{
+      jobId: string
+    }>
+    expect(foreignJobs.map((job) => job.jobId)).not.toContain(jobId)
+  })
+
+  test('lists a job with basher parent fields when root clientSessionId+rootRunId match', async () => {
+    // parentRunId/parentAgentId are diagnostic only; ownedBy keys on
+    // (clientSessionId, rootRunId). A basher-spawned job stamped with the root
+    // pair must still appear in the root list.
+    const basherStamped: BackgroundJobOwner = {
+      clientSessionId: owner.clientSessionId,
+      rootRunId: owner.rootRunId,
+      parentRunId: 'basher-run',
+      parentAgentId: 'basher',
+    }
+    const jobId = seedRunningJob('basher-bg', basherStamped, 'process')
+
+    const jobs = value(await listJobs({ owner })).jobs as Array<{ jobId: string }>
+    expect(jobs.map((job) => job.jobId)).toContain(jobId)
   })
 })

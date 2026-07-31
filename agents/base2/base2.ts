@@ -492,6 +492,8 @@ ${specialistRoutingSection}
       const MAX_REPAIR_ROUNDS = 3
       const MAX_REVIEWER_NO_VERDICT_RETRIES = 1
       const MAX_REVIEWER_REPAIR_ROUNDS = 3
+      const MAX_SPECIALIST_REPAIR_ROUNDS = 3
+      const MAX_SPECIALIST_NO_VERDICT_RETRIES = 1
       // Single source of truth for the post-gate finalization instruction used
       // by every gate-pass path (fresh pass, conversation reuse, durable
       // fingerprint reuse). Worded idempotently so a model that already wrote
@@ -546,6 +548,10 @@ ${specialistRoutingSection}
         testWriterGateDone: false,
         docWriterGateDone: false,
         specialistReviewGatesDone: [],
+        owedReviewerRevalidations: [],
+        specialistReviewGateFingerprints: {},
+        specialistRepairRoundCount: 0,
+        specialistNoVerdictCounts: {},
         reviewReceipts: [],
         auxGatesLastPendingFiles: [],
       }
@@ -582,26 +588,30 @@ ${specialistRoutingSection}
       activeWorkState.testWriterGateDone ??= false
       activeWorkState.docWriterGateDone ??= false
       activeWorkState.specialistReviewGatesDone ??= []
+      activeWorkState.owedReviewerRevalidations ??= []
+      // Records, not lists: never routed through normalizeGateFileList. Just
+      // guarantee they are always plain objects so older serialized state
+      // (which lacks them) is treated as `{}` and fails closed.
+      activeWorkState.specialistReviewGateFingerprints ??= {}
+      activeWorkState.specialistRepairRoundCount ??= 0
+      activeWorkState.specialistNoVerdictCounts ??= {}
       activeWorkState.reviewReceipts ??= []
       activeWorkState.auxGatesLastPendingFiles ??= []
-      if (
-        activeWorkState.openReviewerFindings.length > 0 &&
-        !activeWorkState.requiredReviewerRevalidation
-      ) {
-        const originFinding = activeWorkState.openReviewerFindings[0]
-        if (originFinding.reviewer) {
-          // Authoritative reviewer family recorded on the finding.
-          activeWorkState.requiredReviewerRevalidation = originFinding.reviewer
-        } else {
-          // Legacy state without a reviewer field: infer from the gateId
-          // prefix (`${reviewerFamily}:${fingerprint}`).
-          const originGatePrefix = originFinding.gateId.split(':')[0]
-          activeWorkState.requiredReviewerRevalidation =
-            originGatePrefix === 'security-reviewer'
-              ? 'security-reviewer'
-              : originGatePrefix === 'code-reviewer'
-                ? 'code-reviewer'
-                : (originGatePrefix as SpecialistReviewerAgent)
+      if (activeWorkState.openReviewerFindings.length > 0) {
+        // Rehydrate the owed set from EVERY open finding, not just findings[0]:
+        // serialized state can carry open findings from several reviewers and
+        // each of them still owes a fresh re-attestation (fail closed).
+        const owedFromFindings = activeWorkState.openReviewerFindings.map(
+          (finding) => reviewerFamilyFromFinding(finding),
+        )
+        const owed = (activeWorkState.owedReviewerRevalidations ??= [])
+        for (const family of owedFromFindings) {
+          if (!owed.includes(family)) owed.push(family)
+        }
+        // Keep the legacy scalar in sync as the first owed entry; only set it
+        // when it is currently unset, matching the previous guard.
+        if (!activeWorkState.requiredReviewerRevalidation) {
+          activeWorkState.requiredReviewerRevalidation = owed[0] ?? undefined
         }
       }
       activeWorkState.workflowTodoProgress = normalizeWorkflowTodoProgress(
@@ -888,6 +898,25 @@ ${specialistRoutingSection}
           markActiveWorkStateChanged()
         }
       }
+      // Latest dirty working-tree snapshot for P0 re-arm / P2 pin lag / P3
+      // unvalidated publication. Starts as the turn-start dirty set and is
+      // refreshed whenever a real mid-turn git_status result is extracted.
+      let latestDirtyFiles = initialGitStatusDirtyFiles
+      // P0 turn-start re-arm only when finalization is falsely open. Do not
+      // re-arm mid-gate (awaiting_validation/review) — that would re-touch
+      // pending files, clear durable fingerprints, and break reuse. Do not
+      // re-arm solely for non-reviewable dirty (docs/session/jsonl).
+      if (
+        runValidationGate &&
+        (finalResponseGateOpen ||
+          activeWorkState.currentPhase === 'final_response_allowed')
+      ) {
+        const unreviewedAtTurnStart =
+          collectUnreviewedDirtyReviewableFiles(initialGitStatusDirtyFiles)
+        if (unreviewedAtTurnStart.length > 0) {
+          rearmGateForUnreviewedDirty(unreviewedAtTurnStart)
+        }
+      }
       while (true) {
         yield {
           toolName: 'spawn_agent_inline',
@@ -918,31 +947,47 @@ ${specialistRoutingSection}
         mutableAgentState.canSuggestFollowups =
           !runValidationGate || finalResponseGateOpen || hasNoPendingGateWork
 
-        // Publish the set of working-tree files that are dirty but NOT covered by a
-        // green gate pass, so the git-committer spawn guard in the tool executor can
-        // refuse to stage never-validated changes even when the finalization gate is
-        // otherwise open (a turn can end green on file A while an unrelated file B was
-        // never validated). Scoped to task-related files this agent actually touched
-        // (touchedFiles/changedFiles/pendingGateFiles/gatePassedFiles) so unrelated
-        // dirty files left by other agents or processes working the same codebase no
-        // longer block commits. The filter is recomputed every iteration
-        // against the current gatePassedFiles so files validated this turn drop
-        // out of the set. Note: initialGitStatusDirtyFiles is the turn-start
-        // snapshot. A task-related file dirtied at turn start and then reverted
-        // (not committed) mid-turn stays published until the next turn
-        // (fail-closed, safe), and a file dirtied only via a non-edit-tool
-        // channel (e.g. run_terminal_command) may not be re-captured into the
-        // task-related set this turn. Both directions fail safe.
-        const taskRelatedFiles = new Set<string>([
-          ...activeWorkState.touchedFiles,
-          ...activeWorkState.changedFiles,
-          ...activeWorkState.pendingGateFiles,
-          ...activeWorkState.gatePassedFiles,
-        ])
+        // Publish REVIEWABLE-ONLY task-related dirty files not covered by a
+        // green gate pass for the git-committer commit guard. Non-reviewable
+        // dirty task files (docs, session STATE.json, jsonl, etc.) are excluded
+        // from this list so they do not block commits; the pin (P2) surfaces
+        // them as excluded from the gate, not as validated. Recomputed every
+        // iteration against latestDirtyFiles + current gatePassedFiles.
+        // Mid-turn dirty is preferred once a real git_status has refreshed
+        // latestDirtyFiles; until then the turn-start snapshot is used
+        // (fail-closed if a turn-start dirty was reverted mid-turn).
+        const unvalidatedDirtyReviewable =
+          collectUnvalidatedDirtyReviewableFiles(latestDirtyFiles)
+        // Re-arm candidates only: exclude already-pending (mid-gate) paths.
+        const unreviewedDirtyReviewable =
+          collectUnreviewedDirtyReviewableFiles(latestDirtyFiles)
+        const nonReviewableDirtyTask =
+          collectNonReviewableDirtyTaskFiles(latestDirtyFiles)
+        const dirtyReviewableAll = selectReviewableGateFiles(
+          normalizeGateFileList(latestDirtyFiles).filter((file) =>
+            collectTaskRelatedFiles().has(file),
+          ),
+        )
+        activeWorkState.dirtyReviewableCount = dirtyReviewableAll.length
+        // Pin lag list is the false-PASSED re-arm set only (not mid-gate pending).
+        activeWorkState.unreviewedDirtyReviewableFiles =
+          unreviewedDirtyReviewable
+        activeWorkState.nonReviewableDirtyTaskFiles = nonReviewableDirtyTask
+        // Commit guard includes pending unvalidated reviewable paths.
         mutableAgentState.uncommittedUnvalidatedFiles =
-          initialGitStatusDirtyFiles.filter(
-            (file) => taskRelatedFiles.has(file) && !gatePassedFiles.has(file),
-          )
+          unvalidatedDirtyReviewable
+
+        // P0 every-iteration re-arm: if finalization is open (or phase claims
+        // final_response_allowed) while unreviewed dirty reviewable task files
+        // remain, force re-arm before the early break can skip the gate.
+        if (
+          runValidationGate &&
+          unreviewedDirtyReviewable.length > 0 &&
+          (finalResponseGateOpen ||
+            activeWorkState.currentPhase === 'final_response_allowed')
+        ) {
+          rearmGateForUnreviewedDirty(unreviewedDirtyReviewable)
+        }
 
         const pinnedStateMessage = buildPinnedActiveWorkMessage(activeWorkState)
         if (
@@ -1055,6 +1100,15 @@ ${specialistRoutingSection}
         const gitStatusFiles = extractGitStatusFiles(
           (currentGitStatus as any)?.toolResult,
         )
+        // Refresh the mid-turn dirty snapshot whenever git_status returns a
+        // real status payload so top-of-loop P0 re-arm and P3 publication see
+        // live dirtiness rather than only the turn-start snapshot.
+        const isRealGitStatusForDirtySnapshot =
+          (currentGitStatus as any)?.toolResult?.[0]?.value?.status !==
+          undefined
+        if (isRealGitStatusForDirtySnapshot) {
+          latestDirtyFiles = gitStatusFiles
+        }
         // Prune pending gate files that were previously observed as dirty in
         // git status but are no longer present (i.e., they were committed).
         // Without this, committed files stay in the pending set forever,
@@ -1528,26 +1582,36 @@ ${specialistRoutingSection}
             markActiveWorkStateChanged()
           }
         }
-        // 3) security-reviewer gate
+        // 3) security-reviewer gate. The credit fingerprint is computed BEFORE
+        // the condition so the gate also re-fires when a stored credit no
+        // longer matches the current pending bytes (fail closed for legacy
+        // state that stored no fingerprint at all).
+        const securitySnapshotDetails = buildGateSnapshotDetails(
+          currentPendingGateFiles,
+          '',
+        )
+        const securitySnapshotFingerprint = hashGateSnapshotDetails(
+          securitySnapshotDetails,
+        )
+        // A done credit with an absent fingerprint (legacy / seeded state)
+        // satisfies the gate; a stored fingerprint re-fires only on real byte
+        // drift, so fail-closed drift detection and owed-security revalidation
+        // (which never marks done on block) are both preserved.
+        const securityCreditIsFresh =
+          activeWorkState.securityReviewGateFingerprint === undefined ||
+          activeWorkState.securityReviewGateFingerprint ===
+            securitySnapshotFingerprint
+        const owedReviewers = activeWorkState.owedReviewerRevalidations ?? []
         if (
           runValidationGate &&
           editsHappened &&
           currentPendingGateFiles.length > 0 &&
-          !activeWorkState.securityReviewGateDone &&
-          (revalidationFamily(activeWorkState.requiredReviewerRevalidation) ===
-            'none' ||
-            revalidationFamily(activeWorkState.requiredReviewerRevalidation) ===
-              'security') &&
+          (!activeWorkState.securityReviewGateDone || !securityCreditIsFresh) &&
+          (owedReviewers.length === 0 ||
+            owedReviewers.includes('security-reviewer')) &&
           matchesSecuritySensitiveGlob(currentPendingGateFiles)
         ) {
           auxGateFiredThisIteration = true
-          const securitySnapshotDetails = buildGateSnapshotDetails(
-            currentPendingGateFiles,
-            '',
-          )
-          const securitySnapshotFingerprint = hashGateSnapshotDetails(
-            securitySnapshotDetails,
-          )
           const securityReviewResult = yield {
             toolName: 'spawn_agent_inline',
             input: {
@@ -1598,7 +1662,7 @@ ${specialistRoutingSection}
                 }
               },
             )
-            activeWorkState.requiredReviewerRevalidation = 'security-reviewer'
+            addOwedReviewer('security-reviewer')
             activeWorkState.currentPhase = 'repair_loop'
             activeWorkState.nextRequiredAction =
               'Repair-editor must address every open security-review finding before validation and finalization.'
@@ -1606,6 +1670,7 @@ ${specialistRoutingSection}
               'Security review reported blocking findings; repair is required.'
             activeWorkState.securityReviewGateDone = false
             activeWorkState.preEditSecurityReviewDone = false
+            activeWorkState.securityReviewGateFingerprint = undefined
             markActiveWorkStateChanged()
             emitGateTelemetry({
               currentPhase: 'repair_loop',
@@ -1754,7 +1819,7 @@ ${specialistRoutingSection}
               markActiveWorkStateChanged()
               break
             }
-            activeWorkState.requiredReviewerRevalidation = 'security-reviewer'
+            addOwedReviewer('security-reviewer')
             activeWorkState.currentPhase = 'awaiting_validation'
             activeWorkState.nextRequiredAction = ''
             activeWorkState.latestWorkSummary =
@@ -1772,6 +1837,7 @@ ${specialistRoutingSection}
             activeWorkState.latestWorkSummary = `Security review is incomplete: ${protocolFailureDetail}`
             activeWorkState.securityReviewGateDone = false
             activeWorkState.preEditSecurityReviewDone = false
+            activeWorkState.securityReviewGateFingerprint = undefined
             markActiveWorkStateChanged()
             emitGateTelemetry({
               currentPhase: 'blocked',
@@ -1812,14 +1878,14 @@ ${specialistRoutingSection}
           }
           activeWorkState.securityReviewGateDone = true
           activeWorkState.preEditSecurityReviewDone = true
+          // Snapshot-bind the credit: a later byte change to the same pending
+          // paths (including a validation-hook rewrite) no longer matches, so
+          // the gate re-fires instead of reusing credit for unreviewed bytes.
+          activeWorkState.securityReviewGateFingerprint =
+            securitySnapshotFingerprint
           // The security aux block owns security-family revalidation; clear its
-          // marker once it passes, but never clobber a code/specialist marker.
-          if (
-            revalidationFamily(activeWorkState.requiredReviewerRevalidation) ===
-            'security'
-          ) {
-            activeWorkState.requiredReviewerRevalidation = undefined
-          }
+          // owed entry once it passes, but never clobber a code/specialist one.
+          clearOwedReviewer('security-reviewer')
           markActiveWorkStateChanged()
         }
         // 4) deterministic reviewer-family specialist gates. Advisory
@@ -1829,40 +1895,107 @@ ${specialistRoutingSection}
           editsHappened &&
           currentPendingGateFiles.length > 0
         ) {
-          // Specialist-family revalidation is owned by this aux block: the
+          // Specialist-family revalidation is owned by this aux block: every
           // owed specialist must re-review through its own snapshot/attestation
-          // path even if it already passed for this pending set. Drop it from
-          // the done-set so the existing filter does not re-exclude it, and
-          // union it into the routed list so it is re-included even if the
-          // router would not otherwise select it.
-          const owedSpecialist =
-            revalidationFamily(activeWorkState.requiredReviewerRevalidation) ===
-            'specialist'
-              ? (activeWorkState.requiredReviewerRevalidation as string)
-              : undefined
-          if (
-            owedSpecialist &&
-            activeWorkState.specialistReviewGatesDone?.includes(owedSpecialist)
-          ) {
-            activeWorkState.specialistReviewGatesDone =
-              activeWorkState.specialistReviewGatesDone.filter(
-                (agentType) => agentType !== owedSpecialist,
-              )
-            markActiveWorkStateChanged()
+          // path even if it already passed for this pending set. Drop each of
+          // them from the done-set (and their stored credit fingerprints) so the
+          // filter below does not re-exclude them, and union all of them into
+          // the routed list so they are re-included even if the router would
+          // not otherwise select them.
+          const owedSpecialists = (
+            activeWorkState.owedReviewerRevalidations ?? []
+          ).filter(
+            (agent) =>
+              agent !== 'code-reviewer' && agent !== 'security-reviewer',
+          ) as string[]
+          for (const owedSpecialist of owedSpecialists) {
+            if (
+              activeWorkState.specialistReviewGatesDone?.includes(owedSpecialist)
+            ) {
+              activeWorkState.specialistReviewGatesDone =
+                activeWorkState.specialistReviewGatesDone.filter(
+                  (agentType) => agentType !== owedSpecialist,
+                )
+              markActiveWorkStateChanged()
+            }
+            if (
+              activeWorkState.specialistReviewGateFingerprints &&
+              owedSpecialist in activeWorkState.specialistReviewGateFingerprints
+            ) {
+              delete activeWorkState.specialistReviewGateFingerprints[
+                owedSpecialist
+              ]
+              markActiveWorkStateChanged()
+            }
           }
+          // Snapshot binding for specialist credit: the content fingerprint of
+          // the AUX-RELEVANT reviewable pending subset at spawn time. Stored on
+          // pass and compared in specialistCreditIsFresh so a byte change to
+          // those paths (or legacy state with no stored fingerprint) re-reviews.
+          // The narrowing to the aux-relevant subset is DELIBERATE and is
+          // deliberately weaker than the reviewed set: specialists are spawned
+          // with the reviewable pending subset, but co-changed test files that
+          // are not aux-relevant are kept out of the credit fingerprint so
+          // ordinary test-writer churn does not invalidate specialist credit on
+          // every sweep. The accepted consequence is that byte drift confined to
+          // those test files alone does not force a specialist re-review; drift
+          // in any aux-relevant source file still does.
+          const specialistPendingFiles = selectReviewableGateFiles(
+            currentPendingGateFiles,
+          )
+          const specialistCreditFingerprint = hashGateSnapshotDetails(
+            buildGateSnapshotDetails(
+              selectReviewableGateFiles(
+                selectAuxRelevantFiles(currentPendingGateFiles),
+              ),
+              '',
+            ),
+          )
           const baseRoutedSpecialists = selectSpecialistReviewersInline({
-            files: currentPendingGateFiles,
+            files: specialistPendingFiles,
             requirements: prompt ?? '',
           })
           const routedSpecialists = (
-            owedSpecialist
-              ? Array.from(new Set([...baseRoutedSpecialists, owedSpecialist]))
+            owedSpecialists.length > 0
+              ? Array.from(
+                  new Set([...baseRoutedSpecialists, ...owedSpecialists]),
+                )
               : baseRoutedSpecialists
           ).filter(
             (agentType) =>
-              !activeWorkState.specialistReviewGatesDone?.includes(agentType),
+              !specialistCreditIsFresh(agentType, specialistCreditFingerprint),
           )
-          if (routedSpecialists.length > 0) {
+          if (
+            routedSpecialists.length > 0 &&
+            specialistPendingFiles.length === 0
+          ) {
+            // Requirements may still route a specialist, but with no
+            // reviewable pending files there is nothing to attest. Mark done
+            // like the empty-snapshot path instead of spawning a reviewer that
+            // can only fail file attestation.
+            for (const agentType of routedSpecialists) {
+              activeWorkState.specialistReviewGatesDone = Array.from(
+                new Set([
+                  ...(activeWorkState.specialistReviewGatesDone ?? []),
+                  agentType,
+                ]),
+              )
+              ;(activeWorkState.specialistReviewGateFingerprints ??= {})[
+                agentType
+              ] = specialistCreditFingerprint
+            }
+            activeWorkState.lastReviewerGateSkipReason =
+              'no-pending-changes-in-snapshot'
+            markActiveWorkStateChanged()
+            emitGateTelemetry({
+              currentPhase: 'final_response_allowed',
+              pendingFileCount: 0,
+              pendingFiles: [],
+              reviewerStatus: 'skipped',
+              validationStatus: 'skipped',
+              reuseReason: 'no-pending-changes-in-snapshot',
+            })
+          } else if (routedSpecialists.length > 0) {
             const bundleResult = yield {
               toolName: 'get_change_review_bundle',
               input: {},
@@ -1896,6 +2029,11 @@ ${specialistRoutingSection}
                     agentType,
                   ]),
                 )
+                // Record the credit fingerprint here too so this early-out
+                // path stays idempotent under the snapshot-bound credit test.
+                ;(activeWorkState.specialistReviewGateFingerprints ??= {})[
+                  agentType
+                ] = specialistCreditFingerprint
               }
               activeWorkState.lastReviewerGateSkipReason =
                 'no-pending-changes-in-snapshot'
@@ -1912,6 +2050,12 @@ ${specialistRoutingSection}
               auxGateFiredThisIteration = true
               let specialistBlocked = false
               let specialistTerminalFailure = false
+              // Set only by the bounded specialist repair loop when it must
+              // exit the OUTER while loop (repair budget exhausted, missing
+              // repair receipt, repair crash, or no snapshot-visible progress).
+              // Every other specialist break stays scoped to the routed-agent
+              // for loop.
+              let specialistRepairExit = false
               const specialistResults = new Map<string, unknown>()
               const specialistSnapshots = new Map<string, string>()
               for (const agentType of routedSpecialists) {
@@ -1925,11 +2069,11 @@ ${specialistRoutingSection}
                     prompt: [
                       'Perform the routed post-edit specialist review.',
                       `Requirements: ${prompt ?? '(none supplied)'}`,
-                      `Changed files: ${currentPendingGateFiles.join(', ')}`,
+                      `Changed files: ${specialistPendingFiles.join(', ') || '(none)'}`,
                       `Snapshot ID (echo exactly): ${bundle.snapshotId}`,
                     ].join('\n'),
                     params: {
-                      files: currentPendingGateFiles,
+                      files: specialistPendingFiles,
                       snapshot_id: bundle.snapshotId,
                     },
                   })),
@@ -1946,13 +2090,21 @@ ${specialistRoutingSection}
               }
               const retrySpecialists = routedSpecialists.filter((agentType) => {
                 const result = specialistResults.get(agentType)
+                // A fully-attesting review (every pending source file covered
+                // by a well-formed snapshot fingerprint) is accepted even when
+                // the exact snapshot id advanced; only genuine file-coverage
+                // gaps or a missing/non-attestable fingerprint require a
+                // re-spawn. `isStaleSnapshotReviewerResult` is therefore only
+                // consulted when attestation issues remain, so transient
+                // snapshot drift never triggers a pointless refresh+retry.
+                const attestationIssues = collectReviewerAttestationIssues(
+                  result,
+                  bundle.snapshotId,
+                  specialistPendingFiles,
+                )
                 return (
-                  isStaleSnapshotReviewerResult(result) ||
-                  collectReviewerAttestationIssues(
-                    result,
-                    bundle.snapshotId,
-                    currentPendingGateFiles,
-                  ).length > 0
+                  attestationIssues.length > 0 &&
+                  isStaleSnapshotReviewerResult(result)
                 )
               })
               if (retrySpecialists.length > 0) {
@@ -1970,7 +2122,14 @@ ${specialistRoutingSection}
                   activeWorkState.openReviewerBlockers = [
                     'Specialist review could not obtain a refreshed snapshot after attestation failure.',
                   ]
-                  activeWorkState.openReviewerFindings = []
+                  // Only drop the retrying specialists' findings; another
+                  // reviewer's still-open findings must survive.
+                  activeWorkState.openReviewerFindings = (
+                    activeWorkState.openReviewerFindings ?? []
+                  ).filter(
+                    (finding) =>
+                      !retrySpecialists.includes(finding.reviewer as string),
+                  )
                   activeWorkState.nextRequiredAction =
                     'Stop concurrent edits and resume once the working tree is stable; the runtime will obtain a fresh review bundle.'
                   activeWorkState.latestWorkSummary =
@@ -1987,12 +2146,12 @@ ${specialistRoutingSection}
                         prompt: [
                           'Retry the routed specialist review after snapshot/file attestation failure.',
                           `Requirements: ${prompt ?? '(none supplied)'}`,
-                          `Changed files: ${currentPendingGateFiles.join(', ')}`,
+                          `Changed files: ${specialistPendingFiles.join(', ') || '(none)'}`,
                           `Snapshot ID (echo exactly): ${refreshedBundle.snapshotId}`,
                           'Correct the structured output directly; do not request source edits for this protocol error.',
                         ].join('\n'),
                         params: {
-                          files: currentPendingGateFiles,
+                          files: specialistPendingFiles,
                           snapshot_id: refreshedBundle.snapshotId,
                         },
                       })),
@@ -2019,18 +2178,34 @@ ${specialistRoutingSection}
                     collectReviewerAttestationIssues(
                       specialistToolResult,
                       expectedSnapshotId,
-                      currentPendingGateFiles,
+                      specialistPendingFiles,
                     )
+                  // Fingerprint-only drift on a fully-attesting review is NOT a
+                  // terminal protocol failure: only a FILE-COVERAGE gap or a
+                  // non-attestable fingerprint stays blocking after the refresh.
+                  const attestsEverything =
+                    specialistAttestationIssues.length === 0
+                  // A coverage-complete review (zero attestation issues) is a
+                  // PASS and FALLS THROUGH to the normal verdict/credit
+                  // handling below (collectReviewerBlockers /
+                  // getReviewerFinalizationVerdict / specialistReviewGatesDone /
+                  // specialistReviewGateFingerprints). Only a review that does
+                  // NOT fully attest AND smells stale is a terminal protocol
+                  // failure. Do NOT `continue` here for attestsEverything: that
+                  // would skip to the next routed specialist and silently never
+                  // credit this one.
                   if (
-                    isStaleSnapshotReviewerResult(specialistToolResult) ||
-                    specialistAttestationIssues.length > 0
+                    !attestsEverything &&
+                    isStaleSnapshotReviewerResult(specialistToolResult)
                   ) {
                     activeWorkState.currentPhase = 'blocked'
                     activeWorkState.openReviewerBlockers = [
                       `${agentType} could not attest to a stable snapshot after one automatic refresh.`,
                       ...specialistAttestationIssues,
                     ]
-                    activeWorkState.openReviewerFindings = []
+                    activeWorkState.openReviewerFindings = (
+                      activeWorkState.openReviewerFindings ?? []
+                    ).filter((finding) => finding.reviewer !== agentType)
                     activeWorkState.nextRequiredAction =
                       'Stop concurrent edits and resume once the working tree is stable; the runtime will obtain a fresh review bundle.'
                     activeWorkState.latestWorkSummary = `${agentType} stopped after two stale snapshot results.`
@@ -2046,9 +2221,7 @@ ${specialistRoutingSection}
                   if (blockers.length > 0) {
                     const records =
                       collectReviewerFindingRecordsInline(specialistToolResult)
-                    activeWorkState.currentPhase = 'blocked'
-                    activeWorkState.openReviewerBlockers = blockers
-                    activeWorkState.openReviewerFindings = blockers.map(
+                    const specialistFindingRecords = blockers.map(
                       (text: string, index: number) => {
                         const record = correlateReviewerFindingRecord(
                           text,
@@ -2060,17 +2233,301 @@ ${specialistRoutingSection}
                           gateId: `${agentType}:${expectedSnapshotId}`,
                           text: record?.text ?? text,
                           status: 'open' as const,
-                          files: currentPendingGateFiles,
+                          files: specialistPendingFiles,
                           snapshotFingerprint: expectedSnapshotId,
                           reviewer: agentType as SpecialistReviewerAgent,
                           createdAt: new Date().toISOString(),
                         }
                       },
                     )
-                    activeWorkState.nextRequiredAction = `Resolve ${agentType} findings before validation and finalization.`
-                    activeWorkState.latestWorkSummary = `${agentType} blocked the current change snapshot.`
-                    markActiveWorkStateChanged()
+                    // Merge instead of replace: another reviewer's still-open
+                    // findings/blockers must not be clobbered by this one.
+                    mergeReviewerFindings(
+                      agentType,
+                      specialistFindingRecords,
+                      blockers,
+                    )
+                    // In-turn marker: this specialist owes a fresh
+                    // re-attestation before finalization, and its credit is
+                    // dropped immediately so the gate cannot reuse it.
+                    addOwedReviewer(agentType)
+                    activeWorkState.specialistReviewGatesDone = (
+                      activeWorkState.specialistReviewGatesDone ?? []
+                    ).filter((entry) => entry !== agentType)
+                    if (activeWorkState.specialistReviewGateFingerprints) {
+                      delete activeWorkState.specialistReviewGateFingerprints[
+                        agentType
+                      ]
+                    }
+                    const specialistRepairRound: number =
+                      Number(activeWorkState.specialistRepairRoundCount ?? 0) + 1
+                    activeWorkState.specialistRepairRoundCount =
+                      specialistRepairRound
                     specialistBlocked = true
+                    if (specialistRepairRound > MAX_SPECIALIST_REPAIR_ROUNDS) {
+                      activeWorkState.currentPhase = 'blocked'
+                      activeWorkState.nextRequiredAction = `Specialist repair budget exhausted (${MAX_SPECIALIST_REPAIR_ROUNDS}/${MAX_SPECIALIST_REPAIR_ROUNDS}); the ${agentType} findings are still open. Stop retrying automatically and inspect the findings or handoff.`
+                      activeWorkState.latestWorkSummary = `Specialist repair budget exhausted for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`
+                      markActiveWorkStateChanged()
+                      emitGateTelemetry({
+                        currentPhase: 'blocked',
+                        pendingFileCount: currentPendingGateFiles.length,
+                        pendingFiles: currentPendingGateFiles,
+                        reviewerStatus: 'failed',
+                        validationStatus: 'passed',
+                        blockerCount: blockers.length,
+                        repairRound: specialistRepairRound,
+                        skipReason: 'specialist-repair-budget-exhausted',
+                      })
+                      yield {
+                        toolName: 'add_message',
+                        input: {
+                          role: 'user',
+                          content: [
+                            `Specialist gate: automated repair budget exhausted after ${MAX_SPECIALIST_REPAIR_ROUNDS} round(s); the following ${agentType} findings are still open and were not cleared:`,
+                            '',
+                            ...blockers,
+                            '',
+                            'Stop retrying automatically. Inspect the findings directly, fix them, or explicitly authorize a different path.',
+                          ].join('\n'),
+                        },
+                        includeToolCall: false,
+                      } as any
+                      specialistRepairExit = true
+                      break
+                    }
+                    activeWorkState.currentPhase = 'repair_loop'
+                    activeWorkState.nextRequiredAction = `Repair-editor must address every open ${agentType} finding before validation and finalization.`
+                    activeWorkState.latestWorkSummary = `${agentType} blocked the current change snapshot; repair is required.`
+                    markActiveWorkStateChanged()
+                    emitGateTelemetry({
+                      currentPhase: 'repair_loop',
+                      pendingFileCount: currentPendingGateFiles.length,
+                      pendingFiles: currentPendingGateFiles,
+                      reviewerStatus: 'failed',
+                      validationStatus: 'passed',
+                      blockerCount: blockers.length,
+                      repairRound: specialistRepairRound,
+                      reuseReason: `aux-gate:${agentType}-blocking`,
+                    })
+                    yield {
+                      toolName: 'add_message',
+                      input: {
+                        role: 'user',
+                        content: [
+                          `${agentType} returned blocking findings. The harness will send these exact findings to repair-editor:`,
+                          '',
+                          ...blockers,
+                          '',
+                          `These findings remain open until targeted validation and a fresh matching ${agentType} review clear them.`,
+                        ].join('\n'),
+                      },
+                      includeToolCall: false,
+                    } as any
+                    // Snapshot-progress guard baseline, captured BEFORE the
+                    // repair spawn so a repair that changes nothing is caught.
+                    const preRepairFingerprint = hashGateSnapshotDetails(
+                      buildGateSnapshotDetails(Array.from(pendingGateFiles), ''),
+                    )
+                    const specialistOpenFindings = (
+                      activeWorkState.openReviewerFindings ?? []
+                    ).filter((finding) => finding.reviewer === agentType)
+                    activeWorkState.repairSessionId =
+                      activeWorkState.repairSessionId ??
+                      `specialist-review-repair-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+                    const specialistRepairResult = yield {
+                      toolName: 'spawn_agents',
+                      input: {
+                        agents: [
+                          {
+                            agent_type: 'repair-editor',
+                            handoff: {
+                              schemaVersion: 1,
+                              taskId: activeWorkState.repairSessionId,
+                              role: 'repair-editor',
+                              objective: `Resolve every open ${agentType} finding without unrelated changes.`,
+                              requirements: specialistOpenFindings.map(
+                                ({ id, text }) => ({ id, text, required: true }),
+                              ),
+                              acceptanceCriteria: specialistOpenFindings.map(
+                                ({ id }) => ({
+                                  id: `clear-${id}`,
+                                  behavior: `${agentType} finding ${id} is addressed in the live workspace.`,
+                                  verification: `Targeted validation passes and a fresh snapshot-bound ${agentType} review clears the finding.`,
+                                }),
+                              ),
+                              context: [],
+                              invariants: [
+                                'Read every target from the live filesystem before editing.',
+                                `Treat every finding ID as open until a fresh ${agentType} clears it.`,
+                              ],
+                              nonGoals: [
+                                'Unrelated diagnostics, refactors, or cleanup.',
+                              ],
+                              risks: [
+                                `${agentType} findings may be stale if the workspace snapshot changed.`,
+                              ],
+                              unknowns: [],
+                              findings: specialistOpenFindings.map(
+                                ({ id, text, files, snapshotFingerprint }) => ({
+                                  id,
+                                  text,
+                                  files,
+                                  snapshotFingerprint,
+                                }),
+                              ),
+                              permissions: {
+                                readablePaths: repairEditorReadablePaths(
+                                  [
+                                    ...pendingGateFiles,
+                                    ...specialistOpenFindings.flatMap(
+                                      (finding: { files?: string[] }) =>
+                                        finding.files ?? [],
+                                    ),
+                                  ],
+                                  specialistOpenFindings.map(
+                                    (finding: { text?: string }) =>
+                                      finding.text ?? '',
+                                  ),
+                                ),
+                                writablePaths: Array.from(
+                                  new Set([
+                                    ...pendingGateFiles,
+                                    ...specialistOpenFindings.flatMap(
+                                      (finding: { files?: string[] }) =>
+                                        finding.files ?? [],
+                                    ),
+                                  ]),
+                                ),
+                                allowedTools: [
+                                  'read_files',
+                                  'read_outline',
+                                  'read_blocks',
+                                  'read_subtree',
+                                  'edit_transaction',
+                                ],
+                              },
+                              workspaceRevision:
+                                mutableAgentState.workspaceState?.revision,
+                              workspaceSnapshotId:
+                                mutableAgentState.workspaceState?.snapshotId,
+                              artifacts: [],
+                              successCriteria: [
+                                `All ${agentType} finding IDs are cleared by a fresh reviewer receipt.`,
+                              ],
+                              constraints: [
+                                'Keep every edit within the pending gate file set.',
+                              ],
+                            },
+                            prompt: [
+                              `Repair the blocking ${agentType} findings below.`,
+                              `Treat every finding ID as open until a fresh ${agentType} clears it.`,
+                              'Read every target from the live filesystem before editing.',
+                              '',
+                              ...specialistOpenFindings.map(
+                                (finding) => `${finding.id}: ${finding.text}`,
+                              ),
+                            ].join('\n'),
+                          },
+                        ],
+                      },
+                    } as any
+                    const specialistRepairCrash = detectReviewerCrash(
+                      (specialistRepairResult as any)?.toolResult ??
+                        specialistRepairResult,
+                    )
+                    if (specialistRepairCrash) {
+                      activeWorkState.currentPhase = 'blocked'
+                      activeWorkState.nextRequiredAction = `Repair-editor failed while addressing ${agentType} findings. Inspect the failure before retrying.`
+                      activeWorkState.latestWorkSummary = `Repair-editor failed: ${specialistRepairCrash}`
+                      markActiveWorkStateChanged()
+                      specialistRepairExit = true
+                      break
+                    }
+                    const specialistRepairReceipt = extractAgentReceipt(
+                      (specialistRepairResult as any)?.toolResult ??
+                        specialistRepairResult,
+                    )
+                    const specialistOpenFindingIds = new Set(
+                      specialistOpenFindings.map((finding) => finding.id),
+                    )
+                    const specialistRepairHasProgress =
+                      !!specialistRepairReceipt &&
+                      specialistRepairReceipt.changedFiles.some(
+                        (file: { path: string }) =>
+                          typeof file.path === 'string' &&
+                          file.path.trim().length > 0,
+                      )
+                    if (
+                      !specialistRepairReceipt ||
+                      (!specialistRepairHasProgress &&
+                        (specialistRepairReceipt.status !== 'completed' ||
+                          [...specialistOpenFindingIds].some(
+                            (id) =>
+                              !specialistRepairReceipt.findingsAddressed.includes(
+                                id,
+                              ),
+                          )))
+                    ) {
+                      activeWorkState.currentPhase = 'blocked'
+                      activeWorkState.nextRequiredAction = `Repair-editor did not return a completed receipt addressing every open ${agentType} finding.`
+                      activeWorkState.latestWorkSummary = `${agentType} repair receipt was incomplete or missing.`
+                      markActiveWorkStateChanged()
+                      specialistRepairExit = true
+                      break
+                    }
+                    const specialistRepairStatus = yield {
+                      toolName: 'git_status',
+                      input: {},
+                    } as any
+                    const specialistRepairFiles = extractGitStatusFiles(
+                      (specialistRepairStatus as any)?.toolResult,
+                    ).filter((file: string) => pendingGateFiles.has(file))
+                    if (specialistRepairFiles.length > 0) {
+                      recordChangedFiles(specialistRepairFiles, {
+                        fromRepair: true,
+                      })
+                    }
+                    const postRepairFingerprint = hashGateSnapshotDetails(
+                      buildGateSnapshotDetails(Array.from(pendingGateFiles), ''),
+                    )
+                    // No-progress detection for the specialist
+                    // review -> repair -> re-review loop. A repair round that
+                    // leaves the pending bytes byte-identical cannot clear the
+                    // findings, so re-firing the specialist would repeat the
+                    // same blocking verdict forever even while the repair
+                    // budget still has rounds left. Fail closed: record the
+                    // skip reason, retract finalization, and exit the gate loop
+                    // instead of spawning another repair round.
+                    if (postRepairFingerprint === preRepairFingerprint) {
+                      if (!activeWorkState.lastReviewerGateSkipReason) {
+                        activeWorkState.lastReviewerGateSkipReason =
+                          'specialist-repair-no-progress'
+                      }
+                      activeWorkState.currentPhase = 'blocked'
+                      activeWorkState.nextRequiredAction = `Repair-editor made no snapshot-visible progress on the ${agentType} findings. Stop retrying and inspect the finding or handoff.`
+                      activeWorkState.latestWorkSummary = `${agentType} repair produced no workspace fingerprint change.`
+                      mutableAgentState.canSuggestFollowups = false
+                      finalResponseGateOpen = false
+                      markActiveWorkStateChanged()
+                      emitGateTelemetry({
+                        currentPhase: 'blocked',
+                        pendingFileCount: currentPendingGateFiles.length,
+                        pendingFiles: currentPendingGateFiles,
+                        reviewerStatus: 'failed',
+                        validationStatus: 'passed',
+                        repairRound: specialistRepairRound,
+                        skipReason: 'specialist-repair-no-progress',
+                      })
+                      specialistRepairExit = true
+                      break
+                    }
+                    // Leave agentType in the owed set: it must re-attest
+                    // against the post-repair bytes before finalization.
+                    activeWorkState.currentPhase = 'awaiting_validation'
+                    activeWorkState.nextRequiredAction = ''
+                    activeWorkState.latestWorkSummary = `Repair-editor addressed ${agentType} findings; targeted validation and a fresh ${agentType} review are required.`
+                    markActiveWorkStateChanged()
                     break
                   }
                   if (crash) {
@@ -2078,7 +2535,9 @@ ${specialistRoutingSection}
                     activeWorkState.openReviewerBlockers = [
                       `${agentType} crashed during specialist review: ${crash}`,
                     ]
-                    activeWorkState.openReviewerFindings = []
+                    activeWorkState.openReviewerFindings = (
+                      activeWorkState.openReviewerFindings ?? []
+                    ).filter((finding) => finding.reviewer !== agentType)
                     activeWorkState.latestWorkSummary = `${agentType} crashed during specialist review.`
                     markActiveWorkStateChanged()
                     specialistBlocked = true
@@ -2086,9 +2545,39 @@ ${specialistRoutingSection}
                     break
                   }
                   if (!verdict) {
+                    // A missing verdict is NOT success. Retry the specialist a
+                    // bounded number of times without crediting it (fail
+                    // closed); once the budget is spent, credit it so the aux
+                    // loop cannot spin forever and record reduced assurance.
+                    const noVerdictCounts =
+                      (activeWorkState.specialistNoVerdictCounts ??= {})
+                    const noVerdictCount =
+                      Number(noVerdictCounts[agentType] ?? 0) + 1
+                    noVerdictCounts[agentType] = noVerdictCount
+                    if (noVerdictCount <= MAX_SPECIALIST_NO_VERDICT_RETRIES) {
+                      activeWorkState.validationAssurance = 'reduced'
+                      activeWorkState.latestWorkSummary = `${agentType} returned no verdict; retrying it (attempt ${noVerdictCount}/${MAX_SPECIALIST_NO_VERDICT_RETRIES}) before crediting the gate.`
+                      markActiveWorkStateChanged()
+                      emitGateTelemetry({
+                        currentPhase: 'awaiting_validation',
+                        pendingFileCount: currentPendingGateFiles.length,
+                        pendingFiles: currentPendingGateFiles,
+                        reviewerStatus: 'failed',
+                        validationStatus: 'passed',
+                        skipReason: 'specialist-no-verdict-retry',
+                      })
+                      continue
+                    }
                     activeWorkState.validationAssurance = 'reduced'
-                    activeWorkState.latestWorkSummary = `${agentType} infrastructure failed without reporting a concrete finding; continuing with reduced assurance.`
+                    if (!activeWorkState.lastReviewerGateSkipReason) {
+                      activeWorkState.lastReviewerGateSkipReason =
+                        'specialist-no-verdict-budget-exhausted'
+                    }
+                    activeWorkState.latestWorkSummary = `${agentType} never returned a verdict after ${MAX_SPECIALIST_NO_VERDICT_RETRIES} retry/retries; the gate proceeded with reduced assurance.`
                   } else {
+                    delete (activeWorkState.specialistNoVerdictCounts ??= {})[
+                      agentType
+                    ]
                     recordSuccessfulReviewReceipt(
                       specialistToolResult,
                       agentType,
@@ -2101,18 +2590,23 @@ ${specialistRoutingSection}
                       agentType,
                     ]),
                   )
+                  // Snapshot-bind the credit so a later byte change to the
+                  // same paths (including a validation-hook rewrite) re-reviews.
+                  ;(activeWorkState.specialistReviewGateFingerprints ??= {})[
+                    agentType
+                  ] = specialistCreditFingerprint
                   // The specialist aux block owns specialist-family
-                  // revalidation; clear its marker once the owed specialist
-                  // passes. This never clobbers a code/security marker.
-                  if (
-                    activeWorkState.requiredReviewerRevalidation === agentType
-                  ) {
-                    activeWorkState.requiredReviewerRevalidation = undefined
-                  }
+                  // revalidation; clear its owed entry once it passes. This
+                  // never clobbers a code/security owed entry.
+                  clearOwedReviewer(agentType)
                   markActiveWorkStateChanged()
                 }
               }
               if (specialistBlocked) {
+                // The repair loop's terminal paths (budget exhausted, missing
+                // receipt, repair crash, no snapshot progress) intentionally
+                // exit the OUTER while loop; everything else re-enters it.
+                if (specialistRepairExit) break
                 if (specialistTerminalFailure) {
                   // A specialist that cannot attest to either the original or
                   // refreshed bundle is a terminal protocol failure. Preserve
@@ -2218,6 +2712,8 @@ ${specialistRoutingSection}
           editsHappened &&
           conversationGatePass &&
           gateFileSetsEqual(gateScopeFiles, currentPendingGateFiles) &&
+          collectUnreviewedDirtyReviewableFiles(latestDirtyFiles).length ===
+            0 &&
           hasFreshGateFingerprintForPendingFiles(
             gateScopeFiles,
             conversationValidationSummary,
@@ -2280,6 +2776,8 @@ ${specialistRoutingSection}
           runValidationGate &&
           editsHappened &&
           gateFileSetsEqual(gateScopeFiles, currentPendingGateFiles) &&
+          collectUnreviewedDirtyReviewableFiles(latestDirtyFiles).length ===
+            0 &&
           hasDurableGatePassForPendingFiles(currentPendingGateFiles)
         ) {
           const durableReviewerVerdict =
@@ -3298,11 +3796,27 @@ ${specialistRoutingSection}
               },
               includeToolCall: false,
             } as any
+            // Snapshot-progress baseline for the reviewer repair round,
+            // captured BEFORE the repair spawn and with the SAME inputs the
+            // post-repair fingerprint uses (pending gate files + the current
+            // validation summary). Comparing against reviewSnapshotFingerprint
+            // instead would compare a summary-less reviewable-scope hash with a
+            // summary-bearing pending-scope hash, which can never be equal, so
+            // a repair that changes nothing would keep re-entering the loop.
+            const preReviewerRepairFingerprint = hashGateSnapshotDetails(
+              buildGateSnapshotDetails(
+                Array.from(pendingGateFiles),
+                validationSummary,
+              ),
+            )
             const reviewerRepairSessionId =
               activeWorkState.repairSessionId ??
               `review-repair-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
             activeWorkState.repairSessionId = reviewerRepairSessionId
-            activeWorkState.requiredReviewerRevalidation = requiredReviewerAgentType
+            // Route through the owed-set mutator so the scalar can never drift
+            // from owedReviewerRevalidations (a later clearOwedReviewer would
+            // otherwise re-derive the scalar from a stale array).
+            addOwedReviewer(requiredReviewerAgentType)
             activeWorkState.currentPhase = 'repair_loop'
             activeWorkState.nextRequiredAction = allCoverageFindings
               ? 'Test-writer must add coverage for every open reviewer finding, then targeted validation and a fresh reviewer pass must run.'
@@ -3562,12 +4076,22 @@ ${specialistRoutingSection}
                 validationSummary,
               ),
             )
-            if (repairedSnapshotFingerprint === reviewSnapshotFingerprint) {
+            // No-progress detection for the reviewer
+            // review -> repair -> re-review loop. The round cap above bounds
+            // repairs that keep producing churn; this bounds the opposite case,
+            // where a repair reports success but changes no pending bytes, so a
+            // fresh reviewer pass could only return the same findings. Fail
+            // closed and retract finalization instead of looping.
+            if (repairedSnapshotFingerprint === preReviewerRepairFingerprint) {
+              activeWorkState.lastReviewerGateSkipReason =
+                'reviewer-repair-no-progress'
               activeWorkState.currentPhase = 'blocked'
               activeWorkState.nextRequiredAction =
                 `${repairAgentLabel} made no snapshot-visible progress on the reviewer findings. Stop retrying and inspect the finding or handoff.`
               activeWorkState.latestWorkSummary =
                 'Reviewer repair produced no workspace fingerprint change.'
+              mutableAgentState.canSuggestFollowups = false
+              finalResponseGateOpen = false
               markActiveWorkStateChanged()
               break
             }
@@ -3579,10 +4103,17 @@ ${specialistRoutingSection}
               (reVerify as any) && (reVerify as any).toolResult,
             )
             if (reFailures.length === 0) {
-              activeWorkState.requiredReviewerRevalidation ??=
-                reviewerOriginFromGateId(
-                  activeWorkState.openReviewerFindings[0]?.gateId,
+              // Same no-drift rule: only seed the owed family when nothing is
+              // owed yet, and do it through the mutator.
+              if (
+                (activeWorkState.owedReviewerRevalidations ?? []).length === 0
+              ) {
+                addOwedReviewer(
+                  reviewerOriginFromGateId(
+                    activeWorkState.openReviewerFindings[0]?.gateId,
+                  ),
                 )
+              }
               validationSummary = summarizeHookResults(
                 (reVerify as any) && (reVerify as any).toolResult,
               )
@@ -3809,6 +4340,11 @@ ${specialistRoutingSection}
             activeWorkState.gateProgressLine = ''
             activeWorkState.openReviewerBlockers = []
             activeWorkState.openReviewerFindings = []
+            // Clear the owed SET, not just the legacy scalar: a leftover entry
+            // would survive the pass and force a phantom re-attestation (or
+            // resurrect the scalar via addOwedReviewer/clearOwedReviewer) on the
+            // next edit set even though every reviewer just attested.
+            activeWorkState.owedReviewerRevalidations = []
             activeWorkState.requiredReviewerRevalidation = undefined
             pendingGateFiles.clear()
             activeWorkState.pendingGateFiles = []
@@ -3840,6 +4376,11 @@ ${specialistRoutingSection}
             activeWorkState.reviewerProtocolRetryCount = 0
             activeWorkState.reviewerRepairRoundCount = 0
             activeWorkState.reviewerNoVerdictCount = 0
+            // Per-turn specialist budgets are reset for the same reason as the
+            // code-reviewer ones: the next edit set must start with a full
+            // repair/retry budget instead of inheriting this gate's spend.
+            activeWorkState.specialistRepairRoundCount = 0
+            activeWorkState.specialistNoVerdictCounts = {}
             activeWorkState.reviewerBypassChallenge = undefined
             activeWorkState.reviewerGateBypassReason = ''
             activeWorkState.testWriterGateDone = false
@@ -4079,6 +4620,106 @@ ${specialistRoutingSection}
         return 'specialist'
       }
 
+      // Reviewer family that owns an open finding: the authoritative `reviewer`
+      // field when present, otherwise the gateId prefix
+      // (`${reviewerFamily}:${fingerprint}`) for legacy serialized state.
+      // Self-contained pure string logic (no module-scope imports) because
+      // handleSteps is serialized via .toString() + new Function(...).
+      function reviewerFamilyFromFinding(finding: {
+        reviewer?: 'code-reviewer' | 'security-reviewer' | SpecialistReviewerAgent
+        gateId: string
+      }): 'code-reviewer' | 'security-reviewer' | SpecialistReviewerAgent {
+        if (finding.reviewer) return finding.reviewer
+        const originGatePrefix = finding.gateId.split(':')[0]
+        return originGatePrefix === 'security-reviewer'
+          ? 'security-reviewer'
+          : originGatePrefix === 'code-reviewer'
+            ? 'code-reviewer'
+            : (originGatePrefix as SpecialistReviewerAgent)
+      }
+
+      // Owed-set mutators. Every owed-reviewer mutation goes through these so
+      // the legacy scalar requiredReviewerRevalidation is re-synced to element 0
+      // in exactly one place and can never drift from the set (a drifted
+      // specialist marker would leak into the final code-reviewer block).
+      // Inline because handleSteps is serialized via .toString() +
+      // new Function(...).
+      function addOwedReviewer(agent: string): void {
+        const owed = (activeWorkState.owedReviewerRevalidations ??= [])
+        const family = agent as
+          | 'code-reviewer'
+          | 'security-reviewer'
+          | SpecialistReviewerAgent
+        if (!owed.includes(family)) owed.push(family)
+        activeWorkState.requiredReviewerRevalidation = owed[0] ?? undefined
+      }
+
+      function clearOwedReviewer(agent: string): void {
+        const owed = (activeWorkState.owedReviewerRevalidations ??= []).filter(
+          (entry) => entry !== agent,
+        )
+        activeWorkState.owedReviewerRevalidations = owed
+        activeWorkState.requiredReviewerRevalidation = owed[0] ?? undefined
+      }
+
+      // A specialist counts as done only when it is credited AND its stored
+      // credit fingerprint matches the current reviewable snapshot. Legacy
+      // state with no stored fingerprint, or a non-attestable sentinel such as
+      // 'unreadable:no-crypto', re-reviews (fail closed). Inline because
+      // handleSteps is serialized via .toString() + new Function(...).
+      function specialistCreditIsFresh(
+        agentType: string,
+        fingerprint: string,
+      ): boolean {
+        if (
+          !(activeWorkState.specialistReviewGatesDone ?? []).includes(agentType)
+        ) {
+          return false
+        }
+        const stored = (activeWorkState.specialistReviewGateFingerprints ?? {})[
+          agentType
+        ]
+        // Legacy state that never stored a fingerprint re-reviews (fail
+        // closed). A stored value is compared literally so the loop always
+        // converges after one fresh review of the current bytes.
+        if (stored === undefined) return false
+        return stored === fingerprint
+      }
+
+      // Merge one reviewer's blocking output into the open finding ledger
+      // WITHOUT clobbering another reviewer's still-open findings. Blocker
+      // strings carry no reviewer field, so the retained blocker set is the
+      // existing blockers minus the ones matching this reviewer's previous
+      // finding texts. The record shape (id/gateId/snapshotFingerprint/
+      // reviewer/createdAt) is produced by the caller so receipt reconciliation
+      // (findingsAddressed.includes(id)) keeps matching. Inline because
+      // handleSteps is serialized via .toString() + new Function(...).
+      function mergeReviewerFindings(
+        reviewer: string,
+        records: NonNullable<Base2ActiveWorkState['openReviewerFindings']>,
+        blockers: string[],
+      ): void {
+        const existingFindings = activeWorkState.openReviewerFindings ?? []
+        const previousOwnFindings = existingFindings.filter(
+          (finding) => finding.reviewer === reviewer,
+        )
+        const retainedFindings = existingFindings.filter(
+          (finding) => finding.reviewer !== reviewer,
+        )
+        const retainedBlockers = (
+          activeWorkState.openReviewerBlockers ?? []
+        ).filter(
+          (blocker) =>
+            !previousOwnFindings.some(
+              (finding) => finding.text && blocker.includes(finding.text),
+            ),
+        )
+        activeWorkState.openReviewerFindings = [...retainedFindings, ...records]
+        activeWorkState.openReviewerBlockers = Array.from(
+          new Set([...retainedBlockers, ...blockers]),
+        )
+      }
+
 // <gate-helpers-generated> DO NOT EDIT — regenerate via: bun run scripts/generate-gate-helpers.ts
 /**
  * Pure gate path / set helpers extracted from `base2.ts`.
@@ -4258,16 +4899,34 @@ function collectReviewerAttestationIssues(toolResult: unknown, expectedFingerpri
     if (result.schemaVersion !== 1) {
         return ['BLOCKING: reviewer returned an invalid attestation schemaVersion'];
     }
-    const issues: string[] = [];
-    if (result.snapshotFingerprint !== expectedFingerprint) {
-        issues.push('BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree');
-    }
     const reviewed = new Set((result.reviewedFiles ?? [])
         .map((file) => normalizeGateFilePath(file))
         .filter((file) => file.length > 0));
     const missing = pendingFiles
         .map((file) => normalizeGateFilePath(file))
         .filter((file) => file.length > 0 && !reviewed.has(file));
+    const issues: string[] = [];
+    // Fingerprint tolerance: a reviewer that attested to EVERY pending source
+    // file with a well-formed snapshot fingerprint is trusted even when the
+    // exact snapshot id advanced between its spawn and attestation (e.g. an
+    // unrelated plan-session .jsonl/.md or a git-status bundle bump). Only a
+    // FILE-COVERAGE gap, a missing/empty fingerprint, or a non-attestable
+    // sentinel fingerprint remains a hard blocker. This decouples transient
+    // snapshot drift from terminal reviewer failure while keeping genuine
+    // coverage gaps and malformed attestations fail-closed.
+    const reportedFingerprint = result.snapshotFingerprint;
+    const fingerprintIsAttestable = typeof reportedFingerprint === 'string' &&
+        /^v3:[a-f0-9]{64}$/.test(reportedFingerprint);
+    const fingerprintMatches = fingerprintIsAttestable && reportedFingerprint === expectedFingerprint;
+    if (!fingerprintMatches && missing.length > 0) {
+        issues.push('BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree');
+    }
+    if (!fingerprintIsAttestable && missing.length === 0) {
+        // A review that covers every pending file but reports no attestable
+        // snapshot fingerprint cannot be safely credited; fail closed without a
+        // fingerprint at all.
+        issues.push('BLOCKING: reviewer did not report an attestable snapshot fingerprint');
+    }
     if (missing.length > 0) {
         issues.push(`BLOCKING: reviewer did not attest to every pending file: ${missing.join(', ')}`);
     }
@@ -5276,7 +5935,21 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
           }
           if (matchesSecuritySensitiveGlob([file])) {
             relevant.push(file)
+            continue
           }
+          // Specialist-routed files (reliability / migration / compatibility /
+          // performance) intentionally get NO branch of their own here: every
+          // such file that is a reviewable source file is already admitted by
+          // the test-writer (isNonTestSourceFile) or doc-writer
+          // (isPublicApiSourceFile) predicates above. Re-running the
+          // specialist router (or a copy of its path regexes) over the raw
+          // path would additionally admit aux OUTPUTS whose names collide with
+          // router keywords — e.g. packages/sdk/src/__tests__/cache.test.ts or
+          // docs/state.md both match the reliability path pattern — which
+          // would grow this snapshot right after test-writer/doc-writer ran,
+          // make detectPendingGateFileSetChange return true, clear
+          // testWriterGateDone/docWriterGateDone, and re-spawn the writers
+          // forever: the exact loop this helper exists to prevent.
         }
         // Dedupe preserving first-seen order.
         const seen = new Set<string>()
@@ -5341,15 +6014,22 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
           )
         )
           selected.add('compatibility-reviewer')
+        const isAgentsSessionArtifact = (file: string) =>
+          /(?:^|\/)\.agents\/sessions(?:\/|$)/.test(file)
+
+        const isReliabilityCodePath = (file: string) => {
+          if (isAgentsSessionArtifact(file)) return false
+          // Directory-style concurrency/runtime surfaces only (not bare state.json filenames).
+          return /(?:^|\/)(?:queues?|workers?|jobs?|cache|sessions?|state|process|async|concurrency)\//.test(
+            file,
+          )
+        }
+
         if (
           /\b(?:race|concurr|retry|retries|cancel|abort|idempoten|deadlock|state machine|resource leak|partial failure)\b/.test(
             requirements,
           ) ||
-          files.some((file) =>
-            /(?:^|\/)(?:queues?|workers?|jobs?|cache|state|session|process|async|concurrency)(?:\/|\.)/.test(
-              file,
-            ),
-          )
+          files.some(isReliabilityCodePath)
         )
           selected.add('reliability-reviewer')
         if (
@@ -5480,10 +6160,16 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
         return (result?.findingRecords ?? []).some((finding) => {
           const id = finding.id.toLowerCase()
           const text = finding.text.toLowerCase()
+          if (id.endsWith(':stale-snapshot')) return true
+          // Protocol-only phrasing; avoid matching ordinary content findings that
+          // mention snapshot fingerprints or durable memory.
           return (
-            id.endsWith(':stale-snapshot') ||
-            (text.includes('snapshot') &&
-              (text.includes('stale') || text.includes('does not match')))
+            (text.includes('stale snapshot') ||
+              text.includes('snapshot is stale') ||
+              text.includes('snapshot does not match') ||
+              text.includes('snapshot fingerprint did not match') ||
+              text.includes('could not attest')) &&
+            (text.includes('snapshot') || text.includes('attest'))
           )
         })
       }
@@ -5860,6 +6546,13 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
         return ''
       }
 
+      function formatPinnedFileList(files: string[], cap = 8): string {
+        if (files.length === 0) return ''
+        if (files.length <= cap) return files.join(', ')
+        const shown = files.slice(0, cap)
+        return `${shown.join(', ')} +${files.length - cap} more`
+      }
+
       function buildPinnedActiveWorkMessage(
         state: Base2ActiveWorkState,
       ): string {
@@ -5867,6 +6560,22 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
         const hasIncompleteWorkflowTodos =
           !!workflowTodoProgress &&
           workflowTodoProgress.nextWorkflowAction.trim().length > 0
+        const unreviewedDirty =
+          state.unreviewedDirtyReviewableFiles ?? []
+        const dirtyReviewableCount =
+          typeof state.dirtyReviewableCount === 'number'
+            ? state.dirtyReviewableCount
+            : unreviewedDirty.length
+        const nonReviewableDirty = state.nonReviewableDirtyTaskFiles ?? []
+        // Historical dirty task files on an idle phase are not gate lag — only
+        // false final_response_allowed (or active gate phases) surface lag.
+        const hasDirtyGateLag =
+          unreviewedDirty.length > 0 &&
+          (state.currentPhase === 'final_response_allowed' ||
+            state.currentPhase === 'awaiting_validation' ||
+            state.currentPhase === 'awaiting_review' ||
+            state.currentPhase === 'repair_loop' ||
+            state.pendingGateFiles.length > 0)
         const hasUnresolvedGateWork =
           state.openReviewerBlockers.length > 0 ||
           state.pendingGateFiles.length > 0 ||
@@ -5874,13 +6583,57 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
           state.lastReviewerGateSkipReason.trim().length > 0 ||
           state.currentPhase === 'blocked' ||
           state.currentPhase === 'awaiting_validation' ||
-          state.currentPhase === 'awaiting_review'
+          state.currentPhase === 'awaiting_review' ||
+          hasDirtyGateLag
         if (!hasUnresolvedGateWork && !hasIncompleteWorkflowTodos) return ''
 
         const sections: string[] = [`Current phase: ${state.currentPhase}`]
-        sections.push(
-          `Gate status: phase=${state.currentPhase}; validation hooks ran=${state.lastValidationSummary ? 'yes' : 'no'}; this is a durable snapshot captured at turn start; the validation/reviewer gate runs inline and locally when you end your turn (it is not a backend/async job and does not run between turns on its own), so do not infer progress or predict when it will pass — just finish your work and let it run; and NEVER tell the user the reviewer/validation "is running in the background" or is running asynchronously — you have not started it, it is not a background job, and it must never be described as in-flight or pending-after-turn, so just finish and stop.`,
-        )
+        // P2: if phase claims PASSED but unreviewed dirty lag remains, still
+        // show GATE: PENDING / lag warning rather than a clean PASSED.
+        if (hasUnresolvedGateWork) {
+          sections.push(
+            [
+              'GATE: PENDING',
+              `phase: ${state.currentPhase}`,
+              `hooks summary present: ${state.lastValidationSummary ? 'yes' : 'no'}`,
+              'allowed actions: finish implementation work, then end your turn',
+              'blocked actions: git-committer, suggest_followups, claiming the gate is running',
+              'local checks (basher/typecheck) are not the gate',
+              hasDirtyGateLag
+                ? 'lag warning: unreviewed dirty reviewable files keep the gate from staying PASSED'
+                : 'This is a durable turn-start snapshot; the runtime advances the gate when you end your turn.',
+            ].join('\n'),
+          )
+        } else if (
+          hasIncompleteWorkflowTodos &&
+          state.currentPhase === 'final_response_allowed'
+        ) {
+          sections.push(
+            [
+              'GATE: PASSED',
+              `phase: ${state.currentPhase}`,
+              'allowed actions: final summary, suggest_followups, git-committer (with owned_paths)',
+            ].join('\n'),
+          )
+        }
+        if (
+          dirtyReviewableCount > 0 ||
+          unreviewedDirty.length > 0
+        ) {
+          sections.push(
+            `dirty reviewable: ${dirtyReviewableCount} (unreviewed: ${unreviewedDirty.length})`,
+          )
+        }
+        if (unreviewedDirty.length > 0) {
+          sections.push(
+            `unreviewed dirty reviewable: ${formatPinnedFileList(unreviewedDirty)}`,
+          )
+        }
+        if (nonReviewableDirty.length > 0) {
+          sections.push(
+            `non-reviewable dirty (excluded from gate, not covered by review): ${formatPinnedFileList(nonReviewableDirty)}`,
+          )
+        }
         if (
           typeof state.gateProgressLine === 'string' &&
           state.gateProgressLine.length > 0
@@ -5889,7 +6642,7 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
         }
         if (hasUnresolvedGateWork) {
           sections.push(
-            'suggest_followups: BLOCKED — the validation/reviewer gate has not passed yet. Do not call it until this line disappears.',
+            'suggest_followups: BLOCKED — GATE: PENDING. End your turn; call suggest_followups only after GATE: PASSED.',
           )
         }
         if (state.openReviewerBlockers.length > 0) {
@@ -6351,8 +7104,54 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
             }
           }
         }
+        // P1: adopt agent receipt changedFiles (multi-file editor spawn batches
+        // that only surface agentReceipt.changedFiles, without a file_mutation_result).
+        collectAgentReceiptChangedFiles(record, out)
         for (const nested of Object.values(record)) {
           visitToolValue(nested, out)
+        }
+      }
+
+      // Collect paths from a schemaVersion=1 agent receipt or a runtime
+      // envelope with agentReceipt. Paths may be strings or { path: string }.
+      // Self-contained inline helper (handleSteps is serialized).
+      function collectAgentReceiptChangedFiles(
+        record: Record<string, unknown>,
+        out: Set<string>,
+      ): void {
+        const collectFromChangedFiles = (changedFiles: unknown): void => {
+          if (!Array.isArray(changedFiles)) return
+          for (const item of changedFiles) {
+            if (typeof item === 'string' && item.trim()) {
+              out.add(item)
+              continue
+            }
+            if (item && typeof item === 'object') {
+              const path = (item as Record<string, unknown>).path
+              if (typeof path === 'string' && path.trim()) out.add(path)
+            }
+          }
+        }
+        const isAgentReceipt = (candidate: Record<string, unknown>): boolean =>
+          candidate.schemaVersion === 1 &&
+          typeof candidate.receiptId === 'string' &&
+          Array.isArray(candidate.changedFiles)
+        if (isAgentReceipt(record)) {
+          collectFromChangedFiles(record.changedFiles)
+        }
+        if (
+          record.agentReceipt &&
+          typeof record.agentReceipt === 'object' &&
+          !Array.isArray(record.agentReceipt)
+        ) {
+          const receipt = record.agentReceipt as Record<string, unknown>
+          if (isAgentReceipt(receipt)) {
+            collectFromChangedFiles(receipt.changedFiles)
+          } else if (Array.isArray(receipt.changedFiles)) {
+            // Runtime envelopes may omit schemaVersion on a nested receipt;
+            // still adopt changedFiles when present.
+            collectFromChangedFiles(receipt.changedFiles)
+          }
         }
       }
 
@@ -6486,11 +7285,10 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
         }
       }
 
-      // Derive the cumulative final-gate scope from the live dirty set and the
-      // complete task-related path ledger. This helper is inline because
-      // handleSteps is serialized through toString()/new Function().
-      function deriveGateScopeFiles(dirtyFiles: string[]): string[] {
-        const taskRelatedFiles = new Set(
+      // Task-related path ledger used by gate scope, P0 unreviewed re-arm, and
+      // P3 unvalidated publication. Inline because handleSteps is serialized.
+      function collectTaskRelatedFiles(): Set<string> {
+        return new Set(
           normalizeGateFileList([
             ...activeWorkState.touchedFiles,
             ...activeWorkState.changedFiles,
@@ -6498,6 +7296,61 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
             ...activeWorkState.gatePassedFiles,
           ]),
         )
+      }
+
+      // Reviewable dirty task files not credited into gatePassedFiles. Used for
+      // the git-committer uncommittedUnvalidatedFiles publish (P3) and pin lag
+      // counts. Includes already-pending files so mid-gate dirty still blocks
+      // commit of never-credited paths.
+      function collectUnvalidatedDirtyReviewableFiles(
+        dirtyFiles: string[],
+      ): string[] {
+        const taskRelated = collectTaskRelatedFiles()
+        return selectReviewableGateFiles(dirtyFiles).filter(
+          (file) => taskRelated.has(file) && !gatePassedFiles.has(file),
+        )
+      }
+
+      // Subset of unvalidated dirty that is not already pending — only these
+      // represent "false PASSED" lag that must re-arm (P0). Already-pending
+      // files are mid-gate and must not re-touch/clear durable fingerprints.
+      function collectUnreviewedDirtyReviewableFiles(
+        dirtyFiles: string[],
+      ): string[] {
+        return collectUnvalidatedDirtyReviewableFiles(dirtyFiles).filter(
+          (file) => !pendingGateFiles.has(file),
+        )
+      }
+
+      // Task-related dirty paths excluded from the code-reviewer gate (docs,
+      // session artifacts, config). Pin surfaces them as excluded; they must
+      // not enter uncommittedUnvalidatedFiles (P3).
+      function collectNonReviewableDirtyTaskFiles(
+        dirtyFiles: string[],
+      ): string[] {
+        const taskRelated = collectTaskRelatedFiles()
+        return normalizeGateFileList(dirtyFiles).filter(
+          (file) => taskRelated.has(file) && !isReviewableGateFile(file),
+        )
+      }
+
+      // Shared re-arm path for turn-start and every-iteration P0 fail-closed.
+      function rearmGateForUnreviewedDirty(unreviewed: string[]): void {
+        if (unreviewed.length === 0) return
+        recordChangedFiles(unreviewed)
+        editsHappened = true
+        finalResponseGateOpen = false
+        mutableAgentState.canSuggestFollowups = false
+        activeWorkState.currentPhase = 'awaiting_validation'
+        activeWorkState.latestWorkSummary = `Unreviewed dirty reviewable files reopened the gate: ${unreviewed.join(', ')}`
+        markActiveWorkStateChanged()
+      }
+
+      // Derive the cumulative final-gate scope from the live dirty set and the
+      // complete task-related path ledger. This helper is inline because
+      // handleSteps is serialized through toString()/new Function().
+      function deriveGateScopeFiles(dirtyFiles: string[]): string[] {
+        const taskRelatedFiles = collectTaskRelatedFiles()
         return normalizeGateFileList(dirtyFiles).filter((file) =>
           taskRelatedFiles.has(file),
         )

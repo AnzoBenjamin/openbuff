@@ -435,14 +435,13 @@ describe('base2 validation/reviewer coordination prompts', () => {
     )
     expect(base2.systemPrompt).toContain('product, Openbuff')
     expect(base2.systemPrompt).not.toContain('product, Codebuff')
-    // gateAwarenessSection: runtime-owned hooks → automated reviewer (not the
-    // older "runtime automatically runs configured validation hooks…" phrasing).
-    expect(base2.systemPrompt).toContain(
-      'the runtime-owned path is: configured file-change hooks',
-    )
-    expect(base2.systemPrompt).toContain('run_file_change_hooks')
+    // gateAwarenessSection: affirmative GATE PENDING/PASSED vocabulary and
+    // local-check separation (not the older runtime-owned-path / tool-name
+    // narration).
+    expect(base2.systemPrompt).toContain('GATE: PENDING')
+    expect(base2.systemPrompt).toContain('GATE: PASSED')
     expect(base2.systemPrompt).toContain('automated code-reviewer')
-    expect(base2.systemPrompt).toContain('finalization allowed when green')
+    expect(base2.systemPrompt).toContain('local checks')
     expect(base2.systemPrompt).not.toContain(
       '- Spawn a code-reviewer to review the changes after you have implemented the changes.',
     )
@@ -460,7 +459,7 @@ describe('base2 validation/reviewer coordination prompts', () => {
       'Do not manually spawn code-reviewer for the same edited file set',
     )
     expect(base2.systemPrompt).toContain(
-      'Manual code-reviewer use is for pre-edit/advisory review',
+      'Manual re-spawn of code-reviewer for the same pending set',
     )
     expect(base2.systemPrompt).toContain('Prefer dedicated harness tools')
     expect(base2.systemPrompt).toContain('Validation is dependency-neutral')
@@ -1918,16 +1917,295 @@ describe('base2 verification and reviewer gates', () => {
         expect(gen.next().value).toBe('STEP')
       }
 
-      // Only the never-validated agent-touched dirty file B is published; the
-      // gate-passed file A and the untouched file C are excluded.
+      // Only the never-validated agent-touched dirty reviewable file B is
+      // published; the gate-passed file A and the untouched file C are excluded.
       expect((agentState as any).uncommittedUnvalidatedFiles).toEqual(['src/b.ts'])
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }
   })
 
+  test('P3: non-reviewable dirty task files are not published in uncommittedUnvalidatedFiles', () => {
+    // Session/plan/docs artifacts must not block git-committer via the
+    // unvalidated list; only reviewable dirty B is published.
+    const base2 = createBase2('default')
+    const tmpDir = makeProjectTempDir('base2-p3-nonreviewable-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2',
+        base2ActiveWork: {
+          changedFiles: [
+            gateFile,
+            'src/b.ts',
+            'notes.md',
+            '.agents/sessions/x/STATE.json',
+          ],
+          touchedFiles: [
+            gateFile,
+            'src/b.ts',
+            'notes.md',
+            '.agents/sessions/x/STATE.json',
+          ],
+          pendingGateFiles: [],
+          currentPhase: 'final_response_allowed',
+          latestWorkSummary: '',
+          openReviewerBlockers: [],
+          lastValidationSummary:
+            'Configured file-change hooks passed: typecheck.',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [gateFile],
+          gatePassedFileMarkers: { [gateFile]: buildContentMarker(tmpFile) },
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [
+            {
+              type: 'json',
+              value: {
+                status: ` M ${gateFile}\n M src/b.ts\n M notes.md\n M .agents/sessions/x/STATE.json`,
+              },
+            },
+          ],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      const maybePinnedState = gen.next().value
+      if (maybePinnedState !== 'STEP') {
+        expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
+        const pinText = (maybePinnedState as any).input.content as string
+        expect(pinText).toMatch(/non-reviewable dirty/i)
+        expect(gen.next().value).toBe('STEP')
+      }
+
+      expect((agentState as any).uncommittedUnvalidatedFiles).toEqual([
+        'src/b.ts',
+      ])
+      expect((agentState as any).uncommittedUnvalidatedFiles).not.toContain(
+        'notes.md',
+      )
+      expect((agentState as any).uncommittedUnvalidatedFiles).not.toContain(
+        '.agents/sessions/x/STATE.json',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('P0: unreviewed dirty reviewable task files re-arm a durable pass at turn start', () => {
+    // Durable pass covers only A; touched/changed include A+B; turn-start dirty
+    // on A+B without new edits this turn must reopen the gate for B.
+    const base2 = createBase2('default')
+    const tmpDir = makeProjectTempDir('base2-p0-rearm-')
+    try {
+      const fileA = join(tmpDir, 'a.ts')
+      const gateFileA = normalizeGateFilePath(fileA)
+      writeFileSync(fileA, 'export const a = 1\n')
+      const validationSummary = 'No configured file-change hooks ran.'
+      const fingerprint = buildFingerprint(
+        [
+          {
+            file: gateFileA,
+            contentMarker: buildContentMarker(fileA),
+          },
+        ],
+        validationSummary,
+      )
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          changedFiles: [gateFileA, 'src/b.ts'],
+          touchedFiles: [gateFileA, 'src/b.ts'],
+          pendingGateFiles: [],
+          currentPhase: 'final_response_allowed',
+          latestWorkSummary: '',
+          openReviewerBlockers: [],
+          lastValidationSummary: validationSummary,
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [gateFileA],
+          gatePassedPendingFiles: [gateFileA],
+          gatePassedReviewerVerdict: 'LOOKS_GOOD',
+          gatePassedValidationSummary: validationSummary,
+          gatePassedFingerprint: fingerprint,
+          gatePassedFileMarkers: {
+            [gateFileA]: buildContentMarker(fileA),
+          },
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [
+            {
+              type: 'json',
+              value: { status: ` M ${fileA}\n M src/b.ts` },
+            },
+          ],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      const pinned = gen.next()
+      expect(pinned.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const pinText = (pinned.value as any).input.content as string
+      expect(pinText).toMatch(/unreviewed dirty reviewable|dirty reviewable/i)
+      expect(gen.next().value).toBe('STEP')
+
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+        'awaiting_validation',
+      )
+      expect((agentState as any).base2ActiveWork.pendingGateFiles).toEqual(
+        expect.arrayContaining(['src/b.ts']),
+      )
+      expect((agentState as any).canSuggestFollowups).toBe(false)
+      expect(
+        (agentState as any).base2ActiveWork.latestWorkSummary,
+      ).toMatch(/Unreviewed dirty reviewable files reopened the gate/)
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('P0 negative: concurrent dirty non-task file does not re-arm a durable pass', () => {
+    // Dirty only untouched concurrent C + durable A must not re-arm solely for C.
+    const base2 = createBase2('default')
+    const tmpDir = makeProjectTempDir('base2-p0-negative-')
+    try {
+      const fileA = join(tmpDir, 'a.ts')
+      const gateFileA = normalizeGateFilePath(fileA)
+      writeFileSync(fileA, 'export const a = 1\n')
+      const validationSummary = 'No configured file-change hooks ran.'
+      const fingerprint = buildFingerprint(
+        [{ file: gateFileA, contentMarker: buildContentMarker(fileA) }],
+        validationSummary,
+      )
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          changedFiles: [gateFileA],
+          touchedFiles: [gateFileA],
+          pendingGateFiles: [],
+          currentPhase: 'final_response_allowed',
+          latestWorkSummary: '',
+          openReviewerBlockers: [],
+          lastValidationSummary: validationSummary,
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [gateFileA],
+          gatePassedPendingFiles: [gateFileA],
+          gatePassedReviewerVerdict: 'LOOKS_GOOD',
+          gatePassedValidationSummary: validationSummary,
+          gatePassedFingerprint: fingerprint,
+          gatePassedFileMarkers: {
+            [gateFileA]: buildContentMarker(fileA),
+          },
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Can you confirm whether those earlier reports still hold',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      // Dirty concurrent C only (A is gate-passed and may also appear dirty).
+      expect(
+        gen.next({
+          toolResult: [
+            {
+              type: 'json',
+              value: { status: ` M ${fileA}\n M src/c.ts` },
+            },
+          ],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      const maybePinned = gen.next().value
+      if (maybePinned !== 'STEP') {
+        expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+        'final_response_allowed',
+      )
+      expect((agentState as any).base2ActiveWork.pendingGateFiles).toEqual([])
+      expect((agentState as any).canSuggestFollowups).toBe(true)
+      expect((agentState as any).uncommittedUnvalidatedFiles).toEqual([])
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('P1: agentReceipt changedFiles enter pendingGateFiles without file_mutation_result', () => {
+    const base2 = createBase2('default')
+    const agentState = { agentId: 'base2' }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Make the requested change now please',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+        .value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    expect(gen.next().value).toBe('STEP')
+    const agentReceipt = {
+      schemaVersion: 1,
+      receiptId: 'editor-batch-receipt',
+      status: 'completed',
+      changedFiles: [{ path: 'src/one.ts' }, { path: 'src/two.ts' }],
+      findingsAddressed: [],
+      requestedValidation: [],
+    }
+    expect(
+      gen.next({
+        stepsComplete: true,
+        toolResult: [
+          {
+            type: 'json',
+            value: {
+              agentId: 'editor-1',
+              agentName: 'Editor',
+              agentType: 'editor',
+              value: {},
+              agentReceipt,
+            },
+          },
+        ],
+      } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect((agentState as any).base2ActiveWork.pendingGateFiles).toEqual(
+      expect.arrayContaining(['src/one.ts', 'src/two.ts']),
+    )
+    expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+      'awaiting_validation',
+    )
+  })
 
   test('historical changed files alone do not trigger stale validation or review', () => {
+    // Concurrent dirty outside the task ledger must not re-arm; historical
+    // changedFiles alone with non-task dirty finalize as no edits. Task-related
+    // dirty reviewable paths are covered by the P0 tests.
     const base2 = createBase2('default')
     const agentState = {
       agentId: 'base2',
@@ -1952,7 +2230,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
     expect(
       gen.next({
-        toolResult: [{ type: 'json', value: { status: ' M src/old.ts' } }],
+        toolResult: [{ type: 'json', value: { status: ' M src/other.ts' } }],
       } as any).value,
     ).toMatchObject({ toolName: 'spawn_agent_inline' })
     expect(gen.next().value).toBe('STEP')
@@ -1960,7 +2238,7 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({ stepsComplete: true, toolResult: [] } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     const finalGate = gen.next({
-      toolResult: [{ type: 'json', value: { status: ' M src/old.ts' } }],
+      toolResult: [{ type: 'json', value: { status: ' M src/other.ts' } }],
     } as any)
     expect(finalGate.value).toMatchObject({
       toolName: 'add_message',
@@ -1975,7 +2253,7 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({ stepsComplete: true, toolResult: [] } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     const done = gen.next({
-      toolResult: [{ type: 'json', value: { status: ' M src/old.ts' } }],
+      toolResult: [{ type: 'json', value: { status: ' M src/other.ts' } }],
     } as any)
     expect(done.done).toBe(true)
   })
@@ -1999,6 +2277,7 @@ describe('base2 verification and reviewer gates', () => {
       agentState,
       prompt: 'Make the requested change now please',
       params: {},
+
     } as any)
 
     expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
@@ -2156,135 +2435,140 @@ describe('base2 verification and reviewer gates', () => {
   })
 
   test('direct edit tool calls in message history trigger gates when git status was already dirty', () => {
+    // Use a real on-disk file so creditGatePassedFiles can store an attestable
+    // content marker. A virtual path cannot be credited; P0 would re-arm on the
+    // next loop and the generator would not finish.
     const base2 = createBase2('default')
-    const initialMessage = {
-      role: 'user',
-      content: [{ type: 'text', text: 'existing context' }],
-    }
-    const gen = base2.handleSteps!({
-      agentState: { agentId: 'base2', messageHistory: [initialMessage] },
-      prompt: 'Make the requested change now please',
-      params: {},
-    } as any)
+    const tmpDir = makeProjectTempDir('base2-direct-edit-dirty-')
+    try {
+      const dirtyFile = join(tmpDir, 'already-dirty.ts')
+      const gateFile = normalizeGateFilePath(dirtyFile)
+      writeFileSync(dirtyFile, 'export const before = 1\n')
+      const initialMessage = {
+        role: 'user',
+        content: [{ type: 'text', text: 'existing context' }],
+      }
+      const gen = base2.handleSteps!({
+        agentState: { agentId: 'base2', messageHistory: [initialMessage] },
+        prompt: 'Make the requested change now please',
+        params: {},
+      } as any)
 
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
-    expect(
-      gen.next({
-        toolResult: [
-          { type: 'json', value: { status: ' M src/already-dirty.ts' } },
-        ],
-      } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
-    expect(gen.next().value).toBe('STEP')
-    const messageHistory = [
-      initialMessage,
-      {
-        role: 'assistant',
-        content: [
-          {
-            type: 'tool-call',
-            toolCallId: 'tool-call-1',
-            toolName: 'str_replace',
-            input: {
-              path: 'src/already-dirty.ts',
-              replacements: [{ oldString: 'before', newString: 'after' }],
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [
+            { type: 'json', value: { status: ` M ${gateFile}` } },
+          ],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      expect(gen.next().value).toBe('STEP')
+      const messageHistory = [
+        initialMessage,
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: 'tool-call-1',
+              toolName: 'str_replace',
+              input: {
+                path: gateFile,
+                replacements: [{ oldString: 'before', newString: 'after' }],
+              },
             },
-          },
-        ],
-      },
-      {
-        role: 'tool',
-        toolCallId: 'tool-call-1',
-        toolName: 'str_replace',
-        content: [
-          {
-            type: 'json',
-            value: {
-              file: 'src/already-dirty.ts',
-              message: 'String replace applied successfully.',
+          ],
+        },
+        {
+          role: 'tool',
+          toolCallId: 'tool-call-1',
+          toolName: 'str_replace',
+          content: [
+            {
+              type: 'json',
+              value: {
+                file: gateFile,
+                message: 'String replace applied successfully.',
+              },
             },
-          },
-        ],
-      },
-    ]
-    expect(
-      gen.next({
-        stepsComplete: true,
-        toolResult: [],
-        agentState: { messageHistory },
-      } as any).value,
-    ).toMatchObject({ toolName: 'git_status' })
-    const afterGit = gen.next({
-      toolResult: [
-        { type: 'json', value: { status: ' M src/already-dirty.ts' } },
-      ],
-    } as any)
+          ],
+        },
+      ]
+      expect(
+        gen.next({
+          stepsComplete: true,
+          toolResult: [],
+          agentState: { messageHistory },
+        } as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      const afterGit = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any)
 
-    expect(afterGit.value).toMatchObject({
-      toolName: 'run_file_change_hooks',
-      input: { files: ['src/already-dirty.ts'] },
-    })
-    const afterHooks = gen.next({
-      toolResult: [{ type: 'json', value: [] }],
-    } as any)
-    expect(afterHooks.value).toMatchObject({ toolName: 'git_status' })
-    const reviewCall = gen.next({
-      toolResult: [
-        { type: 'json', value: { status: ' M src/already-dirty.ts' } },
-      ],
-    } as any).value
-    expect(reviewCall).toMatchObject({
-      toolName: 'spawn_agents',
-      input: { agents: [{ agent_type: 'code-reviewer' }] },
-    })
-    const finalPreCreditStatus = gen.next(
-      attestedReviewerResult(reviewCall) as any,
-    )
-    expect(finalPreCreditStatus.value).toMatchObject({ toolName: 'git_status' })
-    const gatePassed = gen.next({
-      toolResult: [
-        { type: 'json', value: { status: ' M src/already-dirty.ts' } },
-      ],
-    } as any)
-    expect(gatePassed.value).toMatchObject({
-      toolName: 'add_message',
-      input: { role: 'user' },
-    })
-    expect(gen.next().value).toMatchObject({
-      toolName: 'git_status',
-      input: { include_diff: true },
-    })
-    expect(
-      gen.next({
-        toolResult: [
-          {
-            type: 'json',
-            value: { status: ' M src/already-dirty.ts', diff: 'diff' },
-          },
-        ],
-      } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
-    const maybePinnedState = gen.next().value
-    if (maybePinnedState !== 'STEP') {
-      expect(maybePinnedState).toMatchObject({
+      expect(afterGit.value).toMatchObject({
+        toolName: 'run_file_change_hooks',
+        input: { files: [gateFile] },
+      })
+      const afterHooks = gen.next({
+        toolResult: [{ type: 'json', value: [] }],
+      } as any)
+      expect(afterHooks.value).toMatchObject({ toolName: 'git_status' })
+      const reviewCall = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any).value
+      expect(reviewCall).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'code-reviewer' }] },
+      })
+      const finalPreCreditStatus = gen.next(
+        attestedReviewerResult(reviewCall) as any,
+      )
+      expect(finalPreCreditStatus.value).toMatchObject({
+        toolName: 'git_status',
+      })
+      const gatePassed = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any)
+      expect(gatePassed.value).toMatchObject({
         toolName: 'add_message',
         input: { role: 'user' },
       })
-      expect(gen.next().value).toBe('STEP')
+      expect(gen.next().value).toMatchObject({
+        toolName: 'git_status',
+        input: { include_diff: true },
+      })
+      expect(
+        gen.next({
+          toolResult: [
+            {
+              type: 'json',
+              value: { status: ` M ${gateFile}`, diff: 'diff' },
+            },
+          ],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      const maybePinnedState = gen.next().value
+      if (maybePinnedState !== 'STEP') {
+        expect(maybePinnedState).toMatchObject({
+          toolName: 'add_message',
+          input: { role: 'user' },
+        })
+        expect(gen.next().value).toBe('STEP')
+      }
+      expect(
+        gen.next({
+          stepsComplete: true,
+          toolResult: [],
+          agentState: { messageHistory },
+        } as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      const done = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any)
+      expect(done.done).toBe(true)
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
     }
-    expect(
-      gen.next({
-        stepsComplete: true,
-        toolResult: [],
-        agentState: { messageHistory },
-      } as any).value,
-    ).toMatchObject({ toolName: 'git_status' })
-    const done = gen.next({
-      toolResult: [
-        { type: 'json', value: { status: ' M src/already-dirty.ts' } },
-      ],
-    } as any)
-    expect(done.done).toBe(true)
   })
 
   test('apply_patch calls in message history trigger gates when git status was already dirty', () => {
@@ -2971,7 +3255,7 @@ describe('base2 verification and reviewer gates', () => {
     ).toMatchObject({ toolName: 'spawn_agents' })
   })
 
-  test('pinned gate-status line reports validation hooks ran=yes when lastValidationSummary is set', () => {
+  test('pinned gate-status line reports hooks summary present=yes when lastValidationSummary is set', () => {
     const base2 = createBase2('default')
     const agentState = {
       agentId: 'base2',
@@ -3005,13 +3289,14 @@ describe('base2 verification and reviewer gates', () => {
       input: { role: 'user' },
     })
     const text = (pinned.value as any).input.content as string
-    // New durable gate-status line: emitted right after the Current phase line.
-    expect(text).toContain('Gate status: phase=awaiting_validation')
-    expect(text).toContain('validation hooks ran=yes')
-    expect(text).toContain('do not infer progress or predict when it will pass')
+    // Affirmative GATE: PENDING block: emitted right after the Current phase line.
+    expect(text).toContain('GATE: PENDING')
+    expect(text).toContain('phase: awaiting_validation')
+    expect(text).toContain('hooks summary present: yes')
+    expect(text).toContain('local checks (basher/typecheck) are not the gate')
   })
 
-  test('pinned gate-status line reports validation hooks ran=no when lastValidationSummary is empty', () => {
+  test('pinned gate-status line reports hooks summary present=no when lastValidationSummary is empty', () => {
     const base2 = createBase2('default')
     const agentState = {
       agentId: 'base2',
@@ -3045,9 +3330,10 @@ describe('base2 verification and reviewer gates', () => {
       input: { role: 'user' },
     })
     const text = (pinned.value as any).input.content as string
-    expect(text).toContain('Gate status: phase=awaiting_validation')
-    expect(text).toContain('validation hooks ran=no')
-    expect(text).toContain('do not infer progress or predict when it will pass')
+    expect(text).toContain('GATE: PENDING')
+    expect(text).toContain('phase: awaiting_validation')
+    expect(text).toContain('hooks summary present: no')
+    expect(text).toContain('local checks (basher/typecheck) are not the gate')
   })
 
   test('pinned active-work message renders Gate progress line when gateProgressLine is set', () => {
@@ -3126,7 +3412,8 @@ describe('base2 verification and reviewer gates', () => {
     })
     const text = (pinned.value as any).input.content as string
     // Sanity: unresolved gate work is present so the pinned message is emitted.
-    expect(text).toContain('Gate status: phase=awaiting_validation')
+    expect(text).toContain('GATE: PENDING')
+    expect(text).toContain('phase: awaiting_validation')
     expect(text).not.toContain('Gate progress:')
   })
 
@@ -3180,101 +3467,123 @@ describe('base2 verification and reviewer gates', () => {
     expect(olderRoundTripped.gateProgressLine).toBeUndefined()
   })
 
+  // Uses a real project-scoped scratch file whose bytes genuinely change
+  // across the simulated repair. The live reviewer-repair no-progress guard
+  // compares the pre- and post-repair gate snapshot fingerprints, both derived
+  // from on-disk bytes of the pending gate files, so a synthetic path would
+  // hash to the same unreadable sentinel twice and block the repair round.
   test('reviewer feedback is pinned as active work before the next step', () => {
-    const base2 = createBase2('default')
-    const agentState = { agentId: 'base2' }
-    const gen = base2.handleSteps!({
-      agentState,
-      prompt: 'Make the requested change now please',
-      params: {},
-    } as any)
+    const tmpDir = makeProjectTempDir('base2-reviewer-pinned-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const base2 = createBase2('default')
+      const agentState = { agentId: 'base2' }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Make the requested change now please',
+        params: {},
+      } as any)
 
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
-    expect(
-      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
-        .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
-    expect(gen.next().value).toBe('STEP')
-    expect(
-      gen.next({
-        stepsComplete: true,
-        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
-      } as any).value,
-    ).toMatchObject({ toolName: 'git_status' })
-    expect(
-      gen.next({
-        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
-      } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
-    const postValidationStatus = gen.next({
-      toolResult: [{ type: 'json', value: [] }],
-    } as any).value
-    expect(postValidationStatus).toMatchObject({ toolName: 'git_status' })
-    const reviewCall = gen.next({
-      toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
-    } as any).value
-    expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
-    expect(
-      gen.next(
-        attestedReviewerResult(reviewCall, 'BLOCKING', [
-          'Fix the edge case.',
-        ]) as any,
-      ).value,
-    ).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: '' } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      expect(gen.next().value).toBe('STEP')
+      expect(
+        gen.next({
+          stepsComplete: true,
+          toolResult: [{ type: 'json', value: editReceipt(gateFile) }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      const postValidationStatus = gen.next({
+        toolResult: [{ type: 'json', value: [] }],
+      } as any).value
+      expect(postValidationStatus).toMatchObject({ toolName: 'git_status' })
+      const reviewCall = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any).value
+      expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+      expect(
+        gen.next(
+          attestedReviewerResult(reviewCall, 'BLOCKING', [
+            'Fix the edge case.',
+          ]) as any,
+        ).value,
+      ).toMatchObject({ toolName: 'add_message' })
 
-    expect((agentState as any).base2ActiveWork).toMatchObject({
-      changedFiles: ['src/a.ts'],
-      touchedFiles: ['src/a.ts'],
-      pendingGateFiles: ['src/a.ts'],
-      openReviewerBlockers: ['BLOCKING: Fix the edge case.'],
-      lastValidationSummary: 'No configured file-change hooks ran.',
-      nextRequiredAction:
-        'Resolve the reviewer feedback below before any unrelated work, final response, or another review.',
-    })
+      expect((agentState as any).base2ActiveWork).toMatchObject({
+        changedFiles: [gateFile],
+        touchedFiles: [gateFile],
+        pendingGateFiles: [gateFile],
+        openReviewerBlockers: ['BLOCKING: Fix the edge case.'],
+        lastValidationSummary: 'No configured file-change hooks ran.',
+        nextRequiredAction:
+          'Resolve the reviewer feedback below before any unrelated work, final response, or another review.',
+      })
 
-    expect(gen.next().value).toMatchObject({
-      toolName: 'spawn_agents',
-      input: { agents: [{ agent_type: 'repair-editor' }] },
-    })
-    const findingIds = (
-      agentState as any
-    ).base2ActiveWork.openReviewerFindings.map((finding: any) => finding.id)
-    expect(
-      gen.next(completedRepairReceipt(findingIds, ['src/a.ts']) as any).value,
-    ).toMatchObject({
-      toolName: 'git_status',
-    })
-    expect(
-      gen.next({
-        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
-      } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
-    expect(
-      gen.next({
-        toolResult: [
-          { type: 'json', value: [{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }] },
-        ],
-      } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
-    const pinned = gen.next()
-    expect(pinned.value).toMatchObject({
-      toolName: 'add_message',
-      input: { role: 'user' },
-    })
-    const text = (pinned.value as any).input.content as string
-    expect(text).toContain(
-      'Harness pinned active-work state (controlling state',
-    )
-    expect(text).toContain('Current phase: awaiting_review')
-    expect(text).toContain('BLOCKING: Fix the edge case.')
-    expect(text).toContain('Pending validation/reviewer gate files: src/a.ts')
-    // The inline-validation flow emits a real summary of the hooks that just
-    // ran (here a passing typecheck), not the legacy 'No configured hooks'
-    // placeholder. Assert the stable marker rather than the exact hook text.
-    expect(text).toContain('Last validation summary:')
-    expect(text).not.toContain('Historical changed files: src/a.ts')
-    expect(text).not.toContain('Historical touched files: src/a.ts')
-    expect(gen.next().value).toBe('STEP')
+      // This yield is where the runtime captures the pre-repair snapshot
+      // fingerprint, so the repair's byte change must land after it.
+      expect(gen.next().value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+      const findingIds = (
+        agentState as any
+      ).base2ActiveWork.openReviewerFindings.map((finding: any) => finding.id)
+      writeFileSync(tmpFile, 'export const value = 2 // repaired\n')
+      expect(
+        gen.next(completedRepairReceipt(findingIds, [gateFile]) as any).value,
+      ).toMatchObject({
+        toolName: 'git_status',
+      })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect(
+        gen.next({
+          toolResult: [
+            {
+              type: 'json',
+              value: [{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }],
+            },
+          ],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      const pinned = gen.next()
+      expect(pinned.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const text = (pinned.value as any).input.content as string
+      expect(text).toContain(
+        'Harness pinned active-work state (controlling state',
+      )
+      expect(text).toContain('Current phase: awaiting_review')
+      expect(text).toContain('BLOCKING: Fix the edge case.')
+      expect(text).toContain(
+        `Pending validation/reviewer gate files: ${gateFile}`,
+      )
+      // The inline-validation flow emits a real summary of the hooks that just
+      // ran (here a passing typecheck), not the legacy 'No configured hooks'
+      // placeholder. Assert the stable marker rather than the exact hook text.
+      expect(text).toContain('Last validation summary:')
+      expect(text).not.toContain(`Historical changed files: ${gateFile}`)
+      expect(text).not.toContain(`Historical touched files: ${gateFile}`)
+      expect(gen.next().value).toBe('STEP')
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
   })
 
   // All-coverage blocker sets must not co-spawn repair-editor.
@@ -3397,74 +3706,174 @@ describe('base2 verification and reviewer gates', () => {
   })
 
   test('repair-editor with mutation progress continues into re-validation even when receipt is blocked', () => {
-    const base2 = createBase2('default')
-    const agentState = { agentId: 'base2' }
-    const gen = base2.handleSteps!({
-      agentState,
-      prompt: 'Make the requested change now please',
-      params: {},
-    } as any)
+    const tmpDir = makeProjectTempDir('base2-repair-progress-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const base2 = createBase2('default')
+      const agentState = { agentId: 'base2' }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Make the requested change now please',
+        params: {},
+      } as any)
 
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
-    expect(
-      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
-        .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
-    expect(gen.next().value).toBe('STEP')
-    expect(
-      gen.next({
-        stepsComplete: true,
-        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
-      } as any).value,
-    ).toMatchObject({ toolName: 'git_status' })
-    expect(
-      gen.next({
-        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
-      } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
-    const postValidationStatus = gen.next({
-      toolResult: [{ type: 'json', value: [] }],
-    } as any).value
-    expect(postValidationStatus).toMatchObject({ toolName: 'git_status' })
-    const reviewCall = gen.next({
-      toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
-    } as any).value
-    expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
-    expect(
-      gen.next(
-        attestedReviewerResult(reviewCall, 'BLOCKING', [
-          'Fix the edge case.',
-        ]) as any,
-      ).value,
-    ).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: '' } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      expect(gen.next().value).toBe('STEP')
+      expect(
+        gen.next({
+          stepsComplete: true,
+          toolResult: [{ type: 'json', value: editReceipt(gateFile) }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      const postValidationStatus = gen.next({
+        toolResult: [{ type: 'json', value: [] }],
+      } as any).value
+      expect(postValidationStatus).toMatchObject({ toolName: 'git_status' })
+      const reviewCall = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any).value
+      expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+      expect(
+        gen.next(
+          attestedReviewerResult(reviewCall, 'BLOCKING', [
+            'Fix the edge case.',
+          ]) as any,
+        ).value,
+      ).toMatchObject({ toolName: 'add_message' })
 
-    expect(gen.next().value).toMatchObject({
-      toolName: 'spawn_agents',
-      input: { agents: [{ agent_type: 'repair-editor' }] },
-    })
-    // Receipt status blocked + empty findingsAddressed, but changedFiles present:
-    // parent must re-enter validation instead of hard-blocking the gate.
-    expect(
-      gen.next(progressOnlyRepairReceipt(['src/a.ts']) as any).value,
-    ).toMatchObject({
-      toolName: 'git_status',
-    })
-    expect(
-      gen.next({
-        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
-      } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
-    expect((agentState as any).base2ActiveWork.currentPhase).not.toBe('blocked')
-    expect(
-      gen.next({
-        toolResult: [
-          {
-            type: 'json',
-            value: [{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }],
-          },
-        ],
-      } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      expect(gen.next().value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+      // Receipt status blocked + empty findingsAddressed, but changedFiles present:
+      // parent must re-enter validation instead of hard-blocking the gate.
+      // The scratch file's bytes really change so the no-progress guard stays
+      // quiet and the mutation-progress path is what's under test here.
+      writeFileSync(tmpFile, 'export const value = 2 // partial repair\n')
+      expect(
+        gen.next(progressOnlyRepairReceipt([gateFile]) as any).value,
+      ).toMatchObject({
+        toolName: 'git_status',
+      })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect((agentState as any).base2ActiveWork.currentPhase).not.toBe(
+        'blocked',
+      )
+      expect(
+        gen.next({
+          toolResult: [
+            {
+              type: 'json',
+              value: [{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }],
+            },
+          ],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // Counterpart of the two tests above: a repair that reports success but
+  // leaves every pending gate file byte-identical must fail closed instead of
+  // re-entering validation and re-review forever.
+  test('reviewer repair that changes no bytes trips the no-progress guard', () => {
+    const tmpDir = makeProjectTempDir('base2-repair-no-progress-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const base2 = createBase2('default')
+      const agentState = { agentId: 'base2' }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Make the requested change now please',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: '' } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      expect(gen.next().value).toBe('STEP')
+      expect(
+        gen.next({
+          stepsComplete: true,
+          toolResult: [{ type: 'json', value: editReceipt(gateFile) }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      const postValidationStatus = gen.next({
+        toolResult: [{ type: 'json', value: [] }],
+      } as any).value
+      expect(postValidationStatus).toMatchObject({ toolName: 'git_status' })
+      const reviewCall = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any).value
+      expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+      expect(
+        gen.next(
+          attestedReviewerResult(reviewCall, 'BLOCKING', [
+            'Fix the edge case.',
+          ]) as any,
+        ).value,
+      ).toMatchObject({ toolName: 'add_message' })
+
+      expect(gen.next().value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+      const findingIds = (
+        agentState as any
+      ).base2ActiveWork.openReviewerFindings.map((finding: any) => finding.id)
+      // No writeFileSync here: the repair claims completion for every open
+      // finding but the scratch file's bytes are untouched.
+      expect(
+        gen.next(completedRepairReceipt(findingIds, [gateFile]) as any).value,
+      ).toMatchObject({
+        toolName: 'git_status',
+      })
+      const afterGuard = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any)
+      // The guard breaks out of the gate loop, so re-validation must not run.
+      expect((afterGuard.value as any)?.toolName).not.toBe(
+        'run_file_change_hooks',
+      )
+      const activeWork = (agentState as any).base2ActiveWork
+      expect(activeWork.currentPhase).toBe('blocked')
+      expect(activeWork.lastReviewerGateSkipReason).toBe(
+        'reviewer-repair-no-progress',
+      )
+      expect(activeWork.nextRequiredAction).toContain(
+        'no snapshot-visible progress',
+      )
+      expect((agentState as any).canSuggestFollowups).toBe(false)
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
   })
 
   test('repair-editor ignores forged child value receipt before runtime agentReceipt', () => {

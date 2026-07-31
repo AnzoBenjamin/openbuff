@@ -650,6 +650,72 @@ test('memory-drift guard skips .bun-install cache directories', () => {
   expect(brokenFindings.some(touched)).toBe(false)
 })
 
+test('memory-drift guard skips .agents/sessions plan-session markdown', () => {
+  // Session plan artifacts under `.agents/sessions/` are local/runtime state
+  // and must not be treated as repo knowledge (task commits exclude them).
+  mkdirSync(join(tmpRoot, '.agents', 'sessions', 'unified-background-jobs'), {
+    recursive: true,
+  })
+  writeFileSync(
+    join(tmpRoot, '.agents', 'sessions', 'unified-background-jobs', 'PLAN.md'),
+    'See `src/missing.ts` and [gone](./gone.md).\nTODO: session only\n',
+  )
+  // Control: a normal docs path with the same content still flags.
+  mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
+  writeFileSync(
+    join(tmpRoot, 'docs', 'notes.md'),
+    'See `src/missing.ts`.\n',
+  )
+
+  const pathFindings = checkPath(tmpRoot)
+  const brokenFindings = checkBrokenLink(tmpRoot)
+  const todoFindings = checkTodoFixme(tmpRoot)
+  const sessionTouched = (f: { path: string }) =>
+    f.path.includes('.agents/sessions')
+
+  expect(pathFindings.some(sessionTouched)).toBe(false)
+  expect(brokenFindings.some(sessionTouched)).toBe(false)
+  expect(todoFindings.some(sessionTouched)).toBe(false)
+  expect(pathFindings.some((f) => f.path.includes('docs/notes.md'))).toBe(true)
+})
+
+test('memory-drift guard skips other SKIP_PATH_PREFIXES like evals/test-repos', () => {
+  mkdirSync(join(tmpRoot, 'evals', 'test-repos', 'demo'), { recursive: true })
+  writeFileSync(
+    join(tmpRoot, 'evals', 'test-repos', 'demo', 'README.md'),
+    'See `src/missing.ts` and [gone](./gone.md).\n',
+  )
+  const pathFindings = checkPath(tmpRoot)
+  const brokenFindings = checkBrokenLink(tmpRoot)
+  const touched = (f: { path: string }) => f.path.includes('evals/test-repos')
+  expect(pathFindings.some(touched)).toBe(false)
+  expect(brokenFindings.some(touched)).toBe(false)
+})
+
+test('formatMemoryDriftReport reports clean pass when score is zero', () => {
+  const report = formatMemoryDriftReport({
+    score: 0,
+    checkers: [{ name: 'path', findings: [] }],
+  })
+  expect(report).toContain('Memory drift guard passed')
+  expect(report).toContain('0 findings')
+})
+
+test('command checker infers cwd from multi-line cd prefix in code block', () => {
+  mkdirSync(join(tmpRoot, 'cli'), { recursive: true })
+  writeFileSync(
+    join(tmpRoot, 'cli', 'package.json'),
+    JSON.stringify({ name: 'cli', scripts: { build: 'echo' } }),
+  )
+  mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
+  writeFileSync(
+    join(tmpRoot, 'docs', 'cmd.md'),
+    ['```bash', 'cd cli', 'bun run build', '```'].join('\n') + '\n',
+  )
+  const findings = checkCommand(tmpRoot)
+  expect(findings.some((f) => f.message.includes('`build`'))).toBe(false)
+})
+
 test('todo-fixme checker flags TODO and allows allowlisted line', () => {
   mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
   writeFileSync(

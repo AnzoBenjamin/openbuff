@@ -78,6 +78,7 @@ export const createGeneralAgent = (options: {
       'spawn_agents',
       'query_index',
       'read_files',
+      'read_blocks',
       'read_subtree',
       'task_completed',
       'write_audit_findings',

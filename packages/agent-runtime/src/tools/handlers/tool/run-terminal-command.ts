@@ -1,3 +1,5 @@
+import { resolveRuntimeJobOwner } from '../../../util/runtime-job-owner'
+
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
   ClientToolCall,
@@ -44,15 +46,7 @@ export const handleRunTerminalCommand = (async ({
       detach: toolCall.input.detach,
       timeout_seconds: toolCall.input.timeout_seconds,
       cwd: toolCall.input.cwd,
-      owner: {
-        clientSessionId,
-        rootRunId:
-          agentState.ancestorRunIds[0] ??
-          agentState.runId ??
-          agentState.agentId,
-        parentRunId: agentState.runId ?? agentState.agentId,
-        parentAgentId: agentState.agentId,
-      },
+      owner: resolveRuntimeJobOwner({ clientSessionId, agentState }),
       approval_receipt_id:
         typeof spawnParams?.approval_receipt_id === 'string'
           ? spawnParams.approval_receipt_id

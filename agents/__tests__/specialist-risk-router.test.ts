@@ -41,4 +41,31 @@ describe('specialist risk router', () => {
       }),
     ).toEqual(['product-reviewer', 'evaluator'])
   })
+
+  test('does not route reliability from plan session STATE.json alone', () => {
+    expect(
+      selectSpecialistReviewers({
+        files: [
+          '.agents/sessions/read-tool-unification-2026-07/STATE.json',
+          '.agents/sessions/read-tool-unification-2026-07/EVENTS.jsonl',
+        ],
+        requirements: 'Commit remaining work.',
+      }),
+    ).toEqual([])
+  })
+
+  test('routes reliability for real session/state code directories and retry requirements', () => {
+    expect(
+      selectSpecialistReviewers({
+        files: ['src/session/store.ts'],
+        requirements: 'Rename a prop.',
+      }),
+    ).toEqual(['reliability-reviewer'])
+    expect(
+      selectSpecialistReviewers({
+        files: ['src/foo.ts'],
+        requirements: 'Make the retry state machine idempotent.',
+      }),
+    ).toEqual(['reliability-reviewer'])
+  })
 })

@@ -71,7 +71,8 @@ Not sure where to start? Here are some great ways to jump in:
 2. **Follow style guidelines** - See below
 3. **Test** - Write tests for new features, run `bun test`
 4. **Type check** - Run `bun run typecheck`
-5. **Submit a PR** - Clear description of changes
+5. **CI-local early gates** - Run `bun run check:ci-local` (tool-definition drift + memory-drift + config sync). Optional: `bun run install:pre-push` installs a local-only pre-push hook
+6. **Submit a PR** - Clear description of changes
 
 Small PRs merge faster.
 

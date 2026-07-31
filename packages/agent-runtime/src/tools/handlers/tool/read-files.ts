@@ -14,6 +14,7 @@ import {
   grantWholeFileReadAuthorization,
   normalizeToolPath,
 } from './write-file'
+import { classifyReadBlockAuthority } from './read-authority-ladder'
 import {
   clearEditRereadRequirement,
   getEditRereadRequirement,
@@ -221,65 +222,70 @@ export const handleReadFiles = (async (
       .map((result) => result.path),
   )
 
-  // Paths that receive a complete whole-file sticky grant (or the same complete
-  // whole-file result that would mint one) may clear context_compacted.
-  // Partial/range-subset/symbol success may still clear other reread reasons
-  // (failed_edit gates) but must not drop context_compacted.
+  // Paths whose observed coverage classifies as 'whole_file' on the shared
+  // read-authority ladder may clear context_compacted. Anything the ladder
+  // calls 'scoped'/'none' (partial reads, range subsets, symbol slices) may
+  // still clear other reread reasons (failed_edit gates) but must not drop
+  // context_compacted.
   const wholeFileGrantPaths = new Set<string>()
 
   for (const result of fileResults) {
-    if (
-      result.selector === 'file' &&
-      result.status === 'ok' &&
-      result.complete &&
-      typeof result.content === 'string'
-    ) {
-      wholeFileGrantPaths.add(result.path)
-      delete fileProcessingState.confirmedPostEditAnchorsByPath?.[result.path]
-      if (fileProcessingState.strictReadBeforeEdit) {
-        grantWholeFileReadAuthorization(
-          fileProcessingState,
-          result.path,
-          result.content,
-        )
-      }
-    }
-    // Promote complete full-file range reads (1..totalLines) to sticky whole-file
-    // auth — same as paths reads. Truncated/partial ranges never grant.
-    if (
-      result.selector === 'range' &&
-      result.status === 'ok' &&
-      result.complete === true &&
-      typeof result.content === 'string'
-    ) {
-      const totalLines =
-        'totalLines' in result && typeof result.totalLines === 'number'
-          ? result.totalLines
-          : undefined
-      const isFullFileCoverage =
-        result.startLine === 1 &&
-        totalLines !== undefined &&
-        result.endLine === totalLines
-      if (isFullFileCoverage) {
-        // Prefer undecorated sourceContent (hash-stable whole-file bytes).
-        // Numbered display content alone is not used for granting.
-        const wholeFileContent =
-          'sourceContent' in result &&
-          typeof result.sourceContent === 'string'
-            ? result.sourceContent
-            : null
-        if (wholeFileContent !== null) {
-          wholeFileGrantPaths.add(result.path)
-          delete fileProcessingState.confirmedPostEditAnchorsByPath?.[result.path]
-          if (fileProcessingState.strictReadBeforeEdit) {
-            grantWholeFileReadAuthorization(
-              fileProcessingState,
-              result.path,
-              wholeFileContent,
-            )
-          }
+    if (result.status !== 'ok') continue
+    // One ladder call for every selector: whole-file paths reads and complete
+    // full-file (1..totalLines) range reads both promote to sticky whole-file
+    // auth; truncated/partial reads, range subsets and symbol reads never do.
+    const coverage = (() => {
+      if (
+        result.selector === 'file' &&
+        result.complete &&
+        typeof result.content === 'string'
+      ) {
+        const totalLines = normalizeLineEndings(result.content).split('\n')
+          .length
+        return {
+          complete: true,
+          startLine: 1,
+          endLine: totalLines,
+          totalLines,
+          sourceContent: result.content,
         }
       }
+      if (result.selector === 'range' && result.complete === true) {
+        // Only the undecorated sourceContent (hash-stable bytes) can grant;
+        // numbered display content is never used.
+        return {
+          complete: true,
+          startLine: result.startLine,
+          endLine: result.endLine,
+          totalLines:
+            'totalLines' in result && typeof result.totalLines === 'number'
+              ? result.totalLines
+              : 0,
+          sourceContent:
+            'sourceContent' in result &&
+            typeof result.sourceContent === 'string'
+              ? result.sourceContent
+              : undefined,
+        }
+      }
+      return undefined
+    })()
+    if (!coverage) continue
+    const sourceContent = coverage.sourceContent
+    if (
+      classifyReadBlockAuthority(coverage) !== 'whole_file' ||
+      sourceContent === undefined
+    ) {
+      continue
+    }
+    wholeFileGrantPaths.add(result.path)
+    delete fileProcessingState.confirmedPostEditAnchorsByPath?.[result.path]
+    if (fileProcessingState.strictReadBeforeEdit) {
+      grantWholeFileReadAuthorization(
+        fileProcessingState,
+        result.path,
+        sourceContent,
+      )
     }
   }
 

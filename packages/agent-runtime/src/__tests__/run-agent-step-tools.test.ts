@@ -609,22 +609,22 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringContaining('git-committer withheld'),
       }),
     )
-    // Pin the reworded gate-block guidance: the message names the gate stage
-    // (hooks first, then the reviewer) and tells the agent to wait for the
-    // pinned final_response_allowed phase rather than predicting, so this
-    // behavior-changing wording stays covered.
+    // Pin the affirmative GATE vocabulary: withheld until GATE: PASSED /
+    // phase=final_response_allowed, and do not retry or predict progress.
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'error',
         message: expect.stringContaining(
-          'Wait until the pinned gate status shows phase=final_response_allowed',
+          'GATE: PENDING (need GATE: PASSED / phase=final_response_allowed)',
         ),
       }),
     )
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'error',
-        message: expect.stringContaining('hooks first, then the reviewer'),
+        message: expect.stringContaining(
+          'do not retry or predict gate progress',
+        ),
       }),
     )
     expect(chunks).not.toContainEqual(

@@ -5,10 +5,13 @@ import { spawn } from 'node:child_process'
 
 import { afterEach, describe, expect, test } from 'bun:test'
 
+import { getOwnedTempRoots } from '@codebuff/common/util/project-path-containment'
+
 import {
   VerifiedKnowledgeService,
   WorkspaceLeaseService,
   classifyConnectorOperation,
+  clearHarnessDiscoveryCache,
   createContextPacket,
   getAffectedTestTargets,
   getBuildTargets,
@@ -21,6 +24,7 @@ const FILESYSTEM_DISCOVERY_TIMEOUT_MS = 15_000
 const CROSS_PROCESS_TIMEOUT_MS = 30_000
 const CROSS_PROCESS_READY_TIMEOUT_MS = 20_000
 afterEach(() => {
+  clearHarnessDiscoveryCache()
   for (const root of roots.splice(0))
     fs.rmSync(root, { recursive: true, force: true })
 })
@@ -166,6 +170,54 @@ describe('harness intelligence services', () => {
     ])
   })
 
+  test(
+    'reuses the per-cwd workspace discovery walk across calls until cleared',
+    () => {
+      // The aux gate calls inspect_environment + get_affected_tests +
+      // get_build_targets per iteration; each one used to redo the full-tree
+      // walk. Observable proof of the cache: a workspace created AFTER the
+      // first discovery is not reported until the cache is cleared.
+      const root = tempRoot()
+      fs.writeFileSync(
+        path.join(root, 'package.json'),
+        JSON.stringify({ scripts: { test: 'bun test' } }),
+      )
+      fs.writeFileSync(path.join(root, 'bun.lock'), '')
+      expect(
+        getBuildTargets(root, ['src/app.ts']).map(
+          (target) => target.packageRoot,
+        ),
+      ).toEqual(['.'])
+
+      fs.mkdirSync(path.join(root, 'packages/api/src'), { recursive: true })
+      fs.writeFileSync(
+        path.join(root, 'packages/api/package.json'),
+        JSON.stringify({ scripts: { test: 'bun test' } }),
+      )
+      // Cached discovery: the new nested manifest is not visible yet, so the
+      // nested source still routes to the root workspace.
+      expect(
+        getBuildTargets(root, ['packages/api/src/user.ts']).map(
+          (target) => target.packageRoot,
+        ),
+      ).toEqual(['.'])
+
+      clearHarnessDiscoveryCache()
+      expect(
+        getBuildTargets(root, ['packages/api/src/user.ts']).map(
+          (target) => target.packageRoot,
+        ),
+      ).toEqual(['packages/api'])
+      // inspect_environment shares the same cache entry, so it sees the
+      // re-discovered manifests too.
+      expect(inspectHarnessEnvironment(root).manifests).toEqual([
+        'package.json',
+        'packages/api/package.json',
+      ])
+    },
+    FILESYSTEM_DISCOVERY_TIMEOUT_MS,
+  )
+
   test('rejects traversal, absolute, and symlink-escaping source paths', () => {
     const root = tempRoot()
     const outside = tempRoot()
@@ -183,6 +235,36 @@ describe('harness intelligence services', () => {
     expect(getAffectedTestTargets(root, unsafe)).toEqual([])
     expect(getBuildTargets(root, unsafe)).toEqual([])
   })
+
+  test(
+    'rejects owned-temp absolute sources even when a root workspace matches',
+    () => {
+      const root = tempRoot()
+      fs.writeFileSync(
+        path.join(root, 'package.json'),
+        JSON.stringify({ scripts: { test: 'bun test' } }),
+      )
+      // Sanity check: the fixture really does discover a '.' workspace, so the
+      // rejection below is load-bearing rather than vacuous.
+      expect(getBuildTargets(root, ['src/app.ts'])).toEqual([
+        expect.objectContaining({ packageRoot: '.', scripts: ['test'] }),
+      ])
+
+      // Named from `getOwnedTempRoots()[0]` instead of a literal `/tmp` because
+      // on macOS the OS temp dir is a symlinked `/var/folders/...` path, and
+      // spelled out here rather than via `tempRoot()` so the owned-temp shape is
+      // explicit. Without the `scope === 'project'` gate this absolute path
+      // would match the `'.'` workspace and emit a bogus target.
+      const ownedTempSource = path.join(
+        getOwnedTempRoots()[0],
+        `openbuff-build-targets-${process.pid}`,
+        'source.ts',
+      )
+      expect(getBuildTargets(root, [ownedTempSource])).toEqual([])
+      expect(getAffectedTestTargets(root, [ownedTempSource])).toEqual([])
+    },
+    FILESYSTEM_DISCOVERY_TIMEOUT_MS,
+  )
 
   test('context packets are content-addressed', () => {
     const input = {

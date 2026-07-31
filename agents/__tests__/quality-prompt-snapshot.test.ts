@@ -135,52 +135,35 @@ describe('shared craftsmanship prompt sections', () => {
 
   test('gateAwarenessSection contains the required gate-awareness topics (not byte-frozen)', () => {
     // gateAwarenessSection is advisory guidance that may evolve; only assert
-    // topic coverage so future tightening does not silently drop the
-    // don't-double-spawn-code-reviewer guidance and the four hooks-vs-gate
-    // clarifications (re-arm ownership, targeted validation ≠ gate, commit
-    // recovery, pending-set authority).
+    // affirmative-state-first topic coverage so future tightening does not
+    // silently drop GATE PENDING/PASSED, pending-set authority, or local-check
+    // separation.
     expect(gateAwarenessSection).toContain('# Automated Validation & Review Gate')
+    expect(gateAwarenessSection).toContain('GATE: PENDING')
+    expect(gateAwarenessSection).toContain('GATE: PASSED')
+    expect(gateAwarenessSection).toContain('final_response_allowed')
     expect(gateAwarenessSection).toContain('code-reviewer')
-    expect(gateAwarenessSection).toContain('run_file_change_hooks')
-    expect(gateAwarenessSection).toContain('finalization allowed when green')
-    // 1) Re-arm ownership: runtime-owned hooks→reviewer; no manual re-spawn
-    // for the same pending set; wait when awaiting_validation.
-    expect(gateAwarenessSection).toContain('Do not double-spawn code-reviewer')
+    expect(gateAwarenessSection).toContain('Manual re-spawn')
     expect(gateAwarenessSection).toContain('same pending set')
     expect(gateAwarenessSection).toContain('awaiting_validation')
-    // 2) run_targeted_validation is NOT the gate (scoped evidence only).
     expect(gateAwarenessSection).toContain('run_targeted_validation')
     expect(gateAwarenessSection).toContain('is NOT the gate')
     expect(gateAwarenessSection).toContain(
       'does not clear reviewer findings by itself',
     )
     expect(gateAwarenessSection).toContain('does **not** unlock')
-    expect(gateAwarenessSection).toContain('Basher typechecks')
-    // 3) Commit recovery: git-committer only after gate green; re-arms; no tight-loop.
+    expect(gateAwarenessSection).toContain('local checks')
+    expect(gateAwarenessSection).toContain('Basher typecheck')
     expect(gateAwarenessSection).toContain('git-committer')
     expect(gateAwarenessSection).toContain('re-arms on every new edit')
     expect(gateAwarenessSection).toContain('tight-loop')
-    // "Observe, don't predict" bullet: pin the durable-snapshot guidance —
-    // commit/finalize only when the pinned gate state reports the passed phase.
-    expect(gateAwarenessSection).toContain('Observe, don\'t predict')
-    expect(gateAwarenessSection).toContain('final_response_allowed')
-    // 4) Pending-set authority: full pendingGateFiles set, not last-edited file.
     expect(gateAwarenessSection).toContain('pendingGateFiles')
     expect(gateAwarenessSection).toContain('full related set')
     expect(gateAwarenessSection).toContain(
       'authoritative over conversational memory',
     )
-    // 5) Anti-background-narration: the gate runs inline the moment the turn
-    // ends, so the model must never describe it as a background/async job,
-    // including in gate-disabled modes where no reviewer runs at all.
-    expect(gateAwarenessSection).toContain(
-      'Never narrate the gate as a background job',
-    )
-    expect(gateAwarenessSection).toContain('is running in the background')
-    expect(gateAwarenessSection).toContain(
-      'runs inline the moment your turn ends',
-    )
     expect(gateAwarenessSection).toContain('gate-disabled modes')
+    expect(gateAwarenessSection).not.toContain('run_file_change_hooks')
   })
 
   test('securityReviewSection contains the required security-review topics (not byte-frozen)', () => {

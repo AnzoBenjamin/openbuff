@@ -85,11 +85,25 @@ describe('handleEndTurn', () => {
     expect(value).toEqual({ message: 'Turn ended.' })
   })
 
+  test('fails closed and lists nothing when clientSessionId/agentState are missing', async () => {
+    // Seed jobs that would be visible to an UNSCOPED registry listing. With no
+    // client session id or agent state the handler must NOT surface them (it
+    // would leak cross-session jobs); it returns the plain turn-ended message.
+    seedShellJob({ command: 'echo cross-session' })
+
+    const value = await runHandler()
+    expect(value).toEqual({ message: 'Turn ended.' })
+  })
+
   test('surfaces running background shell jobs in the end_turn output', async () => {
     const job1 = seedShellJob({ command: 'echo hi' })
     const job2 = seedShellJob({ command: 'sleep 100' })
 
-    const value = await runHandler()
+    const value = await runHandler({
+      clientSessionId: 'unknown-session',
+      agentId: 'unknown-agent',
+      runId: 'unknown-root',
+    })
     expect(value.message).toContain('2 shell job(s)')
     expect(value.pendingBackgroundJobs).toEqual(
       expect.arrayContaining([
@@ -104,9 +118,20 @@ describe('handleEndTurn', () => {
     const job = allocateBackgroundAgentJob({
       agentType: 'researcher-web',
       agentName: 'Web researcher',
+      owner: {
+        clientSessionId: 'session-agent-1',
+        rootRunId: 'root-agent-1',
+        parentRunId: 'parent-agent-1',
+        parentAgentId: 'agent-1',
+        userInputId: 'input-agent-1',
+      },
     })
 
-    const value = await runHandler()
+    const value = await runHandler({
+      clientSessionId: 'session-agent-1',
+      agentId: 'agent-1',
+      runId: 'root-agent-1',
+    })
     expect(value.message).toContain('1 agent job(s)')
     expect(value.pendingBackgroundAgentJobs).toEqual([
       expect.objectContaining({
@@ -156,7 +181,11 @@ describe('handleEndTurn', () => {
       seedShellJob({ command: `cmd ${i}` })
     }
 
-    const value = await runHandler()
+    const value = await runHandler({
+      clientSessionId: 'unknown-session',
+      agentId: 'unknown-agent',
+      runId: 'unknown-root',
+    })
     expect(value.pendingBackgroundJobs).toHaveLength(5)
     expect(value.pendingBackgroundJobsTruncated).toBe(2)
   })
@@ -165,12 +194,74 @@ describe('handleEndTurn', () => {
     const running = seedShellJob({ command: 'echo running' })
     seedShellJob({ command: 'echo done', completed: true })
 
-    const value = await runHandler()
+    const value = await runHandler({
+      clientSessionId: 'unknown-session',
+      agentId: 'unknown-agent',
+      runId: 'unknown-root',
+    })
     expect(value.pendingBackgroundJobs).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ jobId: running, command: 'echo running' }),
       ]),
     )
     expect(value.pendingBackgroundJobs).toHaveLength(1)
+  })
+
+  test('truncates the listed agent jobs when more than five are running', async () => {
+    const owner = {
+      clientSessionId: 'session-truncate-agents',
+      rootRunId: 'root-truncate-agents',
+      parentRunId: 'parent-truncate-agents',
+      parentAgentId: 'agent-truncate',
+      userInputId: 'input-truncate-agents',
+    }
+    for (let i = 0; i < 7; i++) {
+      allocateBackgroundAgentJob({
+        agentType: 'researcher',
+        agentName: `Researcher ${i}`,
+        owner,
+      })
+    }
+
+    const value = await runHandler({
+      clientSessionId: owner.clientSessionId,
+      agentId: owner.parentAgentId,
+      runId: owner.rootRunId,
+    })
+    expect(value.pendingBackgroundAgentJobs).toHaveLength(5)
+    expect(value.pendingBackgroundAgentJobsTruncated).toBe(2)
+  })
+
+  test('surfaces a mixed shell and agent running scenario with combined summary', async () => {
+    seedShellJob({
+      command: 'echo shell',
+      owner: {
+        clientSessionId: 'session-mixed',
+        rootRunId: 'root-mixed',
+        parentRunId: 'parent-mixed',
+        parentAgentId: 'agent-mixed',
+      },
+    })
+    allocateBackgroundAgentJob({
+      agentType: 'researcher',
+      agentName: 'Agent researcher',
+      owner: {
+        clientSessionId: 'session-mixed',
+        rootRunId: 'root-mixed',
+        parentRunId: 'parent-mixed',
+        parentAgentId: 'agent-mixed',
+        userInputId: 'input-mixed',
+      },
+    })
+
+    const value = await runHandler({
+      clientSessionId: 'session-mixed',
+      agentId: 'agent-mixed',
+      runId: 'root-mixed',
+    })
+    expect(value.message).toContain('1 shell job(s)')
+    expect(value.message).toContain('1 agent job(s)')
+    expect(value.pendingBackgroundJobs).toHaveLength(1)
+    expect(value.pendingBackgroundAgentJobs).toHaveLength(1)
   })
 })

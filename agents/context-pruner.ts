@@ -159,6 +159,7 @@ const definition: AgentDefinition = {
     /** Tool categories for knowledge memory extraction */
     const FILE_INSPECTION_TOOLS = [
       'read_files',
+      'read_blocks',
       'read_outline',
       'read_subtree',
       'read_image',
@@ -258,6 +259,44 @@ const definition: AgentDefinition = {
           // read_files (or read_outline) instead of relying on the lossy
           // summary.
           return `${parts.join('; ')} (re-fetch with read_files if needed)`
+        }
+        case 'read_blocks': {
+          const windows = input.windows as
+            | Array<{ path?: string; window?: number }>
+            | undefined
+          const around = input.around as
+            | Array<{ path?: string; match?: string; occurrence?: number }>
+            | undefined
+          const symbols = input.symbols as
+            | Array<{ path?: string; name?: string }>
+            | undefined
+          const parts: string[] = []
+          if (windows && windows.length > 0) {
+            parts.push(
+              `windows: ${windows
+                .map((w) => `${w.path}:win ${w.window ?? 1}`)
+                .join(', ')}`,
+            )
+          }
+          if (around && around.length > 0) {
+            parts.push(
+              `around: ${around
+                .map(
+                  (a) =>
+                    `${a.path}@"${a.match ?? ''}"${a.occurrence ? `#${a.occurrence}` : ''}`,
+                )
+                .join(', ')}`,
+            )
+          }
+          if (symbols && symbols.length > 0) {
+            parts.push(
+              `symbols: ${symbols
+                .map((s) => `${s.path}#${s.name ?? ''}`)
+                .join(', ')}`,
+            )
+          }
+          if (parts.length === 0) return 'inspected blocks'
+          return `${parts.join('; ')} (re-fetch with read_blocks if needed)`
         }
         case 'write_file': {
           const path = input.path as string | undefined
@@ -959,7 +998,8 @@ const definition: AgentDefinition = {
       if (!isRecord(value)) return
 
       if (
-        value.kind === 'read_files_result' &&
+        (value.kind === 'read_files_result' ||
+          value.kind === 'read_blocks_result') &&
         value.version === 1 &&
         Array.isArray(value.results)
       ) {
@@ -1071,6 +1111,23 @@ const definition: AgentDefinition = {
           }
         }
       }
+      if (toolName === 'read_blocks') {
+        if (Array.isArray(input.windows)) {
+          for (const window of input.windows) {
+            if (isRecord(window)) addPath(window.path)
+          }
+        }
+        if (Array.isArray(input.around)) {
+          for (const around of input.around) {
+            if (isRecord(around)) addPath(around.path)
+          }
+        }
+        if (Array.isArray(input.symbols)) {
+          for (const symbolRequest of input.symbols) {
+            if (isRecord(symbolRequest)) addPath(symbolRequest.path)
+          }
+        }
+      }
       addPath(input.path)
       if (paths.length === 0 && typeof input.pattern === 'string') {
         paths.push(`glob: ${input.pattern}`)
@@ -1099,14 +1156,20 @@ const definition: AgentDefinition = {
     }
 
     function getSuccessfulReadPaths(
+      toolName: string,
       input: Record<string, unknown>,
       values: unknown[],
     ): string[] {
-      const requestedPaths = getInspectionPaths('read_files', input)
+      const requestedPaths = getInspectionPaths(toolName, input)
       if (values.length === 0 || requestedPaths.length === 0) return []
 
       for (const value of values) {
-        if (!isRecord(value) || value.kind !== 'read_files_result') continue
+        if (
+          !isRecord(value) ||
+          (value.kind !== 'read_files_result' &&
+            value.kind !== 'read_blocks_result')
+        )
+          continue
         if (value.version !== 1 || !Array.isArray(value.results)) return []
         const canonicalPaths: string[] = []
         for (const result of value.results) {
@@ -2299,8 +2362,8 @@ const definition: AgentDefinition = {
               // facts below but must not become durable "Files Inspected" state.
               if (FILE_INSPECTION_TOOLS.includes(toolName)) {
                 const paths =
-                  toolName === 'read_files'
-                    ? getSuccessfulReadPaths(input, resultValues)
+                  toolName === 'read_files' || toolName === 'read_blocks'
+                    ? getSuccessfulReadPaths(toolName, input, resultValues)
                     : hasFailureMarker(resultValues) ||
                         resultValues.length === 0
                       ? []

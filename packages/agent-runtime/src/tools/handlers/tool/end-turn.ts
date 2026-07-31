@@ -1,6 +1,7 @@
 import { jobRegistry } from '@codebuff/common/util/job-registry'
 
 import { getBackgroundAgentJob } from '../../../util/background-agent-jobs'
+import { resolveRuntimeJobOwner } from '../../../util/runtime-job-owner'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
@@ -21,11 +22,21 @@ export const handleEndTurn = (async (params: {
 
   await previousToolCallFinished
 
-  const rootRunId = agentState
-    ? agentState.ancestorRunIds[0] ?? agentState.runId ?? agentState.agentId
-    : undefined
-  const owner =
-    clientSessionId && rootRunId ? { clientSessionId, rootRunId } : undefined
+  // Fail closed on cross-session scope: without BOTH the client session id and
+  // agent state there is no scoped owner, and `jobRegistry.listRunning(undefined)`
+  // would surface every non-terminal job in the registry across sessions. Ending
+  // the turn with no in-scope owner is a clean no-op, never a global listing.
+  if (!clientSessionId || !agentState) {
+    return { output: [{ type: 'json', value: { message: 'Turn ended.' } }] }
+  }
+  const resolved = resolveRuntimeJobOwner({
+    clientSessionId,
+    agentState,
+  })
+  const owner = {
+    clientSessionId: resolved.clientSessionId,
+    rootRunId: resolved.rootRunId,
+  }
   // The unified job registry lists both shell `process` jobs and `agent`
   // coroutine jobs; end_turn must keep warning about BOTH kinds.
   const running = jobRegistry.listRunning(owner)

@@ -6,6 +6,7 @@ import {
   snapshotBackgroundAgentJob,
   waitForBackgroundAgentJob,
 } from '../../../util/background-agent-jobs'
+import { resolveRuntimeJobOwner } from '../../../util/runtime-job-owner'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
@@ -60,9 +61,11 @@ export const handleCheckBackgroundAgent = (async ({
     cancel = false,
     cursor,
   } = toolCall.input
-  const rootRunId =
-    agentState.ancestorRunIds[0] ?? agentState.runId ?? agentState.agentId
-  const owner = { clientSessionId, rootRunId }
+  const resolved = resolveRuntimeJobOwner({ clientSessionId, agentState })
+  const owner = {
+    clientSessionId: resolved.clientSessionId,
+    rootRunId: resolved.rootRunId,
+  }
 
   // Ownership is enforced inside the unified core registry via assertOwned;
   // the legacy owned/foreign/recover gate is gone.

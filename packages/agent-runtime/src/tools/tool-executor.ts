@@ -1488,7 +1488,7 @@ export async function executeToolCall<T extends ToolName>(
       onResponseChunk({
         type: 'error',
         message:
-          'Tool `suggest_followups` is not available yet. Finish the requested work first; for edited code, wait until the automated validation/reviewer gate has passed and you have written a user-visible completion summary.',
+          'Tool `suggest_followups` is not available yet. GATE: PENDING (or final summary not written). End your turn so the runtime gate can clear; call this only after GATE: PASSED and a user-visible completion summary.',
       })
       return abortablePreviousToolCallFinished
     }
@@ -1557,7 +1557,7 @@ export async function executeToolCall<T extends ToolName>(
         onResponseChunk({
           type: 'error',
           message:
-            'git-committer withheld: the validation/reviewer gate has not reported passed yet (it re-arms on every edit and runs across turns — hooks first, then the reviewer). Wait until the pinned gate status shows phase=final_response_allowed for the pending files, then spawn git-committer once. Do not retry now or predict the gate\'s progress.',
+            'git-committer withheld: GATE: PENDING (need GATE: PASSED / phase=final_response_allowed). End your turn; do not retry or predict gate progress. Spawn git-committer once after GATE: PASSED.',
         })
         if (filteredAgents.length === 0) {
           return abortablePreviousToolCallFinished

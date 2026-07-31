@@ -1860,6 +1860,58 @@ describe('context-pruner handleSteps', () => {
     expect(secondContent.match(/<knowledge_memory>/g)).toHaveLength(1)
   })
 
+  test('preserves successful read_blocks windows as Files Inspected after compaction', () => {
+    const inspectedPath =
+      'packages/agent-runtime/src/tools/tool-executor.ts'
+    const firstMessages = [
+      createMessage('user', 'Inspect the tool executor via read_blocks'),
+      createToolCallMessage('call-rb', 'read_blocks', {
+        windows: [{ path: inspectedPath, window: 1 }],
+      }),
+      createToolResultMessage('call-rb', 'read_blocks', {
+        kind: 'read_blocks_result',
+        version: 1,
+        results: [
+          {
+            path: inspectedPath,
+            status: 'ok',
+          },
+        ],
+        summary: { ok: 1, failed: 0 },
+      }),
+      createMessage('assistant', 'x'.repeat(2000)),
+    ]
+
+    const firstResults = runHandleSteps(firstMessages, 250000, 200000, {
+      assistantToolBudget: 1,
+      userBudget: 1,
+    })
+    const firstContent = firstResults[0].input.messages[0].content[0].text
+    const firstKnowledgeMemory =
+      firstContent.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
+      ''
+
+    expect(firstKnowledgeMemory).toContain('Files Inspected:')
+    expect(firstKnowledgeMemory).toContain(inspectedPath)
+
+    const secondResults = runHandleSteps(
+      [
+        firstResults[0].input.messages[0],
+        createMessage('assistant', 'more work'),
+      ],
+      250000,
+      200000,
+      { assistantToolBudget: 1, userBudget: 1 },
+    )
+    const secondContent = secondResults[0].input.messages[0].content[0].text
+    const secondKnowledgeMemory =
+      secondContent.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
+      ''
+
+    expect(secondKnowledgeMemory).toContain(inspectedPath)
+    expect(secondContent.match(/<knowledge_memory>/g)).toHaveLength(1)
+  })
+
   test('does not pin edited file and task ledger entries without active harness blockers', () => {
     const messages = [
       createMessage('user', 'Implement ledger preservation'),
