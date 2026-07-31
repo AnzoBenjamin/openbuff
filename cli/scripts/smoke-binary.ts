@@ -43,12 +43,18 @@ import { existsSync } from 'fs'
 //   - "Enter a coding task" — chat input prompt
 //   - DEC alternate-screen activation — OpenTUI renderer initialized and
 //     began painting even if capability negotiation fragmented later labels.
+// `openbuff bootscreen ok` — CLI emits this deterministic marker whenever
+// stdout is a non-TTY pipe, because OpenTUI's renderer writes no frames when
+// stdout is not a TTY (so the piped full-TUI smoke would otherwise see zero
+// bytes on native Windows). The CLI intentionally does NOT exit after printing
+// it, so this is a boot-presence signal, not a clean-exit marker.
 const BOOT_SIGNAL_PATTERNS = [
   /will run commands on your behalf/,
   /Press ENTER to login/,
   /Open this URL/,
   /Enter a coding task/,
   /\x1b\[\?1049h/,
+  /openbuff bootscreen ok/,
 ] as const
 
 // Fatal markers we already know about — kept for nicer error messages on
@@ -72,11 +78,23 @@ const FATAL_PATTERNS = [
 ] as const
 
 // Long enough that an unhandled rejection from the eager Parser.init has
-// time to surface through the renderer-cleanup handler — that path is
-// past startup incidents while a 5s window let CI pass. Async wasm rejections
-// can fire >5s after spawn (after React mounts and
-// the renderer is up).
+// time to surface through the renderer-cleanup handler — that path is past
+// startup incidents while a short window let CI pass. Async wasm rejections
+// can fire after spawn (after React mounts and the renderer is up), so keep
+// a generous default of 10s.
 const DEFAULT_RUN_SECONDS = 10
+
+// A hanging probe must fail the harness instead of hanging CI, so each
+// deterministic probe gets a fixed budget. Reusing DEFAULT_RUN_SECONDS keeps
+// the whole smoke bounded by the same value (10s) a probe can reasonably take.
+const PROBE_TIMEOUT_SECONDS = DEFAULT_RUN_SECONDS
+
+// Only the first CAPTURED_OUTPUT_CAP bytes of a child's stdout/stderr are ever
+// reported (both requireProbe's error slice and the full-TUI fail() cap), so
+// the capture handlers short-circuit past this many bytes to keep memory
+// bounded over the whole run. Shared by the probe and full-TUI paths so they
+// can't drift.
+const CAPTURED_OUTPUT_CAP = 16 * 1024
 
 type ProcessResult = {
   captured: string
@@ -91,15 +109,46 @@ function runProbe(binary: string, flag: string): Promise<ProcessResult> {
       env: { ...process.env, NO_COLOR: '1', TERM: 'dumb' },
     })
 
+    // Keep memory bounded: `requireProbe` only matches a marker anywhere in
+    // captured output and the error slice is capped, so a cap here just avoids
+    // unbounded growth if a probe ever prints a lot.
     let captured = ''
     const append = (chunk: Buffer): void => {
+      if (captured.length >= CAPTURED_OUTPUT_CAP) return
       captured += chunk.toString('utf8')
     }
     proc.stdout?.on('data', append)
     proc.stderr?.on('data', append)
 
-    proc.once('error', reject)
+    // Time out a hanging probe so a defective binary can't stall CI. Kill the
+    // child and reject; `requireProbe`'s await throws and the harness fails.
+    const timer = setTimeout(() => {
+      try {
+        proc.kill('SIGKILL')
+      } catch {
+        // process already dead or not killable; reject is what matters
+      }
+      reject(
+        new Error(
+          `probe for flag ${flag} timed out after ${PROBE_TIMEOUT_SECONDS}s`,
+        ),
+      )
+    }, PROBE_TIMEOUT_SECONDS * 1000)
+
+    proc.once('error', (err: Error) => {
+      // A spawn 'error' (e.g. ENOENT) fires before 'exit'; the child may still
+      // be alive. Kill it so we never leak a live process, mirroring the
+      // full-TUI path which SIGKILLs on timeout.
+      clearTimeout(timer)
+      try {
+        proc.kill('SIGKILL')
+      } catch {
+        // process already dead or not killable; reject is what matters
+      }
+      reject(err)
+    })
     proc.once('exit', (code, signal) => {
+      clearTimeout(timer)
       resolve({ captured, code, signal })
     })
   })
@@ -171,13 +220,17 @@ async function main(): Promise<void> {
 
   console.log(`smoke-binary: spawning full TUI for ${runSeconds}s…`)
 
-  const proc = spawn(binary, [], {
+  const proc = spawn(binary, ['--smoke-bootscreen'], {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, NO_COLOR: '1', TERM: 'dumb' },
   })
 
+  // Cap accumulation: only the first CAPTURED_OUTPUT_CAP bytes are ever
+  // reported (see fail()), so keep memory bounded across the whole run rather
+  // than letting TUI frames over the full window grow the string unboundedly.
   let captured = ''
   const append = (chunk: Buffer): void => {
+    if (captured.length >= CAPTURED_OUTPUT_CAP) return
     captured += chunk.toString('utf8')
   }
   proc.stdout?.on('data', append)
@@ -185,7 +238,16 @@ async function main(): Promise<void> {
 
   let earlyExitCode: number | null = null
   let exitSignal: NodeJS.Signals | null = null
+  let spawnError: Error | null = null
   const exited = new Promise<void>((resolve) => {
+    // A spawn 'error' (e.g. ENOENT, EACCES) fires before 'exit' and the child
+    // never emits 'exit' afterwards, so resolve here too; otherwise the await
+    // below would hang forever (the killTimer only handles a live child).
+    // Resolving with spawnError set lets the failure report cleanly.
+    proc.once('error', (err: Error) => {
+      spawnError = err
+      resolve()
+    })
     proc.once('exit', (code, signal) => {
       earlyExitCode = code
       exitSignal = signal
@@ -196,9 +258,17 @@ async function main(): Promise<void> {
   let timedOut = false
   const killTimer = setTimeout(() => {
     // SIGKILL is the only signal that's portable across Linux/macOS/Windows
-    // here; SIGTERM may be ignored by the renderer on some platforms.
+    // here; SIGTERM may be ignored by the renderer on some platforms. Wrapped in
+    // try/catch so an ESRCH from the child exiting right at the timeout boundary
+    // (between the exit event and clearTimeout below) can't escape into main's
+    // catch and turn a clean timeout into an unexpected-exit(2) failure.
     timedOut = true
-    proc.kill('SIGKILL')
+    try {
+      proc.kill('SIGKILL')
+    } catch {
+      // child already exited at the boundary; timedOut still marks the run a
+      // timeout for the boot-signal evaluation below.
+    }
   }, runSeconds * 1_000)
 
   await exited
@@ -211,6 +281,13 @@ async function main(): Promise<void> {
     console.error('--- captured output (truncated to 8KB) ---')
     console.error(captured.slice(0, 8 * 1024))
     process.exit(1)
+  }
+
+  // A spawn 'error' never emits 'exit', so fail cleanly rather than treating
+  // the unresolved child as a boot failure or, without the handler above, an
+  // uncaught 'error' event.
+  if (spawnError) {
+    fail(`failed to spawn binary: ${spawnError.message}`)
   }
 
   // Negative gate first: a known fatal marker gives us a more specific error
