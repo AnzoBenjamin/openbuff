@@ -19,6 +19,7 @@ import { isAbortError } from '@codebuff/common/util/error'
 import { jsonToolResult } from '@codebuff/common/util/messages'
 import { generateCompactId } from '@codebuff/common/util/string'
 import { cloneDeep } from 'lodash'
+import z from 'zod/v4'
 import * as path from 'path'
 import { realpathSync } from 'node:fs'
 
@@ -592,23 +593,401 @@ function repairTerminalCommandScalars(
   return copy ?? input
 }
 
-function levenshteinDistanceForToolSuggestion(a: string, b: string): number {
-  const rows = a.length + 1
-  const cols = b.length + 1
-  const dist = Array.from({ length: rows }, () => new Array<number>(cols).fill(0))
-  for (let i = 0; i < rows; i += 1) dist[i][0] = i
-  for (let j = 0; j < cols; j += 1) dist[0][j] = j
-  for (let i = 1; i < rows; i += 1) {
-    for (let j = 1; j < cols; j += 1) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1
-      dist[i][j] = Math.min(
-        dist[i - 1][j] + 1,
-        dist[i][j - 1] + 1,
-        dist[i - 1][j - 1] + cost,
-      )
+// Narrow, fail-closed coercion for a stringified boolean scalar. Only the exact
+// strings "true"/"false" coerce; "yes"/"1"/"" and any other value return
+// undefined so the caller leaves the field untouched and the strict schema still
+// rejects it (fail closed).
+function coerceBooleanString(value: unknown): boolean | undefined {
+  if (value === 'true') return true
+  if (value === 'false') return false
+  return undefined
+}
+
+// Narrow, fail-closed coercion for a stringified integer scalar. Only a strict
+// integer string (/^\d+$/ after trimming) coerces; ""/"1.5"/"soon"/"NaN" return
+// undefined so the caller leaves the field untouched (fail closed). When `min`
+// is given, values below it also return undefined.
+function coerceIntString(value: unknown, min?: number): number | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (!/^\d+$/.test(trimmed)) return undefined
+  const parsed = Number(trimmed)
+  if (min !== undefined && parsed < min) return undefined
+  return parsed
+}
+
+// Generic, fail-closed, schema-driven scalar coercion for ALL native tools.
+// Some providers emit boolean/integer/number tool args as strings (e.g.
+// { "limit": "10" }, { "startLine": "105" }, { "detach": "false" }). This walks
+// the tool's input JSON Schema once per call and coerces any field whose
+// declared type is boolean/integer/number from an unambiguous string, without
+// needing a per-tool helper. String-typed fields (oldString/newString/content/
+// path/readCapability/diff/command/etc.) are never touched because coercion is
+// keyed off the schema's declared type. Returns the original reference when
+// nothing changed. Mirrors the narrow, fail-closed, early-return style of the
+// per-tool repairs above.
+//
+// Known intentional gaps: `allOf` compositions are not traversed (no native
+// tool schema relies on allOf for a coercible scalar), and negative integer
+// strings (e.g. "-1") are not coerced here — those are handled by the
+// tool-specific repairs above (e.g. repairTerminalCommandScalars for a negative
+// run_terminal_command timeout).
+function coerceInputScalarsBySchema(toolName: string, input: unknown): unknown {
+  if (
+    !(toolName in toolParams) ||
+    input === null ||
+    typeof input !== 'object' ||
+    Array.isArray(input)
+  ) {
+    return input
+  }
+
+  let jsonSchema: Record<string, unknown>
+  try {
+    jsonSchema = z.toJSONSchema(toolParams[toolName as ToolName].inputSchema, {
+      io: 'input',
+    }) as Record<string, unknown>
+  } catch {
+    return input
+  }
+
+  const defs = (jsonSchema.$defs ?? jsonSchema.definitions) as
+    | Record<string, unknown>
+    | undefined
+
+  const resolveRef = (
+    schema: Record<string, unknown>,
+  ): Record<string, unknown> => {
+    if (typeof schema.$ref !== 'string' || !defs) return schema
+    const name = String(schema.$ref)
+      .replace(/^#\/\$defs\//, '')
+      .replace(/^#\/definitions\//, '')
+    const resolved = defs[name]
+    if (resolved && typeof resolved === 'object' && !Array.isArray(resolved)) {
+      return resolved as Record<string, unknown>
+    }
+    return schema
+  }
+
+  const coerceNode = (
+    schema: Record<string, unknown>,
+    value: unknown,
+  ): unknown => {
+    const resolved = resolveRef(schema)
+
+    // anyOf/oneOf: try each branch; use the first that yields a coercion.
+    const branches = (resolved.anyOf ?? resolved.oneOf) as unknown
+    if (Array.isArray(branches)) {
+      for (const branch of branches) {
+        if (branch && typeof branch === 'object' && !Array.isArray(branch)) {
+          const coerced = coerceNode(branch as Record<string, unknown>, value)
+          if (coerced !== value) return coerced
+        }
+      }
+      return value
+    }
+
+    const type = resolved.type
+
+    if (type === 'boolean' && typeof value === 'string') {
+      const coerced = coerceBooleanString(value)
+      if (coerced !== undefined) return coerced
+    }
+
+    if (type === 'integer' && typeof value === 'string') {
+      const coerced = coerceIntString(value)
+      if (coerced !== undefined) return coerced
+    }
+
+    if (type === 'number' && typeof value === 'string') {
+      const trimmed = value.trim()
+      if (
+        /^-?\d+(?:\.\d+)?$/.test(trimmed) &&
+        Number.isFinite(Number(trimmed))
+      ) {
+        return Number(trimmed)
+      }
+    }
+
+    if (
+      type === 'object' &&
+      value !== null &&
+      typeof value === 'object' &&
+      !Array.isArray(value)
+    ) {
+      const properties = resolved.properties
+      if (
+        !properties ||
+        typeof properties !== 'object' ||
+        Array.isArray(properties)
+      ) {
+        return value
+      }
+      const props = properties as Record<string, unknown>
+      const record = value as Record<string, unknown>
+      let copy: Record<string, unknown> | undefined
+      for (const key of Object.keys(record)) {
+        const propSchema = props[key]
+        if (
+          !propSchema ||
+          typeof propSchema !== 'object' ||
+          Array.isArray(propSchema)
+        ) {
+          continue
+        }
+        const coerced = coerceNode(
+          propSchema as Record<string, unknown>,
+          record[key],
+        )
+        if (coerced !== record[key]) {
+          copy = copy ?? { ...record }
+          copy[key] = coerced
+        }
+      }
+      return copy ?? value
+    }
+
+    if (type === 'array' && Array.isArray(value)) {
+      const itemsSchema = resolved.items
+      if (
+        !itemsSchema ||
+        typeof itemsSchema !== 'object' ||
+        Array.isArray(itemsSchema)
+      ) {
+        return value
+      }
+      let copy: unknown[] | undefined
+      for (let i = 0; i < value.length; i++) {
+        const coerced = coerceNode(
+          itemsSchema as Record<string, unknown>,
+          value[i],
+        )
+        if (coerced !== value[i]) {
+          copy = copy ?? [...value]
+          copy[i] = coerced
+        }
+      }
+      return copy ?? value
+    }
+
+    return value
+  }
+
+  return coerceNode(jsonSchema, input)
+}
+
+// Coerce the stringified scalar fields on one replacement entry. allowMultiple
+// and (optionally) skipIfMissing coerce only exact "true"/"false"; occurrenceIndex
+// coerces only a strict integer string >= 1. Content strings (oldString/newString/
+// basedOnRead) are never touched. Returns the original reference when nothing
+// changed. edit_transaction keeps its prior narrower scope (no skipIfMissing) so
+// its behavior stays identical; standalone str_replace coerces skipIfMissing too.
+function coerceReplacementScalars(
+  replacement: unknown,
+  coerceSkipIfMissing: boolean,
+): unknown {
+  if (
+    replacement === null ||
+    typeof replacement !== 'object' ||
+    Array.isArray(replacement)
+  ) {
+    return replacement
+  }
+  const replacementRecord = replacement as Record<string, unknown>
+  let replacementCopy: Record<string, unknown> | undefined
+
+  const allowMultiple = coerceBooleanString(replacementRecord.allowMultiple)
+  if (allowMultiple !== undefined) {
+    replacementCopy = replacementCopy ?? { ...replacementRecord }
+    replacementCopy.allowMultiple = allowMultiple
+  }
+
+  const occurrenceIndex = coerceIntString(replacementRecord.occurrenceIndex, 1)
+  if (occurrenceIndex !== undefined) {
+    replacementCopy = replacementCopy ?? { ...replacementRecord }
+    replacementCopy.occurrenceIndex = occurrenceIndex
+  }
+
+  if (coerceSkipIfMissing) {
+    const skipIfMissing = coerceBooleanString(replacementRecord.skipIfMissing)
+    if (skipIfMissing !== undefined) {
+      replacementCopy = replacementCopy ?? { ...replacementRecord }
+      replacementCopy.skipIfMissing = skipIfMissing
     }
   }
-  return dist[rows - 1][cols - 1]
+
+  return replacementCopy ?? replacement
+}
+
+// Coerce a replacements array, returning a new array only when at least one entry
+// changed; otherwise undefined so the caller can preserve the original reference.
+function coerceReplacementListScalars(
+  replacements: unknown[],
+  coerceSkipIfMissing: boolean,
+): unknown[] | undefined {
+  const replacementsCopy: unknown[] = []
+  let replacementsChanged = false
+  for (const replacement of replacements) {
+    const coerced = coerceReplacementScalars(replacement, coerceSkipIfMissing)
+    if (coerced !== replacement) {
+      replacementsCopy.push(coerced)
+      replacementsChanged = true
+    } else {
+      replacementsCopy.push(replacement)
+    }
+  }
+  return replacementsChanged ? replacementsCopy : undefined
+}
+
+// Narrow, fail-closed coercion for the edit tools' scalar args that some providers
+// emit as strings (e.g. { "atomic": "true", "allowMultiple": "false",
+// "occurrenceIndex": "1", "startLine": "105" }). Covers edit_transaction,
+// str_replace, and replace_range. Only unambiguous string scalars are coerced;
+// anything else is left untouched so the strict schema still rejects it and the
+// validation hint fires. Content-bearing strings (oldString/newString/newContent/
+// path/readCapability/occurrence.match) are never touched. Mirrors
+// repairTerminalCommandScalars' narrow, tool-scoped, early-return style.
+function repairEditToolScalars(toolName: string, input: unknown): unknown {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+    return input
+  }
+  const record = input as Record<string, unknown>
+
+  // str_replace: top-level atomic plus per-replacement allowMultiple/
+  // occurrenceIndex/skipIfMissing. replacements live directly at input.replacements.
+  if (toolName === 'str_replace') {
+    let copy: Record<string, unknown> | undefined
+
+    const atomic = coerceBooleanString(record.atomic)
+    if (atomic !== undefined) {
+      copy = copy ?? { ...record }
+      copy.atomic = atomic
+    }
+
+    if (Array.isArray(record.replacements)) {
+      const replacementsCopy = coerceReplacementListScalars(
+        record.replacements,
+        true,
+      )
+      if (replacementsCopy) {
+        copy = copy ?? { ...record }
+        copy.replacements = replacementsCopy
+      }
+    }
+
+    return copy ?? input
+  }
+
+  // replace_range: top-level startLine/endLine plus nested occurrence.occurrence.
+  // occurrence.match is a literal match string and is never coerced.
+  if (toolName === 'replace_range') {
+    let copy: Record<string, unknown> | undefined
+
+    // startLine/endLine: only a strict integer string coerces; ""/"1.5"/"soon"
+    // fail closed.
+    for (const lineKey of ['startLine', 'endLine'] as const) {
+      const coerced = coerceIntString(record[lineKey])
+      if (coerced !== undefined) {
+        copy = copy ?? { ...record }
+        copy[lineKey] = coerced
+      }
+    }
+
+    const occurrence = record.occurrence
+    if (
+      occurrence !== null &&
+      typeof occurrence === 'object' &&
+      !Array.isArray(occurrence)
+    ) {
+      const occurrenceRecord = occurrence as Record<string, unknown>
+      const coercedOccurrence = coerceIntString(occurrenceRecord.occurrence, 1)
+      if (coercedOccurrence !== undefined) {
+        copy = copy ?? { ...record }
+        copy.occurrence = { ...occurrenceRecord, occurrence: coercedOccurrence }
+      }
+    }
+
+    return copy ?? input
+  }
+
+  // edit_transaction: per-edit startLine/endLine plus per-replacement
+  // allowMultiple/occurrenceIndex, nested under input.edits[]. Behavior is
+  // unchanged from the prior edit_transaction-only repair (no skipIfMissing).
+  if (toolName !== 'edit_transaction' || !Array.isArray(record.edits)) {
+    return input
+  }
+
+  const editsCopy: unknown[] = []
+  let editsChanged = false
+
+  for (const edit of record.edits) {
+    if (edit === null || typeof edit !== 'object' || Array.isArray(edit)) {
+      editsCopy.push(edit)
+      continue
+    }
+    const editRecord = edit as Record<string, unknown>
+    let editCopy: Record<string, unknown> | undefined
+
+    // startLine/endLine: only a strict integer string coerces; ""/"1.5"/"soon"
+    // fail closed.
+    for (const lineKey of ['startLine', 'endLine'] as const) {
+      const coerced = coerceIntString(editRecord[lineKey])
+      if (coerced !== undefined) {
+        editCopy = editCopy ?? { ...editRecord }
+        editCopy[lineKey] = coerced
+      }
+    }
+
+    // replacements[].allowMultiple / occurrenceIndex. edit_transaction keeps its
+    // prior narrower scope (no skipIfMissing) so its behavior stays identical.
+    if (Array.isArray(editRecord.replacements)) {
+      const replacementsCopy = coerceReplacementListScalars(
+        editRecord.replacements,
+        false,
+      )
+      if (replacementsCopy) {
+        editCopy = editCopy ?? { ...editRecord }
+        editCopy.replacements = replacementsCopy
+      }
+    }
+
+    if (editCopy) {
+      editsCopy.push(editCopy)
+      editsChanged = true
+    } else {
+      editsCopy.push(edit)
+    }
+  }
+
+  if (!editsChanged) {
+    return input
+  }
+  return { ...record, edits: editsCopy }
+}
+
+function levenshteinDistanceForToolSuggestion(a: string, b: string): number {
+  const cols = b.length + 1
+  // Two-row DP: only the previous and current rows are needed to compute the
+  // edit distance, so reuse two buffers instead of allocating a full
+  // (a.length+1)x(b.length+1) matrix. Tool names are short, but this keeps the
+  // helper allocation-light on the suggestion path.
+  let prev = Array.from({ length: cols }, (_, j) => j)
+  let curr = new Array<number>(cols).fill(0)
+  for (let i = 1; i <= a.length; i += 1) {
+    curr[0] = i
+    for (let j = 1; j < cols; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + cost,
+      )
+    }
+    const next = prev
+    prev = curr
+    curr = next
+  }
+  return prev[cols - 1]
 }
 
 function suggestClosestToolName(
@@ -1157,6 +1536,47 @@ export function canonicalScopedToolPath(
   )
 }
 
+// A project-relative normalized path escapes the project root when it is
+// `..`, starts with `../`, or is absolute (the absolute case is essentially
+// the cross-drive Windows guard, since path.relative returns `../`-relative
+// forms within the same drive).
+function normalizedEscapesProject(normalized: string): boolean {
+  return (
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    path.isAbsolute(normalized)
+  )
+}
+
+const MAX_CUSTOM_INPUT_SCAN_DEPTH = 6
+const MAX_CUSTOM_INPUT_SCAN_STRINGS = 1000
+
+// Recursively collect string values from an arbitrary custom-tool input, with
+// bounded depth and count so a pathological nested/huge input cannot blow the
+// stack or stall the scan. Only own enumerable values are visited.
+function collectCustomInputStrings(
+  value: unknown,
+  out: string[],
+  depth: number = 0,
+): void {
+  if (depth > MAX_CUSTOM_INPUT_SCAN_DEPTH || out.length >= MAX_CUSTOM_INPUT_SCAN_STRINGS) {
+    return
+  }
+  if (typeof value === 'string') {
+    out.push(value)
+    return
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectCustomInputStrings(item, out, depth + 1)
+    return
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const child of Object.values(value as Record<string, unknown>)) {
+      collectCustomInputStrings(child, out, depth + 1)
+    }
+  }
+}
+
 export function parseRawToolCall<T extends ToolName = ToolName>(params: {
   rawToolCall: {
     toolName: T
@@ -1184,9 +1604,15 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
     )
   }
 
-  let repairedInput = repairTerminalCommandScalars(
+  let repairedInput = coerceInputScalarsBySchema(
     toolName,
-    repairSetOutputData(toolName, processedParameters.input),
+    repairEditToolScalars(
+      toolName,
+      repairTerminalCommandScalars(
+        toolName,
+        repairSetOutputData(toolName, processedParameters.input),
+      ),
+    ),
   )
   if (toolName === 'spawn_agents') {
     const misbraced = detectMisbracedSpawnPayload({
@@ -1374,6 +1800,7 @@ export async function executeToolCall<T extends ToolName>(
     onResponseChunk({
       type: 'error',
       message: `${toolCall.error}\n\n${inputLabel}:\n${formattedInput}`,
+      userMessage: `The model sent a malformed \`${toolName}\` tool call and is correcting it automatically. No action is needed.`,
     })
     logger.debug(
       { toolCall, error: toolCall.error },
@@ -1389,7 +1816,13 @@ export async function executeToolCall<T extends ToolName>(
   const allowedPatterns = filesystemAccess
     ? agentTemplate.filesystemScope?.[filesystemAccess.access]
     : undefined
-  if (filesystemAccess && allowedPatterns) {
+  // Containment is evaluated for EVERY filesystem tool call whose paths we can
+  // statically determine — not only when the agent declared a filesystemScope.
+  // The project root is the real security boundary, so the escape check below
+  // is a universal runtime backstop; SDK handlers remain the authoritative
+  // containment layer. The declared-scope mismatch warning only applies when
+  // the agent actually configured a scope for this access type.
+  if (filesystemAccess) {
     const evaluatedPaths = filesystemAccess.paths.map((rawPath) => {
       const normalized = normalizeScopedToolPath(
         rawPath,
@@ -1412,15 +1845,13 @@ export async function executeToolCall<T extends ToolName>(
       // real containment boundary: an agent must never read or write outside
       // the project, so these are always hard-blocked regardless of access.
       const escapesProject =
-        normalized === '..' ||
-        normalized.startsWith('../') ||
-        path.isAbsolute(normalized) ||
-        canonical === '..' ||
-        canonical.startsWith('../') ||
-        path.isAbsolute(canonical)
+        normalizedEscapesProject(normalized) ||
+        normalizedEscapesProject(canonical)
       // An in-project path is a scope mismatch when it stays inside the project
-      // but does not match the agent's declared filesystemScope patterns.
+      // but does not match the agent's declared filesystemScope patterns. Only
+      // meaningful when the agent declared a scope for this access type.
       const scopeMismatch =
+        allowedPatterns !== undefined &&
         !escapesProject &&
         !allowedPatterns.some(
           (pattern) =>
@@ -1432,40 +1863,33 @@ export async function executeToolCall<T extends ToolName>(
     const escapedPaths = evaluatedPaths.filter(
       ({ escapesProject }) => escapesProject,
     )
-    const scopeMismatchPaths = evaluatedPaths.filter(
-      ({ scopeMismatch }) => scopeMismatch,
-    )
-    // Hard-block policy differs by access:
-    //   - Escapes above the project root are always blocked (read and write).
-    //   - read: an in-project scope mismatch is still blocked, because reads
-    //     guard secret/fixture exposure (e.g. .env, synthetic fixtures) and
-    //     have deliberate recovery semantics.
-    //   - write: an in-project scope mismatch is NOT hard-blocked; it is
-    //     softened to a non-blocking warning below so a legitimate in-project
-    //     edit is not stopped merely because the path was not pre-declared in
-    //     the agent's writable scope.
-    const hardBlockedPaths =
-      filesystemAccess.access === 'write'
-        ? escapedPaths
-        : [...escapedPaths, ...scopeMismatchPaths]
-    if (hardBlockedPaths.length > 0) {
-      const repairEditorReadRecovery =
-        agentTemplate.id === 'repair-editor' && filesystemAccess.access === 'read'
-          ? ' Recovery: do not retry this read or request broader scope. If the path is a synthetic fixture literal, inspect the authorized test file that owns the literal instead; otherwise report the missing read permission to the parent.'
-          : ''
+    // Hard-block policy:
+    //   - Escapes above the project root are always hard-blocked (read and
+    //     write), for every agent regardless of configured filesystemScope.
+    //     The project root is the real containment boundary and SDK handlers
+    //     are authoritative.
+    //   - In-project scope mismatches are NOT hard-blocked for either access.
+    //     They proceed with a non-blocking warning below so a legitimate
+    //     in-project operation is not stopped merely because the path was not
+    //     pre-declared in the agent's filesystem scope.
+    if (escapedPaths.length > 0) {
+      const allowedSuffix = allowedPatterns
+        ? ` Allowed patterns: ${allowedPatterns.join(', ')}.`
+        : ''
       onResponseChunk({
         type: 'error',
-        message: `Tool \`${toolName}\` was blocked by the ${agentTemplate.id} filesystem ${filesystemAccess.access} scope. Disallowed path(s): ${hardBlockedPaths.map(({ rawPath }) => rawPath).join(', ')}. Allowed patterns: ${allowedPatterns.join(', ')}.${repairEditorReadRecovery}`,
+        message: `Tool \`${toolName}\` was blocked by the ${agentTemplate.id} filesystem ${filesystemAccess.access} scope. Disallowed path(s): ${escapedPaths.map(({ rawPath }) => rawPath).join(', ')}.${allowedSuffix}`,
       })
       return abortablePreviousToolCallFinished
     }
-    // Softened write policy: an in-project write outside the declared scope
-    // proceeds, but is surfaced as a non-blocking warning so the boundary stays
-    // observable for diagnostics without hard-stopping legitimate edits.
-    if (
-      filesystemAccess.access === 'write' &&
-      scopeMismatchPaths.length > 0
-    ) {
+    // Softened scope policy: an in-project read or write outside the declared
+    // scope proceeds, but is surfaced as a non-blocking warning so the boundary
+    // stays observable for diagnostics without hard-stopping legitimate work.
+    // Only applies when the agent declared a scope for this access type.
+    const scopeMismatchPaths = evaluatedPaths.filter(
+      ({ scopeMismatch }) => scopeMismatch,
+    )
+    if (allowedPatterns && scopeMismatchPaths.length > 0) {
       logger.warn(
         {
           toolName,
@@ -1473,7 +1897,7 @@ export async function executeToolCall<T extends ToolName>(
           outOfScopePaths: scopeMismatchPaths.map(({ rawPath }) => rawPath),
           allowedPatterns,
         },
-        `Tool \`${toolName}\` wrote outside the ${agentTemplate.id} declared filesystem write scope; proceeding with a warning.`,
+        `Tool \`${toolName}\` accessed paths outside the ${agentTemplate.id} declared filesystem ${filesystemAccess.access} scope; proceeding with a warning.`,
       )
     }
   }
@@ -2417,11 +2841,39 @@ export async function executeCustomToolCall(
     onResponseChunk({
       type: 'error',
       message: `${toolCall.error}\n\n${inputLabel}:\n${formattedInput}`,
+      userMessage: `The model sent a malformed \`${toolName}\` tool call and is correcting it automatically. No action is needed.`,
     })
     logger.debug(
       { toolCall, error: toolCall.error },
       `${toolName} error: ${toolCall.error}`,
     )
+    return abortablePreviousToolCallFinished
+  }
+
+  // Heuristic containment backstop for custom/MCP tools. Their input schemas are
+  // arbitrary and agent-defined, so getFilesystemToolPaths cannot enumerate path
+  // fields the way it does for native tools. As defense-in-depth (SDK handlers
+  // remain the authoritative containment layer), recursively scan string inputs
+  // and hard-block the call when any value LEXICALLY resolves to a path that
+  // escapes the project root (../ traversal or absolute). This is intentionally
+  // lexical-only (no realpath): it stays cheap over arbitrary/large inputs and
+  // avoids per-string filesystem stat storms; symlink-level containment remains
+  // the SDK handler's responsibility. It can false-positive on non-path strings
+  // that happen to resolve outside the root — an explicitly accepted tradeoff.
+  const scannedInputStrings: string[] = []
+  collectCustomInputStrings(toolCall.input, scannedInputStrings)
+  const escapingInputValues = scannedInputStrings.filter(
+    (value) =>
+      value.length > 0 &&
+      normalizedEscapesProject(
+        normalizeScopedToolPath(value, fileContext.projectRoot),
+      ),
+  )
+  if (escapingInputValues.length > 0) {
+    onResponseChunk({
+      type: 'error',
+      message: `Tool \`${toolName}\` was blocked because one or more inputs resolve to a path outside the project root: ${escapingInputValues.slice(0, 5).join(', ')}. Tools may only operate on paths inside the project.`,
+    })
     return abortablePreviousToolCallFinished
   }
 

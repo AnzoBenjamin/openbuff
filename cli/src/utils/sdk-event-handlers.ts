@@ -824,8 +824,16 @@ const handleJobUpdate = (
       const base = block.output ?? ''
       const withDelta =
         event.outputDelta !== undefined ? base + event.outputDelta : base
+      // Track whether the error text has already been appended via an explicit
+      // flag on the block, rather than string-suffix matching. This avoids the
+      // edge case where legitimate streamed output happens to end with the same
+      // error string, which would suppress a genuinely new error append.
+      const errorAlreadyAppended =
+        errorText !== undefined && block.jobErrorAppended === true
       const combined =
-        errorText !== undefined ? `${withDelta}\n${errorText}` : withDelta
+        errorText !== undefined && !errorAlreadyAppended
+          ? `${withDelta}\n${errorText}`
+          : withDelta
       const nextOutput =
         event.outputDelta !== undefined || errorText !== undefined
           ? combined.slice(-JOB_OUTPUT_CHAR_CAP)
@@ -834,6 +842,9 @@ const handleJobUpdate = (
         ...block,
         lifecycle: jobStateToToolLifecycle(event.state),
         ...(nextOutput !== undefined ? { output: nextOutput } : {}),
+        ...(errorText !== undefined && !errorAlreadyAppended
+          ? { jobErrorAppended: true }
+          : {}),
       }
     }
     if (block.type === 'agent') {
@@ -992,12 +1003,17 @@ const handleRuntimeError = (
   state: EventHandlerState,
   event: Extract<SDKEvent, { type: 'error' }>,
 ) => {
+  state.logger.error({ event }, 'SDK runtime error event')
+  const concise = event.userMessage?.trim()
+  if (concise) {
+    state.message.updater.setError(concise)
+    return
+  }
   const message = event.message
     .split('\n')
     .filter((line, index) => index === 0 || !/^\s*at\s/.test(line))
     .join('\n')
     .trim()
-  state.logger.error({ event }, 'SDK runtime error event')
   state.message.updater.setError(
     message || 'The agent runtime reported an error.',
   )

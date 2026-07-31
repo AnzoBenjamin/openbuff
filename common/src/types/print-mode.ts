@@ -12,6 +12,11 @@ export type PrintModeStart = z.infer<typeof printModeStartSchema>
 export const printModeErrorSchema = z.object({
   type: z.literal('error'),
   message: z.string(),
+  // Concise, calm summary for agent-recoverable errors (e.g. a malformed tool
+  // call the agent will auto-correct). When present, UIs should show this to
+  // the user instead of the full `message`, which carries detailed recovery
+  // context intended for the agent's message history.
+  userMessage: z.string().optional(),
 })
 export type PrintModeError = z.infer<typeof printModeErrorSchema>
 

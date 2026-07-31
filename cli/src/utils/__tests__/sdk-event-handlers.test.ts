@@ -130,6 +130,26 @@ describe('sdk-event-handlers', () => {
     expect(getMessages()[0].userError).toBe('Provider failed')
   })
 
+  test('prefers the concise userMessage over the detailed message when present', () => {
+    const { ctx, getMessages } = createTestContext()
+    createEventHandler(ctx)({
+      type: 'error',
+      message: 'detailed wall\n    at x.ts:1:2',
+      userMessage: 'Calm summary',
+    })
+    expect(getMessages()[0].userError).toBe('Calm summary')
+  })
+
+  test('falls back to the stack-stripped message when userMessage is whitespace-only', () => {
+    const { ctx, getMessages } = createTestContext()
+    createEventHandler(ctx)({
+      type: 'error',
+      message: 'Provider failed\n    at secret/path.ts:1:2',
+      userMessage: '   ',
+    })
+    expect(getMessages()[0].userError).toBe('Provider failed')
+  })
+
   test('background agent cards remain running until polling reports settlement', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
@@ -497,6 +517,35 @@ describe('sdk-event-handlers', () => {
     })
   })
 
+  test('tool_start flips a queued tool block back to running', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    // A write queued behind a prior same-path write is emitted with queued:true
+    // and lifecycle 'queued'; the runtime later emits tool_start once the
+    // per-path barrier resolves, which flips the card to running.
+    handleEvent({
+      type: 'tool_call',
+      toolCallId: 'write-queued',
+      toolName: 'write_file',
+      input: { path: 'src/a.ts' },
+      queued: true,
+    } as any)
+
+    expect(getMessages()[0].blocks?.[0]).toMatchObject({
+      type: 'tool',
+      queued: true,
+      lifecycle: 'queued',
+    })
+
+    handleEvent({ type: 'tool_start', toolCallId: 'write-queued' })
+
+    expect(getMessages()[0].blocks?.[0]).toMatchObject({
+      type: 'tool',
+      queued: false,
+      lifecycle: 'running',
+    })
+  })
+
   test('job_update updates a correlated tool block lifecycle and appends bounded output', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
@@ -678,6 +727,83 @@ describe('sdk-event-handlers', () => {
     expect(block).toMatchObject({ type: 'tool', lifecycle: 'failed' })
     expect(block.output).toContain('partial output')
     expect(block.output).toContain('command failed with exit code 1')
+  })
+
+  test('job_update does not duplicate a repeated tool job error in the card output', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    // Pins the tool-block error dedup that mirrors the agent-block path: an
+    // error/lost job_update delivered more than once without new output must
+    // not append the same error text repeatedly.
+    handleEvent({
+      type: 'tool_call',
+      toolCallId: 'term-err-dup',
+      toolName: 'run_terminal_command',
+      input: { command: 'npm test' },
+      backgroundJobId: 'job-err',
+    } as any)
+
+    handleEvent({
+      type: 'job_update',
+      jobId: 'job-err',
+      kind: 'process',
+      state: 'error',
+      sequence: 1,
+      error: 'boom',
+    } as any)
+    handleEvent({
+      type: 'job_update',
+      jobId: 'job-err',
+      kind: 'process',
+      state: 'error',
+      sequence: 2,
+      error: 'boom',
+    } as any)
+
+    const block = getMessages()[0].blocks?.[0] as any
+    expect(block).toMatchObject({ type: 'tool', lifecycle: 'failed' })
+    expect((block.output.match(/boom/g) ?? []).length).toBe(1)
+  })
+
+  test('job_update still appends an error whose text coincidentally matches trailing streamed output', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    // Pins the flag-based dedup's advantage over string-suffix matching: when
+    // legitimate streamed output happens to end with the exact error text, a
+    // genuinely new error append must NOT be suppressed. The explicit
+    // jobErrorAppended flag (unset until the first error) distinguishes
+    // "already appended this error" from "output coincidentally ends this way".
+    handleEvent({
+      type: 'tool_call',
+      toolCallId: 'term-coincidental',
+      toolName: 'run_terminal_command',
+      input: { command: 'npm test' },
+      backgroundJobId: 'job-coincidental',
+    } as any)
+
+    // Streamed output that coincidentally ends with the exact error text.
+    handleEvent({
+      type: 'job_update',
+      jobId: 'job-coincidental',
+      kind: 'process',
+      state: 'running',
+      sequence: 1,
+      outputDelta: 'boom',
+    } as any)
+    // A genuinely new error carrying the same text; it must still be appended.
+    handleEvent({
+      type: 'job_update',
+      jobId: 'job-coincidental',
+      kind: 'process',
+      state: 'error',
+      sequence: 2,
+      error: 'boom',
+    } as any)
+
+    const block = getMessages()[0].blocks?.[0] as any
+    expect(block).toMatchObject({ type: 'tool', lifecycle: 'failed' })
+    // Once from the streamed output, once from the appended error.
+    expect((block.output.match(/boom/g) ?? []).length).toBe(2)
   })
 
   test('job_update appends a single error block to a failed agent job without duplicating', () => {

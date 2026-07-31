@@ -65,9 +65,14 @@ const providerSchemaAnnotationKeys = new Set([
   'title',
 ])
 
-function compactJsonSchemaValue(value: unknown): unknown {
+function compactJsonSchemaValue(
+  value: unknown,
+  preserveDescriptions?: boolean,
+): unknown {
   if (Array.isArray(value)) {
-    return value.map(compactJsonSchemaValue)
+    return value.map((child) =>
+      compactJsonSchemaValue(child, preserveDescriptions),
+    )
   }
   if (!value || typeof value !== 'object') {
     return value
@@ -75,20 +80,30 @@ function compactJsonSchemaValue(value: unknown): unknown {
 
   const compacted: Record<string, unknown> = {}
   for (const [key, childValue] of Object.entries(value)) {
+    // Descriptions are the one annotation mutation tools keep so the model
+    // still sees per-field guidance for a bare discriminated union; every
+    // other annotation key stays stripped for token economy.
+    if (key === 'description' && preserveDescriptions) {
+      compacted[key] = childValue
+      continue
+    }
     if (providerSchemaAnnotationKeys.has(key)) {
       continue
     }
-    compacted[key] = compactJsonSchemaValue(childValue)
+    compacted[key] = compactJsonSchemaValue(childValue, preserveDescriptions)
   }
   return compacted
 }
 
 export function compactToolInputSchemaForProvider(
   schema: z.ZodType,
+  options?: { preserveDescriptions?: boolean },
 ): ReturnType<typeof jsonSchema> {
+  const preserveDescriptions = options?.preserveDescriptions === true
   const safeSchema = ensureJsonSchemaCompatible(schema)
   const compactedSchema = compactJsonSchemaValue(
     toJsonSchemaSafe(safeSchema),
+    preserveDescriptions,
   ) as JSONSchema7
 
   return jsonSchema(compactedSchema)
@@ -96,6 +111,7 @@ export function compactToolInputSchemaForProvider(
 
 function compactToolDefinitionForProvider(
   toolDefinition: ToolSet[string],
+  options?: { preserveDescriptions?: boolean },
 ): ToolSet[string] {
   const inputSchema = (toolDefinition as { inputSchema?: unknown }).inputSchema
   if (!inputSchema) {
@@ -113,6 +129,7 @@ function compactToolDefinitionForProvider(
     ...toolDefinition,
     inputSchema: compactToolInputSchemaForProvider(
       ensureZodSchema(inputSchema as z.ZodType | Record<string, unknown>),
+      options,
     ),
   } as ToolSet[string]
 }
@@ -162,7 +179,7 @@ function paramsSection(params: { schema: z.ZodType; endsAgentStep: boolean }) {
     : 'None'
 
   let paramsSection = ''
-  if (paramsDescription.length === 1 && paramsDescription[0] === 'None') {
+  if (paramsDescription === 'None') {
     paramsSection = 'Params: None'
   } else if (paramsDescription.length > 0) {
     paramsSection = `Params: ${paramsDescription}`
@@ -455,34 +472,31 @@ export async function getToolSet(params: {
         ...toolDef,
         inputSchema: providerInputSchemaFor(toolDef),
       }
+      // Mutation tools keep schema field descriptions so the model still sees
+      // per-field guidance for a bare discriminated union (e.g.
+      // edit_transaction); read-only/other tools stay fully compacted.
+      const preserveDescriptions =
+        getToolMetadata(toolName as ToolName).kind === 'mutation'
 
-      // For the skill tool, replace the placeholder with actual available skills
-      if (toolName === 'skill' && availableSkillsXml) {
-        let description = toolDef.description ?? ''
-        description = description.replace(
-          AVAILABLE_SKILLS_PLACEHOLDER,
-          availableSkillsXml,
-        )
-        toolSet[toolName] = {
+      // For the skill tool, replace the placeholder with the actual available
+      // skills (or an explicit "no skills" notice when none are loaded) before
+      // compacting. Every branch funnels into the single compaction call below.
+      let resolvedToolDef = providerToolDef
+      if (toolName === 'skill') {
+        const replacement =
+          availableSkillsXml ||
+          'There are no skills available. Do not use this tool because there are no skills to load.'
+        resolvedToolDef = {
           ...providerToolDef,
-          description,
+          description: (toolDef.description ?? '').replace(
+            AVAILABLE_SKILLS_PLACEHOLDER,
+            replacement,
+          ),
         }
-        toolSet[toolName] = compactToolDefinitionForProvider(toolSet[toolName])
-      } else if (toolName === 'skill') {
-        // Explicitly state no skills are available
-        let description = toolDef.description ?? ''
-        description = description.replace(
-          AVAILABLE_SKILLS_PLACEHOLDER,
-          'There are no skills available. Do not use this tool because there are no skills to load.',
-        )
-        toolSet[toolName] = {
-          ...providerToolDef,
-          description,
-        }
-        toolSet[toolName] = compactToolDefinitionForProvider(toolSet[toolName])
-      } else {
-        toolSet[toolName] = compactToolDefinitionForProvider(providerToolDef)
       }
+      toolSet[toolName] = compactToolDefinitionForProvider(resolvedToolDef, {
+        preserveDescriptions,
+      })
     }
   }
 
