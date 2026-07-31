@@ -44,6 +44,7 @@ import { detectTerminalTheme } from './utils/terminal-color-detection'
 import { setOscDetectedTheme } from './utils/theme-system'
 
 import type { FileTreeNode } from '@codebuff/common/util/file'
+import { SmokeBootscreenMarker } from './components/smoke-bootscreen-marker'
 
 const require = createRequire(import.meta.url)
 
@@ -194,6 +195,14 @@ async function main(): Promise<void> {
     }
   }
 
+  // Smoke-gate only: strip --smoke-bootscreen before commander.parse so the flag
+  // is never rejected as an unknown option (the other --smoke-* probes handle
+  // their own flags pre-parse and exit; this one must continue to full boot).
+  const smokeBootscreen = process.argv.includes('--smoke-bootscreen')
+  const cliArgv = process.argv.filter(
+    (arg) => arg !== '--smoke-bootscreen',
+  )
+
   // Run OSC theme detection BEFORE anything else.
   // This MUST happen before OpenTUI starts because OSC responses come through stdin,
   // and OpenTUI also listens to stdin. Running detection here ensures stdin is clean.
@@ -217,7 +226,7 @@ async function main(): Promise<void> {
     cwd,
     initialMode,
     trustProjectAgents,
-  } = parseCliArgs(process.argv, { version: loadPackageVersion() })
+  } = parseCliArgs(cliArgv, { version: loadPackageVersion() })
 
   const isPublishCommand = process.argv[2] === 'publish'
   const hasAgentOverride = Boolean(agent?.trim())
@@ -383,9 +392,11 @@ async function main(): Promise<void> {
   process.removeListener('uncaughtException', earlyFatalHandler)
   process.removeListener('unhandledRejection', earlyFatalHandler)
   installProcessCleanupHandlers(renderer)
+
   createRoot(renderer).render(
     <QueryClientProvider client={queryClient}>
       <AppWithAsyncAuth />
+      {smokeBootscreen ? <SmokeBootscreenMarker /> : null}
     </QueryClientProvider>,
   )
 }

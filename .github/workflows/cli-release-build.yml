@@ -491,6 +491,11 @@ jobs:
           # Long-running check — gives async startup failures time to surface.
           # This is the step that would have caught the post-OpenTUI-upgrade
           # tree-sitter wasm crash on Windows.
+          #
+          # The CLI emits a deterministic non-TTY boot marker ('openbuff
+          # bootscreen ok') when stdout is a pipe, so the full boot-screen gate
+          # below resolves on native Windows now that OpenTUI itself paints
+          # nothing to a non-TTY stdout.
           bun "$SMOKE_SCRIPT" "$BIN"
 
       - name: Create tarball
