@@ -38,6 +38,11 @@ const INLINE_HELPER_NAMES: GateFilesFunctionName[] = [
 // load path. Editor does not define/need it for the four-helper reconstruction.
 const BASE2_EXTRA_HELPER_NAMES = ['collectAgentReceiptChangedFiles'] as const
 
+// editor hasEditArtifact/visit call this hoisted sibling; add it to the
+// reconstructed set for the editor load path so the serialized copy stays
+// in scope after handleSteps.toString() + new Function(...).
+const EDITOR_EXTRA_HELPER_NAMES = ['getCorrelatedReceiptAction'] as const
+
 function extractInlineFunctionSource(
   source: string,
   functionName: string,
@@ -198,7 +203,11 @@ describe('gate-files helpers — inline copies match canonical exports', () => {
   })
 
   test('editor inline copies match canonical gate-files.ts exports', () => {
-    const inline = loadInlineHelpers('../editor/editor.ts', EDITOR_NAME_ALIASES)
+    const inline = loadInlineHelpers(
+      '../editor/editor.ts',
+      EDITOR_NAME_ALIASES,
+      EDITOR_EXTRA_HELPER_NAMES,
+    )
     assertParity(inline)
   })
 
@@ -218,7 +227,11 @@ describe('gate-files helpers — inline copies match canonical exports', () => {
   })
 
   test('editor inline gate-files copies reference no non-reconstructed siblings', () => {
-    assertNoSiblingHelperReferences('../editor/editor.ts', EDITOR_NAME_ALIASES)
+    assertNoSiblingHelperReferences(
+      '../editor/editor.ts',
+      EDITOR_NAME_ALIASES,
+      EDITOR_EXTRA_HELPER_NAMES,
+    )
   })
 
   function assertParity(inline: GateFilesHelpers): void {

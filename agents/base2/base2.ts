@@ -2185,15 +2185,19 @@ ${specialistRoutingSection}
                   // non-attestable fingerprint stays blocking after the refresh.
                   const attestsEverything =
                     specialistAttestationIssues.length === 0
+                  // A coverage-complete review (zero attestation issues) is a
+                  // PASS and FALLS THROUGH to the normal verdict/credit
+                  // handling below (collectReviewerBlockers /
+                  // getReviewerFinalizationVerdict / specialistReviewGatesDone /
+                  // specialistReviewGateFingerprints). Only a review that does
+                  // NOT fully attest AND smells stale is a terminal protocol
+                  // failure. Do NOT `continue` here for attestsEverything: that
+                  // would skip to the next routed specialist and silently never
+                  // credit this one.
                   if (
-                    attestsEverything ||
+                    !attestsEverything &&
                     isStaleSnapshotReviewerResult(specialistToolResult)
                   ) {
-                    if (attestsEverything) {
-                      // A coverage-complete attestation passes; fall through to
-                      // the normal verdict/credit handling instead of blocking.
-                      continue
-                    }
                     activeWorkState.currentPhase = 'blocked'
                     activeWorkState.openReviewerBlockers = [
                       `${agentType} could not attest to a stable snapshot after one automatic refresh.`,

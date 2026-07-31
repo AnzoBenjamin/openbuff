@@ -3,15 +3,13 @@
  * editor agent. These walk tool-call/tool-result shapes and collect changed
  * file paths so downstream agents can reuse a durable gate pass.
  *
- * NOTE: `agents/base2/base2.ts` keeps parallel inline copies of these
- * helpers inside `createBase2`'s `handleSteps` generator because that
- * function is serialized via `handleSteps.toString()` and reconstructed
- * with `new Function(...)`. Reconstructed functions lose their module
- * closure, so they cannot reference imports from this file. Keep the two
- * implementations in sync.
- *
- * `agents/editor/editor.ts` does NOT serialize its handleSteps and uses
- * these exports directly.
+ * NOTE: `agents/base2/base2.ts` and `agents/editor/editor.ts` both keep
+ * parallel inline copies of these helpers inside their `handleSteps`
+ * generators because those functions are serialized via
+ * `handleSteps.toString()` and reconstructed with `new Function(...)`.
+ * Reconstructed functions lose their module closure, so they cannot
+ * reference imports from this file. Keep all three implementations in
+ * sync; `agents/__tests__/gate-files-parity.test.ts` asserts their parity.
  */
 
 import {
