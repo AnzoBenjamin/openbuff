@@ -1,6 +1,7 @@
 import { jobRegistry } from '@codebuff/common/util/job-registry'
 
 import { getBackgroundAgentJob } from '../../../util/background-agent-jobs'
+import { resolveRuntimeJobOwner } from '../../../util/runtime-job-owner'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
@@ -21,11 +22,19 @@ export const handleEndTurn = (async (params: {
 
   await previousToolCallFinished
 
-  const rootRunId = agentState
-    ? agentState.ancestorRunIds[0] ?? agentState.runId ?? agentState.agentId
-    : undefined
   const owner =
-    clientSessionId && rootRunId ? { clientSessionId, rootRunId } : undefined
+    clientSessionId && agentState
+      ? (() => {
+          const resolved = resolveRuntimeJobOwner({
+            clientSessionId,
+            agentState,
+          })
+          return {
+            clientSessionId: resolved.clientSessionId,
+            rootRunId: resolved.rootRunId,
+          }
+        })()
+      : undefined
   // The unified job registry lists both shell `process` jobs and `agent`
   // coroutine jobs; end_turn must keep warning about BOTH kinds.
   const running = jobRegistry.listRunning(owner)

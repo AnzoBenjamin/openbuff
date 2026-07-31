@@ -1,3 +1,5 @@
+import { resolveRuntimeJobOwner } from '../../../util/runtime-job-owner'
+
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
   ClientToolCall,
@@ -41,13 +43,7 @@ export const handleCheckJob = (async ({
       timeout_seconds: toolCall.input.timeout_seconds,
       kill_on_timeout: toolCall.input.kill_on_timeout,
       // Trusted owner injected from agent/session state (never model input).
-      owner: {
-        clientSessionId,
-        rootRunId:
-          agentState.ancestorRunIds[0] ?? agentState.runId ?? agentState.agentId,
-        parentRunId: agentState.runId ?? agentState.agentId,
-        parentAgentId: agentState.agentId,
-      },
+      owner: resolveRuntimeJobOwner({ clientSessionId, agentState }),
     },
   }
   await previousToolCallFinished

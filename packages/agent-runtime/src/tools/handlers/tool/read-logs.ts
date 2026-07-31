@@ -1,3 +1,5 @@
+import { resolveRuntimeJobOwner } from '../../../util/runtime-job-owner'
+
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
   ClientToolCall,
@@ -39,13 +41,7 @@ export const handleReadLogs = (async ({
       lines: toolCall.input.lines,
       max_chars: toolCall.input.max_chars,
       // Trusted owner injected from agent/session state (never model input).
-      owner: {
-        clientSessionId,
-        rootRunId:
-          agentState.ancestorRunIds[0] ?? agentState.runId ?? agentState.agentId,
-        parentRunId: agentState.runId ?? agentState.agentId,
-        parentAgentId: agentState.agentId,
-      },
+      owner: resolveRuntimeJobOwner({ clientSessionId, agentState }),
     },
   }
   await previousToolCallFinished

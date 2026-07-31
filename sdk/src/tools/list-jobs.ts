@@ -14,10 +14,10 @@ export async function listJobs(params: {
     clientSessionId: params.owner.clientSessionId,
     rootRunId: params.owner.rootRunId,
   }
-  const entries = jobRegistry
-    .list(owner)
-    .filter((job) => job.kind === 'process')
-  const jobs = entries.map((entry) => ({
+  // Both shell (`process`) and background-agent (`agent`) jobs share the
+  // registry; list every owned job so rediscovery matches docs/schema and
+  // runtime end_turn warnings. Ownership is (clientSessionId, rootRunId).
+  const jobs = jobRegistry.list(owner).map((entry) => ({
     jobId: entry.jobId,
     kind: entry.kind,
     command: entry.label,
