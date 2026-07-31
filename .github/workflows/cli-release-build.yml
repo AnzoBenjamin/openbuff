@@ -488,10 +488,19 @@ jobs:
           VERSION_OUTPUT=$("$BIN" --version | tail -n 1)
           test "$VERSION_OUTPUT" = "${{ inputs.new-version }}"
 
-          # Long-running check — gives async startup failures time to surface.
-          # This is the step that would have caught the post-OpenTUI-upgrade
-          # tree-sitter wasm crash on Windows.
-          bun "$SMOKE_SCRIPT" "$BIN"
+          # Deterministic native/wasm probes: this exercises both the packaged
+          # tree-sitter wasm (async Parser.init) and the OpenTUI native FFI
+          # boundary. We parse and exercise the OpenTUI native library via the
+          # smoke script's --probe-only mode, mirroring the legacy-macOS matrix
+          # entries.
+          #
+          # The FULL interactive TUI is intentionally NOT boot-screen-gated
+          # here: painting through a piped stdout is non-deterministic on the
+          # native Windows runner (the binary emits no boot-signal or
+          # alternate-screen escape when stdout is not a TTY), so boot-screen
+          # detection would flake. The probes below deterministically prove
+          # both native dependencies load and init.
+          bun "$SMOKE_SCRIPT" "$BIN" --probe-only
 
       - name: Create tarball
         shell: bash
