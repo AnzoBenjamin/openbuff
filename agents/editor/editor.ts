@@ -18,6 +18,12 @@ type CodeEditorVariant =
 const EDITOR_VARIANTS_WITH_THINK_TAGS: ReadonlySet<CodeEditorVariant> = new Set(
   ['opus'],
 )
+// Smaller / reasoning-first variants that are more prone to landing zero
+// committed edits from a strict read-before-edit harness. These get explicit
+// recovery guidance so they stop looping and emit a precise `blockedReason`
+// (or a partial result) instead of making the parent guess why nothing changed.
+const EDITOR_VARIANTS_WITH_RECOVERY_GUIDANCE: ReadonlySet<CodeEditorVariant> =
+  new Set(['gpt-5', 'glm', 'kimi', 'deepseek', 'minimax'])
 const EDITOR_MODELS: Record<CodeEditorVariant, AgentDefinition['model']> = {
   'gpt-5': 'openai/gpt-5.3',
   opus: 'anthropic/claude-opus-4.7',
@@ -45,6 +51,10 @@ export const createCodeEditor = (options: {
           type: 'string',
           enum: ['completed', 'partial', 'blocked'],
         },
+        // Why the editor ended with status `blocked` (or reported partial)
+        // despite its attempts: helps a cheap/fast parent model decide how to
+        // retry without re-deriving the cause from raw tool transcripts.
+        blockedReason: { type: 'string' },
         messages: { type: 'array', items: {} },
         changedFiles: { type: 'array', items: { type: 'string' } },
         targetFileProgress: {
@@ -180,6 +190,12 @@ You can also use <think> tags interspersed between tool calls to think about the
     : ''
 }
 
+${
+  EDITOR_VARIANTS_WITH_RECOVERY_GUIDANCE.has(model)
+    ? '\n\nRecovery guidance: if an edit_transaction repeatedly fails to commit, re-read the exact target (or use the failure capability) and retry once. If it still does not land, stop and return status "blocked" with a precise blockedReason and unresolved note so the orchestrator knows exactly what stalled.\n'
+    : ''
+}
+
 Your implementation should:
 - Be complete and comprehensive
 - Include all necessary changes to fulfill the user's request
@@ -248,6 +264,13 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
           : unresolved.length > 0
             ? 'partial'
             : 'completed'
+      // When nothing committed, surface why so the parent can retry precisely
+      // instead of re-deriving the cause from raw tool transcripts. A cheap,
+      // explicit diagnostic only — never a security/authority statement.
+      const blockedReason =
+        changedFiles.length === 0
+          ? collectFailedEditReason(newMessages)
+          : undefined
       // Changed paths prove only that mutations committed, not that a reviewer
       // finding was semantically addressed. Leave finding attestation to the
       // parent reviewer gate until an explicit trustworthy evidence channel exists.
@@ -260,6 +283,7 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
             status,
             messages: newMessages,
             changedFiles,
+            ...(blockedReason !== undefined ? { blockedReason } : {}),
             ...(targetFileProgress ? { targetFileProgress } : {}),
             requirementsAddressed: [],
             acceptanceCriteriaAddressed: [],
@@ -275,6 +299,56 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
         const files = new Set<string>()
         visit(messages, files)
         return [...files]
+      }
+
+      // Called only when `changedFiles.length === 0` (so the status resolves to
+      // `blocked`). Produces a deterministic, cheap diagnostic for why no edit
+      // landed without inspecting any authority/security internals — just two
+      // boolean flags derived from the edit_transaction tool messages.
+      function collectFailedEditReason(messages: unknown[]): string {
+        let sawEditTransaction = false
+        let committedUnrecognized = false
+        for (const message of messages) {
+          if (!message || typeof message !== 'object') continue
+          const record = message as Record<string, unknown>
+          if (
+            record.role !== 'tool' ||
+            record.toolName !== 'edit_transaction'
+          ) {
+            continue
+          }
+          sawEditTransaction = true
+          const parts = Array.isArray(record.content) ? record.content : []
+          for (const part of parts) {
+            if (!part || typeof part !== 'object') continue
+            const partRecord = part as Record<string, unknown>
+            if (
+              partRecord.type !== 'json' ||
+              !partRecord.value ||
+              typeof partRecord.value !== 'object'
+            ) {
+              continue
+            }
+            const value = partRecord.value as Record<string, unknown>
+            if (
+              (value.kind === 'commit_receipt' &&
+                value.version === 1 &&
+                value.status === 'committed') ||
+              (value.kind === 'file_mutation_result' &&
+                value.version === 1 &&
+                (value.outcome === 'applied' || value.outcome === 'partial'))
+            ) {
+              committedUnrecognized = true
+            }
+          }
+        }
+        if (committedUnrecognized) {
+          return 'edit_transaction committed but the change was not recognized as an edited file. Check that the receipt finalHashes/actions all correlate and the target path matches what you intended to change.'
+        }
+        if (sawEditTransaction) {
+          return 'edit_transaction was attempted but no edit committed. Re-read the exact target range (or the failure diagnostic capability) and retry with a precise anchor.'
+        }
+        return 'no edit_transaction was submitted; no file changes were produced.'
       }
 
       // NOTE: these helpers are inlined here (rather than imported from
@@ -298,38 +372,38 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
       // Mutation evidence is accepted only from canonical committed receipts.
       // For partial results, each applied action is correlated independently so
       // a committed subset remains reportable without trusting failed actions.
-      function hasEditArtifact(record: Record<string, unknown>): boolean {
-        function getCorrelatedReceiptAction(
-          receiptActions: unknown[],
-          action: Record<string, unknown>,
-        ): Record<string, unknown> | null {
-          if (
-            !Number.isInteger(action.index) ||
-            (action.index as number) < 0 ||
-            typeof action.actionId !== 'string' ||
-            action.actionId.length === 0
-          ) {
-            return null
-          }
-          const indexMatches = receiptActions.filter(
-            (candidate) =>
-              candidate &&
-              typeof candidate === 'object' &&
-              (candidate as Record<string, unknown>).index === action.index,
-          )
-          const actionIdMatches = receiptActions.filter(
-            (candidate) =>
-              candidate &&
-              typeof candidate === 'object' &&
-              (candidate as Record<string, unknown>).actionId === action.actionId,
-          )
-          return indexMatches.length === 1 &&
-            actionIdMatches.length === 1 &&
-            indexMatches[0] === actionIdMatches[0]
-            ? (indexMatches[0] as Record<string, unknown>)
-            : null
+      function getCorrelatedReceiptAction(
+        receiptActions: unknown[],
+        action: Record<string, unknown>,
+      ): Record<string, unknown> | null {
+        if (
+          !Number.isInteger(action.index) ||
+          (action.index as number) < 0 ||
+          typeof action.actionId !== 'string' ||
+          action.actionId.length === 0
+        ) {
+          return null
         }
+        const indexMatches = receiptActions.filter(
+          (candidate) =>
+            candidate &&
+            typeof candidate === 'object' &&
+            (candidate as Record<string, unknown>).index === action.index,
+        )
+        const actionIdMatches = receiptActions.filter(
+          (candidate) =>
+            candidate &&
+            typeof candidate === 'object' &&
+            (candidate as Record<string, unknown>).actionId === action.actionId,
+        )
+        return indexMatches.length === 1 &&
+          actionIdMatches.length === 1 &&
+          indexMatches[0] === actionIdMatches[0]
+          ? (indexMatches[0] as Record<string, unknown>)
+          : null
+      }
 
+      function hasEditArtifact(record: Record<string, unknown>): boolean {
         const actions = Array.isArray(record.actions) ? record.actions : []
         const receipt =
           record.kind === 'commit_receipt'
@@ -467,22 +541,7 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
         const receiptActions = receipt.actions as Array<Record<string, unknown>>
         const finalHashes = receipt.finalHashes as Record<string, unknown>
         for (const action of record.actions as Array<Record<string, unknown>>) {
-          const indexMatches = receiptActions.filter(
-            (candidate) => candidate.index === action.index,
-          )
-          const actionIdMatches = receiptActions.filter(
-            (candidate) => candidate.actionId === action.actionId,
-          )
-          const committed =
-            Number.isInteger(action.index) &&
-            (action.index as number) >= 0 &&
-            typeof action.actionId === 'string' &&
-            action.actionId.length > 0 &&
-            indexMatches.length === 1 &&
-            actionIdMatches.length === 1 &&
-            indexMatches[0] === actionIdMatches[0]
-              ? indexMatches[0]
-              : null
+          const committed = getCorrelatedReceiptAction(receiptActions, action)
           const applied =
             record.kind === 'commit_receipt'
               ? action.status === 'committed'

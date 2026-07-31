@@ -186,6 +186,27 @@ describe('editor agent', () => {
       expect(opusEditor.instructionsPrompt).toContain('</think>')
     })
 
+    test('cheap variants include recovery guidance in instructions', () => {
+      for (const model of [
+        'gpt-5',
+        'glm',
+        'kimi',
+        'deepseek',
+        'minimax',
+      ] as const) {
+        const codeEditor = createCodeEditor({ model })
+        expect(codeEditor.instructionsPrompt).toContain('Recovery guidance:')
+        expect(codeEditor.instructionsPrompt).toContain(
+          'return status "blocked" with a precise blockedReason and unresolved note',
+        )
+      }
+    })
+
+    test('opus editor does not include recovery guidance in instructions', () => {
+      const opusEditor = createCodeEditor({ model: 'opus' })
+      expect(opusEditor.instructionsPrompt).not.toContain('Recovery guidance:')
+    })
+
     test('all variants have same base properties', () => {
       const opusEditor = createCodeEditor({ model: 'opus' })
       const gpt5Editor = createCodeEditor({ model: 'gpt-5' })
@@ -465,6 +486,8 @@ describe('editor agent', () => {
               { role: 'assistant', content: [{ type: 'text', text: 'Done' }] },
             ],
             changedFiles: [],
+            blockedReason:
+              'no edit_transaction was submitted; no file changes were produced.',
             requirementsAddressed: [],
             acceptanceCriteriaAddressed: [],
             findingsAddressed: [],
@@ -574,6 +597,187 @@ describe('editor agent', () => {
 
       expect((result.value as any).input.output.changedFiles).toEqual([])
       expect((result.value as any).input.output.status).toBe('blocked')
+    })
+
+    test('reports an attempted-but-uncommitted blockedReason for a failed edit_transaction', () => {
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        params: {},
+      })
+      generator.next()
+
+      // An edit_transaction tool call that returned a non-committed result (e.g.
+      // a prepared/uncommitted receipt) should surface the precise blockedReason so
+      // the parent knows to re-read and retry rather than guessing why nothing landed.
+      const result = generator.next({
+        agentState: createMockAgentState([
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            content: [
+              { type: 'json', value: { kind: 'commit_receipt', actions: [] } },
+            ],
+          },
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect((result.value as any).input.output.status).toBe('blocked')
+      expect((result.value as any).input.output.blockedReason).toContain(
+        'edit_transaction was attempted but no edit committed',
+      )
+    })
+
+    test('reports committed-but-unrecognized blockedReason when receipts commit without a correlated file', () => {
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        params: {},
+      })
+      generator.next()
+
+      const committed = withCommittedReceipt({
+        kind: 'file_mutation_result',
+        version: 1,
+        operationId: 'blocked-reason-commit',
+        outcome: 'applied',
+        authorityTier: 'portable_path',
+        actions: [
+          {
+            actionId: 'blocked:0',
+            index: 0,
+            action: 'update',
+            path: 'src/blocked.ts',
+            outcome: 'applied',
+            afterHash: 'after',
+          },
+        ],
+        errors: [],
+        freshCapabilities: [],
+      })
+      // Break the finalHashes correlation so the committed receipt is not recognized
+      // as a changed file; status stays blocked and the reason should indicate the
+      // commit did not correlate to an edited file.
+      committed.authorityReceipt.finalHashes['src/blocked.ts'] = 'different'
+
+      const result = generator.next({
+        agentState: createMockAgentState([
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            content: [{ type: 'json', value: committed }],
+          },
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect((result.value as any).input.output.status).toBe('blocked')
+      expect((result.value as any).input.output.blockedReason).toContain(
+        'committed but the change was not recognized as an edited file',
+      )
+    })
+
+    test('reports committed-but-unrecognized blockedReason for a standalone commit_receipt', () => {
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        params: {},
+      })
+      generator.next()
+
+      // Seed a standalone commit_receipt whose finalHashes entry does NOT match the
+      // action's afterHash, so the receipt is not recognized as a changed file and
+      // the committed-but-unrecognized blockedReason resolves to the committed variant.
+      const standaloneReceipt = {
+        kind: 'commit_receipt',
+        version: 1,
+        receiptId: 'standalone-unrecognized',
+        operationId: 'op-standalone-unrecognized',
+        callId: 'call-standalone-unrecognized',
+        authorityTier: 'conditional_commit',
+        status: 'committed',
+        actions: [
+          {
+            actionId: 'a1',
+            index: 0,
+            action: 'update',
+            path: 'src/from-commit-receipt-unrecognized.ts',
+            status: 'committed',
+            beforeHash: 'before',
+            afterHash: 'after',
+          },
+        ],
+        finalHashes: {
+          'src/from-commit-receipt-unrecognized.ts': 'different',
+        },
+      }
+
+      const result = generator.next({
+        agentState: createMockAgentState([
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            content: [{ type: 'json', value: standaloneReceipt }],
+          },
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect((result.value as any).input.output.status).toBe('blocked')
+      expect((result.value as any).input.output.blockedReason).toContain(
+        'committed but the change was not recognized as an edited file',
+      )
+    })
+
+    test('does not attach blockedReason when status is completed', () => {
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        params: {},
+      })
+      generator.next()
+
+      const result = generator.next({
+        agentState: createMockAgentState([
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            content: [
+              {
+                type: 'json',
+                value: withCommittedReceipt({
+                  kind: 'file_mutation_result',
+                  version: 1,
+                  operationId: 'completed-reason',
+                  outcome: 'applied',
+                  authorityTier: 'portable_path',
+                  actions: [
+                    {
+                      actionId: 'c0',
+                      index: 0,
+                      action: 'update',
+                      path: 'src/done.ts',
+                      outcome: 'applied',
+                      afterHash: 'after',
+                    },
+                  ],
+                  errors: [],
+                  freshCapabilities: [],
+                }),
+              },
+            ],
+          },
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect((result.value as any).input.output.status).toBe('completed')
+      expect((result.value as any).input.output.blockedReason).toBeUndefined()
     })
 
     test('rejects receipts with missing authority fields or ambiguous action correlation', () => {
@@ -1232,6 +1436,10 @@ describe('editor agent', () => {
 
     test('mentions new components in new files', () => {
       expect(editor.instructionsPrompt).toContain('new file')
+    })
+
+    test('recovery guidance is not added to the default editor', () => {
+      expect(editor.instructionsPrompt).not.toContain('Recovery guidance:')
     })
   })
 })
