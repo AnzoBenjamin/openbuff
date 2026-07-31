@@ -67,6 +67,10 @@ export type ToolContentBlock = {
    * output. Prevents duplicate error text if an error/lost job_update is
    * delivered more than once. Omitted/undefined for blocks without a
    * background job error (treated as not-yet-appended).
+   *
+   * Internal in-memory UI state only: this optional flag is not part of any
+   * serialized/persisted block format or any CLI/config/environment contract.
+   * Its addition is backward-compatible and requires no migration.
    */
   jobErrorAppended?: boolean
 }
@@ -93,6 +97,10 @@ export type AgentContentBlock = {
    * blocks. Prevents duplicate error text if an error/lost job_update is
    * delivered more than once. Omitted/undefined for blocks without a
    * background job error (treated as not-yet-appended).
+   *
+   * Internal in-memory UI state only: this optional flag is not part of any
+   * serialized/persisted block format or any CLI/config/environment contract.
+   * Its addition is backward-compatible and requires no migration.
    */
   jobErrorAppended?: boolean
 }
