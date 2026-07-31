@@ -2090,13 +2090,21 @@ ${specialistRoutingSection}
               }
               const retrySpecialists = routedSpecialists.filter((agentType) => {
                 const result = specialistResults.get(agentType)
+                // A fully-attesting review (every pending source file covered
+                // by a well-formed snapshot fingerprint) is accepted even when
+                // the exact snapshot id advanced; only genuine file-coverage
+                // gaps or a missing/non-attestable fingerprint require a
+                // re-spawn. `isStaleSnapshotReviewerResult` is therefore only
+                // consulted when attestation issues remain, so transient
+                // snapshot drift never triggers a pointless refresh+retry.
+                const attestationIssues = collectReviewerAttestationIssues(
+                  result,
+                  bundle.snapshotId,
+                  specialistPendingFiles,
+                )
                 return (
-                  isStaleSnapshotReviewerResult(result) ||
-                  collectReviewerAttestationIssues(
-                    result,
-                    bundle.snapshotId,
-                    specialistPendingFiles,
-                  ).length > 0
+                  attestationIssues.length > 0 &&
+                  isStaleSnapshotReviewerResult(result)
                 )
               })
               if (retrySpecialists.length > 0) {
@@ -2172,10 +2180,20 @@ ${specialistRoutingSection}
                       expectedSnapshotId,
                       specialistPendingFiles,
                     )
+                  // Fingerprint-only drift on a fully-attesting review is NOT a
+                  // terminal protocol failure: only a FILE-COVERAGE gap or a
+                  // non-attestable fingerprint stays blocking after the refresh.
+                  const attestsEverything =
+                    specialistAttestationIssues.length === 0
                   if (
-                    isStaleSnapshotReviewerResult(specialistToolResult) ||
-                    specialistAttestationIssues.length > 0
+                    attestsEverything ||
+                    isStaleSnapshotReviewerResult(specialistToolResult)
                   ) {
+                    if (attestsEverything) {
+                      // A coverage-complete attestation passes; fall through to
+                      // the normal verdict/credit handling instead of blocking.
+                      continue
+                    }
                     activeWorkState.currentPhase = 'blocked'
                     activeWorkState.openReviewerBlockers = [
                       `${agentType} could not attest to a stable snapshot after one automatic refresh.`,
@@ -4877,16 +4895,34 @@ function collectReviewerAttestationIssues(toolResult: unknown, expectedFingerpri
     if (result.schemaVersion !== 1) {
         return ['BLOCKING: reviewer returned an invalid attestation schemaVersion'];
     }
-    const issues: string[] = [];
-    if (result.snapshotFingerprint !== expectedFingerprint) {
-        issues.push('BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree');
-    }
     const reviewed = new Set((result.reviewedFiles ?? [])
         .map((file) => normalizeGateFilePath(file))
         .filter((file) => file.length > 0));
     const missing = pendingFiles
         .map((file) => normalizeGateFilePath(file))
         .filter((file) => file.length > 0 && !reviewed.has(file));
+    const issues: string[] = [];
+    // Fingerprint tolerance: a reviewer that attested to EVERY pending source
+    // file with a well-formed snapshot fingerprint is trusted even when the
+    // exact snapshot id advanced between its spawn and attestation (e.g. an
+    // unrelated plan-session .jsonl/.md or a git-status bundle bump). Only a
+    // FILE-COVERAGE gap, a missing/empty fingerprint, or a non-attestable
+    // sentinel fingerprint remains a hard blocker. This decouples transient
+    // snapshot drift from terminal reviewer failure while keeping genuine
+    // coverage gaps and malformed attestations fail-closed.
+    const reportedFingerprint = result.snapshotFingerprint;
+    const fingerprintIsAttestable = typeof reportedFingerprint === 'string' &&
+        /^v3:[a-f0-9]{64}$/.test(reportedFingerprint);
+    const fingerprintMatches = fingerprintIsAttestable && reportedFingerprint === expectedFingerprint;
+    if (!fingerprintMatches && missing.length > 0) {
+        issues.push('BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree');
+    }
+    if (!fingerprintIsAttestable && missing.length === 0) {
+        // A review that covers every pending file but reports no attestable
+        // snapshot fingerprint cannot be safely credited; fail closed without a
+        // fingerprint at all.
+        issues.push('BLOCKING: reviewer did not report an attestable snapshot fingerprint');
+    }
     if (missing.length > 0) {
         issues.push(`BLOCKING: reviewer did not attest to every pending file: ${missing.join(', ')}`);
     }

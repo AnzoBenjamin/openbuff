@@ -22,19 +22,21 @@ export const handleEndTurn = (async (params: {
 
   await previousToolCallFinished
 
-  const owner =
-    clientSessionId && agentState
-      ? (() => {
-          const resolved = resolveRuntimeJobOwner({
-            clientSessionId,
-            agentState,
-          })
-          return {
-            clientSessionId: resolved.clientSessionId,
-            rootRunId: resolved.rootRunId,
-          }
-        })()
-      : undefined
+  // Fail closed on cross-session scope: without BOTH the client session id and
+  // agent state there is no scoped owner, and `jobRegistry.listRunning(undefined)`
+  // would surface every non-terminal job in the registry across sessions. Ending
+  // the turn with no in-scope owner is a clean no-op, never a global listing.
+  if (!clientSessionId || !agentState) {
+    return { output: [{ type: 'json', value: { message: 'Turn ended.' } }] }
+  }
+  const resolved = resolveRuntimeJobOwner({
+    clientSessionId,
+    agentState,
+  })
+  const owner = {
+    clientSessionId: resolved.clientSessionId,
+    rootRunId: resolved.rootRunId,
+  }
   // The unified job registry lists both shell `process` jobs and `agent`
   // coroutine jobs; end_turn must keep warning about BOTH kinds.
   const running = jobRegistry.listRunning(owner)

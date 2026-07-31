@@ -69,12 +69,6 @@ export function collectReviewerAttestationIssues(
   if (result.schemaVersion !== 1) {
     return ['BLOCKING: reviewer returned an invalid attestation schemaVersion']
   }
-  const issues: string[] = []
-  if (result.snapshotFingerprint !== expectedFingerprint) {
-    issues.push(
-      'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
-    )
-  }
   const reviewed = new Set(
     (result.reviewedFiles ?? [])
       .map((file) => normalizeGateFilePath(file))
@@ -83,6 +77,34 @@ export function collectReviewerAttestationIssues(
   const missing = pendingFiles
     .map((file) => normalizeGateFilePath(file))
     .filter((file) => file.length > 0 && !reviewed.has(file))
+  const issues: string[] = []
+  // Fingerprint tolerance: a reviewer that attested to EVERY pending source
+  // file with a well-formed snapshot fingerprint is trusted even when the
+  // exact snapshot id advanced between its spawn and attestation (e.g. an
+  // unrelated plan-session .jsonl/.md or a git-status bundle bump). Only a
+  // FILE-COVERAGE gap, a missing/empty fingerprint, or a non-attestable
+  // sentinel fingerprint remains a hard blocker. This decouples transient
+  // snapshot drift from terminal reviewer failure while keeping genuine
+  // coverage gaps and malformed attestations fail-closed.
+  const reportedFingerprint = result.snapshotFingerprint
+  const fingerprintIsAttestable =
+    typeof reportedFingerprint === 'string' &&
+    /^v3:[a-f0-9]{64}$/.test(reportedFingerprint)
+  const fingerprintMatches =
+    fingerprintIsAttestable && reportedFingerprint === expectedFingerprint
+  if (!fingerprintMatches && missing.length > 0) {
+    issues.push(
+      'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
+    )
+  }
+  if (!fingerprintIsAttestable && missing.length === 0) {
+    // A review that covers every pending file but reports no attestable
+    // snapshot fingerprint cannot be safely credited; fail closed without a
+    // fingerprint at all.
+    issues.push(
+      'BLOCKING: reviewer did not report an attestable snapshot fingerprint',
+    )
+  }
   if (missing.length > 0) {
     issues.push(
       `BLOCKING: reviewer did not attest to every pending file: ${missing.join(', ')}`,

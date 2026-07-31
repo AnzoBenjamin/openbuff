@@ -265,10 +265,10 @@ describe('gate-reviewer helpers', () => {
         {
           schemaVersion: 1,
           verdict: 'LOOKS_GOOD',
-          snapshotFingerprint: 'current',
+          snapshotFingerprint: 'v3:' + 'b'.repeat(64),
           reviewedFiles: ['src/a.ts', 'src/b.ts'],
         },
-        'current',
+        'v3:' + 'b'.repeat(64),
         ['src/a.ts', 'src/b.ts'],
       ),
     ).toEqual([])
@@ -299,10 +299,96 @@ describe('gate-reviewer helpers', () => {
         {
           schemaVersion: 1,
           verdict: 'LOOKS_GOOD',
-          snapshotFingerprint: 'current',
+          snapshotFingerprint: 'v3:' + 'c'.repeat(64),
           reviewedFiles: ['./src/a.ts', 'src\\b.ts'],
         },
-        'current',
+        'v3:' + 'c'.repeat(64),
+        ['src/a.ts', 'src/b.ts'],
+      ),
+    ).toEqual([])
+  })
+
+  // The gate tolerates a fully-attesting review whose well-formed snapshot
+  // fingerprint drifted from the exact bundle id (e.g. an unrelated plan-session
+  // .jsonl/.md or a git-status bundle bump between spawn and attestation). Only
+  // FILE-COVERAGE gaps, a missing fingerprint, or a non-attestable sentinel stay
+  // hard blockers.
+  test('tolerates a coverage-complete review with a wrong-but-well-formed fingerprint', () => {
+    expect(
+      collectReviewerAttestationIssues(
+        {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'v3:' + 'e'.repeat(64),
+          reviewedFiles: ['src/a.ts'],
+        },
+        'v3:' + 'd'.repeat(64),
+        ['src/a.ts'],
+      ),
+    ).toEqual([])
+  })
+
+  test('fails closed when a coverage-complete review reports no fingerprint', () => {
+    expect(
+      collectReviewerAttestationIssues(
+        {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          reviewedFiles: ['src/a.ts'],
+        },
+        'v3:' + 'd'.repeat(64),
+        ['src/a.ts'],
+      ),
+    ).toEqual([
+      'BLOCKING: reviewer did not report an attestable snapshot fingerprint',
+    ])
+  })
+
+  test('fails closed when a coverage-complete review reports a non-attestable sentinel fingerprint', () => {
+    expect(
+      collectReviewerAttestationIssues(
+        {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'unreadable:no-crypto',
+          reviewedFiles: ['src/a.ts'],
+        },
+        'v3:' + 'd'.repeat(64),
+        ['src/a.ts'],
+      ),
+    ).toEqual([
+      'BLOCKING: reviewer did not report an attestable snapshot fingerprint',
+    ])
+  })
+
+  test('blocks a coverage gap with an attestable-but-wrong fingerprint on both issues', () => {
+    expect(
+      collectReviewerAttestationIssues(
+        {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'v3:' + 'g'.repeat(64),
+          reviewedFiles: ['src/a.ts'],
+        },
+        'v3:' + 'f'.repeat(64),
+        ['src/a.ts', 'src/b.ts'],
+      ),
+    ).toEqual([
+      'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
+      'BLOCKING: reviewer did not attest to every pending file: src/b.ts',
+    ])
+  })
+
+  test('exact-match attestable fingerprint with full coverage yields no issues', () => {
+    expect(
+      collectReviewerAttestationIssues(
+        {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'v3:' + 'a'.repeat(64),
+          reviewedFiles: ['src/a.ts', 'src/b.ts'],
+        },
+        'v3:' + 'a'.repeat(64),
         ['src/a.ts', 'src/b.ts'],
       ),
     ).toEqual([])
