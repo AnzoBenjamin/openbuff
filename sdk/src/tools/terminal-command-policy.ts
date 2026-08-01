@@ -854,6 +854,99 @@ function isReadOnlyGitCommand(command: string): boolean {
   )
 }
 
+/**
+ * Safe complex git operations for the git-commit profile: branch switch/create,
+ * safe branch delete, merge, cherry-pick, stash, soft/mixed reset, tag create,
+ * and staged restore. The upstream hasUnquotedShellSyntax and
+ * hasActiveShellSyntaxAnywhere guards already ensure each of these is a single
+ * clean command with no composition, substitution, or redirection, so the
+ * anchored regexes below only police git-level flags. Data-loss and
+ * history-rewrite shapes (reset --hard, branch -D/--delete/-f/--force, clean,
+ * path checkout, checkout -f/--force/-p/--patch/--merge/--theirs/--ours,
+ * switch -f/--force/--discard-changes/-C, merge -s/-s<strategy>, rebase,
+ * stash drop/clear, config writes) fail closed via explicit guards before any
+ * allow regex is consulted.
+ */
+function isAllowedComplexGitCommand(command: string): boolean {
+  // Single clean command only: composition/substitution/redirection are
+  // rejected upstream, but fail closed here too so the helper stays safe if it
+  // is ever reused outside the single-command branch.
+  if (hasActiveShellSyntaxAnywhere(command)) return false
+  if (hasUnquotedShellSyntax(command)) return false
+  // Defense-in-depth: the read-only option denylist also applies to the complex
+  // path so --exec-path/--output/--ext-diff/--textconv/-o are rejected by
+  // construction rather than relying on each allow regex alone.
+  if (hasUnsafeReadOnlyGitOption(command)) return false
+  // Data-loss / history-rewrite guards - reject before the allow disjunction so
+  // a too-loose pattern can never re-admit a destructive shape.
+  if (/\s--hard\b/i.test(command)) return false // reset --hard destroys work
+  if (/\s--(?:\s|$)/.test(command)) return false // pathspec `--` (path checkout/reset overwrite)
+  // restore worktree/patch/source/overlay overwrite (data loss): deny any
+  // restore carrying --worktree/-W, --patch/-p, --source, or --overlay.
+  if (/\brestore\b[\s\S]*(?:--worktree\b|-[A-Za-z]*W\b|--patch\b|-[A-Za-z]*p\b|--source\b|--overlay\b)/i.test(command)) return false
+  // merge/cherry-pick strategy option: deny `-X` standalone or attached (e.g.
+  // `-Xours`), which the in-regex `-X\b` guard cannot catch when attached.
+  if (/(?:^|\s)-X/i.test(command)) return false
+  if (/\bstash\s+(?:drop|clear)\b/i.test(command)) return false
+  // Force delete / force ref reset: `-d` (safe delete) stays allowed;
+  // `-D`/`--delete` (force delete) and `-f`/`--force` (reset branch ref) do not.
+  if (/\bbranch\s+(?:-[a-zA-Z]*[Df]|--delete|--force)\b/.test(command)) return false
+  if (/^git\s+clean\b/i.test(command)) return false
+  if (/^git\s+rebase\b/i.test(command)) return false
+  if (/^git\s+config\b/i.test(command)) return false
+  // switch force/discard: `-f` aliases `--discard-changes` (discards uncommitted
+  // work); `-C` force-creates over an existing branch. Deny before allow regexes.
+  if (/^git\s+switch\b/i.test(command) && /(?:\s-f\b|\s-C\b|--force\b|--discard-changes\b)/.test(command)) return false
+  // checkout worktree overwrite: `-f`/`--force` discard changes, `-p`/`--patch`
+  // selectively overwrite, `--merge`/`--theirs`/`--ours` resolve by discarding.
+  if (/^git\s+checkout\b/i.test(command) && /(?:\s-f\b|\s-p\b|--force\b|--patch\b|--merge\b|--theirs\b|--ours\b)/.test(command)) return false
+  // merge short strategy: `-s` standalone or attached (e.g. `-sours`) selects a
+  // strategy (such as `ours`) that discards one side of the merge.
+  if (/^git\s+merge\b/i.test(command) && /(?:\s-s\b|\s-s[A-Za-z])/.test(command)) return false
+
+  return (
+    // switch: `git switch foo`, `git switch -c foo [start-point]`.
+    /^git\s+switch\s+(?:-[A-Za-z]+\s+)*[A-Za-z0-9._/-]+\s*$/i.test(command) ||
+    // checkout (branch-only): the standalone `--` path form is rejected above
+    // and by the negative lookahead, so this cannot overwrite the worktree.
+    /^git\s+checkout\s+(?!.*(?:^|\s)--(?:\s|$))(?:-[bB]\s+)?[A-Za-z0-9._/][A-Za-z0-9._/-]*\s*$/i.test(
+      command,
+    ) ||
+    // branch create / safe delete: lowercase short flags only, so `-d` (safe
+    // delete) and plain create pass while `-D`/`--delete` (force) do not.
+    /^git\s+branch\s+(?:-[a-z]+\s+)*[A-Za-z0-9._/-]+\s*$/i.test(command) ||
+    // merge (no strategy/exec/upload-pack/-X; standalone/attached -X also denied above).
+    /^git\s+merge\s+(?!.*(?:--(?:strategy|exec-path|upload-pack)\b|(?:^|\s)-[sX]))(?:--(?:no-ff|ff-only|no-commit|no-edit|edit|squash|abort|continue|quit)\s+)*(?:-[A-Za-z]+\s+)*[A-Za-z0-9._/-]+\s*$/i.test(
+      command,
+    ) ||
+    // cherry-pick (no strategy/exec/-X; standalone/attached -X also denied above)
+    // with a commit-ish argument.
+    /^git\s+cherry-pick\s+(?!.*(?:--(?:strategy|exec-path)\b|(?:^|\s)-X))(?:--(?:abort|continue|skip|no-commit|edit|-?\w+)\s+)*[A-Za-z0-9._/-]+\s*$/i.test(
+      command,
+    ) ||
+    // stash (drop/clear rejected above).
+    /^git\s+stash\s+(?:push|pop|apply|list|show|save|create|store)(?:\s+(?:-[A-Za-z]+|--(?:message|keep-index|include-untracked|patch|quiet)))*(?:\s+(?:--\s+)?[A-Za-z0-9._/-]+)*\s*$/i.test(
+      command,
+    ) ||
+    // reset (soft/mixed/merge/keep only; --hard and pathspec -- rejected above).
+    // The commit-ish accepts `~`/`^` revision suffixes (e.g. HEAD~1).
+    /^git\s+reset\s+(?:--(?:soft|mixed|merge|keep)\s+)?(?:[A-Za-z0-9._/^~-]+\s*)?$/i.test(
+      command,
+    ) ||
+    // tag create/annotate only: the tag name must start with a non-dash so
+    // `-d`/`--delete` cannot be consumed as a name; explicit deny for safety.
+    (!/(?:^|\s)-d\b/i.test(command) &&
+      !/--delete\b/i.test(command) &&
+      /^git\s+tag\s+(?:-[aA]\s+)?(?:-m\s+\S+\s+)*[A-Za-z0-9._/][A-Za-z0-9._/-]*(?:\s+-m\s+\S+)?(?:\s+[A-Za-z0-9._/][A-Za-z0-9._/-]*)?\s*$/i.test(
+        command,
+      )) ||
+    // restore --staged only: every path token must start with a non-dash
+    // (negative lookahead) so --worktree/-W/--patch/-p/--source/--overlay cannot
+    // be smuggled as a path; those shapes are also denied by the guard above.
+    /^git\s+restore\s+--staged(?:\s+(?!-)[A-Za-z0-9._/-]+)+\s*$/i.test(command)
+  )
+}
+
 /** tmux-test permits non-fetch Git commands only through the inspection allowlist. */
 function hasUnsafeTmuxGitCommand(command: string): boolean {
   const segments = splitReadOnlyShellSegments(command)
@@ -1066,6 +1159,7 @@ export function evaluateTerminalCommandPolicy(params: {
       }
       const isAllowedGitCommand =
         isReadOnlyGitCommand(command) ||
+        isAllowedComplexGitCommand(command) ||
         /^git\s+add\s+(?!.*(?:^|\s)--(?:intent-to-add|chmod)\b).+/i.test(
           command,
         ) ||
@@ -1078,7 +1172,7 @@ export function evaluateTerminalCommandPolicy(params: {
         return {
           allowed: false,
           reason:
-            'git-commit agents may only inspect/fetch git state, stage paths, create a non-amend commit, and perform an explicit non-force branch push',
+            'git-commit agents may only inspect/fetch git state, stage owned paths, create a non-amend commit, perform an explicit non-force branch push, and run safe branch/merge/cherry-pick/stash/reset/tag operations (data-loss operations like reset --hard, branch -D, clean, and path checkout remain forbidden)',
         }
       }
     }

@@ -28,7 +28,7 @@ const definition: SecretAgentDefinition = {
         branch_name: {
           type: 'string',
           description:
-            'If set, create and switch to this branch before committing. The git_branch tool refuses to branch when the working tree is dirty; if the tree is dirty and branch_name was provided, commit the existing changes first on the current branch, then create the new branch (or instruct the caller to set branch_switch with allow_dirty).',
+            'If set, create and switch to this branch before committing. Switching/creating a branch on a dirty worktree requires allow_dirty_branch: true; otherwise the agent refuses the switch to protect uncommitted work. The terminal policy also supports safe switch/merge/cherry-pick/stash/reset-soft/tag operations.',
         },
         branch_switch: {
           type: 'boolean',
@@ -40,7 +40,7 @@ const definition: SecretAgentDefinition = {
           type: 'boolean',
           default: false,
           description:
-            'Explicitly allow creating/switching branches while the worktree is dirty. Defaults to false.',
+            'Explicitly allow creating/switching branches while the worktree is dirty. Defaults to false; set true only after confirming the current uncommitted changes should move with the branch switch/create.',
         },
         push: {
           type: 'boolean',
@@ -78,9 +78,10 @@ const definition: SecretAgentDefinition = {
 3. Stage only task-owned paths. owned_paths is required and is a hard allowlist. Never use git add -A, git add ., or broad globs. If a file mixes unrelated user and task changes and safe hunk staging is unavailable, stop and report it rather than claiming ownership.
 4. If the changes span unrelated concerns, create only the logical commit requested by the caller and leave the rest untouched.
 5. Read relevant source files if the diff is insufficient. Match recent repository commit message style; default to an imperative subject under 72 characters and a body explaining why.
-6. Before committing, inspect git diff --cached, run whitespace/secret checks, and verify every staged path is task-owned. Do not amend, rebase, merge, reset, stash, or resolve conflicts.
-7. Push only when params.push is true. Fetch the selected remote first. Never force-push or use a refspec. Direct default-branch pushes are denied by this agent; use a feature branch. Refuse when the branch is behind or diverged; report that synchronization requires a separately authorized rebase/merge workflow and fresh validation/review.
-8. Return the worktree path, branch, commit hash/message, committed paths, remote synchronization state, and push result.
+6. Before committing, inspect git diff --cached, run whitespace/secret checks, and verify every staged path is task-owned. Permitted safe operations: inspecting state; staging only owned paths; non-amend commits; non-force feature-branch pushes; git switch / git checkout <branch>; creating branches; safe git branch -d; git merge --no-ff / --no-commit; git cherry-pick; git stash push/pop/apply/list; git reset --soft / --mixed; git tag (create); and git restore --staged.
+7. Forbidden (data-loss, history-rewrite, or shared-repo risk): git reset --hard; git branch -D / --delete; git clean; git checkout -- <path> or any path checkout that overwrites the worktree; git push --force / -f / refspec / --delete; git rebase; git commit --amend; git stash drop / clear; git config writes; direct default-branch pushes; and resolving merge conflicts by discarding a side.
+8. Data-safety guideline (no data loss): before any operation that could move HEAD or alter the worktree, inspect git status and git stash list; never discard uncommitted changes - if an operation would overwrite uncommitted work, stop and report instead. Prefer --no-ff / --no-commit merges so the caller can review. Only push when params.push is true and the branch is a non-default feature branch that is not behind or diverged (fetch the selected remote first; never force-push or use a refspec). If a complex operation (merge/cherry-pick) conflicts, STOP and report rather than auto-resolving; synchronization that needs rebase requires separate authorization plus fresh validation/review.
+9. Return the worktree path, branch, commit hash/message, committed paths, remote synchronization state, and push result.
 Do not commit secrets, .env files, credentials, generated artifacts without their source, or unrelated changes. If there are no eligible changes, report that and stop.`.trim(),
 
   handleSteps: function* ({ params }) {
@@ -108,7 +109,7 @@ Do not commit secrets, .env files, credentials, generated artifacts without thei
     ) {
       yield {
         type: 'STEP_TEXT',
-        text: 'Refusing to create or switch branches with a dirty worktree. Re-run with allow_dirty_branch: true after confirming the current changes should move to the new branch.',
+        text: 'Refusing to create or switch branches with a dirty worktree (data-safety guard). Complex operations such as switch/merge/cherry-pick/stash/reset-soft/tag are otherwise permitted; re-run with allow_dirty_branch: true only after confirming the current uncommitted changes should move to the new branch.',
       } satisfies StepText
       return
     }
