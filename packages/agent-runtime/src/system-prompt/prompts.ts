@@ -7,9 +7,11 @@ import { truncateString } from '@codebuff/common/util/string'
 import { closeXml } from '@codebuff/common/util/xml'
 
 import { truncateFileTreeBasedOnTokenBudget } from './truncate-file-tree'
+import { applyMeasure } from '../util/context-budget'
 
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ProjectFileContext } from '@codebuff/common/util/file'
+import type { ContextBudgetLedger } from '../util/context-budget'
 
 export const knowledgeFilesPrompt = `
 # Knowledge files
@@ -123,8 +125,9 @@ export const getProjectFileTreePrompt = (params: {
   fileTreeTokenBudget: number
   mode: 'search' | 'agent'
   logger: Logger
+  ledger?: ContextBudgetLedger
 }) => {
-  const { fileContext, fileTreeTokenBudget, mode, logger } = params
+  const { fileContext, fileTreeTokenBudget, mode, logger, ledger } = params
   const { projectRoot } = fileContext
   const { printedTree, truncationLevel } = truncateFileTreeBasedOnTokenBudget({
     fileContext,
@@ -141,7 +144,7 @@ export const getProjectFileTreePrompt = (params: {
           ? '\nNote: Selected function, class, and variable names in source files have been removed from the file tree to fit within token limits.'
           : '\nNote: The file tree has been truncated to show a subset of files to fit within token limits.'
 
-  return `
+  const prompt = `
 # Project file tree
 
 As Buffy, you have access to all the files in the project.
@@ -165,6 +168,16 @@ ${printedTree}
 ${closeXml('project_file_tree')}
 ${truncationNote}
 `.trim()
+
+  if (ledger) {
+    applyMeasure(ledger, {
+      category: 'fileTree',
+      label: 'project-file-tree',
+      content: prompt,
+    })
+  }
+
+  return prompt
 }
 
 const windowsNote = `
@@ -172,12 +185,15 @@ Note: many commands in the terminal are different on Windows.
 For example, the mkdir command is \`mkdir\` instead of \`mkdir -p\`. Instead of grep, use \`findstr\`. Instead of \`ls\` use \`dir\` to list files. Instead of \`mv\` use \`move\`. Instead of \`rm\` use \`del\`. Instead of \`cp\` use \`copy\`. Unless the user is in Powershell, in which case you should use the Powershell commands instead.
 `.trim()
 
-export const getSystemInfoPrompt = (fileContext: ProjectFileContext) => {
+export const getSystemInfoPrompt = (
+  fileContext: ProjectFileContext,
+  ledger?: ContextBudgetLedger,
+) => {
   const { fileTree, shellConfigFiles, systemInfo } = fileContext
   const flattenedNodes = flattenTree(fileTree)
   const lastReadFilePaths = getLastReadFilePaths(flattenedNodes, 20)
 
-  return `
+  const prompt = `
 # System Info
 
 Operating System: ${systemInfo.platform}
@@ -196,15 +212,35 @@ The following are the most recently read files according to the OS atime. This i
 ${lastReadFilePaths.join('\n')}
 ${closeXml('recently_read_file_paths_most_recent_first')}
 `.trim()
+
+  if (ledger) {
+    applyMeasure(ledger, {
+      category: 'systemInfo',
+      label: 'system-info',
+      content: prompt,
+    })
+  }
+
+  return prompt
 }
 
-export const getGitChangesPrompt = (fileContext: ProjectFileContext) => {
+export const getGitChangesPrompt = (
+  fileContext: ProjectFileContext,
+  ledger?: ContextBudgetLedger,
+) => {
   const { gitChanges } = fileContext
-  if (!gitChanges) {
+  const hasGitChanges =
+    !!gitChanges &&
+    (gitChanges.status !== '' ||
+      gitChanges.diff !== '' ||
+      gitChanges.diffCached !== '' ||
+      gitChanges.lastCommitMessages !== '')
+  if (!hasGitChanges) {
+    // Skip recording empty blocks: no git changes means no ledger line.
     return ''
   }
   const maxLength = 30_000
-  return `
+  const prompt = `
 Git Changes:
 <git_status>
 ${truncateString(gitChanges.status, maxLength / 10)}
@@ -222,4 +258,14 @@ ${closeXml('git_diff_cached')}
 ${truncateString(gitChanges.lastCommitMessages, maxLength / 10)}
 ${closeXml('git_commit_messages_most_recent_first')}
 `.trim()
+
+  if (ledger) {
+    applyMeasure(ledger, {
+      category: 'gitChanges',
+      label: 'git-changes',
+      content: prompt,
+    })
+  }
+
+  return prompt
 }
