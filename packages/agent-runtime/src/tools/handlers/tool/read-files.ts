@@ -1,10 +1,13 @@
 import {
   buildReadFilesResultV1,
+  type FilesystemError,
   type ReadFilesItemV1,
 } from '@codebuff/common/tools/results/filesystem'
+import { MAX_READ_BLOCK_BYTES } from '@codebuff/common/tools/params/tool/read-blocks'
 import {
   encodeReadCapabilityToken,
   getContentHash,
+  hasAuthoritativeReadCapabilityScope,
   normalizeLineEndings,
 } from '@codebuff/common/util/content-hash'
 import { jsonToolResult } from '@codebuff/common/util/messages'
@@ -20,7 +23,12 @@ import {
   getEditRereadRequirement,
 } from './edit-read-state'
 import { getFileReadingUpdates } from '../../../get-file-reading-updates'
-import { extractSlices } from '../../../structural-read'
+import {
+  buildAroundBlock,
+  buildWindowBlock,
+  extractSlices,
+  type ReadBlockBuilderContext,
+} from '../../../structural-read'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type { FileProcessingState } from './write-file'
@@ -63,6 +71,8 @@ export const handleReadFiles = (async (
   }
   const pathInputs = toolCall.input.paths ?? []
   const rangeInputs = toolCall.input.ranges ?? []
+  const windowInputs = toolCall.input.windows ?? []
+  const aroundInputs = toolCall.input.around ?? []
   const symbolInputs = toolCall.input.symbols ?? []
   const allSelectors = [
     ...pathInputs.map((path, requestIndex) => ({
@@ -75,9 +85,25 @@ export const handleReadFiles = (async (
       requestIndex: pathInputs.length + index,
       path: range.path,
     })),
+    ...windowInputs.map((window, index) => ({
+      selector: 'window' as const,
+      requestIndex: pathInputs.length + rangeInputs.length + index,
+      path: window.path,
+    })),
+    ...aroundInputs.map((around, index) => ({
+      selector: 'around' as const,
+      requestIndex:
+        pathInputs.length + rangeInputs.length + windowInputs.length + index,
+      path: around.path,
+    })),
     ...symbolInputs.map((symbol, index) => ({
       selector: 'symbols' as const,
-      requestIndex: pathInputs.length + rangeInputs.length + index,
+      requestIndex:
+        pathInputs.length +
+        rangeInputs.length +
+        windowInputs.length +
+        aroundInputs.length +
+        index,
       path: symbol.path,
     })),
   ]
@@ -115,6 +141,14 @@ export const handleReadFiles = (async (
     ...range,
     path: normalizeToolPath(range.path),
   }))
+  const windowRequests = windowInputs.map((entry) => ({
+    ...entry,
+    path: normalizeToolPath(entry.path),
+  }))
+  const aroundRequests = aroundInputs.map((entry) => ({
+    ...entry,
+    path: normalizeToolPath(entry.path),
+  }))
   const symbolRequests = symbolInputs.map((entry) => ({
     path: normalizeToolPath(entry.path),
     names: entry.names,
@@ -125,6 +159,8 @@ export const handleReadFiles = (async (
   const requestedPaths = new Set([
     ...paths,
     ...ranges.map((range) => range.path),
+    ...windowRequests.map((entry) => entry.path),
+    ...aroundRequests.map((entry) => entry.path),
     ...symbolRequests.map((entry) => entry.path),
   ])
   const editedSinceLastRead = new Set<string>()
@@ -329,10 +365,171 @@ export const handleReadFiles = (async (
       : { ...result, content: modelContent }
   })
 
+  // -------------------------------------------------------------------------
+  // windows / around selectors: share one memoized loader, one anchor minter,
+  // one authority ladder, and one byte-budget guard with read_blocks via the
+  // shared block builders.
+  // -------------------------------------------------------------------------
+  const blockFileCache = new Map<
+    string,
+    Promise<{ content: string } | { error: FilesystemError }>
+  >()
+  const loadBlockFile = (
+    path: string,
+  ): Promise<{ content: string } | { error: FilesystemError }> => {
+    let cached = blockFileCache.get(path)
+    if (!cached) {
+      cached = (async () => {
+        try {
+          const raw = await requestOptionalFile({ ...params, filePath: path })
+          if (raw === null) {
+            return {
+              error: {
+                code: 'not_found',
+                message: `File does not exist: ${path}`,
+                retryable: true,
+                recovery: 'discover_path',
+              } satisfies FilesystemError,
+            }
+          }
+          return { content: raw }
+        } catch (error) {
+          return { error: classifyOptionalReadError(error) }
+        }
+      })()
+      blockFileCache.set(path, cached)
+    }
+    return cached
+  }
+
+  const mintBlockEditAnchor = (
+    path: string,
+    startLine: number,
+    endLine: number,
+    blockContent: string,
+  ) => {
+    const scope = { ...capabilityIssuer, path }
+    if (!hasAuthoritativeReadCapabilityScope(scope)) return undefined
+    const contentHash = getContentHash(blockContent)
+    return {
+      startLine,
+      endLine,
+      contentHash,
+      readCapability: encodeReadCapabilityToken({
+        startLine,
+        endLine,
+        hash: contentHash,
+        scope,
+      }),
+    }
+  }
+
+  const applyBlockAuthority = (blockParams: {
+    path: string
+    startLine: number
+    endLine: number
+    totalLines: number
+    sourceContent: string
+    capabilityEligible?: boolean
+  }) => {
+    const authority = classifyReadBlockAuthority({
+      complete: true,
+      startLine: blockParams.startLine,
+      endLine: blockParams.endLine,
+      totalLines: blockParams.totalLines,
+      sourceContent: blockParams.sourceContent,
+      ...(blockParams.capabilityEligible === undefined
+        ? {}
+        : { capabilityEligible: blockParams.capabilityEligible }),
+    })
+    if (authority !== 'whole_file') return
+    wholeFileGrantPaths.add(blockParams.path)
+    delete fileProcessingState.confirmedPostEditAnchorsByPath?.[
+      blockParams.path
+    ]
+    if (fileProcessingState.strictReadBeforeEdit) {
+      grantWholeFileReadAuthorization(
+        fileProcessingState,
+        blockParams.path,
+        blockParams.sourceContent,
+      )
+    }
+  }
+
+  // A block that exceeds the byte budget mints no editAnchor and never counts
+  // as a successful read, so it cannot clear failed_edit gates.
+  const overBudgetError = (
+    blockContent: string,
+  ): FilesystemError | undefined => {
+    const byteLength = new TextEncoder().encode(blockContent).byteLength
+    if (byteLength <= MAX_READ_BLOCK_BYTES) return undefined
+    return {
+      code: 'too_large',
+      message: `read_files block is ${byteLength} bytes, over the ${MAX_READ_BLOCK_BYTES}-byte per-block budget. Request a smaller block (lower windowSize, or fewer contextLines) and read it in several passes.`,
+      retryable: true,
+      recovery: 'read_smaller_range',
+    }
+  }
+
+  const blockBuilderContext: ReadBlockBuilderContext = {
+    loadFile: loadBlockFile,
+    mintBlockEditAnchor,
+    applyBlockAuthority,
+    overBudgetError,
+    capabilityIssuer,
+    successfulReadPaths,
+  }
+
+  const blockItems: ReadFilesItemV1[] = []
+  for (let index = 0; index < windowRequests.length; index++) {
+    blockItems.push(
+      await buildWindowBlock(
+        blockBuilderContext,
+        windowRequests[index]!,
+        paths.length + ranges.length + index,
+      ),
+    )
+  }
+  for (let index = 0; index < aroundRequests.length; index++) {
+    blockItems.push(
+      await buildAroundBlock(
+        blockBuilderContext,
+        aroundRequests[index]!,
+        paths.length + ranges.length + windowRequests.length + index,
+      ),
+    )
+  }
+
+  // A block covering the whole file mints the same authority an identical
+  // whole-file paths read would, so it may clear context_compacted. Sub-file
+  // blocks may clear failed_edit gates but must not drop context_compacted
+  // (same rule as range/symbol reads).
+  const blockReadPaths = new Set<string>()
+  for (const item of blockItems) {
+    if (item.status !== 'error') blockReadPaths.add(item.path)
+  }
+  for (const path of blockReadPaths) {
+    const rereadReq = getEditRereadRequirement(fileProcessingState, path)
+    if (
+      rereadReq?.reason === 'context_compacted' &&
+      !wholeFileGrantPaths.has(path)
+    ) {
+      delete fileProcessingState.promisesByPath[path]
+      continue
+    }
+    clearEditRereadRequirement(fileProcessingState, path)
+    delete fileProcessingState.promisesByPath[path]
+  }
+
   const symbolResults: ReadFilesItemV1[] = []
   for (let index = 0; index < symbolRequests.length; index++) {
     const request = symbolRequests[index]!
-    const requestIndex = paths.length + ranges.length + index
+    const requestIndex =
+      paths.length +
+      ranges.length +
+      windowRequests.length +
+      aroundRequests.length +
+      index
     let rawContent: string | null
     try {
       rawContent = await requestOptionalFile({
@@ -437,10 +634,92 @@ export const handleReadFiles = (async (
     })
   }
 
+  const allResults: ReadFilesItemV1[] = [
+    ...renderedFileResults,
+    ...blockItems,
+    ...symbolResults,
+  ]
+
+  // M2-T4: when a whole-file paths read was rejected or truncated for size,
+  // also emit the window manifest for that path plus its first window so the
+  // agent can page immediately. The failure information stays in the same
+  // result (status 'partial' + truncation) and no whole-file capability is
+  // minted for it. Each synthesized manifest item is inserted immediately
+  // after the truncated file item it belongs to, then every requestIndex is
+  // renumbered contiguously so the summary invariant still holds.
+  const truncatedFilePaths = new Set<string>()
+  for (const result of allResults) {
+    if (
+      result.selector === 'file' &&
+      result.status === 'partial' &&
+      !result.complete &&
+      // Only synthesize a manifest when this path has no other selector item
+      // (the agent already has another way to page it).
+      !allResults.some((item) => item !== result && item.path === result.path)
+    ) {
+      truncatedFilePaths.add(result.path)
+    }
+  }
+  if (truncatedFilePaths.size > 0) {
+    const DEFAULT_MANIFEST_WINDOW_SIZE = 400
+    const manifestByPath = new Map<string, ReadFilesItemV1>()
+    for (const path of truncatedFilePaths) {
+      const loaded = await loadBlockFile(path)
+      if ('error' in loaded) continue
+      const lines = normalizeLineEndings(loaded.content).split('\n')
+      const totalLines = lines.length
+      const windowSize = DEFAULT_MANIFEST_WINDOW_SIZE
+      const windowCount = Math.max(1, Math.ceil(totalLines / windowSize))
+      const startLine = 1
+      const endLine = Math.min(totalLines, windowSize)
+      const blockContent = lines.slice(0, endLine).join('\n')
+      if (overBudgetError(blockContent)) continue
+      // Never mint an anchor that covers the whole file from a truncated
+      // read: only a strict sub-file first window earns a scoped capability,
+      // so the partial paths read cannot be laundered into whole-file auth.
+      const editAnchor =
+        endLine < totalLines
+          ? mintBlockEditAnchor(path, startLine, endLine, blockContent)
+          : undefined
+      manifestByPath.set(path, {
+        selector: 'window',
+        requestIndex: -1, // reassigned below
+        path,
+        status: 'ok',
+        content: blockContent,
+        sourceContent: blockContent,
+        startLine,
+        endLine,
+        totalLines,
+        complete: true,
+        windowSize,
+        windowCount,
+        window: 1,
+        ...(editAnchor ? { editAnchor } : {}),
+      })
+    }
+    if (manifestByPath.size > 0) {
+      const withManifests: ReadFilesItemV1[] = []
+      for (const item of allResults) {
+        withManifests.push(item)
+        if (
+          item.selector === 'file' &&
+          item.status === 'partial' &&
+          manifestByPath.has(item.path)
+        ) {
+          withManifests.push(manifestByPath.get(item.path)!)
+        }
+      }
+      withManifests.forEach((item, index) => {
+        item.requestIndex = index
+      })
+      allResults.length = 0
+      allResults.push(...withManifests)
+    }
+  }
+
   return {
-    output: jsonToolResult(
-      buildReadFilesResultV1([...renderedFileResults, ...symbolResults]),
-    ),
+    output: jsonToolResult(buildReadFilesResultV1(allResults)),
   }
 }) satisfies CodebuffToolHandlerFunction<ToolName>
 

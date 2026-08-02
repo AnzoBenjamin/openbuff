@@ -679,6 +679,26 @@ export interface ReadFilesParams {
     /** 1-indexed inclusive end line. Defaults to the last line. */
     endLine?: number
   }[]
+  /** Optional: windowed reads for large files. Each returned window is a COMPLETE contiguous line block that mints its own cap.v3 editAnchor, so you can edit it directly via replace_range/basedOnRead without a guess-shrink-retry loop. When exactly one paths entry is supplied, a missing window path is inferred from it. */
+  windows?: {
+    /** File path to read in contiguous line windows, relative to the project root. */
+    path: string
+    /** Lines per window. Defaults to 400, capped at 5000. */
+    windowSize?: number
+    /** 1-indexed window number to return. Omit to get the window manifest (totalLines, windowSize, windowCount) plus the first window. */
+    window?: number
+  }[]
+  /** Optional: content-anchored reads. Finds the Nth exact literal match and returns a complete bounded block around it, minting a cap.v3 editAnchor for that block. When exactly one paths entry is supplied, a missing around path is inferred from it. */
+  around?: {
+    /** File path to read a content-anchored block from, relative to the project root. */
+    path: string
+    /** Exact literal string to anchor on. Robust to line-number drift. */
+    match: string
+    /** 1-indexed occurrence of `match` to anchor on. Defaults to 1. */
+    occurrence?: number
+    /** Lines of context to include on each side of the match, clamped at file boundaries. Defaults to 40, capped at 2000. */
+    contextLines?: number
+  }[]
   /** Optional: instead of (or in addition to) whole files, pull just the implementation slices for named symbols. Prefer this over a full read when you already know which functions/classes you need, especially in large files. Each returned slice includes one editAnchor whose readCapability can anchor a later edit. */
   symbols?: {
     /** File path to extract symbol slices from, relative to the project root. */

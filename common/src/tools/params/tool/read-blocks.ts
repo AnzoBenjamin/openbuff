@@ -18,103 +18,104 @@ export const MAX_READ_BLOCK_BYTES = 4_194_304
 
 const toolName = 'read_blocks'
 const endsAgentStep = true
+
+export const readBlocksWindowSelectorSchema = z.object({
+  path: z
+    .string()
+    .min(1)
+    .describe(
+      'File path to read in contiguous line windows, relative to the project root.',
+    ),
+  windowSize: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_WINDOW_SIZE)
+    .optional()
+    .describe(
+      `Lines per window. Defaults to ${DEFAULT_WINDOW_SIZE}, capped at ${MAX_WINDOW_SIZE}.`,
+    ),
+  window: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe(
+      '1-indexed window number to return. Omit to get the window manifest (totalLines, windowSize, windowCount) plus the first window.',
+    ),
+})
+
+export const readBlocksAroundSelectorSchema = z.object({
+  path: z
+    .string()
+    .min(1)
+    .describe(
+      'File path to read a content-anchored block from, relative to the project root.',
+    ),
+  match: z
+    .string()
+    .min(1)
+    .describe(
+      'Exact literal string to anchor on. Robust to line-number drift.',
+    ),
+  occurrence: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe(
+      '1-indexed occurrence of `match` to anchor on. Defaults to 1.',
+    ),
+  contextLines: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_CONTEXT_LINES)
+    .optional()
+    .describe(
+      `Lines of context to include on each side of the match, clamped at file boundaries. Defaults to ${DEFAULT_CONTEXT_LINES}, capped at ${MAX_CONTEXT_LINES}.`,
+    ),
+})
+
+export const readBlocksSymbolSelectorSchema = z.object({
+  path: z
+    .string()
+    .min(1)
+    .describe(
+      'File path to extract a symbol slice from, relative to the project root.',
+    ),
+  name: z
+    .string()
+    .min(1)
+    .describe(
+      'Top-level symbol name (function, class, interface, method) to pull, as shown by read_outline.',
+    ),
+  occurrence: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe(
+      'When multiple top-level symbols share this name, the 1-indexed one to return. Defaults to 1. Matches rewrite_symbol occurrence semantics.',
+    ),
+})
+
 const inputSchema = z
   .object({
     windows: z
-      .array(
-        z.object({
-          path: z
-            .string()
-            .min(1)
-            .describe(
-              'File path to read in contiguous line windows, relative to the project root.',
-            ),
-          windowSize: z
-            .number()
-            .int()
-            .min(1)
-            .max(MAX_WINDOW_SIZE)
-            .optional()
-            .describe(
-              `Lines per window. Defaults to ${DEFAULT_WINDOW_SIZE}, capped at ${MAX_WINDOW_SIZE}.`,
-            ),
-          window: z
-            .number()
-            .int()
-            .min(1)
-            .optional()
-            .describe(
-              '1-indexed window number to return. Omit to get the window manifest (totalLines, windowSize, windowCount) plus the first window.',
-            ),
-        }),
-      )
+      .array(readBlocksWindowSelectorSchema)
       .optional()
       .describe(
         'Windowed reads for large files. Each returned window is a COMPLETE contiguous line block that mints its own cap.v3 editAnchor, so you can edit it directly via replace_range/basedOnRead without a guess-shrink-retry loop.',
       ),
     around: z
-      .array(
-        z.object({
-          path: z
-            .string()
-            .min(1)
-            .describe(
-              'File path to read a content-anchored block from, relative to the project root.',
-            ),
-          match: z
-            .string()
-            .min(1)
-            .describe(
-              'Exact literal string to anchor on. Robust to line-number drift.',
-            ),
-          occurrence: z
-            .number()
-            .int()
-            .min(1)
-            .optional()
-            .describe(
-              '1-indexed occurrence of `match` to anchor on. Defaults to 1.',
-            ),
-          contextLines: z
-            .number()
-            .int()
-            .min(0)
-            .max(MAX_CONTEXT_LINES)
-            .optional()
-            .describe(
-              `Lines of context to include on each side of the match, clamped at file boundaries. Defaults to ${DEFAULT_CONTEXT_LINES}, capped at ${MAX_CONTEXT_LINES}.`,
-            ),
-        }),
-      )
+      .array(readBlocksAroundSelectorSchema)
       .optional()
       .describe(
         'Content-anchored reads: find the Nth exact literal match and return a complete bounded block around it, minting a cap.v3 editAnchor for that block.',
       ),
     symbols: z
-      .array(
-        z.object({
-          path: z
-            .string()
-            .min(1)
-            .describe(
-              'File path to extract a symbol slice from, relative to the project root.',
-            ),
-          name: z
-            .string()
-            .min(1)
-            .describe(
-              'Top-level symbol name (function, class, interface, method) to pull, as shown by read_outline.',
-            ),
-          occurrence: z
-            .number()
-            .int()
-            .min(1)
-            .optional()
-            .describe(
-              'When multiple top-level symbols share this name, the 1-indexed one to return. Defaults to 1. Matches rewrite_symbol occurrence semantics.',
-            ),
-        })
-      )
+      .array(readBlocksSymbolSelectorSchema)
       .optional()
       .describe(
         'Occurrence-aware symbol reads: pull the Nth top-level symbol with a given name. Parser-proven slices mint a cap.v3 editAnchor.',

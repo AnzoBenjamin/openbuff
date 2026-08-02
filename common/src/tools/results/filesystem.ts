@@ -532,6 +532,9 @@ const readFilesErrorItemSchema = z.object({
   error: filesystemErrorSchema,
 })
 
+/** Referencing modules surfaced alongside a read result (R5). */
+const readReferencedBySchema = z.record(z.string(), z.string().array())
+
 const readFilesFileItemSchema = z
   .object({
     selector: z.literal('file'),
@@ -543,7 +546,7 @@ const readFilesFileItemSchema = z
     complete: z.boolean(),
     template: z.boolean(),
     editAnchor: readFilesEditAnchorSchema.optional(),
-    referencedBy: z.record(z.string(), z.string().array()).optional(),
+    referencedBy: readReferencedBySchema.optional(),
     truncation: z
       .object({
         reason: z.literal('character_limit'),
@@ -579,6 +582,7 @@ const readFilesRangeItemSchema = z
     totalLines: z.number().int().nonnegative(),
     complete: z.boolean(),
     editAnchor: readFilesEditAnchorSchema.optional(),
+    referencedBy: readReferencedBySchema.optional(),
     truncation: z.object({ reason: z.literal('character_limit') }).optional(),
   })
   .strict()
@@ -618,10 +622,103 @@ const readFilesSymbolsItemSchema = z
     'read_files symbol results require exactly one slices payload or omission marker',
   )
 
+const readBlocksBlockBaseFields = {
+  requestIndex: z.number().int().nonnegative(),
+  path: z.string(),
+  status: z.enum(['ok', 'partial']),
+  content: z.string(),
+  /** Exact undecorated normalized block text for deterministic follow-up edits. */
+  sourceContent: z.string(),
+  startLine: z.number().int().positive(),
+  endLine: z.number().int().positive(),
+  totalLines: z.number().int().nonnegative(),
+  complete: z.boolean(),
+  editAnchor: readFilesEditAnchorSchema.optional(),
+  referencedBy: readReferencedBySchema.optional(),
+} as const
+
+const readBlocksBlockSuperRefine = (
+  value: {
+    startLine: number
+    endLine: number
+    complete: boolean
+    editAnchor?: { startLine: number; endLine: number }
+  },
+  ctx: z.RefinementCtx,
+) => {
+  if (
+    value.editAnchor &&
+    (value.editAnchor.startLine !== value.startLine ||
+      value.editAnchor.endLine !== value.endLine)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'block editAnchor must match the block bounds',
+    })
+  }
+  if (!value.complete && value.editAnchor !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'partial blocks cannot expose edit capabilities',
+    })
+  }
+}
+
+export const readBlocksWindowItemSchema = z
+  .object({
+    selector: z.literal('window'),
+    ...readBlocksBlockBaseFields,
+    windowSize: z.number().int().positive(),
+    windowCount: z.number().int().positive(),
+    window: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    readBlocksBlockSuperRefine(value, ctx)
+    if (value.window > value.windowCount) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'window index cannot exceed windowCount',
+      })
+    }
+  })
+
+export const readBlocksAroundItemSchema = z
+  .object({
+    selector: z.literal('around'),
+    ...readBlocksBlockBaseFields,
+    match: z.string(),
+    /** 1-indexed matched occurrence this block was anchored on. */
+    occurrence: z.number().int().positive(),
+    totalOccurrences: z.number().int().nonnegative(),
+  })
+  .strict()
+  .superRefine(readBlocksBlockSuperRefine)
+
+export const readBlocksSymbolItemSchema = z
+  .object({
+    selector: z.literal('symbol'),
+    ...readBlocksBlockBaseFields,
+    symbol: z.string(),
+    kind: z.string().optional(),
+    /** 1-indexed AST match this slice was selected from. */
+    occurrence: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine(readBlocksBlockSuperRefine)
+
+/**
+ * The single shared read item union: read_files serves all five selector
+ * kinds and read_blocks is defined in terms of the same item schemas, so an
+ * item valid for one tool stays valid for the other.
+ */
 export const readFilesItemV1Schema = z.union([
   readFilesFileItemSchema,
   readFilesRangeItemSchema,
   readFilesSymbolsItemSchema,
+  readBlocksWindowItemSchema,
+  readBlocksAroundItemSchema,
+  readBlocksSymbolItemSchema,
   readFilesErrorItemSchema,
 ])
 
@@ -706,13 +803,18 @@ export const readFilesResultV1Schema = z
         }
         continue
       }
-      if (result.status === 'ok' && !result.complete) {
+      if (
+        (result.selector === 'file' || result.selector === 'range') &&
+        result.status === 'ok' &&
+        !result.complete
+      ) {
         ctx.addIssue({
           code: 'custom',
           message: 'ok file/range results must be complete',
         })
       }
       if (
+        (result.selector === 'file' || result.selector === 'range') &&
         result.status === 'partial' &&
         (result.complete || !result.truncation)
       ) {
@@ -736,96 +838,7 @@ export const readFilesResultV1Schema = z
     }
   })
 
-const readBlocksBlockBaseFields = {
-  requestIndex: z.number().int().nonnegative(),
-  path: z.string(),
-  status: z.enum(['ok', 'partial']),
-  content: z.string(),
-  /** Exact undecorated normalized block text for deterministic follow-up edits. */
-  sourceContent: z.string(),
-  startLine: z.number().int().positive(),
-  endLine: z.number().int().positive(),
-  totalLines: z.number().int().nonnegative(),
-  complete: z.boolean(),
-  editAnchor: readFilesEditAnchorSchema.optional(),
-} as const
-
-const readBlocksBlockSuperRefine = (
-  value: {
-    startLine: number
-    endLine: number
-    complete: boolean
-    editAnchor?: { startLine: number; endLine: number }
-  },
-  ctx: z.RefinementCtx,
-) => {
-  if (
-    value.editAnchor &&
-    (value.editAnchor.startLine !== value.startLine ||
-      value.editAnchor.endLine !== value.endLine)
-  ) {
-    ctx.addIssue({
-      code: 'custom',
-      message: 'block editAnchor must match the block bounds',
-    })
-  }
-  if (!value.complete && value.editAnchor !== undefined) {
-    ctx.addIssue({
-      code: 'custom',
-      message: 'partial blocks cannot expose edit capabilities',
-    })
-  }
-}
-
-const readBlocksWindowItemSchema = z
-  .object({
-    selector: z.literal('window'),
-    ...readBlocksBlockBaseFields,
-    windowSize: z.number().int().positive(),
-    windowCount: z.number().int().positive(),
-    window: z.number().int().positive(),
-  })
-  .strict()
-  .superRefine((value, ctx) => {
-    readBlocksBlockSuperRefine(value, ctx)
-    if (value.window > value.windowCount) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'window index cannot exceed windowCount',
-      })
-    }
-  })
-
-const readBlocksAroundItemSchema = z
-  .object({
-    selector: z.literal('around'),
-    ...readBlocksBlockBaseFields,
-    match: z.string(),
-    /** 1-indexed matched occurrence this block was anchored on. */
-    occurrence: z.number().int().positive(),
-    totalOccurrences: z.number().int().nonnegative(),
-  })
-  .strict()
-  .superRefine(readBlocksBlockSuperRefine)
-
-const readBlocksSymbolItemSchema = z
-  .object({
-    selector: z.literal('symbol'),
-    ...readBlocksBlockBaseFields,
-    symbol: z.string(),
-    kind: z.string().optional(),
-    /** 1-indexed AST match this slice was selected from. */
-    occurrence: z.number().int().positive(),
-  })
-  .strict()
-  .superRefine(readBlocksBlockSuperRefine)
-
-export const readBlocksItemV1Schema = z.union([
-  readBlocksWindowItemSchema,
-  readBlocksAroundItemSchema,
-  readBlocksSymbolItemSchema,
-  readFilesErrorItemSchema,
-])
+export const readBlocksItemV1Schema = readFilesItemV1Schema
 
 export const readBlocksResultV1Schema = z
   .object({
@@ -893,6 +906,13 @@ export const readBlocksResultV1Schema = z
     }
     for (const result of value.results) {
       if (result.status === 'error') continue
+      if (
+        result.selector !== 'window' &&
+        result.selector !== 'around' &&
+        result.selector !== 'symbol'
+      ) {
+        continue
+      }
       if (result.status === 'ok' && !result.complete) {
         ctx.addIssue({
           code: 'custom',
@@ -931,6 +951,7 @@ export type FileMutationOutcomeV1 = z.infer<typeof fileMutationOutcomeV1Schema>
 export type FileMutationResultV1 = z.infer<typeof fileMutationResultV1Schema>
 export type CommitActionReceiptV1 = z.infer<typeof commitActionReceiptV1Schema>
 export type CommitReceiptV1 = z.infer<typeof commitReceiptV1Schema>
+export type ReadFilesEditAnchor = z.infer<typeof readFilesEditAnchorSchema>
 export type ReadFilesItemV1 = z.infer<typeof readFilesItemV1Schema>
 export type ReadFilesResultV1 = z.infer<typeof readFilesResultV1Schema>
 export type ReadBlocksItemV1 = z.infer<typeof readBlocksItemV1Schema>

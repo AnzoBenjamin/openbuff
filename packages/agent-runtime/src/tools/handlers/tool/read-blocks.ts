@@ -8,7 +8,6 @@ import {
   encodeReadCapabilityToken,
   getContentHash,
   hasAuthoritativeReadCapabilityScope,
-  normalizeLineEndings,
 } from '@codebuff/common/util/content-hash'
 import { jsonToolResult } from '@codebuff/common/util/messages'
 
@@ -24,8 +23,10 @@ import {
   getEditRereadRequirement,
 } from './edit-read-state'
 import {
-  findLiteralOccurrences,
-  selectSymbolSlice,
+  buildAroundBlock,
+  buildSymbolBlock,
+  buildWindowBlock,
+  type ReadBlockBuilderContext,
 } from '../../../structural-read'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
@@ -39,9 +40,6 @@ import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ProjectFileContext } from '@codebuff/common/util/file'
 
 type ToolName = 'read_blocks'
-
-const DEFAULT_WINDOW_SIZE = 400
-const DEFAULT_CONTEXT_LINES = 40
 
 /**
  * Read-side parity surface for edit_transaction: returns one or more COMPLETE,
@@ -234,253 +232,37 @@ export const handleReadBlocks = (async (
     }
   }
 
+  const builderContext: ReadBlockBuilderContext = {
+    loadFile,
+    mintBlockEditAnchor,
+    applyBlockAuthority,
+    overBudgetError,
+    capabilityIssuer,
+    successfulReadPaths,
+  }
+
   for (let index = 0; index < windowInputs.length; index++) {
-    const request = windowInputs[index]!
-    const requestIndex = index
-    const path = normalizeToolPath(request.path)
-    const loaded = await loadFile(path)
-    if ('error' in loaded) {
-      items.push({
-        selector: 'window',
-        requestIndex,
-        path,
-        status: 'error',
-        error: loaded.error,
-      })
-      continue
-    }
-    const lines = normalizeLineEndings(loaded.content).split('\n')
-    const totalLines = lines.length
-    const windowSize = request.windowSize ?? DEFAULT_WINDOW_SIZE
-    const windowCount = Math.max(1, Math.ceil(totalLines / windowSize))
-    const window = request.window ?? 1
-    if (window > windowCount) {
-      items.push({
-        selector: 'window',
-        requestIndex,
-        path,
-        status: 'error',
-        error: {
-          code: 'invalid_request',
-          message: `read_blocks window ${window} is out of range for ${path}: the file has ${totalLines} lines (${windowCount} window(s) of ${windowSize} lines). Omit window to get the manifest plus the first window.`,
-          retryable: true,
-          recovery: 'read_smaller_range',
-        },
-      })
-      continue
-    }
-    const startLine = (window - 1) * windowSize + 1
-    const endLine = Math.min(totalLines, window * windowSize)
-    const blockContent = lines.slice(startLine - 1, endLine).join('\n')
-    const tooLarge = overBudgetError(blockContent)
-    if (tooLarge) {
-      items.push({
-        selector: 'window',
-        requestIndex,
-        path,
-        status: 'error',
-        error: tooLarge,
-      })
-      continue
-    }
-    const editAnchor = mintBlockEditAnchor(
-      path,
-      startLine,
-      endLine,
-      blockContent,
-    )
-    successfulReadPaths.add(path)
-    items.push({
-      selector: 'window',
-      requestIndex,
-      path,
-      status: 'ok',
-      content: blockContent,
-      sourceContent: blockContent,
-      startLine,
-      endLine,
-      totalLines,
-      complete: true,
-      windowSize,
-      windowCount,
-      window,
-      ...(editAnchor ? { editAnchor } : {}),
-    })
-    applyBlockAuthority({
-      path,
-      startLine,
-      endLine,
-      totalLines,
-      sourceContent: blockContent,
-    })
+    items.push(await buildWindowBlock(builderContext, windowInputs[index]!, index))
   }
 
   for (let index = 0; index < aroundInputs.length; index++) {
-    const request = aroundInputs[index]!
-    const requestIndex = windowInputs.length + index
-    const path = normalizeToolPath(request.path)
-    const loaded = await loadFile(path)
-    if ('error' in loaded) {
-      items.push({
-        selector: 'around',
-        requestIndex,
-        path,
-        status: 'error',
-        error: loaded.error,
-      })
-      continue
-    }
-    const normalized = normalizeLineEndings(loaded.content)
-    const lines = normalized.split('\n')
-    const totalLines = lines.length
-    const occurrence = request.occurrence ?? 1
-    const contextLines = request.contextLines ?? DEFAULT_CONTEXT_LINES
-    const occurrences = findLiteralOccurrences(normalized, request.match)
-    const matched = occurrences[occurrence - 1]
-    if (!matched) {
-      items.push({
-        selector: 'around',
-        requestIndex,
-        path,
-        status: 'error',
-        error: {
-          code: 'no_match',
-          message: `read_blocks found ${occurrences.length} exact occurrence(s) of the match in ${path}, so occurrence ${occurrence} does not exist. Re-check the literal text against a fresh read.`,
-          retryable: true,
-          recovery: 'read_again',
-        },
-      })
-      continue
-    }
-    const startLine = Math.max(1, matched.startLine - contextLines)
-    const endLine = Math.min(totalLines, matched.endLine + contextLines)
-    const blockContent = lines.slice(startLine - 1, endLine).join('\n')
-    const tooLarge = overBudgetError(blockContent)
-    if (tooLarge) {
-      items.push({
-        selector: 'around',
-        requestIndex,
-        path,
-        status: 'error',
-        error: tooLarge,
-      })
-      continue
-    }
-    const editAnchor = mintBlockEditAnchor(
-      path,
-      startLine,
-      endLine,
-      blockContent,
+    items.push(
+      await buildAroundBlock(
+        builderContext,
+        aroundInputs[index]!,
+        windowInputs.length + index,
+      ),
     )
-    successfulReadPaths.add(path)
-    items.push({
-      selector: 'around',
-      requestIndex,
-      path,
-      status: 'ok',
-      content: blockContent,
-      sourceContent: blockContent,
-      startLine,
-      endLine,
-      totalLines,
-      complete: true,
-      match: request.match,
-      occurrence,
-      totalOccurrences: occurrences.length,
-      ...(editAnchor ? { editAnchor } : {}),
-    })
-    applyBlockAuthority({
-      path,
-      startLine,
-      endLine,
-      totalLines,
-      sourceContent: blockContent,
-    })
   }
 
   for (let index = 0; index < symbolInputs.length; index++) {
-    const request = symbolInputs[index]!
-    const requestIndex = windowInputs.length + aroundInputs.length + index
-    const path = normalizeToolPath(request.path)
-    const loaded = await loadFile(path)
-    if ('error' in loaded) {
-      items.push({
-        selector: 'symbol',
-        requestIndex,
-        path,
-        status: 'error',
-        error: loaded.error,
-      })
-      continue
-    }
-    const occurrence = request.occurrence ?? 1
-    const slice = await selectSymbolSlice({
-      rawContent: loaded.content,
-      filePath: path,
-      name: request.name,
-      occurrence,
-      capabilityScope: { ...capabilityIssuer, path },
-    })
-    if (!slice) {
-      items.push({
-        selector: 'symbol',
-        requestIndex,
-        path,
-        status: 'error',
-        error: {
-          code: 'no_match',
-          message: `Symbol "${request.name}" (occurrence ${occurrence}) was not found in ${path}. Use read_outline to list the available symbols, then retry with an exact name.`,
-          retryable: true,
-          recovery: 'choose_symbol',
-        },
-      })
-      continue
-    }
-    const totalLines = normalizeLineEndings(loaded.content).split('\n').length
-    const tooLarge = overBudgetError(slice.content)
-    if (tooLarge) {
-      items.push({
-        selector: 'symbol',
-        requestIndex,
-        path,
-        status: 'error',
-        error: tooLarge,
-      })
-      continue
-    }
-    // Mirror read_files: only parser-proven slices (which carry a minted
-    // readCapability) expose an editAnchor; heuristic regex slices stay
-    // read-only and require an anchored window/around read before editing.
-    const editAnchor = slice.readCapability
-      ? mintBlockEditAnchor(path, slice.startLine, slice.endLine, slice.content)
-      : undefined
-    successfulReadPaths.add(path)
-    items.push({
-      selector: 'symbol',
-      requestIndex,
-      path,
-      status: 'ok',
-      content: slice.content,
-      sourceContent: slice.content,
-      startLine: slice.startLine,
-      endLine: slice.endLine,
-      totalLines,
-      complete: true,
-      symbol: slice.symbol,
-      ...(slice.kind ? { kind: slice.kind } : {}),
-      occurrence,
-      ...(editAnchor ? { editAnchor } : {}),
-    })
-    // A whole-file-spanning slice may grant, but only when the slice is
-    // parser-proven; heuristic slices classify as 'none'.
-    applyBlockAuthority({
-      path,
-      startLine: slice.startLine,
-      endLine: slice.endLine,
-      totalLines,
-      sourceContent: slice.content,
-      capabilityEligible: Boolean(slice.readCapability),
-    })
+    items.push(
+      await buildSymbolBlock(
+        builderContext,
+        symbolInputs[index]!,
+        windowInputs.length + aroundInputs.length + index,
+      ),
+    )
   }
 
   // A block covering the whole file mints the same authority an identical

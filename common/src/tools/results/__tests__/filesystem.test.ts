@@ -256,6 +256,145 @@ describe('structured filesystem results', () => {
     expect(readFilesResultV1Schema.safeParse(result).success).toBe(true)
   })
 
+  it('accepts a unified read_files result mixing all five selector kinds', () => {
+    const contentHash = `sha256:${'c'.repeat(64)}`
+    const result = buildReadFilesResultV1([
+      {
+        selector: 'file',
+        requestIndex: 0,
+        path: 'src/a.ts',
+        status: 'ok',
+        content: 'a',
+        complete: true,
+        template: false,
+      },
+      {
+        selector: 'range',
+        requestIndex: 1,
+        path: 'src/b.ts',
+        status: 'ok',
+        content: '1\tb',
+        sourceContent: 'b',
+        startLine: 1,
+        endLine: 1,
+        totalLines: 1,
+        complete: true,
+      },
+      {
+        selector: 'window',
+        requestIndex: 2,
+        path: 'src/c.ts',
+        status: 'ok',
+        content: 'c1\nc2',
+        sourceContent: 'c1\nc2',
+        startLine: 1,
+        endLine: 2,
+        totalLines: 5,
+        complete: true,
+        windowSize: 2,
+        windowCount: 3,
+        window: 1,
+        editAnchor: {
+          startLine: 1,
+          endLine: 2,
+          contentHash,
+          readCapability: 'cap.v3.win',
+        },
+      },
+      {
+        selector: 'around',
+        requestIndex: 3,
+        path: 'src/c.ts',
+        status: 'ok',
+        content: 'c2\nc3',
+        sourceContent: 'c2\nc3',
+        startLine: 2,
+        endLine: 3,
+        totalLines: 5,
+        complete: true,
+        match: 'c3',
+        occurrence: 1,
+        totalOccurrences: 1,
+      },
+      {
+        selector: 'symbols',
+        requestIndex: 4,
+        path: 'src/d.ts',
+        status: 'ok',
+        requestedSymbols: ['run'],
+        missingSymbols: [],
+        slices: [],
+      },
+    ])
+
+    expect(readFilesResultV1Schema.safeParse(result).success).toBe(true)
+    expect(result.summary).toEqual({
+      requested: 5,
+      ok: 5,
+      partial: 0,
+      failed: 0,
+      uniquePaths: 4,
+    })
+  })
+
+  it('does not fire file/range completeness branches on block items', () => {
+    // A partial file item must be incomplete+truncated, but a complete window
+    // item in the same result must not be rejected by the file/range branch.
+    const result = buildReadFilesResultV1([
+      {
+        selector: 'file',
+        requestIndex: 0,
+        path: 'src/big.ts',
+        status: 'partial',
+        content: 'excerpt',
+        complete: false,
+        template: false,
+        truncation: { reason: 'character_limit' },
+      },
+      {
+        selector: 'window',
+        requestIndex: 1,
+        path: 'src/big.ts',
+        status: 'ok',
+        content: 'w1',
+        sourceContent: 'w1',
+        startLine: 1,
+        endLine: 1,
+        totalLines: 100,
+        complete: true,
+        windowSize: 1,
+        windowCount: 100,
+        window: 1,
+      },
+    ])
+
+    expect(readFilesResultV1Schema.safeParse(result).success).toBe(true)
+  })
+
+  it('accepts referencedBy on range/window/around/symbol strict items', () => {
+    const referencedBy = { 'src/consumer.ts': ['run'] }
+    const result = buildReadFilesResultV1([
+      {
+        selector: 'window',
+        requestIndex: 0,
+        path: 'src/c.ts',
+        status: 'ok',
+        content: 'c',
+        sourceContent: 'c',
+        startLine: 1,
+        endLine: 1,
+        totalLines: 1,
+        complete: true,
+        windowSize: 1,
+        windowCount: 1,
+        window: 1,
+        referencedBy,
+      },
+    ])
+
+    expect(readFilesResultV1Schema.safeParse(result).success).toBe(true)
+  })
+
   it('rejects aggregate status and request-index drift', () => {
     const result = buildReadFilesResultV1([
       {
