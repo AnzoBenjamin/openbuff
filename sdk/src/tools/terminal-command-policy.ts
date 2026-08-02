@@ -798,6 +798,58 @@ function stripCommitMessageArgs(command: string): string {
     .trim()
 }
 
+/**
+ * Junk/placeholder commit-message subjects (whole-subject, case-insensitive,
+ * after stripping surrounding quotes/whitespace/punctuation). A commit whose
+ * -m/--message subject is one of these is a policy probe or a content-free
+ * placeholder rather than a real change description, so the git-commit
+ * profile rejects it outright.
+ */
+const PLACEHOLDER_COMMIT_SUBJECTS = new Set([
+  'probe',
+  'test',
+  'wip',
+  'tmp',
+  'temp',
+  'asdf',
+  'foo',
+  'bar',
+  'x',
+  'xx',
+  'xxx',
+  'commit',
+  'update',
+  'changes',
+  'stuff',
+  'misc',
+  'test commit',
+  'wip commit',
+])
+
+/**
+ * Capturing counterpart to stripCommitMessageArgs: extract each -m/--message
+ * value (double-quoted, single-quoted, --message=value, and bare-word forms;
+ * multiple flags are all captured) and report whether any message subject is
+ * a junk/placeholder word. Matching is whole-subject (never substring), so a
+ * real message that merely contains a placeholder word (e.g. "Add probe
+ * support for X") stays allowed while a bare "probe"/"wip"/"test" does not.
+ */
+function hasPlaceholderCommitMessage(command: string): boolean {
+  for (const match of command.matchAll(
+    /(?:^|\s)(?:-m|--message)(?:=|\s+)("[^"]*"|'[^']*'|[^\s"']+)/g,
+  )) {
+    const subject = match[1]
+      .replace(/^["']+|["']+$/g, '')
+      .trim()
+      .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
+      .toLowerCase()
+    if (subject.length > 0 && PLACEHOLDER_COMMIT_SUBJECTS.has(subject)) {
+      return true
+    }
+  }
+  return false
+}
+
 function hasUnsafeReadOnlyGitOption(command: string): boolean {
   return /(?:^|\s)--(?:output|exec-path)(?:=|\s|$)/i.test(command) ||
     /(?:^|\s)--(?:ext-diff|textconv)(?:\s|$)/i.test(command) ||
@@ -1157,13 +1209,31 @@ export function evaluateTerminalCommandPolicy(params: {
           }
         }
       }
+      // A commit whose -m/--message subject is a junk placeholder
+      // (probe/test/wip/etc.) is a policy probe or content-free, never a
+      // real change description: reject it with guidance instead of
+      // committing it.
+      if (
+        /^git\s+commit\b/i.test(command) &&
+        hasPlaceholderCommitMessage(command)
+      ) {
+        return {
+          allowed: false,
+          reason:
+            'git commit message appears to be a placeholder (probe/test/wip/etc.); write a real imperative commit message',
+        }
+      }
       const isAllowedGitCommand =
         isReadOnlyGitCommand(command) ||
         isAllowedComplexGitCommand(command) ||
         /^git\s+add\s+(?!.*(?:^|\s)--(?:intent-to-add|chmod)\b).+/i.test(
           command,
         ) ||
+        // Defense in depth: the early return above already rejects
+        // placeholder messages with a clear reason; keep the guard here so
+        // the allow clause stays fail-closed on its own.
         (!/(?:^|\s)--amend\b/i.test(command) &&
+          !hasPlaceholderCommitMessage(command) &&
           /^git\s+commit\s+(?=.*-m(?:\s|$)).+/i.test(command)) ||
         /^git\s+push\s+(?!.*(?:--force|-f\b|--delete\b|:))(?:-u\s+|--set-upstream\s+)?[A-Za-z0-9._/-]+\s+[A-Za-z0-9._/-]+$/i.test(
           command,

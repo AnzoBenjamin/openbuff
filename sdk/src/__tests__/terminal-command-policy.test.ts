@@ -343,6 +343,69 @@ describe('terminal command permission policy', () => {
     }
   })
 
+  it('rejects placeholder git commit messages but allows real imperative ones', () => {
+    const placeholderReason =
+      'git commit message appears to be a placeholder (probe/test/wip/etc.); write a real imperative commit message'
+    for (const command of [
+      'git commit -m probe',
+      'git commit -m "probe"',
+      "git commit -m 'wip'",
+      'git commit -m WIP',
+      'git commit -m test',
+      'git commit -m "test commit"',
+      'git commit -m "wip commit"',
+      'git commit -m tmp',
+      'git commit -m temp',
+      'git commit -m asdf',
+      'git commit -m foo',
+      'git commit -m bar',
+      'git commit -m x',
+      'git commit -m xx',
+      'git commit -m xxx',
+      'git commit -m commit',
+      'git commit -m update',
+      'git commit -m changes',
+      'git commit -m stuff',
+      'git commit -m misc',
+      'git commit --message probe',
+      'git commit --message=probe',
+      'git commit --message="wip"',
+      'git commit -m "probe."',
+      // Any placeholder among multiple -m flags rejects the whole commit.
+      'git commit -m "Fix the parser" -m wip',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'git-commit',
+          projectRoot,
+          allowedPaths: ['src/a.ts'],
+        }),
+      ).toEqual({ allowed: false, reason: placeholderReason })
+    }
+    // Whole-subject matching: real messages that merely contain a
+    // placeholder word (or use none) stay allowed.
+    for (const command of [
+      'git commit -m "Add probe support for X"',
+      'git commit -m "Fix issue"',
+      'git commit -m "Update the installer to fetch dependencies"',
+      'git commit -m "Test the retry logic before release"',
+      'git commit -m "Remove temp files from the build output"',
+      'git commit -m "Miscellaneous cleanups are not misc"',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'git-commit',
+          projectRoot,
+          allowedPaths: ['src/a.ts'],
+        }).allowed,
+      ).toBe(true)
+    }
+  })
+
   it('rejects raw newlines before normalization for non-full-access profiles', () => {
     for (const [permissionProfile, command] of [
       ['git-commit', 'git status --short\ntouch pwned.txt'],

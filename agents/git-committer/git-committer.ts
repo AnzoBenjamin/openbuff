@@ -70,18 +70,19 @@ const definition: SecretAgentDefinition = {
   terminalPermissionProfile: 'git-commit',
   spawnableAgents: [],
 
-  systemPrompt: `You are a conservative git delivery specialist. You inspect repository, upstream, and worktree state; stage only task-owned changes; create clear commits; and push only when the structured invocation explicitly authorizes it. Shared-repository safety is more important than convenience.`,
+  systemPrompt: `You are a conservative git delivery specialist. You inspect repository, upstream, and worktree state; stage only task-owned changes; create clear commits with real imperative messages; and push only when the structured invocation explicitly authorizes it. Shared-repository safety is more important than convenience: on any policy denial or uncertainty, stop and report rather than improvise a workaround.`,
 
   instructionsPrompt: `Instructions:
 1. Treat the repository as shared. Inspect branch, upstream, remote/default branch, worktree membership, dirty/staged/untracked files, and in-progress merge/rebase/cherry-pick state before staging. Never alter git config.
 2. If branch_name is provided with a dirty tree, proceed only when allow_dirty_branch was explicitly set; otherwise stop. Create it through the git_branch tool. Existing worktrees are valid: report the current worktree and branch, but do not create/remove worktrees in this version.
 3. Stage only task-owned paths. owned_paths is required and is a hard allowlist. Never use git add -A, git add ., or broad globs. If a file mixes unrelated user and task changes and safe hunk staging is unavailable, stop and report it rather than claiming ownership.
 4. If the changes span unrelated concerns, create only the logical commit requested by the caller and leave the rest untouched.
-5. Read relevant source files if the diff is insufficient. Match recent repository commit message style; default to an imperative subject under 72 characters and a body explaining why.
+5. Read relevant source files if the diff is insufficient. Match recent repository commit message style; default to an imperative subject under 72 characters and a body explaining why. Every commit must use a real imperative message derived from the actual change; placeholder messages (probe/test/wip/etc.) are forbidden and policy-rejected.
 6. Before committing, inspect git diff --cached, run whitespace/secret checks, and verify every staged path is task-owned. Permitted safe operations: inspecting state; staging only owned paths; non-amend commits; non-force feature-branch pushes; git switch / git checkout <branch>; creating branches; safe git branch -d; git merge --no-ff / --no-commit; git cherry-pick; git stash push/pop/apply/list; git reset --soft / --mixed; git tag (create); and git restore --staged.
 7. Forbidden (data-loss, history-rewrite, or shared-repo risk): git reset --hard; git branch -D / --delete; git clean; git checkout -- <path> or any path checkout that overwrites the worktree; git push --force / -f / refspec / --delete; git rebase; git commit --amend; git stash drop / clear; git config writes; direct default-branch pushes; and resolving merge conflicts by discarding a side.
-8. Data-safety guideline (no data loss): before any operation that could move HEAD or alter the worktree, inspect git status and git stash list; never discard uncommitted changes - if an operation would overwrite uncommitted work, stop and report instead. Prefer --no-ff / --no-commit merges so the caller can review. Only push when params.push is true and the branch is a non-default feature branch that is not behind or diverged (fetch the selected remote first; never force-push or use a refspec). If a complex operation (merge/cherry-pick) conflicts, STOP and report rather than auto-resolving; synchronization that needs rebase requires separate authorization plus fresh validation/review.
-9. Return the worktree path, branch, commit hash/message, committed paths, remote synchronization state, and push result.
+8. A terminal-policy denial is final. When a terminal command is denied by the git-commit terminal policy (for example a reset/unstage/restore variant, or a placeholder-message commit), STOP and report the exact denial reason verbatim, then ask for guidance. Never work around a denial by improvising a different or riskier command: never substitute a path-scoped git commit to test policy, never commit just to see whether it is allowed, and never invent a placeholder message.
+9. Data-safety guideline (no data loss): before any operation that could move HEAD or alter the worktree, inspect git status and git stash list; never discard uncommitted changes - if an operation would overwrite uncommitted work, stop and report instead. Prefer --no-ff / --no-commit merges so the caller can review. push only when params.push is true and the branch is a non-default feature branch that is not behind or diverged (fetch the selected remote first; never force-push or use a refspec). If a complex operation (merge/cherry-pick) conflicts, STOP and report rather than auto-resolving; synchronization that needs rebase requires separate authorization plus fresh validation/review.
+10. Return the worktree path, branch, commit hash/message, committed paths, remote synchronization state, and push result.
 Do not commit secrets, .env files, credentials, generated artifacts without their source, or unrelated changes. If there are no eligible changes, report that and stop.`.trim(),
 
   handleSteps: function* ({ params }) {
@@ -199,10 +200,68 @@ Do not commit secrets, .env files, credentials, generated artifacts without thei
         } satisfies StepText
         return
       }
-      yield {
+      // Verify the staged set is a subset of owned_paths before committing:
+      // a staged path is owned when it exactly equals an owned path or lives
+      // under an owned directory (owned_paths may use trailing slashes for
+      // directories). Never proceed to git commit with an over-broad set.
+      const { toolResult: stagedResult } = yield {
         toolName: 'run_terminal_command',
         input: { command: 'git diff --cached --name-only' },
       } as ToolCall<'run_terminal_command'>
+      const stagedValue = stagedResult?.find((part) => part.type === 'json')
+        ?.value as Record<string, unknown> | undefined
+      const stagedPaths = (
+        typeof stagedValue?.stdout === 'string' ? stagedValue.stdout : ''
+      )
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+      const normalizedOwnedPaths = ownedPaths.map((ownedPath: string) =>
+        ownedPath
+          .replace(/\\/g, '/')
+          .replace(/^\.\//, '')
+          .replace(/\/+$/, ''),
+      )
+      const unexpectedStagedPaths = stagedPaths.filter(
+        (stagedPath: string) => {
+          const normalizedStagedPath = stagedPath
+            .replace(/\\/g, '/')
+            .replace(/^\.\//, '')
+          return !normalizedOwnedPaths.some(
+            (ownedPath: string) =>
+              normalizedStagedPath === ownedPath ||
+              normalizedStagedPath.startsWith(`${ownedPath}/`),
+          )
+        },
+      )
+      if (unexpectedStagedPaths.length > 0) {
+        // Safe unstage path: `git restore --staged <path>...` is the
+        // policy-permitted shape, so only bare path tokens are passed.
+        const unstageTargets = unexpectedStagedPaths.filter(
+          (stagedPath: string) => /^[A-Za-z0-9._/-]+$/.test(stagedPath),
+        )
+        if (unstageTargets.length > 0) {
+          yield {
+            toolName: 'run_terminal_command',
+            input: {
+              command: `git restore --staged ${unstageTargets.join(' ')}`,
+            },
+          } as ToolCall<'run_terminal_command'>
+        }
+        yield {
+          type: 'STEP_TEXT',
+          text: [
+            'Stopping: the staged set contains paths outside the owned_paths allowlist, so no commit was created.',
+            `Offending staged paths: ${unexpectedStagedPaths.join(', ')}`,
+            `owned_paths allowlist: ${ownedPaths.join(', ')}`,
+            unstageTargets.length > 0
+              ? `Unstaged via git restore --staged: ${unstageTargets.join(', ')}.`
+              : 'No offending paths could be unstaged automatically; unstage them manually.',
+            'Re-scope owned_paths to the intended paths (or clean up the pre-staged files) and run again.',
+          ].join('\n'),
+        } satisfies StepText
+        return
+      }
       yield {
         toolName: 'run_terminal_command',
         input: { command: 'git diff --cached -U0' },
