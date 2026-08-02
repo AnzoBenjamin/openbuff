@@ -1,6 +1,6 @@
 # Unified Background Job Architecture — PLAN
 
-<!-- current-task: M1.1 unified core registry -->
+<!-- current-task: none -->
 
 Status legend: `[ ]` pending, `[~]` in_progress, `[x]` done, `[!]` blocked.
 
@@ -24,14 +24,14 @@ Status legend: `[ ]` pending, `[~]` in_progress, `[x]` done, `[!]` blocked.
 ### M4 — Tool migration (thin wrappers) — DONE (31/31 agent-runtime; all typechecks clean)
 - [x] M4.1 check_job unified event result; M4.2 check_background_agent; M4.3 kill/list/read_logs + end_turn on unified core; M4.4 schemas (full JobState/JobEventPayload/kind); M4.5 DELETED authorize-background-job.ts + common/util/pending-background-jobs.ts. Single-key bg-agent ids.
 
-### M5 — Live UI — IN PROGRESS
-- [~] M5.1 Run loop consumes job event stream; M5.2 CLI renders live job status/output.
+### M5 — Live UI — DONE (verified implemented + unit-tested; no new code needed)
+- [x] M5.1 Run loop consumes job event stream (sdk/src/job-update-forwarder.ts + subscribeAll/dispose in run.ts; printModeJobUpdateSchema; run-job-updates.test.ts 6/6); M5.2 CLI renders live job status/output (handleJobUpdate in cli/src/utils/sdk-event-handlers.ts + backgroundJobId correlation + terminal-command-display.tsx; sdk-event-handlers.test.ts 26/26 incl. 13 job_update cases). Live real-terminal dev-server smoke deferred to M7.3.
 
-### M6 — Prompts, docs, evals, generated bundles
-- [ ] M6.1 agent prompts; M6.2 docs/deterministic-edit-system.md; M6.3 evals + regenerate cli/release bundles.
+### M6 — Prompts, docs, evals, generated bundles — DONE (verified current; no edits needed)
+- [x] M6.1 agent prompts (base2.ts:292 already documents the unified model; editor.ts + base-deep.ts have zero stale authorize/foreign/recover refs); M6.2 docs/deterministic-edit-system.md:28 + agents-and-tools.md:581-628 already document the unified JobRegistry / assertOwned / job_update; no doc still describes the deleted tri-state gate. M6.3 evals clean (evals/buffbench/* reference no job tooling, assert no ownership behavior); cli/release*/index.js regeneration deferred to the CI release workflow (build-binary.ts is the release path — regenerate, do not hand-edit).
 
 ### M7 — Validation & review
-- [ ] M7.1 typecheck all; M7.2 test all touched suites; M7.3 live dev-server smoke; M7.4 coverage gate.
+- [x] M7.1 typecheck all; M7.2 test all touched suites; M7.3 live dev-server smoke; M7.4 coverage gate. (typecheck all packages green; 174/174 sdk+common + 26/26 CLI + 21/21 context-budget; live real-spawn smoke passed; reviewer gates LOOKS_GOOD/NON_BLOCKING with nits applied; commits e5797f4fe (push-model) + 4ce235b51 (context-budget))
 
 ## DESIGN (authoritative implementation spec)
 
