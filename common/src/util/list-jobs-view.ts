@@ -98,13 +98,19 @@ export function selectListJobsRows<
   }
 }
 
-/** Stable fingerprint for change-gating tests / future use. */
+/**
+ * Stable fingerprint for change-gating tests / future use.
+ *
+ * exitCode is included because it is a meaningful terminal signal (a
+ * completed job whose exitCode differs must bust the gate); tail/startedAt
+ * remain intentionally ignored as churn.
+ */
 export function fingerprintListJobsRows(rows: ListJobsViewRow[]): string {
   return [...rows]
     .sort((a, b) => a.jobId.localeCompare(b.jobId))
     .map(
       (row) =>
-        `${row.jobId}|${row.status}|${row.pending}|${row.gap}|${row.completedAt ?? ''}`,
+        `${row.jobId}|${row.status}|${row.pending}|${row.gap}|${row.completedAt ?? ''}|${row.exitCode ?? ''}`,
     )
     .join('\n')
 }

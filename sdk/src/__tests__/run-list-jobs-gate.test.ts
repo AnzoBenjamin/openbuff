@@ -119,6 +119,10 @@ describe('applyListJobsDigestGate', () => {
   })
 })
 
+// These integration tests stub `callMainPrompt` wholesale on purpose: the
+// model-visible suppression payload is asserted at the `requestToolCall`
+// seam — the actual injection point where tool results reach the model — so
+// the mock is the right assertion surface, not missing end-to-end coverage.
 describe('list_jobs per-turn change-gating (run integration)', () => {
   afterEach(() => {
     mock.restore()

@@ -114,6 +114,22 @@ describe('fingerprintListJobsRows', () => {
       fingerprintListJobsRows([a, b]),
     )
   })
+
+  test('changes when exitCode changes; null/undefined normalize the same', () => {
+    const settled = row({ jobId: 'a', status: 'completed', completedAt: 2 })
+    const exitZero = row({ ...settled, exitCode: 0 })
+    const exitOne = row({ ...settled, exitCode: 1 })
+    expect(fingerprintListJobsRows([exitZero])).not.toBe(
+      fingerprintListJobsRows([exitOne]),
+    )
+    expect(fingerprintListJobsRows([exitZero])).not.toBe(
+      fingerprintListJobsRows([settled]),
+    )
+    // `?? ''` normalization: null and undefined fingerprint identically.
+    expect(fingerprintListJobsRows([row({ ...settled, exitCode: null })])).toBe(
+      fingerprintListJobsRows([settled]),
+    )
+  })
 })
 
 describe('buildListJobsValue', () => {
