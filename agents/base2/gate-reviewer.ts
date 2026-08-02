@@ -53,6 +53,7 @@ export function collectReviewerAttestationIssues(
   toolResult: unknown,
   expectedFingerprint: string,
   pendingFiles: string[],
+  deletedFiles?: string[],
 ): string[] {
   // The caller passes the reviewable subset; when it is empty there is
   // nothing to attest, so surface no attestation issues.
@@ -74,9 +75,21 @@ export function collectReviewerAttestationIssues(
       .map((file) => normalizeGateFilePath(file))
       .filter((file) => file.length > 0),
   )
+  // Files deleted in the changeset carry a `missing` content marker and cannot
+  // be read by the reviewer, so they are attested-by-absence and excluded from
+  // the missing computation. Genuinely-modified pending files still must be
+  // attested, and a changeset of ONLY deletions still requires an attestable
+  // fingerprint via the fail-closed check below.
+  const deleted = new Set(
+    (deletedFiles ?? [])
+      .map((file) => normalizeGateFilePath(file))
+      .filter((file) => file.length > 0),
+  )
   const missing = pendingFiles
     .map((file) => normalizeGateFilePath(file))
-    .filter((file) => file.length > 0 && !reviewed.has(file))
+    .filter(
+      (file) => file.length > 0 && !reviewed.has(file) && !deleted.has(file),
+    )
   const issues: string[] = []
   // Fingerprint tolerance: a reviewer that attested to EVERY pending source
   // file with a well-formed snapshot fingerprint is trusted even when the

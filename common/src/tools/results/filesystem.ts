@@ -708,9 +708,8 @@ export const readBlocksSymbolItemSchema = z
   .superRefine(readBlocksBlockSuperRefine)
 
 /**
- * The single shared read item union: read_files serves all five selector
- * kinds and read_blocks is defined in terms of the same item schemas, so an
- * item valid for one tool stays valid for the other.
+ * The single shared read item union for read_files: every selector kind
+ * (file, range, symbols, window, around, symbol) plus per-selector errors.
  */
 export const readFilesItemV1Schema = z.union([
   readFilesFileItemSchema,
@@ -838,96 +837,6 @@ export const readFilesResultV1Schema = z
     }
   })
 
-export const readBlocksItemV1Schema = readFilesItemV1Schema
-
-export const readBlocksResultV1Schema = z
-  .object({
-    kind: z.literal('read_blocks_result'),
-    version: z.literal(1),
-    status: z.enum(['ok', 'partial', 'error']),
-    summary: z.object({
-      requested: z.number().int().nonnegative(),
-      ok: z.number().int().nonnegative(),
-      partial: z.number().int().nonnegative(),
-      failed: z.number().int().nonnegative(),
-      uniquePaths: z.number().int().nonnegative(),
-    }),
-    results: readBlocksItemV1Schema.array(),
-  })
-  .superRefine((value, ctx) => {
-    const { requested, ok, partial, failed, uniquePaths } = value.summary
-    const actualOk = value.results.filter(
-      (result) => result.status === 'ok',
-    ).length
-    const actualPartial = value.results.filter(
-      (result) => result.status === 'partial',
-    ).length
-    const actualFailed = value.results.filter(
-      (result) => result.status === 'error',
-    ).length
-    if (
-      ok + partial + failed !== requested ||
-      requested !== value.results.length ||
-      ok !== actualOk ||
-      partial !== actualPartial ||
-      failed !== actualFailed
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        message:
-          'read_blocks summary counts must equal the number of result items',
-      })
-    }
-    if (
-      new Set(value.results.map((result) => result.path)).size !== uniquePaths
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'read_blocks summary.uniquePaths does not match results',
-      })
-    }
-    const expectedStatus =
-      failed === requested && failed > 0
-        ? 'error'
-        : failed > 0 || partial > 0
-          ? 'partial'
-          : 'ok'
-    if (value.status !== expectedStatus) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'read_blocks aggregate status does not match summary counts',
-      })
-    }
-    if (value.results.some((result, index) => result.requestIndex !== index)) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'read_blocks request indexes must be contiguous and ordered',
-      })
-    }
-    for (const result of value.results) {
-      if (result.status === 'error') continue
-      if (
-        result.selector !== 'window' &&
-        result.selector !== 'around' &&
-        result.selector !== 'symbol'
-      ) {
-        continue
-      }
-      if (result.status === 'ok' && !result.complete) {
-        ctx.addIssue({
-          code: 'custom',
-          message: 'ok block results must be complete',
-        })
-      }
-      if (result.status === 'partial' && result.complete) {
-        ctx.addIssue({
-          code: 'custom',
-          message: 'partial block results must be incomplete',
-        })
-      }
-    }
-  })
-
 export type FilesystemError = z.infer<typeof filesystemErrorSchema>
 export type FilesystemErrorCode = z.infer<typeof filesystemErrorCodeSchema>
 export type ToolLifecycleStateV1 = z.infer<typeof toolLifecycleStateV1Schema>
@@ -954,8 +863,6 @@ export type CommitReceiptV1 = z.infer<typeof commitReceiptV1Schema>
 export type ReadFilesEditAnchor = z.infer<typeof readFilesEditAnchorSchema>
 export type ReadFilesItemV1 = z.infer<typeof readFilesItemV1Schema>
 export type ReadFilesResultV1 = z.infer<typeof readFilesResultV1Schema>
-export type ReadBlocksItemV1 = z.infer<typeof readBlocksItemV1Schema>
-export type ReadBlocksResultV1 = z.infer<typeof readBlocksResultV1Schema>
 
 const TOOL_LIFECYCLE_TRANSITIONS: Record<
   ToolLifecycleStateV1,
@@ -1486,36 +1393,4 @@ export function isReadFilesResultV1(
   value: unknown,
 ): value is ReadFilesResultV1 {
   return readFilesResultV1Schema.safeParse(value).success
-}
-
-export function buildReadBlocksResultV1(
-  results: ReadBlocksItemV1[],
-): ReadBlocksResultV1 {
-  const ok = results.filter((result) => result.status === 'ok').length
-  const partial = results.filter((result) => result.status === 'partial').length
-  const failed = results.filter((result) => result.status === 'error').length
-  return {
-    kind: 'read_blocks_result',
-    version: 1,
-    status:
-      failed === results.length && failed > 0
-        ? 'error'
-        : failed > 0 || partial > 0
-          ? 'partial'
-          : 'ok',
-    summary: {
-      requested: results.length,
-      ok,
-      partial,
-      failed,
-      uniquePaths: new Set(results.map((result) => result.path)).size,
-    },
-    results,
-  }
-}
-
-export function isReadBlocksResultV1(
-  value: unknown,
-): value is ReadBlocksResultV1 {
-  return readBlocksResultV1Schema.safeParse(value).success
 }

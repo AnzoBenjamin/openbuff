@@ -841,17 +841,14 @@ Model-facing range content omits the transport-only `[RANGE_BLOCK ...]`
 metadata header. Exact undecorated bytes remain available as `sourceContent`,
 while the structured anchor carries freshness metadata without prose parsing.
 
-### `read_blocks`
-
-`read_blocks` is the read-side counterpart to `read_files` ranges for large
-files: it returns one or more COMPLETE, capability-minting structural blocks
-so a large file yields a usable edit anchor without a guess-shrink-retry loop.
-Every complete block returns a structured `editAnchor` (`startLine`, `endLine`,
-`contentHash`, cap.v3 `readCapability`) that can be copied verbatim to
-`basedOnRead` / `readCapability` on a follow-up edit. Partial or failed blocks
-mint no capability.
-
-Three combinable selector modes:
+For large files, `read_files` is also the capability-minting block reader: the
+`windows`, `around`, `symbol`, and batch `symbols` selectors below return one
+or more COMPLETE structural blocks so a large file yields a usable edit anchor
+without a guess-shrink-retry loop. Every complete block returns a structured
+`editAnchor` (`startLine`, `endLine`, `contentHash`, cap.v3 `readCapability`)
+that can be copied verbatim to `basedOnRead` / `readCapability` on a follow-up
+edit. Partial or failed blocks mint no capability. The selector modes may be
+combined in one call:
 
 - `windows: [{ path, windowSize?, window? }]` — split the file into complete
   contiguous line windows (default `windowSize` 400). Omit `window` to get the
@@ -860,7 +857,8 @@ Three combinable selector modes:
   block around the 1-indexed `occurrence` (default 1) of the exact literal
   `match`, with `contextLines` (default 40) on each side, clamped at file
   boundaries. Robust to line-number drift.
-- `symbols: [{ path, name, occurrence? }]` — pull the Nth (default 1)
+- `symbol: { path, name, occurrence? }` (or batch
+  `symbols: [{ path, name, occurrence? }]`) — pull the Nth (default 1)
   top-level symbol with that name, mirroring `rewrite_symbol` occurrence
   semantics. Pair with `read_outline` to discover names.
 

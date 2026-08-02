@@ -204,7 +204,6 @@ export function createSpecialist(
     includeMessageHistory: false,
     toolNames: [
       'read_files',
-      'read_blocks',
       'read_outline',
       'code_search',
       'inspect_workspace',

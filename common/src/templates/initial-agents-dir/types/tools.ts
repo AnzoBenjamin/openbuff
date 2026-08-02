@@ -31,7 +31,6 @@ export type ToolName =
   | 'list_jobs'
   | 'lookup_agent_info'
   | 'query_index'
-  | 'read_blocks'
   | 'read_docs'
   | 'read_files'
   | 'read_image'
@@ -92,7 +91,6 @@ export interface ToolParamsMap {
   list_jobs: ListJobsParams
   lookup_agent_info: LookupAgentInfoParams
   query_index: QueryIndexParams
-  read_blocks: ReadBlocksParams
   read_docs: ReadDocsParams
   read_files: ReadFilesParams
   read_image: ReadImageParams
@@ -618,41 +616,6 @@ export interface QueryIndexParams {
 }
 
 /**
- * Read one or more complete, capability-minting structural blocks from files: line windows, literal-anchored context blocks, or occurrence-aware symbol slices. Selector modes may be combined in one call.
- */
-export interface ReadBlocksParams {
-  /** Windowed reads for large files. Each returned window is a COMPLETE contiguous line block that mints its own cap.v3 editAnchor, so you can edit it directly via replace_range/basedOnRead without a guess-shrink-retry loop. */
-  windows?: {
-    /** File path to read in contiguous line windows, relative to the project root. */
-    path: string
-    /** Lines per window. Defaults to 400, capped at 5000. */
-    windowSize?: number
-    /** 1-indexed window number to return. Omit to get the window manifest (totalLines, windowSize, windowCount) plus the first window. */
-    window?: number
-  }[]
-  /** Content-anchored reads: find the Nth exact literal match and return a complete bounded block around it, minting a cap.v3 editAnchor for that block. */
-  around?: {
-    /** File path to read a content-anchored block from, relative to the project root. */
-    path: string
-    /** Exact literal string to anchor on. Robust to line-number drift. */
-    match: string
-    /** 1-indexed occurrence of `match` to anchor on. Defaults to 1. */
-    occurrence?: number
-    /** Lines of context to include on each side of the match, clamped at file boundaries. Defaults to 40, capped at 2000. */
-    contextLines?: number
-  }[]
-  /** Occurrence-aware symbol reads: pull the Nth top-level symbol with a given name. Parser-proven slices mint a cap.v3 editAnchor. */
-  symbols?: {
-    /** File path to extract a symbol slice from, relative to the project root. */
-    path: string
-    /** Top-level symbol name (function, class, interface, method) to pull, as shown by read_outline. */
-    name: string
-    /** When multiple top-level symbols share this name, the 1-indexed one to return. Defaults to 1. Matches rewrite_symbol occurrence semantics. */
-    occurrence?: number
-  }[]
-}
-
-/**
  * Fetch up-to-date documentation for libraries and frameworks using Context7 API.
  */
 export interface ReadDocsParams {
@@ -698,6 +661,15 @@ export interface ReadFilesParams {
     occurrence?: number
     /** Lines of context to include on each side of the match, clamped at file boundaries. Defaults to 40, capped at 2000. */
     contextLines?: number
+  }[]
+  /** Optional: occurrence-aware single-symbol reads. Each entry pulls the Nth (default 1) top-level symbol with the given name, mirroring read_blocks occurrence semantics, and returns one `symbol` block item with its own editAnchor. Prefer batch `symbols` for several symbols from one file; use `symbol` when you need a specific occurrence of a same-named symbol. When exactly one paths entry is supplied, a missing symbol path is inferred from it. */
+  symbol?: {
+    /** File path to extract a symbol slice from, relative to the project root. */
+    path: string
+    /** Top-level symbol name (function, class, interface, method) to pull, as shown by read_outline. */
+    name: string
+    /** When multiple top-level symbols share this name, the 1-indexed one to return. Defaults to 1. Matches rewrite_symbol occurrence semantics. */
+    occurrence?: number
   }[]
   /** Optional: instead of (or in addition to) whole files, pull just the implementation slices for named symbols. Prefer this over a full read when you already know which functions/classes you need, especially in large files. Each returned slice includes one editAnchor whose readCapability can anchor a later edit. */
   symbols?: {

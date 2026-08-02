@@ -7,7 +7,7 @@ const definition: SecretAgentDefinition = {
   publisher,
   displayName: 'Theo the Theorizer',
   spawnerPrompt:
-    'Makes a focused architecture, design, or root-cause decision from a self-contained evidence packet. It has read-only repository access (read_files, read_blocks) to verify evidence but does not inherit conversation history, so include evidence, constraints, options, and unknowns.',
+    'Makes a focused architecture, design, or root-cause decision from a self-contained evidence packet. It has read-only repository access (read_files) to verify evidence but does not inherit conversation history, so include evidence, constraints, options, and unknowns.',
   inputSchema: {
     prompt: {
       type: 'string',
@@ -50,10 +50,10 @@ const definition: SecretAgentDefinition = {
   inheritParentSystemPrompt: false,
   includeMessageHistory: false,
   spawnableAgents: [],
-  toolNames: ['read_files', 'read_blocks', 'set_output'],
+  toolNames: ['read_files', 'set_output'],
 
   instructionsPrompt: `
-You are a thinker agent. Reason from the self-contained decision packet in the current prompt. Do not assume access to parent conversation history or operational state. You have read-only repository access: you may call read_files and read_blocks to verify evidence in the packet when helpful, but do not modify anything. Use the <think> tag to think deeply about the request.
+You are a thinker agent. Reason from the self-contained decision packet in the current prompt. Do not assume access to parent conversation history or operational state. You have read-only repository access: you may call read_files to verify evidence in the packet when helpful, but do not modify anything. Use the <think> tag to think deeply about the request.
 
 When satisfied, write out a brief response to the user's request. The parent agent will see your response -- DO NOT call set_output or any tool to produce it. Structured output is captured automatically for you.
 

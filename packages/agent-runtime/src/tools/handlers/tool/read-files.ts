@@ -3,7 +3,7 @@ import {
   type FilesystemError,
   type ReadFilesItemV1,
 } from '@codebuff/common/tools/results/filesystem'
-import { MAX_READ_BLOCK_BYTES } from '@codebuff/common/tools/params/tool/read-blocks'
+import { MAX_READ_BLOCK_BYTES } from '@codebuff/common/tools/params/tool/read-files'
 import {
   encodeReadCapabilityToken,
   getContentHash,
@@ -25,6 +25,7 @@ import {
 import { getFileReadingUpdates } from '../../../get-file-reading-updates'
 import {
   buildAroundBlock,
+  buildSymbolBlock,
   buildWindowBlock,
   extractSlices,
   type ReadBlockBuilderContext,
@@ -73,6 +74,7 @@ export const handleReadFiles = (async (
   const rangeInputs = toolCall.input.ranges ?? []
   const windowInputs = toolCall.input.windows ?? []
   const aroundInputs = toolCall.input.around ?? []
+  const symbolBlockInputs = toolCall.input.symbol ?? []
   const symbolInputs = toolCall.input.symbols ?? []
   const allSelectors = [
     ...pathInputs.map((path, requestIndex) => ({
@@ -96,6 +98,16 @@ export const handleReadFiles = (async (
         pathInputs.length + rangeInputs.length + windowInputs.length + index,
       path: around.path,
     })),
+    ...symbolBlockInputs.map((symbol, index) => ({
+      selector: 'symbol' as const,
+      requestIndex:
+        pathInputs.length +
+        rangeInputs.length +
+        windowInputs.length +
+        aroundInputs.length +
+        index,
+      path: symbol.path,
+    })),
     ...symbolInputs.map((symbol, index) => ({
       selector: 'symbols' as const,
       requestIndex:
@@ -103,6 +115,7 @@ export const handleReadFiles = (async (
         rangeInputs.length +
         windowInputs.length +
         aroundInputs.length +
+        symbolBlockInputs.length +
         index,
       path: symbol.path,
     })),
@@ -149,6 +162,10 @@ export const handleReadFiles = (async (
     ...entry,
     path: normalizeToolPath(entry.path),
   }))
+  const symbolBlockRequests = symbolBlockInputs.map((entry) => ({
+    ...entry,
+    path: normalizeToolPath(entry.path),
+  }))
   const symbolRequests = symbolInputs.map((entry) => ({
     path: normalizeToolPath(entry.path),
     names: entry.names,
@@ -161,6 +178,7 @@ export const handleReadFiles = (async (
     ...ranges.map((range) => range.path),
     ...windowRequests.map((entry) => entry.path),
     ...aroundRequests.map((entry) => entry.path),
+    ...symbolBlockRequests.map((entry) => entry.path),
     ...symbolRequests.map((entry) => entry.path),
   ])
   const editedSinceLastRead = new Set<string>()
@@ -499,6 +517,19 @@ export const handleReadFiles = (async (
       ),
     )
   }
+  for (let index = 0; index < symbolBlockRequests.length; index++) {
+    blockItems.push(
+      await buildSymbolBlock(
+        blockBuilderContext,
+        symbolBlockRequests[index]!,
+        paths.length +
+          ranges.length +
+          windowRequests.length +
+          aroundRequests.length +
+          index,
+      ),
+    )
+  }
 
   // A block covering the whole file mints the same authority an identical
   // whole-file paths read would, so it may clear context_compacted. Sub-file
@@ -529,6 +560,7 @@ export const handleReadFiles = (async (
       ranges.length +
       windowRequests.length +
       aroundRequests.length +
+      symbolBlockRequests.length +
       index
     let rawContent: string | null
     try {

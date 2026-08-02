@@ -12,16 +12,27 @@ describe('tool input compatibility aliases', () => {
     })
   })
 
-  it('repairs singular read_files range and symbol selectors', () => {
+  it('repairs singular read_files range and symbols selectors', () => {
     expect(
       toolParams.read_files.inputSchema.parse({
         range: { path: 'src/example.ts', startLine: 2, endLine: 4 },
-        symbol: { path: 'src/example.ts', names: 'render' },
+        symbols: { path: 'src/example.ts', names: 'render' },
       }),
     ).toEqual({
       paths: [],
       ranges: [{ path: 'src/example.ts', startLine: 2, endLine: 4 }],
       symbols: [{ path: 'src/example.ts', names: ['render'] }],
+    })
+  })
+
+  it('accepts the occurrence-aware read_files symbol selector as canonical', () => {
+    expect(
+      toolParams.read_files.inputSchema.parse({
+        symbol: { path: 'src/example.ts', name: 'render', occurrence: 2 },
+      }),
+    ).toEqual({
+      paths: [],
+      symbol: [{ path: 'src/example.ts', name: 'render', occurrence: 2 }],
     })
   })
 

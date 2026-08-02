@@ -702,7 +702,6 @@ describe('base-deep prompt naming and tool guidance', () => {
     expect(baseDeep.toolNames).toEqual(
       expect.arrayContaining([
         'read_outline',
-        'read_blocks',
         'list_directory',
         'glob',
         'edit_transaction',
@@ -6279,7 +6278,6 @@ describe('base2 repair-loop gate-state telemetry (M6.4)', () => {
       expect.arrayContaining([
         'read_files',
         'read_outline',
-        'read_blocks',
         'read_subtree',
         'edit_transaction',
       ]),

@@ -237,7 +237,7 @@ function getLineNumberAtIndex(content: string, index: number): number {
  * matches). Returns the 1-indexed inclusive line range of every occurrence of
  * `match` in `content`, up to `limit`. This is the single source of truth for
  * literal-occurrence line mapping, used by process-str-replace
- * (occurrenceIndex targeting and diagnostics) and by the read_blocks `around`
+ * (occurrenceIndex targeting and diagnostics) and by the read_files `around`
  * selector, so both agree on occurrence ordering and line spans.
  */
 export function findLiteralOccurrences(
@@ -301,7 +301,7 @@ export function nthOccurrenceLineRange(
  * default 1) exact literal occurrence of `match`, searched only inside the
  * capability-authorized line window `capabilityStartLine..capabilityEndLine`
  * of `content`. Occurrence ordering and line spans come from the shared
- * literal-occurrence helpers above, so replace_range agrees with read_blocks
+ * literal-occurrence helpers above, so replace_range agrees with read_files
  * and str_replace. `found` reports how many occurrences exist inside the
  * authorized window, for not-found diagnostics.
  */
@@ -517,7 +517,7 @@ function regexSlice(
 }
 
 // ---------------------------------------------------------------------------
-// Shared per-selector block builders (read_files + read_blocks)
+// Shared per-selector block builders (read_files windows/around/symbol)
 // ---------------------------------------------------------------------------
 
 /** Capabilities the block builders need from their calling handler. */
@@ -591,7 +591,7 @@ export async function buildWindowBlock(
       status: 'error',
       error: {
         code: 'invalid_request',
-        message: `read_blocks window ${window} is out of range for ${path}: the file has ${totalLines} lines (${windowCount} window(s) of ${windowSize} lines). Omit window to get the manifest plus the first window.`,
+        message: `read_files window ${window} is out of range for ${path}: the file has ${totalLines} lines (${windowCount} window(s) of ${windowSize} lines). Omit window to get the manifest plus the first window.`,
         retryable: true,
         recovery: 'read_smaller_range',
       },
@@ -680,7 +680,7 @@ export async function buildAroundBlock(
       status: 'error',
       error: {
         code: 'no_match',
-        message: `read_blocks found ${occurrences.length} exact occurrence(s) of the match in ${path}, so occurrence ${occurrence} does not exist. Re-check the literal text against a fresh read.`,
+        message: `read_files found ${occurrences.length} exact occurrence(s) of the match in ${path}, so occurrence ${occurrence} does not exist. Re-check the literal text against a fresh read.`,
         retryable: true,
         recovery: 'read_again',
       },

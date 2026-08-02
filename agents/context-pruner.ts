@@ -159,7 +159,6 @@ const definition: AgentDefinition = {
     /** Tool categories for knowledge memory extraction */
     const FILE_INSPECTION_TOOLS = [
       'read_files',
-      'read_blocks',
       'read_outline',
       'read_subtree',
       'read_image',
@@ -232,6 +231,15 @@ const definition: AgentDefinition = {
           const ranges = input.ranges as
             | Array<{ path?: string; startLine?: number; endLine?: number }>
             | undefined
+          const windows = input.windows as
+            | Array<{ path?: string; window?: number }>
+            | undefined
+          const around = input.around as
+            | Array<{ path?: string; match?: string; occurrence?: number }>
+            | undefined
+          const symbol = input.symbol as
+            | Array<{ path?: string; name?: string; occurrence?: number }>
+            | undefined
           const symbols = input.symbols as
             | Array<{ path?: string; names?: string[] }>
             | undefined
@@ -246,31 +254,6 @@ const definition: AgentDefinition = {
                 .join(', ')}`,
             )
           }
-          if (symbols && symbols.length > 0) {
-            parts.push(
-              `symbols: ${symbols
-                .map((s) => `${s.path}#${(s.names ?? []).join('|')}`)
-                .join(', ')}`,
-            )
-          }
-          if (parts.length === 0) return 'inspected files'
-          // File bodies are dropped from this summary; the path/range/symbol
-          // pointer lets the agent cheaply re-fetch the exact content via
-          // read_files (or read_outline) instead of relying on the lossy
-          // summary.
-          return `${parts.join('; ')} (re-fetch with read_files if needed)`
-        }
-        case 'read_blocks': {
-          const windows = input.windows as
-            | Array<{ path?: string; window?: number }>
-            | undefined
-          const around = input.around as
-            | Array<{ path?: string; match?: string; occurrence?: number }>
-            | undefined
-          const symbols = input.symbols as
-            | Array<{ path?: string; name?: string }>
-            | undefined
-          const parts: string[] = []
           if (windows && windows.length > 0) {
             parts.push(
               `windows: ${windows
@@ -288,15 +271,29 @@ const definition: AgentDefinition = {
                 .join(', ')}`,
             )
           }
-          if (symbols && symbols.length > 0) {
+          if (symbol && symbol.length > 0) {
             parts.push(
-              `symbols: ${symbols
-                .map((s) => `${s.path}#${s.name ?? ''}`)
+              `symbol: ${symbol
+                .map(
+                  (s) =>
+                    `${s.path}#${s.name ?? ''}${s.occurrence ? `#${s.occurrence}` : ''}`,
+                )
                 .join(', ')}`,
             )
           }
-          if (parts.length === 0) return 'inspected blocks'
-          return `${parts.join('; ')} (re-fetch with read_blocks if needed)`
+          if (symbols && symbols.length > 0) {
+            parts.push(
+              `symbols: ${symbols
+                .map((s) => `${s.path}#${(s.names ?? []).join('|')}`)
+                .join(', ')}`,
+            )
+          }
+          if (parts.length === 0) return 'inspected files'
+          // File bodies are dropped from this summary; the path/range/symbol
+          // pointer lets the agent cheaply re-fetch the exact content via
+          // read_files (or read_outline) instead of relying on the lossy
+          // summary.
+          return `${parts.join('; ')} (re-fetch with read_files if needed)`
         }
         case 'write_file': {
           const path = input.path as string | undefined
@@ -998,8 +995,7 @@ const definition: AgentDefinition = {
       if (!isRecord(value)) return
 
       if (
-        (value.kind === 'read_files_result' ||
-          value.kind === 'read_blocks_result') &&
+        value.kind === 'read_files_result' &&
         value.version === 1 &&
         Array.isArray(value.results)
       ) {
@@ -1105,13 +1101,6 @@ const definition: AgentDefinition = {
             if (isRecord(range)) addPath(range.path)
           }
         }
-        if (Array.isArray(input.symbols)) {
-          for (const symbolRequest of input.symbols) {
-            if (isRecord(symbolRequest)) addPath(symbolRequest.path)
-          }
-        }
-      }
-      if (toolName === 'read_blocks') {
         if (Array.isArray(input.windows)) {
           for (const window of input.windows) {
             if (isRecord(window)) addPath(window.path)
@@ -1120,6 +1109,11 @@ const definition: AgentDefinition = {
         if (Array.isArray(input.around)) {
           for (const around of input.around) {
             if (isRecord(around)) addPath(around.path)
+          }
+        }
+        if (Array.isArray(input.symbol)) {
+          for (const symbolRequest of input.symbol) {
+            if (isRecord(symbolRequest)) addPath(symbolRequest.path)
           }
         }
         if (Array.isArray(input.symbols)) {
@@ -1166,8 +1160,7 @@ const definition: AgentDefinition = {
       for (const value of values) {
         if (
           !isRecord(value) ||
-          (value.kind !== 'read_files_result' &&
-            value.kind !== 'read_blocks_result')
+          value.kind !== 'read_files_result'
         )
           continue
         if (value.version !== 1 || !Array.isArray(value.results)) return []
@@ -2362,7 +2355,7 @@ const definition: AgentDefinition = {
               // facts below but must not become durable "Files Inspected" state.
               if (FILE_INSPECTION_TOOLS.includes(toolName)) {
                 const paths =
-                  toolName === 'read_files' || toolName === 'read_blocks'
+                  toolName === 'read_files'
                     ? getSuccessfulReadPaths(toolName, input, resultValues)
                     : hasFailureMarker(resultValues) ||
                         resultValues.length === 0

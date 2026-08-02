@@ -7406,6 +7406,192 @@ describe('read_files unified five-selector surface (M2)', () => {
     })
   })
 
+  it('one call with a symbol selector plus the other kinds returns the occurrence-selected symbol item in order', async () => {
+    const fileProcessingState = createFileProcessingState()
+    const fileContent = 'export const value = 1\n'
+    const largeContent = ['l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7'].join('\n')
+    const aroundContent = [
+      'const a = 1',
+      'const marker = true',
+      'const b = 2',
+    ].join('\n')
+    const duplicateSymbolContent = [
+      'export function dup() {',
+      '  return 1',
+      '}',
+      '',
+      'export function dup() {',
+      '  return 2',
+      '}',
+    ].join('\n')
+    const symbolContent = 'export function run() {\n  return 1\n}\n'
+
+    const result = await handleReadFiles({ ...defaultTestHandlerAuthority,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'read-six-selectors',
+        toolName: 'read_files',
+        input: {
+          paths: ['src/file.ts'],
+          ranges: [{ path: 'src/file.ts', startLine: 1, endLine: 1 }],
+          windows: [{ path: 'src/large.ts', windowSize: 3, window: 2 }],
+          around: [{ path: 'src/around.ts', match: 'const marker = true' }],
+          symbol: [{ path: 'src/dup.ts', name: 'dup', occurrence: 2 }],
+          symbols: [{ path: 'src/symbol.ts', names: ['run'] }],
+        },
+      },
+      fileContext: mockFileContext,
+      fileProcessingState,
+      requestFiles: async () =>
+        buildReadFilesResultV1([
+          {
+            selector: 'file',
+            requestIndex: 0,
+            path: 'src/file.ts',
+            status: 'ok',
+            content: fileContent,
+            complete: true,
+            template: false,
+          },
+          {
+            selector: 'range',
+            requestIndex: 1,
+            path: 'src/file.ts',
+            status: 'ok',
+            content: '1\texport const value = 1',
+            sourceContent: 'export const value = 1',
+            startLine: 1,
+            endLine: 1,
+            totalLines: 1,
+            complete: true,
+            editAnchor: {
+              startLine: 1,
+              endLine: 1,
+              contentHash: getContentHash('export const value = 1'),
+              readCapability: 'cap.v3.range',
+            },
+          },
+        ]),
+      requestOptionalFile: async ({ filePath }: { filePath: string }) => {
+        if (filePath === 'src/large.ts') return largeContent
+        if (filePath === 'src/around.ts') return aroundContent
+        if (filePath === 'src/dup.ts') return duplicateSymbolContent
+        if (filePath === 'src/symbol.ts') return symbolContent
+        return null
+      },
+      logger,
+    } as any)
+
+    expect(result.output[0]?.type).toBe('json')
+    if (result.output[0]?.type !== 'json') return
+    const value = result.output[0].value as any
+
+    expect(value.kind).toBe('read_files_result')
+    expect(value.summary).toEqual({
+      requested: 6,
+      ok: 6,
+      partial: 0,
+      failed: 0,
+      uniquePaths: 5,
+    })
+    // requestIndex is contiguous in the order
+    // paths -> ranges -> windows -> around -> symbol -> symbols.
+    expect(value.results.map((item: any) => item.selector)).toEqual([
+      'file',
+      'range',
+      'window',
+      'around',
+      'symbol',
+      'symbols',
+    ])
+    expect(value.results.map((item: any) => item.requestIndex)).toEqual([
+      0, 1, 2, 3, 4, 5,
+    ])
+
+    const symbol = value.results[4]
+    expect(symbol).toMatchObject({
+      selector: 'symbol',
+      path: 'src/dup.ts',
+      status: 'ok',
+      symbol: 'dup',
+      occurrence: 2,
+      complete: true,
+    })
+    // occurrence: 2 selects the second same-named top-level symbol.
+    expect(symbol.content).toContain('return 2')
+    expect(symbol.content).not.toContain('return 1')
+    expect(symbol.editAnchor).toMatchObject({
+      startLine: symbol.startLine,
+      endLine: symbol.endLine,
+      readCapability: expect.stringMatching(/^cap\.v3\./),
+    })
+
+    const symbols = value.results[5]
+    expect(symbols).toMatchObject({
+      selector: 'symbols',
+      path: 'src/symbol.ts',
+      status: 'ok',
+      requestedSymbols: ['run'],
+      missingSymbols: [],
+    })
+  })
+
+  it('returns a no_match error item without a capability for a symbol occurrence that does not exist', async () => {
+    const fileProcessingState = createFileProcessingState()
+    const duplicateSymbolContent = [
+      'export function dup() {',
+      '  return 1',
+      '}',
+      '',
+      'export function dup() {',
+      '  return 2',
+      '}',
+    ].join('\n')
+
+    const result = await handleReadFiles({ ...defaultTestHandlerAuthority,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'read-symbol-missing-occurrence',
+        toolName: 'read_files',
+        input: {
+          symbol: [{ path: 'src/dup.ts', name: 'dup', occurrence: 3 }],
+        },
+      },
+      fileContext: mockFileContext,
+      fileProcessingState,
+      requestFiles: async () => buildReadFilesResultV1([]),
+      requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+        filePath === 'src/dup.ts' ? duplicateSymbolContent : null,
+      logger,
+    } as any)
+
+    expect(result.output[0]?.type).toBe('json')
+    if (result.output[0]?.type !== 'json') return
+    const value = result.output[0].value as any
+
+    expect(value.results).toHaveLength(1)
+    const item = value.results[0]
+    expect(item).toMatchObject({
+      selector: 'symbol',
+      requestIndex: 0,
+      path: 'src/dup.ts',
+      status: 'error',
+    })
+    expect(item.error?.code).toBe('no_match')
+    expect(item.editAnchor).toBeUndefined()
+    expect(value.summary).toEqual({
+      requested: 1,
+      ok: 0,
+      partial: 0,
+      failed: 1,
+      uniquePaths: 1,
+    })
+    // The failed occurrence read grants no authorization.
+    expect(
+      fileProcessingState.readAuthorizationsByPath?.['src/dup.ts'],
+    ).toBeUndefined()
+  })
+
   it('emits a window manifest plus first window for an oversized whole-file read', async () => {
     const fileProcessingState = createFileProcessingState()
     const largeContent = Array.from(

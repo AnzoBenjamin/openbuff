@@ -316,7 +316,6 @@ describe('base2 deterministic gate lifecycle e2e', () => {
       expect.arrayContaining([
         'read_files',
         'read_outline',
-        'read_blocks',
         'read_subtree',
         'edit_transaction',
       ]),
