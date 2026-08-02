@@ -585,7 +585,7 @@ export interface ListDirectoryParams {
 }
 
 /**
- * List this run's background jobs (shell processes and background agents, running and settled) and their statuses.
+ * List this run's background jobs (shell processes and background agents, running and settled) with statuses, bucketed pending process/log output relative to the last check_job consumer cursor (agents usually show pending: 'none'), and a gap flag.
  */
 export interface ListJobsParams {}
 
