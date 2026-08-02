@@ -26,6 +26,14 @@ function makeProjectTempDir(prefix: string): string {
   return mkdtempSync(join(TEST_TMP_ROOT, prefix))
 }
 
+const LIST_JOBS_RESULT = {
+  jobs: [],
+  note: 'No action required unless you need this output.',
+}
+function feedListJobs() {
+  return { toolResult: [{ type: 'json', value: LIST_JOBS_RESULT }] } as any
+}
+
 /**
  * Build a canonical file_mutation_result receipt (the real production
  * edit-artifact shape) for `path`. The mid-turn git-status sweep only absorbs
@@ -754,16 +762,19 @@ describe('base-deep gate lifecycle parity with base2', () => {
 
     // Pre-step: git_status to detect existing changes.
     expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
-    // spawn_agent_inline context-pruner before the first STEP.
+    // Turn-start git_status is followed by the pushed list_jobs digest.
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({
+    ).toMatchObject({ toolName: 'list_jobs' })
+    // spawn_agent_inline context-pruner before the first STEP.
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
     expect(gen.next().value).toBe('STEP')
-    // After the step produces a file change: git_status → run_file_change_hooks.
+    // After the step produces a file change: git_status → list_jobs →
+    // run_file_change_hooks.
     const afterStep = gen.next({
       stepsComplete: true,
       toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
@@ -772,7 +783,10 @@ describe('base-deep gate lifecycle parity with base2', () => {
     const afterGit = gen.next({
       toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
     } as any)
-    expect(afterGit.value).toMatchObject({ toolName: 'run_file_change_hooks' })
+    expect(afterGit.value).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     // Gate-state tracks the pending file for the validation/reviewer gate.
     expect((agentState as any).base2ActiveWork).toMatchObject({
       changedFiles: ['src/a.ts'],
@@ -933,7 +947,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -945,7 +962,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
   })
 
   test('failed verification hooks reopen the turn so failures get fixed', () => {
@@ -962,7 +982,8 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -975,7 +996,10 @@ describe('base2 verification and reviewer gates', () => {
     const afterGit = gen.next({
       toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
     } as any)
-    expect(afterGit.value).toMatchObject({ toolName: 'run_file_change_hooks' })
+    expect(afterGit.value).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
 
     const afterHooks = gen.next({
       toolResult: [
@@ -1026,7 +1050,10 @@ describe('base2 verification and reviewer gates', () => {
       expect(
         gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
           .value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       expect(gen.next().value).toBe('STEP')
       const afterStep = gen.next({
         stepsComplete: true,
@@ -1036,7 +1063,10 @@ describe('base2 verification and reviewer gates', () => {
       const afterGit = gen.next({
         toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
       } as any)
-      expect(afterGit.value).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect(afterGit.value).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'run_file_change_hooks',
+      })
       const afterHooks = gen.next({
         toolResult: [
           {
@@ -1116,9 +1146,11 @@ describe('base2 verification and reviewer gates', () => {
       expect(
         gen.next({ stepsComplete: true, toolResult: [] } as any).value,
       ).toMatchObject({ toolName: 'git_status' })
-      const done = gen.next({
+      const doneJobs = gen.next({
         toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
       } as any)
+      expect(doneJobs.value).toMatchObject({ toolName: 'list_jobs' })
+      const done = gen.next(feedListJobs())
       expect(done.done).toBe(true)
 
       const followupGen = base2.handleSteps!({
@@ -1131,15 +1163,20 @@ describe('base2 verification and reviewer gates', () => {
         followupGen.next({
           toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(followupGen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       const followupStep = followupGen.next()
       expect(followupStep.value).toBe('STEP')
       expect(
         followupGen.next({ stepsComplete: true, toolResult: [] } as any).value,
       ).toMatchObject({ toolName: 'git_status' })
-      const followupDone = followupGen.next({
+      const followupDoneJobs = followupGen.next({
         toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
       } as any)
+      expect(followupDoneJobs.value).toMatchObject({ toolName: 'list_jobs' })
+      const followupDone = followupGen.next(feedListJobs())
       expect(followupDone.done).toBe(true)
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
@@ -1164,7 +1201,10 @@ describe('base2 verification and reviewer gates', () => {
       expect(
         gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
           .value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       expect(gen.next().value).toBe('STEP')
       expect(
         gen.next({
@@ -1178,7 +1218,8 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
         } as any).value,
-      ).toMatchObject({
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
         toolName: 'run_file_change_hooks',
         input: { files: [gateFile] },
       })
@@ -1221,9 +1262,11 @@ describe('base2 verification and reviewer gates', () => {
       expect(
         gen.next({ stepsComplete: true, toolResult: [] } as any).value,
       ).toMatchObject({ toolName: 'git_status' })
-      const done = gen.next({
+      const doneJobs = gen.next({
         toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
       } as any)
+      expect(doneJobs.value).toMatchObject({ toolName: 'list_jobs' })
+      const done = gen.next(feedListJobs())
 
       expect(done.done).toBe(true)
     } finally {
@@ -1244,7 +1287,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -1256,7 +1302,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
     } as any).value
@@ -1306,7 +1355,10 @@ describe('base2 verification and reviewer gates', () => {
       expect(
         gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
           .value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       expect(gen.next().value).toBe('STEP')
       expect(
         gen.next({
@@ -1318,7 +1370,10 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'run_file_change_hooks',
+      })
       const postValidationStatus = gen.next({
         toolResult: [{ type: 'json', value: [] }],
       } as any).value
@@ -1387,7 +1442,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     const maybePinnedState = gen.next().value
     if (maybePinnedState !== 'STEP') {
       expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
@@ -1396,9 +1454,11 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ stepsComplete: true, toolResult: [] } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const next = gen.next({
+    const nextJobs = gen.next({
       toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
     } as any)
+    expect(nextJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const next = gen.next(feedListJobs())
 
     // No fingerprint -> no durable reuse -> validation hooks rerun.
     expect(next.value).toMatchObject({
@@ -1475,7 +1535,10 @@ describe('base2 verification and reviewer gates', () => {
             },
           ],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       const maybePinnedState = gen.next().value
       if (maybePinnedState !== 'STEP') {
         expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
@@ -1485,7 +1548,7 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({ stepsComplete: true, toolResult: [], agentState } as any)
           .value,
       ).toMatchObject({ toolName: 'git_status' })
-      const reused = gen.next({
+      const reusedJobs = gen.next({
         toolResult: [
           {
             type: 'json',
@@ -1493,6 +1556,8 @@ describe('base2 verification and reviewer gates', () => {
           },
         ],
       } as any)
+      expect(reusedJobs.value).toMatchObject({ toolName: 'list_jobs' })
+      const reused = gen.next(feedListJobs())
 
       expect(reused.value).toMatchObject({
         toolName: 'add_message',
@@ -1573,7 +1638,10 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       const maybePinnedState = gen.next().value
       if (maybePinnedState !== 'STEP') {
         expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
@@ -1583,9 +1651,11 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({ stepsComplete: true, toolResult: [], agentState } as any)
           .value,
       ).toMatchObject({ toolName: 'git_status' })
-      const next = gen.next({
+      const nextJobs = gen.next({
         toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
       } as any)
+      expect(nextJobs.value).toMatchObject({ toolName: 'list_jobs' })
+      const next = gen.next(feedListJobs())
 
       expect(next.value).toMatchObject({
         toolName: 'run_file_change_hooks',
@@ -1648,7 +1718,10 @@ describe('base2 verification and reviewer gates', () => {
             { type: 'json', value: { status: ` M ${tmpFile}` } },
           ],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       const maybePinnedState = gen.next().value
       if (maybePinnedState !== 'STEP') {
         expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
@@ -1662,9 +1735,11 @@ describe('base2 verification and reviewer gates', () => {
       // unchanged. The content-only fingerprint still matches, so the gate
       // short-circuits directly to a conversation-gate-state reuse instead of
       // re-running the file-change hooks or the reviewer on unchanged content.
-      const reused = gen.next({
+      const reusedJobs = gen.next({
         toolResult: [{ type: 'json', value: { status: '' } }],
       } as any)
+      expect(reusedJobs.value).toMatchObject({ toolName: 'list_jobs' })
+      const reused = gen.next(feedListJobs())
       expect(reused.value).toMatchObject({
         toolName: 'add_message',
         input: { role: 'user' },
@@ -1726,7 +1801,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     const maybePinnedState = gen.next().value
     if (maybePinnedState !== 'STEP') {
       expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
@@ -1736,9 +1814,11 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({ stepsComplete: true, toolResult: [], agentState } as any)
         .value,
     ).toMatchObject({ toolName: 'git_status' })
-    const next = gen.next({
+    const nextJobs = gen.next({
       toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
     } as any)
+    expect(nextJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const next = gen.next(feedListJobs())
 
     expect(next.value).toMatchObject({
       toolName: 'run_file_change_hooks',
@@ -1780,7 +1860,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     const maybePinnedState = gen.next().value
     if (maybePinnedState !== 'STEP') {
       expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
@@ -1827,7 +1910,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: '' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     // Idle, clean turn produces no pinned-state message, so the next yield is
     // STEP and suggest_followups is already permitted.
     expect(gen.next().value).toBe('STEP')
@@ -1852,7 +1938,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/foo.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     const maybePinnedState = gen.next().value
     if (maybePinnedState !== 'STEP') {
       expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
@@ -1910,7 +1999,10 @@ describe('base2 verification and reviewer gates', () => {
             },
           ],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       const maybePinnedState = gen.next().value
       if (maybePinnedState !== 'STEP') {
         expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
@@ -1979,7 +2071,10 @@ describe('base2 verification and reviewer gates', () => {
             },
           ],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       const maybePinnedState = gen.next().value
       if (maybePinnedState !== 'STEP') {
         expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
@@ -2059,7 +2154,10 @@ describe('base2 verification and reviewer gates', () => {
             },
           ],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       const pinned = gen.next()
       expect(pinned.value).toMatchObject({
         toolName: 'add_message',
@@ -2136,7 +2234,10 @@ describe('base2 verification and reviewer gates', () => {
             },
           ],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       const maybePinned = gen.next().value
       if (maybePinned !== 'STEP') {
         expect(maybePinned).toMatchObject({ toolName: 'add_message' })
@@ -2167,7 +2268,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     const agentReceipt = {
       schemaVersion: 1,
@@ -2232,14 +2336,19 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/other.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({ stepsComplete: true, toolResult: [] } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const finalGate = gen.next({
+    const finalGateJobs = gen.next({
       toolResult: [{ type: 'json', value: { status: ' M src/other.ts' } }],
     } as any)
+    expect(finalGateJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const finalGate = gen.next(feedListJobs())
     expect(finalGate.value).toMatchObject({
       toolName: 'add_message',
       input: { role: 'user' },
@@ -2252,9 +2361,11 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ stepsComplete: true, toolResult: [] } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const done = gen.next({
+    const doneJobs = gen.next({
       toolResult: [{ type: 'json', value: { status: ' M src/other.ts' } }],
     } as any)
+    expect(doneJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const done = gen.next(feedListJobs())
     expect(done.done).toBe(true)
   })
 
@@ -2285,7 +2396,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/old.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -2298,7 +2412,8 @@ describe('base2 verification and reviewer gates', () => {
         { type: 'json', value: { status: ' M src/old.ts\n M src/new.ts' } },
       ],
     } as any)
-    expect(afterGit.value).toMatchObject({
+    expect(afterGit.value).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: ['src/old.ts', 'src/new.ts'] },
     })
@@ -2316,7 +2431,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -2332,9 +2450,11 @@ describe('base2 verification and reviewer gates', () => {
         ],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const finalGate = gen.next({
+    const finalGateJobs = gen.next({
       toolResult: [{ type: 'json', value: { status: '' } }],
     } as any)
+    expect(finalGateJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const finalGate = gen.next(feedListJobs())
     expect(finalGate.value).toMatchObject({
       toolName: 'add_message',
       input: { role: 'user' },
@@ -2347,9 +2467,11 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ stepsComplete: true, toolResult: [] } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const done = gen.next({
+    const doneJobs = gen.next({
       toolResult: [{ type: 'json', value: { status: '' } }],
     } as any)
+    expect(doneJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const done = gen.next(feedListJobs())
 
     expect(done.done).toBe(true)
   })
@@ -2366,7 +2488,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -2383,9 +2508,11 @@ describe('base2 verification and reviewer gates', () => {
         ],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const afterGit = gen.next({
+    const afterGitJobs = gen.next({
       toolResult: [{ type: 'json', value: { status: '' } }],
     } as any)
+    expect(afterGitJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const afterGit = gen.next(feedListJobs())
 
     expect(afterGit.value).toMatchObject({
       toolName: 'add_message',
@@ -2408,7 +2535,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -2421,9 +2551,11 @@ describe('base2 verification and reviewer gates', () => {
         ],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const afterGit = gen.next({
+    const afterGitJobs = gen.next({
       toolResult: [{ type: 'json', value: { status: '' } }],
     } as any)
+    expect(afterGitJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const afterGit = gen.next(feedListJobs())
 
     expect(afterGit.value).toMatchObject({
       toolName: 'add_message',
@@ -2461,7 +2593,10 @@ describe('base2 verification and reviewer gates', () => {
             { type: 'json', value: { status: ` M ${gateFile}` } },
           ],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       expect(gen.next().value).toBe('STEP')
       const messageHistory = [
         initialMessage,
@@ -2505,7 +2640,8 @@ describe('base2 verification and reviewer gates', () => {
         toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
       } as any)
 
-      expect(afterGit.value).toMatchObject({
+      expect(afterGit.value).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
         toolName: 'run_file_change_hooks',
         input: { files: [gateFile] },
       })
@@ -2562,9 +2698,11 @@ describe('base2 verification and reviewer gates', () => {
           agentState: { messageHistory },
         } as any).value,
       ).toMatchObject({ toolName: 'git_status' })
-      const done = gen.next({
+      const doneJobs = gen.next({
         toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
       } as any)
+      expect(doneJobs.value).toMatchObject({ toolName: 'list_jobs' })
+      const done = gen.next(feedListJobs())
       expect(done.done).toBe(true)
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
@@ -2590,7 +2728,10 @@ describe('base2 verification and reviewer gates', () => {
           { type: 'json', value: { status: ' M src/already-dirty.ts' } },
         ],
       } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     const messageHistory = [
       initialMessage,
@@ -2639,7 +2780,8 @@ describe('base2 verification and reviewer gates', () => {
       ],
     } as any)
 
-    expect(afterGit.value).toMatchObject({
+    expect(afterGit.value).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: ['src/already-dirty.ts'] },
     })
@@ -2664,7 +2806,10 @@ describe('base2 verification and reviewer gates', () => {
           { type: 'json', value: { status: ' M src/already-dirty.ts' } },
         ],
       } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     const messageHistory = [
       initialMessage,
@@ -2696,7 +2841,8 @@ describe('base2 verification and reviewer gates', () => {
       ],
     } as any)
 
-    expect(afterGit.value).toMatchObject({
+    expect(afterGit.value).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: ['src/already-dirty.ts'] },
     })
@@ -2745,7 +2891,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     const pinned = gen.next()
 
     expect(pinned.value).toMatchObject({
@@ -2853,7 +3002,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     const initialPinned = gen.next()
     expect((initialPinned.value as any).input.content).toContain(
       'Next workflow action: Implement durable workflow progress',
@@ -2901,7 +3053,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -2943,7 +3098,8 @@ describe('base2 verification and reviewer gates', () => {
       ],
     } as any)
 
-    expect(afterGit.value).toMatchObject({
+    expect(afterGit.value).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: ['src/one.ts', 'src/two.ts'] },
     })
@@ -2961,7 +3117,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -2999,9 +3158,11 @@ describe('base2 verification and reviewer gates', () => {
         },
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const finalGate = gen.next({
+    const finalGateJobs = gen.next({
       toolResult: [{ type: 'json', value: { status: '' } }],
     } as any)
+    expect(finalGateJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const finalGate = gen.next(feedListJobs())
     expect(finalGate.value).toMatchObject({
       toolName: 'add_message',
       input: { role: 'user' },
@@ -3014,9 +3175,11 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ stepsComplete: true, toolResult: [] } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const done = gen.next({
+    const doneJobs = gen.next({
       toolResult: [{ type: 'json', value: { status: '' } }],
     } as any)
+    expect(doneJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const done = gen.next(feedListJobs())
 
     expect(done.done).toBe(true)
   })
@@ -3035,7 +3198,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -3043,9 +3209,11 @@ describe('base2 verification and reviewer gates', () => {
         toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const skipDiagnostic = gen.next({
+    const skipJobs = gen.next({
       toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
     } as any)
+    expect(skipJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const skipDiagnostic = gen.next(feedListJobs())
 
     // Disabled-gate fast path now surfaces a visible skip diagnostic with
     // a parseable gate-state block before terminating the generator.
@@ -3087,7 +3255,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -3095,9 +3266,11 @@ describe('base2 verification and reviewer gates', () => {
         toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const skipDiagnostic = gen.next({
+    const skipJobs = gen.next({
       toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
     } as any)
+    expect(skipJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const skipDiagnostic = gen.next(feedListJobs())
 
     expect(skipDiagnostic.value).toMatchObject({
       toolName: 'add_message',
@@ -3150,7 +3323,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     const maybePinned = gen.next().value
     if (maybePinned !== 'STEP') {
       expect(maybePinned).toMatchObject({ toolName: 'add_message' })
@@ -3162,9 +3338,11 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ stepsComplete: true, toolResult: [] } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const blocked = gen.next({
+    const blockedJobs = gen.next({
       toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
     } as any)
+    expect(blockedJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const blocked = gen.next(feedListJobs())
 
     expect(blocked.value).toMatchObject({
       toolName: 'add_message',
@@ -3219,7 +3397,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/legacy.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     const pinned = gen.next()
     expect(pinned.value).toMatchObject({
       toolName: 'add_message',
@@ -3241,7 +3422,8 @@ describe('base2 verification and reviewer gates', () => {
     const afterGit = gen.next({
       toolResult: [{ type: 'json', value: { status: ' M src/legacy.ts' } }],
     } as any)
-    expect(afterGit.value).toMatchObject({
+    expect(afterGit.value).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: ['src/legacy.ts'] },
     })
@@ -3282,7 +3464,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     const pinned = gen.next()
     expect(pinned.value).toMatchObject({
       toolName: 'add_message',
@@ -3323,7 +3508,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     const pinned = gen.next()
     expect(pinned.value).toMatchObject({
       toolName: 'add_message',
@@ -3364,7 +3552,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     const pinned = gen.next()
     expect(pinned.value).toMatchObject({
       toolName: 'add_message',
@@ -3404,7 +3595,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     const pinned = gen.next()
     expect(pinned.value).toMatchObject({
       toolName: 'add_message',
@@ -3491,7 +3685,10 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: '' } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       expect(gen.next().value).toBe('STEP')
       expect(
         gen.next({
@@ -3503,7 +3700,10 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'run_file_change_hooks',
+      })
       const postValidationStatus = gen.next({
         toolResult: [{ type: 'json', value: [] }],
       } as any).value
@@ -3600,7 +3800,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -3612,7 +3815,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
     } as any).value
@@ -3660,7 +3866,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -3672,7 +3881,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
     } as any).value
@@ -3724,7 +3936,10 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: '' } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       expect(gen.next().value).toBe('STEP')
       expect(
         gen.next({
@@ -3736,7 +3951,10 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'run_file_change_hooks',
+      })
       const postValidationStatus = gen.next({
         toolResult: [{ type: 'json', value: [] }],
       } as any).value
@@ -3812,7 +4030,10 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: '' } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       expect(gen.next().value).toBe('STEP')
       expect(
         gen.next({
@@ -3824,7 +4045,10 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'run_file_change_hooks',
+      })
       const postValidationStatus = gen.next({
         toolResult: [{ type: 'json', value: [] }],
       } as any).value
@@ -3889,7 +4113,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -3901,7 +4128,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
     } as any).value
@@ -3969,7 +4199,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -3981,7 +4214,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
     } as any).value
@@ -4046,7 +4282,10 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: statusLine } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       const maybePinnedState = gen.next().value
       if (maybePinnedState !== 'STEP') {
         expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
@@ -4055,9 +4294,11 @@ describe('base2 verification and reviewer gates', () => {
       expect(
         gen.next({ stepsComplete: true, toolResult: [] } as any).value,
       ).toMatchObject({ toolName: 'git_status' })
-      const next = gen.next({
+      const nextJobs = gen.next({
         toolResult: [{ type: 'json', value: { status: statusLine } }],
       } as any)
+      expect(nextJobs.value).toMatchObject({ toolName: 'list_jobs' })
+      const next = gen.next(feedListJobs())
 
       // Content hash differs from the stored marker -> no durable reuse.
       expect(next.value).toMatchObject({
@@ -4102,7 +4343,10 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: statusLine } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       const maybePinnedState = gen.next().value
       if (maybePinnedState !== 'STEP') {
         expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
@@ -4111,9 +4355,11 @@ describe('base2 verification and reviewer gates', () => {
       expect(
         gen.next({ stepsComplete: true, toolResult: [] } as any).value,
       ).toMatchObject({ toolName: 'git_status' })
-      const gatePassed = gen.next({
+      const gatePassedJobs = gen.next({
         toolResult: [{ type: 'json', value: { status: statusLine } }],
       } as any)
+      expect(gatePassedJobs.value).toMatchObject({ toolName: 'list_jobs' })
+      const gatePassed = gen.next(feedListJobs())
 
       // Same fingerprint (including content hash) -> durable reuse fires.
       expect(gatePassed.value).toMatchObject({ toolName: 'add_message' })
@@ -4170,7 +4416,10 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: statusLine } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       const maybePinnedState = gen.next().value
       if (maybePinnedState !== 'STEP') {
         expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
@@ -4179,9 +4428,11 @@ describe('base2 verification and reviewer gates', () => {
       expect(
         gen.next({ stepsComplete: true, toolResult: [] } as any).value,
       ).toMatchObject({ toolName: 'git_status' })
-      const next = gen.next({
+      const nextJobs = gen.next({
         toolResult: [{ type: 'json', value: { status: statusLine } }],
       } as any)
+      expect(nextJobs.value).toMatchObject({ toolName: 'list_jobs' })
+      const next = gen.next(feedListJobs())
 
       // Content changed -> fingerprint differs -> validation reruns.
       expect(next.value).toMatchObject({
@@ -4230,7 +4481,10 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: statusLine } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       const maybePinnedState = gen.next().value
       if (maybePinnedState !== 'STEP') {
         expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
@@ -4239,9 +4493,11 @@ describe('base2 verification and reviewer gates', () => {
       expect(
         gen.next({ stepsComplete: true, toolResult: [] } as any).value,
       ).toMatchObject({ toolName: 'git_status' })
-      const next = gen.next({
+      const nextJobs = gen.next({
         toolResult: [{ type: 'json', value: { status: statusLine } }],
       } as any)
+      expect(nextJobs.value).toMatchObject({ toolName: 'list_jobs' })
+      const next = gen.next(feedListJobs())
 
       // Missing-now file -> fingerprint mismatches recorded content hash.
       expect(next.value).toMatchObject({
@@ -4266,7 +4522,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -4279,7 +4538,7 @@ describe('base2 verification and reviewer gates', () => {
         ],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const securityReview = gen.next({
+    const securityReviewJobs = gen.next({
       toolResult: [
         {
           type: 'json',
@@ -4287,6 +4546,8 @@ describe('base2 verification and reviewer gates', () => {
         },
       ],
     } as any)
+    expect(securityReviewJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const securityReview = gen.next(feedListJobs())
     expect(securityReview.value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'security-reviewer' },
@@ -4355,7 +4616,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -4368,7 +4632,7 @@ describe('base2 verification and reviewer gates', () => {
         ],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const securityReview = gen.next({
+    const securityReviewJobs = gen.next({
       toolResult: [
         {
           type: 'json',
@@ -4376,6 +4640,8 @@ describe('base2 verification and reviewer gates', () => {
         },
       ],
     } as any)
+    expect(securityReviewJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const securityReview = gen.next(feedListJobs())
     expect(securityReview.value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'security-reviewer' },
@@ -4438,7 +4704,7 @@ describe('base2 verification and reviewer gates', () => {
     // reset securityReviewGateDone, so on loop re-entry the SECURITY AUX BLOCK
     // re-fires (spawning security-reviewer inline with params) rather than the
     // final code-reviewer.
-    const revalidationReview = gen.next({
+    const revalidationReviewJobs = gen.next({
       toolResult: [
         {
           type: 'json',
@@ -4446,6 +4712,8 @@ describe('base2 verification and reviewer gates', () => {
         },
       ],
     } as any)
+    expect(revalidationReviewJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const revalidationReview = gen.next(feedListJobs())
     expect(revalidationReview.value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'security-reviewer' },
@@ -4504,7 +4772,10 @@ describe('base2 verification and reviewer gates', () => {
           },
         ],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     const postValidationStatus = gen.next({
       toolResult: [
         {
@@ -4566,7 +4837,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -4579,7 +4853,7 @@ describe('base2 verification and reviewer gates', () => {
         ],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const securityReview = gen.next({
+    const securityReviewJobs = gen.next({
       toolResult: [
         {
           type: 'json',
@@ -4587,6 +4861,8 @@ describe('base2 verification and reviewer gates', () => {
         },
       ],
     } as any)
+    expect(securityReviewJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const securityReview = gen.next(feedListJobs())
     expect(securityReview.value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'security-reviewer' },
@@ -4624,7 +4900,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -4636,7 +4915,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
     } as any).value
@@ -4672,7 +4954,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -4684,7 +4969,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
     } as any).value
@@ -4725,7 +5013,10 @@ describe('base2 verification and reviewer gates', () => {
       expect(
         gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
           .value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       expect(gen.next().value).toBe('STEP')
       expect(
         gen.next({
@@ -4737,7 +5028,10 @@ describe('base2 verification and reviewer gates', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'run_file_change_hooks',
+      })
       const postValidationStatus = gen.next({
         toolResult: [{ type: 'json', value: [] }],
       } as any).value as any
@@ -4776,7 +5070,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -4788,7 +5085,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
     } as any).value as any
@@ -4878,7 +5178,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -4890,7 +5193,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     expect(
       gen.next({ toolResult: [{ type: 'json', value: [] }] } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
@@ -4972,7 +5278,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -4984,7 +5293,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
     } as any).value as any
@@ -5026,7 +5338,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -5052,7 +5367,10 @@ describe('base2 verification and reviewer gates', () => {
           },
         ],
       } as any).value,
-    ).toMatchObject({ toolName: 'inspect_environment' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'inspect_environment',
+    })
     expect(
       gen.next({ toolResult: [{ type: 'json', value: {} }] } as any).value,
     ).toMatchObject({ toolName: 'get_affected_tests' })
@@ -5193,7 +5511,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -5205,7 +5526,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
     } as any).value as any
@@ -5304,7 +5628,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -5316,7 +5643,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
     } as any).value as any
@@ -5452,7 +5782,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -5464,7 +5797,10 @@ describe('base2 verification and reviewer gates', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
     } as any).value
@@ -5522,7 +5858,10 @@ describe('base2 gate-passed credit ledger (Option A)', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: '' } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       expect(gen.next().value).toBe('STEP')
       expect(
         gen.next({
@@ -5536,7 +5875,10 @@ describe('base2 gate-passed credit ledger (Option A)', () => {
             { type: 'json', value: { status: ` M ${gateFile}` } },
           ],
         } as any).value,
-      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'run_file_change_hooks',
+      })
       expect(
         gen.next({
           toolResult: [{ type: 'json', value: [] }],
@@ -5617,7 +5959,10 @@ describe('base2 gate-passed credit ledger (Option A)', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
       expect(gen.next().value).toBe('STEP')
 
@@ -5675,7 +6020,10 @@ describe('base2 gate-passed credit ledger (Option A)', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
       expect(gen.next().value).toBe('STEP')
 
@@ -5730,7 +6078,10 @@ describe('base2 gate-passed credit ledger (Option A)', () => {
         gen.next({
           toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
         } as any).value,
-      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
       // The retain path does not deterministically emit a pinned-state message.
       const maybePinnedState = gen.next().value
       if (maybePinnedState !== 'STEP') {
@@ -5819,7 +6170,10 @@ describe('base2 validation-first reviewer snapshots', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -5827,9 +6181,11 @@ describe('base2 validation-first reviewer snapshots', () => {
         toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const validation = gen.next({
+    const validationJobs = gen.next({
       toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
     } as any)
+    expect(validationJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const validation = gen.next(feedListJobs())
     expect(validation.value).toMatchObject({ toolName: 'run_file_change_hooks' })
 
     const postValidationStatus = gen.next({
@@ -5862,7 +6218,10 @@ describe('base2 repair-loop gate-state telemetry (M6.4)', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
 
     // Step completes with a canonical edit receipt so src/a.ts enters
@@ -5878,7 +6237,10 @@ describe('base2 repair-loop gate-state telemetry (M6.4)', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
 
     // Validation fails with a parseable (tsc-shaped) failure -> repair loop.
     const typecheckFailure = {
@@ -5968,16 +6330,21 @@ describe('base2 repair-loop gate-state telemetry (M6.4)', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({ stepsComplete: true, toolResult: [] } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     // No edits: validation hooks are skipped, the reviewer gate does not run,
     // and the finalization block stays the legacy {gate,status,details} shape.
-    const finalized = gen.next({
+    const finalizedJobs = gen.next({
       toolResult: [{ type: 'json', value: { status: '' } }],
     } as any)
+    expect(finalizedJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const finalized = gen.next(feedListJobs())
     expect((finalized.value as any).toolName).toBe('add_message')
     const content = (finalized.value as any).input.content as string
     const parsed = parseGateStateBlock(content)
@@ -6014,7 +6381,10 @@ describe('base2 test-writer aux-gate completion path', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -6030,7 +6400,10 @@ describe('base2 test-writer aux-gate completion path', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'inspect_environment' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'inspect_environment',
+    })
     expect(
       gen.next({ toolResult: [{ type: 'json', value: {} }] } as any).value,
     ).toMatchObject({ toolName: 'get_affected_tests' })
@@ -6119,7 +6492,10 @@ describe('base2 test-writer aux-gate completion path', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -6131,7 +6507,10 @@ describe('base2 test-writer aux-gate completion path', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'inspect_environment' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'inspect_environment',
+    })
     expect(
       gen.next({ toolResult: [{ type: 'json', value: {} }] } as any).value,
     ).toMatchObject({ toolName: 'get_affected_tests' })
@@ -6225,7 +6604,10 @@ describe('base2 COMMIT ANYWAY commit-scope bypass publisher', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect((agentState as any).commitScopeBypassAuthorized).toBeUndefined()
     // The step returns an updated message history containing the exact
@@ -6316,7 +6698,10 @@ describe('base2 reviewer repair budget cap', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     const maybePinned = gen.next().value
     if (maybePinned !== 'STEP') {
       expect(maybePinned).toMatchObject({ toolName: 'add_message' })
@@ -6332,7 +6717,10 @@ describe('base2 reviewer repair budget cap', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
     } as any).value
@@ -6390,7 +6778,10 @@ describe('base2 content-based reviewer finding correlation', () => {
     expect(
       gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
         .value,
-    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
     expect(gen.next().value).toBe('STEP')
     expect(
       gen.next({
@@ -6403,7 +6794,7 @@ describe('base2 content-based reviewer finding correlation', () => {
         ],
       } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
-    const securityReview = gen.next({
+    const securityReviewJobs = gen.next({
       toolResult: [
         {
           type: 'json',
@@ -6411,6 +6802,8 @@ describe('base2 content-based reviewer finding correlation', () => {
         },
       ],
     } as any)
+    expect(securityReviewJobs.value).toMatchObject({ toolName: 'list_jobs' })
+    const securityReview = gen.next(feedListJobs())
     expect(securityReview.value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'security-reviewer' },

@@ -29,6 +29,16 @@ function finishStepWithToolResult(value: unknown) {
   } as any
 }
 
+/** Minimal pushed background-job digest payload for the post-git_status list_jobs yield. */
+const LIST_JOBS_RESULT = {
+  jobs: [],
+  note: 'No action required unless you need this output.',
+}
+
+function feedListJobs() {
+  return feedJson(LIST_JOBS_RESULT)
+}
+
 /**
  * Canonical file_mutation_result receipt (the real production edit-artifact
  * shape) for `path`. Feed this instead of a bare `{ file }` so the edited file
@@ -229,6 +239,10 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
 
     // 3) Context pruning before the first model step.
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'list_jobs',
+      input: {},
+    })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -238,11 +252,12 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     expect(
       gen.next(finishStepWithToolResult(editReceipt(AUX_TRIPLE_FILE))).value,
     ).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(
+      gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
 
     // 5) git_status reports the pending edit -> the aux block fires.
-    const environmentYield = gen.next(
-      feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }),
-    )
+    const environmentYield = gen.next(feedListJobs())
     expect(environmentYield.value).toMatchObject({
       toolName: 'inspect_environment',
       input: {},
@@ -382,15 +397,16 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       toolName: 'git_status',
       input: {},
     })
+    expect(
+      gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
 
     // Invariant 4 (no infinite re-spawn loop): with the same aux-relevant
     // pending file set, the done-flags stay true and selectAuxRelevantFiles
     // filters out nothing new, so the aux block skips entirely. The next yield
     // is the FINAL validation gate (run_file_change_hooks). Assert NO
     // spawn_agent_inline for any aux agent_type occurs here.
-    const finalValidationGate = gen.next(
-      feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }),
-    )
+    const finalValidationGate = gen.next(feedListJobs())
     expect(isAuxSpawn(finalValidationGate.value)).toBe(false)
     expect(finalValidationGate.value).toMatchObject({
       toolName: 'run_file_change_hooks',
@@ -438,9 +454,7 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       toolName: 'git_status',
       input: {},
     })
-    const gatePassed = gen.next(
-      feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }),
-    )
+    const gatePassed = gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }))
     expect(gatePassed.value).toMatchObject({
       toolName: 'add_message',
       input: { role: 'user' },
@@ -487,7 +501,8 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
     expect(
       gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
-    ).toMatchObject({
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -497,12 +512,13 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       toolName: 'git_status',
       input: {},
     })
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
 
     // Aux block: the router selects reliability-reviewer for the state/session
     // path; the bundle freezes then the specialist spawns.
-    const specialistBundle = gen.next(
-      feedJson({ status: ` M ${SPECIALIST_FILE}` }),
-    )
+    const specialistBundle = gen.next(feedListJobs())
     expect(specialistBundle.value).toMatchObject({
       toolName: 'get_change_review_bundle',
       input: {},
@@ -636,7 +652,8 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
     expect(
       gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` })).value,
-    ).toMatchObject({
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -646,10 +663,13 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       toolName: 'git_status',
       input: {},
     })
+    expect(
+      gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
 
     // The owed specialist re-routes reliability-reviewer; the bundle freezes
     // and the specialist spawns.
-    const bundle = gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }))
+    const bundle = gen.next(feedListJobs())
     expect(bundle.value).toMatchObject({
       toolName: 'get_change_review_bundle',
       input: {},
@@ -735,7 +755,8 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
     expect(
       gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
-    ).toMatchObject({
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -745,12 +766,13 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       toolName: 'git_status',
       input: {},
     })
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
 
     // Aux block: the router selects reliability-reviewer for the state/session
     // path; the bundle freezes then the specialist spawns.
-    const specialistBundle = gen.next(
-      feedJson({ status: ` M ${SPECIALIST_FILE}` }),
-    )
+    const specialistBundle = gen.next(feedListJobs())
     expect(specialistBundle.value).toMatchObject({
       toolName: 'get_change_review_bundle',
       input: {},
@@ -825,6 +847,9 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       toolName: 'git_status',
     })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'list_jobs',
+    })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -834,11 +859,12 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     ).toMatchObject({
       toolName: 'git_status',
     })
+    expect(
+      gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs' })
 
     // First iteration fires all three aux gates in order.
-    const environmentYield = gen.next(
-      feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }),
-    )
+    const environmentYield = gen.next(feedListJobs())
     expect(environmentYield.value).toMatchObject({
       toolName: 'inspect_environment',
       input: {},
@@ -921,13 +947,14 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     expect(
       gen.next(finishStepWithToolResult({})).value,
     ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs' })
 
     // Idempotency invariant: on this second iteration reaching the aux block
     // with the same aux-relevant pending file set, NONE of the three aux gates
     // re-spawn. The next yield goes straight to run_file_change_hooks.
-    const secondIterationNext = gen.next(
-      feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }),
-    )
+    const secondIterationNext = gen.next(feedListJobs())
     expect(isAuxSpawn(secondIterationNext.value)).toBe(false)
     expect(secondIterationNext.value).toMatchObject({
       toolName: 'run_file_change_hooks',
@@ -1015,7 +1042,8 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     ).toBe('reliability-reviewer')
     expect(
       gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` })).value,
-    ).toMatchObject({
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -1031,6 +1059,9 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       toolName: 'git_status',
       input: {},
     })
+    expect(
+      gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
 
     // The test/doc/security aux gates are already satisfied (and the security
     // gate is family-guarded off while a specialist marker is owed), so the
@@ -1038,9 +1069,7 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     // family as 'specialist', re-includes the owed reliability-reviewer into
     // the routed specialists, freezes a fresh review bundle, and re-fires it
     // via spawn_agents.
-    const specialistBundle = gen.next(
-      feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }),
-    )
+    const specialistBundle = gen.next(feedListJobs())
     expect(specialistBundle.value).toMatchObject({
       toolName: 'get_change_review_bundle',
       input: {},
@@ -1094,12 +1123,13 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       toolName: 'git_status',
       input: {},
     })
+    expect(
+      gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
 
     // With the specialist family cleared and its gate done, no aux gate
     // re-fires; the loop advances to the FINAL validation hooks.
-    const finalValidationGate = gen.next(
-      feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }),
-    )
+    const finalValidationGate = gen.next(feedListJobs())
     expect(isAuxSpawn(finalValidationGate.value)).toBe(false)
     expect(finalValidationGate.value).toMatchObject({
       toolName: 'run_file_change_hooks',
@@ -1115,7 +1145,9 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       toolName: 'git_status',
       input: {},
     })
-    const reviewerSpawn = gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }))
+    const reviewerSpawn = gen.next(
+      feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }),
+    )
     // Invariant 3: the FINAL reviewer is code-reviewer, only reached after the
     // specialist family was cleared (family is now 'none'/'code').
     expect(isAuxSpawn(reviewerSpawn.value)).toBe(false)
@@ -1408,7 +1440,8 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
     expect(
       gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
-    ).toMatchObject({
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -1418,10 +1451,13 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
       toolName: 'git_status',
       input: {},
     })
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
 
     // Aux block: router selects reliability-reviewer for the state/session
     // path; the bundle freezes then the specialist spawns.
-    const bundle = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+    const bundle = gen.next(feedListJobs())
     expect(bundle.value).toMatchObject({
       toolName: 'get_change_review_bundle',
       input: {},
@@ -1502,9 +1538,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     writeFileSync(SPECIALIST_FILE, 'export const session = "v2-repaired"\n')
     const repairStatus = gen.next(repairReceipt(SPECIALIST_FILE, [finding.id]))
     expect(repairStatus.value).toMatchObject({ toolName: 'git_status', input: {} })
-
     // The repair loop re-enters the outer loop at context-pruner.
-    const reLoopPruner = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+    const reLoopPruner = gen.next(
+      feedJson({ status: ` M ${SPECIALIST_FILE}` }),
+    )
     expect(reLoopPruner.value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
@@ -1525,7 +1562,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
       toolName: 'git_status',
       input: {},
     })
-    const bundle2 = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    const bundle2 = gen.next(feedListJobs())
     expect(bundle2.value).toMatchObject({
       toolName: 'get_change_review_bundle',
       input: {},
@@ -1578,10 +1618,16 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
 
     // Resumed-state prelude.
     expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
-    gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })) // context-pruner
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    gen.next(feedListJobs()) // context-pruner
     gen.next() // pinned add_message
     expect(gen.next().value).toBe('STEP')
     gen.next(finishStepWithToolResult({})) // post-step git_status
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
 
     const finding = {
       id: 'reliability-reviewer:correctness:retry-race',
@@ -1589,9 +1635,7 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     }
     // Drive MAX_SPECIALIST_REPAIR_ROUNDS (3) full repair rounds, each of which
     // blocks again, then a 4th blocking result that exhausts the budget.
-    let next: IteratorResult<any, any> = gen.next(
-      feedJson({ status: ` M ${SPECIALIST_FILE}` }),
-    )
+    let next: IteratorResult<any, any> = gen.next(feedListJobs())
     let budgetNotice: any
     for (let round = 1; round <= 4; round += 1) {
       // `next` is the get_change_review_bundle yield for this round's aux pass.
@@ -1663,7 +1707,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
         gen.next() // pinned add_message
         expect(gen.next().value).toBe('STEP')
         gen.next(finishStepWithToolResult({})) // post-step git_status
-        next = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+        expect(
+          gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+        ).toMatchObject({ toolName: 'list_jobs', input: {} })
+        next = gen.next(feedListJobs())
       } else {
         // Round 4's blocking result exhausts the budget: its add_message is the
         // budget-exhausted notice, not another blocking-findings notice.
@@ -1750,14 +1797,20 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     ).toBe('reliability-reviewer')
 
     // Prelude.
-    gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })) // context-pruner
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    gen.next(feedListJobs()) // context-pruner
     gen.next() // pinned add_message
     expect(gen.next().value).toBe('STEP')
     gen.next(finishStepWithToolResult({})) // post-step git_status
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
 
     // Aux block unions BOTH owed specialists into the routed set. Feed the
     // bundle and capture the two-agent spawn.
-    const bundle = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+    const bundle = gen.next(feedListJobs())
     expect(bundle.value).toMatchObject({
       toolName: 'get_change_review_bundle',
       input: {},
@@ -1827,7 +1880,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     gen.next() // pinned add_message
     expect(gen.next().value).toBe('STEP')
     gen.next(finishStepWithToolResult({})) // post-step git_status
-    const bundle2 = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    const bundle2 = gen.next(feedListJobs())
     expect(bundle2.value).toMatchObject({
       toolName: 'get_change_review_bundle',
       input: {},
@@ -1886,12 +1942,18 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
         params: {},
       } as any)
       expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
-      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })) // context-pruner
+      expect(
+        gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+      ).toMatchObject({ toolName: 'list_jobs', input: {} })
+      gen.next(feedListJobs()) // context-pruner
       gen.next() // pinned add_message
       expect(gen.next().value).toBe('STEP')
       gen.next(finishStepWithToolResult({})) // post-step git_status
+      expect(
+        gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+      ).toMatchObject({ toolName: 'list_jobs', input: {} })
       // First aux pass: spawn + PASS reliability-reviewer; credit is stored.
-      let next = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+      let next = gen.next(feedListJobs())
       expect(next.value).toMatchObject({
         toolName: 'get_change_review_bundle',
         input: {},
@@ -1928,7 +1990,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
       gen.next() // pinned add_message
       expect(gen.next().value).toBe('STEP')
       gen.next(finishStepWithToolResult({})) // post-step git_status
-      next = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+      expect(
+        gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+      ).toMatchObject({ toolName: 'list_jobs', input: {} })
+      next = gen.next(feedListJobs())
       // No specialist respawn: the next gate yield is NOT a specialist bundle
       // fetch and NOT a reliability-reviewer spawn.
       expect((next.value as any)?.toolName).not.toBe('get_change_review_bundle')
@@ -1961,13 +2026,19 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
         params: {},
       } as any)
       expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
-      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })) // context-pruner
+      expect(
+        gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+      ).toMatchObject({ toolName: 'list_jobs', input: {} })
+      gen.next(feedListJobs()) // context-pruner
       gen.next() // pinned add_message
       expect(gen.next().value).toBe('STEP')
       gen.next(finishStepWithToolResult({})) // post-step git_status
+      expect(
+        gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+      ).toMatchObject({ toolName: 'list_jobs', input: {} })
       // The aux block must re-route reliability-reviewer because its stored
       // credit fingerprint is stale relative to the current bytes.
-      const bundle = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+      const bundle = gen.next(feedListJobs())
       expect(bundle.value).toMatchObject({
         toolName: 'get_change_review_bundle',
         input: {},
@@ -1997,14 +2068,20 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
 
     // Prelude.
     expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
-    gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })) // context-pruner
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    gen.next(feedListJobs()) // context-pruner
     gen.next() // pinned add_message
     expect(gen.next().value).toBe('STEP')
     gen.next(finishStepWithToolResult({})) // post-step git_status
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
 
     // Aux pass: the router selects reliability-reviewer for the state/session
     // path; the bundle freezes, then the specialist spawns.
-    const bundle = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+    const bundle = gen.next(feedListJobs())
     expect(bundle.value).toMatchObject({
       toolName: 'get_change_review_bundle',
       input: {},
@@ -2071,14 +2148,20 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
 
     // Prelude.
     expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
-    gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })) // context-pruner
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    gen.next(feedListJobs()) // context-pruner
     gen.next() // pinned add_message
     expect(gen.next().value).toBe('STEP')
     gen.next(finishStepWithToolResult({})) // post-step git_status
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
 
     // Round 1: the specialist BLOCKS, so it spends one repair round and is owed
     // a fresh re-attestation. Both must be gone once the gate finally passes.
-    const bundle = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+    const bundle = gen.next(feedListJobs())
     expect(bundle.value).toMatchObject({
       toolName: 'get_change_review_bundle',
       input: {},
@@ -2122,7 +2205,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     gen.next() // pinned add_message
     expect(gen.next().value).toBe('STEP')
     gen.next(finishStepWithToolResult({})) // post-step git_status
-    const bundle2 = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    const bundle2 = gen.next(feedListJobs())
     expect(bundle2.value).toMatchObject({
       toolName: 'get_change_review_bundle',
       input: {},
@@ -2150,11 +2236,12 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     gen.next() // pinned add_message
     expect(gen.next().value).toBe('STEP')
     gen.next(finishStepWithToolResult({})) // post-step git_status
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
 
     // Final validation hooks -> post-validation git_status -> code-reviewer.
-    const finalValidation = gen.next(
-      feedJson({ status: ` M ${SPECIALIST_FILE}` }),
-    )
+    const finalValidation = gen.next(feedListJobs())
     expect(finalValidation.value).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: [SPECIALIST_FILE] },
@@ -2163,7 +2250,9 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
       gen.next(feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }]))
         .value,
     ).toMatchObject({ toolName: 'git_status', input: {} })
-    const reviewerSpawn = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+    const reviewerSpawn = gen.next(
+      feedJson({ status: ` M ${SPECIALIST_FILE}` }),
+    )
     expect(reviewerSpawn.value).toMatchObject({
       toolName: 'spawn_agents',
       input: { agents: [{ agent_type: 'code-reviewer' }] },
@@ -2213,13 +2302,19 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
 
     // Prelude.
     expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
-    gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })) // context-pruner
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    gen.next(feedListJobs()) // context-pruner
     gen.next() // pinned add_message
     expect(gen.next().value).toBe('STEP')
     gen.next(finishStepWithToolResult({})) // post-step git_status
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
 
     // Round 1: the routed specialist BLOCKS, so repair-editor is spawned.
-    const bundle = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+    const bundle = gen.next(feedListJobs())
     expect(bundle.value).toMatchObject({
       toolName: 'get_change_review_bundle',
       input: {},
@@ -2265,11 +2360,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
       toolName: 'git_status',
       input: {},
     })
-
     // The snapshot-progress guard sees postRepairFingerprint ===
     // preRepairFingerprint and exits the gate loop instead of re-spawning
     // repair-editor or re-firing the specialist: the turn ends immediately.
-    const afterGuard = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+    const afterGuard = gen.next(feedListJobs())
     expect(afterGuard.done).toBe(true)
 
     // The turn is blocked, the specialist is still owed and uncredited, and the
@@ -2319,7 +2413,8 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
     expect(
       gen.next(feedJson({ status: ` M ${REVIEWER_REPAIR_FILE}` })).value,
-    ).toMatchObject({
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -2329,12 +2424,13 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
       toolName: 'git_status',
       input: {},
     })
+    expect(
+      gen.next(feedJson({ status: ` M ${REVIEWER_REPAIR_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
 
     // No aux gate is owed, so the loop advances straight to the final
     // validation hooks, then to the post-validation dirty-scope re-derivation.
-    const finalValidation = gen.next(
-      feedJson({ status: ` M ${REVIEWER_REPAIR_FILE}` }),
-    )
+    const finalValidation = gen.next(feedListJobs())
     expect(isAuxSpawn(finalValidation.value)).toBe(false)
     expect(finalValidation.value).toMatchObject({
       toolName: 'run_file_change_hooks',

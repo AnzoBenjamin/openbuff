@@ -1,4 +1,3 @@
-import { describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import {
   lstatSync,
@@ -9,14 +8,19 @@ import {
   rmSync,
   statSync,
   symlinkSync,
-  unlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 
+import { describe, expect, test } from 'bun:test'
+
 import { createBase2 } from '../base2/base2'
+import {
+  hashGateSnapshotDetails,
+  isAttestableSnapshotFingerprint,
+} from '../base2/gate-fingerprint'
 
 function parseGateStateBlock(text: string): {
   gate: string
@@ -41,6 +45,16 @@ function finishStep(value: unknown) {
     stepsComplete: true,
     toolResult: [{ type: 'json', value }],
   } as any
+}
+
+/** Minimal pushed background-job digest payload for the post-git_status list_jobs yield. */
+const LIST_JOBS_RESULT = {
+  jobs: [],
+  note: 'No action required unless you need this output.',
+}
+
+function feedListJobs() {
+  return feedJson(LIST_JOBS_RESULT)
 }
 
 function gateFileMarker(path: string): string {
@@ -86,44 +100,6 @@ function gateFingerprint(path: string, validationSummary = ''): string {
 
 function reviewableFingerprint(path: string): string {
   return gateFingerprint(path)
-}
-
-function extractInlineFunction(jsSource: string, functionName: string): string {
-  const startMarker = `function ${functionName}(`
-  const startIndex = jsSource.indexOf(startMarker)
-  if (startIndex === -1) {
-    throw new Error(`Function ${functionName} not found in source`)
-  }
-  let depth = 0
-  let inString = false
-  let stringChar = ''
-  let escaped = false
-  for (let i = jsSource.indexOf('{', startIndex); i < jsSource.length; i++) {
-    const ch = jsSource[i]
-    if (escaped) {
-      escaped = false
-      continue
-    }
-    if (ch === '\\') {
-      escaped = true
-      continue
-    }
-    if (inString) {
-      if (ch === stringChar) inString = false
-      continue
-    }
-    if (ch === '"' || ch === "'" || ch === '`') {
-      inString = true
-      stringChar = ch
-      continue
-    }
-    if (ch === '{') depth++
-    if (ch === '}') {
-      depth--
-      if (depth === 0) return jsSource.slice(startIndex, i + 1)
-    }
-  }
-  throw new Error(`Unbalanced braces in ${functionName}`)
 }
 
 /**
@@ -186,6 +162,10 @@ describe('base2 reviewer spawn conditions e2e', () => {
       toolName: 'git_status',
     })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'list_jobs',
+      input: {},
+    })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -198,6 +178,10 @@ describe('base2 reviewer spawn conditions e2e', () => {
     expect(
       gen.next(feedJson({ status: ' M src/lifecycle.ts' })).value,
     ).toMatchObject({
+      toolName: 'list_jobs',
+      input: {},
+    })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: ['src/lifecycle.ts'] },
     })
@@ -244,6 +228,10 @@ describe('base2 reviewer spawn conditions e2e', () => {
       toolName: 'git_status',
     })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'list_jobs',
+      input: {},
+    })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -253,8 +241,14 @@ describe('base2 reviewer spawn conditions e2e', () => {
     ).toMatchObject({
       toolName: 'git_status',
     })
+    expect(
+      gen.next(feedJson({ status: ' M src/lifecycle.ts' })).value,
+    ).toMatchObject({
+      toolName: 'list_jobs',
+      input: {},
+    })
 
-    const skippedGate = gen.next(feedJson({ status: ' M src/lifecycle.ts' }))
+    const skippedGate = gen.next(feedListJobs())
     expect(skippedGate.value).toMatchObject({
       toolName: 'add_message',
       input: { role: 'user' },
@@ -291,15 +285,19 @@ describe('base2 reviewer spawn conditions e2e', () => {
     expect(gen.next(feedJson([])).value).toMatchObject({ toolName: 'add_message' })
     expect(gen.next(feedJson([])).value).toMatchObject({ toolName: 'git_status' })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'list_jobs',
+    })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
     })
     expect(gen.next().value).toBe('STEP')
     expect(gen.next(finishStep(editReceipt('.agents/sessions/x/PLAN.md'))).value).toMatchObject({
       toolName: 'git_status',
     })
-    const skipped = gen.next(
-      feedJson({ status: ' M .agents/sessions/x/PLAN.md' }),
-    )
+    expect(
+      gen.next(feedJson({ status: ' M .agents/sessions/x/PLAN.md' })).value,
+    ).toMatchObject({ toolName: 'list_jobs' })
+    const skipped = gen.next(feedListJobs())
     expect(skipped.value).toMatchObject({ toolName: 'add_message' })
     const text = (skipped.value as any).input.content as string
     expect(text).toContain('plan-only-automatic-finalization-gate-disabled')
@@ -323,6 +321,9 @@ describe('base2 reviewer spawn conditions e2e', () => {
     expect(gen.next(feedJson([])).value).toMatchObject({ toolName: 'add_message' })
     expect(gen.next(feedJson([])).value).toMatchObject({ toolName: 'git_status' })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'list_jobs',
+    })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
     })
     expect(gen.next().value).toBe('STEP')
@@ -331,7 +332,8 @@ describe('base2 reviewer spawn conditions e2e', () => {
     })
     expect(
       gen.next(feedJson({ status: ' M src/lifecycle.ts' })).value,
-    ).toMatchObject({
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: ['src/lifecycle.ts'] },
     })
@@ -348,6 +350,9 @@ describe('base2 reviewer spawn conditions e2e', () => {
 
     expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'list_jobs',
+    })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -357,8 +362,11 @@ describe('base2 reviewer spawn conditions e2e', () => {
     ).toMatchObject({
       toolName: 'git_status',
     })
+    expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'list_jobs',
+    })
 
-    const noEditsGate = gen.next(feedJson({ status: '' }))
+    const noEditsGate = gen.next(feedListJobs())
     expect(noEditsGate.value).toMatchObject({
       toolName: 'add_message',
       input: { role: 'user' },
@@ -386,7 +394,10 @@ describe('base2 reviewer spawn conditions e2e', () => {
     ).toMatchObject({
       toolName: 'git_status',
     })
-    expect(gen.next(feedJson({ status: '' })).done).toBe(true)
+    expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'list_jobs',
+    })
+    expect(gen.next(feedListJobs()).done).toBe(true)
   })
 
   test('unsafe edits without pending files blocks finalization and skips reviewer', () => {
@@ -414,7 +425,8 @@ describe('base2 reviewer spawn conditions e2e', () => {
     expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
     expect(
       gen.next(feedJson({ status: ' M src/lifecycle.ts' })).value,
-    ).toMatchObject({
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -429,8 +441,11 @@ describe('base2 reviewer spawn conditions e2e', () => {
     ).toMatchObject({
       toolName: 'git_status',
     })
+    expect(
+      gen.next(feedJson({ status: ' M src/lifecycle.ts' })).value,
+    ).toMatchObject({ toolName: 'list_jobs' })
 
-    const blocked = gen.next(feedJson({ status: ' M src/lifecycle.ts' }))
+    const blocked = gen.next(feedListJobs())
     expect(blocked.value).toMatchObject({
       toolName: 'add_message',
       input: { role: 'user' },
@@ -480,6 +495,9 @@ describe('base2 reviewer spawn conditions e2e', () => {
 
     expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'list_jobs',
+    })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -489,6 +507,9 @@ describe('base2 reviewer spawn conditions e2e', () => {
       gen.next({ stepsComplete: true, toolResult: [] } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'list_jobs',
+    })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: ['src/lifecycle.ts'] },
     })
@@ -497,7 +518,6 @@ describe('base2 reviewer spawn conditions e2e', () => {
         feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }]),
       ).value,
     ).toMatchObject({ toolName: 'git_status' })
-
     const reviewerSpawn = gen.next(feedJson({ status: '' }))
     expect(reviewerSpawn.value).toMatchObject({
       toolName: 'spawn_agents',
@@ -553,6 +573,9 @@ describe('base2 reviewer spawn conditions e2e', () => {
 
     expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'list_jobs',
+    })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
     })
     expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
@@ -561,6 +584,9 @@ describe('base2 reviewer spawn conditions e2e', () => {
       gen.next({ stepsComplete: true, toolResult: [] } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'list_jobs',
+    })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'run_file_change_hooks',
     })
     expect(
@@ -568,7 +594,6 @@ describe('base2 reviewer spawn conditions e2e', () => {
         feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }]),
       ).value,
     ).toMatchObject({ toolName: 'git_status' })
-
     const reviewerSkip = gen.next(feedJson({ status: '' }))
     expect(reviewerSkip.value).toMatchObject({ toolName: 'add_message' })
     expect((reviewerSkip.value as any).input.content).toContain(
@@ -655,6 +680,9 @@ describe('base2 reviewer spawn conditions e2e', () => {
       expect(changedMarker).not.toBe(originalMarker)
 
       expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+        toolName: 'list_jobs',
+      })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
         toolName: 'spawn_agent_inline',
         input: { agent_type: 'context-pruner' },
       })
@@ -674,6 +702,9 @@ describe('base2 reviewer spawn conditions e2e', () => {
         gen.next({ stepsComplete: true, toolResult: [] } as any).value,
       ).toMatchObject({ toolName: 'git_status' })
       expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+        toolName: 'list_jobs',
+      })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
         toolName: 'run_file_change_hooks',
         input: { files: [path] },
       })
@@ -703,7 +734,16 @@ describe('base2 reviewer spawn conditions e2e', () => {
 
     try {
       writeFileSync(target, 'export const value = 1\n')
-      symlinkSync(target, absolutePath, 'file')
+      // Windows requires elevated privileges to create symlinks; skip there.
+      if (process.platform === 'win32') {
+        try {
+          symlinkSync(target, absolutePath, 'file')
+        } catch {
+          return
+        }
+      } else {
+        symlinkSync(target, absolutePath, 'file')
+      }
       // External symlinks are rejected without reading the target.
       expect(gateFileMarker(path)).toBe('unreadable:outside-project-symlink')
 
@@ -744,6 +784,9 @@ describe('base2 reviewer spawn conditions e2e', () => {
       expect(readFileSync(target, 'utf8')).toBe('export const value = 1\n')
 
       expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+        toolName: 'list_jobs',
+      })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
         toolName: 'spawn_agent_inline',
         input: { agent_type: 'context-pruner' },
       })
@@ -762,6 +805,9 @@ describe('base2 reviewer spawn conditions e2e', () => {
         gen.next({ stepsComplete: true, toolResult: [] } as any).value,
       ).toMatchObject({ toolName: 'git_status' })
       expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+        toolName: 'list_jobs',
+      })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
         toolName: 'run_file_change_hooks',
         input: { files: [path] },
       })
@@ -792,7 +838,16 @@ describe('base2 reviewer spawn conditions e2e', () => {
 
     try {
       writeFileSync(target, 'export const value = 1\n')
-      symlinkSync(target, absolutePath, 'file')
+      // Windows requires elevated privileges to create symlinks; skip there.
+      if (process.platform === 'win32') {
+        try {
+          symlinkSync(target, absolutePath, 'file')
+        } catch {
+          return
+        }
+      } else {
+        symlinkSync(target, absolutePath, 'file')
+      }
       const originalLinkText = readlinkSync(absolutePath)
       // External symlinks are always rejected.
       expect(gateFileMarker(path)).toBe('unreadable:outside-project-symlink')
@@ -837,6 +892,9 @@ describe('base2 reviewer spawn conditions e2e', () => {
       expect(gateFileMarker(path)).toBe('unreadable:outside-project-symlink')
 
       expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+        toolName: 'list_jobs',
+      })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
         toolName: 'spawn_agent_inline',
         input: { agent_type: 'context-pruner' },
       })
@@ -854,6 +912,9 @@ describe('base2 reviewer spawn conditions e2e', () => {
         gen.next({ stepsComplete: true, toolResult: [] } as any).value,
       ).toMatchObject({ toolName: 'git_status' })
       expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+        toolName: 'list_jobs',
+      })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
         toolName: 'run_file_change_hooks',
         input: { files: [path] },
       })
@@ -873,40 +934,25 @@ describe('base2 reviewer spawn conditions e2e', () => {
   })
 
   test('hashGateSnapshotDetails fails closed without crypto (no FNV fallback)', () => {
-    // Extract hashGateSnapshotDetails and isAttestableSnapshotFingerprint from
-    // the serialized handleSteps source and evaluate them in a scope where no
-    // crypto loader is available, proving the FNV fallback is gone.
-    const source = readFileSync(
-      new URL('../base2/base2.ts', import.meta.url),
-      'utf8',
-    )
-    const transpiler = new Bun.Transpiler({ loader: 'ts' })
-    const js = transpiler.transformSync(source)
-    const hashFnSource = extractInlineFunction(js, 'hashGateSnapshotDetails')
-    const predFnSource = extractInlineFunction(js, 'isAttestableSnapshotFingerprint')
-
+    // The shared hashGateSnapshotDetails resolves node:crypto lazily at call
+    // time (never at import time), so deleting both module loaders forces the
+    // fail-closed sentinel — proving there is no FNV fallback.
     const savedGetBuiltinModule = (process as any).getBuiltinModule
     const savedRequire = (globalThis as any).require
     try {
       delete (process as any).getBuiltinModule
       delete (globalThis as any).require
-      const hashFn = new Function(
-        `"use strict";\n${hashFnSource}\nreturn hashGateSnapshotDetails`,
-      )() as (details: string) => string
-      const result = hashFn('test-details')
+      const result = hashGateSnapshotDetails('test-details')
       // Must fail closed, not fall back to FNV.
       expect(result).toBe('unreadable:no-crypto')
       expect(result).not.toMatch(/^v3:fnv1a-/)
 
-      const isAttestable = new Function(
-        `"use strict";\n${predFnSource}\nreturn isAttestableSnapshotFingerprint`,
-      )() as (value: string) => boolean
       // Non-attestable fingerprints are rejected.
-      expect(isAttestable(result)).toBe(false)
-      expect(isAttestable('v3:fnv1a-12345678')).toBe(false)
-      expect(isAttestable('')).toBe(false)
+      expect(isAttestableSnapshotFingerprint(result)).toBe(false)
+      expect(isAttestableSnapshotFingerprint('v3:fnv1a-12345678')).toBe(false)
+      expect(isAttestableSnapshotFingerprint('')).toBe(false)
       // Canonical SHA-256 fingerprints are accepted.
-      expect(isAttestable(`v3:${'a'.repeat(64)}`)).toBe(true)
+      expect(isAttestableSnapshotFingerprint(`v3:${'a'.repeat(64)}`)).toBe(true)
     } finally {
       if (savedGetBuiltinModule !== undefined) {
         ;(process as any).getBuiltinModule = savedGetBuiltinModule
@@ -927,7 +973,8 @@ describe('base2 reviewer spawn conditions e2e', () => {
     expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
     expect(
       gen.next(feedJson({ status: ' M src/owned.ts\n?? src/new.ts' })).value,
-    ).toMatchObject({
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -944,7 +991,8 @@ describe('base2 reviewer spawn conditions e2e', () => {
       gen.next(
         feedJson({ status: ' M src/owned.ts\n?? src/new.ts' }),
       ).value,
-    ).toMatchObject({
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: ['src/owned.ts', 'src/new.ts'] },
     })
@@ -966,7 +1014,8 @@ describe('base2 reviewer spawn conditions e2e', () => {
     expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
     expect(
       gen.next(feedJson({ status: ' M src/owned.ts\n?? src/new.ts' })).value,
-    ).toMatchObject({
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -989,7 +1038,8 @@ describe('base2 reviewer spawn conditions e2e', () => {
       expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
       expect(
         gen.next(feedJson({ status: ' M src/owned.ts\n?? src/new.ts' })).value,
-      ).toMatchObject({
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
         toolName: 'spawn_agent_inline',
         input: { agent_type: 'context-pruner' },
       })
@@ -1025,7 +1075,8 @@ describe('base2 reviewer spawn conditions e2e', () => {
     expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
     expect(
       gen.next(feedJson({ status: ' M src/owned.ts\n?? src/new.ts' })).value,
-    ).toMatchObject({
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -1038,6 +1089,6 @@ describe('base2 reviewer spawn conditions e2e', () => {
     // The bypass flag is published (turn-start recognition), but the gate is
     // not re-armed: canSuggestFollowups stays unset (not forced to false).
     expect((agentState as any).commitScopeBypassAuthorized).toBe(true)
-    expect((agentState as any).canSuggestFollowups).not.toBe(false)
+    expect((agentState as any).canSuggestFollowups).toBeUndefined()
   })
 })

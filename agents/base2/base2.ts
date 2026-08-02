@@ -7410,6 +7410,38 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
       }
 
       function hashGateSnapshotDetails(details: string): string {
+        // Delegate to the canonical shared implementation in
+        // ./gate-fingerprint so this gate and its consumers cannot drift.
+        // handleSteps is serialized via .toString() and reconstructed with
+        // new Function(...), so this must NOT capture a module-scope import:
+        // resolve the sibling module lazily at call time through the global
+        // CommonJS loader (the same lazy pattern readGateFileContentMarker
+        // uses for node builtins), trying the plausible require referrers
+        // (this directory, the agents/ root, and the repo root). When no
+        // loader can resolve it, fall back to the inline copy below, which
+        // is kept in sync with ./gate-fingerprint.
+        const req = (globalThis as any).require as NodeJS.Require | undefined
+        if (typeof req === 'function') {
+          for (const specifier of [
+            './gate-fingerprint',
+            './base2/gate-fingerprint',
+            './agents/base2/gate-fingerprint',
+          ]) {
+            try {
+              const shared = req(specifier) as
+                | typeof import('./gate-fingerprint')
+                | undefined
+              if (
+                shared &&
+                typeof shared.hashGateSnapshotDetails === 'function'
+              ) {
+                return shared.hashGateSnapshotDetails(details)
+              }
+            } catch {
+              // Try the next candidate specifier.
+            }
+          }
+        }
         const getBuiltinModule =
           typeof process === 'object' &&
           process !== null &&
@@ -7417,7 +7449,6 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
           typeof process.getBuiltinModule === 'function'
             ? process.getBuiltinModule.bind(process)
             : undefined
-        const req = (globalThis as any).require as NodeJS.Require | undefined
         let crypto: typeof import('node:crypto') | undefined
         if (getBuiltinModule) {
           crypto = getBuiltinModule(
