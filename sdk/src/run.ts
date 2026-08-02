@@ -124,6 +124,9 @@ import type { Source } from '@codebuff/common/types/source'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
 import { listJobs } from './tools/list-jobs'
 
+import type { ListJobsViewRow } from '@codebuff/common/util/list-jobs-view'
+import { fingerprintListJobsRows } from '@codebuff/common/util/list-jobs-view'
+
 /**
  * Wraps content for user messages, ensuring text is wrapped in <user_message> tags.
  * Uses buildUserMessageContent from agent-runtime for consistency.
@@ -705,6 +708,12 @@ async function runOnce({
   }
 
   const ownedLibrarianCloneDirs = new Set<string>()
+  // Per-turn change-gate state for list_jobs digests. Declared in this run
+  // closure (not module scope) so every run() call gets a fresh fingerprint
+  // and concurrent runs never share suppression state. `null` means no
+  // list_jobs digest has been emitted yet this turn, so the first call always
+  // returns the full table.
+  let lastListJobsFingerprint: string | null = null
   const agentRuntimeImpl = getAgentRuntimeImpl({
     logger,
     apiKey,
@@ -738,7 +747,7 @@ async function runOnce({
         toolName,
       })
       try {
-        return await handleToolCall({
+        const handled = await handleToolCall({
           action: {
             type: 'tool-call-request',
             requestId: callId ?? crypto.randomUUID(),
@@ -817,6 +826,19 @@ async function runOnce({
             : undefined,
           signal: deadline.signal,
         })
+        // Intercept the single dispatch path (model- and agent-initiated calls
+        // alike) so an unchanged list_jobs digest doesn't re-inject the full
+        // table into the conversation every step. The gate owns the returned
+        // output; the per-turn fingerprint lives in this closure.
+        if (toolName === 'list_jobs') {
+          const gated = applyListJobsDigestGate(
+            lastListJobsFingerprint,
+            handled.output,
+          )
+          lastListJobsFingerprint = gated.nextFingerprint
+          return { ...handled, output: gated.output }
+        }
+        return handled
       } finally {
         deadline.dispose()
       }
@@ -1087,6 +1109,56 @@ async function runOnce({
     )
   }
   return terminalState
+}
+
+/**
+ * Per-turn change-gate for list_jobs digests. Compares the row fingerprint of
+ * the freshly-produced digest against the last fingerprint this turn and, when
+ * nothing meaningful changed, swaps the full table for a tiny suppression note.
+ *
+ * Exported for tests. `lastFingerprint` is the run-closure state (null on the
+ * first call of a turn, which always returns the full digest). The caller owns
+ * storing `nextFingerprint` back into that state.
+ *
+ * The suppression payload intentionally omits `jobs` entirely: an empty array
+ * would read as "no jobs exist", which is false.
+ */
+export function applyListJobsDigestGate(
+  lastFingerprint: string | null,
+  output: ToolResultOutput[],
+): { output: ToolResultOutput[]; nextFingerprint: string | null } {
+  // Only gate a well-formed single json digest. Overrides, errors, or custom
+  // list_jobs shapes are passed through untouched and do not update the gate.
+  const first = output[0]
+  if (output.length !== 1 || first?.type !== 'json') {
+    return { output, nextFingerprint: lastFingerprint }
+  }
+  const value = first.value
+  const jobs =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? ((value as { jobs?: unknown }).jobs)
+      : undefined
+  if (!Array.isArray(jobs)) {
+    return { output, nextFingerprint: lastFingerprint }
+  }
+  // fingerprintListJobsRows ignores tail/startedAt by design, so chattiness
+  // (new buffered output) and wall-clock drift do not reset the gate.
+  const nextFingerprint = fingerprintListJobsRows(jobs as ListJobsViewRow[])
+  if (lastFingerprint !== null && nextFingerprint === lastFingerprint) {
+    return {
+      output: [
+        {
+          type: 'json',
+          value: {
+            unchanged: true,
+            note: 'No job changes since the previous list_jobs digest this turn; the earlier digest is still current.',
+          },
+        },
+      ],
+      nextFingerprint: lastFingerprint,
+    }
+  }
+  return { output, nextFingerprint }
 }
 
 function requireCwd(cwd: string | undefined, toolName: string): string {

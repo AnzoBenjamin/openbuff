@@ -5,6 +5,8 @@ import * as path from 'path'
 import { StringDecoder } from 'string_decoder'
 
 import {
+  SETTLED_JOB_TTL_MS,
+  UNKNOWN_JOB_OWNER,
   jobRegistry,
   type JobOwner,
 } from '@codebuff/common/util/job-registry'
@@ -85,6 +87,32 @@ export interface BackgroundJob {
   readOffset: number
   /** Preserves incomplete UTF-8 sequences across bounded incremental reads. */
   decoder?: StringDecoder
+  /**
+   * True only for jobs spawned by `startBackgroundJob`, which own a live
+   * per-job drainer running on the 250ms `logQuotaTimer` interval. check_job
+   * must NOT drain such a job (that would corrupt the shared
+   * readOffset/decoder/lineCarry cursor); recovered and test-registered jobs
+   * leave this undefined and keep draining via check_job's readNewJobOutput.
+   */
+  hasLiveDrainer?: boolean
+  /**
+   * Per-adapter registry consumer cursor for check_job. Tracks how far the
+   * adapter has already returned events to a check_job caller — independent
+   * of the live drainer's readOffset/decoder/lineCarry progress. Defaults to
+   * 0 so the first check_job observes output the live interval already
+   * mirrored into the registry; advanced to the returned nextCursor on each
+   * successful check_job. Do NOT treat "already mirrored by the live drainer"
+   * as "already consumed by check_job".
+   */
+  lastCheckCursor?: number
+  /**
+   * Retained partial trailing line (bytes drained after the last newline).
+   * emitJobOutputLines carries it across drains so output enters the registry
+   * as complete per-line events; a settled job's final drain flushes it.
+   */
+  lineCarry?: string
+  /** Epoch ms when the job FIRST became terminal; set once in settleBackgroundJob. */
+  settledAt?: number
   owner?: BackgroundJobOwner
   /** Wall-clock time of the last throttled metadata write, if any. */
   lastMetadataWriteAt?: number
@@ -114,18 +142,6 @@ const jobs = new Map<string, BackgroundJob>()
 const metadataFilesCreatedByThisProcess = new Set<string>()
 
 /**
- * Owner stamped on jobs started without explicit run ownership (e.g. direct
- * CLI invocations or test-registered jobs) so registry records always carry
- * a full owner for `assertOwned`.
- */
-const UNKNOWN_JOB_OWNER: BackgroundJobOwner = {
-  clientSessionId: 'unknown-session',
-  rootRunId: 'unknown-root',
-  parentRunId: 'unknown-parent',
-  parentAgentId: 'unknown-agent',
-}
-
-/**
  * Max age of orphaned background-job log/metadata files in /tmp before they
  * are eligible for cleanup on the next startBackgroundJob call. Set to 24h to
  * preserve recently-completed jobs for short-lived recovery while preventing
@@ -134,6 +150,13 @@ const UNKNOWN_JOB_OWNER: BackgroundJobOwner = {
 const ORPHANED_JOB_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 const MAX_BACKGROUND_LOG_BYTES = 10 * 1024 * 1024
 export const MAX_BACKGROUND_READ_BYTES = 100_000
+/**
+ * Max bytes emitJobOutputLines retains in `lineCarry` without seeing a newline
+ * before it force-emits the carry as a single event. This bounds carry growth
+ * on a newline-less flood so a chatty child cannot accumulate unbounded output
+ * in memory while waiting for a line terminator that never arrives.
+ */
+export const MAX_LINE_BYTES = 64 * 1024
 const BACKGROUND_LOG_MONITOR_INTERVAL_MS = 250
 /**
  * Minimum interval between per-poll metadata writes in readNewJobOutput. The
@@ -371,6 +394,8 @@ type BackgroundJobMetadata = {
   exitCode: number | null
   startedAt: number
   readOffset?: number
+  /** Epoch ms when the job first became terminal; written on settle for recovery. */
+  settledAt?: number
   owner?: BackgroundJobOwner
   childProcessStartTime?: string
 }
@@ -385,6 +410,7 @@ function writeBackgroundJobMetadata(job: BackgroundJob): void {
     exitCode: job.exitCode,
     startedAt: job.startedAt,
     readOffset: job.readOffset,
+    ...(job.settledAt !== undefined ? { settledAt: job.settledAt } : {}),
     owner: job.owner,
     childProcessStartTime: job.childProcessStartTime,
   }
@@ -415,6 +441,14 @@ function settleBackgroundJob(
 ): void {
   job.status = status
   job.exitCode = exitCode
+  // Stamp the FIRST terminal time once. settleBackgroundJob can be reached
+  // from multiple terminal paths (child exit, child error, kill, log-quota);
+  // keep the earliest stamp so the TTL window is correct and a late duplicate
+  // settle can't extend an entry's lifetime. Running jobs keep settledAt
+  // undefined so the prune ignores them.
+  if (job.settledAt === undefined) {
+    job.settledAt = Date.now()
+  }
   jobRegistry.emit(registryJobIdFor(job), {
     type: 'lifecycle',
     state: status,
@@ -424,10 +458,76 @@ function settleBackgroundJob(
   writeBackgroundJobMetadata(job)
 }
 
+/**
+ * Internal helper: drop TTL-expired settled entries from the live `jobs` Map.
+ * Only jobs whose terminal `settledAt` is older than SETTLED_JOB_TTL_MS are
+ * removed; running jobs (settledAt undefined) and within-TTL settled jobs are
+ * retained so their final output/exit code stay servable. Swept lazily (no
+ * timer) from getBackgroundJob/startBackgroundJob. Exported only so a
+ * deterministic regression test can inject `now`.
+ */
+export function pruneSettledJobs(now: number = Date.now()): void {
+  for (const [jobId, record] of jobs) {
+    if (
+      record.settledAt !== undefined &&
+      now - record.settledAt > SETTLED_JOB_TTL_MS
+    ) {
+      jobs.delete(jobId)
+    }
+  }
+}
+
 /** Mirror a chunk of streamed log bytes into the registry as an output event. */
 function emitJobOutput(job: BackgroundJob, data: string): void {
   if (data.length === 0) return
   jobRegistry.emit(registryJobIdFor(job), { type: 'output', data })
+}
+
+/**
+ * Per-line inversion of emitJobOutput: append `text` to the job's `lineCarry`,
+ * split on '\n', and emit each COMPLETE line (line + '\n') as its own registry
+ * `output` event, retaining the trailing partial (no newline yet) in
+ * `lineCarry` for the next drain. Output therefore enters the registry
+ * line-by-line at drain time (timestamps stamped by jobRegistry.emit), not as
+ * one blob. A newline-less flood is bounded by MAX_LINE_BYTES: once the carry
+ * grows past the cap with no newline, it is force-emitted as one event and
+ * reset so the carry can never grow without bound.
+ */
+function emitJobOutputLines(job: BackgroundJob, text: string): void {
+  if (text.length === 0) return
+  job.lineCarry = (job.lineCarry ?? '') + text
+  let newlineIndex = job.lineCarry.indexOf('\n')
+  while (newlineIndex !== -1) {
+    emitJobOutput(job, job.lineCarry.slice(0, newlineIndex + 1))
+    job.lineCarry = job.lineCarry.slice(newlineIndex + 1)
+    newlineIndex = job.lineCarry.indexOf('\n')
+  }
+  if (job.lineCarry.length > MAX_LINE_BYTES) {
+    emitJobOutput(job, job.lineCarry)
+    job.lineCarry = ''
+  }
+}
+
+/**
+ * Flush any retained partial trailing line as a final `output` event. Called
+ * on a settled job's final drain so a last line without a newline is not lost.
+ * No-op when the carry is empty.
+ */
+export function flushJobLineCarry(job: BackgroundJob): void {
+  if (job.lineCarry && job.lineCarry.length > 0) {
+    emitJobOutput(job, job.lineCarry)
+    job.lineCarry = ''
+  }
+}
+
+/**
+ * Return the current retained partial trailing line (bytes drained after the
+ * last newline) WITHOUT emitting or clearing it. Lets a consumer's wait_for
+ * match window see text that has been drained from the log but not yet
+ * emitted as a per-line registry `output` event. Read-only; never mutates.
+ */
+export function peekJobLineCarry(job: BackgroundJob): string {
+  return job.lineCarry ?? ''
 }
 
 function getBackgroundJobFilePath(
@@ -464,6 +564,9 @@ export function startBackgroundJob(params: {
   const { command, shell, shellArgs, cwd, env } = params
   const owner = params.owner ?? UNKNOWN_JOB_OWNER
   sweepOrphanedJobFiles()
+  // Bound the Map at every spawn to the jobs settled within the TTL window,
+  // so a long agent session does not accumulate dead process handles.
+  pruneSettledJobs()
   // The registry issues the job id; the on-disk log/metadata file names are
   // derived from it so cross-session recovery can find them by id.
   const jobId = jobRegistry.create({
@@ -476,7 +579,7 @@ export function startBackgroundJob(params: {
   // Reject pre-existing symlinks at both paths before opening for write.
   // safeCreateJobLogFile/safeWriteJobMetadata also use O_EXCL + O_NOFOLLOW so
   // pre-created regular files and TOCTOU symlink swaps are rejected at open().
-  let outFd: number
+  let outFd: number | undefined
   let child: ChildProcess
   try {
     rejectIfSymlink(logFile)
@@ -489,6 +592,24 @@ export function startBackgroundJob(params: {
       detached: os.platform() !== 'win32',
     })
   } catch (error) {
+    // If safeCreateJobLogFile succeeded but spawn threw, the already-opened
+    // log fd would otherwise leak. Close it best-effort before folding the
+    // failed spawn into the registry.
+    if (typeof outFd === 'number') {
+      try {
+        fs.closeSync(outFd)
+      } catch {
+        // already closed
+      }
+    }
+    // The log file was created exclusively for this spawn (O_EXCL); on a failed
+    // spawn nobody else can own it, so remove it best-effort rather than leaving
+    // an empty temp file behind until the 24h+ orphan sweep.
+    try {
+      fs.unlinkSync(logFile)
+    } catch {
+      // best-effort; the orphan sweep will clean it up if removal fails
+    }
     // Fold the failed spawn into the registry so the freshly-created id does
     // not linger as a queued job (queued only transitions via running).
     jobRegistry.start(jobId)
@@ -510,6 +631,9 @@ export function startBackgroundJob(params: {
     exitCode: null,
     startedAt: Date.now(),
     readOffset: 0,
+    // Live jobs own their drainer on the logQuotaTimer interval below; this
+    // flag tells check_job NOT to drain them (see check-job.ts).
+    hasLiveDrainer: true,
     decoder: new StringDecoder('utf8'),
     owner,
     childProcessStartTime: child.pid
@@ -521,6 +645,13 @@ export function startBackgroundJob(params: {
   let quotaExceeded = false
   const logQuotaTimer = setInterval(() => {
     try {
+      // Job-owned drainer: drain newly-written log bytes into the registry as
+      // per-line output events FIRST, independently of check_job. This MUST
+      // run before the quota early-return below — otherwise a normal-sized job
+      // (the common case, size <= MAX_BACKGROUND_LOG_BYTES) would never drain.
+      // The gate in check-job.ts ensures a live job is drained only here, so
+      // the shared readOffset/decoder/lineCarry cursor is never double-drained.
+      readNewJobOutput(job)
       const size = fs.statSync(logFile).size
       if (size <= MAX_BACKGROUND_LOG_BYTES) return
       if (!quotaExceeded) {
@@ -583,6 +714,13 @@ export function startBackgroundJob(params: {
         // best-effort truncation; the exit path owns final cleanup
       }
     }
+    // Final drain BEFORE settle + closeLog: capture any bytes written between
+    // the last interval tick and exit, then flush the partial trailing line so
+    // a last line without a newline is not lost. closeLog() clears the
+    // interval, so this must precede it; JS single-threading guarantees the
+    // interval callback cannot interleave with this handler.
+    readNewJobOutput(job)
+    flushJobLineCarry(job)
     // Terminal lifecycle is emitted exactly once per job: the registry folds
     // the first transition in and ignores this one when kill/quota already
     // settled the job, keeping the final state/exit code servable after exit.
@@ -590,6 +728,9 @@ export function startBackgroundJob(params: {
     closeLog()
   })
   child.on('error', (error) => {
+    // Final drain + carry flush before settle (same ordering as exit above).
+    readNewJobOutput(job)
+    flushJobLineCarry(job)
     settleBackgroundJob(job, 'error', job.exitCode, error.message)
     closeLog()
   })
@@ -613,6 +754,17 @@ function isUnknownJobOwner(owner: BackgroundJobOwner | undefined): boolean {
  * an already-real owner is never overwritten (prevents cross-run ownership
  * laundering, SEC-2). Returns undefined when no upgrade applies so callers
  * fall back to the existing owner.
+ *
+ * Ownerless recovered jobs (UNKNOWN_JOB_OWNER / missing owner on disk) are
+ * restamped by the FIRST check_job caller that supplies a trusted
+ * restampOwner. That is intentional first-claimer semantics for orphan
+ * recovery: any trusted session may claim an ownerless job, after which
+ * assertOwned binds it to that owner. Cross-session first-claimer laundering
+ * of ALREADY-OWNED jobs is prevented by the already-real-owner gate above;
+ * only UNKNOWN_JOB_OWNER jobs are claimable. If product policy later requires
+ * that solely the spawning session may claim ownerless jobs, gate the upgrade
+ * here (e.g. match restampOwner to spawn metadata) rather than relaxing the
+ * already-real-owner check.
  */
 function resolveRestampedOwner(
   currentOwner: BackgroundJobOwner | undefined,
@@ -623,10 +775,43 @@ function resolveRestampedOwner(
   return restampOwner
 }
 
+/**
+ * Resolve a process adapter for a *registry* job id (list_jobs iteration).
+ *
+ * The adapter Map is keyed by the user-facing jobId. Live spawns use the same
+ * id for both Map key and registry. Recovered / `__registerJobForTest` jobs
+ * remap: Map key = disk/user jobId, `registryJobId` = fresh registry id. A
+ * direct `jobs.get(registryId)` therefore misses remapped adapters — reverse-
+ * scan by `registryJobId ?? jobId` so list_jobs can read `lastCheckCursor` /
+ * lineCarry and expose the user-facing `adapter.jobId` that check_job/kill_job
+ * resolve via `getBackgroundJob`.
+ */
+export function getBackgroundJobForRegistryId(
+  registryJobId: string,
+): BackgroundJob | undefined {
+  pruneSettledJobs()
+  const direct = jobs.get(registryJobId)
+  if (direct !== undefined) {
+    const backing = direct.registryJobId ?? direct.jobId
+    if (backing === registryJobId) return direct
+  }
+  for (const job of jobs.values()) {
+    if ((job.registryJobId ?? job.jobId) === registryJobId) {
+      return job
+    }
+  }
+  return undefined
+}
+
 export function getBackgroundJob(
   jobId: string,
   opts?: { restampOwner?: BackgroundJobOwner },
 ): BackgroundJob | undefined {
+  // Lazily amortize the settled-job sweep on the hottest read path: a
+  // settle→read within TTL stays registry-consistent (the shared registry
+  // sweeps settled entries on its own TTL, so a cached adapter job must not
+  // outlive the registry record that serves it).
+  pruneSettledJobs()
   const existing = jobs.get(jobId)
   if (existing) {
     // Re-attach path: a job first recovered without a trusted owner is cached
@@ -651,6 +836,17 @@ export function getBackgroundJob(
 
   const recovered = recoverBackgroundJob(jobId)
   if (recovered) {
+    // Post-TTL settled recoveries must not re-enter the live Map or create a
+    // fresh registry row (that would reset completedAt and defeat pruning).
+    // Leave orphan disk files for the existing 24h orphan sweep.
+    if (
+      recovered.status !== 'running' &&
+      recovered.settledAt !== undefined &&
+      Date.now() - recovered.settledAt > SETTLED_JOB_TTL_MS
+    ) {
+      return undefined
+    }
+
     jobs.set(jobId, recovered)
     // Re-emit the recovered job into the registry, which is the live source
     // of truth for state/ownership. The registry allocates its own ids, so
@@ -707,8 +903,12 @@ function recoverBackgroundJob(jobId: string): BackgroundJob | undefined {
       return undefined
     }
 
+    // Disk may still say 'running' while the process is gone; promote to
+    // 'lost' at recovery time. That promotion is a *new* terminal discovery,
+    // not an old settle — see settledAt below.
+    const wasRunningOnDisk = metadata.status === 'running'
     const status =
-      metadata.status === 'running' &&
+      wasRunningOnDisk &&
       (metadata.processId === null || !isProcessAlive(metadata.processId))
         ? 'lost'
         : metadata.status
@@ -724,6 +924,27 @@ function recoverBackgroundJob(jobId: string): BackgroundJob | undefined {
 
     metadataFilesCreatedByThisProcess.add(metadataFile)
 
+    // Terminal recoveries always carry a settledAt stamp so prune/get can
+    // honor the TTL.
+    // - Prefer the persisted field when present.
+    // - If disk said running and we just promoted to lost, stamp NOW so a
+    //   freshly-discovered dead process is not rejected as post-TTL (startedAt
+    //   can be arbitrarily old and would defeat recovery of dead 'running'
+    //   jobs).
+    // - Already-terminal disk rows without settledAt fall back to startedAt
+    //   as a conservative lower bound for older metadata.
+    // - Still-running recoveries leave settledAt undefined so they stay
+    //   cacheable.
+    const settledAt =
+      status === 'running'
+        ? undefined
+        : typeof metadata.settledAt === 'number' &&
+            Number.isFinite(metadata.settledAt)
+          ? metadata.settledAt
+          : wasRunningOnDisk
+            ? Date.now()
+            : metadata.startedAt
+
     return {
       jobId,
       command: metadata.command,
@@ -736,6 +957,7 @@ function recoverBackgroundJob(jobId: string): BackgroundJob | undefined {
       readOffset,
       decoder: new StringDecoder('utf8'),
       owner,
+      settledAt,
       childProcessStartTime:
         typeof metadata.childProcessStartTime === 'string'
           ? metadata.childProcessStartTime
@@ -844,12 +1066,12 @@ export function killBackgroundJob(
 
   const pid = job.child.pid
   if (!pid) {
-    job.status = 'error'
-    jobRegistry.emit(registryJobIdFor(job), {
-      type: 'lifecycle',
-      state: 'error',
-      error: `Background job "${jobId}" has no process id to kill.`,
-    })
+    settleBackgroundJob(
+      job,
+      'error',
+      job.exitCode,
+      `Background job "${jobId}" has no process id to kill.`,
+    )
     return {
       jobId,
       errorMessage: `Background job "${jobId}" has no process id to kill.`,
@@ -917,7 +1139,7 @@ export function readNewJobOutput(job: BackgroundJob): string {
       if (job.status !== 'running' && job.decoder) {
         const final = job.decoder.end()
         job.decoder = new StringDecoder('utf8')
-        emitJobOutput(job, final)
+        emitJobOutputLines(job, final)
         return final
       }
       return ''
@@ -941,7 +1163,7 @@ export function readNewJobOutput(job: BackgroundJob): string {
     }
     job.decoder ??= new StringDecoder('utf8')
     const text = job.decoder.write(buf.subarray(0, bytesRead))
-    emitJobOutput(job, text)
+    emitJobOutputLines(job, text)
     return text
   } catch {
     return ''
@@ -969,6 +1191,39 @@ export function __registerJobForTest(job: BackgroundJob): void {
       exitCode: job.exitCode,
     })
   }
+}
+
+/**
+ * Test-only: set/create a Map adapter keyed by registry jobId (production id shape).
+ * Used only by tests so list_jobs can observe a same-id lastCheckCursor without
+ * `__registerJobForTest`'s dual-id remapping.
+ */
+export function __setLastCheckCursorForTest(
+  jobId: string,
+  lastCheckCursor: number,
+  owner?: BackgroundJobOwner,
+): void {
+  const existing = jobs.get(jobId)
+  if (existing) {
+    existing.lastCheckCursor = lastCheckCursor
+    return
+  }
+  // Minimal adapter stub only — do not call jobRegistry.create (caller owns the
+  // registry row under the same jobId as production live spawns).
+  jobs.set(jobId, {
+    jobId,
+    registryJobId: jobId,
+    command: 'test',
+    child: {} as ChildProcess,
+    logFile: path.join(os.tmpdir(), `openbuff-${jobId}.log`),
+    metadataFile: path.join(os.tmpdir(), `openbuff-${jobId}.json`),
+    status: 'running',
+    exitCode: null,
+    startedAt: Date.now(),
+    readOffset: 0,
+    lastCheckCursor,
+    owner,
+  })
 }
 
 /** Test-only: clear the registry between tests. */

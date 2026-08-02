@@ -1,6 +1,7 @@
 import {
   getBackgroundJob,
   killBackgroundJob,
+  peekJobLineCarry,
   readNewJobOutput,
 } from './background-jobs'
 
@@ -22,10 +23,6 @@ const POLL_INTERVAL_MS = 200
  */
 export const CHECK_JOB_POLL_ACCUMULATION_CAP = CHECK_JOB_OUTPUT_LIMIT * 2
 const COLLECTED_TAIL_KEEP = Math.floor(CHECK_JOB_OUTPUT_LIMIT / 4)
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
 
 /** Registry-side id backing this adapter job (recovered jobs are remapped). */
 function registryIdFor(job: { jobId: string; registryJobId?: string }): string {
@@ -71,6 +68,47 @@ export function appendBoundedCollected(
   const tail = combined.slice(combined.length - COLLECTED_TAIL_KEEP)
   const overflow = combined.length - headKeep - COLLECTED_TAIL_KEEP
   return head + `\n…[poll truncated ${overflow} chars mid-stream]\n` + tail
+}
+
+/**
+ * Bound the returned `events` to at most `limit` characters of `output` data,
+ * keeping the NEWEST output (tail-biased: the most recent output is the most
+ * useful for a status check). Non-output events (lifecycle/status) are always
+ * retained regardless of the limit. When the newest output event alone exceeds
+ * the remaining budget, its `data` is sliced to keep only the tail. Returns the
+ * bounded event list (original relative order preserved) and whether any output
+ * was dropped or sliced. `nextCursor` is unaffected by this presentation cap;
+ * the caller folds `truncated` into its own truncated flag.
+ */
+export function boundEventsToOutputTail(
+  events: JobEvent[],
+  limit: number,
+): { events: JobEvent[]; truncated: boolean } {
+  const result: JobEvent[] = []
+  let remaining = limit
+  let truncated = false
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]
+    if (event.payload.type !== 'output') {
+      result.unshift(event)
+      continue
+    }
+    const data = event.payload.data
+    if (data.length <= remaining) {
+      result.unshift(event)
+      remaining -= data.length
+    } else if (remaining > 0) {
+      result.unshift({
+        ...event,
+        payload: { type: 'output', data: data.slice(data.length - remaining) },
+      })
+      remaining = 0
+      truncated = true
+    } else {
+      truncated = true
+    }
+  }
+  return { events: result, truncated }
 }
 
 /**
@@ -152,18 +190,17 @@ export async function checkJob(params: {
       },
     ]
   }
-  // Per-consumer cursor into the registry event stream. The first poll
-  // adopts the adapter's already-mirrored output as consumed (readOffset),
-  // then tracks the registry sequence so events never repeat across calls.
-  const initialSnapshot = jobRegistry.snapshot(registryJobId, 0)
-  // Entry cursor into the registry event stream. Re-snapshotting from this
-  // cursor before returning yields the FULL window matching `nextCursor`, so a
-  // multi-iteration follow returns every `output` event emitted before the
-  // match/exit/timeout — not just the final poll's batch (which would drop
-  // earlier events while advancing `nextCursor` past them).
-  const entryCursor = initialSnapshot?.nextCursor ?? 0
+  // Per-adapter registry consumer cursor (lastCheckCursor). Independent of the
+  // live drainer's readOffset: bytes the 250ms interval already mirrored into
+  // the registry are still unconsumed by check_job until returned here.
+  // Default 0 so the first poll observes prior registry events (including
+  // pre-drained live output); subsequent polls advance from the prior return.
+  // Re-snapshotting from entryCursor before returning yields the FULL window
+  // matching `nextCursor`, so a multi-iteration follow returns every `output`
+  // event emitted before the match/exit/timeout — not just the final poll's
+  // batch (which would drop earlier events while advancing `nextCursor`).
+  const entryCursor = job.lastCheckCursor ?? 0
   let cursor = entryCursor
-  let dropped = initialSnapshot?.dropped ?? 0
   let truncated = false
   let collected = ''
   // `matched` latches across poll iterations. The wait_for pattern is matched
@@ -171,22 +208,27 @@ export async function checkJob(params: {
   // the window is bounded, so it is detected even when it lands in the middle
   // of a large chunk that appendBoundedCollected would drop. Latching means a
   // match found in an earlier iteration is never lost when the buffer is later
-  // truncated. With no wait_for, poll/follow returns as soon as the job settles
-  // or the deadline elapses, so matched starts true.
-  let matched = !waitFor
+  // truncated. `matched` is purely the wait_for latch: it starts false and is
+  // only ever set true when a wait_for needle is found. Poll mode (and follow
+  // without wait_for) exits via the finished/deadline terms instead.
+  let matched = false
   // Cap accumulation during polling so a long-running chatty job can't OOM
   // the agent runtime before the follow timeout fires. `collected` is only
   // the wait_for match window (kept as head + tail with a marker); the
   // returned output events are bounded separately by the registry's per-job
   // event/byte ring buffer.
   while (true) {
-    // Drain newly-written log bytes into the registry as output events.
-    readNewJobOutput(job)
+    // Drain newly-written log bytes into the registry as output events — but
+    // ONLY for jobs without a live drainer. A live job (spawned by
+    // startBackgroundJob) is drained by its own 250ms interval; draining it
+    // here too would corrupt the shared readOffset/decoder/lineCarry cursor.
+    // Recovered and test-registered jobs have no interval, so they still drain
+    // here.
+    if (!job.hasLiveDrainer) readNewJobOutput(job)
     const snapshot = jobRegistry.snapshot(registryJobId, cursor)
     const newEvents = snapshot?.events ?? []
     if (snapshot) {
       cursor = snapshot.nextCursor
-      dropped = snapshot.dropped
       truncated = truncated || snapshot.truncated
     }
     const chunk = outputEventsText(newEvents)
@@ -194,8 +236,23 @@ export async function checkJob(params: {
     // window (the retained match window plus this chunk) BEFORE truncating, so
     // a pattern is matched even when it lands in the middle of a large chunk —
     // the region appendBoundedCollected drops. The result latches so it is not
-    // lost when the buffer is subsequently bounded.
-    if (waitFor && !matched && (collected + chunk).includes(waitFor)) {
+    // lost when the buffer is subsequently bounded. Also include the pending
+    // partial line (peekJobLineCarry) in this transient test ONLY so a needle
+    // that lands in an unterminated partial line — drained from the log but not
+    // yet emitted as a per-line registry `output` event — is still matchable;
+    // the carry is NOT folded into `collected` (that must stay bounded and
+    // event-derived, or it would double-count once the line is later emitted).
+    // For a live job (hasLiveDrainer) this `wait_for` window includes the
+    // pending lineCarry, so checkJob can return matched:true while the
+    // corresponding needle has NOT yet appeared in the returned events/
+    // outputText for that same response — the event is emitted on the next
+    // drain (≤250ms). This transient inconsistency is intentional and bounded
+    // by MAX_LINE_BYTES, not a bug.
+    if (
+      waitFor &&
+      !matched &&
+      (collected + chunk + peekJobLineCarry(job)).includes(waitFor)
+    ) {
       matched = true
     }
     // Bound the match window so a chatty long-running job can't grow
@@ -221,10 +278,22 @@ export async function checkJob(params: {
       // output it would otherwise never be able to refetch. Bounded by the
       // registry's per-job event/byte ring buffer.
       const finalSnapshot = jobRegistry.snapshot(registryJobId, entryCursor)
-      const events = finalSnapshot?.events ?? newEvents
+      const rawEvents = finalSnapshot?.events ?? newEvents
+      const boundedResult = boundEventsToOutputTail(
+        rawEvents,
+        CHECK_JOB_OUTPUT_LIMIT,
+      )
+      const events = boundedResult.events
       const nextCursor = finalSnapshot?.nextCursor ?? cursor
-      const finalDropped = finalSnapshot?.dropped ?? dropped
-      const finalTruncated = truncated || (finalSnapshot?.truncated ?? false)
+      // Advance the per-adapter consumer cursor so the next check_job does not
+      // re-serve these events. Mirrored-by-live-drainer is not the same as
+      // consumed-by-check_job; only this advance marks consumption.
+      job.lastCheckCursor = nextCursor
+      const finalDropped = finalSnapshot?.dropped ?? 0
+      const finalTruncated =
+        truncated ||
+        (finalSnapshot?.truncated ?? false) ||
+        boundedResult.truncated
       const baseValue: {
         jobId: string
         state: JobState
@@ -294,6 +363,20 @@ export async function checkJob(params: {
         },
       ]
     }
-    await sleep(POLL_INTERVAL_MS)
+    // Event-driven wake, used purely as a smarter sleep: wait() is the WAKE
+    // signal only (not the matcher — matching stays above, over the drained
+    // registry events). The POLL_INTERVAL_MS (200) cap preserves the periodic
+    // re-drain cadence for non-live (recovered/test) jobs, which are drained
+    // at the top of the loop; live jobs wake earlier on their own events.
+    // `remaining > 0` is guaranteed here because the `Date.now() >= deadline`
+    // exit check immediately above already returned otherwise. Poll mode
+    // (timeoutMs entry === 0, deadline ≈ entry time) returns on iteration 1
+    // before ever reaching this line, so wait() never blocks a poll. No
+    // predicate is passed and the return value is ignored.
+    const remaining = deadline - Date.now()
+    await jobRegistry.wait(registryJobId, {
+      timeoutMs: Math.min(POLL_INTERVAL_MS, remaining),
+      cursor,
+    })
   }
 }

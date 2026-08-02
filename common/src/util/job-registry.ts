@@ -72,8 +72,8 @@ export interface JobOwner {
  * invocations or registry test fixtures). It must NEVER be attributed to a
  * real run: owner-scoped consumers (such as the SDK run loop's live
  * job-event forwarding) explicitly refuse to forward jobs stamped with this
- * owner because they are unattributable. `sdk/src/tools/background-jobs.ts`
- * keeps its own private copy of the same value for stamping ownerless spawns.
+ * owner because they are unattributable. The SDK imports this single source
+ * directly for stamping ownerless spawns (no private copy).
  */
 export const UNKNOWN_JOB_OWNER: JobOwner = {
   clientSessionId: 'unknown-session',
@@ -802,10 +802,17 @@ export class JobRegistry {
     if (record.bufferedBytes < 0) record.bufferedBytes = 0
   }
 
-  /** Whether any buffered event has sequence <= cursor (i.e. a visible gap). */
+  /**
+   * Whether events the consumer has not yet seen were evicted before it could
+   * read them (a real gap in its stream). A gap exists when the lowest
+   * retained sequence is more than one past the cursor: the consumer wants
+   * `cursor + 1` next, so a first retained sequence greater than that means
+   * the events in between were dropped. A healthy buffer that merely still
+   * holds already-consumed events (first.sequence <= cursor) is NOT a gap.
+   */
   private truncatedAtCursor(record: JobRecord, cursor: number): boolean {
     const first = record.events[0]
-    return first !== undefined && first.sequence <= cursor
+    return first !== undefined && first.sequence > cursor + 1
   }
 
   /**

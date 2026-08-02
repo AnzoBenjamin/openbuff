@@ -8,8 +8,12 @@ import {
   __registerJobForTest,
   __sweepOrphanedJobFilesForTest,
   getBackgroundJob,
+  killBackgroundJob,
+  peekJobLineCarry,
+  pruneSettledJobs,
   readNewJobOutput,
   MAX_BACKGROUND_READ_BYTES,
+  MAX_LINE_BYTES,
   type BackgroundJob,
 } from '../tools/background-jobs'
 import {
@@ -17,7 +21,10 @@ import {
   appendBoundedCollected,
   checkJob,
 } from '../tools/check-job'
-import { jobRegistry } from '@codebuff/common/util/job-registry'
+import {
+  SETTLED_JOB_TTL_MS,
+  jobRegistry,
+} from '@codebuff/common/util/job-registry'
 
 /** Flatten the unified `output` events of a checkJob result into a string. */
 function outputText(result: any): string {
@@ -121,6 +128,37 @@ describe('readNewJobOutput', () => {
     expect(readNewJobOutput(job)).toBe('x')
   })
 
+  test('force-flushes lineCarry once a newline-less flood exceeds MAX_LINE_BYTES', () => {
+    // A chatty child with no line terminators must not grow lineCarry without
+    // bound: emitJobOutputLines force-emits once carry exceeds MAX_LINE_BYTES
+    // and resets it so the next drain starts fresh.
+    const job = makeJob()
+    const flood = 'x'.repeat(MAX_LINE_BYTES + 100)
+    fs.appendFileSync(job.logFile, flood)
+
+    // One read is enough: flood is under MAX_BACKGROUND_READ_BYTES. Loop in case
+    // the cap or read path changes so the flood still fully drains.
+    for (let i = 0; i < 10; i++) {
+      const chunk = readNewJobOutput(job)
+      if (chunk === '' && peekJobLineCarry(job) === '') break
+    }
+
+    expect(peekJobLineCarry(job)).toBe('')
+    const registryId = job.registryJobId ?? job.jobId
+    const snapshot = jobRegistry.snapshot(registryId, 0)
+    const outputEvents = (snapshot?.events ?? []).filter(
+      (event) => event.payload.type === 'output',
+    )
+    expect(outputEvents.length).toBeGreaterThanOrEqual(1)
+    const combined = outputEvents
+      .map((event) =>
+        event.payload.type === 'output' ? event.payload.data : '',
+      )
+      .join('')
+    expect(combined.length).toBeGreaterThanOrEqual(MAX_LINE_BYTES)
+    expect(combined).toBe(flood)
+  })
+
   test('does not follow a job log symlink swapped in before reading', () => {
     const job = makeJob()
     const secretLog = path.join(
@@ -156,6 +194,94 @@ describe('checkJob', () => {
     expect(outputText(second)).toBe('line two\n')
   })
 
+  test('hasLiveDrainer: pre-drained registry output appears in the first poll', async () => {
+    // Live jobs are drained by the 250ms interval into the registry BEFORE
+    // check_job runs. Simulate that path: drain once via readNewJobOutput,
+    // then mark hasLiveDrainer so check_job must NOT re-drain (single-drainer
+    // contract for readOffset/decoder/lineCarry). Output already in the
+    // registry must still appear — lastCheckCursor starts at 0, not the tip.
+    const job = makeJob()
+    fs.appendFileSync(job.logFile, 'live-pre-drained\n')
+    expect(readNewJobOutput(job)).toBe('live-pre-drained\n')
+    const offsetAfterLiveDrain = job.readOffset
+    job.hasLiveDrainer = true
+
+    const first = value(
+      await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+    )
+    expect(outputText(first)).toBe('live-pre-drained\n')
+    expect(first.state).toBe('running')
+    // Single-drainer: check_job must not advance the shared file cursor.
+    expect(job.readOffset).toBe(offsetAfterLiveDrain)
+
+    // Second poll must not re-serve the same events (lastCheckCursor advanced).
+    const second = value(
+      await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+    )
+    expect(outputText(second)).toBe('')
+    expect(job.readOffset).toBe(offsetAfterLiveDrain)
+  })
+
+  test('hasLiveDrainer: wait_for matches a needle already emitted before checkJob entry', async () => {
+    // Needle was mirrored by the live drainer (or equivalent pre-drain) into
+    // the registry before check_job ran. Poll-mode wait_for must match it
+    // immediately — not wait for new bytes — and must not double-drain.
+    const job = makeJob()
+    fs.appendFileSync(job.logFile, 'boot\nListening on :3000\n')
+    expect(readNewJobOutput(job)).toContain('Listening on :3000')
+    const offsetAfterLiveDrain = job.readOffset
+    job.hasLiveDrainer = true
+
+    const result = value(
+      await checkJob({
+        jobId: job.jobId,
+        wait_for: 'Listening on',
+        owner: TRUSTED_OWNER,
+      }),
+    )
+    expect(result.matched).toBe(true)
+    expect(outputText(result)).toContain('Listening on :3000')
+    expect(result.timedOut).toBeUndefined()
+    expect(job.readOffset).toBe(offsetAfterLiveDrain)
+  })
+
+  test('wait_for matches only via peekJobLineCarry for an unterminated partial line', async () => {
+    // Documented live-drainer match-vs-events lag: a needle drained into
+    // lineCarry (no trailing newline yet) is matchable via peekJobLineCarry
+    // even though no complete per-line registry `output` event has been
+    // emitted for it yet. matched can be true while events/outputText lag.
+    const job = makeJob()
+    const partial = 'Ready > Listening on :3000'
+    fs.appendFileSync(job.logFile, partial)
+
+    expect(readNewJobOutput(job)).toBe(partial)
+    expect(peekJobLineCarry(job)).toContain('Listening on')
+
+    const registryId = job.registryJobId ?? job.jobId
+    const preMatchSnapshot = jobRegistry.snapshot(registryId, 0)
+    const preMatchOutput = (preMatchSnapshot?.events ?? [])
+      .filter((event) => event.payload.type === 'output')
+      .map((event) =>
+        event.payload.type === 'output' ? event.payload.data : '',
+      )
+      .join('')
+    expect(preMatchOutput).not.toContain('Listening on')
+
+    const result = value(
+      await checkJob({
+        jobId: job.jobId,
+        wait_for: 'Listening on',
+        owner: TRUSTED_OWNER,
+      }),
+    )
+    expect(result.matched).toBe(true)
+    expect(result.state).toBe('running')
+    expect(result.timedOut).toBeUndefined()
+    // Carry still holds the unterminated needle; events need not include it.
+    expect(peekJobLineCarry(job)).toContain('Listening on')
+    expect(outputText(result)).not.toContain('Listening on')
+  })
+
   test('follow mode returns matched=true once the pattern is present', async () => {
     const job = makeJob()
     fs.appendFileSync(job.logFile, 'starting...\nListening on :3000\n')
@@ -188,6 +314,50 @@ describe('checkJob', () => {
       }),
     )
     // Pattern is absent, but the call returned immediately rather than blocking.
+    expect(result.matched).toBe(false)
+    expect(result.state).toBe('running')
+    expect(result.timedOut).toBeUndefined()
+    expect(outputText(result)).toContain('still starting...')
+  })
+
+  test('poll mode returns matched=true immediately when wait_for is already present in current output', async () => {
+    // Direct complement to 'wait_for without timeout_seconds': blocking is
+    // governed solely by timeout_seconds, so with the field omitted the call
+    // performs a single non-blocking poll. Here the needle is ALREADY in the
+    // current output, so it must return matched=true immediately rather than
+    // block waiting for a later iteration (which would hang the suite).
+    const job = makeJob()
+    fs.appendFileSync(job.logFile, 'ready\nListening on :3000\n')
+
+    const result = value(
+      await checkJob({
+        jobId: job.jobId,
+        wait_for: 'Listening on',
+        owner: TRUSTED_OWNER,
+      }),
+    )
+    expect(result.matched).toBe(true)
+    expect(result.state).toBe('running')
+    expect(result.timedOut).toBeUndefined()
+    expect(outputText(result)).toContain('Listening on :3000')
+  })
+
+  test('an explicit zero timeout (timeout_seconds: 0) is poll mode: returns immediately with wait_for evaluated against current output', async () => {
+    // An explicit `timeout_seconds: 0` is treated identically to an unset
+    // timeout: both are poll mode (non-blocking). The needle is absent from
+    // the current output, so the single-poll call returns immediately with
+    // matched=false and no timeout.
+    const job = makeJob()
+    fs.appendFileSync(job.logFile, 'still starting...\n')
+
+    const result = value(
+      await checkJob({
+        jobId: job.jobId,
+        wait_for: 'Listening on',
+        timeout_seconds: 0,
+        owner: TRUSTED_OWNER,
+      }),
+    )
     expect(result.matched).toBe(false)
     expect(result.state).toBe('running')
     expect(result.timedOut).toBeUndefined()
@@ -292,6 +462,53 @@ describe('checkJob', () => {
     expect(job.status).toBe('running')
   })
 
+  test('follow without wait_for times out on a still-running job without killing it', async () => {
+    const job = makeJob()
+
+    const result = value(
+      await withElapsedFollowTimeout(() =>
+        checkJob({
+          jobId: job.jobId,
+          timeout_seconds: 1,
+          owner: TRUSTED_OWNER,
+        }),
+      ),
+    )
+
+    expect(result).toMatchObject({
+      jobId: job.jobId,
+      state: 'running',
+      timedOut: true,
+    })
+    // No wait_for, so no matched field is emitted.
+    expect(result.matched).toBeUndefined()
+    expect(result.killed).toBeUndefined()
+    expect(job.status).toBe('running')
+  })
+
+  test('follow without wait_for returns completed state when the job finishes', async () => {
+    const job = makeJob({ status: 'completed', exitCode: 0 })
+    fs.appendFileSync(job.logFile, 'done\n')
+
+    const result = value(
+      await withElapsedFollowTimeout(() =>
+        checkJob({
+          jobId: job.jobId,
+          timeout_seconds: 1,
+          owner: TRUSTED_OWNER,
+        }),
+      ),
+    )
+
+    expect(result).toMatchObject({
+      jobId: job.jobId,
+      state: 'completed',
+      exitCode: 0,
+    })
+    expect(result.timedOut).toBeUndefined()
+    expect(result.matched).toBeUndefined()
+  })
+
   test('follow timeout kills a running job when kill_on_timeout is true', async () => {
     let killCalled = false
     const job = makeJob({
@@ -349,6 +566,78 @@ describe('checkJob', () => {
     expect(result.killed).toBe(true)
     expect(typeof result.errorMessage).toBe('string')
     expect(result.errorMessage.length).toBeGreaterThan(0)
+  })
+
+  test('bounds a single oversized output event to the tail of the limit', async () => {
+    const CHECK_JOB_OUTPUT_LIMIT = 50_000
+    const job = makeJob()
+    // One log write larger than the output limit. readNewJobOutput caps a
+    // single read at MAX_BACKGROUND_READ_BYTES, so drain in a short loop until
+    // the whole blob has been mirrored into the registry, then assert whatever
+    // a single poll returns is bounded to the tail of the limit.
+    fs.appendFileSync(job.logFile, 'x'.repeat(CHECK_JOB_OUTPUT_LIMIT * 3))
+
+    let result: any
+    for (let i = 0; i < 50; i++) {
+      result = value(await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }))
+      if (readNewJobOutput(job) === '') break
+    }
+
+    const text = outputText(result)
+    expect(text.length).toBeLessThanOrEqual(CHECK_JOB_OUTPUT_LIMIT)
+    if (text.length >= CHECK_JOB_OUTPUT_LIMIT) {
+      expect(result.truncated).toBe(true)
+    }
+  })
+
+  test('follow mode bounds in-memory accumulation for a chatty long-running job', async () => {
+    // The follow loop accumulates drained output into an in-memory match
+    // window (`collected`) across every poll iteration. A chatty job emitting
+    // far more output than CHECK_JOB_POLL_ACCUMULATION_CAP must never grow
+    // that window unbounded (which would OOM the runtime); the returned
+    // `events` are similarly capped. This test locks the bound in at the
+    // checkJob boundary, where the loop's internal `collected` is observable
+    // only through the response.
+    const job = makeJob()
+    // readNewJobOutput caps a single read at MAX_BACKGROUND_READ_BYTES, so the
+    // follow loop drains the oversized blob across many bounded iterations:
+    // exactly the chatty long-running scenario this guard protects against.
+    fs.appendFileSync(
+      job.logFile,
+      'x'.repeat(CHECK_JOB_POLL_ACCUMULATION_CAP * 3 + 1),
+    )
+
+    // The wait_for needle is absent from the written bytes, so the loop never
+    // matches and keeps draining/bounding iterations until the (deterministic,
+    // fast) follow deadline elapses.
+    const result = value(
+      await withElapsedFollowTimeout(() =>
+        checkJob({
+          jobId: job.jobId,
+          wait_for: 'NEVER-APPEARS',
+          // timeout_seconds must be 1 (not 5): withElapsedFollowTimeout pins
+          // Date.now at 2001 after the first call, so a 5s timeout yields a
+          // deadline of 6000 that 2001 can never reach — the follow loop would
+          // spin forever and the test would time out. A 1s timeout gives a
+          // deadline of 2000 that 2001 clears immediately, bounding the loop.
+          timeout_seconds: 1,
+          owner: TRUSTED_OWNER,
+        }),
+      ),
+    )
+
+    // The match window over the giant input exceeds the accumulation cap, so
+    // the response is bounded and marked truncated.
+    expect(outputText(result).length).toBeLessThanOrEqual(
+      CHECK_JOB_POLL_ACCUMULATION_CAP,
+    )
+    expect(result.truncated).toBe(true)
+    // The job never settled and the follow deadline elapsed without a match.
+    expect(result).toMatchObject({
+      state: 'running',
+      timedOut: true,
+      matched: false,
+    })
   })
 
   test('reports completed status and exit code', async () => {
@@ -699,6 +988,118 @@ describe('checkJob', () => {
     const entry = jobRegistry.get(created.jobId)
     expect(entry?.state).toBe('completed')
     expect(entry?.completedAt).toBeDefined()
+  })
+
+  test('retains a settled job within TTL, prunes it past the TTL, never prunes running jobs, and keeps the first settledAt', () => {
+    // Settle a RUNNING job through the REAL settle path (killBackgroundJob)
+    // so settledAt is stamped for real rather than hand-injected.
+    const job = makeJob({
+      child: {
+        pid: 1234,
+        kill: () => true,
+      } as unknown as BackgroundJob['child'],
+    })
+    const killResult = killBackgroundJob(job.jobId)
+    expect('killed' in killResult).toBe(true)
+    expect('killed' in killResult ? killResult.killed : false).toBe(true)
+    expect(job.status).toBe('stopped')
+    expect(job.settledAt).toBeDefined()
+    const settledAt = job.settledAt!
+
+    // A settled job is RETAINED while within TTL (injected clock at the TTL
+    // boundary, inclusive).
+    pruneSettledJobs(settledAt + SETTLED_JOB_TTL_MS)
+    expect(getBackgroundJob(job.jobId)).toBe(job)
+
+    // Once it ages past the TTL it is PRUNED from the live Map.
+    pruneSettledJobs(settledAt + SETTLED_JOB_TTL_MS + 1)
+    expect(getBackgroundJob(job.jobId)).toBeUndefined()
+
+    // A RUNNING job (settledAt undefined) is NOT pruned even at a far-future
+    // clock.
+    const running = makeJob()
+    pruneSettledJobs(Date.now() + 365 * 24 * 60 * 60 * 1000)
+    expect(getBackgroundJob(running.jobId)).toBe(running)
+
+    // Settling the same job twice does NOT change its settledAt (idempotency):
+    // a late duplicate settle must never extend an entry's retention window.
+    const twice = makeJob({
+      child: {
+        pid: 1234,
+        kill: () => true,
+      } as unknown as BackgroundJob['child'],
+    })
+    killBackgroundJob(twice.jobId)
+    const firstStamp = twice.settledAt!
+    // Re-open the running state and settle again through the real kill path;
+    // the guard must keep the FIRST stamp.
+    twice.status = 'running'
+    const killResult2 = killBackgroundJob(twice.jobId)
+    expect('killed' in killResult2).toBe(true)
+    expect('killed' in killResult2 ? killResult2.killed : false).toBe(true)
+    expect(twice.settledAt).toBe(firstStamp)
+  })
+
+  test('does not permanently re-cache a TTL-expired settled job recovered from canonical on-disk metadata', () => {
+    // Post-TTL settled disk metadata must not re-enter the live Map or mint a
+    // fresh registry row (that would reset completedAt and defeat pruning).
+    const expiredJobId = `job-prune-recover-${++counter}`
+    const expiredLog = path.join(os.tmpdir(), `openbuff-${expiredJobId}.log`)
+    const expiredMetadata = path.join(
+      os.tmpdir(),
+      `openbuff-${expiredJobId}.json`,
+    )
+    fs.writeFileSync(expiredLog, 'done\n')
+    fs.writeFileSync(
+      expiredMetadata,
+      JSON.stringify({
+        jobId: expiredJobId,
+        command: 'echo done',
+        processId: null,
+        logFile: expiredLog,
+        status: 'completed',
+        exitCode: 0,
+        startedAt: Date.now() - SETTLED_JOB_TTL_MS - 60_000,
+        settledAt: Date.now() - SETTLED_JOB_TTL_MS - 1000,
+        owner: TRUSTED_OWNER,
+      }),
+    )
+    tempFiles.push(expiredLog, expiredMetadata)
+
+    expect(getBackgroundJob(expiredJobId)).toBeUndefined()
+    // A second call must still miss — no permanent re-cache from orphan files.
+    expect(getBackgroundJob(expiredJobId)).toBeUndefined()
+
+    // Within-TTL settled recovery must still work so final output stays servable.
+    __clearJobsForTest()
+    const freshJobId = `job-prune-recover-${++counter}`
+    const freshLog = path.join(os.tmpdir(), `openbuff-${freshJobId}.log`)
+    const freshMetadata = path.join(
+      os.tmpdir(),
+      `openbuff-${freshJobId}.json`,
+    )
+    const freshSettledAt = Date.now() - 1000
+    fs.writeFileSync(freshLog, 'done\n')
+    fs.writeFileSync(
+      freshMetadata,
+      JSON.stringify({
+        jobId: freshJobId,
+        command: 'echo done',
+        processId: null,
+        logFile: freshLog,
+        status: 'completed',
+        exitCode: 0,
+        startedAt: freshSettledAt - 1000,
+        settledAt: freshSettledAt,
+        owner: TRUSTED_OWNER,
+      }),
+    )
+    tempFiles.push(freshLog, freshMetadata)
+
+    const recovered = getBackgroundJob(freshJobId)
+    expect(recovered).toBeDefined()
+    expect(recovered?.status).toBe('completed')
+    expect(recovered?.settledAt).toBe(freshSettledAt)
   })
 })
 

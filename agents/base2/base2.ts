@@ -787,6 +787,14 @@ ${specialistRoutingSection}
         toolName: 'git_status',
         input: {},
       } as any
+      // Pushed background-job status digest (M4); list_jobs is change-informative
+      // via pending/gap fields; agentStep TTL via programmatic result path.
+      // Change-gating (suppressing an unchanged repeat digest) lives in the SDK
+      // dispatch layer (sdk/src/run.ts), not here — this agent always yields.
+      yield {
+        toolName: 'list_jobs',
+        input: {},
+      } as any
       const initialGitStatusFiles = extractGitStatusFiles(
         (initialGitStatus as any)?.toolResult,
       ).filter((file) => !activeWorkState.gatePassedFiles.includes(file))
@@ -1095,6 +1103,14 @@ ${specialistRoutingSection}
 
         const currentGitStatus = yield {
           toolName: 'git_status',
+          input: {},
+        } as any
+        // Pushed background-job status digest (M4); list_jobs is change-informative
+        // via pending/gap fields; agentStep TTL via programmatic result path.
+        // Change-gating (suppressing an unchanged repeat digest) lives in the SDK
+        // dispatch layer (sdk/src/run.ts), not here — this agent always yields.
+        yield {
+          toolName: 'list_jobs',
           input: {},
         } as any
         const gitStatusFiles = extractGitStatusFiles(
