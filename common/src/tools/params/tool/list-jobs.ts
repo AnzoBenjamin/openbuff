@@ -18,7 +18,7 @@ const inputSchema = z
 const description = `
 List the background jobs owned by the current run from the unified registry — BOTH shell jobs (kind: 'process') started by run_terminal_command and background-agent jobs (kind: 'agent') started by spawn_agents({ background: true }). This includes still-running jobs and recently settled ones (completed/error/stopped/lost/cancelled) that are retained within the session/TTL.
 
-Each job includes bucketed pending output relative to the last check_job consumer cursor for process/log output (agent jobs are listed for rediscovery and usually show pending: 'none' for line buckets) and a gap flag when events were truncated from the buffer. When gap is true, pending is a lower bound counted from only the retained (non-truncated) events after the check_job cursor — a flooded job may show pending: 'none' alongside gap: true because older events were evicted from the ring. Terminal jobs may include a short tail (last ≤10 output lines) and exitCode. The top-level note is declarative (no action required unless you need the output). Use this to rediscover jobIds after context compaction so you can check_job/read_logs/kill_job a shell job or check_background_agent an agent job. This tool takes no agent-supplied input; the owner field is runtime-managed and agents must omit it.
+Each job includes bucketed pending output relative to the last check_job consumer cursor for process/log output (agent jobs are listed for rediscovery and usually show pending: 'none' for line buckets) and a gap flag when events were truncated from the buffer. When gap is true, pending is a lower bound counted from only the retained (non-truncated) events after the check_job cursor — a flooded job may show pending: 'none' alongside gap: true because older events were evicted from the ring. Terminal jobs may include a short tail (last ≤10 output lines) and exitCode. The top-level note is declarative (no action required unless you need the output). Use this to rediscover jobIds after context compaction so you can check_job/read_logs/kill_job a shell job or check_background_agent an agent job. If nothing changed since the previous list_jobs result this turn, the tool may instead return a small suppression payload of the form { unchanged: true, note } (with no jobs field), meaning the earlier digest is still current. This tool takes no agent-supplied input; the owner field is runtime-managed and agents must omit it.
 
 Example:
 ${$getNativeToolCallExampleString({
@@ -67,7 +67,7 @@ export const listJobsParams = {
       // swaps the full digest for this payload when nothing changed — it
       // deliberately omits `jobs` so an empty array can't read as "no jobs".
       z.object({
-        unchanged: z.boolean(),
+        unchanged: z.literal(true),
         note: z.string(),
       }),
     ]),

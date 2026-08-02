@@ -147,4 +147,41 @@ describe('buildListJobsValue', () => {
     expect(capped.jobs).toHaveLength(LIST_JOBS_MAX_ROWS)
     expect(capped.truncatedCount).toBe(2)
   })
+
+  test('explicit truncatedCount emits rows as-is (no re-select, re-sort, or re-cap)', () => {
+    // startedAt ascending: a re-selection would sort descending and cap at
+    // LIST_JOBS_MAX_ROWS, so preserved order + full length prove pass-through.
+    const many = Array.from({ length: 12 }, (_, i) =>
+      row({ jobId: `j-${i}`, startedAt: i }),
+    )
+
+    const value = buildListJobsValue({ rows: many, truncatedCount: 2 })
+    expect(value.jobs).toHaveLength(many.length)
+    expect(value.jobs.map((r) => r.jobId)).toEqual(many.map((r) => r.jobId))
+    expect(value.truncatedCount).toBe(2)
+    expect(value.note).toBe(LIST_JOBS_NO_ACTION_LINE)
+
+    // Contrast: without truncatedCount the same rows are re-selected and capped.
+    const capped = buildListJobsValue({ rows: many })
+    expect(capped.jobs).toHaveLength(LIST_JOBS_MAX_ROWS)
+    expect(capped.jobs[0].jobId).toBe('j-11')
+    expect(capped.truncatedCount).toBe(2)
+  })
+
+  test('explicit truncatedCount: 0 is honored (not treated as absent)', () => {
+    // The pass-through guard is `truncatedCount !== undefined`, so a falsy
+    // zero must still skip re-selection; an `||`/truthiness regression would
+    // re-sort and re-cap these rows.
+    const many = Array.from({ length: 12 }, (_, i) =>
+      row({ jobId: `j-${i}`, startedAt: i }),
+    )
+
+    const value = buildListJobsValue({ rows: many, truncatedCount: 0 })
+    expect(value.jobs).toHaveLength(many.length)
+    expect(value.jobs.map((r) => r.jobId)).toEqual(many.map((r) => r.jobId))
+    // Zero truncation means the field is omitted from the value, but the
+    // rows were still passed through untouched.
+    expect(value.truncatedCount).toBeUndefined()
+    expect(value.note).toBe(LIST_JOBS_NO_ACTION_LINE)
+  })
 })

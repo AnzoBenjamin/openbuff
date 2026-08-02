@@ -57,6 +57,10 @@ export type ListJobsViewRow = {
 }
 
 export const LIST_JOBS_MAX_ROWS = 10
+/**
+ * Consumed by `extractTailLines` in `sdk/src/tools/list-jobs.ts` to cap the
+ * terminal tail (`lines.slice(-LIST_JOBS_MAX_TAIL_LINES)`) — not a dead export.
+ */
 export const LIST_JOBS_MAX_TAIL_LINES = 10
 export const LIST_JOBS_NO_ACTION_LINE =
   'No action required unless you need this output.'
