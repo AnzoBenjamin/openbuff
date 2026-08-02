@@ -3,10 +3,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-import {
-  DEFAULT_JOB_EVENT_BUFFER_LIMIT,
-  jobRegistry,
-} from '@codebuff/common/util/job-registry'
+import { jobRegistry } from '@codebuff/common/util/job-registry'
 
 import {
   __clearJobsForTest,
@@ -68,9 +65,12 @@ function value(output: Awaited<ReturnType<typeof listJobs>>): any {
 
 /** Emit output events until the ring at cursor 0 reports truncation. */
 function emitUntilGap(jobId: string): void {
-  // Batch to avoid one giant loop; stop at first truncated/dropped snapshot.
+  // Batch to avoid one giant loop; stop at the first truncated/dropped
+  // snapshot. maxBatches is a fixed generous backstop (deliberately decoupled
+  // from DEFAULT_JOB_EVENT_BUFFER_LIMIT); the early return keeps this fast.
   const batchSize = 50
-  for (let round = 0; round < DEFAULT_JOB_EVENT_BUFFER_LIMIT; round++) {
+  const maxBatches = 2000
+  for (let round = 0; round < maxBatches; round++) {
     for (let i = 0; i < batchSize; i++) {
       jobRegistry.emit(jobId, {
         type: 'output',
@@ -80,6 +80,7 @@ function emitUntilGap(jobId: string): void {
     const snap = jobRegistry.snapshot(jobId, 0)
     if (snap?.truncated || (snap?.dropped ?? 0) > 0) return
   }
+  throw new Error('emitUntilGap: ring never reported truncation')
 }
 
 afterEach(() => {

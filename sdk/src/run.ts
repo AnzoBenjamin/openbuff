@@ -1113,8 +1113,9 @@ async function runOnce({
 
 /**
  * Per-turn change-gate for list_jobs digests. Compares the row fingerprint of
- * the freshly-produced digest against the last fingerprint this turn and, when
- * nothing meaningful changed, swaps the full table for a tiny suppression note.
+ * the freshly-produced digest (folded with its truncatedCount) against the
+ * last fingerprint this turn and, when nothing meaningful changed, swaps the
+ * full table for a tiny suppression note.
  *
  * Exported for tests. `lastFingerprint` is the run-closure state (null on the
  * first call of a turn, which always returns the full digest). The caller owns
@@ -1142,8 +1143,14 @@ export function applyListJobsDigestGate(
     return { output, nextFingerprint: lastFingerprint }
   }
   // fingerprintListJobsRows ignores tail/startedAt by design, so chattiness
-  // (new buffered output) and wall-clock drift do not reset the gate.
-  const nextFingerprint = fingerprintListJobsRows(jobs as ListJobsViewRow[])
+  // (new buffered output) and wall-clock drift do not reset the gate. Fold in
+  // the digest value's truncatedCount so a change in how many rows were capped
+  // off (identical selected rows, different truncation) still busts the gate.
+  const rawTruncatedCount = (value as { truncatedCount?: unknown })
+    .truncatedCount
+  const truncatedCount =
+    typeof rawTruncatedCount === 'number' ? rawTruncatedCount : 0
+  const nextFingerprint = `${fingerprintListJobsRows(jobs as ListJobsViewRow[])}|${truncatedCount}`
   if (lastFingerprint !== null && nextFingerprint === lastFingerprint) {
     return {
       output: [

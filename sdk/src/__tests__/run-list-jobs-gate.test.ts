@@ -23,11 +23,15 @@ const makeRow = (overrides: Partial<ListJobsViewRow> = {}): ListJobsViewRow => (
   ...overrides,
 })
 
-const digestOutput = (rows: ListJobsViewRow[]): ToolResultOutput[] => [
+const digestOutput = (
+  rows: ListJobsViewRow[],
+  truncatedCount?: number,
+): ToolResultOutput[] => [
   {
     type: 'json',
     value: {
       jobs: rows,
+      ...(truncatedCount !== undefined ? { truncatedCount } : {}),
       note: 'No action required unless you need this output.',
     },
   },
@@ -76,6 +80,31 @@ describe('applyListJobsDigestGate', () => {
       makeRow({ startedAt: 9_999, tail: ['a', 'b'] }),
     ])
     const second = applyListJobsDigestGate(first.nextFingerprint, chattier)
+    const value = second.output[0]
+    expect(value.type === 'json' && (value.value as any).unchanged).toBe(true)
+  })
+
+  it('busts the gate when only truncatedCount changes (identical rows)', () => {
+    const rows = [makeRow()]
+    const first = applyListJobsDigestGate(null, digestOutput(rows, 3))
+    // Same selected rows, different truncatedCount: must re-emit in full so
+    // the new truncation count reaches the model.
+    const changedTruncation = digestOutput(rows, 5)
+    const second = applyListJobsDigestGate(
+      first.nextFingerprint,
+      changedTruncation,
+    )
+    expect(second.output).toBe(changedTruncation)
+    expect(second.nextFingerprint).not.toBe(first.nextFingerprint)
+  })
+
+  it('treats an omitted truncatedCount as 0', () => {
+    const rows = [makeRow()]
+    const first = applyListJobsDigestGate(null, digestOutput(rows, 0))
+    const second = applyListJobsDigestGate(
+      first.nextFingerprint,
+      digestOutput(rows),
+    )
     const value = second.output[0]
     expect(value.type === 'json' && (value.value as any).unchanged).toBe(true)
   })

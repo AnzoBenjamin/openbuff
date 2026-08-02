@@ -2,7 +2,16 @@ import type { JobEvent, JobState } from './job-registry'
 
 export type PendingBucket = 'none' | '<10' | '<100' | '<1k' | '1k+'
 
-/** Count pending output lines relative to a consumer cursor. */
+/**
+ * Count pending output lines relative to a consumer cursor.
+ *
+ * Tallies '\n' in buffered output events plus an optional non-empty lineCarry
+ * (+1). A registry chunk that ends mid-line without carry would under-count
+ * relative to tail extraction; process adapters avoid that by line-splitting
+ * at emit (`emitJobOutputLines`) and retaining the unterminated fragment in
+ * lineCarry (or force-flushing past MAX_LINE_BYTES / on settle). Agent/
+ * non-process output is not line-bucketed the same way.
+ */
 export function countPendingOutputLines(params: {
   eventsAfterCursor: ReadonlyArray<Pick<JobEvent, 'payload'> | { payload: { type: string; data?: unknown } }>
   lineCarry?: string
@@ -64,9 +73,16 @@ function isNonTerminalStatus(status: JobState): boolean {
   return !TERMINAL_STATUSES.has(status)
 }
 
-/** Prefer running/non-terminal, then by startedAt desc; cap at LIST_JOBS_MAX_ROWS. */
-export function selectListJobsRows(rows: ListJobsViewRow[]): {
-  rows: ListJobsViewRow[]
+/**
+ * Prefer running/non-terminal, then by startedAt desc (stable for equal
+ * startedAt); cap at LIST_JOBS_MAX_ROWS. Generic over the row shape so callers
+ * can pre-select on lightweight data (status/startedAt only) and enrich just
+ * the selected rows.
+ */
+export function selectListJobsRows<
+  T extends Pick<ListJobsViewRow, 'status' | 'startedAt'>,
+>(rows: T[]): {
+  rows: T[]
   truncatedCount: number
 } {
   const sorted = [...rows].sort((a, b) => {
@@ -96,12 +112,21 @@ export function fingerprintListJobsRows(rows: ListJobsViewRow[]): string {
 /** Build the json value shape for list_jobs. */
 export function buildListJobsValue(params: {
   rows: ListJobsViewRow[]
+  /**
+   * Precomputed truncation when `rows` was already capped via
+   * selectListJobsRows (e.g. selected on lightweight data before expensive
+   * enrichment). When provided, `rows` is emitted as-is, not re-selected.
+   */
+  truncatedCount?: number
 }): {
   jobs: ListJobsViewRow[]
   truncatedCount?: number
   note: typeof LIST_JOBS_NO_ACTION_LINE
 } {
-  const selected = selectListJobsRows(params.rows)
+  const selected =
+    params.truncatedCount !== undefined
+      ? { rows: params.rows, truncatedCount: params.truncatedCount }
+      : selectListJobsRows(params.rows)
   return {
     jobs: selected.rows,
     ...(selected.truncatedCount > 0

@@ -3,6 +3,7 @@ import {
   bucketPendingLines,
   buildListJobsValue,
   countPendingOutputLines,
+  selectListJobsRows,
   type ListJobsViewRow,
 } from '@codebuff/common/util/list-jobs-view'
 import {
@@ -47,7 +48,19 @@ export async function listJobs(params: {
   // registry; list every owned job so rediscovery matches docs/schema and
   // runtime end_turn warnings. Ownership is (clientSessionId, rootRunId).
   // Do NOT advance lastCheckCursor — list_jobs is a read-only digest.
-  const rows: ListJobsViewRow[] = jobRegistry.list(owner).map((entry) => {
+  //
+  // Cap on lightweight registry data first: candidates carry only the fields
+  // selectListJobsRows orders by (state → status, startedAt ?? createdAt —
+  // the same fallback the row build below uses, keeping order/tie-break
+  // parity), so adapter reverse-resolution, snapshot, pending, and tail work
+  // runs only for the ≤LIST_JOBS_MAX_ROWS rows actually emitted.
+  const candidates = jobRegistry.list(owner).map((entry) => ({
+    entry,
+    status: entry.state,
+    startedAt: entry.startedAt ?? entry.createdAt,
+  }))
+  const selected = selectListJobsRows(candidates)
+  const rows: ListJobsViewRow[] = selected.rows.map(({ entry }) => {
     // Resolve process adapters by *registry* id (not a direct Map get on the
     // registry id alone). Live spawns share one id; recovered /
     // `__registerJobForTest` remaps (Map key = user/disk jobId,
@@ -63,13 +76,7 @@ export async function listJobs(params: {
     // rediscovered via status/kind, not pending lines. `gap` still reflects
     // ring truncation at the snapshot cursor for any kind.
     //
-    // countPendingOutputLines tallies '\n' in buffered output events plus an
-    // optional non-empty lineCarry (+1). A registry chunk that ends mid-line
-    // without carry would under-count relative to tail extraction; process
-    // adapters avoid that by line-splitting at emit (`emitJobOutputLines`)
-    // and retaining the unterminated fragment in lineCarry (or force-flushing
-    // past MAX_LINE_BYTES / on settle). Agent/non-process output is not
-    // line-bucketed the same way.
+    // The lineCarry +1 counting rationale lives on `countPendingOutputLines`.
     const adapter = getBackgroundJobForRegistryId(entry.jobId)
     const cursor = adapter?.lastCheckCursor ?? 0
     const snap = jobRegistry.snapshot(entry.jobId, cursor)
@@ -114,6 +121,9 @@ export async function listJobs(params: {
     return row
   })
 
-  const value = buildListJobsValue({ rows })
+  const value = buildListJobsValue({
+    rows,
+    truncatedCount: selected.truncatedCount,
+  })
   return [{ type: 'json', value }]
 }
