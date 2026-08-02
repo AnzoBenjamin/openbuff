@@ -937,8 +937,15 @@ describe('base2 reviewer spawn conditions e2e', () => {
     // The shared hashGateSnapshotDetails resolves node:crypto lazily at call
     // time (never at import time), so deleting both module loaders forces the
     // fail-closed sentinel — proving there is no FNV fallback.
-    const savedGetBuiltinModule = (process as any).getBuiltinModule
-    const savedRequire = (globalThis as any).require
+    const hadGetBuiltinModule = Object.prototype.hasOwnProperty.call(
+      process,
+      'getBuiltinModule',
+    )
+    const savedGetBuiltinModule = hadGetBuiltinModule
+      ? (process as any).getBuiltinModule
+      : undefined
+    const hadRequire = Object.prototype.hasOwnProperty.call(globalThis, 'require')
+    const savedRequire = hadRequire ? (globalThis as any).require : undefined
     try {
       delete (process as any).getBuiltinModule
       delete (globalThis as any).require
@@ -954,11 +961,15 @@ describe('base2 reviewer spawn conditions e2e', () => {
       // Canonical SHA-256 fingerprints are accepted.
       expect(isAttestableSnapshotFingerprint(`v3:${'a'.repeat(64)}`)).toBe(true)
     } finally {
-      if (savedGetBuiltinModule !== undefined) {
+      if (hadGetBuiltinModule) {
         ;(process as any).getBuiltinModule = savedGetBuiltinModule
+      } else {
+        delete (process as any).getBuiltinModule
       }
-      if (savedRequire !== undefined) {
+      if (hadRequire) {
         ;(globalThis as any).require = savedRequire
+      } else {
+        delete (globalThis as any).require
       }
     }
   })

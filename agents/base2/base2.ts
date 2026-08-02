@@ -7410,20 +7410,18 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
       }
 
       function hashGateSnapshotDetails(details: string): string {
-        // Delegate to the canonical shared implementation in
-        // ./gate-fingerprint so this gate and its consumers cannot drift.
+        // Best-effort lazy require of the canonical shared module so this gate
+        // and its consumers cannot drift when a CommonJS loader is present.
         // handleSteps is serialized via .toString() and reconstructed with
-        // new Function(...), so this must NOT capture a module-scope import:
-        // resolve the sibling module lazily at call time through the global
-        // CommonJS loader (the same lazy pattern readGateFileContentMarker
-        // uses for node builtins), trying the plausible require referrers
-        // (this directory, the agents/ root, and the repo root). When no
-        // loader can resolve it, fall back to the inline copy below, which
-        // is kept in sync with ./gate-fingerprint.
+        // new Function(...), so this must NOT capture a module-scope import.
+        // Specifiers are repo-root / agents-package referrers only (not the
+        // sibling-only './gate-fingerprint' path, which almost never resolves
+        // under the serialized-runtime global require). The inline body below
+        // is the intentional serialized fallback when no specifier resolves;
+        // keep it in sync with ./gate-fingerprint.
         const req = (globalThis as any).require as NodeJS.Require | undefined
         if (typeof req === 'function') {
           for (const specifier of [
-            './gate-fingerprint',
             './base2/gate-fingerprint',
             './agents/base2/gate-fingerprint',
           ]) {
