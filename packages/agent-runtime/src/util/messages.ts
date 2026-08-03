@@ -14,6 +14,11 @@ import {
   simplifyToolResultContent,
   SUMMARIZABLE_TOOL_NAMES,
 } from './simplify-tool-results'
+import {
+  DEFAULT_FULL_TOOL_RESULTS_TO_KEEP,
+  isProtectedToolResult,
+  shouldKeepFullToolResult,
+} from './tool-result-lifecycle'
 import { countTokensJson } from './token-counter'
 
 import type { System } from '../llm-api/claude'
@@ -145,26 +150,52 @@ export function castAssistantMessage(message: Message): Message | null {
     : null
 }
 
-// Number of summarizable tool results to keep in full form before simplifying.
-// Keep only the newest result verbatim; older results are summarized so long
-// validation/test/search loops do not dominate the main agent context.
-const numToolResultsToKeep = 1
+// Default N newest *unprotected* summarizable tool results kept full before
+// simplifying older ones (see tool-result-lifecycle policy).
+export { DEFAULT_FULL_TOOL_RESULTS_TO_KEEP }
 
 function simplifyToolResultHelper(params: {
   toolName: string
   toolResult: CodebuffToolOutput
   numKept: number
+  keepDuringTruncation?: boolean
+  tags?: string[]
   logger: Logger
 }): { result: CodebuffToolOutput; numKept: number } {
-  const { toolName, toolResult, numKept, logger } = params
+  const {
+    toolName,
+    toolResult,
+    numKept,
+    keepDuringTruncation,
+    tags,
+    logger,
+  } = params
   const simplified = simplifyToolResultContent({
     toolName,
     content: toolResult,
     logger,
   })
 
-  // Keep the full output for the N most recent summarizable results
-  if (numKept < numToolResultsToKeep && !isEqual(simplified, toolResult)) {
+  // Already a receipt (or non-compressable) — nothing to keep-budget against.
+  if (isEqual(simplified, toolResult)) {
+    return { result: toolResult, numKept }
+  }
+
+  // Protected results stay full and do not consume the keep-N budget so the N
+  // newest unprotected summarizable results still get full slots.
+  if (isProtectedToolResult({ keepDuringTruncation, tags })) {
+    return { result: toolResult, numKept }
+  }
+
+  if (
+    shouldKeepFullToolResult({
+      toolName,
+      keepDuringTruncation,
+      tags,
+      numFullKeptSoFar: numKept,
+      maxFullToKeep: DEFAULT_FULL_TOOL_RESULTS_TO_KEEP,
+    })
+  ) {
     return { result: toolResult, numKept: numKept + 1 }
   }
 
@@ -365,7 +396,10 @@ function buildMechanicalRecoveryMessage(params: {
  *
  * The function:
  * 1. Processes messages from newest to oldest
- * 2. Simplifies summarizable tool results after keeping N most recent ones
+ * 2. Applies tool-result lifecycle policy: compress summarizable results after
+ *    N full-keep slots for unprotected results; pinned / keepDuringTruncation /
+ *    high-importance tags never compress on this pass (message *dropping* still
+ *    respects keepDuringTruncation separately)
  * 3. Stops adding messages when approaching token limit
  *
  * @param messages - Array of messages to trim
@@ -436,6 +470,8 @@ export function trimMessagesToFitTokenLimitWithReport(params: {
         toolName: toolResultMessage.toolName,
         toolResult: toolResultMessage.content,
         numKept,
+        keepDuringTruncation: toolResultMessage.keepDuringTruncation,
+        tags: toolResultMessage.tags,
         logger,
       })
       toolResultMessage.content = result.result
