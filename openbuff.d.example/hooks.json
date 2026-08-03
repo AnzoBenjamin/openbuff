@@ -25,6 +25,12 @@
       "timeoutSeconds": 180
     },
     {
+      "name": "test-agents",
+      "command": "cd agents && bun run test",
+      "filePattern": "agents/**/*.ts",
+      "timeoutSeconds": 300
+    },
+    {
       "name": "typecheck-.agents",
       "command": "cd .agents && bun run typecheck",
       "filePattern": ".agents/**/*.ts",
