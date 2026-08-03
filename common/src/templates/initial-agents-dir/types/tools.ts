@@ -662,7 +662,7 @@ export interface ReadFilesParams {
     /** Lines of context to include on each side of the match, clamped at file boundaries. Defaults to 40, capped at 2000. */
     contextLines?: number
   }[]
-  /** Optional: occurrence-aware single-symbol reads. Each entry pulls the Nth (default 1) top-level symbol with the given name, mirroring read_blocks occurrence semantics, and returns one `symbol` block item with its own editAnchor. Prefer batch `symbols` for several symbols from one file; use `symbol` when you need a specific occurrence of a same-named symbol. When exactly one paths entry is supplied, a missing symbol path is inferred from it. */
+  /** Optional: occurrence-aware single-symbol reads. Each entry pulls the Nth (default 1) top-level symbol with the given name, mirroring rewrite_symbol occurrence semantics, and returns one `symbol` block item with its own editAnchor. Prefer batch `symbols` for several symbols from one file; use `symbol` when you need a specific occurrence of a same-named symbol. When exactly one paths entry is supplied, a missing symbol path is inferred from it. */
   symbol?: {
     /** File path to extract a symbol slice from, relative to the project root. */
     path: string
