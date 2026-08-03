@@ -6,6 +6,7 @@ import {
   jsonToolResultSchema,
 } from '../utils'
 import {
+  READ_FILES_BLOCK_CONTENT_MAX_BYTES,
   readFilesResultV1Schema,
   readFilesSliceSchema,
 } from '../../results/filesystem'
@@ -16,10 +17,15 @@ const DEFAULT_CONTEXT_LINES = 40
 
 export const MAX_WINDOW_SIZE = 5_000
 export const MAX_CONTEXT_LINES = 2_000
-/** Mirrors sdk MAX_RANGE_READ_BYTES so a block read cannot exceed the range-read budget. */
-export const MAX_READ_BLOCK_BYTES = 4_194_304
+/**
+ * Byte budget enforced independently on each window/around/symbol block payload
+ * (the decorated `content` and the exact `sourceContent`), not on their sum.
+ * Re-exported from the result contract so the budget documented in the tool
+ * description cannot drift from the bound enforced on block result items.
+ */
+export const MAX_READ_BLOCK_BYTES = READ_FILES_BLOCK_CONTENT_MAX_BYTES
 
-export const readBlocksWindowSelectorSchema = z.object({
+export const readFilesWindowSelectorSchema = z.object({
   path: z
     .string()
     .min(1)
@@ -45,7 +51,7 @@ export const readBlocksWindowSelectorSchema = z.object({
     ),
 })
 
-export const readBlocksAroundSelectorSchema = z.object({
+export const readFilesAroundSelectorSchema = z.object({
   path: z
     .string()
     .min(1)
@@ -77,7 +83,7 @@ export const readBlocksAroundSelectorSchema = z.object({
     ),
 })
 
-export const readBlocksSymbolSelectorSchema = z.object({
+export const readFilesSymbolSelectorSchema = z.object({
   path: z
     .string()
     .min(1)
@@ -126,21 +132,36 @@ export const fileContentsSchema = z.union([
 
 const toolName = 'read_files'
 const endsAgentStep = true
-const decodeFragmentedSymbolSelectors = (input: unknown): unknown => {
+/** Selector arrays a transport may have stringified and split on commas. */
+const FRAGMENTED_SELECTOR_KEYS = [
+  'ranges',
+  'windows',
+  'around',
+  'symbol',
+  'symbols',
+] as const
+
+const decodeFragmentedSelectors = (input: unknown): unknown => {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input
   const record = input as Record<string, unknown>
-  if (!Array.isArray(record.symbols) || record.symbols.length === 0)
-    return input
-  if (!record.symbols.every((value) => typeof value === 'string')) return input
+  const repaired: Record<string, unknown> = { ...record }
+  let decodedAny = false
+  for (const key of FRAGMENTED_SELECTOR_KEYS) {
+    const selectors = record[key]
+    if (!Array.isArray(selectors) || selectors.length === 0) continue
+    if (!selectors.every((value) => typeof value === 'string')) continue
 
-  const encoded = (record.symbols as string[]).join(',')
-  try {
-    const decoded = JSON.parse(encoded) as unknown
-    if (!Array.isArray(decoded)) return input
-    return { ...record, symbols: decoded }
-  } catch {
-    return input
+    const encoded = (selectors as string[]).join(',')
+    try {
+      const decoded = JSON.parse(encoded) as unknown
+      if (!Array.isArray(decoded)) continue
+      repaired[key] = decoded
+      decodedAny = true
+    } catch {
+      continue
+    }
   }
+  return decodedAny ? repaired : input
 }
 
 const inferSingleSelectorPath = (input: unknown): unknown => {
@@ -154,8 +175,9 @@ const inferSingleSelectorPath = (input: unknown): unknown => {
   if (paths.length !== 1 || typeof paths[0] !== 'string') return input
   let inferredPath = false
   const inferPath = (selectors: unknown): unknown => {
-    if (!Array.isArray(selectors)) return selectors
-    return selectors.map((selector) => {
+    const coerced = coerceToArray(selectors)
+    if (!Array.isArray(coerced)) return selectors
+    return coerced.map((selector) => {
       if (
         !selector ||
         typeof selector !== 'object' ||
@@ -185,7 +207,7 @@ const inferSingleSelectorPath = (input: unknown): unknown => {
 
 const inputSchema = z
   .preprocess(
-    (input) => inferSingleSelectorPath(decodeFragmentedSymbolSelectors(input)),
+    (input) => inferSingleSelectorPath(decodeFragmentedSelectors(input)),
     z.object({
       paths: z
         .preprocess(
@@ -234,19 +256,19 @@ const inputSchema = z
           'Optional: read only a 1-indexed inclusive line range of specific files. Use this to page through large files that exceeded the read limit. Each entry reads `path` from startLine..endLine. When exactly one paths entry is supplied, a missing range path is inferred from it.',
         ),
       windows: z
-        .array(readBlocksWindowSelectorSchema)
+        .preprocess(coerceToArray, z.array(readFilesWindowSelectorSchema))
         .optional()
         .describe(
           'Optional: windowed reads for large files. Each returned window is a COMPLETE contiguous line block that mints its own cap.v3 editAnchor, so you can edit it directly via replace_range/basedOnRead without a guess-shrink-retry loop. When exactly one paths entry is supplied, a missing window path is inferred from it.',
         ),
       around: z
-        .array(readBlocksAroundSelectorSchema)
+        .preprocess(coerceToArray, z.array(readFilesAroundSelectorSchema))
         .optional()
         .describe(
           'Optional: content-anchored reads. Finds the Nth exact literal match and returns a complete bounded block around it, minting a cap.v3 editAnchor for that block. When exactly one paths entry is supplied, a missing around path is inferred from it.',
         ),
       symbol: z
-        .array(readBlocksSymbolSelectorSchema)
+        .preprocess(coerceToArray, z.array(readFilesSymbolSelectorSchema))
         .optional()
         .describe(
           'Optional: occurrence-aware single-symbol reads. Each entry pulls the Nth (default 1) top-level symbol with the given name, mirroring rewrite_symbol occurrence semantics, and returns one `symbol` block item with its own editAnchor. Prefer batch `symbols` for several symbols from one file; use `symbol` when you need a specific occurrence of a same-named symbol. When exactly one paths entry is supplied, a missing symbol path is inferred from it.',
@@ -305,6 +327,7 @@ Important:
 - Windowed read: pass \`windows: [{ path, windowSize?, window? }]\`. The file is split into complete contiguous line windows (default windowSize 400). Pick \`window\` (1-indexed) or omit it to get the manifest (totalLines, windowSize, windowCount) plus the first window.
 - Content-anchored read: pass \`around: [{ path, match, occurrence?, contextLines? }]\`. Finds the 1-indexed occurrence (default 1) of the exact literal \`match\` and returns a complete block covering the match plus \`contextLines\` (default 40) on each side, clamped at file boundaries.
 - Occurrence-aware symbol read: pass \`symbol: [{ path, name, occurrence? }]\` to pull the Nth (default 1) top-level symbol with that name, mirroring rewrite_symbol occurrence semantics. Prefer batch \`symbols\` for several symbols from one file; use \`symbol\` when you need a specific occurrence of a same-named symbol. Each complete symbol block mints its own cap.v3 editAnchor.
+- Block byte budget: for every window/around/symbol block, the decorated content and the exact sourceContent are each bounded independently by a ${MAX_READ_BLOCK_BYTES}-byte budget; it is a per-payload bound, not a combined total. A block whose decorated content or sourceContent exceeds that budget is returned as a \`too_large\` error item instead of a partial block, so request a smaller windowSize/contextLines.
 - Model-visible complete reads expose one editAnchor rather than duplicate top-level hash/capability fields.
 - Complete range results also return sourceContent containing the exact undecorated normalized range text used for the range hash. Use sourceContent—not the numbered display content—when an exact oldString is truly needed. Never splice a mid-line suffix together with following lines; that is not contiguous source text.
 - For a medium/large or formatting-sensitive block, use an edit_transaction replace_range edit and copy editAnchor.readCapability directly instead of reconstructing oldString or separate range fields.

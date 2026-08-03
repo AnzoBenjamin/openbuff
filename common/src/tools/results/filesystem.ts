@@ -13,6 +13,14 @@ export const FILESYSTEM_RESULT_CONTENT_MAX_BYTES = 10 * 1024 * 1024
 export const FILESYSTEM_RESULT_AGGREGATE_CONTENT_MAX_BYTES = 20 * 1024 * 1024
 export const FILESYSTEM_RESULT_MAX_ACTIONS = 128
 export const FILESYSTEM_RESULT_MAX_CAPABILITIES = 128
+/**
+ * Byte budget applied independently to each payload of a read_files
+ * window/around/symbol block (decorated `content` and exact `sourceContent`),
+ * rather than to their combined size. The read_files params module re-exports
+ * this as MAX_READ_BLOCK_BYTES so the request-side and result-side budgets
+ * cannot drift.
+ */
+export const READ_FILES_BLOCK_CONTENT_MAX_BYTES = 4 * 1024 * 1024
 
 const boundedMutationContentSchema = z
   .string()
@@ -622,13 +630,29 @@ const readFilesSymbolsItemSchema = z
     'read_files symbol results require exactly one slices payload or omission marker',
   )
 
-const readBlocksBlockBaseFields = {
+/**
+ * Bounded block payload. Blocks carry both decorated `content` and exact
+ * `sourceContent`, and this bound is applied to each of those fields on its own,
+ * so a block whose either payload is over budget must be returned as a
+ * `too_large` error item instead of an unbounded (or silently truncated) block.
+ */
+const boundedBlockContentSchema = z
+  .string()
+  .max(READ_FILES_BLOCK_CONTENT_MAX_BYTES)
+  .refine(
+    (content) =>
+      new TextEncoder().encode(content).byteLength <=
+      READ_FILES_BLOCK_CONTENT_MAX_BYTES,
+    'read_files block content exceeds the per-block byte budget; return a too_large error item instead',
+  )
+
+const readFilesBlockBaseFields = {
   requestIndex: z.number().int().nonnegative(),
   path: z.string(),
   status: z.enum(['ok', 'partial']),
-  content: z.string(),
+  content: boundedBlockContentSchema,
   /** Exact undecorated normalized block text for deterministic follow-up edits. */
-  sourceContent: z.string(),
+  sourceContent: boundedBlockContentSchema,
   startLine: z.number().int().positive(),
   endLine: z.number().int().positive(),
   totalLines: z.number().int().nonnegative(),
@@ -637,15 +661,42 @@ const readBlocksBlockBaseFields = {
   referencedBy: readReferencedBySchema.optional(),
 } as const
 
-const readBlocksBlockSuperRefine = (
+const readFilesBlockSuperRefine = (
   value: {
+    status: 'ok' | 'partial'
+    sourceContent: string
     startLine: number
     endLine: number
+    totalLines: number
     complete: boolean
-    editAnchor?: { startLine: number; endLine: number }
+    editAnchor?: { startLine: number; endLine: number; contentHash: string }
   },
   ctx: z.RefinementCtx,
 ) => {
+  if (value.endLine < value.startLine) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'block endLine must be at or after startLine',
+    })
+  }
+  if (value.endLine > value.totalLines) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'block endLine cannot exceed totalLines',
+    })
+  }
+  if (value.status === 'ok' && !value.complete) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'ok block results must be complete',
+    })
+  }
+  if (value.status === 'partial' && value.complete) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'partial block results must be incomplete',
+    })
+  }
   if (
     value.editAnchor &&
     (value.editAnchor.startLine !== value.startLine ||
@@ -662,19 +713,40 @@ const readBlocksBlockSuperRefine = (
       message: 'partial blocks cannot expose edit capabilities',
     })
   }
+  // A consumer may use sourceContent as an exact oldString, so the anchor must
+  // describe exactly that text.
+  if (
+    value.editAnchor &&
+    value.editAnchor.contentHash !== getContentHash(value.sourceContent)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'block editAnchor contentHash must hash the exact sourceContent',
+    })
+  }
+  if (
+    value.editAnchor &&
+    value.endLine - value.startLine + 1 !==
+      normalizeLineEndings(value.sourceContent).split('\n').length
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'block sourceContent line count must match the block bounds',
+    })
+  }
 }
 
-export const readBlocksWindowItemSchema = z
+export const readFilesWindowItemSchema = z
   .object({
     selector: z.literal('window'),
-    ...readBlocksBlockBaseFields,
+    ...readFilesBlockBaseFields,
     windowSize: z.number().int().positive(),
     windowCount: z.number().int().positive(),
     window: z.number().int().positive(),
   })
   .strict()
   .superRefine((value, ctx) => {
-    readBlocksBlockSuperRefine(value, ctx)
+    readFilesBlockSuperRefine(value, ctx)
     if (value.window > value.windowCount) {
       ctx.addIssue({
         code: 'custom',
@@ -683,29 +755,37 @@ export const readBlocksWindowItemSchema = z
     }
   })
 
-export const readBlocksAroundItemSchema = z
+export const readFilesAroundItemSchema = z
   .object({
     selector: z.literal('around'),
-    ...readBlocksBlockBaseFields,
+    ...readFilesBlockBaseFields,
     match: z.string(),
     /** 1-indexed matched occurrence this block was anchored on. */
     occurrence: z.number().int().positive(),
     totalOccurrences: z.number().int().nonnegative(),
   })
   .strict()
-  .superRefine(readBlocksBlockSuperRefine)
+  .superRefine((value, ctx) => {
+    readFilesBlockSuperRefine(value, ctx)
+    if (value.occurrence > value.totalOccurrences) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'around occurrence cannot exceed totalOccurrences',
+      })
+    }
+  })
 
-export const readBlocksSymbolItemSchema = z
+export const readFilesSymbolItemSchema = z
   .object({
     selector: z.literal('symbol'),
-    ...readBlocksBlockBaseFields,
+    ...readFilesBlockBaseFields,
     symbol: z.string(),
     kind: z.string().optional(),
     /** 1-indexed AST match this slice was selected from. */
     occurrence: z.number().int().positive(),
   })
   .strict()
-  .superRefine(readBlocksBlockSuperRefine)
+  .superRefine(readFilesBlockSuperRefine)
 
 /**
  * The single shared read item union for read_files: every selector kind
@@ -715,9 +795,9 @@ export const readFilesItemV1Schema = z.union([
   readFilesFileItemSchema,
   readFilesRangeItemSchema,
   readFilesSymbolsItemSchema,
-  readBlocksWindowItemSchema,
-  readBlocksAroundItemSchema,
-  readBlocksSymbolItemSchema,
+  readFilesWindowItemSchema,
+  readFilesAroundItemSchema,
+  readFilesSymbolItemSchema,
   readFilesErrorItemSchema,
 ])
 

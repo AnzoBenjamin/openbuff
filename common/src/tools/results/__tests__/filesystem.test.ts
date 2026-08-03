@@ -256,8 +256,9 @@ describe('structured filesystem results', () => {
     expect(readFilesResultV1Schema.safeParse(result).success).toBe(true)
   })
 
-  it('accepts a unified read_files result mixing all five selector kinds', () => {
-    const contentHash = `sha256:${'c'.repeat(64)}`
+  it('accepts a unified read_files result mixing all six selector kinds', () => {
+    const windowSource = 'c1\nc2'
+    const symbolSource = 'export const e = 1'
     const result = buildReadFilesResultV1([
       {
         selector: 'file',
@@ -285,8 +286,8 @@ describe('structured filesystem results', () => {
         requestIndex: 2,
         path: 'src/c.ts',
         status: 'ok',
-        content: 'c1\nc2',
-        sourceContent: 'c1\nc2',
+        content: windowSource,
+        sourceContent: windowSource,
         startLine: 1,
         endLine: 2,
         totalLines: 5,
@@ -297,7 +298,7 @@ describe('structured filesystem results', () => {
         editAnchor: {
           startLine: 1,
           endLine: 2,
-          contentHash,
+          contentHash: getContentHash(windowSource),
           readCapability: 'cap.v3.win',
         },
       },
@@ -317,8 +318,29 @@ describe('structured filesystem results', () => {
         totalOccurrences: 1,
       },
       {
-        selector: 'symbols',
+        selector: 'symbol',
         requestIndex: 4,
+        path: 'src/e.ts',
+        status: 'ok',
+        content: `4\t${symbolSource}`,
+        sourceContent: symbolSource,
+        startLine: 4,
+        endLine: 4,
+        totalLines: 10,
+        complete: true,
+        symbol: 'e',
+        kind: 'variable',
+        occurrence: 1,
+        editAnchor: {
+          startLine: 4,
+          endLine: 4,
+          contentHash: getContentHash(symbolSource),
+          readCapability: 'cap.v3.sym',
+        },
+      },
+      {
+        selector: 'symbols',
+        requestIndex: 5,
         path: 'src/d.ts',
         status: 'ok',
         requestedSymbols: ['run'],
@@ -329,12 +351,139 @@ describe('structured filesystem results', () => {
 
     expect(readFilesResultV1Schema.safeParse(result).success).toBe(true)
     expect(result.summary).toEqual({
-      requested: 5,
-      ok: 5,
+      requested: 6,
+      ok: 6,
       partial: 0,
       failed: 0,
-      uniquePaths: 4,
+      uniquePaths: 5,
     })
+  })
+
+  it('rejects unknown keys on a strict symbol block item', () => {
+    const sourceContent = 'export const e = 1'
+    const result = buildReadFilesResultV1([
+      {
+        selector: 'symbol',
+        requestIndex: 0,
+        path: 'src/e.ts',
+        status: 'ok',
+        content: sourceContent,
+        sourceContent,
+        startLine: 1,
+        endLine: 1,
+        totalLines: 1,
+        complete: true,
+        symbol: 'e',
+        occurrence: 1,
+        editAnchor: {
+          startLine: 1,
+          endLine: 1,
+          contentHash: getContentHash(sourceContent),
+          readCapability: 'cap.v3.sym',
+        },
+      },
+    ])
+
+    expect(readFilesResultV1Schema.safeParse(result).success).toBe(true)
+    expect(
+      readFilesResultV1Schema.safeParse({
+        ...result,
+        results: [{ ...result.results[0], rangeHash: `sha256:${'f'.repeat(64)}` }],
+      }).success,
+    ).toBe(false)
+  })
+
+  it('rejects incoherent and over-claiming block items', () => {
+    const sourceContent = 'w1\nw2'
+    const editAnchor = {
+      startLine: 1,
+      endLine: 2,
+      contentHash: getContentHash(sourceContent),
+      readCapability: 'cap.v3.win',
+    }
+    const baseWindow = {
+      selector: 'window' as const,
+      requestIndex: 0,
+      path: 'src/big.ts',
+      status: 'ok' as const,
+      content: sourceContent,
+      sourceContent,
+      startLine: 1,
+      endLine: 2,
+      totalLines: 100,
+      complete: true,
+      windowSize: 2,
+      windowCount: 50,
+      window: 1,
+      editAnchor,
+    }
+
+    expect(
+      readFilesResultV1Schema.safeParse(buildReadFilesResultV1([baseWindow]))
+        .success,
+    ).toBe(true)
+
+    const incoherentBlocks = [
+      // partial blocks cannot expose edit capabilities
+      { ...baseWindow, status: 'partial' as const, complete: false },
+      // window index cannot exceed windowCount
+      { ...baseWindow, window: 4, windowCount: 3 },
+      // ok blocks must be complete
+      { ...baseWindow, complete: false, editAnchor: undefined },
+      // partial blocks cannot claim completeness
+      {
+        ...baseWindow,
+        status: 'partial' as const,
+        editAnchor: undefined,
+      },
+      // inverted bounds
+      { ...baseWindow, startLine: 3, endLine: 2 },
+      // bounds outside the file
+      { ...baseWindow, totalLines: 1 },
+      // the anchor must hash the exact sourceContent
+      {
+        ...baseWindow,
+        editAnchor: { ...editAnchor, contentHash: `sha256:${'d'.repeat(64)}` },
+      },
+      // sourceContent line count must match the declared bounds
+      { ...baseWindow, content: 'w1', sourceContent: 'w1' },
+    ]
+
+    for (const block of incoherentBlocks) {
+      expect(
+        readFilesResultV1Schema.safeParse(buildReadFilesResultV1([block]))
+          .success,
+      ).toBe(false)
+    }
+  })
+
+  it('rejects around blocks claiming an occurrence beyond totalOccurrences', () => {
+    const sourceContent = 'c2\nc3'
+    const baseAround = {
+      selector: 'around' as const,
+      requestIndex: 0,
+      path: 'src/c.ts',
+      status: 'ok' as const,
+      content: sourceContent,
+      sourceContent,
+      startLine: 2,
+      endLine: 3,
+      totalLines: 5,
+      complete: true,
+      match: 'c3',
+      occurrence: 1,
+      totalOccurrences: 1,
+    }
+
+    expect(
+      readFilesResultV1Schema.safeParse(buildReadFilesResultV1([baseAround]))
+        .success,
+    ).toBe(true)
+    expect(
+      readFilesResultV1Schema.safeParse(
+        buildReadFilesResultV1([{ ...baseAround, occurrence: 2 }]),
+      ).success,
+    ).toBe(false)
   })
 
   it('does not fire file/range completeness branches on block items', () => {

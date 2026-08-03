@@ -3,6 +3,12 @@ import z from 'zod/v4'
 
 import { applyPatchParams } from '../tool/apply-patch'
 import {
+  MAX_CONTEXT_LINES,
+  MAX_READ_BLOCK_BYTES,
+  MAX_WINDOW_SIZE,
+  readFilesParams,
+} from '../tool/read-files'
+import {
   encodeReadCapabilityToken,
   getContentHash,
 } from '../../../util/content-hash'
@@ -749,6 +755,134 @@ describe('normalizeReplacementList', () => {
     const fragments = stringified.split(',')
     expect(fragments.length).toBeGreaterThan(1)
     expect(normalizeReplacementList(fragments)).toEqual(replacements)
+  })
+})
+
+describe('read_files block selector input schema', () => {
+  const parse = (input: unknown) => readFilesParams.inputSchema.safeParse(input)
+
+  it('accepts window/around/symbol selectors at their documented caps', () => {
+    const parsed = parse({
+      windows: [{ path: 'a.ts', windowSize: MAX_WINDOW_SIZE, window: 2 }],
+      around: [
+        { path: 'a.ts', match: 'loadConfig', contextLines: MAX_CONTEXT_LINES },
+      ],
+      symbol: [{ path: 'a.ts', name: 'loadConfig', occurrence: 2 }],
+    })
+
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.windows).toEqual([
+        { path: 'a.ts', windowSize: MAX_WINDOW_SIZE, window: 2 },
+      ])
+      expect(parsed.data.symbol).toEqual([
+        { path: 'a.ts', name: 'loadConfig', occurrence: 2 },
+      ])
+    }
+  })
+
+  it('rejects selector values beyond the window/context caps and below occurrence 1', () => {
+    expect(
+      parse({ windows: [{ path: 'a.ts', windowSize: MAX_WINDOW_SIZE + 1 }] })
+        .success,
+    ).toBe(false)
+    expect(
+      parse({
+        around: [
+          { path: 'a.ts', match: 'x', contextLines: MAX_CONTEXT_LINES + 1 },
+        ],
+      }).success,
+    ).toBe(false)
+    expect(parse({ windows: [{ path: 'a.ts', window: 0 }] }).success).toBe(false)
+    expect(
+      parse({ around: [{ path: 'a.ts', match: 'x', occurrence: 0 }] }).success,
+    ).toBe(false)
+    expect(
+      parse({ symbol: [{ path: 'a.ts', name: 'run', occurrence: 0 }] }).success,
+    ).toBe(false)
+  })
+
+  it('requires at least one selector and names every selector kind in the message', () => {
+    const parsed = parse({})
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) {
+      expect(parsed.error.issues[0]?.message).toBe(
+        'read_files requires at least one path, range, window, around, symbol, or symbols selector.',
+      )
+    }
+    expect(parse({ windows: [{ path: 'a.ts' }] }).success).toBe(true)
+    expect(parse({ around: [{ path: 'a.ts', match: 'x' }] }).success).toBe(true)
+    expect(parse({ symbol: [{ path: 'a.ts', name: 'run' }] }).success).toBe(true)
+  })
+
+  it('infers the sole paths entry into window/around/symbol selectors', () => {
+    const parsed = parse({
+      paths: ['src/large.ts'],
+      windows: [{ window: 2 }],
+      around: [{ match: 'loadConfig' }],
+      symbol: [{ name: 'loadConfig' }],
+    })
+
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.paths).toEqual([])
+      expect(parsed.data.windows).toEqual([{ path: 'src/large.ts', window: 2 }])
+      expect(parsed.data.around).toEqual([
+        { path: 'src/large.ts', match: 'loadConfig' },
+      ])
+      expect(parsed.data.symbol).toEqual([
+        { path: 'src/large.ts', name: 'loadConfig' },
+      ])
+    }
+  })
+
+  it('does not infer a path when several paths are supplied', () => {
+    expect(
+      parse({ paths: ['a.ts', 'b.ts'], windows: [{ window: 1 }] }).success,
+    ).toBe(false)
+  })
+
+  it('coerces single-object window/around/symbol selectors into arrays', () => {
+    const parsed = parse({
+      windows: { path: 'src/large.ts', window: 2 },
+      around: { path: 'src/large.ts', match: 'loadConfig' },
+      symbol: { path: 'src/large.ts', name: 'loadConfig' },
+    })
+
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.windows).toEqual([{ path: 'src/large.ts', window: 2 }])
+      expect(parsed.data.around).toEqual([
+        { path: 'src/large.ts', match: 'loadConfig' },
+      ])
+      expect(parsed.data.symbol).toEqual([
+        { path: 'src/large.ts', name: 'loadConfig' },
+      ])
+    }
+  })
+
+  it('repairs comma-split fragmented symbol and window selector arrays', () => {
+    const symbol = [{ path: 'src/large.ts', name: 'loadConfig' }]
+    const windows = [{ path: 'src/large.ts', window: 2 }]
+    const symbolFragments = JSON.stringify(symbol).split(',')
+    const windowFragments = JSON.stringify(windows).split(',')
+    expect(symbolFragments.length).toBeGreaterThan(1)
+    expect(windowFragments.length).toBeGreaterThan(1)
+
+    const parsed = parse({
+      symbol: symbolFragments,
+      windows: windowFragments,
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.symbol).toEqual(symbol)
+      expect(parsed.data.windows).toEqual(windows)
+    }
+  })
+
+  it('documents the per-block byte budget and its too_large outcome', () => {
+    expect(readFilesParams.description).toContain(String(MAX_READ_BLOCK_BYTES))
+    expect(readFilesParams.description).toContain('too_large')
   })
 })
 
