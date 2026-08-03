@@ -81,3 +81,9 @@ M3 is complete. Per user decision (full removal, not a forwarding alias), the `r
 
 **Plan complete:** M1 (authority ladder + ecosystem), M2 (unified selector surface), M3 (full read_blocks removal) all done and gate-verified. The read surface is now a single `read_files` tool with six selectors, one authority ladder, cap.v3 minting, byte budgets, and full CLI/pruner/agent parity.
 
+
+<!-- update_plan_status:appended -->
+## Session closed — all milestones complete — 2026-08-02T21:34:04.262Z
+
+All three milestones (M1 authority ladder, M2 unified selector surface, M3 read_blocks removal) are complete and gate-verified per the appended entries above. The read surface is now unified on `read_files` with six selectors (paths, ranges, windows, around, symbol, symbols). `read_blocks` is fully removed from every layer (registry, handler, schemas, CLI renderer, agent grants, prompts, docs). Flipping session state to completed.
+

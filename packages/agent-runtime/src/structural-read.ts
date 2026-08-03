@@ -14,8 +14,8 @@ import type {
 import type { ReadCapabilityScope } from '@codebuff/common/util/content-hash'
 
 /**
- * Tree-sitter-backed structural extraction for the read_outline / read_slices
- * tools, shared so both tools behave identically across languages.
+ * Tree-sitter-backed structural extraction for the read_outline tool and
+ * read_files symbol slicing, shared so both behave identically across languages.
  *
  * code-map is imported dynamically: its module top-level constructs a
  * tree-sitter loader and kicks off WASM init, which we do NOT want to trigger
@@ -351,7 +351,7 @@ const DEFAULT_MAX_MATCHES_PER_SYMBOL = 5
  * declarations carry an edit capability; heuristic slices are read-only and
  * require an exact range read before editing.
  *
- * Shared by read_files (symbols mode) and the deprecated read_slices alias.
+ * Shared by read_files (symbols mode).
  */
 export async function extractSlices(
   rawContent: string,

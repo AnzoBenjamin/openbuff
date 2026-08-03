@@ -49,3 +49,5 @@
 {"ts":"2026-07-21T21:49:48.771Z","kind":"append_lesson","summary":"Appended entry \"M3.2 Blocker Resolved + Non-Blocking Cleanup (2026-07)\" to STATUS.md","payload":{"heading":"M3.2 Blocker Resolved + Non-Blocking Cleanup (2026-07)","artifact":"STATUS.md"}}
 {"ts":"2026-07-22T03:57:28.377Z","kind":"append_lesson","summary":"Appended entry \"Reviewer read-budget fix (2026-07)\" to LESSONS.md","payload":{"heading":"Reviewer read-budget fix (2026-07)","artifact":"LESSONS.md"}}
 {"ts":"2026-07-22T03:58:01.891Z","kind":"append_lesson","summary":"Appended entry \"Reviewer Read-Budget Fix Complete (2026-07)\" to STATUS.md","payload":{"heading":"Reviewer Read-Budget Fix Complete (2026-07)","artifact":"STATUS.md"}}
+{"ts":"2026-08-02T21:32:41.648Z","kind":"append_lesson","summary":"Appended entry \"M5.2 RESOLVED — read_slices fully removed from live surface\" to STATUS.md","payload":{"heading":"M5.2 RESOLVED — read_slices fully removed from live surface","artifact":"STATUS.md"}}
+{"ts":"2026-08-02T21:32:41.649Z","kind":"session_status","summary":"Session status -> completed","payload":{"status":"completed"}}

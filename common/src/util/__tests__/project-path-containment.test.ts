@@ -134,6 +134,12 @@ describe('isPathInsideProject — symlink containment', () => {
     expect(isPathInsideProject(tmpDir, 'evil/nonexistent.ts')).toBe(false)
   })
 
+  test('rejects a missing descendant below a symlink whose nearest existing ancestor is outside', () => {
+    const missingDescendant = path.join('evil', 'missing', 'deep', 'file.ts')
+    expect(resolveProjectPath(tmpDir, missingDescendant)).toBeNull()
+    expect(isPathInsideProject(tmpDir, missingDescendant)).toBe(false)
+  })
+
   test('allows a symlink that points inside the project', () => {
     expect(isPathInsideProject(tmpDir, 'link/file.ts')).toBe(true)
   })

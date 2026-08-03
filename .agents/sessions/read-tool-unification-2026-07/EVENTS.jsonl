@@ -1,3 +1,5 @@
 {"ts":"2026-08-02T17:34:06.608Z","kind":"append_lesson","summary":"Appended entry \"M1 + M2 complete (gate-verified)\" to STATUS.md","payload":{"heading":"M1 + M2 complete (gate-verified)","artifact":"STATUS.md"}}
 {"ts":"2026-08-02T17:34:06.608Z","kind":"session_status","summary":"Session status -> executing","payload":{"status":"executing"}}
 {"ts":"2026-08-02T20:18:50.156Z","kind":"append_lesson","summary":"Appended entry \"M3 complete: read_blocks fully removed (gate-verified)\" to STATUS.md","payload":{"heading":"M3 complete: read_blocks fully removed (gate-verified)","artifact":"STATUS.md"}}
+{"ts":"2026-08-02T21:34:04.265Z","kind":"append_lesson","summary":"Appended entry \"Session closed — all milestones complete\" to STATUS.md","payload":{"heading":"Session closed — all milestones complete","artifact":"STATUS.md"}}
+{"ts":"2026-08-02T21:34:04.265Z","kind":"session_status","summary":"Session status -> completed","payload":{"status":"completed"}}
