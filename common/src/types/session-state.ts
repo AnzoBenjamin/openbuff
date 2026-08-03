@@ -216,6 +216,11 @@ export type AgentState = {
   taskMemory?: TaskMemoryV1
   /** Monotonic workspace state shared by reads, mutations, indexing, validation, and review. */
   workspaceState?: WorkspaceStateV1
+  /**
+   * Process-owned mutation paths for concurrent gate isolation; published by
+   * runtime after confirmed mutations / terminal touchedPaths.
+   */
+  selfMutatedPaths?: string[]
   /** Ordered, resumable control-plane events that survive transcript compaction. */
   orchestrationLedger?: OrchestrationLedgerV1
   /** Spawn-bound writable path ownership used to prevent overlapping writers. */

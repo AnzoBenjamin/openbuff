@@ -413,14 +413,14 @@ describe('base2 deterministic gate lifecycle e2e', () => {
       'code-reviewer',
     )
 
-    // Invariant 11: a non-blocking reviewer verdict permits finalization.
+    // Invariant 11: only LOOKS_GOOD permits finalization.
     const finalPreCreditStatus = gen.next(
       reviewerResult({
         snapshotFingerprint: reviewerFingerprintFromSpawn(
           finalReviewerSpawn.value,
         ),
         reviewedFiles: [LIFECYCLE_FILE],
-        verdict: 'NON_BLOCKING',
+        verdict: 'LOOKS_GOOD',
       }),
     )
     expect(finalPreCreditStatus.value).toMatchObject({
@@ -434,7 +434,7 @@ describe('base2 deterministic gate lifecycle e2e', () => {
     })
     const passText = (gatePassed.value as any).input.content as string
     expect(passText).toContain(
-      'Automated validation and reviewer gate passed with NON_BLOCKING',
+      'Automated validation and reviewer gate passed with LOOKS_GOOD',
     )
     expect(parseGateStateBlock(passText)).toMatchObject({
       gate: 'validation/reviewer',
@@ -448,7 +448,7 @@ describe('base2 deterministic gate lifecycle e2e', () => {
       openReviewerBlockers: [],
       nextRequiredAction: '',
       gatePassedPendingFiles: [LIFECYCLE_FILE],
-      gatePassedReviewerVerdict: 'NON_BLOCKING',
+      gatePassedReviewerVerdict: 'LOOKS_GOOD',
     })
     expect((agentState as any).canSuggestFollowups).toBe(true)
   })

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { spawnSync } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -645,6 +646,98 @@ describe('checkJob', () => {
     fs.appendFileSync(job.logFile, 'done\n')
     const result = value(await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }))
     expect(result).toMatchObject({ state: 'completed', exitCode: 0 })
+  })
+
+  test('first settled poll emits one-shot dirty-delta touchedPaths', async () => {
+    const projectRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'check-job-dirty-'),
+    )
+    try {
+      const run = (args: string[]) =>
+        spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8' })
+      expect(run(['init']).status).toBe(0)
+      run(['config', 'user.email', 'test@example.com'])
+      run(['config', 'user.name', 'Test'])
+      fs.writeFileSync(path.join(projectRoot, 'README'), 'seed\n')
+      run(['add', 'README'])
+      run(['commit', '-m', 'seed'])
+
+      // Pre-start dirt must not appear in the delta.
+      fs.writeFileSync(path.join(projectRoot, 'already-dirty.txt'), 'old\n')
+      const dirtyBeforePaths = ['already-dirty.txt']
+
+      // Job-authored dirt appears after the snapshot.
+      fs.writeFileSync(path.join(projectRoot, 'from-bg.txt'), 'new\n')
+
+      const job = makeJob({
+        status: 'completed',
+        exitCode: 0,
+        projectRoot,
+        dirtyBeforePaths,
+      })
+      fs.appendFileSync(job.logFile, 'done\n')
+
+      const first = value(
+        await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+      )
+      expect(first.state).toBe('completed')
+      expect(first.touchedPaths).toContain('from-bg.txt')
+      expect(first.touchedPaths).not.toContain('already-dirty.txt')
+      expect(job.settlementTouchedPaths).toEqual(first.touchedPaths)
+
+      // Subsequent poll must not re-emit (idempotent one-shot), even if more
+      // concurrent dirt appears after settle.
+      fs.writeFileSync(path.join(projectRoot, 'post-settle.txt'), 'late\n')
+      const second = value(
+        await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+      )
+      expect(second.touchedPaths).toBeUndefined()
+      expect(second.state).toBe('completed')
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('settled job without dirty snapshot soft-fails (omits touchedPaths)', async () => {
+    // Recovered / test jobs without pre-start snapshot must not invent paths.
+    const job = makeJob({ status: 'completed', exitCode: 0 })
+    fs.appendFileSync(job.logFile, 'done\n')
+
+    const first = value(
+      await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+    )
+    expect(first.state).toBe('completed')
+    expect(first.touchedPaths).toBeUndefined()
+    // Locked so a later poll still does not recompute.
+    expect(job.settlementTouchedPaths).toEqual([])
+
+    const second = value(
+      await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+    )
+    expect(second.touchedPaths).toBeUndefined()
+  })
+
+  test('running poll never emits touchedPaths even with a dirty snapshot', async () => {
+    const projectRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'check-job-running-dirty-'),
+    )
+    try {
+      const job = makeJob({
+        status: 'running',
+        projectRoot,
+        dirtyBeforePaths: [],
+      })
+      fs.appendFileSync(job.logFile, 'still going\n')
+
+      const result = value(
+        await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+      )
+      expect(result.state).toBe('running')
+      expect(result.touchedPaths).toBeUndefined()
+      expect(job.settlementTouchedPaths).toBeUndefined()
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
   })
 
   test('success output includes the job logFile for a running job', async () => {

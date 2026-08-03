@@ -1,10 +1,10 @@
 {
   "schemaVersion": 2,
   "slug": "context-budget-architecture-2026-08",
-  "status": "executing",
+  "status": "completed",
   "currentTask": null,
-  "revision": 4,
+  "revision": 5,
   "checkpoint": null,
   "createdAt": "2026-08-02T23:25:00.119Z",
-  "updatedAt": "2026-08-03T13:51:26.913Z"
+  "updatedAt": "2026-08-03T17:58:41.620Z"
 }

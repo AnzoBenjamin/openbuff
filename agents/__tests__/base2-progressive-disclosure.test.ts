@@ -114,6 +114,8 @@ describe('base2 progressive prompt disclosure (M4)', () => {
     expect(system.toLowerCase()).toContain('specialist')
   })
 
+  // AC4 canary acceptance metric: progressive disclosure must shrink the
+  // authored always-on surface by >=25%. No separate buffbench harness.
   test('flag on shrinks the authored prompt surface by at least 25%', () => {
     const off = countTokens(authoredSurface(createBase2('default')))
     const on = countTokens(
@@ -123,6 +125,42 @@ describe('base2 progressive prompt disclosure (M4)', () => {
     )
     const reduction = (off - on) / off
     expect(reduction).toBeGreaterThanOrEqual(0.25)
+  })
+
+  test('env canary enables disclosure when option is omitted', () => {
+    const previous = process.env.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE
+    try {
+      process.env.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE = 'true'
+      const agent = createBase2('default')
+      const system = agent.systemPrompt as string
+      expect(system).not.toContain(qualitySection)
+      expect(system).toContain('agents/guides/code-craftsmanship.md')
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE
+      } else {
+        process.env.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE = previous
+      }
+    }
+  })
+
+  test('explicit false overrides env canary on', () => {
+    const previous = process.env.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE
+    try {
+      process.env.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE = '1'
+      const agent = createBase2('default', {
+        progressivePromptDisclosure: false,
+      })
+      const system = agent.systemPrompt as string
+      expect(system).toContain(qualitySection)
+      expect(system).not.toContain('agents/guides/code-craftsmanship.md')
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE
+      } else {
+        process.env.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE = previous
+      }
+    }
   })
 
   test('every relocated guide file exists and carries its moved content', () => {

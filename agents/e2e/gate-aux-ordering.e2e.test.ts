@@ -105,7 +105,7 @@ function reviewerValue(snapshotFingerprint: string, reviewedFiles: string[]) {
   return {
     schemaVersion: 1,
     family: 'reviewer',
-    verdict: 'NON_BLOCKING',
+    verdict: 'LOOKS_GOOD',
     snapshotFingerprint,
     reviewedFiles,
     findings: [],
@@ -461,7 +461,7 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     })
     const passText = (gatePassed.value as any).input.content as string
     expect(passText).toContain(
-      'Automated validation and reviewer gate passed with NON_BLOCKING',
+      'Automated validation and reviewer gate passed with LOOKS_GOOD',
     )
     expect(parseGateStateBlock(passText)).toMatchObject({
       gate: 'validation/reviewer',
@@ -1174,7 +1174,7 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       input: { role: 'user' },
     })
     expect((gatePassed.value as any).input.content).toContain(
-      'Automated validation and reviewer gate passed with NON_BLOCKING',
+      'Automated validation and reviewer gate passed with LOOKS_GOOD',
     )
     expect(parseGateStateBlock((gatePassed.value as any).input.content)).toMatchObject(
       {
@@ -1614,6 +1614,9 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
       agentState,
       prompt: 'Please finish the pending reliability finding.',
       params: {},
+      // Pass programmaticConfig so configured specialist budget (default 3)
+      // is re-clamped from config rather than only the local handleSteps literal.
+      config: base2.programmaticConfig,
     } as any)
 
     // Resumed-state prelude.

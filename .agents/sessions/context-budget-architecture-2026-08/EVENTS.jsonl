@@ -8,3 +8,5 @@
 {"ts":"2026-08-03T13:12:52.889Z","kind":"session_status","summary":"Session status -> executing","payload":{"status":"executing"}}
 {"ts":"2026-08-03T13:51:26.914Z","kind":"append_lesson","summary":"Appended entry \"M2 residual + M3 + X-T1/X-T2 complete (gate-verified NON_BLOCKING)\" to STATUS.md","payload":{"heading":"M2 residual + M3 + X-T1/X-T2 complete (gate-verified NON_BLOCKING)","artifact":"STATUS.md"}}
 {"ts":"2026-08-03T13:51:26.914Z","kind":"session_status","summary":"Session status -> executing","payload":{"status":"executing"}}
+{"ts":"2026-08-03T17:58:41.623Z","kind":"append_lesson","summary":"Appended entry \"Optional tail complete — canary + tool schema cost\" to STATUS.md","payload":{"heading":"Optional tail complete — canary + tool schema cost","artifact":"STATUS.md"}}
+{"ts":"2026-08-03T17:58:41.624Z","kind":"session_status","summary":"Session status -> completed","payload":{"status":"completed"}}

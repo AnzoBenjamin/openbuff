@@ -1,5 +1,10 @@
 import { buildArray } from '@codebuff/common/util/array'
 import type { SpecialistReviewerAgent } from '@codebuff/common/agents/specialist-risk-router'
+import {
+  resolveMaxRepairRounds,
+  resolveMaxReviewerRepairRounds,
+  resolveMaxSpecialistRepairRounds,
+} from '@codebuff/common/util/gate-repair-budgets'
 
 import type {
   Base2ActiveWorkPhase,
@@ -22,6 +27,32 @@ import {
   type SecretAgentDefinition,
 } from '../types/secret-agent-definition'
 
+/** Env canary for progressive prompt disclosure (module-level; createBase2 load time). */
+export function isProgressivePromptDisclosureEnvEnabled(
+  raw: string | undefined,
+): boolean {
+  if (typeof raw !== 'string') return false
+  const normalized = raw.trim().toLowerCase()
+  return (
+    normalized === '1' ||
+    normalized === 'true' ||
+    normalized === 'yes' ||
+    normalized === 'on'
+  )
+}
+
+export {
+  DEFAULT_MAX_REPAIR_ROUNDS,
+  DEFAULT_MAX_SPECIALIST_REPAIR_ROUNDS,
+  DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS,
+  MAX_MAX_GATE_REPAIR_ROUNDS,
+  MAX_MAX_REVIEWER_REPAIR_ROUNDS,
+  resolvePositiveIntBudget,
+  resolveMaxReviewerRepairRounds,
+  resolveMaxRepairRounds,
+  resolveMaxSpecialistRepairRounds,
+} from '@codebuff/common/util/gate-repair-budgets'
+
 export function createBase2(
   mode: 'default' | 'fast',
   options?: {
@@ -30,6 +61,9 @@ export function createBase2(
     executePlan?: boolean
     noAskUser?: boolean
     progressivePromptDisclosure?: boolean
+    maxReviewerRepairRounds?: number
+    maxRepairRounds?: number
+    maxSpecialistRepairRounds?: number
     model?: SecretAgentDefinition['model']
     providerOptions?: SecretAgentDefinition['providerOptions']
   },
@@ -39,10 +73,46 @@ export function createBase2(
     planOnly = false,
     executePlan = false,
     noAskUser = false,
-    progressivePromptDisclosure = false,
+    progressivePromptDisclosure: progressivePromptDisclosureOption,
+    maxReviewerRepairRounds: maxReviewerRepairRoundsOption,
+    maxRepairRounds: maxRepairRoundsOption,
+    maxSpecialistRepairRounds: maxSpecialistRepairRoundsOption,
     model: modelOverride,
     providerOptions,
   } = options ?? {}
+  // Explicit true/false wins over env. When omitted, resolve from the
+  // OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE canary (off unless 1/true/yes/on).
+  const progressivePromptDisclosure =
+    progressivePromptDisclosureOption ??
+    isProgressivePromptDisclosureEnvEnabled(
+      typeof process === 'object' && process !== null
+        ? process.env?.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE
+        : undefined,
+    )
+  // Explicit option wins over env. When omitted, resolve from
+  // OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS (positive integer string).
+  const maxReviewerRepairRounds = resolveMaxReviewerRepairRounds(
+    maxReviewerRepairRoundsOption ??
+      (typeof process === 'object' && process !== null
+        ? process.env?.OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS
+        : undefined),
+  )
+  // Explicit option wins over env. When omitted, resolve from
+  // OPENBUFF_MAX_REPAIR_ROUNDS (positive integer string). Default 3.
+  const maxRepairRounds = resolveMaxRepairRounds(
+    maxRepairRoundsOption ??
+      (typeof process === 'object' && process !== null
+        ? process.env?.OPENBUFF_MAX_REPAIR_ROUNDS
+        : undefined),
+  )
+  // Explicit option wins over env. When omitted, resolve from
+  // OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS (positive integer string). Default 3.
+  const maxSpecialistRepairRounds = resolveMaxSpecialistRepairRounds(
+    maxSpecialistRepairRoundsOption ??
+      (typeof process === 'object' && process !== null
+        ? process.env?.OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS
+        : undefined),
+  )
   const isDefault = mode === 'default'
   const isFast = mode === 'fast'
   const canDirectEdit = !planOnly
@@ -132,7 +202,13 @@ export function createBase2(
       'inspect_codebase_structure',
     ],
     spawnableAgentToolMode: 'generic',
-    programmaticConfig: { hasNoValidation, planOnly },
+    programmaticConfig: {
+      hasNoValidation,
+      planOnly,
+      maxReviewerRepairRounds,
+      maxRepairRounds,
+      maxSpecialistRepairRounds,
+    },
     // Spawnable roster with documented, intentional per-mode deltas (M3.2).
     // The deltas are ONLY the coded gates below; everything else is shared
     // across default/fast/plan/execute-plan. Asserted by
@@ -458,6 +534,12 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         base2ActiveWork?: Base2ActiveWorkState
         canSuggestFollowups?: boolean
         uncommittedUnvalidatedFiles?: string[]
+        /**
+         * Process-owned mutation paths published by the runtime as JSON-safe
+         * string[] (AgentState.selfMutatedPaths). Declared on this local
+         * intersection so handleSteps can read it without casts.
+         */
+        selfMutatedPaths?: string[]
         commitScopeBypassAuthorized?: boolean
         commitScopeBypassRecord?: {
           reason: string
@@ -514,10 +596,40 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
       const SECURITY_SENSITIVE_NAME_SUBSTRINGS = ['secret', 'token', 'apikey']
       const runReviewerGate = runValidationGate
       const reviewerAgentType = 'code-reviewer'
-      const MAX_REPAIR_ROUNDS = 3
       const MAX_REVIEWER_NO_VERDICT_RETRIES = 1
-      const MAX_REVIEWER_REPAIR_ROUNDS = 3
-      const MAX_SPECIALIST_REPAIR_ROUNDS = 3
+      // Validation-hook repair budget. Already resolved into programmaticConfig
+      // at createBase2 load time; re-clamp here with local literals only because
+      // handleSteps is serialized via toString/new Function and cannot call
+      // module-scope resolve helpers.
+      const configuredMaxRepairRounds = config?.maxRepairRounds
+      const MAX_REPAIR_ROUNDS =
+        typeof configuredMaxRepairRounds === 'number' &&
+        Number.isFinite(configuredMaxRepairRounds) &&
+        configuredMaxRepairRounds >= 1
+          ? Math.min(Math.floor(configuredMaxRepairRounds), 20)
+          : 3
+      // Reviewer→repair→re-review budget (also burned by NON_BLOCKING under
+      // LOOKS_GOOD-only finalization). Already resolved into programmaticConfig
+      // at createBase2 load time; re-clamp here with local literals only because
+      // handleSteps is serialized via toString/new Function and cannot call
+      // module-scope resolveMaxReviewerRepairRounds.
+      const configuredMaxReviewerRepairRounds = config?.maxReviewerRepairRounds
+      const MAX_REVIEWER_REPAIR_ROUNDS =
+        typeof configuredMaxReviewerRepairRounds === 'number' &&
+        Number.isFinite(configuredMaxReviewerRepairRounds) &&
+        configuredMaxReviewerRepairRounds >= 1
+          ? Math.min(Math.floor(configuredMaxReviewerRepairRounds), 20)
+          : 6
+      // Specialist→repair→re-review budget. Same local re-clamp pattern;
+      // default stays 3 (unlike reviewer default 6).
+      const configuredMaxSpecialistRepairRounds =
+        config?.maxSpecialistRepairRounds
+      const MAX_SPECIALIST_REPAIR_ROUNDS =
+        typeof configuredMaxSpecialistRepairRounds === 'number' &&
+        Number.isFinite(configuredMaxSpecialistRepairRounds) &&
+        configuredMaxSpecialistRepairRounds >= 1
+          ? Math.min(Math.floor(configuredMaxSpecialistRepairRounds), 20)
+          : 3
       const MAX_SPECIALIST_NO_VERDICT_RETRIES = 1
       // Single source of truth for the post-gate finalization instruction used
       // by every gate-pass path (fresh pass, conversation reuse, durable
@@ -1215,11 +1327,6 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             .messageHistory
         }
         let editsThisStep = false
-        // Reset per STEP iteration (NOT hoisted across iterations): true when
-        // this step ran a terminal-mutation tool that can write files the
-        // edit-artifact channel does not capture. Used to scope the mid-turn
-        // git-status sweep's absorption below.
-        let terminalMutationThisStep = false
         const files = extractChangedFiles(
           (stepResult as any) && (stepResult as any).toolResult,
         )
@@ -1231,24 +1338,14 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           markActiveWorkStateChanged()
         }
         const messageHistory = (stepResult as any)?.agentState?.messageHistory
-        // Capture the pre-update start index so the terminal-mutation scan
-        // below covers the SAME message delta extractChangedFilesFromMessages
-        // scans; processedMessageHistoryLength is overwritten right after. If
-        // we scanned from the post-update length the slice would be empty and
-        // the terminal signal would always be false.
+        // Capture the pre-update start index so extractChangedFilesFromMessages
+        // covers only the message delta for this step; processedMessageHistoryLength
+        // is overwritten right after.
         const messageHistoryStartIndex = processedMessageHistoryLength
         const messageFiles = extractChangedFilesFromMessages(
           messageHistory,
           messageHistoryStartIndex,
         )
-        if (
-          messagesRanTerminalMutationTool(
-            messageHistory,
-            messageHistoryStartIndex,
-          )
-        ) {
-          terminalMutationThisStep = true
-        }
         if (Array.isArray(messageHistory)) {
           currentConversationMessages = messageHistory
           updateWorkflowTodoProgressFromMessages(messageHistory)
@@ -1334,20 +1431,29 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         for (const file of gitStatusFiles) {
           // Concurrent-instance isolation: absorb a newly-dirty git-status
           // file into the pending set only when this agent plausibly authored
-          // it — either it is already task-related (present in the live
-          // changedFiles set, which recordChangedFiles populated this step from
-          // edit-tool/message-history artifacts) or a terminal-mutation tool
-          // (run_terminal_command / a spawned basher) ran this step and can
-          // write files the edit-artifact channel does not capture. A file that
-          // is neither self-authored nor produced during a terminal step is
-          // attributed to a concurrent instance / external churn and excluded.
-          // The observation bookkeeping above (gitStatusObservedFiles.add and
-          // gitStatusObservedDirty) stays UNSCOPED for every git-status file so
-          // committed-file pruning keeps working.
+          // it. `shouldAbsorbGitStatusFile` is generated into
+          // `<gate-helpers-generated>` from `agents/base2/gate-concurrency.ts`
+          // via `scripts/generate-gate-helpers.ts` (function-declaration
+          // hoisting in handleSteps makes it available at this mid-turn call
+          // site). Observation bookkeeping above (gitStatusObservedFiles.add
+          // and gitStatusObservedDirty) stays UNSCOPED for every git-status
+          // file so committed-file pruning keeps working.
+          // Runtime publishes selfMutatedPaths as string[] after confirmed
+          // broker/tool/terminal mutations so this absorption path can credit
+          // process-owned writes that are not yet task-related.
+          const rawSelfMutated = mutableAgentState.selfMutatedPaths
+          const selfMutatedPaths =
+            Array.isArray(rawSelfMutated) && rawSelfMutated.length > 0
+              ? new Set(rawSelfMutated)
+              : undefined
           if (
-            !initialGitStatusFiles.includes(file) &&
-            !gatePassedFiles.has(file) &&
-            (changedFiles.has(file) || terminalMutationThisStep)
+            shouldAbsorbGitStatusFile({
+              file,
+              initialGitStatusFiles,
+              gatePassedFiles,
+              taskRelatedFiles: changedFiles,
+              selfMutatedPaths,
+            })
           ) {
             editsHappened = true
             recordChangedFiles([file], { fromStatusObservation: true })
@@ -1839,8 +1945,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             !securityVerdict
           if (securityBlockers.length > 0) {
             const records = collectReviewerFindingRecordsInline(securityToolResult)
-            activeWorkState.openReviewerBlockers = securityBlockers
-            activeWorkState.openReviewerFindings = securityBlockers.map(
+            const securityFindingRecords = securityBlockers.map(
               (text: string, index: number) => {
                 const record = correlateReviewerFindingRecord(text, records)
                 return {
@@ -1854,6 +1959,13 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                   createdAt: new Date().toISOString(),
                 }
               },
+            )
+            // Merge instead of replace: another reviewer's still-open
+            // findings/blockers must not be clobbered by security-reviewer.
+            mergeReviewerFindings(
+              'security-reviewer',
+              securityFindingRecords,
+              securityBlockers,
             )
             addOwedReviewer('security-reviewer')
             activeWorkState.currentPhase = 'repair_loop'
@@ -3701,8 +3813,8 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           )
         }
 
-        let reviewerFinalizationVerdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | '' =
-          reviewerProtocolBypassAuthorized ? 'NON_BLOCKING' : ''
+        let reviewerFinalizationVerdict: 'LOOKS_GOOD' | '' =
+          reviewerProtocolBypassAuthorized ? 'LOOKS_GOOD' : ''
         if (reviewerProtocolBypassAuthorized) {
           activeWorkState.reviewerGateBypassReason =
             'User authorized bypass after repeated reviewer protocol attestation failures.'
@@ -3730,8 +3842,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         const matchingReviewReceipt = activeWorkState.reviewReceipts.some(
           (receipt) =>
             receipt.reviewer === requiredReviewerAgentType &&
-            (receipt.verdict === 'LOOKS_GOOD' ||
-              receipt.verdict === 'NON_BLOCKING') &&
+            receipt.verdict === 'LOOKS_GOOD' &&
             receipt.snapshotFingerprint === reviewableFingerprint &&
             receipt.reviewedFileCount === reviewableGateScopeFiles.length &&
             gateFileSetsEqual(
@@ -3754,7 +3865,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           (reviewableGateScopeFiles.length === 0 ||
             reviewableSetAlreadyReviewed)
         if (skipReviewerForReviewableScope) {
-          reviewerFinalizationVerdict = 'NON_BLOCKING'
+          reviewerFinalizationVerdict = 'LOOKS_GOOD'
           activeWorkState.currentPhase = 'awaiting_review'
           activeWorkState.nextRequiredAction = ''
           const reviewerSkipReason =
@@ -3934,16 +4045,39 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               activeWorkState.reviewerRepairRoundCount ?? 0,
             ) + 1
             // Hard round cap for the reviewer -> repair -> re-review loop,
-            // mirroring MAX_REPAIR_ROUNDS for validation repairs. The
-            // snapshot-progress guard below already breaks when a repair makes
-            // no fingerprint change; this adds an explicit upper bound so a
-            // repair that keeps producing snapshot-visible churn without ever
+            // mirroring MAX_REPAIR_ROUNDS for validation repairs. NON_BLOCKING
+            // findings also burn this budget under LOOKS_GOOD-only finalization.
+            // The snapshot-progress guard below already breaks when a repair
+            // makes no fingerprint change; this adds an explicit upper bound so
+            // a repair that keeps producing snapshot-visible churn without ever
             // clearing the finding cannot loop indefinitely.
             if (
               Number(activeWorkState.reviewerRepairRoundCount ?? 0) >
               MAX_REVIEWER_REPAIR_ROUNDS
             ) {
-              activeWorkState.openReviewerBlockers = blockers
+              // Preserve other families' open findings while recording this
+              // code-reviewer blocker set (budget exhausted before full merge
+              // records are built below on the non-exhausted path).
+              const budgetExhaustedRecords = blockers.map(
+                (text: string, index: number) => ({
+                  id: buildReviewerFindingId(text, index),
+                  gateId: `${requiredReviewerAgentType}:${reviewSnapshotFingerprint}`,
+                  text,
+                  status: 'open' as const,
+                  files: Array.from(pendingGateFiles),
+                  snapshotFingerprint: reviewSnapshotFingerprint,
+                  reviewer: requiredReviewerAgentType as
+                    | 'code-reviewer'
+                    | 'security-reviewer'
+                    | SpecialistReviewerAgent,
+                  createdAt: new Date().toISOString(),
+                }),
+              )
+              mergeReviewerFindings(
+                requiredReviewerAgentType,
+                budgetExhaustedRecords,
+                blockers,
+              )
               activeWorkState.currentPhase = 'blocked'
               activeWorkState.nextRequiredAction =
                 `Reviewer repair budget exhausted (${MAX_REVIEWER_REPAIR_ROUNDS}/${MAX_REVIEWER_REPAIR_ROUNDS}); the reviewer findings are still open. Stop retrying automatically and inspect the findings or handoff.`
@@ -3965,8 +4099,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               } as any
               break
             }
-            activeWorkState.openReviewerBlockers = blockers
-            activeWorkState.openReviewerFindings = blockers.map(
+            const codeReviewerFindingRecords = blockers.map(
               (text: string, index: number) => ({
                 id: buildReviewerFindingId(text, index),
                 gateId: `${requiredReviewerAgentType}:${reviewSnapshotFingerprint}`,
@@ -3974,9 +4107,19 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 status: 'open' as const,
                 files: Array.from(pendingGateFiles),
                 snapshotFingerprint: reviewSnapshotFingerprint,
-                reviewer: requiredReviewerAgentType,
+                reviewer: requiredReviewerAgentType as
+                  | 'code-reviewer'
+                  | 'security-reviewer'
+                  | SpecialistReviewerAgent,
                 createdAt: new Date().toISOString(),
               }),
+            )
+            // Merge instead of replace: another reviewer's still-open
+            // findings/blockers must not be clobbered by the final code-reviewer.
+            mergeReviewerFindings(
+              requiredReviewerAgentType,
+              codeReviewerFindingRecords,
+              blockers,
             )
             activeWorkState.nextRequiredAction =
               'Resolve the reviewer feedback below before any unrelated work, final response, or another review.'
@@ -4416,7 +4559,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 }
                 activeWorkState.nextRequiredAction = ''
                 activeWorkState.currentPhase = 'awaiting_review'
-                reviewerFinalizationVerdict = 'NON_BLOCKING'
+                reviewerFinalizationVerdict = 'LOOKS_GOOD'
                 markActiveWorkStateChanged()
                 emitGateTelemetry({
                   currentPhase: 'awaiting_review',
@@ -5049,7 +5192,8 @@ function selectCoverageEvidenceFiles(files: string[]): string[] {
 
 type ReviewerStructuredVerdict = 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING';
 
-type ReviewerFinalizationVerdict = 'LOOKS_GOOD' | 'NON_BLOCKING' | '';
+/** Only LOOKS_GOOD unlocks finalization; empty string is fail-closed. */
+type ReviewerFinalizationVerdict = 'LOOKS_GOOD' | '';
 
 type ReviewerCoverage = 'covered' | 'missing' | 'n/a';
 
@@ -5165,10 +5309,22 @@ function isTestCoverageReviewerFinding(text: string): boolean {
     return false;
 }
 
+function dedupeExactStringsPreserveOrder(values: string[]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const value of values) {
+        if (seen.has(value))
+            continue;
+        seen.add(value);
+        out.push(value);
+    }
+    return out;
+}
+
 function collectReviewerBlockers(toolResult: unknown): string[] {
     // First check for structured reviewer outputs (e.g. JSON with a
-    // verdict field). When present and BLOCKING, surface findings as the
-    // blocker text so existing pinning/messaging logic still works.
+    // verdict field). BLOCKING and NON_BLOCKING both surface repair targets;
+    // only LOOKS_GOOD finalizes (via getReviewerFinalizationVerdict).
     const structured = collectStructuredReviewerOutputs(toolResult);
     const structuredBlockers: string[] = [];
     for (const entry of structured) {
@@ -5178,6 +5334,9 @@ function collectReviewerBlockers(toolResult: unknown): string[] {
                 structuredBlockers.push(`BLOCKING: ${finding}`);
             }
         }
+        // Coverage-adequacy / dimension / requirement hard blockers first so we
+        // know whether an empty NON_BLOCKING receipt already has repair fuel.
+        const hardBlockersBefore = structuredBlockers.length;
         // Coverage-adequacy contract (M6.3): missing test coverage for a
         // behavior-changing edit is BLOCKING regardless of the text verdict.
         if (entry.coverage === 'missing') {
@@ -5194,14 +5353,34 @@ function collectReviewerBlockers(toolResult: unknown): string[] {
                 structuredBlockers.push(`BLOCKING: requirement ${requirement.status}: ${requirement.requirement}`);
             }
         }
+        const entryHasHardBlocker = structuredBlockers.length > hardBlockersBefore;
+        // NON_BLOCKING is repair fuel, not a pass: elevate findings into the
+        // same repair path used for BLOCKING until the reviewer returns LOOKS_GOOD.
+        // Empty-findings synthetic is only needed when no hard blocker already
+        // forces re-review — otherwise pure coverage-missing sets would mix a
+        // non-coverage string and break all-coverage → test-writer routing.
+        if (entry.verdict === 'NON_BLOCKING') {
+            if (entry.findings.length > 0) {
+                for (const finding of entry.findings) {
+                    structuredBlockers.push(`NON_BLOCKING: ${finding}`);
+                }
+            }
+            else if (!entryHasHardBlocker) {
+                structuredBlockers.push('NON_BLOCKING: reviewer returned non-blocking nits without findings; re-address and re-review until LOOKS_GOOD');
+            }
+        }
     }
-    if (structuredBlockers.length > 0)
-        return structuredBlockers;
+    // Nested spawn/set_output wrappers can surface the same structured receipt
+    // twice; exact-string de-dupe keeps first-seen order without dropping
+    // legitimately distinct blockers.
+    if (structuredBlockers.length > 0) {
+        return dedupeExactStringsPreserveOrder(structuredBlockers);
+    }
     const texts: string[] = [];
     collectStrings(toolResult, texts);
-    return texts
+    return dedupeExactStringsPreserveOrder(texts
         .map((text) => stripReviewerPreamble(text))
-        .filter((text) => hasReviewerLineVerdict(text, 'BLOCKING'));
+        .filter((text) => hasReviewerLineVerdict(text, 'BLOCKING')));
 }
 
 /**
@@ -5273,11 +5452,17 @@ function getReviewerFinalizationVerdict(toolResult: unknown): ReviewerFinalizati
     if (structured.some((entry) => entry.coverage === 'missing')) {
         return '';
     }
+    // Incomplete requirements (missing/uncertain) also block finalization even
+    // when the reviewer emits a soft top-level verdict.
+    if (structured.some((entry) => (entry.requirementCoverage ?? []).some((requirement) => requirement.status === 'missing' ||
+        requirement.status === 'uncertain'))) {
+        return '';
+    }
+    // Finalization credit is LOOKS_GOOD only. NON_BLOCKING findings are
+    // elevated by collectReviewerBlockers into the repair loop.
     for (const entry of structured) {
         if (entry.verdict === 'LOOKS_GOOD')
             return 'LOOKS_GOOD';
-        if (entry.verdict === 'NON_BLOCKING')
-            return 'NON_BLOCKING';
     }
     return '';
 }
@@ -5629,6 +5814,82 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
         lines.push(`Pending changed files: ${pendingFiles.join(', ')}`);
     }
     return lines.join('\n');
+}
+
+/**
+ * Pure concurrent-instance isolation helper for the base2 mid-turn git-status
+ * sweep.
+ *
+ * NOTE: the inline copy is **generated** into the base2 `handleSteps`
+ * `<gate-helpers-generated>` region via `scripts/generate-gate-helpers.ts`
+ * (same as gate-paths/reviewer/repair). `handleSteps` is serialized via
+ * `toString()` / `new Function(...)` and loses module closure, so it cannot
+ * import this file — edit this module and regenerate rather than hand-maintaining
+ * the inline copy.
+ */
+function shouldAbsorbGitStatusFile(params: {
+    file: string;
+    initialGitStatusFiles: readonly string[];
+    gatePassedFiles: ReadonlySet<string> | {
+        has(f: string): boolean;
+    };
+    taskRelatedFiles: ReadonlySet<string> | {
+        has(f: string): boolean;
+    };
+    selfMutatedPaths?: ReadonlySet<string> | {
+        has(f: string): boolean;
+    };
+}): boolean {
+    const { file, initialGitStatusFiles, gatePassedFiles, taskRelatedFiles, selfMutatedPaths, } = params;
+    if (initialGitStatusFiles.includes(file))
+        return false;
+    if (gatePassedFiles.has(file))
+        return false;
+    if (taskRelatedFiles.has(file))
+        return true;
+    if (selfMutatedPaths !== undefined && selfMutatedPaths.has(file))
+        return true;
+    return false;
+}
+
+/**
+ * Pure gate snapshot fingerprint helpers extracted from `base2.ts`.
+ *
+ * NOTE: the inline copy is **generated** into the base2 `handleSteps`
+ * `<gate-helpers-generated>` region via `scripts/generate-gate-helpers.ts`
+ * (same as gate-paths/reviewer/repair/concurrency). `handleSteps` is serialized
+ * via `toString()` / `new Function(...)` and loses module closure, so it cannot
+ * import this file — edit this module and regenerate rather than hand-maintaining
+ * the inline copy.
+ */
+// Canonical SHA-256 snapshot fingerprint: v3: followed by exactly 64
+// lowercase hex chars. Only these are reusable as durable attestation.
+function isAttestableSnapshotFingerprint(value: string): boolean {
+    return /^v3:[a-f0-9]{64}$/.test(value);
+}
+
+function hashGateSnapshotDetails(details: string): string {
+    const getBuiltinModule = typeof process === 'object' &&
+        process !== null &&
+        'getBuiltinModule' in process &&
+        typeof process.getBuiltinModule === 'function'
+        ? process.getBuiltinModule.bind(process)
+        : undefined;
+    const req = (globalThis as any).require as NodeJS.Require | undefined;
+    let crypto: typeof import('node:crypto') | undefined;
+    if (getBuiltinModule) {
+        crypto = getBuiltinModule('node:crypto') as typeof import('node:crypto');
+    }
+    else if (typeof req === 'function') {
+        crypto = req('node:crypto');
+    }
+    if (crypto) {
+        return `v3:${crypto.createHash('sha256').update(details).digest('hex')}`;
+    }
+    // Fail closed: without a collision-resistant hash the snapshot cannot
+    // be safely attested. Return a non-reusable sentinel so no durable
+    // gate credit, review receipt, or bypass challenge can match it.
+    return 'unreadable:no-crypto';
 }
 // </gate-helpers-generated>
 
@@ -6568,11 +6829,9 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
       function getConversationGatePassForPendingFiles(
         files: string[],
         messages: unknown,
-      ): { reviewerVerdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | '' } | undefined {
+      ): { reviewerVerdict: 'LOOKS_GOOD' | '' } | undefined {
         if (files.length === 0 || !Array.isArray(messages)) return undefined
-        let latestMatchingPass:
-          | { reviewerVerdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | '' }
-          | undefined
+        let latestMatchingPass: { reviewerVerdict: 'LOOKS_GOOD' | '' } | undefined
         for (const message of messages) {
           if (latestMatchingPass && messageChangedFiles(message)) {
             latestMatchingPass = undefined
@@ -6589,11 +6848,13 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
               gateState.details,
             )
             if (!gateFileSetsEqual(files, gateFiles)) continue
-            latestMatchingPass = {
-              reviewerVerdict: extractReviewerVerdictFromGateDetails(
-                gateState.details,
-              ),
-            }
+            const reviewerVerdict = extractReviewerVerdictFromGateDetails(
+              gateState.details,
+            )
+            // Historical NON_BLOCKING conversation passes fail closed; only
+            // LOOKS_GOOD may reuse as a conversation gate credit.
+            if (reviewerVerdict !== 'LOOKS_GOOD') continue
+            latestMatchingPass = { reviewerVerdict }
           }
         }
         return latestMatchingPass
@@ -6682,20 +6943,13 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
 
       function extractReviewerVerdictFromGateDetails(
         details: string,
-      ): 'LOOKS_GOOD' | 'NON_BLOCKING' | '' {
-        if (/\bNON_BLOCKING\b/.test(details)) return 'NON_BLOCKING'
+      ): 'LOOKS_GOOD' | '' {
         if (/\bLOOKS_GOOD\b/.test(details)) return 'LOOKS_GOOD'
         return ''
       }
 
       function messageChangedFiles(message: unknown): boolean {
         return extractChangedFilesFromMessages([message], 0).length > 0
-      }
-
-      // Canonical SHA-256 snapshot fingerprint: v3: followed by exactly 64
-      // lowercase hex chars. Only these are reusable as durable attestation.
-      function isAttestableSnapshotFingerprint(value: string): boolean {
-        return /^v3:[a-f0-9]{64}$/.test(value)
       }
 
       // Canonical content marker: sha256:<64hex>:<length> for regular files,
@@ -6740,15 +6994,11 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
         )
       }
 
-      function reviewerFinalizationVerdictFromDurablePass():
-        | 'LOOKS_GOOD'
-        | 'NON_BLOCKING'
-        | '' {
+      function reviewerFinalizationVerdictFromDurablePass(): 'LOOKS_GOOD' | '' {
+        // Historical NON_BLOCKING durable passes fail closed: only LOOKS_GOOD
+        // may reuse as a durable finalization credit.
         if (activeWorkState.gatePassedReviewerVerdict === 'LOOKS_GOOD') {
           return 'LOOKS_GOOD'
-        }
-        if (activeWorkState.gatePassedReviewerVerdict === 'NON_BLOCKING') {
-          return 'NON_BLOCKING'
         }
         return ''
       }
@@ -7229,62 +7479,6 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
         return normalizeGateFileList([...out])
       }
 
-      // Detects a terminal-mutation tool call in a message-history delta.
-      // Mirrors the scanning shape of extractChangedFilesFromMessages: iterate
-      // messages.slice(startIndex), and for each assistant record with an array
-      // content, return true if any part is a tool-call whose tool name is
-      // run_terminal_command, OR a spawn (spawn_agents / spawn_agent_inline)
-      // whose input names `basher` as an agent_type. Terminal writes are not
-      // captured by the edit-artifact channel, so this signal scopes the
-      // git-status sweep's absorption. Self-contained inline helper (handleSteps
-      // is serialized via .toString() + new Function(...), so it must not
-      // reference module-scope imports).
-      function messagesRanTerminalMutationTool(
-        messages: unknown,
-        startIndex: number,
-      ): boolean {
-        if (!Array.isArray(messages)) return false
-        const spawnsBasher = (input: unknown): boolean => {
-          if (!input || typeof input !== 'object') return false
-          const record = input as Record<string, unknown>
-          if (record.agent_type === 'basher') return true
-          if (Array.isArray(record.agents)) {
-            for (const agent of record.agents) {
-              if (
-                agent &&
-                typeof agent === 'object' &&
-                (agent as Record<string, unknown>).agent_type === 'basher'
-              ) {
-                return true
-              }
-            }
-          }
-          return false
-        }
-        for (const message of messages.slice(startIndex)) {
-          if (!message || typeof message !== 'object') continue
-          const record = message as Record<string, unknown>
-          if (record.role !== 'assistant') continue
-          if (!Array.isArray(record.content)) continue
-          for (const part of record.content) {
-            if (!part || typeof part !== 'object') continue
-            const toolCall = part as Record<string, unknown>
-            if (toolCall.type !== 'tool-call') continue
-            const toolName =
-              typeof toolCall.toolName === 'string' ? toolCall.toolName : ''
-            if (toolName === 'run_terminal_command') return true
-            if (
-              (toolName === 'spawn_agents' ||
-                toolName === 'spawn_agent_inline') &&
-              spawnsBasher(toolCall.input)
-            ) {
-              return true
-            }
-          }
-        }
-        return false
-      }
-
       function visitToolValue(value: unknown, out: Set<string>): void {
         if (!value) return
         if (Array.isArray(value)) {
@@ -7623,61 +7817,6 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
           }
         }
         return deletedFiles
-      }
-
-      function hashGateSnapshotDetails(details: string): string {
-        // Best-effort lazy require of the canonical shared module so this gate
-        // and its consumers cannot drift when a CommonJS loader is present.
-        // handleSteps is serialized via .toString() and reconstructed with
-        // new Function(...), so this must NOT capture a module-scope import.
-        // Specifiers are repo-root / agents-package referrers only (not the
-        // sibling-only './gate-fingerprint' path, which almost never resolves
-        // under the serialized-runtime global require). The inline body below
-        // is the intentional serialized fallback when no specifier resolves;
-        // keep it in sync with ./gate-fingerprint.
-        const req = (globalThis as any).require as NodeJS.Require | undefined
-        if (typeof req === 'function') {
-          for (const specifier of [
-            './base2/gate-fingerprint',
-            './agents/base2/gate-fingerprint',
-          ]) {
-            try {
-              const shared = req(specifier) as
-                | typeof import('./gate-fingerprint')
-                | undefined
-              if (
-                shared &&
-                typeof shared.hashGateSnapshotDetails === 'function'
-              ) {
-                return shared.hashGateSnapshotDetails(details)
-              }
-            } catch {
-              // Try the next candidate specifier.
-            }
-          }
-        }
-        const getBuiltinModule =
-          typeof process === 'object' &&
-          process !== null &&
-          'getBuiltinModule' in process &&
-          typeof process.getBuiltinModule === 'function'
-            ? process.getBuiltinModule.bind(process)
-            : undefined
-        let crypto: typeof import('node:crypto') | undefined
-        if (getBuiltinModule) {
-          crypto = getBuiltinModule(
-            'node:crypto',
-          ) as typeof import('node:crypto')
-        } else if (typeof req === 'function') {
-          crypto = req('node:crypto')
-        }
-        if (crypto) {
-          return `v3:${crypto.createHash('sha256').update(details).digest('hex')}`
-        }
-        // Fail closed: without a collision-resistant hash the snapshot cannot
-        // be safely attested. Return a non-reusable sentinel so no durable
-        // gate credit, review receipt, or bypass challenge can match it.
-        return 'unreadable:no-crypto'
       }
 
       /**

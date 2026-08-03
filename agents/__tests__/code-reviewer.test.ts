@@ -136,4 +136,32 @@ describe('code-reviewer prompt isolation', () => {
     expect(reviewer.instructionsPrompt).toContain('verdict-contract, M6.3')
     expect(reviewer.instructionsPrompt).toContain('coverage: "missing"')
   })
+
+  test('forces BLOCKING when any requirementCoverage status is missing or uncertain', () => {
+    const reviewer = createReviewer('anthropic/claude-opus-4.7')
+
+    expect(reviewer.instructionsPrompt).toContain(
+      'If ANY `requirementCoverage[].status` is `missing` or `uncertain`',
+    )
+    expect(reviewer.instructionsPrompt).toContain(
+      'the top-level `verdict` MUST be `"BLOCKING"`',
+    )
+    expect(reviewer.instructionsPrompt).toContain(
+      'put each incomplete requirement into `findings` as a concrete next action',
+    )
+  })
+
+  test('documents LOOKS_GOOD-only finalization and NON_BLOCKING re-review loop', () => {
+    const reviewer = createReviewer('anthropic/claude-opus-4.7')
+
+    expect(reviewer.instructionsPrompt).toContain(
+      'the parent gate finalizes only on `LOOKS_GOOD`',
+    )
+    expect(reviewer.instructionsPrompt).toContain(
+      'Use `NON_BLOCKING` when nits exist',
+    )
+    expect(reviewer.instructionsPrompt).toContain(
+      'repair/re-review loop until a later review returns `LOOKS_GOOD`',
+    )
+  })
 })

@@ -4,6 +4,11 @@ import {
   peekJobLineCarry,
   readNewJobOutput,
 } from './background-jobs'
+import {
+  dirtyDelta,
+  listDirtyPaths,
+  withTouchedPaths,
+} from './run-terminal-command'
 
 import type { BackgroundJobOwner } from './background-jobs'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
@@ -315,6 +320,38 @@ export async function checkJob(params: {
         ...(waitFor ? { matched } : {}),
         logFile: job.logFile,
       }
+
+      /**
+       * Resolve the one-shot settlement dirty delta the first time a settled
+       * observation is returned. Stores `[]` when snapshot/git is missing so
+       * re-polls stay idempotent and never re-attribute post-settle dirt.
+       * Returns paths to emit only on the resolving observation (omit on
+       * subsequent polls and while still running).
+       */
+      const resolveSettlementTouchedPaths = async (): Promise<
+        string[] | undefined
+      > => {
+        if (job.settlementTouchedPaths !== undefined) {
+          // Already resolved on a prior settled check_job — do not re-emit.
+          return undefined
+        }
+        if (
+          job.dirtyBeforePaths !== undefined &&
+          job.projectRoot !== undefined
+        ) {
+          const dirtyAfter = await listDirtyPaths(job.projectRoot)
+          const touched =
+            dirtyAfter !== null
+              ? dirtyDelta(new Set(job.dirtyBeforePaths), dirtyAfter)
+              : []
+          job.settlementTouchedPaths = touched
+          return touched
+        }
+        // Soft-fail: recovered jobs / no git snapshot — lock out recompute.
+        job.settlementTouchedPaths = []
+        return undefined
+      }
+
       if (timedOut && job.status === 'running' && killOnTimeout) {
         const killResult = killBackgroundJob(jobId, 'SIGTERM')
         if ('killed' in killResult) {
@@ -324,18 +361,25 @@ export async function checkJob(params: {
           const postKillState = postKillJob?.state ?? killResult.status
           const postKillExitCode =
             postKillJob?.exitCode ?? killResult.exitCode ?? undefined
+          // Kill settles the job; credit dirty delta on this first settled
+          // observation (same one-shot path as natural finish).
+          const killTouched = await resolveSettlementTouchedPaths()
+          const killValue = {
+            ...baseValue,
+            state: postKillState,
+            ...(postKillExitCode !== undefined && postKillExitCode !== null
+              ? { exitCode: postKillExitCode }
+              : {}),
+            killed: true as const,
+            timedOut: true as const,
+          }
           return [
             {
               type: 'json',
-              value: {
-                ...baseValue,
-                state: postKillState,
-                ...(postKillExitCode !== undefined && postKillExitCode !== null
-                  ? { exitCode: postKillExitCode }
-                  : {}),
-                killed: true,
-                timedOut: true,
-              },
+              value:
+                killTouched !== undefined
+                  ? withTouchedPaths(killValue, killTouched)
+                  : killValue,
             },
           ]
         }
@@ -353,13 +397,27 @@ export async function checkJob(params: {
           },
         ]
       }
+
+      const settlementTouched = finished
+        ? await resolveSettlementTouchedPaths()
+        : undefined
+      const resultValue =
+        settlementTouched !== undefined
+          ? withTouchedPaths(
+              {
+                ...baseValue,
+                ...(timedOut ? { timedOut: true as const } : {}),
+              },
+              settlementTouched,
+            )
+          : {
+              ...baseValue,
+              ...(timedOut ? { timedOut: true as const } : {}),
+            }
       return [
         {
           type: 'json',
-          value: {
-            ...baseValue,
-            ...(timedOut ? { timedOut: true } : {}),
-          },
+          value: resultValue,
         },
       ]
     }

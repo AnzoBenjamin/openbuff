@@ -130,6 +130,23 @@ export interface BackgroundJob {
    * process use the registry-issued id directly and leave this undefined.
    */
   registryJobId?: string
+  /**
+   * Project root used for the pre-start dirty snapshot (BACKGROUND start).
+   * In-memory only — not written to recovery metadata. Recovered jobs omit it.
+   */
+  projectRoot?: string
+  /**
+   * Project-relative dirty paths captured immediately before spawn. Used by
+   * check_job on first settlement observation to compute a one-shot dirty
+   * delta. Soft-fail: undefined when git was unavailable at start.
+   */
+  dirtyBeforePaths?: string[]
+  /**
+   * One-shot settlement dirty delta. `undefined` means not yet resolved on a
+   * settled observation; once set (possibly to `[]`) subsequent check_job
+   * polls must not recompute or re-emit `touchedPaths`.
+   */
+  settlementTouchedPaths?: string[]
 }
 
 /**
@@ -560,6 +577,10 @@ export function startBackgroundJob(params: {
   cwd: string
   env: NodeJS.ProcessEnv
   owner?: BackgroundJob['owner']
+  /** Project root for settlement dirty-delta attribution (in-memory only). */
+  projectRoot?: string
+  /** Pre-start dirty paths snapshot; omitted when git unavailable. */
+  dirtyBeforePaths?: string[]
 }): BackgroundJob {
   const { command, shell, shellArgs, cwd, env } = params
   const owner = params.owner ?? UNKNOWN_JOB_OWNER
@@ -639,6 +660,12 @@ export function startBackgroundJob(params: {
     childProcessStartTime: child.pid
       ? readProcessStartTime(child.pid)
       : undefined,
+    ...(params.projectRoot !== undefined
+      ? { projectRoot: params.projectRoot }
+      : {}),
+    ...(params.dirtyBeforePaths !== undefined
+      ? { dirtyBeforePaths: params.dirtyBeforePaths }
+      : {}),
   }
   jobRegistry.start(jobId)
 

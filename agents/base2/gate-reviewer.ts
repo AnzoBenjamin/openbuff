@@ -12,7 +12,8 @@
 import { normalizeGateFilePath } from './gate-paths'
 
 type ReviewerStructuredVerdict = 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING'
-export type ReviewerFinalizationVerdict = 'LOOKS_GOOD' | 'NON_BLOCKING' | ''
+/** Only LOOKS_GOOD unlocks finalization; empty string is fail-closed. */
+export type ReviewerFinalizationVerdict = 'LOOKS_GOOD' | ''
 
 type ReviewerCoverage = 'covered' | 'missing' | 'n/a'
 
@@ -147,10 +148,21 @@ export function isTestCoverageReviewerFinding(text: string): boolean {
   return false
 }
 
+function dedupeExactStringsPreserveOrder(values: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const value of values) {
+    if (seen.has(value)) continue
+    seen.add(value)
+    out.push(value)
+  }
+  return out
+}
+
 export function collectReviewerBlockers(toolResult: unknown): string[] {
   // First check for structured reviewer outputs (e.g. JSON with a
-  // verdict field). When present and BLOCKING, surface findings as the
-  // blocker text so existing pinning/messaging logic still works.
+  // verdict field). BLOCKING and NON_BLOCKING both surface repair targets;
+  // only LOOKS_GOOD finalizes (via getReviewerFinalizationVerdict).
   const structured = collectStructuredReviewerOutputs(toolResult)
   const structuredBlockers: string[] = []
   for (const entry of structured) {
@@ -161,6 +173,9 @@ export function collectReviewerBlockers(toolResult: unknown): string[] {
         structuredBlockers.push(`BLOCKING: ${finding}`)
       }
     }
+    // Coverage-adequacy / dimension / requirement hard blockers first so we
+    // know whether an empty NON_BLOCKING receipt already has repair fuel.
+    const hardBlockersBefore = structuredBlockers.length
     // Coverage-adequacy contract (M6.3): missing test coverage for a
     // behavior-changing edit is BLOCKING regardless of the text verdict.
     if (entry.coverage === 'missing') {
@@ -185,14 +200,40 @@ export function collectReviewerBlockers(toolResult: unknown): string[] {
         )
       }
     }
+    const entryHasHardBlocker =
+      structuredBlockers.length > hardBlockersBefore
+
+    // NON_BLOCKING is repair fuel, not a pass: elevate findings into the
+    // same repair path used for BLOCKING until the reviewer returns LOOKS_GOOD.
+    // Empty-findings synthetic is only needed when no hard blocker already
+    // forces re-review — otherwise pure coverage-missing sets would mix a
+    // non-coverage string and break all-coverage → test-writer routing.
+    if (entry.verdict === 'NON_BLOCKING') {
+      if (entry.findings.length > 0) {
+        for (const finding of entry.findings) {
+          structuredBlockers.push(`NON_BLOCKING: ${finding}`)
+        }
+      } else if (!entryHasHardBlocker) {
+        structuredBlockers.push(
+          'NON_BLOCKING: reviewer returned non-blocking nits without findings; re-address and re-review until LOOKS_GOOD',
+        )
+      }
+    }
   }
-  if (structuredBlockers.length > 0) return structuredBlockers
+  // Nested spawn/set_output wrappers can surface the same structured receipt
+  // twice; exact-string de-dupe keeps first-seen order without dropping
+  // legitimately distinct blockers.
+  if (structuredBlockers.length > 0) {
+    return dedupeExactStringsPreserveOrder(structuredBlockers)
+  }
 
   const texts: string[] = []
   collectStrings(toolResult, texts)
-  return texts
-    .map((text) => stripReviewerPreamble(text))
-    .filter((text) => hasReviewerLineVerdict(text, 'BLOCKING'))
+  return dedupeExactStringsPreserveOrder(
+    texts
+      .map((text) => stripReviewerPreamble(text))
+      .filter((text) => hasReviewerLineVerdict(text, 'BLOCKING')),
+  )
 }
 
 /**
@@ -262,9 +303,23 @@ export function getReviewerFinalizationVerdict(
   if (structured.some((entry) => entry.coverage === 'missing')) {
     return ''
   }
+  // Incomplete requirements (missing/uncertain) also block finalization even
+  // when the reviewer emits a soft top-level verdict.
+  if (
+    structured.some((entry) =>
+      (entry.requirementCoverage ?? []).some(
+        (requirement) =>
+          requirement.status === 'missing' ||
+          requirement.status === 'uncertain',
+      ),
+    )
+  ) {
+    return ''
+  }
+  // Finalization credit is LOOKS_GOOD only. NON_BLOCKING findings are
+  // elevated by collectReviewerBlockers into the repair loop.
   for (const entry of structured) {
     if (entry.verdict === 'LOOKS_GOOD') return 'LOOKS_GOOD'
-    if (entry.verdict === 'NON_BLOCKING') return 'NON_BLOCKING'
   }
 
   return ''

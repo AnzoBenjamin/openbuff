@@ -488,6 +488,40 @@ Each aux gate is predicate-gated: if no pending file matches its relevance predi
 
 The three done-flags (`testWriterGateDone`, `docWriterGateDone`, `preEditSecurityReviewDone`) and the `auxGatesLastPendingFiles` snapshot live on `Base2ActiveWorkState` (`agents/base2/gate-state.ts`). `detectPendingGateFileSetChange` + `resetAuxGateFlags` reset the flags when the pending file set changes (compared via `gateFileSetsEqual`, order-insensitive). The reset predicate compares the AUX-RELEVANT subset of pending files — files that at least one aux predicate would act on — so newly-written aux outputs (test files created by `test-writer`, doc files updated by `doc-writer`) do not perturb the snapshot and do not re-trigger the aux gates for the same pending file set.
 
+## Concurrent gate isolation (`selfMutatedPaths`)
+
+Mid-turn git-status absorption must not claim foreign worktree dirt from concurrent Openbuff instances or external editors. Terminal steps no longer auto-absorb every newly dirty path; basher/codegen writes re-enter the validation/reviewer gate only through published ownership. `touchedPaths` is best-effort ownership attribution for that absorb path, not authorization to mutate or finalize.
+
+### Absorb rule (`shouldAbsorbGitStatusFile`)
+
+`shouldAbsorbGitStatusFile` credits a dirty path only when all of the following hold:
+
+- it was **not** dirty at turn start (`initialGitStatusFiles`)
+- it is **not** already gate-passed (`gatePassedFiles`)
+- it is task-related (`changedFiles` / `taskRelatedFiles`) **or** listed in `selfMutatedPaths`
+
+The pure helper lives in `agents/base2/gate-concurrency.ts`. The inline copy is generated via `scripts/generate-gate-helpers.ts` from `gate-concurrency.ts` into the `<gate-helpers-generated>` marker region of `createBase2.handleSteps` (serialized via `.toString()` / `new Function(...)`). Freshness is enforced by `agents/__tests__/gate-helpers-freshness.test.ts` and by `prebuild:agents` regenerating the region.
+
+### `AgentState.selfMutatedPaths`
+
+Optional JSON-safe `string[]` on `AgentState` in `common/src/types/session-state.ts`. The runtime publishes it after each stream step so mid-turn absorption can credit process-owned writes without sweeping the whole dirty tree.
+
+### Publisher (`publishSelfMutatedPaths`)
+
+`publishSelfMutatedPaths` in `packages/agent-runtime/src/run-agent-step.ts` runs after `processStream` and merges into `agentState.selfMutatedPaths`. Sources (normalized project-relative paths):
+
+- confirmed `file_mutation_result` applied actions (including move destinations)
+- schemaVersion=1 agent receipts and nested `changedFiles`
+- optional `touchedPaths` on SYNC terminal results and on the first settled `check_job` result
+
+### SYNC `run_terminal_command` `touchedPaths`
+
+SYNC commands take a pre/post `git status --porcelain -uall` dirty delta and may attach optional `touchedPaths` on the command result (project-relative; omits pre-existing dirt). Soft-fail omits the field outside a git repo or when git fails. Helpers: `listDirtyPaths` / `dirtyDelta` / `withTouchedPaths` in `sdk/src/tools/run-terminal-command.ts`. Schema: optional `touchedPaths` on SYNC success and timeout/spawn-failure shapes in `common/src/tools/params/tool/run-terminal-command.ts`.
+
+### BACKGROUND settlement `touchedPaths`
+
+BACKGROUND start stores `dirtyBeforePaths` + `projectRoot` on the in-memory job and does **not** emit `touchedPaths` while the job is running (start result is `jobId`-only). The first settled `check_job` success observation may include one-shot `touchedPaths` (settlement dirty delta); later polls omit the field. Soft-fail when the job was recovered without a snapshot, or outside git / on git failure — settlement is locked so re-polls do not re-attribute post-settle dirt. Schema: optional `touchedPaths` on `check_job` success output in `common/src/tools/params/tool/check-job.ts`.
+
 ## Reviewer verdict contract
 
 Shipped reviewers use a structured, versioned verdict. Code-reviewer reports
@@ -506,16 +540,17 @@ include every pending file. Review guidance also covers meaningful test
 assertions, public and persisted compatibility, package boundaries,
 generated-artifact freshness, migration safety, and bounded resource use.
 
-The `code-reviewer` gate decides whether a turn may finish green. The orchestrator parses the reviewer's tool result to extract a finalization verdict (`LOOKS_GOOD`, `NON_BLOCKING`, or empty string `''`) and to surface any blocking findings. The parser prefers structured (parsed-object) verdicts over text-mode fallbacks, in this order: structured JSON verdict → line-verdict text → embedded JSON verdict in prose. The parsing helpers live in `agents/base2/gate-reviewer.ts` and are mirrored inline inside `createBase2.handleSteps` (the mirror is parity-tested by `agents/__tests__/gate-reviewer.test.ts`).
+The `code-reviewer` gate decides whether a turn may finish green. **Only structured `verdict === 'LOOKS_GOOD'` permits gate pass / finalization** (after coverage and requirement adequacy checks). `NON_BLOCKING` does **not** finalize: its findings are collected as open repair targets and enter the same repair-editor / test-writer re-review loop used for `BLOCKING`. Both BLOCKING and NON_BLOCKING rounds burn the configurable reviewer repair budget (default `6`, max `20`; option `maxReviewerRepairRounds` / env `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS`). Validation-hook and specialist repair loops use separate budgets (default `3` each; options `maxRepairRounds` / `maxSpecialistRepairRounds` and envs `OPENBUFF_MAX_REPAIR_ROUNDS` / `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS`, max `20`). Coverage-missing and incomplete requirements still hard-block. The orchestrator parses the reviewer's tool result to extract a finalization verdict (`LOOKS_GOOD` or empty string `''`) and to surface any repair findings. The parser prefers structured (parsed-object) verdicts over text-mode fallbacks. The parsing helpers live in `agents/base2/gate-reviewer.ts` and are mirrored inline inside `createBase2.handleSteps` (the mirror is parity-tested by `agents/__tests__/gate-reviewer.test.ts`).
 
-The inline mirror is generated, not hand-maintained. `scripts/generate-gate-helpers.ts` is its single source of truth: it reads `agents/base2/gate-paths.ts`, `agents/base2/gate-reviewer.ts`, and `agents/base2/gate-repair.ts`, strips their `export` modifiers, and emits a deterministic block spliced into the `<gate-helpers-generated>` marker region of `agents/base2/base2.ts`. Pass `--write <path>` to refresh that region (the `prebuild:agents` script in `cli/package.json` does this automatically) or `--check <path>` to fail when it is stale; `agents/__tests__/gate-helpers-freshness.test.ts` enforces the same freshness check in CI.
+The inline mirror is generated, not hand-maintained. `scripts/generate-gate-helpers.ts` is its single source of truth: it reads `agents/base2/gate-paths.ts`, `agents/base2/gate-reviewer.ts`, `agents/base2/gate-repair.ts`, `agents/base2/gate-concurrency.ts`, and `agents/base2/gate-fingerprint.ts`, strips their `export` modifiers, and emits a deterministic block spliced into the `<gate-helpers-generated>` marker region of `agents/base2/base2.ts`. Pass `--write <path>` to refresh that region (the `prebuild:agents` script in `cli/package.json` does this automatically) or `--check <path>` to fail when it is stale; `agents/__tests__/gate-helpers-freshness.test.ts` enforces the same freshness check in CI.
 
 A reviewer may emit its verdict in either text mode or structured (JSON) mode:
 
 - **Text mode** — the first visible token of the reply is a verdict label followed by `:` (the orchestrator strips any leading `` block first):
-  - `LOOKS_GOOD:` or `NON_BLOCKING:` → permits finalization.
+  - `LOOKS_GOOD:` → permits finalization when structured output agrees.
+  - `NON_BLOCKING:` → reopens repair/re-review until LOOKS_GOOD; findings are repair fuel.
   - `BLOCKING:` → reopens the turn; the labels are surfaced to the orchestrator as `BLOCKING: <finding>` entries.
-- **Structured (JSON) mode** — a single JSON object with a `verdict` field (`"LOOKS_GOOD"`, `"NON_BLOCKING"`, or `"BLOCKING"`, case-insensitive, trimmed), an optional `findings` array (or string) of human-readable findings, and an optional `coverage` field (`"covered"`, `"missing"`, or `"n/a"`, case-insensitive).
+- **Structured (JSON) mode** — a single JSON object with a `verdict` field (`"LOOKS_GOOD"`, `"NON_BLOCKING"`, or `"BLOCKING"`, case-insensitive, trimmed), an optional `findings` array (or string) of human-readable findings, and an optional `coverage` field (`"covered"`, `"missing"`, or `"n/a"`, case-insensitive). Reviewers may still emit `NON_BLOCKING` for audit; it does not unlock finalization.
 
 ```json
 {"verdict":"LOOKS_GOOD","findings":[],"coverage":"covered"}
@@ -594,7 +629,10 @@ jobs:
   `truncated`/`dropped` bounds) rather than a job-global read offset, so each
   consumer advances its own cursor. Follow mode (`wait_for` with a bounded
   `timeout_seconds`) waits on that event stream until a readiness/error
-  predicate matches.
+  predicate matches. The first settled success observation may also include
+  one-shot optional `touchedPaths` for concurrent gate isolation (see
+  [Concurrent gate isolation (`selfMutatedPaths`)](#concurrent-gate-isolation-selfmutatedpaths));
+  start and later re-polls omit that field.
 - `read_logs` reads the trailing lines of a job's log (or an arbitrary file).
 - `kill_job` stops a running job (status becomes `stopped`).
 - `list_jobs` lists the current run's background jobs — both running and

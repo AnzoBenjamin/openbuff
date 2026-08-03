@@ -1,5 +1,7 @@
 # Quality/recovery agent file-picker audit
 
+> **As-of audit snapshot (2026-07):** "duplicating serialized inline helpers, partly guarded by parity tests" was true at audit time. Paths/reviewer/repair/concurrency helpers are now generator-synced; do not treat hand-copy maintenance as current workflow. Findings below remain historical evidence unless re-verified.
+
 ## Compact inventory for paired code-searcher
 
 | Flow                     | Primary files / symbols                                                                                                                                                                                                                                                                         | Current contract                                                                                                    |

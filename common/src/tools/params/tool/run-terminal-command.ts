@@ -14,6 +14,8 @@ export const terminalCommandOutputSchema = z.union([
     stderr: z.string().optional(),
     stdout: z.string().optional(),
     exitCode: z.number().optional(),
+    /** Project-relative paths newly dirtied by a SYNC command (post − pre git status). */
+    touchedPaths: z.array(z.string()).optional(),
   }),
   z.object({
     command: z.string(),
@@ -25,6 +27,7 @@ export const terminalCommandOutputSchema = z.union([
     stdoutExcerpt: z.string().optional(),
     stdoutOmittedForLength: z.literal(true),
     exitCode: z.number().optional(),
+    touchedPaths: z.array(z.string()).optional(),
   }),
   z.object({
     command: z.string(),
@@ -63,6 +66,9 @@ export const terminalCommandOutputSchema = z.union([
     stdout: z.string().optional(),
     stderr: z.string().optional(),
     exitCode: z.number().optional(),
+    startingCwd: z.string().optional(),
+    /** Project-relative paths newly dirtied before timeout/spawn failure (best-effort). */
+    touchedPaths: z.array(z.string()).optional(),
   }),
 ])
 

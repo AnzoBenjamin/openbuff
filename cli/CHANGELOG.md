@@ -2,11 +2,17 @@
 
 All notable changes to the `@openbuff/cli` package will be documented in this file.
 
-## [Unreleased] - 2026-07-06
+## [Unreleased] - 2026-08-03
 
 ### Added
 
+- Configurable gate repair budgets on `createBase2`: `maxRepairRounds` (validation hooks, default `3`), `maxReviewerRepairRounds` (code-reviewer → repair → re-review, default `6`), and `maxSpecialistRepairRounds` (specialist aux gate, default `3`). Each accepts a positive integer capped at `20`, with option values winning over env (`OPENBUFF_MAX_REPAIR_ROUNDS`, `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS`, `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS`). Shared resolve/format helpers live in `common/src/util/gate-repair-budgets.ts` and are re-exported from `agents/base2/base2.ts`. Documented in `docs/configuration.md` and `docs/environment-variables.md`.
+- `/context` (alias `/ctx`) now always prints the effective **Gate repair budgets** section (validation / reviewer / specialist), resolved from env/defaults even when no context-budget ledger exists yet. Ledger output, when present, is shown first with budgets appended after a blank line.
 - The `code-reviewer` gate now recognizes an embedded JSON verdict object emitted after a prose preamble (e.g. `"I now have full context. … {\"verdict\":\"LOOKS_GOOD\",…}"`). The new `extractEmbeddedJsonVerdict` helper in `agents/base2/gate-reviewer.ts` tracks brace depth with `\"`-escape and JSON-string-boundary awareness so a `}` inside a string value does not prematurely close the object, uses the last embedded verdict when a reviewer echoes a prior `BLOCKING` before a final `LOOKS_GOOD`, and rejects truncated/unknown/`coverage:"missing"` verdicts. The inline `base2.handleSteps` mirror is kept in sync and parity-tested in `agents/__tests__/gate-reviewer.test.ts`. Documented in `docs/agents-and-tools.md` under a new "## Reviewer verdict contract" section.
+
+### Changed
+
+- Validation/reviewer gate finalization is **LOOKS_GOOD-only**. Structured `NON_BLOCKING` no longer passes the gate: findings are elevated into the same repair-editor / re-review loop as `BLOCKING` and burn the reviewer repair budget until a later review returns `LOOKS_GOOD` (or the budget is exhausted).
 
 ### Fixed
 

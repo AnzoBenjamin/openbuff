@@ -1,6 +1,19 @@
 # Fix 3 (deferred): Concurrent-instance isolation for the base2 validation/reviewer gate
 
-Status: DESIGN — awaiting user review before implementation.
+Status: IMPLEMENTED — absorption uses task-related (`changedFiles`) +
+runtime-published `selfMutatedPaths` only. The agent runtime
+(`packages/agent-runtime/src/run-agent-step.ts` `publishSelfMutatedPaths`)
+records confirmed broker/tool mutation paths, agent-receipt changedFiles, and
+terminal/basher `touchedPaths` (pre/post `git status --porcelain -uall` dirty
+delta) onto `agentState.selfMutatedPaths` as a JSON-safe `string[]` after each
+stream step so concurrent isolation can credit process-owned writes — including
+formatter/codegen side effects outside the mutation broker. SYNC commands emit
+`touchedPaths` on the command result; BACKGROUND jobs capture a pre-start dirty
+snapshot and emit a one-shot settlement delta on the first settled `check_job`
+observation (not on start, not on re-polls; soft-fail omits when not a git repo
+or recovered without snapshot).
+Pure helper: `agents/base2/gate-concurrency.ts` `shouldAbsorbGitStatusFile`.
+The handleSteps inline is **generator-synced** (not hand-maintained): `scripts/generate-gate-helpers.ts` emits it into the `<gate-helpers-generated>` region of `agents/base2/base2.ts` (same as gate-paths/reviewer/repair). Edit the pure module and regenerate (`--write` / `prebuild:agents`); freshness is enforced by `agents/__tests__/gate-helpers-freshness.test.ts` and the concurrency parity matrix.
 
 ## Problem
 

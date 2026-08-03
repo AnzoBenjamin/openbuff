@@ -12,7 +12,7 @@ import {
   stripReviewerPreamble,
 } from '../base2/gate-reviewer'
 
-type ReviewerFinalizationVerdict = 'LOOKS_GOOD' | 'NON_BLOCKING' | ''
+type ReviewerFinalizationVerdict = 'LOOKS_GOOD' | ''
 
 type GateReviewerHelpers = {
   stripReviewerPreamble: (text: string) => string
@@ -34,6 +34,7 @@ const INLINE_HELPER_NAMES: GateReviewerFunctionName[] = [
 ]
 
 const INLINE_DEPENDENCY_NAMES = [
+  'dedupeExactStringsPreserveOrder',
   'collectStructuredReviewerOutputs',
   'visitForStructuredVerdict',
   'hasReviewerLineVerdict',
@@ -167,7 +168,7 @@ describe('gate-reviewer helpers', () => {
     ])
   })
 
-  test('getReviewerFinalizationVerdict accepts only structured finalization verdicts', () => {
+  test('getReviewerFinalizationVerdict accepts only structured LOOKS_GOOD finalization', () => {
     expect(
       getReviewerFinalizationVerdict({
         type: 'json',
@@ -179,7 +180,7 @@ describe('gate-reviewer helpers', () => {
         type: 'json',
         value: [{ verdict: 'NON_BLOCKING', findings: 'minor suggestion' }],
       }),
-    ).toBe('NON_BLOCKING')
+    ).toBe('')
     expect(
       getReviewerFinalizationVerdict([
         '<think>analysis</think>\nLOOKS_GOOD: no issues',
@@ -191,6 +192,32 @@ describe('gate-reviewer helpers', () => {
     expect(getReviewerFinalizationVerdict('BLOCKING: fix first')).toBe('')
   })
 
+  test('collectReviewerBlockers elevates NON_BLOCKING findings to repair strings', () => {
+    expect(
+      collectReviewerBlockers({
+        type: 'json',
+        value: [
+          {
+            verdict: 'NON_BLOCKING',
+            findings: ['minor naming nit', '  style tweak  '],
+            coverage: 'covered',
+          },
+        ],
+      }),
+    ).toEqual([
+      'NON_BLOCKING: minor naming nit',
+      'NON_BLOCKING: style tweak',
+    ])
+    expect(
+      collectReviewerBlockers({
+        type: 'json',
+        value: [{ verdict: 'NON_BLOCKING', findings: [], coverage: 'covered' }],
+      }),
+    ).toEqual([
+      'NON_BLOCKING: reviewer returned non-blocking nits without findings; re-address and re-review until LOOKS_GOOD',
+    ])
+  })
+
   // M6.3: coverage-adequacy in the reviewer verdict contract.
   test('collectReviewerBlockers surfaces missing coverage as BLOCKING', () => {
     expect(
@@ -200,6 +227,25 @@ describe('gate-reviewer helpers', () => {
           {
             verdict: 'NON_BLOCKING',
             findings: ['minor nit'],
+            coverage: 'missing',
+          },
+        ],
+      }),
+    ).toEqual([
+      // Hard blockers are collected before NON_BLOCKING findings so pure
+      // coverage sets stay all-coverage for test-writer routing.
+      'BLOCKING: test coverage missing for changed behavior (add a case to the relevant *.test.ts)',
+      'NON_BLOCKING: minor nit',
+    ])
+    // Empty NON_BLOCKING findings + coverage missing: skip synthetic empty
+    // NON_BLOCKING string so all-coverage routing to test-writer still works.
+    expect(
+      collectReviewerBlockers({
+        type: 'json',
+        value: [
+          {
+            verdict: 'NON_BLOCKING',
+            findings: [],
             coverage: 'missing',
           },
         ],
@@ -241,6 +287,28 @@ describe('gate-reviewer helpers', () => {
     ).toEqual([
       'BLOCKING: security review dimension failed',
       'BLOCKING: requirement uncertain: preserve CLI compatibility',
+    ])
+  })
+
+  test('collectReviewerBlockers de-dupes identical blockers from nested structured receipts', () => {
+    // Hard requirement gap already forces re-review, so empty NON_BLOCKING
+    // findings do not add a synthetic NON_BLOCKING string.
+    const receipt = {
+      verdict: 'NON_BLOCKING',
+      findings: [],
+      coverage: 'covered',
+      requirementCoverage: [
+        { requirement: 'wire selfMutatedPaths', status: 'missing' },
+      ],
+    }
+    expect(
+      collectReviewerBlockers({
+        type: 'json',
+        value: { type: 'json', value: receipt },
+      }),
+    ).toEqual(['BLOCKING: requirement missing: wire selfMutatedPaths'])
+    expect(collectReviewerBlockers([receipt, receipt])).toEqual([
+      'BLOCKING: requirement missing: wire selfMutatedPaths',
     ])
   })
 
@@ -429,7 +497,38 @@ describe('gate-reviewer helpers', () => {
     ).toBe('')
   })
 
-  test('getReviewerFinalizationVerdict finalizes when coverage is covered or n/a', () => {
+  test('getReviewerFinalizationVerdict blocks finalization when requirements are missing or uncertain', () => {
+    expect(
+      getReviewerFinalizationVerdict({
+        type: 'json',
+        value: [
+          {
+            verdict: 'LOOKS_GOOD',
+            coverage: 'covered',
+            requirementCoverage: [
+              { requirement: 'add export', status: 'missing' },
+            ],
+          },
+        ],
+      }),
+    ).toBe('')
+    expect(
+      getReviewerFinalizationVerdict({
+        type: 'json',
+        value: [
+          {
+            verdict: 'NON_BLOCKING',
+            coverage: 'n/a',
+            requirementCoverage: [
+              { requirement: 'preserve API', status: 'uncertain' },
+            ],
+          },
+        ],
+      }),
+    ).toBe('')
+  })
+
+  test('getReviewerFinalizationVerdict finalizes only LOOKS_GOOD when coverage is covered or n/a', () => {
     expect(
       getReviewerFinalizationVerdict({
         type: 'json',
@@ -441,7 +540,21 @@ describe('gate-reviewer helpers', () => {
         type: 'json',
         value: [{ verdict: 'NON_BLOCKING', coverage: 'n/a' }],
       }),
-    ).toBe('NON_BLOCKING')
+    ).toBe('')
+    expect(
+      getReviewerFinalizationVerdict({
+        type: 'json',
+        value: [
+          {
+            verdict: 'LOOKS_GOOD',
+            coverage: 'covered',
+            requirementCoverage: [
+              { requirement: 'add export', status: 'satisfied' },
+            ],
+          },
+        ],
+      }),
+    ).toBe('LOOKS_GOOD')
   })
 
   test('detectReviewerCrash identifies errorMessage / type:error / json-wrapped crashes and ignores normal results', () => {

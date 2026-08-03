@@ -196,6 +196,9 @@ page; the high-level wiring is:
   gate, fails closed on missing/unreadable files, and exposes a
   structured `<gate-state>` block as the stable user-visible contract.
   See [Request Flow](./request-flow.md#reviewer--validation-gate-semantics).
+  For concurrent-instance isolation of mid-turn dirt (`selfMutatedPaths` /
+  terminal `touchedPaths`), see
+  [Concurrent gate isolation](./agents-and-tools.md#concurrent-gate-isolation-selfmutatedpaths).
 - **PlanLink and durable plan artifacts.** Plan artifacts under
   `.agents/sessions/<plan>/` are attached to TUI sessions via PlanLink
   slash commands (`/resume-plan`, `/update-plan`, `/plan-status`,

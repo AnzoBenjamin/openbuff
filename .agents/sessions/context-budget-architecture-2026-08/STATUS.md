@@ -204,3 +204,14 @@ All three suggested follow-ups are complete and gate-verified (NON_BLOCKING, 3 m
 - **X-T1/X-T2** — context-budget documentation added to `docs/architecture.md` (Context Budget, Retrieval Caching, and Git Observation Gating), `docs/configuration.md` (Context budget and proactive retrieval), and `docs/environment-variables.md` (no new OPENBUFF_* vars).
 
 Context-budget plan is now substantially complete across M0–M6 + cross-cutting docs. Remaining optional work: canary progressivePromptDisclosure, measure tool-definition schema cost, eval comparison.
+
+<!-- update_plan_status:appended -->
+## Optional tail complete — canary + tool schema cost — 2026-08-03T17:58:41.620Z
+
+Follow-up optional work delivered:
+
+- **Canary progressivePromptDisclosure**: `OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE` (1/true/yes/on) enables disclosure when `createBase2` option is omitted; explicit boolean still wins. Tests cover env on + explicit false override. Docs updated in environment-variables.md + configuration.md.
+- **Tool-definition schema cost measured**: baseline script now reports ~23.5k tokens for base2 default tools (33 tools). Runtime `run-agent-step` records category `tools` / label `tool definitions` on ledger rebuild turns.
+- **Eval comparison**: no buffbench run; AC4 (>=25% authored surface reduction) remains the unit-test canary acceptance metric in base2-progressive-disclosure.test.ts.
+
+Session can be treated as completed for plan purposes.

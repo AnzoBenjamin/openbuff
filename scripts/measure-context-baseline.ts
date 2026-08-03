@@ -21,6 +21,9 @@ import { createBase2 } from '../agents/base2/base2'
 import { initialSessionState } from '../sdk/src/run-state'
 import { DEFAULT_MAX_CONTEXT_TOKENS } from '../packages/agent-runtime/src/util/context-pruning'
 import { KNOWLEDGE_FILE_NAMES_LOWERCASE } from '../common/src/constants/knowledge'
+import { toolParams } from '../common/src/tools/list'
+import type { ToolName } from '../common/src/tools/constants'
+import z from 'zod/v4'
 
 import type { ProjectFileContext } from '@codebuff/common/util/file'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
@@ -97,8 +100,9 @@ async function main() {
   }
 
   // 2. base2 systemPrompt template (raw, before placeholder replacement)
+  let base2Def: ReturnType<typeof createBase2> | undefined
   try {
-    const base2Def = createBase2('default')
+    base2Def = createBase2('default')
     const rawSystemPrompt = base2Def.systemPrompt ?? ''
     const tokens = countTokens(rawSystemPrompt)
     measurements.push({
@@ -110,6 +114,46 @@ async function main() {
   } catch (e) {
     failedMeasurements++
     measurements.push({ component: 'base2 systemPrompt', tokens: -1, note: `ERROR: ${e}` })
+  }
+
+  // 2b. Tool definitions for base2 default tools (Anthropic-shaped, fixed baseline).
+  // Same shape as run-agent-step toolsForTokenCount: {name, description?, input_schema?}.
+  try {
+    const toolNames = (base2Def?.toolNames ?? []) as string[]
+    const toolsForTokenCount = toolNames.flatMap((name) => {
+      const def = (toolParams as Record<string, (typeof toolParams)[ToolName] | undefined>)[
+        name
+      ]
+      if (!def) return []
+      let input_schema: unknown
+      try {
+        const schema = (def.providerInputSchema ?? def.inputSchema) as z.ZodType
+        input_schema = z.toJSONSchema(schema, { io: 'input' })
+      } catch {
+        // Missing/unconvertible schema must not throw the measurement.
+        input_schema = { type: 'object', properties: {} }
+      }
+      return [
+        {
+          name,
+          ...(def.description ? { description: def.description } : {}),
+          ...(input_schema ? { input_schema } : {}),
+        },
+      ]
+    })
+    measurements.push({
+      component: 'Tool definitions (base2 default tools)',
+      tokens: countTokensJson(toolsForTokenCount),
+      note: `${toolsForTokenCount.length} tools, Anthropic-shaped defs`,
+      // Fixed baseline (not an automatic injection).
+    })
+  } catch (e) {
+    failedMeasurements++
+    measurements.push({
+      component: 'Tool definitions (base2 default tools)',
+      tokens: -1,
+      note: `ERROR: ${e}`,
+    })
   }
 
   // 3. File tree prompt (agent mode, 10k budget — the orchestrator default)

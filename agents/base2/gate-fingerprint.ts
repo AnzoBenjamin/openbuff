@@ -1,14 +1,12 @@
 /**
  * Pure gate snapshot fingerprint helpers extracted from `base2.ts`.
  *
- * NOTE: an equivalent inline copy of `hashGateSnapshotDetails` still exists
- * inside `createBase2`'s `handleSteps` generator because that function is
- * serialized via `handleSteps.toString()` and reconstructed with
- * `new Function(...)`. Reconstructed functions lose their module closure, so
- * they cannot reference imports from this file; the inline copy lazily
- * delegates to this module at call time when a CommonJS loader can resolve
- * it, and otherwise falls back to the inline implementation. Keep the two
- * implementations in sync.
+ * NOTE: the inline copy is **generated** into the base2 `handleSteps`
+ * `<gate-helpers-generated>` region via `scripts/generate-gate-helpers.ts`
+ * (same as gate-paths/reviewer/repair/concurrency). `handleSteps` is serialized
+ * via `toString()` / `new Function(...)` and loses module closure, so it cannot
+ * import this file — edit this module and regenerate rather than hand-maintaining
+ * the inline copy.
  */
 
 // Canonical SHA-256 snapshot fingerprint: v3: followed by exactly 64

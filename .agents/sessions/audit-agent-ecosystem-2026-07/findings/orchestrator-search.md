@@ -1,5 +1,7 @@
 # Orchestrator core — code-searcher audit
 
+> **As-of audit snapshot (2026-07):** references to selective parity / inline helper duplication describe the **audit-time** workflow. Gate helpers in `SOURCE_MODULES` (including `gate-fingerprint`) are now generator-synced (`generate-gate-helpers` + freshness test); residual dual-copy for fingerprint is closed. Findings below remain historical evidence unless re-verified.
+
 ## Verified findings
 
 ## [HIGH] Correctness / UX — agents/base2/base2.ts:557 — Step-cap exhaustion bypasses required validation and review

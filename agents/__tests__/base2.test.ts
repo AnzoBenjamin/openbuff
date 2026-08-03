@@ -11,7 +11,15 @@ import { join } from 'node:path'
 import { afterAll, describe, expect, test } from 'bun:test'
 
 import { createBaseDeep } from '../base2/base-deep'
-import { createBase2 } from '../base2/base2'
+import {
+  createBase2,
+  DEFAULT_MAX_REPAIR_ROUNDS,
+  DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS,
+  DEFAULT_MAX_SPECIALIST_REPAIR_ROUNDS,
+  resolveMaxRepairRounds,
+  resolveMaxReviewerRepairRounds,
+  resolveMaxSpecialistRepairRounds,
+} from '../base2/base2'
 import { normalizeGateFilePath } from '../base2/gate-paths'
 import type { Base2ActiveWorkState } from '../base2/gate-state'
 
@@ -5756,7 +5764,7 @@ describe('base2 verification and reviewer gates', () => {
     })
   })
 
-  test('structured NON_BLOCKING reviewer JSON output finalizes', () => {
+  test('structured NON_BLOCKING reviewer JSON output does not finalize and enters repair', () => {
     const base2 = createBase2('default')
     const agentState = { agentId: 'base2-custom' }
     const gen = base2.handleSteps!({
@@ -5804,7 +5812,7 @@ describe('base2 verification and reviewer gates', () => {
     expect(reviewPrompt).toContain(
       'Snapshot details (read for file membership; do not echo):',
     )
-    const finalPreCreditStatus = gen.next({
+    const afterReview = gen.next({
       toolResult: [
         {
           type: 'json',
@@ -5838,39 +5846,32 @@ describe('base2 verification and reviewer gates', () => {
         },
       ],
     } as any)
-    expect(finalPreCreditStatus.value).toMatchObject({ toolName: 'git_status' })
-    const gatePassed = gen.next({
-      toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
-    } as any)
 
-    expect(gatePassed.value).toMatchObject({ toolName: 'add_message' })
-    expect((gatePassed.value as any).input.content).toContain(
-      'Reviewer gate passed with NON_BLOCKING',
-    )
-    expect((agentState as any).base2ActiveWork).toMatchObject({
-      currentPhase: 'final_response_allowed',
-      gatePassedReviewerVerdict: 'NON_BLOCKING',
+    expect(afterReview.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
     })
-    expect((agentState as any).base2ActiveWork.reviewReceipts).toEqual([
-      expect.objectContaining({
-        reviewer: 'code-reviewer',
-        verdict: 'NON_BLOCKING',
-        snapshotFingerprint,
-        reviewedFiles: ['src/a.ts'],
-        findings: [
-          expect.objectContaining({
-            id: 'code-reviewer:correctness:minor-style',
-            evidence: ['src/a.ts uses the expected behavior.'],
-          }),
-        ],
-        requirementCoverage: [
-          expect.objectContaining({
-            requirement: 'Requested behavior',
-            evidence: ['src/a.ts'],
-          }),
-        ],
-      }),
-    ])
+    expect((afterReview.value as any).input.content).toContain(
+      'NON_BLOCKING: [code-reviewer:correctness:minor-style] Minor style suggestion.',
+    )
+    expect((afterReview.value as any).input.content).toContain('repair-editor')
+    expect((agentState as any).base2ActiveWork).toMatchObject({
+      openReviewerBlockers: [
+        'NON_BLOCKING: [code-reviewer:correctness:minor-style] Minor style suggestion.',
+      ],
+      pendingGateFiles: ['src/a.ts'],
+    })
+    expect((agentState as any).base2ActiveWork.currentPhase).not.toBe(
+      'final_response_allowed',
+    )
+    expect((agentState as any).base2ActiveWork.gatePassedReviewerVerdict).not.toBe(
+      'NON_BLOCKING',
+    )
+    const repairSpawn = gen.next().value as any
+    expect(repairSpawn).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'repair-editor' }] },
+    })
   })
 
   test('bounds durable review receipts by total serialized size', () => {
@@ -5925,7 +5926,7 @@ describe('base2 verification and reviewer gates', () => {
           value: [
             {
               schemaVersion: 1,
-              verdict: 'NON_BLOCKING',
+              verdict: 'LOOKS_GOOD',
               snapshotFingerprint,
               reviewedFiles: ['src/a.ts'],
               coverage: 'covered',
@@ -6027,7 +6028,7 @@ describe('base2 verification and reviewer gates', () => {
     }
   })
 
-  test('non-blocking reviewer feedback allows finalization without controlling active work', () => {
+  test('non-blocking reviewer feedback with findings does not finalize and enters repair', () => {
     const base2 = createBase2('default')
     const agentState = { agentId: 'base2' }
     const gen = base2.handleSteps!({
@@ -6067,31 +6068,33 @@ describe('base2 verification and reviewer gates', () => {
       toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
     } as any).value
     expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
-    const finalPreCreditStatus = gen.next(
+    const afterReview = gen.next(
       attestedReviewerResult(reviewCall, 'NON_BLOCKING', [
         'Improve naming.',
       ]) as any,
     )
-    expect(finalPreCreditStatus.value).toMatchObject({ toolName: 'git_status' })
-    const afterReview = gen.next({
-      toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
-    } as any)
 
     expect(afterReview.value).toMatchObject({
       toolName: 'add_message',
       input: { role: 'user' },
     })
     expect((afterReview.value as any).input.content).toContain(
-      'Reviewer gate passed with NON_BLOCKING',
+      'NON_BLOCKING: Improve naming.',
     )
     expect((afterReview.value as any).input.content).not.toContain(
-      'passed with LOOKS_GOOD',
+      'Reviewer gate passed with NON_BLOCKING',
     )
     expect((agentState as any).base2ActiveWork).toMatchObject({
-      currentPhase: 'final_response_allowed',
-      pendingGateFiles: [],
-      openReviewerBlockers: [],
-      nextRequiredAction: '',
+      openReviewerBlockers: ['NON_BLOCKING: Improve naming.'],
+      pendingGateFiles: ['src/a.ts'],
+    })
+    expect((agentState as any).base2ActiveWork.currentPhase).not.toBe(
+      'final_response_allowed',
+    )
+    const repairSpawn = gen.next().value as any
+    expect(repairSpawn).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'repair-editor' }] },
     })
   })
 })
@@ -6569,9 +6572,9 @@ describe('base2 repair-loop gate-state telemetry (M6.4)', () => {
     expect(parsed!.status).toBe('failed')
     expect(parsed!.repairRound).toBeGreaterThanOrEqual(1)
     expect(parsed!.repairRound).toBe(1)
-    expect(parsed!.maxRepairRounds).toBe(3)
+    expect(parsed!.maxRepairRounds).toBe(DEFAULT_MAX_REPAIR_ROUNDS)
     expect(parsed!.details).toContain('repair-incomplete')
-    expect(parsed!.details).toContain('round 1/3')
+    expect(parsed!.details).toContain(`round 1/${DEFAULT_MAX_REPAIR_ROUNDS}`)
   })
 
   test('non-repair gate-state blocks omit repairRound/maxRepairRounds for backward compatibility', () => {
@@ -6932,23 +6935,298 @@ describe('base2 COMMIT ANYWAY commit-scope bypass publisher', () => {
   })
 })
 
-describe('base2 reviewer repair budget cap', () => {
-  test('crossing MAX_REVIEWER_REPAIR_ROUNDS blocks with an exhaustion message', () => {
-    // Seed reviewerRepairRoundCount at MAX_REVIEWER_REPAIR_ROUNDS (=3) so the
-    // very next blocking reviewer result crosses the cap (3 -> 4 > 3). The
-    // loop must yield the exhaustion add_message and break out (currentPhase
-    // blocked) instead of spawning yet another repair round. Driving four
-    // full rounds through the generator is infeasible in a unit test, so the
-    // seed-count approach from the requirements is used.
-    const base2 = createBase2('default')
+describe('resolveMaxReviewerRepairRounds', () => {
+  test('defaults when undefined', () => {
+    expect(resolveMaxReviewerRepairRounds(undefined)).toBe(
+      DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS,
+    )
+  })
+
+  test('accepts a finite option number', () => {
+    expect(resolveMaxReviewerRepairRounds(10)).toBe(10)
+  })
+
+  test('invalid values fall back to default 6', () => {
+    expect(resolveMaxReviewerRepairRounds(0)).toBe(6)
+    expect(resolveMaxReviewerRepairRounds(-1)).toBe(6)
+    expect(resolveMaxReviewerRepairRounds('abc')).toBe(6)
+    expect(resolveMaxReviewerRepairRounds(Number.NaN)).toBe(6)
+  })
+
+  test('caps at 20', () => {
+    expect(resolveMaxReviewerRepairRounds(999)).toBe(20)
+  })
+})
+
+describe('resolveMaxRepairRounds', () => {
+  test('defaults when undefined', () => {
+    expect(resolveMaxRepairRounds(undefined)).toBe(DEFAULT_MAX_REPAIR_ROUNDS)
+  })
+
+  test('accepts a finite option number', () => {
+    expect(resolveMaxRepairRounds(10)).toBe(10)
+  })
+
+  test('invalid values fall back to default 3', () => {
+    expect(resolveMaxRepairRounds(0)).toBe(3)
+    expect(resolveMaxRepairRounds(-1)).toBe(3)
+    expect(resolveMaxRepairRounds('abc')).toBe(3)
+    expect(resolveMaxRepairRounds(Number.NaN)).toBe(3)
+  })
+
+  test('caps at 20', () => {
+    expect(resolveMaxRepairRounds(999)).toBe(20)
+  })
+})
+
+describe('resolveMaxSpecialistRepairRounds', () => {
+  test('defaults when undefined', () => {
+    expect(resolveMaxSpecialistRepairRounds(undefined)).toBe(
+      DEFAULT_MAX_SPECIALIST_REPAIR_ROUNDS,
+    )
+  })
+
+  test('accepts a finite option number', () => {
+    expect(resolveMaxSpecialistRepairRounds(10)).toBe(10)
+  })
+
+  test('invalid values fall back to default 3', () => {
+    expect(resolveMaxSpecialistRepairRounds(0)).toBe(3)
+    expect(resolveMaxSpecialistRepairRounds(-1)).toBe(3)
+    expect(resolveMaxSpecialistRepairRounds('abc')).toBe(3)
+    expect(resolveMaxSpecialistRepairRounds(Number.NaN)).toBe(3)
+  })
+
+  test('caps at 20', () => {
+    expect(resolveMaxSpecialistRepairRounds(999)).toBe(20)
+  })
+})
+
+describe('createBase2 maxReviewerRepairRounds option/env', () => {
+  test('option is stored on programmaticConfig', () => {
+    const base2 = createBase2('default', { maxReviewerRepairRounds: 10 })
+    expect(base2.programmaticConfig).toMatchObject({
+      maxReviewerRepairRounds: 10,
+    })
+  })
+
+  test('env string is used when option is omitted', () => {
+    const previous = process.env.OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS
+    try {
+      process.env.OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS = '8'
+      const base2 = createBase2('default')
+      expect(base2.programmaticConfig).toMatchObject({
+        maxReviewerRepairRounds: 8,
+      })
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS
+      } else {
+        process.env.OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS = previous
+      }
+    }
+  })
+
+  test('option wins over env', () => {
+    const previous = process.env.OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS
+    try {
+      process.env.OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS = '8'
+      const base2 = createBase2('default', { maxReviewerRepairRounds: 4 })
+      expect(base2.programmaticConfig).toMatchObject({
+        maxReviewerRepairRounds: 4,
+      })
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS
+      } else {
+        process.env.OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS = previous
+      }
+    }
+  })
+
+  test('createBase2({ maxReviewerRepairRounds: 2 }) exhausts when count is seeded at 2', () => {
+    const base2 = createBase2('default', { maxReviewerRepairRounds: 2 })
+    expect(base2.programmaticConfig).toMatchObject({
+      maxReviewerRepairRounds: 2,
+    })
     const agentState = {
       agentId: 'base2',
-      base2ActiveWork: { reviewerRepairRoundCount: 3 },
+      base2ActiveWork: { reviewerRepairRoundCount: 2 },
     }
     const gen = base2.handleSteps!({
       agentState,
       prompt: 'Make the requested change now please',
       params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+        .value,
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    const maybePinned = gen.next().value
+    if (maybePinned !== 'STEP') {
+      expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+    }
+    expect(
+      gen.next({
+        stepsComplete: true,
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
+    const postValidationStatus = gen.next({
+      toolResult: [{ type: 'json', value: [] }],
+    } as any).value
+    expect(postValidationStatus).toMatchObject({ toolName: 'git_status' })
+    const reviewCall = gen.next({
+      toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+    } as any).value
+    expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+    const exhausted = gen.next(
+      attestedReviewerResult(reviewCall, 'BLOCKING', [
+        'Fix the persistent edge case.',
+      ]) as any,
+    )
+
+    expect(exhausted.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect((exhausted.value as any).input.content).toContain(
+      'automated repair budget exhausted',
+    )
+    expect((agentState as any).base2ActiveWork.currentPhase).toBe('blocked')
+    expect(gen.next().done).toBe(true)
+  })
+})
+
+describe('createBase2 maxRepairRounds option/env', () => {
+  test('option is stored on programmaticConfig', () => {
+    const base2 = createBase2('default', { maxRepairRounds: 5 })
+    expect(base2.programmaticConfig).toMatchObject({
+      maxRepairRounds: 5,
+    })
+  })
+
+  test('env string is used when option is omitted', () => {
+    const previous = process.env.OPENBUFF_MAX_REPAIR_ROUNDS
+    try {
+      process.env.OPENBUFF_MAX_REPAIR_ROUNDS = '7'
+      const base2 = createBase2('default')
+      expect(base2.programmaticConfig).toMatchObject({
+        maxRepairRounds: 7,
+      })
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENBUFF_MAX_REPAIR_ROUNDS
+      } else {
+        process.env.OPENBUFF_MAX_REPAIR_ROUNDS = previous
+      }
+    }
+  })
+
+  test('option wins over env', () => {
+    const previous = process.env.OPENBUFF_MAX_REPAIR_ROUNDS
+    try {
+      process.env.OPENBUFF_MAX_REPAIR_ROUNDS = '7'
+      const base2 = createBase2('default', { maxRepairRounds: 2 })
+      expect(base2.programmaticConfig).toMatchObject({
+        maxRepairRounds: 2,
+      })
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENBUFF_MAX_REPAIR_ROUNDS
+      } else {
+        process.env.OPENBUFF_MAX_REPAIR_ROUNDS = previous
+      }
+    }
+  })
+
+  test('default createBase2 stores maxRepairRounds 3 on programmaticConfig', () => {
+    const base2 = createBase2('default')
+    expect(base2.programmaticConfig).toMatchObject({
+      maxRepairRounds: DEFAULT_MAX_REPAIR_ROUNDS,
+      maxSpecialistRepairRounds: DEFAULT_MAX_SPECIALIST_REPAIR_ROUNDS,
+    })
+  })
+})
+
+describe('createBase2 maxSpecialistRepairRounds option/env', () => {
+  test('option is stored on programmaticConfig', () => {
+    const base2 = createBase2('default', { maxSpecialistRepairRounds: 5 })
+    expect(base2.programmaticConfig).toMatchObject({
+      maxSpecialistRepairRounds: 5,
+    })
+  })
+
+  test('env string is used when option is omitted', () => {
+    const previous = process.env.OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS
+    try {
+      process.env.OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS = '7'
+      const base2 = createBase2('default')
+      expect(base2.programmaticConfig).toMatchObject({
+        maxSpecialistRepairRounds: 7,
+      })
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS
+      } else {
+        process.env.OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS = previous
+      }
+    }
+  })
+
+  test('option wins over env', () => {
+    const previous = process.env.OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS
+    try {
+      process.env.OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS = '7'
+      const base2 = createBase2('default', { maxSpecialistRepairRounds: 2 })
+      expect(base2.programmaticConfig).toMatchObject({
+        maxSpecialistRepairRounds: 2,
+      })
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS
+      } else {
+        process.env.OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS = previous
+      }
+    }
+  })
+})
+
+describe('base2 reviewer repair budget cap', () => {
+  test('crossing MAX_REVIEWER_REPAIR_ROUNDS blocks with an exhaustion message', () => {
+    // Seed reviewerRepairRoundCount at the default budget (6) so the very next
+    // blocking reviewer result crosses the cap (6 -> 7 > 6). The loop must yield
+    // the exhaustion add_message and break out (currentPhase blocked) instead of
+    // spawning yet another repair round. Driving seven full rounds through the
+    // generator is infeasible in a unit test, so the seed-count approach from
+    // the requirements is used.
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2',
+      base2ActiveWork: {
+        reviewerRepairRoundCount: DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS,
+      },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Make the requested change now please',
+      params: {},
+      config: base2.programmaticConfig,
     } as any)
 
     expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
