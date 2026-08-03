@@ -40,6 +40,11 @@ Document only environment variables that are implemented in code. During the for
 
 `CODEBUFF_API_KEY` functions as a runtime fallback (`OPENBUFF_API_KEY ?? CODEBUFF_API_KEY` in `sdk/src/env.ts`, Openbuff primary). `CODEBUFF_CHATGPT_OAUTH_TOKEN` also has an `OPENBUFF_*` alias but with reversed precedence (legacy name primary). `OPENBUFF_GIT_BASH_PATH` takes precedence over the legacy `CODEBUFF_GIT_BASH_PATH` fallback.
 
+No new `OPENBUFF_*` environment variables were added for the context-budget,
+proactive-retrieval, or progressive-prompt-disclosure systems; those behaviors
+are code-default (or an SDK/agent option), and the existing telemetry and
+local-mode variables above are unchanged.
+
 Do not document an `OPENBUFF_*` alias unless the code implements it.
 
 ## Releases

@@ -333,6 +333,27 @@ reasoning unsupported receive no reasoning parameter. A one-model setup simply
 reuses that model for every phase. Set `"adaptiveReasoning": false` to disable
 this fallback.
 
+## Context budget and proactive retrieval
+
+Openbuff ships several context-window reductions (context budget ledger,
+model-aware semantic compaction, proactive retrieval caching, git_status
+gating, and tool-result lifecycle trimming). There is **no new JSON config
+field** for these systems yet — the behavior is code-default and always on.
+
+- **`progressivePromptDisclosure`** is an SDK/agent option on `createBase2`,
+  not a JSON config key. It defaults to `false`; when set to `true`, verbose
+  advisory prompt sections are replaced by `read_files` pointers to
+  `agents/guides/*.md`. It is opt-in per agent construction.
+- **`/context`** is a read-only slash command that prints the per-component
+  token breakdown recorded for the current turn (advisory telemetry, not a
+  hard gate).
+- **Indexing** (`indexing.enabled`, semantic settings) controls the local
+  index backing `query_index` and the proactive retrieval cache; see
+  [Indexing and retrieval](#indexing-and-retrieval) above.
+
+All reductions and gates are on by default; progressive prompt disclosure is
+the only opt-in (via the agent option above).
+
 ## Merge semantics
 
 When multiple config sources are loaded (global → ancestor → project, or

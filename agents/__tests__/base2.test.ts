@@ -1021,6 +1021,109 @@ describe('base2 proactive index lookup', () => {
     })
   })
 
+  test('invalidates the cached proactive retrieval when messageHistory carries a newer indexMutationEpoch at the same workspace revision', () => {
+    const base2 = createBase2('default')
+    const prompt = 'Refactor the authentication module code.'
+    const agentState = {
+      agentId: 'base2-classify',
+      workspaceState: { revision: 7, snapshotId: 'snapshot-1' },
+    }
+
+    // First turn: the live query_index reports indexMutationEpoch 1, which is
+    // stored on the cache entry.
+    const firstGen = base2.handleSteps!({
+      agentState,
+      prompt,
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(firstGen.next().value).toMatchObject({ toolName: 'query_index' })
+    firstGen.next({
+      toolResult: [
+        {
+          type: 'json',
+          value: {
+            kind: 'query_index_result',
+            results: [],
+            indexMutationEpoch: 1,
+          },
+        },
+      ],
+    } as any)
+    expect((agentState as any).proactiveRetrievalCache).toMatchObject({
+      workspaceRevision: 7,
+      indexMutationEpoch: 1,
+    })
+
+    // An external filesystem mutation (markPathsChanged) advanced the index
+    // epoch WITHOUT bumping workspaceState.revision; the newer epoch is
+    // observed on a prior query_index tool message in messageHistory.
+    ;(agentState as any).messageHistory = [
+      {
+        role: 'tool',
+        toolName: 'query_index',
+        content: [
+          {
+            type: 'json',
+            value: {
+              kind: 'query_index_result',
+              results: [],
+              indexMutationEpoch: 2,
+            },
+          },
+        ],
+      },
+    ]
+
+    // Second turn: same prompt + same revision, but the newer epoch
+    // invalidates the cache, so the live query_index runs again.
+    const secondGen = base2.handleSteps!({
+      agentState,
+      prompt,
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(secondGen.next().value).toMatchObject({ toolName: 'query_index' })
+    expect((agentState as any).proactiveRetrievalCache).toBeUndefined()
+    const secondRouteNote = secondGen.next({
+      toolResult: [
+        {
+          type: 'json',
+          value: {
+            kind: 'query_index_result',
+            results: [],
+            indexMutationEpoch: 2,
+          },
+        },
+      ],
+    } as any).value as any
+    expect(secondRouteNote).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect(secondRouteNote.input.content).toContain('Proactive retrieval route')
+    expect(secondRouteNote.input.content).not.toContain('cached')
+    expect((agentState as any).proactiveRetrievalCache).toMatchObject({
+      workspaceRevision: 7,
+      indexMutationEpoch: 2,
+    })
+
+    // Third turn: the messageHistory epoch now matches the cache entry, so the
+    // cached route note is reused without a live query_index.
+    const thirdGen = base2.handleSteps!({
+      agentState,
+      prompt,
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    const cachedNote = thirdGen.next().value as any
+    expect(cachedNote).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect(cachedNote.input.content).toContain('cached result reused')
+  })
+
   test('a different prompt at the same revision misses the cache', () => {
     const base2 = createBase2('default')
     const agentState = {

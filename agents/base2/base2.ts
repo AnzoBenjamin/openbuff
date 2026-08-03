@@ -473,6 +473,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         proactiveRetrievalCache?: {
           hash: string
           workspaceRevision: number
+          indexMutationEpoch?: number
           result: unknown
         }
       }
@@ -712,8 +713,15 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         // the normalized query; the stored revision must ALSO match the
         // current one, so any revision bump (advanceWorkspaceState) naturally
         // invalidates the entry — no explicit clearing is needed.
-        // TODO: index-manager markPathsChanged invalidation is a separate
-        // lower-level concern and is intentionally not wired into this cache.
+        // M2 residual epoch guard: the entry also records the optional
+        // indexMutationEpoch the query_index result reported at retrieval
+        // time. A would-be HIT is honored only when the newest
+        // indexMutationEpoch seen on any prior query_index message in
+        // messageHistory matches the entry's epoch, so an external index
+        // mutation (markPathsChanged/markStale) that did not advance
+        // workspaceState.revision still invalidates the cache. Missing epochs
+        // compare equal (undefined === undefined), preserving the pre-epoch
+        // behavior.
         const normalizedProactiveQuery = (prompt ?? '')
           .trim()
           .replace(/\s+/g, ' ')
@@ -725,11 +733,30 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         )
         const cachedProactiveRetrieval =
           mutableAgentState.proactiveRetrievalCache
-        const proactiveCacheHit =
+        let proactiveCacheHit =
           cachedProactiveRetrieval !== undefined &&
           cachedProactiveRetrieval.hash === proactiveCacheHash &&
           cachedProactiveRetrieval.workspaceRevision ===
             proactiveWorkspaceRevision
+        if (proactiveCacheHit && cachedProactiveRetrieval) {
+          // Epoch guard: the newest indexMutationEpoch observed on any prior
+          // query_index message is the latest known index generation. If it
+          // differs from the entry's epoch, an external index mutation (e.g.
+          // markPathsChanged) occurred without a workspace-revision bump, so
+          // the cached result is stale: delete it and fall through to the
+          // live query_index path below.
+          const latestKnownIndexMutationEpoch =
+            latestIndexMutationEpochFromMessages(
+              mutableAgentState.messageHistory,
+            )
+          if (
+            latestKnownIndexMutationEpoch !==
+            cachedProactiveRetrieval.indexMutationEpoch
+          ) {
+            delete mutableAgentState.proactiveRetrievalCache
+            proactiveCacheHit = false
+          }
+        }
         if (proactiveCacheHit) {
           // Cache HIT: skip the live query_index call and the
           // discoveryCoordinator bookkeeping entirely (no live retrieval
@@ -791,6 +818,9 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           mutableAgentState.proactiveRetrievalCache = {
             hash: proactiveCacheHash,
             workspaceRevision: proactiveWorkspaceRevision,
+            indexMutationEpoch: extractIndexMutationEpochFromResult(
+              proactiveRetrievalResult,
+            ),
             result: proactiveRetrievalResult,
           }
           yield {
@@ -815,6 +845,72 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           hash = Math.imul(hash, 16777619)
         }
         return (hash >>> 0).toString(16).padStart(8, '0')
+      }
+
+      // M2 residual epoch guard helpers. The optional numeric
+      // indexMutationEpoch on a query_index result identifies the index
+      // generation at retrieval time. Declared inline (like stableHash)
+      // because handleSteps is serialized through toString()/new Function(),
+      // so they cannot reference module-scope imports.
+      function readIndexMutationEpochFromParts(
+        parts: unknown,
+      ): number | undefined {
+        if (!Array.isArray(parts)) return undefined
+        for (const part of parts) {
+          if (!part || typeof part !== 'object') continue
+          const record = part as Record<string, unknown>
+          if (record.type !== 'json' || !('value' in record)) continue
+          // Only the FIRST json value is authoritative for a query_index
+          // result; anything else (or a missing epoch) means unknown.
+          const value = record.value
+          if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            return undefined
+          }
+          const epoch = (value as Record<string, unknown>).indexMutationEpoch
+          return typeof epoch === 'number' && Number.isFinite(epoch)
+            ? epoch
+            : undefined
+        }
+        return undefined
+      }
+
+      function extractIndexMutationEpochFromResult(
+        result: unknown,
+      ): number | undefined {
+        // The generator yield may hand back a { toolResult } envelope or the
+        // bare tool-result part list.
+        if (
+          result &&
+          typeof result === 'object' &&
+          !Array.isArray(result) &&
+          'toolResult' in (result as Record<string, unknown>)
+        ) {
+          return readIndexMutationEpochFromParts(
+            (result as Record<string, unknown>).toolResult,
+          )
+        }
+        return readIndexMutationEpochFromParts(result)
+      }
+
+      // Newest indexMutationEpoch across prior query_index tool messages.
+      // Only role='tool' messages with toolName 'query_index' count — cached
+      // proactiveRetrievalCache entries and other tools never contribute an
+      // epoch.
+      function latestIndexMutationEpochFromMessages(
+        messages: unknown,
+      ): number | undefined {
+        if (!Array.isArray(messages)) return undefined
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          const message = messages[index]
+          if (!message || typeof message !== 'object') continue
+          const record = message as Record<string, unknown>
+          if (record.role !== 'tool' || record.toolName !== 'query_index') {
+            continue
+          }
+          const epoch = readIndexMutationEpochFromParts(record.content)
+          if (epoch !== undefined) return epoch
+        }
+        return undefined
       }
 
       // Explicit Git delivery is the one turn type allowed to claim files that

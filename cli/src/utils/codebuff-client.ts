@@ -188,6 +188,7 @@ export async function getCodebuffClient(): Promise<OpenbuffClient> {
               results,
               totalIndexed: result.totalIndexed,
               indexAge: result.indexAge,
+              indexMutationEpoch: manager.indexMutationEpoch,
               ...(snapshot ? { snapshot } : {}),
               status: result.status as unknown as JSONObject,
               message: `${result.status.message} Found ${result.results.length} indexed file result(s).${semanticNotice}`,
