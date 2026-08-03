@@ -28,7 +28,9 @@ describe('code-reviewer prompt isolation', () => {
       'Always gather complete context',
     )
     expect(reviewer.instructionsPrompt).toContain('diff fragments')
-    expect(reviewer.instructionsPrompt).toContain('read_files with ranges')
+    // Reviewers page large files via read_files windows (bounded cap.v3
+    // block windows); read_blocks was removed in the read-tool unification.
+    expect(reviewer.instructionsPrompt).toContain('read_files windows')
   })
 
   test('includes anti-loop attestation and single-pass instructions', () => {
