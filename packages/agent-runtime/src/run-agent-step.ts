@@ -67,6 +67,11 @@ import {
   getSemanticCompactionBudget,
   maybePruneContext,
 } from './util/context-pruning'
+import {
+  annotateLedgerAfterCompaction,
+  createBudgetLedger,
+  finalizeLedger,
+} from './util/context-budget'
 import { revokeImplicitReadAuthorizationsAfterCompaction } from './util/read-authorization'
 import {
   commitTaskMemory,
@@ -101,6 +106,7 @@ import type {
   AgentTemplateType,
   AgentState,
   AgentOutput,
+  ContextBudgetLedger,
 } from '@codebuff/common/types/session-state'
 import type {
   CustomToolDefinitions,
@@ -720,6 +726,15 @@ export const runAgentStep = async (
         keepDuringTruncation: pinnedBlocks.length > 0,
       }),
     ]
+    // The retained ledger describes the still-cached system prompt, which is
+    // unchanged by compaction (compaction only shrinks messageHistory, which
+    // the ledger never records) — so annotate rather than discard it;
+    // /context will show a staleness note.
+    if (agentState.contextBudgetLedger) {
+      agentState.contextBudgetLedger = annotateLedgerAfterCompaction(
+        agentState.contextBudgetLedger,
+      )
+    }
     logger.debug({ summary: fullResponse }, 'Compacted messages')
   }
 
@@ -1155,6 +1170,18 @@ export async function loopAgentSteps(
     // Build the initial message history with user prompt and instructions
     // Generate system prompt once, using parent's if inheritParentSystemPrompt is true
     let system: string
+    // M1-T3: Per-turn context-budget ledger. It is created lazily, only inside
+    // the rebuild branch below, so turns reusing the cached/inherited system
+    // prompt do not allocate a ledger that would be discarded unused. When
+    // created, it is built before system-prompt assembly so the formatPrompt
+    // placeholder builders record the fileTree, systemInfo, and gitChanges
+    // blocks they inject into it.
+    let contextBudgetLedger: ContextBudgetLedger | undefined
+    // True only on turns that (re)build the system prompt. Turns reusing the
+    // session-cached prompt must not re-record or overwrite the ledger: the
+    // blocks were measured on the turn that built the cache, and that ledger
+    // still describes the byte-identical cached prompt.
+    let builtSystemPromptThisTurn = false
     if (agentTemplate.inheritParentSystemPrompt && parentSystemPrompt) {
       system = parentSystemPrompt
     } else if (
@@ -1171,11 +1198,20 @@ export async function loopAgentSteps(
     ) {
       system = initialAgentState.systemPrompt
     } else {
+      builtSystemPromptThisTurn = true
+      // M1-T3: Create the ledger only on this rebuild turn.
+      contextBudgetLedger = createBudgetLedger({
+        windowTokens: getEffectiveContextLimits(
+          initialAgentState.contextWindowTokens,
+          maxContextLength,
+        ).statusWindowTokens,
+      })
       const systemPrompt = await getAgentPrompt({
         ...params,
         agentTemplate,
         promptType: { type: 'systemPrompt' },
         agentTemplates: localAgentTemplates,
+        ledger: contextBudgetLedger,
         additionalToolDefinitions: async () => {
           if (!cachedAdditionalToolDefinitions) {
             cachedAdditionalToolDefinitions = await additionalToolDefinitions({
@@ -1288,6 +1324,16 @@ export async function loopAgentSteps(
     // an error is thrown before we return.
     initialAgentState.messageHistory = initialMessages
     initialAgentState.systemPrompt = system
+    if (builtSystemPromptThisTurn && contextBudgetLedger) {
+      // M1-T3: Persist the finalized ledger on the session state so the CLI's
+      // /context command can read it across turns. Plain JSON (arrays,
+      // records, numbers, strings), so serialized agent states round-trip. The
+      // ledger only exists on rebuild turns (builtSystemPromptThisTurn), so on
+      // cached-prompt turns this guard is false and the previously persisted
+      // ledger on initialAgentState is left untouched.
+      initialAgentState.contextBudgetLedger =
+        finalizeLedger(contextBudgetLedger)
+    }
     initialAgentState.toolDefinitions = toolDefinitions
     let currentAgentState: AgentState = initialAgentState
     if (prompt?.trim()) {

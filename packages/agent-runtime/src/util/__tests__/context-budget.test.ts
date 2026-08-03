@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
 
+import { formatLedgerForCli as formatLedgerForCliFromCommon } from '@codebuff/common/util/context-budget'
+
 import {
+  annotateLedgerAfterCompaction,
   applyMeasure,
   applyRecord,
   createBudgetLedger,
@@ -10,6 +13,17 @@ import {
   recordBlock,
 } from '../context-budget'
 import * as tokenCounter from '../token-counter'
+
+import type {
+  BudgetCategory as CommonBudgetCategory,
+  BudgetLine as CommonBudgetLine,
+  ContextBudgetLedger as CommonContextBudgetLedger,
+} from '@codebuff/common/types/session-state'
+import type {
+  BudgetCategory,
+  BudgetLine,
+  ContextBudgetLedger,
+} from '../context-budget'
 
 describe('context-budget', () => {
   afterEach(() => {
@@ -26,6 +40,79 @@ describe('context-budget', () => {
         byCategory: {},
         windowTokens: 200_000,
       })
+    })
+  })
+
+  describe('type deduplication with @codebuff/common', () => {
+    it('re-exports formatLedgerForCli as the same function from common', () => {
+      // The agent-runtime module re-exports the shared common implementation
+      // rather than defining its own copy.
+      expect(formatLedgerForCli).toBe(formatLedgerForCliFromCommon)
+    })
+
+    it('re-exports ledger types assignable to the canonical common types', () => {
+      // Compile-time-only guard. TypeScript is structural, so these
+      // assignments do NOT prove the declarations are the same symbol; they
+      // only fail typecheck if the shapes become incompatible. The real
+      // single-source proof is the formatLedgerForCli identity assertion
+      // above plus the absence of local declarations in ../context-budget.
+      const ledger: ContextBudgetLedger = {
+        lines: [
+          {
+            category: 'systemPrompt',
+            label: 'base prompt',
+            tokens: 1_000,
+            cacheable: true,
+          },
+        ],
+        totalTokens: 1_000,
+        byCategory: { systemPrompt: 1_000 },
+        windowTokens: 200_000,
+      }
+
+      const asCommon: CommonContextBudgetLedger = ledger
+      const backToLocal: ContextBudgetLedger = asCommon
+      const line: BudgetLine = backToLocal.lines[0]
+      const asCommonLine: CommonBudgetLine = line
+      const category: BudgetCategory = asCommonLine.category
+      const asCommonCategory: CommonBudgetCategory = category
+
+      expect(asCommonCategory).toBe('systemPrompt')
+    })
+
+    it('accepts every BudgetCategory union member through recordBlock', () => {
+      // Behavior proof that the re-exported BudgetCategory union stays wide
+      // enough for all producers: record a line per member and confirm the
+      // category is preserved verbatim in the ledger.
+      const categories: BudgetCategory[] = [
+        'systemPrompt',
+        'fileTree',
+        'knowledge',
+        'systemInfo',
+        'gitChanges',
+        'proactiveRetrieval',
+        'gitObservation',
+        'patterns',
+        'languageProfile',
+        'tools',
+        'conversation',
+        'other',
+      ]
+
+      let ledger = createBudgetLedger({ windowTokens: 200_000 })
+      for (const category of categories) {
+        ledger = recordBlock(ledger, {
+          category,
+          label: `${category} block`,
+          tokens: 1,
+          cacheable: true,
+        })
+      }
+
+      expect(ledger.lines.map((line) => line.category)).toEqual(categories)
+      expect(Object.keys(ledger.byCategory).sort()).toEqual(
+        [...categories].sort(),
+      )
     })
   })
 
@@ -319,6 +406,46 @@ describe('context-budget', () => {
       expect(finalized.windowTokens).toBe(200_000)
     })
 
+    it('normalizes non-finite and negative persisted line tokens', () => {
+      const corrupted: ContextBudgetLedger = {
+        lines: [
+          {
+            category: 'systemPrompt',
+            label: 'invalid',
+            tokens: Number.NaN,
+            cacheable: true,
+          },
+          {
+            category: 'tools',
+            label: 'negative',
+            tokens: -10,
+            cacheable: true,
+          },
+          {
+            category: 'conversation',
+            label: 'infinite',
+            tokens: Number.POSITIVE_INFINITY,
+            cacheable: true,
+          },
+        ],
+        totalTokens: Number.POSITIVE_INFINITY,
+        byCategory: {
+          systemPrompt: Number.NaN,
+          tools: -10,
+        },
+        windowTokens: 200_000,
+      }
+
+      const normalized = finalizeLedger(corrupted)
+
+      expect(normalized.totalTokens).toBe(0)
+      expect(normalized.byCategory).toEqual({
+        systemPrompt: 0,
+        tools: 0,
+        conversation: 0,
+      })
+    })
+
     it('is idempotent', () => {
       let ledger = createBudgetLedger({ windowTokens: 200_000 })
       ledger = recordBlock(ledger, {
@@ -332,6 +459,57 @@ describe('context-budget', () => {
       const twice = finalizeLedger(once)
 
       expect(twice).toEqual(once)
+    })
+  })
+
+  describe('annotateLedgerAfterCompaction', () => {
+    it('returns a new object with compactedAtTurn true and preserves the recorded fields', () => {
+      let ledger = createBudgetLedger({ windowTokens: 200_000 })
+      ledger = recordBlock(ledger, {
+        category: 'systemPrompt',
+        label: 'base prompt',
+        tokens: 1_000,
+        cacheable: true,
+      })
+      ledger = recordBlock(ledger, {
+        category: 'tools',
+        label: 'tool schemas',
+        tokens: 250,
+        cacheable: false,
+      })
+
+      const annotated = annotateLedgerAfterCompaction(ledger)
+
+      expect(annotated).not.toBe(ledger)
+      expect(annotated.compactedAtTurn).toBe(true)
+      expect(annotated.lines).toBe(ledger.lines)
+      expect(annotated.totalTokens).toBe(ledger.totalTokens)
+      expect(annotated.byCategory).toBe(ledger.byCategory)
+      expect(annotated.windowTokens).toBe(ledger.windowTokens)
+    })
+
+    it('does not mutate the input', () => {
+      const ledger = createBudgetLedger({ windowTokens: 200_000 })
+
+      annotateLedgerAfterCompaction(ledger)
+
+      expect(ledger.compactedAtTurn).toBeUndefined()
+    })
+
+    it('is idempotent', () => {
+      let ledger = createBudgetLedger({ windowTokens: 200_000 })
+      ledger = recordBlock(ledger, {
+        category: 'knowledge',
+        label: 'knowledge',
+        tokens: 100,
+        cacheable: true,
+      })
+
+      const once = annotateLedgerAfterCompaction(ledger)
+      const twice = annotateLedgerAfterCompaction(once)
+
+      expect(twice).toEqual(once)
+      expect(twice.compactedAtTurn).toBe(true)
     })
   })
 
@@ -380,5 +558,10 @@ describe('context-budget', () => {
 
       expect(formatLedgerForCli(ledger)).toBe(formatLedgerForCli(ledger))
     })
+
+    // Direct formatter coverage (multi-category, empty ledger, zero window)
+    // lives in common/src/util/__tests__/context-budget.test.ts, which owns
+    // the implementation. Only the re-export identity is asserted here so a
+    // format change requires updating one file, not two.
   })
 })

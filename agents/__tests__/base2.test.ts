@@ -928,6 +928,156 @@ describe('base2 proactive index lookup', () => {
 
     expect(generator.next().value).toMatchObject({ toolName: 'git_status' })
   })
+
+  test('reuses the cached proactive retrieval result for an identical prompt at the same workspace revision', () => {
+    const base2 = createBase2('default')
+    const prompt = 'Refactor the authentication module code.'
+    const agentState = {
+      agentId: 'base2-classify',
+      workspaceState: { revision: 7, snapshotId: 'snapshot-1' },
+    }
+
+    // First turn: cache miss -> live query_index, then the route note.
+    const firstGen = base2.handleSteps!({
+      agentState,
+      prompt,
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(firstGen.next().value).toMatchObject({ toolName: 'query_index' })
+    const firstRouteNote = firstGen.next({
+      toolResult: [{ type: 'json', value: [] }],
+    } as any).value as any
+    expect(firstRouteNote).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect(firstRouteNote.input.content).toContain('Proactive retrieval route')
+    expect(firstRouteNote.input.content).not.toContain('cached')
+    expect(firstGen.next().value).toMatchObject({ toolName: 'git_status' })
+
+    // The live turn stored the opaque result in the per-session cache.
+    expect((agentState as any).proactiveRetrievalCache).toMatchObject({
+      workspaceRevision: 7,
+    })
+    expect(typeof (agentState as any).proactiveRetrievalCache.hash).toBe(
+      'string',
+    )
+
+    // Second turn: same prompt + same revision -> cache hit. The generator
+    // yields only the cached-result route note (no query_index), then moves
+    // straight to git_status.
+    const secondGen = base2.handleSteps!({
+      agentState,
+      prompt,
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    const cachedNote = secondGen.next().value as any
+    expect(cachedNote).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect(cachedNote.input.content).toContain('cached result reused')
+    expect(secondGen.next().value).toMatchObject({ toolName: 'git_status' })
+  })
+
+  test('re-runs query_index when the workspace revision changed', () => {
+    const base2 = createBase2('default')
+    const prompt = 'Refactor the authentication module code.'
+    const agentState = {
+      agentId: 'base2-classify',
+      workspaceState: { revision: 3, snapshotId: 'snapshot-1' },
+    }
+
+    const firstGen = base2.handleSteps!({
+      agentState,
+      prompt,
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(firstGen.next().value).toMatchObject({ toolName: 'query_index' })
+    firstGen.next({ toolResult: [{ type: 'json', value: [] }] } as any)
+    expect((agentState as any).proactiveRetrievalCache).toMatchObject({
+      workspaceRevision: 3,
+    })
+
+    // Simulate advanceWorkspaceState bumping the revision between turns: the
+    // stored entry no longer matches, so the live query_index runs again.
+    ;(agentState as any).workspaceState = {
+      revision: 4,
+      snapshotId: 'snapshot-2',
+    }
+    const secondGen = base2.handleSteps!({
+      agentState,
+      prompt,
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(secondGen.next().value).toMatchObject({ toolName: 'query_index' })
+    secondGen.next({ toolResult: [{ type: 'json', value: [] }] } as any)
+    expect((agentState as any).proactiveRetrievalCache).toMatchObject({
+      workspaceRevision: 4,
+    })
+  })
+
+  test('a different prompt at the same revision misses the cache', () => {
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2-classify',
+      workspaceState: { revision: 2, snapshotId: 'snapshot-1' },
+    }
+
+    const firstGen = base2.handleSteps!({
+      agentState,
+      prompt: 'Refactor the authentication module code.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(firstGen.next().value).toMatchObject({ toolName: 'query_index' })
+    firstGen.next({ toolResult: [{ type: 'json', value: [] }] } as any)
+    expect((agentState as any).proactiveRetrievalCache).toBeDefined()
+
+    // Same revision, but a different normalized query hashes differently.
+    const secondGen = base2.handleSteps!({
+      agentState,
+      prompt: 'Investigate the repository structure',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(secondGen.next().value).toMatchObject({ toolName: 'query_index' })
+  })
+
+  test('generic words alone no longer trigger proactive retrieval', () => {
+    const firstYield = (prompt: string) => {
+      const base2 = createBase2('default')
+      const gen = base2.handleSteps!({
+        agentState: { agentId: 'base2-classify' },
+        prompt,
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+      return gen.next().value as any
+    }
+
+    // 'flow', 'index', and 'context' were removed from the code-intent
+    // alternation, so a prompt whose only code-intent word is one of these
+    // skips proactive retrieval and starts at git_status.
+    expect(firstYield('tell me about the flow')).toMatchObject({
+      toolName: 'git_status',
+    })
+    expect(firstYield('what is this context')).toMatchObject({
+      toolName: 'git_status',
+    })
+    expect(firstYield('show me the index')).toMatchObject({
+      toolName: 'git_status',
+    })
+
+    // Strong intent words still fire the proactive query_index.
+    expect(
+      firstYield('refactor the authentication module code'),
+    ).toMatchObject({ toolName: 'query_index', input: { mode: 'search' } })
+  })
 })
 
 describe('base2 verification and reviewer gates', () => {
@@ -5310,6 +5460,12 @@ describe('base2 verification and reviewer gates', () => {
     )
     expect(reviewPrompt).toContain(
       'Changed tests are first-class review targets and may also be cited as coverage evidence.',
+    )
+    // The reviewer is instructed to read large files via bounded read_files
+    // windows (not whole-file reads) so its accumulated read context stays
+    // bounded, while still attesting to every pending file.
+    expect(reviewPrompt).toContain(
+      'Read large files via read_files windows (bounded block reads)',
     )
     expect(reviewPrompt).not.toContain('not part of the reviewed fingerprint')
   })

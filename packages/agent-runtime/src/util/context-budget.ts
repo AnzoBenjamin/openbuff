@@ -1,40 +1,23 @@
 
 import { countTokensJson } from './token-counter'
 
-/**
- * Fixed-baseline, injection, and conversation buckets tracked by the
- * per-turn context-budget ledger (M1-T1).
- *
- * The conversation/tool-results buckets exist for later M1-T3 wiring into the
- * trim path; this module just defines them.
- */
-export type BudgetCategory =
-  | 'systemPrompt'
-  | 'fileTree'
-  | 'knowledge'
-  | 'systemInfo'
-  | 'gitChanges'
-  | 'proactiveRetrieval'
-  | 'gitObservation'
-  | 'patterns'
-  | 'languageProfile'
-  | 'tools'
-  | 'conversation'
-  | 'other'
+import type {
+  BudgetCategory,
+  BudgetLine,
+  ContextBudgetLedger,
+} from '@codebuff/common/types/session-state'
 
-export interface BudgetLine {
-  category: BudgetCategory
-  label: string
-  tokens: number
-  cacheable: boolean
-}
+// formatLedgerForCli lives in @codebuff/common so the CLI's /context command
+// and this package share one implementation over the plain-JSON ledger type;
+// re-exported here so existing `../context-budget` imports keep working.
+export { formatLedgerForCli } from '@codebuff/common/util/context-budget'
 
-export interface ContextBudgetLedger {
-  lines: BudgetLine[]
-  totalTokens: number
-  byCategory: Record<string, number>
-  windowTokens: number
-}
+// The ledger types are canonical in @codebuff/common
+// (common/src/types/session-state.ts) because common must not import from
+// agent-runtime. Re-exported here so this module's consumers
+// (../context-budget import sites) keep working and the shapes stay aligned
+// by construction rather than by a keep-in-sync comment.
+export type { BudgetCategory, BudgetLine, ContextBudgetLedger }
 
 export function createBudgetLedger(params: {
   windowTokens: number
@@ -48,7 +31,7 @@ export function createBudgetLedger(params: {
 }
 
 function clampTokens(tokens: number): number {
-  return Math.max(0, tokens)
+  return Number.isFinite(tokens) ? Math.max(0, tokens) : 0
 }
 
 export function recordBlock(
@@ -102,8 +85,13 @@ export function measureBlock(
  * their recorded line into the SAME ledger object the caller already holds.
  * `recordBlock` remains the pure/immutable variant for pure use.
  *
- * Clamps negative token counts to 0, pushes the line onto `ledger.lines`,
- * accumulates `totalTokens` and `byCategory`, and returns the same object.
+ * Clamps negative token counts to 0, then REASSIGNS `ledger.lines`,
+ * `totalTokens`, and `byCategory` from the immutable {@link recordBlock}
+ * result (leaving other fields like `windowTokens` and `compactedAtTurn`
+ * untouched) and returns the same object. Because `lines` is replaced rather
+ * than appended to, a caller holding a `lines` reference captured before this
+ * call keeps the OLD array — always read `ledger.lines` after the call, not
+ * a cached reference.
  */
 export function applyRecord(
   ledger: ContextBudgetLedger,
@@ -136,8 +124,9 @@ export function finalizeLedger(
   const byCategory: Record<string, number> = {}
   let totalTokens = 0
   for (const line of ledger.lines) {
-    totalTokens += line.tokens
-    byCategory[line.category] = (byCategory[line.category] ?? 0) + line.tokens
+    const tokens = clampTokens(line.tokens)
+    totalTokens += tokens
+    byCategory[line.category] = (byCategory[line.category] ?? 0) + tokens
   }
   return {
     ...ledger,
@@ -146,38 +135,20 @@ export function finalizeLedger(
   }
 }
 
-export function formatLedgerForCli(ledger: ContextBudgetLedger): string {
-  const lines: string[] = []
-  lines.push('Context Budget Breakdown')
-  lines.push('------------------------')
-
-  const categories = Object.keys(ledger.byCategory)
-  const labelWidth = Math.max(
-    ...categories.map((category) => category.length),
-    'category'.length,
-  )
-
-  for (const category of categories) {
-    const tokens = ledger.byCategory[category]
-    const percent =
-      ledger.windowTokens > 0
-        ? ((tokens / ledger.windowTokens) * 100).toFixed(1)
-        : '0.0'
-    lines.push(
-      `${category.padEnd(labelWidth)}  ${String(tokens).padStart(8)}  ${percent.padStart(5)}%`,
-    )
+/**
+ * Returns a NEW ledger annotated as recorded before the last /compact.
+ * The ledger is system-prompt telemetry: compaction only shrinks
+ * messageHistory (which the ledger never records), so the breakdown still
+ * describes the byte-identical cached system prompt. Annotating (rather
+ * than discarding) lets /context surface a staleness note over accurate
+ * data. Idempotent: annotating an already-annotated ledger returns an
+ * equivalent object.
+ */
+export function annotateLedgerAfterCompaction(
+  ledger: ContextBudgetLedger,
+): ContextBudgetLedger {
+  return {
+    ...ledger,
+    compactedAtTurn: true,
   }
-
-  const totalPercent =
-    ledger.windowTokens > 0
-      ? ((ledger.totalTokens / ledger.windowTokens) * 100).toFixed(1)
-      : '0.0'
-  lines.push(
-    `${'total'.padEnd(labelWidth)}  ${String(ledger.totalTokens).padStart(8)}  ${totalPercent.padStart(5)}%`,
-  )
-  lines.push(
-    `${'window'.padEnd(labelWidth)}  ${String(ledger.windowTokens)}`,
-  )
-
-  return lines.join('\n')
 }

@@ -42,6 +42,64 @@ export type EditRereadRequirement = {
   sourceTool?: string
 }
 
+/**
+ * One recorded injected-block measurement in the per-turn context budget.
+ * Canonical declaration: `packages/agent-runtime/src/util/context-budget.ts`
+ * imports and re-exports these types from here (common must not import from
+ * agent-runtime), so the shapes are aligned at compile time.
+ *
+ * The category union remains a type alias because its primitive string values
+ * are part of the existing consumer contract; unlike object declarations, a
+ * string-literal union cannot be represented by an interface without making
+ * those existing values unassignable.
+ */
+export type BudgetCategory =
+  | 'systemPrompt'
+  | 'fileTree'
+  | 'knowledge'
+  | 'systemInfo'
+  | 'gitChanges'
+  | 'proactiveRetrieval'
+  | 'gitObservation'
+  | 'patterns'
+  | 'languageProfile'
+  | 'tools'
+  | 'conversation'
+  | 'other'
+
+export interface BudgetLine {
+  category: BudgetCategory
+  label: string
+  tokens: number
+  cacheable: boolean
+}
+
+/**
+ * Plain-JSON per-turn context-budget ledger stored on {@link AgentState}.
+ * Canonical declaration; re-exported by
+ * `packages/agent-runtime/src/util/context-budget.ts` (see the note on
+ * {@link BudgetLine}).
+ *
+ * This remains an interface for declaration-merging compatibility with
+ * existing consumers. The export path and field contract are unchanged, so
+ * no deprecation or consumer migration is required.
+ */
+export interface ContextBudgetLedger {
+  lines: BudgetLine[]
+  totalTokens: number
+  byCategory: Record<string, number>
+  windowTokens: number
+  /**
+   * Set when the conversation was compacted after this ledger was recorded.
+   * The breakdown still describes the last full prompt-build turn:
+   * compaction only shrinks messageHistory (which the ledger never
+   * records), so the system-prompt composition it measures is unchanged and
+   * stays byte-accurate. The CLI's /context command surfaces a staleness
+   * note when this flag is set.
+   */
+  compactedAtTurn?: boolean
+}
+
 export type AgentState = {
   /**
    * @deprecated agentId is replaced by runId
@@ -109,6 +167,15 @@ export type AgentState = {
    * 500k/1M models instead of assuming the legacy 200k-class window.
    */
   contextWindowTokens?: number
+  /**
+   * Finalized per-turn context-budget ledger recorded while assembling the
+   * system prompt (M1-T3). Updated only on turns that rebuild the system
+   * prompt; turns that reuse the session-cached prompt keep the prior
+   * ledger, whose blocks still describe the byte-identical cached prompt.
+   * Read by the CLI's /context command. Optional and plain JSON, so
+   * existing serialized states parse fine without it.
+   */
+  contextBudgetLedger?: ContextBudgetLedger
   /**
    * Cross-turn read authorization registry for the strict read-before-edit
    * gate. Each entry is a path that the agent has read (or successfully

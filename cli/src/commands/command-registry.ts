@@ -7,6 +7,7 @@ import {
 } from '@codebuff/common/util/plan-artifacts'
 
 import { registerPlanTimelineCommand } from './plan-timeline'
+import { handleContextCommand } from './context'
 import { handleIndexCommand } from './index-command'
 import { handleHelpCommand } from './help'
 import { handleImageCommand } from './image'
@@ -596,6 +597,25 @@ const ALL_COMMANDS: CommandDefinition[] = [
           ...prev,
           getSystemMessage(
             `Failed to gather info: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        ])
+      }
+      params.saveToHistory(params.inputValue.trim())
+      clearInput(params)
+    },
+  }),
+  defineCommand({
+    name: 'context',
+    aliases: ['ctx'],
+    handler: (params) => {
+      try {
+        const { postUserMessage } = handleContextCommand()
+        params.setMessages((prev) => postUserMessage(prev))
+      } catch (error) {
+        params.setMessages((prev) => [
+          ...prev,
+          getSystemMessage(
+            `Failed to gather context budget: ${error instanceof Error ? error.message : String(error)}`,
           ),
         ])
       }

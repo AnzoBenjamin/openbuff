@@ -450,6 +450,11 @@ ${specialistRoutingSection}
         }
         discoveryCoverage?: any
         workflowStates?: Record<string, any>
+        proactiveRetrievalCache?: {
+          hash: string
+          workspaceRevision: number
+          result: unknown
+        }
       }
 
       const mutableAgentState = (agentState ?? {}) as Base2AgentState
@@ -681,58 +686,115 @@ ${specialistRoutingSection}
 
       const retrievalDecision = classifyProactiveRetrieval(prompt)
       if (retrievalDecision) {
-        if (retrievalDecision.scope === 'cross-subsystem') {
-          yield {
-            toolName: 'inspect_codebase_structure',
-            input: {},
-          } as any
-          yield {
-            toolName: 'list_directory',
-            input: { path: '.' },
-          } as any
+        // M2 per-session proactive-retrieval dedup cache: a second equivalent
+        // retrieval turn at the same workspace revision reuses the prior
+        // query_index result instead of re-running the tool. The hash keys
+        // the normalized query; the stored revision must ALSO match the
+        // current one, so any revision bump (advanceWorkspaceState) naturally
+        // invalidates the entry — no explicit clearing is needed.
+        // TODO: index-manager markPathsChanged invalidation is a separate
+        // lower-level concern and is intentionally not wired into this cache.
+        const normalizedProactiveQuery = (prompt ?? '')
+          .trim()
+          .replace(/\s+/g, ' ')
+          .toLowerCase()
+        const proactiveWorkspaceRevision =
+          mutableAgentState.workspaceState?.revision ?? 0
+        const proactiveCacheHash = stableHash(
+          `${proactiveWorkspaceRevision}\n${normalizedProactiveQuery}`,
+        )
+        const cachedProactiveRetrieval =
+          mutableAgentState.proactiveRetrievalCache
+        const proactiveCacheHit =
+          cachedProactiveRetrieval !== undefined &&
+          cachedProactiveRetrieval.hash === proactiveCacheHash &&
+          cachedProactiveRetrieval.workspaceRevision ===
+            proactiveWorkspaceRevision
+        if (proactiveCacheHit) {
+          // Cache HIT: skip the live query_index call and the
+          // discoveryCoordinator bookkeeping entirely (no live retrieval
+          // happened this turn); yield only the route note, marked as a
+          // cached reuse.
           yield {
             toolName: 'add_message',
             input: {
               role: 'user',
-              content:
-                '<system>Production breadth guard: this request was deterministically classified as cross-subsystem. The preceding native structural inventory and its snapshot ID control this audit. Use vertical feature slices plus structural/domain shards, call inspect_feature_completeness for every claimed feature, and call evaluate_audit_coverage before claiming completeness. Explicitly cover or exclude every subsystem. A single search/read path or Markdown structural map is insufficient.</system>',
+              content: `<system>Proactive retrieval route (cached result reused): scope=${retrievalDecision.scope}; mode=${retrievalDecision.mode}; reason=${retrievalDecision.reason}. An identical proactive query_index result from workspace revision ${proactiveWorkspaceRevision} is already available in this session, so the live query_index call was skipped. Verify retrieved candidates against the live filesystem before editing.</system>`,
+            },
+            includeToolCall: false,
+          } as any
+        } else {
+          if (retrievalDecision.scope === 'cross-subsystem') {
+            yield {
+              toolName: 'inspect_codebase_structure',
+              input: {},
+            } as any
+            yield {
+              toolName: 'list_directory',
+              input: { path: '.' },
+            } as any
+            yield {
+              toolName: 'add_message',
+              input: {
+                role: 'user',
+                content:
+                  '<system>Production breadth guard: this request was deterministically classified as cross-subsystem. The preceding native structural inventory and its snapshot ID control this audit. Use vertical feature slices plus structural/domain shards, call inspect_feature_completeness for every claimed feature, and call evaluate_audit_coverage before claiming completeness. Explicitly cover or exclude every subsystem. A single search/read path or Markdown structural map is insufficient.</system>',
+              },
+              includeToolCall: false,
+            } as any
+          }
+          const proactiveRetrievalResult = yield {
+            toolName: 'query_index',
+            input: {
+              query: prompt,
+              limit: retrievalDecision.limit,
+              mode: retrievalDecision.mode,
+            },
+          }
+          const discoveryCoordinator = (params as any)
+            ?.orchestrationControlPlane?.planDiscoveryBatch
+          if (typeof discoveryCoordinator === 'function') {
+            try {
+              mutableAgentState.discoveryCoverage = discoveryCoordinator({
+                existing: mutableAgentState.discoveryCoverage,
+                query: prompt ?? '',
+                result:
+                  (proactiveRetrievalResult as any)?.toolResult ??
+                  proactiveRetrievalResult,
+                workspaceRevision: mutableAgentState.workspaceState?.revision,
+              })
+            } catch {
+              // Retrieval output remains usable even if optional coverage
+              // bookkeeping cannot parse a third-party index result.
+            }
+          }
+          mutableAgentState.proactiveRetrievalCache = {
+            hash: proactiveCacheHash,
+            workspaceRevision: proactiveWorkspaceRevision,
+            result: proactiveRetrievalResult,
+          }
+          yield {
+            toolName: 'add_message',
+            input: {
+              role: 'user',
+              content: `<system>Proactive retrieval route: scope=${retrievalDecision.scope}; mode=${retrievalDecision.mode}; reason=${retrievalDecision.reason}. Verify retrieved candidates against the live filesystem before editing.</system>`,
             },
             includeToolCall: false,
           } as any
         }
-        const proactiveRetrievalResult = yield {
-          toolName: 'query_index',
-          input: {
-            query: prompt,
-            limit: retrievalDecision.limit,
-            mode: retrievalDecision.mode,
-          },
+      }
+
+      // FNV-1a string hash (hex) used to key the per-session proactive
+      // retrieval cache. Declared inline (like the other helpers below)
+      // because handleSteps is serialized through toString()/new Function(),
+      // so it cannot reference a module-scope hashing util.
+      function stableHash(input: string): string {
+        let hash = 2166136261
+        for (let index = 0; index < input.length; index += 1) {
+          hash ^= input.charCodeAt(index)
+          hash = Math.imul(hash, 16777619)
         }
-        const discoveryCoordinator = (params as any)?.orchestrationControlPlane
-          ?.planDiscoveryBatch
-        if (typeof discoveryCoordinator === 'function') {
-          try {
-            mutableAgentState.discoveryCoverage = discoveryCoordinator({
-              existing: mutableAgentState.discoveryCoverage,
-              query: prompt ?? '',
-              result:
-                (proactiveRetrievalResult as any)?.toolResult ??
-                proactiveRetrievalResult,
-              workspaceRevision: mutableAgentState.workspaceState?.revision,
-            })
-          } catch {
-            // Retrieval output remains usable even if optional coverage
-            // bookkeeping cannot parse a third-party index result.
-          }
-        }
-        yield {
-          toolName: 'add_message',
-          input: {
-            role: 'user',
-            content: `<system>Proactive retrieval route: scope=${retrievalDecision.scope}; mode=${retrievalDecision.mode}; reason=${retrievalDecision.reason}. Verify retrieved candidates against the live filesystem before editing.</system>`,
-          },
-          includeToolCall: false,
-        } as any
+        return (hash >>> 0).toString(16).padStart(8, '0')
       }
 
       // Explicit Git delivery is the one turn type allowed to claim files that
@@ -8003,7 +8065,7 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
         }
 
         const codeIntent =
-          /\b(code|file|files|repo|repository|project|codebase|workspace|module|package|function|class|component|hook|api|schema|config|test|tests|implement|fix|debug|refactor|audit|review|investigate|architecture|flow|index|context)\b/i.test(
+          /\b(code|file|files|repo|repository|project|codebase|workspace|module|package|function|class|component|hook|api|schema|config|test|tests|implement|fix|debug|refactor|audit|review|investigate|architecture)\b/i.test(
             text,
           )
         if (!codeIntent) return undefined

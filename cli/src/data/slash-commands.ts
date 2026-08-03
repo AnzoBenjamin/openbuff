@@ -39,6 +39,12 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     aliases: ['status'],
   },
   {
+    id: 'context',
+    label: 'context',
+    description: 'Show per-turn context token budget breakdown',
+    aliases: ['ctx'],
+  },
+  {
     id: 'doctor',
     label: 'doctor',
     description:
