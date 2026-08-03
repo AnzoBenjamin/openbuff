@@ -29,6 +29,7 @@ export function createBase2(
     planOnly?: boolean
     executePlan?: boolean
     noAskUser?: boolean
+    progressivePromptDisclosure?: boolean
     model?: SecretAgentDefinition['model']
     providerOptions?: SecretAgentDefinition['providerOptions']
   },
@@ -38,6 +39,7 @@ export function createBase2(
     planOnly = false,
     executePlan = false,
     noAskUser = false,
+    progressivePromptDisclosure = false,
     model: modelOverride,
     providerOptions,
   } = options ?? {}
@@ -47,6 +49,22 @@ export function createBase2(
   const canRunTerminal = !planOnly && executePlan
 
   const model = modelOverride ?? 'anthropic/claude-opus-4.7'
+
+  const progressiveDisclosure = progressivePromptDisclosure
+  // M4 progressive prompt disclosure: when enabled, relocate verbose advisory
+  // sections out of the always-on prompt and replace each with a compact
+  // pointer to an on-demand guide file. When disabled (default), disclose()
+  // returns the full section verbatim so the assembled prompt is byte-identical.
+  const disclose = (fullSection: string, pointer: string): string =>
+    progressiveDisclosure ? pointer : fullSection
+  const specialistRoutingPointer =
+    'Choosing a specialist agent → read_files `agents/guides/specialist-routing.md`.'
+  const gitDisciplinePointer =
+    'Before any git commit/branch/push → read_files `agents/guides/git-discipline.md`.'
+  const securityReviewPointer =
+    'Editing security-sensitive files (auth/crypto/secrets/payment/permissions) → read_files `agents/guides/security-review.md` before editing.'
+  const qualitySectionPointer =
+    'Code craftsmanship standards (conventions, minimal-change, reuse, no-any, hygiene) → read_files `agents/guides/code-craftsmanship.md` before editing code.'
 
   return {
     publisher,
@@ -384,19 +402,19 @@ ${PLACEHOLDER.SYSTEM_INFO_PROMPT}
 
 The runtime injects a fresh, compact Git-status observation before coding work and after model steps. Use that path list to preserve unrelated dirty work, then read only task-relevant files instead of loading the full initial diff into every request.
 
-${qualitySection}
+${disclose(qualitySection, qualitySectionPointer)}
 
 ${PLACEHOLDER.FRONTEND_SECTION}
 
-${gitDisciplineSection}
+${disclose(gitDisciplineSection, gitDisciplinePointer)}
 
-${securityReviewSection}
+${disclose(securityReviewSection, securityReviewPointer)}
 
-${specialistRoutingSection}
+${disclose(specialistRoutingSection, specialistRoutingPointer)}
 `,
 
     instructionsPrompt: planOnly
-      ? buildPlanOnlyInstructionsPrompt({})
+      ? buildPlanOnlyInstructionsPrompt({ progressiveDisclosure })
       : executePlan
         ? buildExecutePlanInstructionsPrompt({
             isFast,
@@ -404,6 +422,7 @@ ${specialistRoutingSection}
 
             hasNoValidation,
             noAskUser,
+            progressiveDisclosure,
           })
         : buildImplementationInstructionsPrompt({
             isFast,
@@ -411,6 +430,7 @@ ${specialistRoutingSection}
 
             hasNoValidation,
             noAskUser,
+            progressiveDisclosure,
           }),
     stepPrompt: planOnly
       ? buildPlanOnlyStepPrompt({})
@@ -8132,11 +8152,13 @@ function buildImplementationInstructionsPrompt({
   isDefault,
   hasNoValidation,
   noAskUser,
+  progressiveDisclosure,
 }: {
   isFast: boolean
   isDefault: boolean
   hasNoValidation: boolean
   noAskUser: boolean
+  progressiveDisclosure: boolean
 }) {
   // Mode-level proxy for "the automated validation/reviewer gate is active".
   // Plan mode uses separate builders, so at prompt-build time this matches the
@@ -8144,7 +8166,11 @@ function buildImplementationInstructionsPrompt({
   const gateActive = !isFast && !hasNoValidation
   return `Act as a helpful assistant and freely respond to the user's request however would be most helpful to the user. Use your judgement to orchestrate the completion of the user's request using your specialized sub-agents and tools as needed. Take your time and be comprehensive. Don't surprise the user. For example, don't modify files if the user has not asked you to do so at least implicitly.
 
-${buildBroadAuditSection('proceed to implementation or the answer')}
+${
+    progressiveDisclosure
+      ? 'Broad audit / many-file / coverage-sweep request → read_files `agents/guides/broad-audit.md` before sharding.'
+      : buildBroadAuditSection('proceed to implementation or the answer')
+  }
 
 ## Example response
 
@@ -8194,6 +8220,7 @@ function buildExecutePlanInstructionsPrompt(params: {
   isDefault: boolean
   hasNoValidation: boolean
   noAskUser: boolean
+  progressiveDisclosure: boolean
 }) {
   return [
     buildImplementationInstructionsPrompt(params),
@@ -8255,12 +8282,20 @@ function buildExecutePlanStepPrompt({}: {}) {
   ).join('\n')
 }
 
-function buildPlanOnlyInstructionsPrompt({}: {}) {
+function buildPlanOnlyInstructionsPrompt({
+  progressiveDisclosure,
+}: {
+  progressiveDisclosure: boolean
+}) {
   return `Orchestrate the completion of the user's request using your specialized sub-agents.
 
 You are in plan mode. Preserve short-answer behavior: if the user is asking a question, requesting an explanation, or asking for a small clarification, answer directly and do not create a plan packet.
 
-${buildBroadAuditSection('translate the findings into the durable plan packet below')}
+${
+  progressiveDisclosure
+    ? 'Broad audit / many-file / coverage-sweep request → read_files `agents/guides/broad-audit.md` before sharding.'
+    : buildBroadAuditSection('translate the findings into the durable plan packet below')
+}
 
 For larger implementation, migration, debugging, or multi-step work, gather enough context to create a comprehensive, resumable plan packet. For non-trivial plans, create all four durable artifacts by default (SPEC.md, PLAN.md, STATUS.md, LESSONS.md); these are not optional or only "as needed". Normal users should not need to explicitly ask for STATUS or LESSONS artifacts. You may ask targeted clarifying questions with ask_user when the answer materially changes the plan. Avoid obvious questions and questions about details that can be adjusted later.
 
