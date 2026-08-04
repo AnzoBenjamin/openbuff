@@ -126,8 +126,9 @@ import type {
  * Stored as a plain string[] for JSON-safe session state; consumers may wrap
  * with Set for O(1) membership. Paths come from confirmed file_mutation_result
  * actions, schemaVersion=1 agent receipts (spawned editor batches),
- * `changedFiles` on receipts, and SYNC `run_terminal_command`/`basher`
- * `touchedPaths` (pre/post git dirty delta — Fix3 terminal SYNC credit).
+ * `changedFiles` on receipts, and optional `touchedPaths` on SYNC
+ * `run_terminal_command`/`basher` results (pre/post git dirty delta) and on
+ * the first settled `check_job` result (BACKGROUND settlement dirty delta).
  * Concurrent foreign dirt that appears only during a command window can still
  * land in that delta; pre-existing dirt is excluded by construction.
  */
@@ -184,7 +185,8 @@ export function publishSelfMutatedPaths(params: {
       }
     }
 
-    // Terminal/basher SYNC dirty-delta (pre/post git status) → selfMutatedPaths.
+    // Optional touchedPaths → selfMutatedPaths: SYNC terminal/basher dirty
+    // delta and first-settled check_job BACKGROUND settlement dirty delta.
     if (Array.isArray(plain.touchedPaths)) {
       for (const p of plain.touchedPaths) addPath(p)
     }
