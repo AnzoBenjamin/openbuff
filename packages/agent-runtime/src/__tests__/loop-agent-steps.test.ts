@@ -9,6 +9,7 @@ import z from 'zod/v4'
 import contextPruner from '../../../../agents/context-pruner'
 import { loopAgentSteps } from '../run-agent-step'
 import { clearAgentGeneratorCache } from '../run-programmatic-step'
+import { PLACEHOLDER } from '../templates/types'
 import { createToolCallChunk, mockFileContext } from './test-utils'
 
 import type { AgentTemplate } from '../templates/types'
@@ -400,5 +401,74 @@ describe('loopAgentSteps', () => {
     expect(compacted).toContain('<historical_memory>')
     expect(compacted).toContain('Goal: current goal')
     expect(compacted).not.toContain('Goal: stale goal')
+  })
+
+  it('populates contextBudgetLedger on prompt-build turns and keeps it on cached-prompt turns', async () => {
+    setup()
+    // Include the placeholder builders that record into the per-turn ledger
+    // while assembling the system prompt.
+    agentTemplate.systemPrompt = `Test system prompt ${PLACEHOLDER.FILE_TREE_PROMPT} ${PLACEHOLDER.SYSTEM_INFO_PROMPT}`
+
+    await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    const ledger = agentState.contextBudgetLedger
+    expect(ledger).toBeDefined()
+    expect(ledger!.byCategory.fileTree).toBeGreaterThan(0)
+    expect(ledger!.byCategory.systemInfo).toBeGreaterThan(0)
+    expect(ledger!.windowTokens).toBeGreaterThan(0)
+
+    // A cached-prompt turn reuses the session-cached system prompt (agent
+    // type matches) and must not overwrite the recorded ledger.
+    agentState.systemPrompt = 'cached'
+    agentState.agentType = 'test-agent'
+
+    await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    expect(agentState.contextBudgetLedger).toBe(ledger)
+  })
+
+  it('annotates the retained contextBudgetLedger on a /compact turn', async () => {
+    setup()
+    // Include the placeholder builders that record into the per-turn ledger
+    // while assembling the system prompt.
+    agentTemplate.systemPrompt = `Test system prompt ${PLACEHOLDER.FILE_TREE_PROMPT} ${PLACEHOLDER.SYSTEM_INFO_PROMPT}`
+
+    await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    const ledger = agentState.contextBudgetLedger
+    expect(ledger).toBeDefined()
+
+    // A cached-prompt turn (agent type matches) keeps the recorded ledger;
+    // the /compact turn must annotate it rather than rebuild or discard it.
+    agentState.agentType = 'test-agent'
+
+    await loopAgentSteps({
+      ...baseParams,
+      prompt: '/compact',
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    expect(agentState.contextBudgetLedger).toBeDefined()
+    expect(agentState.contextBudgetLedger).not.toBe(ledger)
+    expect(agentState.contextBudgetLedger!.compactedAtTurn).toBe(true)
+    expect(agentState.contextBudgetLedger!.totalTokens).toBe(
+      ledger!.totalTokens,
+    )
+    expect(agentState.contextBudgetLedger!.byCategory).toEqual(
+      ledger!.byCategory,
+    )
   })
 })

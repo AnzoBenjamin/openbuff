@@ -196,6 +196,9 @@ page; the high-level wiring is:
   gate, fails closed on missing/unreadable files, and exposes a
   structured `<gate-state>` block as the stable user-visible contract.
   See [Request Flow](./request-flow.md#reviewer--validation-gate-semantics).
+  For concurrent-instance isolation of mid-turn dirt (`selfMutatedPaths` /
+  terminal `touchedPaths`), see
+  [Concurrent gate isolation](./agents-and-tools.md#concurrent-gate-isolation-selfmutatedpaths).
 - **PlanLink and durable plan artifacts.** Plan artifacts under
   `.agents/sessions/<plan>/` are attached to TUI sessions via PlanLink
   slash commands (`/resume-plan`, `/update-plan`, `/plan-status`,
@@ -204,6 +207,48 @@ page; the high-level wiring is:
   remains for whole-artifact creation or rewrite. See
   [Local Mode](./local-mode.md) and
   [Agents and Tools](./agents-and-tools.md).
+
+### Context Budget, Retrieval Caching, and Git Observation Gating
+
+Several cross-cutting subsystems keep long-running turns inside the model's
+context window while preserving the information the agent still needs. They
+are code-default (no config fields); the high-level wiring is:
+
+- **Context budget ledger.** Each turn records per-component token counts
+  into a ledger (`packages/agent-runtime/src/util/context-budget.ts`). The
+  `/context` CLI command renders the breakdown via `formatLedgerForCli`
+  (`common/src/util/context-budget.ts`). The ledger is advisory telemetry,
+  not a hard gate; `/context` is read-only.
+- **Model-aware semantic compaction.** `getSemanticCompactionBudget`
+  (`packages/agent-runtime/src/util/context-pruning.ts`) derives trigger and
+  target budgets from the resolved model context window. Semantic compaction
+  runs before the mechanical `maybePruneContext` emergency brake; pinned
+  `<knowledge_memory>` and control-plane state are retained across
+  compaction, while `maybePruneContext` remains the deterministic,
+  provider-safe fallback.
+- **M2 proactive retrieval caching.** base2 caches a proactive `query_index`
+  result keyed by the normalized query plus `workspaceState.revision`. A
+  cache hit injects a compact pointer instead of re-running the tool. An
+  `indexMutationEpoch` reported on `query_index` results (from IndexManager
+  `markStale`/`markPathsChanged`) also invalidates the cache for external
+  file mutations that did not advance the workspace revision.
+- **M3 git_status gating.** `applyGitStatusGate` (`sdk/src/run.ts`)
+  fingerprints per-turn `git_status` observations. Unchanged repeats are
+  compacted to an "unchanged" note instead of re-sending the full
+  status/diff/branch payload.
+- **M4 progressive prompt disclosure.** `createBase2({
+  progressivePromptDisclosure })` (default off) replaces verbose advisory
+  prompt sections with `read_files` pointers to `agents/guides/*.md` when
+  enabled.
+- **M6 tool-result lifecycle.**
+  `packages/agent-runtime/src/util/tool-result-lifecycle.ts` tags verbose
+  tool results with a lifecycle and importance. Protected results
+  (`keepDuringTruncation`, high importance, or pinned tags) never compress on
+  the first trim pass and do not consume the keep-N budget.
+
+See [Request Flow](./request-flow.md) and
+[Deterministic Edit System](./deterministic-edit-system.md) for the related
+turn and edit wiring.
 
 ### Compatibility Aliases & Legacy Support
 

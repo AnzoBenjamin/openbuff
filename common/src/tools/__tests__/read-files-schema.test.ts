@@ -12,7 +12,29 @@ describe('read_files input schema', () => {
         expect.objectContaining({
           path: ['paths'],
           message:
-            'read_files requires at least one path, range, or symbol selector.',
+            'read_files requires at least one path, range, window, around, symbol, or symbols selector.',
+        }),
+      )
+    }
+  })
+
+  test('rejects an object with all six selector kinds empty', () => {
+    const parsed = readFilesParams.inputSchema.safeParse({
+      paths: [],
+      ranges: [],
+      windows: [],
+      around: [],
+      symbol: [],
+      symbols: [],
+    })
+
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) {
+      expect(parsed.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ['paths'],
+          message:
+            'read_files requires at least one path, range, window, around, symbol, or symbols selector.',
         }),
       )
     }
@@ -21,6 +43,9 @@ describe('read_files input schema', () => {
   test.each([
     { paths: ['src/a.ts'] },
     { ranges: [{ path: 'src/a.ts', startLine: 1, endLine: 2 }] },
+    { windows: [{ path: 'src/a.ts', window: 1 }] },
+    { around: [{ path: 'src/a.ts', match: 'needle' }] },
+    { symbol: [{ path: 'src/a.ts', name: 'run', occurrence: 2 }] },
     { symbols: [{ path: 'src/a.ts', names: ['run'] }] },
   ])('accepts a non-empty selector shape', (input) => {
     expect(readFilesParams.inputSchema.safeParse(input).success).toBe(true)
@@ -61,6 +86,21 @@ describe('read_files input schema', () => {
     }
   })
 
+  test('infers a missing occurrence-aware symbol path from one paths entry', () => {
+    const parsed = readFilesParams.inputSchema.safeParse({
+      paths: ['src/dup.ts'],
+      symbol: [{ name: 'dup', occurrence: 2 }],
+    })
+
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.paths).toEqual([])
+      expect(parsed.data.symbol).toEqual([
+        { path: 'src/dup.ts', name: 'dup', occurrence: 2 },
+      ])
+    }
+  })
+
   test('infers a missing symbol path from one paths entry', () => {
     const parsed = readFilesParams.inputSchema.safeParse({
       paths: ['server/src/services/account.ts'],
@@ -78,6 +118,34 @@ describe('read_files input schema', () => {
           },
         ],
       })
+    }
+  })
+
+  test('infers a missing window path from one paths entry', () => {
+    const parsed = readFilesParams.inputSchema.safeParse({
+      paths: ['src/large.ts'],
+      windows: [{ window: 2 }],
+    })
+
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.paths).toEqual([])
+      expect(parsed.data.windows).toEqual([{ path: 'src/large.ts', window: 2 }])
+    }
+  })
+
+  test('infers a missing around path from one paths entry', () => {
+    const parsed = readFilesParams.inputSchema.safeParse({
+      paths: ['src/large.ts'],
+      around: [{ match: 'needle', contextLines: 5 }],
+    })
+
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.paths).toEqual([])
+      expect(parsed.data.around).toEqual([
+        { path: 'src/large.ts', match: 'needle', contextLines: 5 },
+      ])
     }
   })
 

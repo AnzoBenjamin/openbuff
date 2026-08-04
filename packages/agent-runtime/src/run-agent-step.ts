@@ -60,6 +60,10 @@ import {
   getContextCategoryTelemetry,
   messagesWithSystem,
 } from './util/messages'
+import {
+  getConfirmedAppliedActionsV1,
+  isFileMutationResultV1,
+} from '@codebuff/common/tools/results/filesystem'
 import { countTokensJson } from './util/token-counter'
 import {
   DEFAULT_MAX_CONTEXT_TOKENS,
@@ -67,6 +71,12 @@ import {
   getSemanticCompactionBudget,
   maybePruneContext,
 } from './util/context-pruning'
+import {
+  annotateLedgerAfterCompaction,
+  applyMeasure,
+  createBudgetLedger,
+  finalizeLedger,
+} from './util/context-budget'
 import { revokeImplicitReadAuthorizationsAfterCompaction } from './util/read-authorization'
 import {
   commitTaskMemory,
@@ -101,11 +111,133 @@ import type {
   AgentTemplateType,
   AgentState,
   AgentOutput,
+  ContextBudgetLedger,
 } from '@codebuff/common/types/session-state'
 import type {
   CustomToolDefinitions,
   ProjectFileContext,
 } from '@codebuff/common/util/file'
+
+/**
+ * Publish process-owned mutation paths onto agentState so concurrent gate
+ * isolation (base2 mid-turn git-status absorption) can credit broker/owned
+ * writes without absorbing foreign dirty files.
+ *
+ * Stored as a plain string[] for JSON-safe session state; consumers may wrap
+ * with Set for O(1) membership. Paths come from confirmed file_mutation_result
+ * actions, schemaVersion=1 agent receipts (spawned editor batches),
+ * `changedFiles` on receipts, and optional `touchedPaths` on SYNC
+ * `run_terminal_command`/`basher` results (pre/post git dirty delta) and on
+ * the first settled `check_job` result (BACKGROUND settlement dirty delta).
+ * Concurrent foreign dirt that appears only during a command window can still
+ * land in that delta; pre-existing dirt is excluded by construction.
+ */
+export function publishSelfMutatedPaths(params: {
+  agentState: AgentState
+  toolResults?: ToolMessage[]
+  messages?: Message[]
+}): string[] {
+  const { agentState, toolResults = [], messages = [] } = params
+  const existing = agentState.selfMutatedPaths
+  const paths = new Set<string>()
+
+  const addPath = (value: unknown) => {
+    if (typeof value !== 'string') return
+    const trimmed = value.trim().replace(/\\/g, '/')
+    if (trimmed.length > 0) paths.add(trimmed)
+  }
+
+  if (Array.isArray(existing)) {
+    for (const path of existing) addPath(path)
+  }
+
+  const visitValue = (value: unknown, depth = 0): void => {
+    if (value == null || depth > 8) return
+    if (Array.isArray(value)) {
+      for (const item of value) visitValue(item, depth + 1)
+      return
+    }
+    if (typeof value !== 'object') return
+
+    // Keep a non-narrowed plain object view. Type-guard file mutations on
+    // `value` (unknown) so TS does not collapse `plain` to FileMutationResultV1
+    // and drop agent-receipt property access below.
+    const plain: Record<string, unknown> = value as Record<string, unknown>
+    if (plain.type === 'json' && 'value' in plain) {
+      visitValue(plain.value, depth + 1)
+    }
+
+    if (isFileMutationResultV1(value)) {
+      for (const action of getConfirmedAppliedActionsV1(value)) {
+        addPath(action.path)
+        if (action.action === 'move') addPath(action.destinationPath)
+      }
+    }
+
+    const collectChangedFiles = (changedFiles: unknown) => {
+      if (!Array.isArray(changedFiles)) return
+      for (const item of changedFiles) {
+        if (typeof item === 'string') {
+          addPath(item)
+        } else if (item && typeof item === 'object') {
+          addPath((item as { path?: unknown }).path)
+        }
+      }
+    }
+
+    // Optional touchedPaths → selfMutatedPaths: SYNC terminal/basher dirty
+    // delta and first-settled check_job BACKGROUND settlement dirty delta.
+    if (Array.isArray(plain.touchedPaths)) {
+      for (const p of plain.touchedPaths) addPath(p)
+    }
+    // Credit top-level changedFiles when already present on tool results.
+    if (Array.isArray(plain.changedFiles)) {
+      collectChangedFiles(plain.changedFiles)
+    }
+
+    // agent-receipt checks use plain.* only (never narrowed FileMutationResultV1)
+    const isAgentReceipt =
+      plain.schemaVersion === 1 &&
+      typeof plain.receiptId === 'string' &&
+      Array.isArray(plain.changedFiles)
+    if (isAgentReceipt) {
+      collectChangedFiles(plain.changedFiles)
+    }
+    if (
+      plain.agentReceipt &&
+      typeof plain.agentReceipt === 'object' &&
+      !Array.isArray(plain.agentReceipt)
+    ) {
+      const receipt = plain.agentReceipt as Record<string, unknown>
+      if (
+        receipt.schemaVersion === 1 &&
+        typeof receipt.receiptId === 'string' &&
+        Array.isArray(receipt.changedFiles)
+      ) {
+        collectChangedFiles(receipt.changedFiles)
+      }
+    }
+
+    // Shallow nested walk for tool-result envelopes without deep graph cycles.
+    for (const nested of Object.values(plain)) {
+      if (nested && typeof nested === 'object') {
+        visitValue(nested, depth + 1)
+      }
+    }
+  }
+
+  for (const result of toolResults) {
+    visitValue(result.content)
+  }
+  for (const message of messages) {
+    if (message.role !== 'tool') continue
+    visitValue(message.content)
+  }
+
+  const published = [...paths].sort()
+  agentState.selfMutatedPaths = published
+  return published
+}
 
 async function additionalToolDefinitions(
   params: {
@@ -645,6 +777,15 @@ export const runAgentStep = async (
 
   fullResponse = fullResponseAfterStream
 
+  // Credit broker/owned mutations for concurrent-instance gate isolation.
+  // processStream mutates agentState.messageHistory in its finally, but the
+  // step-local toolResults array is the authoritative post-stream set of
+  // confirmed tool outputs for this step.
+  publishSelfMutatedPaths({
+    agentState,
+    toolResults: newToolResults,
+  })
+
   agentState.messageHistory = expireMessages(
     agentState.messageHistory,
     'agentStep',
@@ -720,6 +861,15 @@ export const runAgentStep = async (
         keepDuringTruncation: pinnedBlocks.length > 0,
       }),
     ]
+    // The retained ledger describes the still-cached system prompt, which is
+    // unchanged by compaction (compaction only shrinks messageHistory, which
+    // the ledger never records) — so annotate rather than discard it;
+    // /context will show a staleness note.
+    if (agentState.contextBudgetLedger) {
+      agentState.contextBudgetLedger = annotateLedgerAfterCompaction(
+        agentState.contextBudgetLedger,
+      )
+    }
     logger.debug({ summary: fullResponse }, 'Compacted messages')
   }
 
@@ -1155,6 +1305,18 @@ export async function loopAgentSteps(
     // Build the initial message history with user prompt and instructions
     // Generate system prompt once, using parent's if inheritParentSystemPrompt is true
     let system: string
+    // M1-T3: Per-turn context-budget ledger. It is created lazily, only inside
+    // the rebuild branch below, so turns reusing the cached/inherited system
+    // prompt do not allocate a ledger that would be discarded unused. When
+    // created, it is built before system-prompt assembly so the formatPrompt
+    // placeholder builders record the fileTree, systemInfo, and gitChanges
+    // blocks they inject into it.
+    let contextBudgetLedger: ContextBudgetLedger | undefined
+    // True only on turns that (re)build the system prompt. Turns reusing the
+    // session-cached prompt must not re-record or overwrite the ledger: the
+    // blocks were measured on the turn that built the cache, and that ledger
+    // still describes the byte-identical cached prompt.
+    let builtSystemPromptThisTurn = false
     if (agentTemplate.inheritParentSystemPrompt && parentSystemPrompt) {
       system = parentSystemPrompt
     } else if (
@@ -1171,11 +1333,20 @@ export async function loopAgentSteps(
     ) {
       system = initialAgentState.systemPrompt
     } else {
+      builtSystemPromptThisTurn = true
+      // M1-T3: Create the ledger only on this rebuild turn.
+      contextBudgetLedger = createBudgetLedger({
+        windowTokens: getEffectiveContextLimits(
+          initialAgentState.contextWindowTokens,
+          maxContextLength,
+        ).statusWindowTokens,
+      })
       const systemPrompt = await getAgentPrompt({
         ...params,
         agentTemplate,
         promptType: { type: 'systemPrompt' },
         agentTemplates: localAgentTemplates,
+        ledger: contextBudgetLedger,
         additionalToolDefinitions: async () => {
           if (!cachedAdditionalToolDefinitions) {
             cachedAdditionalToolDefinitions = await additionalToolDefinitions({
@@ -1283,18 +1454,6 @@ export async function loopAgentSteps(
       return cachedAdditionalToolDefinitions
     }
 
-    // Mutate initialAgentState so that in-progress work propagates back to the
-    // caller's shared reference (e.g. SDK's sessionState.mainAgentState) even if
-    // an error is thrown before we return.
-    initialAgentState.messageHistory = initialMessages
-    initialAgentState.systemPrompt = system
-    initialAgentState.toolDefinitions = toolDefinitions
-    let currentAgentState: AgentState = initialAgentState
-    if (prompt?.trim()) {
-      currentAgentState.lastStepProgressSignature = undefined
-      currentAgentState.repeatedStepProgressCount = 0
-    }
-
     // Convert tool definitions to Anthropic format for accurate token counting
     // Tool definitions are stored as { [name]: { description, inputSchema } }
     // Anthropic count_tokens API expects [{ name, description, input_schema }]
@@ -1305,6 +1464,36 @@ export async function loopAgentSteps(
         ...(def.inputSchema && { input_schema: def.inputSchema }),
       }),
     )
+
+    // Mutate initialAgentState so that in-progress work propagates back to the
+    // caller's shared reference (e.g. SDK's sessionState.mainAgentState) even if
+    // an error is thrown before we return.
+    initialAgentState.messageHistory = initialMessages
+    initialAgentState.systemPrompt = system
+    if (builtSystemPromptThisTurn && contextBudgetLedger) {
+      // Record tool-definition cost on system-prompt rebuild turns only — the
+      // same turns that create/finalize the ledger. toolsForTokenCount is the
+      // Anthropic-shaped list already used for pruning token estimates.
+      applyMeasure(contextBudgetLedger, {
+        category: 'tools',
+        label: 'tool definitions',
+        content: toolsForTokenCount,
+      })
+      // M1-T3: Persist the finalized ledger on the session state so the CLI's
+      // /context command can read it across turns. Plain JSON (arrays,
+      // records, numbers, strings), so serialized agent states round-trip. The
+      // ledger only exists on rebuild turns (builtSystemPromptThisTurn), so on
+      // cached-prompt turns this guard is false and the previously persisted
+      // ledger on initialAgentState is left untouched.
+      initialAgentState.contextBudgetLedger =
+        finalizeLedger(contextBudgetLedger)
+    }
+    initialAgentState.toolDefinitions = toolDefinitions
+    let currentAgentState: AgentState = initialAgentState
+    if (prompt?.trim()) {
+      currentAgentState.lastStepProgressSignature = undefined
+      currentAgentState.repeatedStepProgressCount = 0
+    }
 
     let shouldEndTurn = false
     let hasRetriedOutputSchema = false

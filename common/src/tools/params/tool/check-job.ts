@@ -133,6 +133,12 @@ export const checkJobParams = {
         killed: z.boolean().optional(),
         logFile: z.string().optional(),
         errorMessage: z.string().optional(),
+        touchedPaths: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Optional project-relative paths newly dirtied between BACKGROUND job start and first settled check_job observation (git dirty delta). Emitted once; omitted when not a git repo, snapshot missing, or on subsequent polls.',
+          ),
       }),
       z.object({
         jobId: z.string(),

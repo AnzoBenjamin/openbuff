@@ -2,7 +2,7 @@
 
 ## Gotchas discovered during the audit
 
-- **`handleSteps` is serialized (`.toString()` → `new Function`).** The base2 gate logic cannot import `gate-*.ts`; it keeps inline mirror copies. Any change to gate helpers must update BOTH the inline copy in `base2.ts` and the canonical `gate-*.ts` module, and be covered by a parity test. Existing parity guards: `gate-repair-parity.test.ts`, `gate-reviewer.test.ts`. Missing guard: aux path helpers (`gate-paths.ts`) — see M4.1.
+- **`handleSteps` is serialized (`.toString()` → `new Function`).** Reconstructed generators lose module closure, so gate helpers cannot be imported at runtime. **Do not hand-edit the inline region.** Edit the pure modules in `scripts/generate-gate-helpers.ts` `SOURCE_MODULES` (`gate-paths.ts`, `gate-reviewer.ts`, `gate-repair.ts`, `gate-concurrency.ts`, `gate-fingerprint.ts`), then regenerate into the `<gate-helpers-generated>` block of `agents/base2/base2.ts` via `bun run scripts/generate-gate-helpers.ts --write agents/base2/base2.ts` (or `prebuild:agents`). Freshness is enforced by `agents/__tests__/gate-helpers-freshness.test.ts`; parity matrices still cover paths/reviewer/repair/concurrency/fingerprint.
 
 - **Prompt-section snapshot freeze.** `quality-prompt-snapshot.test.ts` byte-freezes `qualitySection` and shared prompt text. Prompt edits (M2/M3) require an intentional snapshot update; never blind-accept the new snapshot.
 

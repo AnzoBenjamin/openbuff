@@ -866,6 +866,91 @@ describe('trimMessagesToFitTokenLimit', () => {
     expect(result).toEqual([])
   })
 
+  it('keeps keepDuringTruncation tool results full while simplifying older normal ones', () => {
+    const protectedMarker = 'PROTECTED_FULL_TOOL_RESULT_BODY'
+    const messages: Message[] = [
+      userMessage('Inspect prior command outputs'),
+      {
+        role: 'tool',
+        toolName: 'run_terminal_command',
+        toolCallId: 'old-normal',
+        content: jsonToolResult({
+          command: 'bun test old',
+          stdout: 'old-normal-stdout'.repeat(300),
+          stderr: '',
+          exitCode: 0,
+        }),
+      },
+      {
+        role: 'tool',
+        toolName: 'run_terminal_command',
+        toolCallId: 'old-protected',
+        content: jsonToolResult({
+          command: 'bun test protected',
+          stdout: `${protectedMarker}${'p'.repeat(200)}`,
+          stderr: '',
+          exitCode: 0,
+        }),
+        keepDuringTruncation: true,
+      },
+      {
+        role: 'tool',
+        toolName: 'run_terminal_command',
+        toolCallId: 'newest-normal',
+        content: jsonToolResult({
+          command: 'bun test newest',
+          stdout: 'newest-full-stdout-content',
+          stderr: '',
+          exitCode: 0,
+        }),
+      },
+      assistantMessage({
+        content: 'Done',
+        keepDuringTruncation: true,
+      }),
+    ]
+
+    const initialTokens = tokenCounter.countTokensJson(messages)
+    const result = trimMessagesToFitTokenLimit({
+      messages,
+      systemTokens: 0,
+      // Just under initial so the lifecycle simplify pass runs, but after
+      // compressing the large unprotected result we stay under the hard cap
+      // (so the emergency force-simplify pass does not strip the protected body).
+      maxTotalTokens: initialTokens - 10,
+      logger,
+    })
+
+    const oldNormal = result.find(
+      (message): message is CodebuffToolMessage<'run_terminal_command'> =>
+        message.role === 'tool' && message.toolCallId === 'old-normal',
+    )
+    const oldProtected = result.find(
+      (message): message is CodebuffToolMessage<'run_terminal_command'> =>
+        message.role === 'tool' && message.toolCallId === 'old-protected',
+    )
+    const newestNormal = result.find(
+      (message): message is CodebuffToolMessage<'run_terminal_command'> =>
+        message.role === 'tool' && message.toolCallId === 'newest-normal',
+    )
+
+    expect(oldNormal?.content[0].value).toMatchObject({
+      command: 'bun test old',
+      status: 'passed',
+      stdoutOmittedForLength: true,
+      exitCode: 0,
+    })
+    expect(JSON.stringify(oldProtected?.content)).toContain(protectedMarker)
+    expect(oldProtected?.content[0].value).not.toMatchObject({
+      stdoutOmittedForLength: true,
+    })
+    expect(newestNormal?.content[0].value).toMatchObject({
+      command: 'bun test newest',
+      stdout: 'newest-full-stdout-content',
+      exitCode: 0,
+    })
+  })
+
   describe('keepDuringTruncation functionality', () => {
     it('retains compact pinned knowledge memory during emergency trimming', () => {
       const fingerprint = 'd'.repeat(64)

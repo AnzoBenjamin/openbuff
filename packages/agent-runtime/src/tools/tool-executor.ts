@@ -36,6 +36,7 @@ import {
   type ValidationIssue,
 } from '../util/format-validation-issues'
 import { formatValueForError } from '../util/format-value'
+import { lifecycleTagsForToolResult } from '../util/tool-result-lifecycle'
 import { codebuffToolHandlers } from './handlers/list'
 import {
   getMatchingSpawn,
@@ -127,8 +128,20 @@ function makeAbortableBarrier(
   })
 }
 
+// MIGRATION NOTE (spawn-failure errorMessage contract): the per-agent
+// `errorMessage` intentionally no longer embeds the underlying handler error
+// message. It used to be `Agent spawn failed: <error message>`; that format
+// was retired because the raw handler error can carry internal detail that
+// should not be echoed into agent-visible tool output (the sibling
+// native_tool_result_error path likewise never echoes raw internals). The
+// contract is now the static, safe string below; the underlying error is
+// still logged via logger.warn at the call site in executeToolCall. Do not
+// reintroduce the interpolated format, and do not pin it in tests.
 export function buildSpawnAgentsHandlerFailureOutput(
   input: unknown,
+  // Retained for call-site symmetry with the generic failure-output builder
+  // and for logging at the call site; deliberately NOT interpolated into the
+  // agent-visible errorMessage (see the migration note above).
   error: unknown,
 ): CodebuffToolOutput<'spawn_agents'> {
   const inputRecord =
@@ -137,8 +150,6 @@ export function buildSpawnAgentsHandlerFailureOutput(
       : undefined
   const agents =
     inputRecord && Array.isArray(inputRecord.agents) ? inputRecord.agents : []
-  const errorMessage =
-    error instanceof Error ? error.message : String(error || 'Unknown error')
 
   return jsonToolResult(
     (agents.length > 0 ? agents : [{}]).map((agent) => {
@@ -151,7 +162,10 @@ export function buildSpawnAgentsHandlerFailureOutput(
       return {
         agentType,
         agentName: agentType,
-        value: { errorMessage: `Agent spawn failed: ${errorMessage}` },
+        value: {
+          errorMessage:
+            'Agent spawn failed because the handler could not validate the request.',
+        },
       }
     }),
   )
@@ -1427,16 +1441,6 @@ export function getFilesystemToolPaths(
       ],
     }
   }
-  if (toolName === 'read_blocks') {
-    return {
-      access: 'read',
-      paths: [
-        ...objectPaths(input.windows),
-        ...objectPaths(input.around),
-        ...objectPaths(input.symbols),
-      ],
-    }
-  }
   if (toolName === 'read_subtree' || toolName === 'read_image') {
     const paths = strings(input.paths)
     return {
@@ -1446,7 +1450,6 @@ export function getFilesystemToolPaths(
   }
   if (
     toolName === 'read_outline' ||
-    toolName === 'read_slices' ||
     toolName === 'list_directory' ||
     toolName === 'inspect_3d_asset' ||
     toolName === 'render_3d_preview'
@@ -2654,11 +2657,14 @@ export async function executeToolCall<T extends ToolName>(
         validatedOutput = normalized.output
       }
     }
+    const lifecycleTags = lifecycleTagsForToolResult(toolName)
     const toolResult: ToolMessage = {
       role: 'tool',
       toolName,
       toolCallId: toolCall.toolCallId,
       content: validatedOutput,
+      sentAt: Date.now(),
+      ...(lifecycleTags.length > 0 && { tags: lifecycleTags }),
     }
 
     onResponseChunk({
@@ -2862,17 +2868,17 @@ export async function executeCustomToolCall(
   // that happen to resolve outside the root — an explicitly accepted tradeoff.
   const scannedInputStrings: string[] = []
   collectCustomInputStrings(toolCall.input, scannedInputStrings)
-  const escapingInputValues = scannedInputStrings.filter(
+  const hasEscapingInput = scannedInputStrings.some(
     (value) =>
       value.length > 0 &&
       normalizedEscapesProject(
         normalizeScopedToolPath(value, fileContext.projectRoot),
       ),
   )
-  if (escapingInputValues.length > 0) {
+  if (hasEscapingInput) {
     onResponseChunk({
       type: 'error',
-      message: `Tool \`${toolName}\` was blocked because one or more inputs resolve to a path outside the project root: ${escapingInputValues.slice(0, 5).join(', ')}. Tools may only operate on paths inside the project.`,
+      message: `Tool \`${toolName}\` was blocked because one or more input values resolve to a path outside the project root. Tools may only operate on paths inside the project.`,
     })
     return abortablePreviousToolCallFinished
   }
@@ -2955,11 +2961,14 @@ export async function executeCustomToolCall(
       if (!result) {
         return
       }
+      const lifecycleTags = lifecycleTagsForToolResult(toolName)
       const toolResult = {
         role: 'tool',
         toolName,
         toolCallId: toolCall.toolCallId,
         content: result,
+        sentAt: Date.now(),
+        ...(lifecycleTags.length > 0 && { tags: lifecycleTags }),
       } satisfies ToolMessage
       logger.debug(
         { input, toolResult },

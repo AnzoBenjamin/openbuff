@@ -251,6 +251,10 @@ exposes a stable structured contract to the user:
 - Explicit reviewer bypasses retain the reason, authorization timestamp,
   pending files, fingerprint, and completed validation summary.
 
+For concurrent-instance isolation of mid-turn dirt (`selfMutatedPaths` /
+terminal `touchedPaths`), see
+[Concurrent gate isolation](./agents-and-tools.md#concurrent-gate-isolation-selfmutatedpaths).
+
 ### Git-committer commit guard and COMMIT ANYWAY bypass
 
 When the gate system is active (`canSuggestFollowups !== undefined`), the

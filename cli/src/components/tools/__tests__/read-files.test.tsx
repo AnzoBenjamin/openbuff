@@ -186,6 +186,29 @@ describe('ReadFilesComponent', () => {
     ).toContain('Read partial')
   })
 
+  test('treats a streaming serialized read result as a successful read', () => {
+    const streamingTextOutput = `Read 2 windows from src/big.ts\n{"kind":"read_blocks_result","version":1,"status":"ok","summary":{"requested":2,"ok":2,"partial":0,"failed":0,"uniquePaths":1},"results":[]}`
+    const legacyStringifiedOutput = JSON.stringify({
+      kind: 'read_files_result',
+      version: 1,
+      status: 'ok',
+      summary: { requested: 1, ok: 1, partial: 0, failed: 0, uniquePaths: 1 },
+      results: [],
+    })
+
+    for (const output of [streamingTextOutput, legacyStringifiedOutput]) {
+      const result = renderToolComponent(
+        createBlock({ windows: [{ path: 'src/big.ts', window: 1 }] }, output),
+        chatThemes.dark,
+        renderOptions,
+      )
+      const markup = renderToStaticMarkup(
+        result?.content as React.ReactElement,
+      )
+      expect(markup).not.toContain('Read failed')
+    }
+  })
+
   test('treats direct errors, empty envelopes, and missing symbols as failed', () => {
     const cases: unknown[] = [
       { errorMessage: 'read failed directly' },

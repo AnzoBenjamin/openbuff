@@ -16,7 +16,7 @@ describe('code-reviewer prompt isolation', () => {
     // Reviewers may read files (only) so they can always gather full final-file
     // context instead of reviewing from partial diff fragments. No mutating or
     // control tools are granted.
-    expect(reviewer.toolNames).toEqual(['read_files', 'read_blocks', 'set_output'])
+    expect(reviewer.toolNames).toEqual(['read_files', 'set_output'])
     expect(reviewer.spawnableAgents).toEqual([])
     expect(reviewer.handleSteps).toBeUndefined()
   })
@@ -28,7 +28,9 @@ describe('code-reviewer prompt isolation', () => {
       'Always gather complete context',
     )
     expect(reviewer.instructionsPrompt).toContain('diff fragments')
-    expect(reviewer.instructionsPrompt).toContain('read_files with ranges')
+    // Reviewers page large files via read_files windows (bounded cap.v3
+    // block windows); read_blocks was removed in the read-tool unification.
+    expect(reviewer.instructionsPrompt).toContain('read_files windows')
   })
 
   test('includes anti-loop attestation and single-pass instructions', () => {
@@ -133,5 +135,33 @@ describe('code-reviewer prompt isolation', () => {
     // Coverage adequacy guideline is explicitly marked as verdict-contract.
     expect(reviewer.instructionsPrompt).toContain('verdict-contract, M6.3')
     expect(reviewer.instructionsPrompt).toContain('coverage: "missing"')
+  })
+
+  test('forces BLOCKING when any requirementCoverage status is missing or uncertain', () => {
+    const reviewer = createReviewer('anthropic/claude-opus-4.7')
+
+    expect(reviewer.instructionsPrompt).toContain(
+      'If ANY `requirementCoverage[].status` is `missing` or `uncertain`',
+    )
+    expect(reviewer.instructionsPrompt).toContain(
+      'the top-level `verdict` MUST be `"BLOCKING"`',
+    )
+    expect(reviewer.instructionsPrompt).toContain(
+      'put each incomplete requirement into `findings` as a concrete next action',
+    )
+  })
+
+  test('documents LOOKS_GOOD-only finalization and NON_BLOCKING re-review loop', () => {
+    const reviewer = createReviewer('anthropic/claude-opus-4.7')
+
+    expect(reviewer.instructionsPrompt).toContain(
+      'the parent gate finalizes only on `LOOKS_GOOD`',
+    )
+    expect(reviewer.instructionsPrompt).toContain(
+      'Use `NON_BLOCKING` when nits exist',
+    )
+    expect(reviewer.instructionsPrompt).toContain(
+      'repair/re-review loop until a later review returns `LOOKS_GOOD`',
+    )
   })
 })

@@ -783,6 +783,9 @@ const jobStateToToolLifecycle = (
     case 'cancelled':
       return 'cancelled'
     default: {
+      // Compile-time exhaustiveness guard (`never`) plus a defensive runtime
+      // backstop. It changes no emitted event and accepts no new input; no
+      // declared state value can reach this branch at runtime.
       const exhaustive: never = state
       throw new Error(`Unhandled job state for tool lifecycle: ${String(exhaustive)}`)
     }
@@ -810,6 +813,9 @@ const jobStateToAgentStatus = (
     case 'cancelled':
       return 'cancelled'
     default: {
+      // Compile-time exhaustiveness guard (`never`) plus a defensive runtime
+      // backstop. It changes no emitted event and accepts no new input; no
+      // declared state value can reach this branch at runtime.
       const exhaustive: never = state
       throw new Error(`Unhandled job state for agent status: ${String(exhaustive)}`)
     }

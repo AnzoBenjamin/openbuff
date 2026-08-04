@@ -3,12 +3,13 @@
  * Deterministic code generator for the reviewer-gate helper functions.
  *
  * The helpers in `agents/base2/gate-paths.ts`, `agents/base2/gate-reviewer.ts`,
- * and `agents/base2/gate-repair.ts` are duplicated inline inside the
+ * `agents/base2/gate-repair.ts`, `agents/base2/gate-concurrency.ts`, and
+ * `agents/base2/gate-fingerprint.ts` are duplicated inline inside the
  * `createBase2` `handleSteps` generator (because that generator is serialized
  * via `handleSteps.toString()` and reconstructed with `new Function(...)`,
  * which loses the module closure). This script is the single source of truth
- * for that inline region: it reads the three canonical modules, parses them
- * with the TypeScript compiler API, and emits a consolidated block of nested
+ * for that inline region: it reads the five canonical modules, parses them with
+ * the TypeScript compiler API, and emits a consolidated block of nested
  * function/type declarations (no `export`, no `import`) suitable for splicing
  * verbatim into the middle of the `handleSteps` generator body.
  *
@@ -33,7 +34,13 @@ const OPEN_MARKER =
 const CLOSE_MARKER = '// </gate-helpers-generated>'
 
 // Emitted in this order; within each module source order is preserved.
-const SOURCE_MODULES = ['gate-paths.ts', 'gate-reviewer.ts', 'gate-repair.ts']
+const SOURCE_MODULES = [
+  'gate-paths.ts',
+  'gate-reviewer.ts',
+  'gate-repair.ts',
+  'gate-concurrency.ts',
+  'gate-fingerprint.ts',
+]
 
 type DeclarationWithModifiers =
   | ts.FunctionDeclaration
@@ -100,7 +107,7 @@ function stripExportModifier(
 
 /**
  * Collect and transform the top-level function/type/interface declarations from
- * the three canonical gate modules and wrap them between the marker lines.
+ * the canonical gate modules and wrap them between the marker lines.
  */
 function generateBlock(): string {
   const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed })

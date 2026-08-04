@@ -342,13 +342,14 @@ and expected content hash before preflight. Caller-supplied bounds or
 `expectedHash` are not part of this structured-v1 form; re-read the desired
 range when different bounds are needed.
 
-### `read_blocks` and occurrence-scoped `replace_range`
+### read_files `windows`/`around`/`symbol` selectors and occurrence-scoped `replace_range`
 
-`read_blocks` is the read-side parity surface for large files: it returns one
-or more COMPLETE, capability-minting structural blocks so a large file yields a
-usable edit anchor without a guess-shrink-retry loop. Three selector modes may
-be combined in one call; each selector returns one result item with a
-contiguous `requestIndex` and its own `editAnchor`:
+For large files, `read_files` is the capability-minting block read surface: its
+`windows`/`around`/`symbol` selectors return one or more COMPLETE structural
+blocks so a large file yields a usable edit anchor without a
+guess-shrink-retry loop. The selector modes may be combined in one call; each
+selector returns one result item with a contiguous `requestIndex` and its own
+`editAnchor`:
 
 - `windows: [{ path, windowSize?, window? }]` splits the file into complete
   contiguous line windows (default `windowSize` 400). Omit `window` to get the
@@ -357,8 +358,10 @@ contiguous `requestIndex` and its own `editAnchor`:
   `occurrence` (default 1) of the exact literal `match` and returns a complete
   block covering it plus `contextLines` (default 40) on each side, clamped at
   file boundaries. It is robust to line-number drift.
-- `symbols: [{ path, name, occurrence? }]` pulls the Nth (default 1) top-level
-  symbol with that name, mirroring `rewrite_symbol`'s occurrence semantics.
+- `symbol: { path, name, occurrence? }` pulls the Nth (default 1) top-level
+  symbol with that name, mirroring `rewrite_symbol`'s occurrence semantics; a
+  batch `symbols: [{ path, name, occurrence? }]` selector pulls several in one
+  call.
 
 Every complete block returns a structured `editAnchor` (`startLine`, `endLine`,
 `contentHash`, and a cap.v3 `readCapability` bound to the project, path, and

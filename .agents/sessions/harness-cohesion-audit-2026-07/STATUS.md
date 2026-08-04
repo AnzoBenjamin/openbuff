@@ -103,3 +103,16 @@ Reviewer blocker RF-1/RF-2-6e7bf5ad (M3.2 uncertain) resolved: intentional per-m
 ## Reviewer Read-Budget Fix Complete (2026-07) — 2026-07-22T03:58:01.890Z
 
 Fixed the reviewer-gate attestation failure at its root: raised MAX_RENDER_CHARS to equal MAX_FILE_BYTES (10MB) in sdk/src/tools/read-files.ts so the byte gate is the single read ceiling. Reviewers (which read only via read_files) can now fully read large files like base2.ts (313 KB) and attest to them. SDK read-files suite 62 pass / 0 fail; SDK typecheck clean. Coupled test expectations updated. Awaiting runtime reviewer gate re-run against the fresh snapshot; the prior did-not-attest-to-base2.ts blocker should now clear because the file renders fully. Open decision still outstanding: M5.2 (whether to genuinely remove read_slices from the published/generated type surface, a compatibility break), left cancelled/quarantined unless user directs otherwise.
+
+<!-- update_plan_status:appended -->
+## M5.2 RESOLVED — read_slices fully removed from live surface — 2026-08-02T21:32:41.647Z
+
+M5.2 is resolved. Verification against live source confirmed `read_slices` was already absent from `toolNames`, `publishedTools`, and `quarantinedToolNames` in `common/src/tools/constants.ts` (removed during the earlier read-tool-unification work). The two test-encoded invariants that originally blocked removal no longer apply because `read_slices` is no longer in `quarantinedToolNames`.
+
+Remaining dead-code references were cleaned up in this pass:
+- `packages/agent-runtime/src/tools/tool-executor.ts:1449` — removed unreachable `toolName === 'read_slices'` branch from the permission classifier.
+- `packages/agent-runtime/src/structural-read.ts` — updated two stale comments that referenced `read_slices` / the deprecated alias.
+
+Negative assertions and historical docs were intentionally kept: `agents/tool-reachability.test.ts` (regression guards asserting `read_slices` does not appear in prompts/docs), `agents/__tests__/editor.test.ts` (negative assertion), and `docs/audits/read-write-indexing-2026-07-14/findings/read-path.md` (historical audit doc).
+
+Validation: gate NON_BLOCKING (3 minor nits unrelated to this change: window<=0 clamping in buildWindowBlock, missing direct unit tests for build*Block builders, per-call z.toJSONSchema in coerceInputScalarsBySchema). Typecheck green across all packages.

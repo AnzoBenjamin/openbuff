@@ -1860,16 +1860,16 @@ describe('context-pruner handleSteps', () => {
     expect(secondContent.match(/<knowledge_memory>/g)).toHaveLength(1)
   })
 
-  test('preserves successful read_blocks windows as Files Inspected after compaction', () => {
+  test('preserves successful read_files windows as Files Inspected after compaction', () => {
     const inspectedPath =
       'packages/agent-runtime/src/tools/tool-executor.ts'
     const firstMessages = [
-      createMessage('user', 'Inspect the tool executor via read_blocks'),
-      createToolCallMessage('call-rb', 'read_blocks', {
+      createMessage('user', 'Inspect the tool executor via read_files windows'),
+      createToolCallMessage('call-rb', 'read_files', {
         windows: [{ path: inspectedPath, window: 1 }],
       }),
-      createToolResultMessage('call-rb', 'read_blocks', {
-        kind: 'read_blocks_result',
+      createToolResultMessage('call-rb', 'read_files', {
+        kind: 'read_files_result',
         version: 1,
         results: [
           {

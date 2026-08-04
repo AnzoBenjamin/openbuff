@@ -124,6 +124,9 @@ import type { Source } from '@codebuff/common/types/source'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
 import { listJobs } from './tools/list-jobs'
 
+import type { ListJobsViewRow } from '@codebuff/common/util/list-jobs-view'
+import { fingerprintListJobsRows } from '@codebuff/common/util/list-jobs-view'
+
 /**
  * Wraps content for user messages, ensuring text is wrapped in <user_message> tags.
  * Uses buildUserMessageContent from agent-runtime for consistency.
@@ -705,6 +708,18 @@ async function runOnce({
   }
 
   const ownedLibrarianCloneDirs = new Set<string>()
+  // Per-turn change-gate state for list_jobs digests. Declared in this run
+  // closure (not module scope) so every run() call gets a fresh fingerprint
+  // and concurrent runs never share suppression state. `null` means no
+  // list_jobs digest has been emitted yet this turn, so the first call always
+  // returns the full table.
+  let lastListJobsFingerprint: string | null = null
+  // Per-turn change-gate state for git_status observations. Declared in this
+  // run closure (not module scope) so every run() call gets a fresh
+  // fingerprint and concurrent runs never share suppression state. `null`
+  // means no git_status observation has been emitted yet this turn, so the
+  // first call always returns the full observation.
+  let lastGitStatusFingerprint: string | null = null
   const agentRuntimeImpl = getAgentRuntimeImpl({
     logger,
     apiKey,
@@ -738,7 +753,7 @@ async function runOnce({
         toolName,
       })
       try {
-        return await handleToolCall({
+        const handled = await handleToolCall({
           action: {
             type: 'tool-call-request',
             requestId: callId ?? crypto.randomUUID(),
@@ -817,6 +832,29 @@ async function runOnce({
             : undefined,
           signal: deadline.signal,
         })
+        // Intercept the single dispatch path (model- and agent-initiated calls
+        // alike) so an unchanged list_jobs digest doesn't re-inject the full
+        // table into the conversation every step. The gate owns the returned
+        // output; the per-turn fingerprint lives in this closure.
+        if (toolName === 'list_jobs') {
+          const gated = applyListJobsDigestGate(
+            lastListJobsFingerprint,
+            handled.output,
+          )
+          lastListJobsFingerprint = gated.nextFingerprint
+          return { ...handled, output: gated.output }
+        } else if (toolName === 'git_status') {
+          // This interception runs AFTER the tool executed (`handled.output`),
+          // so every git_status observation still runs; only its context
+          // encoding is compacted when the worktree is byte-identical.
+          const gated = applyGitStatusGate(
+            lastGitStatusFingerprint,
+            handled.output,
+          )
+          lastGitStatusFingerprint = gated.nextFingerprint
+          return { ...handled, output: gated.output }
+        }
+        return handled
       } finally {
         deadline.dispose()
       }
@@ -1087,6 +1125,170 @@ async function runOnce({
     )
   }
   return terminalState
+}
+
+/**
+ * Per-turn change-gate for list_jobs digests. Compares the row fingerprint of
+ * the freshly-produced digest (folded with its truncatedCount) against the
+ * last fingerprint this turn and, when nothing meaningful changed, swaps the
+ * full table for a tiny suppression note.
+ *
+ * Exported for tests. `lastFingerprint` is the run-closure state (null on the
+ * first call of a turn, which always returns the full digest). The caller owns
+ * storing `nextFingerprint` back into that state.
+ *
+ * The suppression payload intentionally omits `jobs` entirely: an empty array
+ * would read as "no jobs exist", which is false.
+ */
+/**
+ * Module-scope string hash (FNV-1a, 32-bit) rendered as hex. Used by the
+ * git_status change-gate to fingerprint the concatenated observation fields
+ * without relying on `JSON.stringify` (object key order is not guaranteed, so
+ * two semantically identical observations could stringify differently).
+ */
+function hashGitStatusFingerprint(input: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < input.length; index++) {
+    hash ^= input.charCodeAt(index)
+    // hash *= 16777619 (FNV prime), kept in 32-bit via Math.imul.
+    hash = Math.imul(hash, 0x01000193)
+  }
+  // >>> 0 coerces to an unsigned 32-bit integer for a stable hex rendering.
+  return (hash >>> 0).toString(16)
+}
+
+export function applyListJobsDigestGate(
+  lastFingerprint: string | null,
+  output: ToolResultOutput[],
+): { output: ToolResultOutput[]; nextFingerprint: string | null } {
+  // Only gate a well-formed single json digest. Overrides, errors, or custom
+  // list_jobs shapes are passed through untouched and do not update the gate.
+  const first = output[0]
+  if (output.length !== 1 || first?.type !== 'json') {
+    return { output, nextFingerprint: lastFingerprint }
+  }
+  const value = first.value
+  const jobs =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? ((value as { jobs?: unknown }).jobs)
+      : undefined
+  if (!Array.isArray(jobs)) {
+    return { output, nextFingerprint: lastFingerprint }
+  }
+  // fingerprintListJobsRows ignores tail/startedAt by design, so chattiness
+  // (new buffered output) and wall-clock drift do not reset the gate. Fold in
+  // the digest value's truncatedCount so a change in how many rows were capped
+  // off (identical selected rows, different truncation) still busts the gate.
+  const rawTruncatedCount = (value as { truncatedCount?: unknown })
+    .truncatedCount
+  const truncatedCount =
+    typeof rawTruncatedCount === 'number' ? rawTruncatedCount : 0
+  const nextFingerprint = `${fingerprintListJobsRows(jobs as ListJobsViewRow[])}|${truncatedCount}`
+  if (lastFingerprint !== null && nextFingerprint === lastFingerprint) {
+    return {
+      output: [
+        {
+          type: 'json',
+          value: {
+            unchanged: true,
+            note: 'No job changes since the previous list_jobs digest this turn; the earlier digest is still current.',
+          },
+        },
+      ],
+      nextFingerprint: lastFingerprint,
+    }
+  }
+  return { output, nextFingerprint }
+}
+
+/**
+ * Per-turn change-gate for git_status observations. Compares the fingerprint
+ * of the freshly-produced observation against the last fingerprint this turn
+ * and, when the worktree is byte-identical, swaps the full observation for a
+ * tiny suppression note.
+ *
+ * Exported for tests. `lastFingerprint` is the run-closure state (null on the
+ * first call of a turn, which always returns the full observation). The caller
+ * owns storing `nextFingerprint` back into that state.
+ *
+ * This gates the BUILT-IN git_status tool result (`gitStatus` in
+ * sdk/src/tools/git-status.ts), whose json value is shaped
+ * `{ branch?: string, status: string, diff?: string, truncated?: true }`.
+ * `status` is the dirty-file porcelain body the base2 gate's
+ * `extractGitStatusFiles` parses, so a suppression payload that omits the
+ * fields yields the same file set as the prior (identical) observation.
+ *
+ * The fingerprint serializes every field the tool can return (branch, status,
+ * diff, truncated) via an explicit per-field encoding — never
+ * `JSON.stringify(value)`, whose key order is not guaranteed. `branch` is
+ * included deliberately: a commit changes the branch line while the dirty
+ * status/diff can stay fixed, and that must bust the gate.
+ *
+ * The suppression payload intentionally omits the git fields entirely: an
+ * empty `status` would read as "clean tree", which is false. The gate is
+ * fail-safe: any result that is not a well-formed single-json git_status
+ * observation (including errorMessage shapes) passes through untouched and
+ * does not update the fingerprint.
+ */
+export function applyGitStatusGate(
+  lastFingerprint: string | null,
+  output: ToolResultOutput[],
+): { output: ToolResultOutput[]; nextFingerprint: string | null } {
+  // Only gate a well-formed single json git_status result. Overrides, errors,
+  // or custom git_status shapes are passed through untouched and do not
+  // update the gate.
+  const first = output[0]
+  if (output.length !== 1 || first?.type !== 'json') {
+    return { output, nextFingerprint: lastFingerprint }
+  }
+  const value = first.value
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { output, nextFingerprint: lastFingerprint }
+  }
+  const record = value as {
+    branch?: unknown
+    status?: unknown
+    diff?: unknown
+    truncated?: unknown
+  }
+  // `status` (the dirty-file porcelain body) is always present on a real
+  // observation; errorMessage results lack it and pass through. `diff` /
+  // `branch` / `truncated` are optional (diff only when include_diff ran,
+  // branch only when upstream info exists, truncated only when capped).
+  if (typeof record.status !== 'string') {
+    return { output, nextFingerprint: lastFingerprint }
+  }
+  // Serialize every field the tool can return via an explicit per-field
+  // encoding (never JSON.stringify key order, which is not guaranteed), so
+  // any change busts the gate and no returned field is dropped from the
+  // comparison. Absent optional fields encode as empty. NUL is a safe
+  // separator: git porcelain/diff text never contains it. `branch` is folded
+  // in because a commit changes the branch line while status/diff can stay
+  // fixed, and that must bust the gate.
+  const nextFingerprint = hashGitStatusFingerprint(
+    `branch=${typeof record.branch === 'string' ? record.branch : ''}` +
+      '\u0000' +
+      `status=${record.status}` +
+      '\u0000' +
+      `diff=${typeof record.diff === 'string' ? record.diff : ''}` +
+      '\u0000' +
+      `truncated=${record.truncated === true ? 'true' : ''}`,
+  )
+  if (lastFingerprint !== null && nextFingerprint === lastFingerprint) {
+    return {
+      output: [
+        {
+          type: 'json',
+          value: {
+            unchanged: true,
+            note: 'Worktree is byte-identical to the previous git_status observation this turn; the earlier status/diff/branch/truncated are still current, so do not re-request git_status to retrieve them.',
+          },
+        },
+      ],
+      nextFingerprint: lastFingerprint,
+    }
+  }
+  return { output, nextFingerprint }
 }
 
 function requireCwd(cwd: string | undefined, toolName: string): string {

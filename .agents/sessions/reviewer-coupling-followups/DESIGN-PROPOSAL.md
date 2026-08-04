@@ -1,9 +1,11 @@
 # Reviewer subsystem — design proposals
 
-Status: Proposal C is now IMPLEMENTED (aux-ownership variant — see below);
-Proposals A and B remain open for review. Three safe fixes were shipped
-separately (see "Already shipped" below). This document specifies changes that
-carry real design tradeoffs; A and B should be approved before implementation.
+Status: Proposal A IMPLEMENTED (via `scripts/generate-gate-helpers.ts` +
+freshness test); Proposal B IMPLEMENTED (merge ledger via
+`mergeReviewerFindings` on security + final code-reviewer blocking paths,
+keeping the existing arrays rather than a second keyed field); Proposal C
+already IMPLEMENTED (aux-ownership variant — see below). Three safe fixes were
+shipped earlier (see "Already shipped" below).
 
 Source of truth at time of writing: `agents/base2/base2.ts` (the serialized
 `createBase2` `handleSteps` generator), `agents/base2/gate-state.ts`,

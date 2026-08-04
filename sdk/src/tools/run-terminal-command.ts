@@ -15,6 +15,7 @@ import {
   terminateProcessTree,
 } from './background-jobs'
 import { resolveFilePathForOperation } from './path-utils'
+import { runGit } from './git-status'
 import {
   evaluateTerminalCommandPolicy,
   type TerminalPermissionProfile,
@@ -164,6 +165,51 @@ To fix this, you have several options:
    Set the OPENBUFF_GIT_BASH_PATH environment variable to your bash.exe location.
    Example: set OPENBUFF_GIT_BASH_PATH=C:\\path\\to\\bash.exe`,
   )
+}
+
+/**
+ * Best-effort project-relative dirty paths via `git status --porcelain -uall`.
+ * Returns null when git is unavailable / not a repo so callers can omit
+ * `touchedPaths` without failing the command.
+ */
+export async function listDirtyPaths(
+  projectRoot: string,
+  signal?: AbortSignal,
+): Promise<Set<string> | null> {
+  try {
+    const result = await runGit(
+      ['status', '--porcelain', '-uall'],
+      projectRoot,
+      signal,
+    )
+    if (result.exitCode !== 0) return null
+    const paths = new Set<string>()
+    for (const line of result.stdout.split('\n')) {
+      if (line.trim() === '') continue
+      const raw = line.slice(3).split(' -> ').at(-1)?.trim() ?? ''
+      const normalized = raw.replace(/\\/g, '/').replace(/^\.\//, '').trim()
+      if (normalized.length > 0) paths.add(normalized)
+    }
+    return paths
+  } catch {
+    return null
+  }
+}
+
+export function dirtyDelta(before: Set<string>, after: Set<string>): string[] {
+  const added: string[] = []
+  for (const path of after) {
+    if (!before.has(path)) added.push(path)
+  }
+  return added.sort()
+}
+
+export function withTouchedPaths<T extends Record<string, unknown>>(
+  value: T,
+  paths: string[],
+): T {
+  if (paths.length === 0) return value
+  return { ...value, touchedPaths: paths }
 }
 
 export function runTerminalCommand({
@@ -351,282 +397,317 @@ export function runTerminalCommand({
   }
 
   if (process_type === 'BACKGROUND') {
-    if (signal?.aborted) {
-      const reason = signal.reason
-      return Promise.reject(
-        reason instanceof Error
+    // Capture pre-start dirty set (best-effort) so check_job can credit a
+    // one-shot settlement dirty delta — same SYNC semantics, deferred to the
+    // first settled observation. Soft-fail omits snapshot without failing start.
+    return (async () => {
+      if (signal?.aborted) {
+        const reason = signal.reason
+        throw reason instanceof Error
           ? reason
-          : Object.assign(new Error('Aborted'), { name: 'AbortError' }),
-      )
-    }
-    const isWindows = os.platform() === 'win32'
-    const processEnv = {
-      ...getSystemProcessEnv(),
-      ...(env ?? {}),
-    } as NodeJS.ProcessEnv
-
-    let shell: string
-    let shellArgs: string[]
-    if (isWindows) {
-      const bashPath = findWindowsBash(processEnv)
-      if (!bashPath) {
-        return Promise.reject(createWindowsBashNotFoundError())
+          : Object.assign(new Error('Aborted'), { name: 'AbortError' })
       }
-      shell = bashPath
-      shellArgs = ['-c']
-    } else {
-      shell = 'bash'
-      shellArgs = ['-c']
-    }
+      const isWindows = os.platform() === 'win32'
+      const processEnv = {
+        ...getSystemProcessEnv(),
+        ...(env ?? {}),
+      } as NodeJS.ProcessEnv
 
-    const job = startBackgroundJob({
-      command,
-      shell,
-      shellArgs,
-      cwd: containedCwd,
-      env: processEnv,
-      owner,
-    })
-
-    if (signal && !detach) {
-      const onAbort = () => {
-        killBackgroundJob(job.jobId, 'SIGTERM')
+      let shell: string
+      let shellArgs: string[]
+      if (isWindows) {
+        const bashPath = findWindowsBash(processEnv)
+        if (!bashPath) {
+          throw createWindowsBashNotFoundError()
+        }
+        shell = bashPath
+        shellArgs = ['-c']
+      } else {
+        shell = 'bash'
+        shellArgs = ['-c']
       }
-      const clearAbortListener = () =>
-        signal.removeEventListener('abort', onAbort)
-      signal.addEventListener('abort', onAbort, { once: true })
-      job.child.once('exit', clearAbortListener)
-      job.child.once('error', clearAbortListener)
-    }
 
-    return Promise.resolve([
-      {
-        type: 'json',
-        value: {
-          command,
-          processId: job.child.pid ?? -1,
-          backgroundProcessStatus: 'running',
-          detached: detach,
-          jobId: job.jobId,
-          logFile: job.logFile,
-          startingCwd: containedCwd,
+      const gitRoot = projectRoot ?? containedCwd
+      const dirtyBefore = await listDirtyPaths(gitRoot, signal)
+
+      const job = startBackgroundJob({
+        command,
+        shell,
+        shellArgs,
+        cwd: containedCwd,
+        env: processEnv,
+        owner,
+        projectRoot: gitRoot,
+        dirtyBeforePaths: dirtyBefore ? [...dirtyBefore] : undefined,
+      })
+
+      if (signal && !detach) {
+        const onAbort = () => {
+          killBackgroundJob(job.jobId, 'SIGTERM')
+        }
+        const clearAbortListener = () =>
+          signal.removeEventListener('abort', onAbort)
+        signal.addEventListener('abort', onAbort, { once: true })
+        job.child.once('exit', clearAbortListener)
+        job.child.once('error', clearAbortListener)
+      }
+
+      // Start result is jobId-only; never credit touchedPaths while running.
+      return [
+        {
+          type: 'json' as const,
+          value: {
+            command,
+            processId: job.child.pid ?? -1,
+            backgroundProcessStatus: 'running' as const,
+            detached: detach,
+            jobId: job.jobId,
+            logFile: job.logFile,
+            startingCwd: containedCwd,
+          },
         },
-      },
-    ])
+      ]
+    })()
   }
 
-  return new Promise((resolve, reject) => {
-    const isWindows = os.platform() === 'win32'
-    const processEnv = {
-      ...getSystemProcessEnv(),
-      ...(env ?? {}),
-    } as NodeJS.ProcessEnv
+  // SYNC: capture pre/post dirty paths against projectRoot so cwd subdirectory
+  // commands still attribute project-relative paths. Soft-fail omits touchedPaths.
+  return (async () => {
+    const gitRoot = projectRoot ?? containedCwd
+    const dirtyBefore = await listDirtyPaths(gitRoot, signal)
 
-    let shell: string
-    let shellArgs: string[]
+    const commandResult = await new Promise<
+      CodebuffToolOutput<'run_terminal_command'>
+    >((resolve, reject) => {
+      const isWindows = os.platform() === 'win32'
+      const processEnv = {
+        ...getSystemProcessEnv(),
+        ...(env ?? {}),
+      } as NodeJS.ProcessEnv
 
-    if (isWindows) {
-      const bashPath = findWindowsBash(processEnv)
-      if (!bashPath) {
-        reject(createWindowsBashNotFoundError())
-        return
+      let shell: string
+      let shellArgs: string[]
+
+      if (isWindows) {
+        const bashPath = findWindowsBash(processEnv)
+        if (!bashPath) {
+          reject(createWindowsBashNotFoundError())
+          return
+        }
+        shell = bashPath
+        shellArgs = ['-c']
+      } else {
+        shell = 'bash'
+        shellArgs = ['-c']
       }
-      shell = bashPath
-      shellArgs = ['-c']
-    } else {
-      shell = 'bash'
-      shellArgs = ['-c']
-    }
 
-    // Use the already-resolved, project-contained cwd from the entry guard.
-    const resolvedCwd = containedCwd
+      // Use the already-resolved, project-contained cwd from the entry guard.
+      const resolvedCwd = containedCwd
 
-    const childProcess = spawn(shell, [...shellArgs, command], {
-      cwd: resolvedCwd,
-      env: processEnv,
-      stdio: 'pipe',
-      detached: !isWindows,
-    })
+      const childProcess = spawn(shell, [...shellArgs, command], {
+        cwd: resolvedCwd,
+        env: processEnv,
+        stdio: 'pipe',
+        detached: !isWindows,
+      })
 
-    // These mutable bookkeeping fields are read by `onAbort`, the timeout
-    // callback, and the close/error handlers below. Declare them BEFORE
-    // wiring the abort listener so `onAbort` never references a binding
-    // that is still in the temporal dead zone (the JS engine hoists `let`
-    // but throws on access until the declaration line runs).
-    let timer: NodeJS.Timeout | null = null
-    let settled = false
-    let terminationReason: 'abort' | 'timeout' | null = null
-    let stdout = ''
-    let stderr = ''
+      // These mutable bookkeeping fields are read by `onAbort`, the timeout
+      // callback, and the close/error handlers below. Declare them BEFORE
+      // wiring the abort listener so `onAbort` never references a binding
+      // that is still in the temporal dead zone (the JS engine hoists `let`
+      // but throws on access until the declaration line runs).
+      let timer: NodeJS.Timeout | null = null
+      let settled = false
+      let terminationReason: 'abort' | 'timeout' | null = null
+      let stdout = ''
+      let stderr = ''
 
-    // Honor an external AbortSignal: SIGTERM the child on abort, with a
-    // SIGKILL fallback if it doesn't exit promptly. The promise rejects
-    // with the signal's reason (or a generic `AbortError`). Only applies
-    // to SYNC runs — background jobs keep running and can be cleaned up
-    // via `kill_job` against the returned `jobId`.
-    let abortKillTimer: NodeJS.Timeout | null = null
-    const requestTermination = (reason: 'abort' | 'timeout') => {
-      if (settled || terminationReason) return
-      terminationReason = reason
-      const success = terminateProcessTree(childProcess, 'SIGTERM')
-      if (!success) {
-        terminateProcessTree(childProcess, 'SIGKILL')
-        return
-      }
-      abortKillTimer = setTimeout(() => {
-        if (isProcessTreeAlive(childProcess)) {
+      // Honor an external AbortSignal: SIGTERM the child on abort, with a
+      // SIGKILL fallback if it doesn't exit promptly. The promise rejects
+      // with the signal's reason (or a generic `AbortError`). Only applies
+      // to SYNC runs — background jobs keep running and can be cleaned up
+      // via `kill_job` against the returned `jobId`.
+      let abortKillTimer: NodeJS.Timeout | null = null
+      const requestTermination = (reason: 'abort' | 'timeout') => {
+        if (settled || terminationReason) return
+        terminationReason = reason
+        const success = terminateProcessTree(childProcess, 'SIGTERM')
+        if (!success) {
           terminateProcessTree(childProcess, 'SIGKILL')
+          return
         }
-      }, 5_000)
-      abortKillTimer.unref?.()
-    }
-    const onAbort = () => {
-      requestTermination('abort')
-      if (timer) clearTimeout(timer)
-    }
-    const signalAlreadyAborted = signal?.aborted ?? false
-    if (signal && !signalAlreadyAborted) {
-      signal.addEventListener('abort', onAbort, { once: true })
-    }
-
-    // Set up timeout if timeout_seconds >= 0 (infinite timeout when < 0)
-    if (timeout_seconds >= 0) {
-      timer = setTimeout(() => {
-        requestTermination('timeout')
-      }, timeout_seconds * 1000)
-    }
-
-    // Collect stdout. Cap accumulation during streaming so a chatty process
-    // can't OOM the agent runtime; final truncation at close still applies.
-    // Once we exceed the cap we keep the head and tail with a truncation marker.
-    const STREAM_ACCUMULATION_CAP = COMMAND_OUTPUT_LIMIT * 2
-    const STREAM_TAIL_KEEP = Math.floor(COMMAND_OUTPUT_LIMIT / 4)
-    const appendCapped = (current: string, chunk: string): string => {
-      const next = current + chunk
-      if (next.length <= STREAM_ACCUMULATION_CAP) {
-        return next
+        abortKillTimer = setTimeout(() => {
+          if (isProcessTreeAlive(childProcess)) {
+            terminateProcessTree(childProcess, 'SIGKILL')
+          }
+        }, 5_000)
+        abortKillTimer.unref?.()
       }
-      // Keep head + tail to preserve both startup context and recent output.
-      const head = next.slice(0, STREAM_ACCUMULATION_CAP - STREAM_TAIL_KEEP)
-      const tail = next.slice(next.length - STREAM_TAIL_KEEP)
-      return (
-        head +
-        `\n…[stream truncated ${next.length - STREAM_ACCUMULATION_CAP} chars mid-stream]\n` +
-        tail
-      )
-    }
-    childProcess.stdout.on('data', (data: Buffer) => {
-      stdout = appendCapped(stdout, data.toString())
-    })
-
-    // Collect stderr (same cap)
-    childProcess.stderr.on('data', (data: Buffer) => {
-      stderr = appendCapped(stderr, data.toString())
-    })
-
-    // Handle process completion
-    childProcess.on('close', (exitCode) => {
-      if (settled) return
-      settled = true
-
-      if (timer) {
-        clearTimeout(timer)
+      const onAbort = () => {
+        requestTermination('abort')
+        if (timer) clearTimeout(timer)
       }
-      if (abortKillTimer) {
-        clearTimeout(abortKillTimer)
-        abortKillTimer = null
-      }
-      if (signal) {
-        signal.removeEventListener('abort', onAbort)
+      const signalAlreadyAborted = signal?.aborted ?? false
+      if (signal && !signalAlreadyAborted) {
+        signal.addEventListener('abort', onAbort, { once: true })
       }
 
-      // Truncate stdout to prevent excessive output
-      const truncatedStdout = truncateStringWithMessage({
-        str: stripColors(stdout),
-        maxLength: COMMAND_OUTPUT_LIMIT,
-        remove: 'MIDDLE',
+      // Set up timeout if timeout_seconds >= 0 (infinite timeout when < 0)
+      if (timeout_seconds >= 0) {
+        timer = setTimeout(() => {
+          requestTermination('timeout')
+        }, timeout_seconds * 1000)
+      }
+
+      // Collect stdout. Cap accumulation during streaming so a chatty process
+      // can't OOM the agent runtime; final truncation at close still applies.
+      // Once we exceed the cap we keep the head and tail with a truncation marker.
+      const STREAM_ACCUMULATION_CAP = COMMAND_OUTPUT_LIMIT * 2
+      const STREAM_TAIL_KEEP = Math.floor(COMMAND_OUTPUT_LIMIT / 4)
+      const appendCapped = (current: string, chunk: string): string => {
+        const next = current + chunk
+        if (next.length <= STREAM_ACCUMULATION_CAP) {
+          return next
+        }
+        // Keep head + tail to preserve both startup context and recent output.
+        const head = next.slice(0, STREAM_ACCUMULATION_CAP - STREAM_TAIL_KEEP)
+        const tail = next.slice(next.length - STREAM_TAIL_KEEP)
+        return (
+          head +
+          `\n…[stream truncated ${next.length - STREAM_ACCUMULATION_CAP} chars mid-stream]\n` +
+          tail
+        )
+      }
+      childProcess.stdout.on('data', (data: Buffer) => {
+        stdout = appendCapped(stdout, data.toString())
       })
 
-      const truncatedStderr = truncateStringWithMessage({
-        str: stripColors(stderr),
-        maxLength: COMMAND_OUTPUT_LIMIT,
-        remove: 'MIDDLE',
+      // Collect stderr (same cap)
+      childProcess.stderr.on('data', (data: Buffer) => {
+        stderr = appendCapped(stderr, data.toString())
       })
 
-      if (terminationReason === 'abort') {
-        const reason = signal?.reason
-        if (reason instanceof Error) {
-          reject(reason)
-        } else {
-          const error = new Error('Aborted')
-          error.name = 'AbortError'
-          reject(error)
-        }
-        return
-      }
+      // Handle process completion
+      childProcess.on('close', (exitCode) => {
+        if (settled) return
+        settled = true
 
-      if (terminationReason === 'timeout') {
+        if (timer) {
+          clearTimeout(timer)
+        }
+        if (abortKillTimer) {
+          clearTimeout(abortKillTimer)
+          abortKillTimer = null
+        }
+        if (signal) {
+          signal.removeEventListener('abort', onAbort)
+        }
+
+        // Truncate stdout to prevent excessive output
+        const truncatedStdout = truncateStringWithMessage({
+          str: stripColors(stdout),
+          maxLength: COMMAND_OUTPUT_LIMIT,
+          remove: 'MIDDLE',
+        })
+
+        const truncatedStderr = truncateStringWithMessage({
+          str: stripColors(stderr),
+          maxLength: COMMAND_OUTPUT_LIMIT,
+          remove: 'MIDDLE',
+        })
+
+        if (terminationReason === 'abort') {
+          const reason = signal?.reason
+          if (reason instanceof Error) {
+            reject(reason)
+          } else {
+            const error = new Error('Aborted')
+            error.name = 'AbortError'
+            reject(error)
+          }
+          return
+        }
+
+        if (terminationReason === 'timeout') {
+          resolve([
+            {
+              type: 'json',
+              value: {
+                command,
+                errorMessage: `Command timed out after ${timeout_seconds} seconds`,
+                timedOut: true,
+                startingCwd: resolvedCwd,
+                stdout: truncatedStdout,
+                ...(truncatedStderr ? { stderr: truncatedStderr } : {}),
+                ...(exitCode !== null ? { exitCode } : {}),
+              },
+            },
+          ])
+          return
+        }
+
+        const combinedOutput = {
+          command,
+          startingCwd: resolvedCwd,
+          stdout: truncatedStdout,
+          ...(truncatedStderr ? { stderr: truncatedStderr } : {}),
+          ...(exitCode !== null ? { exitCode } : {}),
+        }
+
+        resolve([{ type: 'json', value: combinedOutput }])
+      })
+
+      // Handle spawn errors
+      childProcess.on('error', (error) => {
+        if (settled) return
+        settled = true
+
+        if (timer) {
+          clearTimeout(timer)
+        }
+        if (abortKillTimer) {
+          clearTimeout(abortKillTimer)
+          abortKillTimer = null
+        }
+        if (signal) {
+          signal.removeEventListener('abort', onAbort)
+        }
+
         resolve([
           {
             type: 'json',
             value: {
               command,
-              errorMessage: `Command timed out after ${timeout_seconds} seconds`,
-              timedOut: true,
+              errorMessage: `Failed to spawn command: ${error.message}`,
+              spawnFailed: true,
               startingCwd: resolvedCwd,
-              stdout: truncatedStdout,
-              ...(truncatedStderr ? { stderr: truncatedStderr } : {}),
-              ...(exitCode !== null ? { exitCode } : {}),
+              stdout: stripColors(stdout),
+              ...(stderr ? { stderr: stripColors(stderr) } : {}),
             },
           },
         ])
-        return
-      }
+      })
 
-      const combinedOutput = {
-        command,
-        startingCwd: resolvedCwd,
-        stdout: truncatedStdout,
-        ...(truncatedStderr ? { stderr: truncatedStderr } : {}),
-        ...(exitCode !== null ? { exitCode } : {}),
+      if (signalAlreadyAborted) {
+        onAbort()
       }
-
-      resolve([{ type: 'json', value: combinedOutput }])
     })
 
-    // Handle spawn errors
-    childProcess.on('error', (error) => {
-      if (settled) return
-      settled = true
-
-      if (timer) {
-        clearTimeout(timer)
-      }
-      if (abortKillTimer) {
-        clearTimeout(abortKillTimer)
-        abortKillTimer = null
-      }
-      if (signal) {
-        signal.removeEventListener('abort', onAbort)
-      }
-
-      resolve([
-        {
-          type: 'json',
-          value: {
-            command,
-            errorMessage: `Failed to spawn command: ${error.message}`,
-            spawnFailed: true,
-            startingCwd: resolvedCwd,
-            stdout: stripColors(stdout),
-            ...(stderr ? { stderr: stripColors(stderr) } : {}),
-          },
-        },
-      ])
-    })
-
-    if (signalAlreadyAborted) {
-      onAbort()
+    const part = commandResult[0]
+    if (part?.type !== 'json' || !part.value || typeof part.value !== 'object') {
+      return commandResult
     }
-  })
+    const dirtyAfter = await listDirtyPaths(gitRoot, signal)
+    const touched =
+      dirtyBefore && dirtyAfter ? dirtyDelta(dirtyBefore, dirtyAfter) : []
+    return [
+      {
+        type: 'json' as const,
+        value: withTouchedPaths(
+          part.value as Record<string, unknown>,
+          touched,
+        ) as typeof part.value,
+      },
+    ]
+  })()
 }

@@ -144,9 +144,10 @@ export type Base2ActiveWorkState = Base2GateState & {
   /**
    * Number of automated repair-editor rounds that have run for the current
    * batch of pending gate files. Reset to 0 whenever the gate passes or a
-   * fresh set of edits is recorded. Bounded by MAX_REPAIR_ROUNDS in base2.ts
-   * (default 3). Backward-compatible: older serialized state without this
-   * field is treated as 0.
+   * fresh set of edits is recorded. Bounded by the configurable validation
+   * repair budget (default 3; option maxRepairRounds / env
+   * OPENBUFF_MAX_REPAIR_ROUNDS, max 20). Backward-compatible: older
+   * serialized state without this field is treated as 0.
    */
   repairRoundCount?: number
   /**
@@ -184,7 +185,12 @@ export type Base2ActiveWorkState = Base2GateState & {
   reviewerCrashCount?: number
   /** Number of automatic reviewer retries caused by protocol/attestation errors. */
   reviewerProtocolRetryCount?: number
-  /** Number of reviewer-finding repair rounds for the current snapshot family. */
+  /**
+   * Number of reviewer-finding repair rounds for the current snapshot family.
+   * Bounded by the configurable reviewer repair budget (default 6; option
+   * maxReviewerRepairRounds / env OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS, max 20).
+   * NON_BLOCKING findings also burn rounds under LOOKS_GOOD-only finalization.
+   */
   reviewerRepairRoundCount?: number
   /** Number of consecutive schema-valid agent runs that produced no verdict. */
   reviewerNoVerdictCount?: number
@@ -250,8 +256,9 @@ export type Base2ActiveWorkState = Base2GateState & {
   securityReviewGateFingerprint?: string
   /**
    * Repair rounds for the specialist -> repair -> re-review loop. Bounded by
-   * MAX_SPECIALIST_REPAIR_ROUNDS in base2.ts so the loop always terminates.
-   * Absent legacy state is treated as 0.
+   * the configurable specialist repair budget (default 3; option
+   * maxSpecialistRepairRounds / env OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS,
+   * max 20) so the loop always terminates. Absent legacy state is treated as 0.
    */
   specialistRepairRoundCount?: number
   /**

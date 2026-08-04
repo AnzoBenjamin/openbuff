@@ -170,6 +170,36 @@ function getReadSelectors(input: unknown): ReadSelector[] {
       label: `${value.path.trim()}:${start}-${end}`,
     })
   }
+  for (const win of Array.isArray(record.windows) ? record.windows : []) {
+    if (!win || typeof win !== 'object') continue
+    const value = win as Record<string, unknown>
+    if (typeof value.path !== 'string' || !value.path.trim()) continue
+    const windowIndex = typeof value.window === 'number' ? value.window : 1
+    selectors.push({
+      path: value.path.trim(),
+      label: `${value.path.trim()}:win ${windowIndex}`,
+    })
+  }
+  for (const around of Array.isArray(record.around) ? record.around : []) {
+    if (!around || typeof around !== 'object') continue
+    const value = around as Record<string, unknown>
+    if (typeof value.path !== 'string' || !value.path.trim()) continue
+    const match = typeof value.match === 'string' ? value.match : ''
+    selectors.push({
+      path: value.path.trim(),
+      label: `${value.path.trim()}@"${match}"`,
+    })
+  }
+  for (const symbol of Array.isArray(record.symbol) ? record.symbol : []) {
+    if (!symbol || typeof symbol !== 'object') continue
+    const value = symbol as Record<string, unknown>
+    if (typeof value.path !== 'string' || !value.path.trim()) continue
+    const name = typeof value.name === 'string' ? value.name : ''
+    selectors.push({
+      path: value.path.trim(),
+      label: `${value.path.trim()}#${name}`,
+    })
+  }
   for (const symbol of Array.isArray(record.symbols) ? record.symbols : []) {
     if (!symbol || typeof symbol !== 'object') continue
     const value = symbol as Record<string, unknown>
@@ -236,6 +266,25 @@ function getReadStatus(toolBlock: {
       value,
     )
 
+  // Streaming/legacy text fallback only: a serialized successful read result
+  // (including a pre-unification read_blocks_result) is not an error payload,
+  // so never let it flip the heuristic branch to 'failed'.
+  const isSuccessfulStructuredReadValue = (value: unknown): boolean => {
+    if (
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      (value as Record<string, unknown>).kind === 'read_files_result'
+    ) {
+      return (value as Record<string, unknown>).version === 1
+    }
+    if (typeof value !== 'string') return false
+    return (
+      value.includes('"kind":"read_files_result"') ||
+      value.includes('"kind":"read_blocks_result"')
+    )
+  }
+
   const inspect = (value: unknown, depth = 0): void => {
     if (depth > 6 || value === null || value === undefined) return
     if (typeof value === 'string') {
@@ -290,7 +339,9 @@ function getReadStatus(toolBlock: {
 
   for (const value of rawValues) inspect(value)
   if (failures > 0 && successes > 0) return 'partial'
-  if (failures > 0 || successes === 0) return 'failed'
+  if (failures > 0 || successes === 0) {
+    return rawValues.some(isSuccessfulStructuredReadValue) ? 'read' : 'failed'
+  }
   return 'read'
 }
 

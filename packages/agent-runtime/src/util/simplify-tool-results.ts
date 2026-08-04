@@ -37,6 +37,13 @@ export function simplifyReadFileResults(
               const { slices: _slices, ...rest } = entry
               return { ...rest, slicesOmittedForLength: true as const }
             }
+            // Only whole-file and range items may drop `content` in favor of
+            // `contentOmittedForLength`. window/around/symbol block items
+            // require `content`/`sourceContent` and forbid the omission
+            // marker, so they pass through unchanged.
+            if (entry.selector !== 'file' && entry.selector !== 'range') {
+              return entry
+            }
             const { content: _content, ...rest } = entry
             return { ...rest, contentOmittedForLength: true as const }
           }),

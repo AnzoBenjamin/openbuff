@@ -45,7 +45,7 @@ describe('thinker agent', () => {
     })
 
     test('exposes set_output for structured output', () => {
-      expect(thinker.toolNames).toEqual(['set_output'])
+      expect(thinker.toolNames).toEqual(['read_files', 'set_output'])
     })
 
     test('has empty spawnable agents', () => {

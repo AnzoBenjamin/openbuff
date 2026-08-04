@@ -123,7 +123,6 @@ const definition: SecretAgentDefinition = {
   includeMessageHistory: false,
   toolNames: [
     'read_files',
-    'read_blocks',
     'read_outline',
     'code_search',
     'git_status',

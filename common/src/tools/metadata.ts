@@ -38,7 +38,6 @@ const READ_TOOLS = new Set<ToolName>([
   'list_directory',
   'list_jobs',
   'query_index',
-  'read_blocks',
   'read_docs',
   'read_files',
   'read_image',
@@ -79,7 +78,6 @@ const CUSTOM_RENDERERS = new Set<ToolName>([
   'edit_transaction',
   'query_index',
   'read_files',
-  'read_blocks',
   'read_subtree',
   'run_file_change_hooks',
   'run_terminal_command',
@@ -107,8 +105,14 @@ const PATH_INPUTS: Partial<Record<ToolName, readonly string[]>> = {
   edit_3d_asset: ['path'],
   inspect_3d_asset: ['path'],
   render_3d_preview: ['path'],
-  read_blocks: ['windows[].path', 'around[].path', 'symbols[].path'],
-  read_files: ['paths[]', 'ranges[].path', 'symbols[].path'],
+  read_files: [
+    'paths[]',
+    'ranges[].path',
+    'windows[].path',
+    'around[].path',
+    'symbol[].path',
+    'symbols[].path',
+  ],
   read_outline: ['path'],
   read_subtree: ['paths[]'],
   replace_range: ['path'],
@@ -153,7 +157,7 @@ function metadataFor(toolName: ToolName): ToolMetadata {
           : 'global',
     pathInputs: PATH_INPUTS[toolName] ?? [],
     resultContract:
-      toolName === 'read_files' || toolName === 'read_blocks'
+      toolName === 'read_files'
         ? 'read_v1'
         : kind === 'mutation'
           ? nonCanonicalMutationResultTools.has(toolName)

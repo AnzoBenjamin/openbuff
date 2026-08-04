@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 
 import {
   __clearJobRegistryForTest,
+  AGENT_JOB_EVENT_BUFFER_LIMIT,
+  AGENT_JOB_SETTLED_TTL_MS,
   JobRegistry,
   jobRegistry,
   reduceJobState,
@@ -418,6 +420,44 @@ describe('jobRegistry', () => {
       expect(after.events[0].sequence).toBe(last + 1)
       expect(outputData(after.events)).toEqual(['tail'])
     })
+
+    it('does not report truncated for a healthy buffer with nothing dropped', () => {
+      const job = createRunningJob()
+      jobRegistry.emit(job.jobId, out('one'))
+      jobRegistry.emit(job.jobId, out('two'))
+      jobRegistry.emit(job.jobId, out('three'))
+
+      const snap = jobRegistry.snapshot(job.jobId, 0)!
+      // A fresh consumer at cursor 0 with the first retained sequence at 1 has
+      // no gap: truncated must be false even though events sit at/below the
+      // cursor, and nothing was ever evicted.
+      expect(snap.dropped).toBe(0)
+      expect(snap.truncated).toBe(false)
+    })
+
+    it('reports truncated when events after the cursor were evicted', () => {
+      const job = createRunningJob()
+      emitUntilDropped(job.jobId)
+
+      const snap = jobRegistry.snapshot(job.jobId, 0)!
+      // Eviction left the lowest retained sequence far past cursor 0, so the
+      // consumer at cursor 0 has a real gap.
+      expect(snap.dropped).toBeGreaterThan(0)
+      expect(snap.truncated).toBe(true)
+    })
+
+    it('does not report truncated once the cursor is caught up past the gap', () => {
+      const job = createRunningJob()
+      emitUntilDropped(job.jobId)
+
+      const snap = jobRegistry.snapshot(job.jobId, 0)!
+      // Snapshotting from a cursor at/after the highest evicted sequence (one
+      // before the lowest retained sequence) has no gap: the consumer already
+      // consumed everything up to the retained window.
+      const firstRetained = snap.events[0].sequence
+      const caughtUp = jobRegistry.snapshot(job.jobId, firstRetained - 1)!
+      expect(caughtUp.truncated).toBe(false)
+    })
   })
 
   describe('output byte bound', () => {
@@ -476,6 +516,110 @@ describe('jobRegistry', () => {
       const snap = registry.snapshot(job.jobId, 0)!
       expect(snap.dropped).toBeGreaterThan(0)
       expect(snap.events.length).toBeLessThan(100)
+    })
+  })
+
+  describe('kindBounds', () => {
+    it('applies agent eventBufferLimit overrides over the global cap', () => {
+      // High global so only the agent kind bound can fire eviction.
+      const registry = new JobRegistry({
+        eventBufferLimit: 10_000,
+        kindBounds: {
+          agent: { eventBufferLimit: 5 },
+        },
+      })
+      const job = registry.create({
+        kind: 'agent',
+        label: 'bounded-agent',
+        owner: OWNER_A,
+      })
+      registry.start(job.jobId)
+      for (let i = 0; i < 20; i++) {
+        registry.emit(job.jobId, {
+          type: 'agent_chunk',
+          chunkType: 'text',
+          data: `c${i}`,
+        })
+      }
+
+      const snap = registry.snapshot(job.jobId, 0)!
+      // lifecycle(queued/running) also count toward the ring.
+      expect(snap.dropped).toBeGreaterThan(0)
+      expect(snap.events.length).toBeLessThanOrEqual(5)
+    })
+
+    it('does not apply agent eventBufferLimit to process jobs', () => {
+      const registry = new JobRegistry({
+        eventBufferLimit: 10_000,
+        kindBounds: {
+          agent: { eventBufferLimit: 5 },
+        },
+      })
+      const job = registry.create({
+        kind: 'process',
+        label: 'unbounded-process',
+        owner: OWNER_A,
+      })
+      registry.start(job.jobId)
+      for (let i = 0; i < 20; i++) {
+        registry.emit(job.jobId, out(`line-${i}`))
+      }
+
+      const snap = registry.snapshot(job.jobId, 0)!
+      // Process keeps the high global limit; agent-only kindBounds must not drop.
+      expect(snap.dropped).toBe(0)
+      expect(snap.events.length).toBeGreaterThan(5)
+    })
+
+    it('applies agent settledTtlMs overrides over the global TTL', () => {
+      const registry = new JobRegistry({
+        settledTtlMs: 24 * 60 * 60 * 1000, // long global
+        kindBounds: {
+          agent: { settledTtlMs: 100 }, // short agent TTL
+        },
+      })
+      const agent = registry.create({
+        kind: 'agent',
+        label: 'a',
+        owner: OWNER_A,
+      })
+      registry.start(agent.jobId)
+      registry.emit(agent.jobId, lifecycle('completed'))
+      const process = registry.create({
+        kind: 'process',
+        label: 'p',
+        owner: OWNER_A,
+      })
+      registry.start(process.jobId)
+      registry.emit(process.jobId, lifecycle('completed'))
+
+      // Past agent TTL, still within process (global) TTL.
+      registry.sweep(Date.now() + 200)
+      expect(registry.get(agent.jobId)).toBeUndefined()
+      expect(registry.get(process.jobId)?.state).toBe('completed')
+    })
+
+    it('uses the singleton default agent eventBufferLimit', () => {
+      // jobRegistry is constructed with agent kindBounds mirroring
+      // AGENT_JOB_EVENT_BUFFER_LIMIT / AGENT_JOB_SETTLED_TTL_MS.
+      const job = jobRegistry.create({
+        kind: 'agent',
+        label: 'singleton-agent-bound',
+        owner: OWNER_A,
+      })
+      jobRegistry.start(job.jobId)
+      // lifecycle(queued/running) count toward the ring; overflow past the
+      // agent default must drop once the kind bound is hit.
+      for (let i = 0; i < AGENT_JOB_EVENT_BUFFER_LIMIT + 50; i++) {
+        jobRegistry.emit(job.jobId, agentChunk(`chunk-${i}`))
+      }
+
+      const snap = jobRegistry.snapshot(job.jobId, 0)!
+      expect(snap.dropped).toBeGreaterThan(0)
+      expect(snap.events.length).toBeLessThanOrEqual(AGENT_JOB_EVENT_BUFFER_LIMIT)
+      // Keep the settled-TTL constant referenced so a silent export/rename
+      // break is caught alongside the event-buffer default.
+      expect(AGENT_JOB_SETTLED_TTL_MS).toBe(30 * 60 * 1000)
     })
   })
 
@@ -763,6 +907,26 @@ describe('jobRegistry', () => {
         ok: false,
         reason: 'not_found',
       })
+    })
+  })
+
+  describe('restampOwner', () => {
+    it('replaces a job owner in place', () => {
+      const job = createRunningJob(OWNER_A)
+
+      jobRegistry.restampOwner(job.jobId, OWNER_B)
+
+      expect(jobRegistry.assertOwned(job.jobId, OWNER_B).ok).toBe(true)
+      expect(jobRegistry.assertOwned(job.jobId, OWNER_A)).toEqual({
+        ok: false,
+        reason: 'foreign',
+      })
+    })
+
+    it('is a no-op for an unknown job id', () => {
+      expect(() =>
+        jobRegistry.restampOwner('job-does-not-exist', OWNER_A),
+      ).not.toThrow()
     })
   })
 

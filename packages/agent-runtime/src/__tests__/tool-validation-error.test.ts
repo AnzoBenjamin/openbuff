@@ -45,6 +45,12 @@ describe('tool validation error handling', () => {
   })
 
   it('builds terminal spawn reports when validation fails after publication', () => {
+    // MIGRATION: the spawn-failure `errorMessage` contract changed. It no
+    // longer interpolates the underlying handler error message (the retired
+    // format was `Agent spawn failed: <error message>`); it is now the static,
+    // leak-safe string asserted below. The underlying error is still logged
+    // via logger.warn in executeToolCall. See the migration note on
+    // buildSpawnAgentsHandlerFailureOutput in tool-executor.ts.
     const output = buildSpawnAgentsHandlerFailureOutput(
       { agents: [{ agent_type: 'editor' }] },
       new Error('Editor brief is incomplete'),
@@ -57,11 +63,15 @@ describe('tool validation error handling', () => {
           agentType: 'editor',
           agentName: 'editor',
           value: {
-            errorMessage: 'Agent spawn failed: Editor brief is incomplete',
+            errorMessage:
+              'Agent spawn failed because the handler could not validate the request.',
           },
         },
       ],
     })
+    // The underlying handler error message must NOT leak into the
+    // agent-visible output (regression guard for the retired format).
+    expect(JSON.stringify(output)).not.toContain('Editor brief is incomplete')
   })
 
   const testAgentTemplate: AgentTemplate = {
@@ -2424,7 +2434,10 @@ describe('tool validation error handling', () => {
       toolName: 'spawn_agents',
       toolCallId: 'basher-missing-command-tool-call-id',
     })
-    expect(events.find((event) => event.type === 'tool_result')).toMatchObject({
+    const toolResultEvent = events.find(
+      (event) => event.type === 'tool_result',
+    )
+    expect(toolResultEvent).toMatchObject({
       type: 'tool_result',
       toolName: 'spawn_agents',
       toolCallId: 'basher-missing-command-tool-call-id',
@@ -2435,15 +2448,22 @@ describe('tool validation error handling', () => {
             expect.objectContaining({
               agentType: 'basher',
               value: {
-                errorMessage: expect.stringContaining(
-                  'Missing required: command',
-                ),
+                // Spawn-failure errorMessage is the static, leak-safe contract
+                // (no interpolation of the underlying validation error); the
+                // detailed error is logged via logger.warn instead.
+                errorMessage:
+                  'Agent spawn failed because the handler could not validate the request.',
               },
             }),
           ]),
         },
       ],
     })
+    // The underlying validation error must not leak into the agent-visible
+    // failure output (regression guard for the retired interpolated format).
+    expect(JSON.stringify(toolResultEvent)).not.toContain(
+      'Missing required: command',
+    )
   })
 
   it('repairs a single-agent mis-braced spawn payload and publishes it to the handler', async () => {
@@ -3120,6 +3140,13 @@ describe('custom tool project-root escape backstop', () => {
             type: 'object',
             properties: {
               path: { type: 'string' },
+              metadata: {
+                type: 'object',
+                properties: {
+                  requestedPath: { type: 'string' },
+                },
+                additionalProperties: false,
+              },
             },
             required: ['path'],
             additionalProperties: false,
@@ -3217,6 +3244,30 @@ describe('custom tool project-root escape backstop', () => {
 
     expect(events.some((event) => event.type === 'tool_call')).toBe(false)
     expect(events.some((event) => event.type === 'tool_result')).toBe(false)
+  })
+
+  it('never echoes secret custom input values in containment errors', async () => {
+    const secret = 'super-secret-token-should-never-appear'
+    const events = await runCustomFsTool({ path: '../escape.txt', metadata: { requestedPath: secret } })
+    const error = events.find(
+      (event): event is Extract<PrintModeEvent, { type: 'error' }> =>
+        event.type === 'error',
+    )
+
+    expect(error).toBeDefined()
+    expect(error!.message).toContain('outside the project root')
+    expect(error!.message).not.toContain(secret)
+    expect(error!.message).not.toContain('../escape.txt')
+  })
+
+  it('blocks nested custom values that resemble escaping paths', async () => {
+    const events = await runCustomFsTool({
+      path: 'src/a.ts',
+      metadata: { requestedPath: '../nested-escape.txt' },
+    })
+
+    expect(events.some((event) => event.type === 'error')).toBe(true)
+    expect(events.some((event) => event.type === 'tool_call')).toBe(false)
   })
 
   it('does not block a legitimate in-project relative path', async () => {

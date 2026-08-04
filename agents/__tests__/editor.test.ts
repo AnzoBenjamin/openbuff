@@ -122,7 +122,6 @@ describe('editor agent', () => {
       expect(editor.toolNames).toEqual([
         'read_files',
         'read_outline',
-        'read_blocks',
         'edit_transaction',
       ])
       expect(editor.toolNames).not.toContain('set_output')

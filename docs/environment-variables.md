@@ -40,6 +40,29 @@ Document only environment variables that are implemented in code. During the for
 
 `CODEBUFF_API_KEY` functions as a runtime fallback (`OPENBUFF_API_KEY ?? CODEBUFF_API_KEY` in `sdk/src/env.ts`, Openbuff primary). `CODEBUFF_CHATGPT_OAUTH_TOKEN` also has an `OPENBUFF_*` alias but with reversed precedence (legacy name primary). `OPENBUFF_GIT_BASH_PATH` takes precedence over the legacy `CODEBUFF_GIT_BASH_PATH` fallback.
 
+Context-budget and proactive-retrieval behaviors remain code-default (no new
+env vars). Progressive prompt disclosure and gate repair budgets each have optional env
+canaries:
+
+- `OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE` — when set to `1`, `true`, `yes`, or
+  `on` (case-insensitive), `createBase2` defaults `progressivePromptDisclosure`
+  to `true` if the option is omitted. Explicit `true`/`false` on the agent
+  option always wins over the env canary. Production stays off unless the
+  canary or option is set.
+- `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS` — positive integer string for the
+  reviewer→repair→re-review budget (default `6`, max `20`). Invalid or missing
+  values fall back to `6`. Explicit `createBase2({ maxReviewerRepairRounds })`
+  always wins over the env canary. NON_BLOCKING findings also burn this budget
+  under LOOKS_GOOD-only finalization.
+- `OPENBUFF_MAX_REPAIR_ROUNDS` — positive integer string for the validation-hook
+  repair-editor budget (default `3`, max `20`). Invalid or missing values fall
+  back to `3`. Explicit `createBase2({ maxRepairRounds })` always wins over the
+  env canary.
+- `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS` — positive integer string for the
+  specialist→repair→re-review budget (default `3`, max `20`). Invalid or missing
+  values fall back to `3`. Explicit `createBase2({ maxSpecialistRepairRounds })`
+  always wins over the env canary.
+
 Do not document an `OPENBUFF_*` alias unless the code implements it.
 
 ## Releases

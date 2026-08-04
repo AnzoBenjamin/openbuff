@@ -6,11 +6,105 @@ import {
   jsonToolResultSchema,
 } from '../utils'
 import {
+  READ_FILES_BLOCK_CONTENT_MAX_BYTES,
   readFilesResultV1Schema,
   readFilesSliceSchema,
 } from '../../results/filesystem'
-
 import type { $ToolParams } from '../../constants'
+
+const DEFAULT_WINDOW_SIZE = 400
+const DEFAULT_CONTEXT_LINES = 40
+
+export const MAX_WINDOW_SIZE = 5_000
+export const MAX_CONTEXT_LINES = 2_000
+/**
+ * Byte budget enforced independently on each window/around/symbol block payload
+ * (the decorated `content` and the exact `sourceContent`), not on their sum.
+ * Re-exported from the result contract so the budget documented in the tool
+ * description cannot drift from the bound enforced on block result items.
+ */
+export const MAX_READ_BLOCK_BYTES = READ_FILES_BLOCK_CONTENT_MAX_BYTES
+
+export const readFilesWindowSelectorSchema = z.object({
+  path: z
+    .string()
+    .min(1)
+    .describe(
+      'File path to read in contiguous line windows, relative to the project root.',
+    ),
+  windowSize: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_WINDOW_SIZE)
+    .optional()
+    .describe(
+      `Lines per window. Defaults to ${DEFAULT_WINDOW_SIZE}, capped at ${MAX_WINDOW_SIZE}.`,
+    ),
+  window: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe(
+      '1-indexed window number to return. Omit to get the window manifest (totalLines, windowSize, windowCount) plus the first window.',
+    ),
+})
+
+export const readFilesAroundSelectorSchema = z.object({
+  path: z
+    .string()
+    .min(1)
+    .describe(
+      'File path to read a content-anchored block from, relative to the project root.',
+    ),
+  match: z
+    .string()
+    .min(1)
+    .describe(
+      'Exact literal string to anchor on. Robust to line-number drift.',
+    ),
+  occurrence: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe(
+      '1-indexed occurrence of `match` to anchor on. Defaults to 1.',
+    ),
+  contextLines: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_CONTEXT_LINES)
+    .optional()
+    .describe(
+      `Lines of context to include on each side of the match, clamped at file boundaries. Defaults to ${DEFAULT_CONTEXT_LINES}, capped at ${MAX_CONTEXT_LINES}.`,
+    ),
+})
+
+export const readFilesSymbolSelectorSchema = z.object({
+  path: z
+    .string()
+    .min(1)
+    .describe(
+      'File path to extract a symbol slice from, relative to the project root.',
+    ),
+  name: z
+    .string()
+    .min(1)
+    .describe(
+      'Top-level symbol name (function, class, interface, method) to pull, as shown by read_outline.',
+    ),
+  occurrence: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe(
+      'When multiple top-level symbols share this name, the 1-indexed one to return. Defaults to 1. Matches rewrite_symbol occurrence semantics.',
+    ),
+})
 
 export const fileContentsSchema = z.union([
   z.object({
@@ -38,21 +132,36 @@ export const fileContentsSchema = z.union([
 
 const toolName = 'read_files'
 const endsAgentStep = true
-const decodeFragmentedSymbolSelectors = (input: unknown): unknown => {
+/** Selector arrays a transport may have stringified and split on commas. */
+const FRAGMENTED_SELECTOR_KEYS = [
+  'ranges',
+  'windows',
+  'around',
+  'symbol',
+  'symbols',
+] as const
+
+const decodeFragmentedSelectors = (input: unknown): unknown => {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input
   const record = input as Record<string, unknown>
-  if (!Array.isArray(record.symbols) || record.symbols.length === 0)
-    return input
-  if (!record.symbols.every((value) => typeof value === 'string')) return input
+  const repaired: Record<string, unknown> = { ...record }
+  let decodedAny = false
+  for (const key of FRAGMENTED_SELECTOR_KEYS) {
+    const selectors = record[key]
+    if (!Array.isArray(selectors) || selectors.length === 0) continue
+    if (!selectors.every((value) => typeof value === 'string')) continue
 
-  const encoded = (record.symbols as string[]).join(',')
-  try {
-    const decoded = JSON.parse(encoded) as unknown
-    if (!Array.isArray(decoded)) return input
-    return { ...record, symbols: decoded }
-  } catch {
-    return input
+    const encoded = (selectors as string[]).join(',')
+    try {
+      const decoded = JSON.parse(encoded) as unknown
+      if (!Array.isArray(decoded)) continue
+      repaired[key] = decoded
+      decodedAny = true
+    } catch {
+      continue
+    }
   }
+  return decodedAny ? repaired : input
 }
 
 const inferSingleSelectorPath = (input: unknown): unknown => {
@@ -66,8 +175,9 @@ const inferSingleSelectorPath = (input: unknown): unknown => {
   if (paths.length !== 1 || typeof paths[0] !== 'string') return input
   let inferredPath = false
   const inferPath = (selectors: unknown): unknown => {
-    if (!Array.isArray(selectors)) return selectors
-    return selectors.map((selector) => {
+    const coerced = coerceToArray(selectors)
+    if (!Array.isArray(coerced)) return selectors
+    return coerced.map((selector) => {
       if (
         !selector ||
         typeof selector !== 'object' ||
@@ -82,6 +192,9 @@ const inferSingleSelectorPath = (input: unknown): unknown => {
     })
   }
   const ranges = inferPath(record.ranges)
+  const windows = inferPath(record.windows)
+  const around = inferPath(record.around)
+  const symbol = inferPath(record.symbol)
   const symbols = inferPath(record.symbols)
   if (!inferredPath) return input
 
@@ -89,12 +202,12 @@ const inferSingleSelectorPath = (input: unknown): unknown => {
   // second whole-file selector. This also recovers the common model shape
   // `{ paths: [file], symbols: [{ names }] }` without weakening ambiguous
   // multi-file validation.
-  return { ...record, paths: [], ranges, symbols }
+  return { ...record, paths: [], ranges, windows, around, symbol, symbols }
 }
 
 const inputSchema = z
   .preprocess(
-    (input) => inferSingleSelectorPath(decodeFragmentedSymbolSelectors(input)),
+    (input) => inferSingleSelectorPath(decodeFragmentedSelectors(input)),
     z.object({
       paths: z
         .preprocess(
@@ -142,6 +255,24 @@ const inputSchema = z
         .describe(
           'Optional: read only a 1-indexed inclusive line range of specific files. Use this to page through large files that exceeded the read limit. Each entry reads `path` from startLine..endLine. When exactly one paths entry is supplied, a missing range path is inferred from it.',
         ),
+      windows: z
+        .preprocess(coerceToArray, z.array(readFilesWindowSelectorSchema))
+        .optional()
+        .describe(
+          'Optional: windowed reads for large files. Each returned window is a COMPLETE contiguous line block that mints its own cap.v3 editAnchor, so you can edit it directly via replace_range/basedOnRead without a guess-shrink-retry loop. When exactly one paths entry is supplied, a missing window path is inferred from it.',
+        ),
+      around: z
+        .preprocess(coerceToArray, z.array(readFilesAroundSelectorSchema))
+        .optional()
+        .describe(
+          'Optional: content-anchored reads. Finds the Nth exact literal match and returns a complete bounded block around it, minting a cap.v3 editAnchor for that block. When exactly one paths entry is supplied, a missing around path is inferred from it.',
+        ),
+      symbol: z
+        .preprocess(coerceToArray, z.array(readFilesSymbolSelectorSchema))
+        .optional()
+        .describe(
+          'Optional: occurrence-aware single-symbol reads. Each entry pulls the Nth (default 1) top-level symbol with the given name, mirroring rewrite_symbol occurrence semantics, and returns one `symbol` block item with its own editAnchor. Prefer batch `symbols` for several symbols from one file; use `symbol` when you need a specific occurrence of a same-named symbol. When exactly one paths entry is supplied, a missing symbol path is inferred from it.',
+        ),
       symbols: z
         .array(
           z.object({
@@ -168,13 +299,16 @@ const inputSchema = z
     if (
       value.paths.length === 0 &&
       (value.ranges?.length ?? 0) === 0 &&
+      (value.windows?.length ?? 0) === 0 &&
+      (value.around?.length ?? 0) === 0 &&
+      (value.symbol?.length ?? 0) === 0 &&
       (value.symbols?.length ?? 0) === 0
     ) {
       ctx.addIssue({
         code: 'custom',
         path: ['paths'],
         message:
-          'read_files requires at least one path, range, or symbol selector.',
+          'read_files requires at least one path, range, window, around, symbol, or symbols selector.',
       })
     }
   })
@@ -182,12 +316,18 @@ const inputSchema = z
     `Read multiple files from disk and return their contents. Use this tool to read as many files as would be helpful to answer the user's request.`,
   )
 const description = `
-Read files from disk. For large files, prefer ranges or symbol slices over full-file reads before editing.
+Read files from disk. For large files, prefer ranges, windows, around-blocks, or symbol slices over full-file reads before editing.
 
 Important:
 - Full reads may be truncated for large files; the truncation marker includes the original character and line counts. Do not edit from truncated content.
 - Every complete read returns one structured editAnchor containing startLine, endLine, contentHash, and an authenticated cap.v3 readCapability bound to this project, path, and agent run. Copy editAnchor.readCapability verbatim to basedOnRead/readCapability; use the other fields for diagnostics only and never mix them into the same edit call.
+- Six selector kinds may be combined in one call: \`paths\` (whole files), \`ranges\` (line ranges), \`windows\` (contiguous line windows), \`around\` (literal-anchored context blocks), \`symbol\` (occurrence-aware single-symbol block), and \`symbols\` (batch named symbol slices).
+- Authority ladder: a whole-file-covering read (complete paths read, complete 1..totalLines range, or a window/around/symbol block spanning the whole file) grants sticky whole-file authorization. A complete sub-file block (window/around/symbol/range) mints only a scoped cap.v3 capability for that exact block. Partial or truncated reads mint nothing.
 - Symbol slices: pass \`symbols: [{ path, names }]\` to pull just the named functions/classes/methods instead of the whole file. Prefer this when you already know the symbol names — pair it with read_outline to discover names in a large file first (outline to see structure, then symbols to pull what you need). Use \`ranges\` when you're paging by line number instead.
+- Windowed read: pass \`windows: [{ path, windowSize?, window? }]\`. The file is split into complete contiguous line windows (default windowSize 400). Pick \`window\` (1-indexed) or omit it to get the manifest (totalLines, windowSize, windowCount) plus the first window.
+- Content-anchored read: pass \`around: [{ path, match, occurrence?, contextLines? }]\`. Finds the 1-indexed occurrence (default 1) of the exact literal \`match\` and returns a complete block covering the match plus \`contextLines\` (default 40) on each side, clamped at file boundaries.
+- Occurrence-aware symbol read: pass \`symbol: [{ path, name, occurrence? }]\` to pull the Nth (default 1) top-level symbol with that name, mirroring rewrite_symbol occurrence semantics. Prefer batch \`symbols\` for several symbols from one file; use \`symbol\` when you need a specific occurrence of a same-named symbol. Each complete symbol block mints its own cap.v3 editAnchor.
+- Block byte budget: for every window/around/symbol block, the decorated content and the exact sourceContent are each bounded independently by a ${MAX_READ_BLOCK_BYTES}-byte budget; it is a per-payload bound, not a combined total. A block whose decorated content or sourceContent exceeds that budget is returned as a \`too_large\` error item instead of a partial block, so request a smaller windowSize/contextLines.
 - Model-visible complete reads expose one editAnchor rather than duplicate top-level hash/capability fields.
 - Complete range results also return sourceContent containing the exact undecorated normalized range text used for the range hash. Use sourceContent—not the numbered display content—when an exact oldString is truly needed. Never splice a mid-line suffix together with following lines; that is not contiguous source text.
 - For a medium/large or formatting-sensitive block, use an edit_transaction replace_range edit and copy editAnchor.readCapability directly instead of reconstructing oldString or separate range fields.
@@ -200,6 +340,15 @@ ${$getNativeToolCallExampleString({
   input: {
     paths: ['path/to/file1.ts', 'path/to/file2.ts'],
     ranges: [{ path: 'path/to/large-file.ts', startLine: 120, endLine: 160 }],
+    windows: [{ path: 'path/to/large-file.ts', window: 2 }],
+    around: [
+      {
+        path: 'path/to/large-file.ts',
+        match: 'export function loadConfig(',
+        contextLines: 40,
+      },
+    ],
+    symbol: [{ path: 'path/to/large-file.ts', name: 'loadConfig', occurrence: 2 }],
     symbols: [{ path: 'path/to/large-file.ts', names: ['loadConfig'] }],
   },
   endsAgentStep,

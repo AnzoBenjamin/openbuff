@@ -164,4 +164,128 @@ describe('git-committer (M5.2 resurrected)', () => {
     expect(firstStep).not.toMatchObject({ toolName: 'git_branch' })
     expect(firstStep).toMatchObject({ toolName: 'run_terminal_command' })
   })
+
+  // Incident hardening: placeholder commit messages, policy-denial
+  // reporting, and the staged-set-is-a-subset-of-owned_paths verification.
+  test('instructions prompt forbids placeholder commit messages', () => {
+    expect(gitCommitter.instructionsPrompt).toMatch(
+      /placeholder messages? \(probe\/test\/wip/i,
+    )
+    expect(gitCommitter.instructionsPrompt).toMatch(/policy-rejected/i)
+    expect(gitCommitter.instructionsPrompt).toMatch(
+      /real imperative message derived from the actual change/i,
+    )
+  })
+
+  test('instructions prompt requires verbatim reporting of policy denials and forbids workarounds', () => {
+    expect(gitCommitter.instructionsPrompt).toMatch(
+      /report the exact denial reason verbatim/i,
+    )
+    expect(gitCommitter.instructionsPrompt).toMatch(
+      /never work around a denial/i,
+    )
+    expect(gitCommitter.instructionsPrompt).toMatch(
+      /never substitute a path-scoped git commit/i,
+    )
+    expect(gitCommitter.instructionsPrompt).toMatch(
+      /never invent a placeholder message/i,
+    )
+  })
+
+  test('system prompt reinforces stop-and-report on policy denial or uncertainty', () => {
+    expect(gitCommitter.systemPrompt).toMatch(/policy denial|uncertainty/i)
+    expect(gitCommitter.systemPrompt).toMatch(/stop and report/i)
+  })
+
+  type CommitterSteps = ReturnType<
+    NonNullable<typeof gitCommitter.handleSteps>
+  >
+
+  const feedJson = (value: Record<string, unknown>) =>
+    ({ toolResult: [{ type: 'json', value }] }) as any
+
+  // Drive the deterministic handleSteps prelude (status, branch/diff
+  // inspection, git add of owned paths, whitespace check) through the staged
+  // listing, feeding `stagedStdout` as the `git diff --cached --name-only`
+  // output, and return the next yielded step.
+  const advancePastStagedListing = (
+    gen: CommitterSteps,
+    ownedPaths: string[],
+    stagedStdout: string,
+  ): unknown => {
+    expect(gen.next().value).toMatchObject({
+      toolName: 'run_terminal_command',
+      input: { command: 'git status --short --branch' },
+    })
+    let step = gen.next(feedJson({ stdout: '', exitCode: 0 })).value
+    const expectedCommands = [
+      'git rev-parse --show-toplevel',
+      'git rev-parse --git-common-dir',
+      'git branch --show-current',
+      'git rev-parse --abbrev-ref --symbolic-full-name @{upstream}',
+      'git diff HEAD',
+      'git log --oneline -10',
+      `git add -- ${ownedPaths.map((path) => JSON.stringify(path)).join(' ')}`,
+      'git diff --cached --check',
+      'git diff --cached --name-only',
+    ]
+    for (const command of expectedCommands) {
+      expect(step).toMatchObject({
+        toolName: 'run_terminal_command',
+        input: { command },
+      })
+      step = gen.next(
+        feedJson({
+          stdout:
+            command === 'git diff --cached --name-only' ? stagedStdout : '',
+          exitCode: 0,
+        }),
+      ).value
+    }
+    return step
+  }
+
+  test('handleSteps unstages offending staged paths and stops instead of committing', () => {
+    if (!gitCommitter.handleSteps) return
+    const gen = gitCommitter.handleSteps({
+      params: { owned_paths: ['src/a.ts'] },
+    } as unknown as Parameters<NonNullable<typeof gitCommitter.handleSteps>>[0])
+    // src/a.ts is owned; src/a.ts.bak is a sibling prefix collision (not
+    // under an owned directory) and src/evil.ts is unrelated.
+    let step = advancePastStagedListing(
+      gen,
+      ['src/a.ts'],
+      'src/a.ts\nsrc/a.ts.bak\nsrc/evil.ts\n',
+    )
+    expect(step).toMatchObject({
+      toolName: 'run_terminal_command',
+      input: { command: 'git restore --staged src/a.ts.bak src/evil.ts' },
+    })
+    step = gen.next(feedJson({ stdout: '', exitCode: 0 })).value
+    expect(step).toMatchObject({ type: 'STEP_TEXT' })
+    const report = JSON.stringify(step)
+    expect(report).toContain('src/a.ts.bak')
+    expect(report).toContain('src/evil.ts')
+    expect(report).toContain('src/a.ts')
+    expect(gen.next().done).toBe(true)
+  })
+
+  test('handleSteps proceeds when every staged path is owned (directory prefix match)', () => {
+    if (!gitCommitter.handleSteps) return
+    const gen = gitCommitter.handleSteps({
+      params: { owned_paths: ['src/'] },
+    } as unknown as Parameters<NonNullable<typeof gitCommitter.handleSteps>>[0])
+    let step = advancePastStagedListing(
+      gen,
+      ['src/'],
+      'src/a.ts\nsrc/nested/b.ts\n',
+    )
+    expect(step).toMatchObject({
+      toolName: 'run_terminal_command',
+      input: { command: 'git diff --cached -U0' },
+    })
+    step = gen.next(feedJson({ stdout: '', exitCode: 0 })).value
+    expect(step).toBe('STEP_ALL')
+    expect(gen.next().done).toBe(true)
+  })
 })

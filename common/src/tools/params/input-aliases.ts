@@ -153,8 +153,26 @@ const TOOL_INPUT_ALIAS_RULES: Partial<
       coerceCanonical: true,
     },
     {
-      canonical: 'symbols',
+      canonical: 'windows',
+      aliases: ['window'],
+      coerce: 'array',
+      coerceCanonical: true,
+    },
+    {
+      canonical: 'around',
+      aliases: ['around'],
+      coerce: 'array',
+      coerceCanonical: true,
+    },
+    {
+      canonical: 'symbol',
       aliases: ['symbol'],
+      coerce: 'array',
+      coerceCanonical: true,
+    },
+    {
+      canonical: 'symbols',
+      aliases: ['symbols'],
       coerce: 'array',
       coerceCanonical: true,
     },

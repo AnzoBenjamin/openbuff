@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
   "slug": "harness-cohesion-audit-2026-07",
-  "status": "executing",
+  "status": "completed",
   "currentTask": null,
-  "revision": 41,
+  "revision": 42,
   "checkpoint": {
     "taskId": "M3.2",
     "phase": "validation",
@@ -16,5 +16,5 @@
     "recordedAt": "2026-07-21T21:49:00.880Z"
   },
   "createdAt": "2026-07-21T20:48:18.665Z",
-  "updatedAt": "2026-07-22T03:58:01.890Z"
+  "updatedAt": "2026-08-02T21:32:41.648Z"
 }

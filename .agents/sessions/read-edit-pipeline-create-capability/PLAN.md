@@ -1,4 +1,4 @@
-<!-- current-task: design-read-edit-pipeline-create-capability -->
+<!-- status: completed -->
 
 # Plan: Create→Edit/Delete Capability & Read/Edit Pipeline Improvements
 
@@ -34,6 +34,20 @@
 - [ ] M2 — (future, gated on user approval) Implement High tier (#1–#3) with tests.
 - [ ] M3 — (future) Medium tier (#4–#6).
 - [ ] M4 — (future) Lower tier (#7–#8) design decision + optional implementation.
+
+## Resolution (2026-08-03)
+
+**Session closed — substantially implemented by other work.** Verified against live source:
+
+- **#1** server-side mint + surface: `synthesizePostEditAnchor` (edit-application-coordinator.ts:287-310) mints cap.v3 from known content; `coordinateEditApplication` appends `postEditCapabilities` to model-facing output (lines 496-509). ✅
+- **#2** create grants sticky auth: `commitAppliedEditPaths` (lines 351-377) grants from runtime-known create bytes without client anchor. ✅
+- **#3** relax delete auth: strict gate delete/move branch (edit-transaction.ts:507-537) authorizes on fresh whole-file confirmed anchor hash-matched to snapshot. ✅
+- **#4** echo capability: done via `postEditCapabilities`. ✅
+- **#6** decouple marker-clearing: done in `commitAppliedEditPaths`. ✅
+- **#5** differentiated recovery messages: partial (stale vs never-read vs compacted, but no 'created this session' message). ⚠️
+- **#7/#8**: not implemented (lower tier, intentional). ❌
+
+Milestones M2–M4 as written are moot. Remaining polish (#5 message wording, #7/#8 design) can be reopened as a fresh scoped task if desired.
 
 ## Validation gates
 

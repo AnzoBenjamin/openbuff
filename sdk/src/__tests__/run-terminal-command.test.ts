@@ -1,3 +1,4 @@
+import { spawnSync } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -287,6 +288,187 @@ describe('runTerminalCommand cwd containment', () => {
     } finally {
       fs.rmSync(projectRoot, { recursive: true, force: true })
       fs.rmSync(outsideRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('runTerminalCommand SYNC dirty-delta touchedPaths', () => {
+  function initTempGitRepo(): string {
+    const projectRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'terminal-dirty-'),
+    )
+    const run = (args: string[]) =>
+      spawnSync('git', args, {
+        cwd: projectRoot,
+        encoding: 'utf8',
+      })
+    expect(run(['init']).status).toBe(0)
+    run(['config', 'user.email', 'test@example.com'])
+    run(['config', 'user.name', 'Test'])
+    // Optional initial commit keeps porcelain stable across git versions.
+    fs.writeFileSync(path.join(projectRoot, 'README'), 'seed\n')
+    run(['add', 'README'])
+    run(['commit', '-m', 'seed'])
+    return projectRoot
+  }
+
+  it('reports newly created project files in touchedPaths', async () => {
+    const projectRoot = initTempGitRepo()
+    try {
+      // Pre-existing dirt must not appear in the delta.
+      fs.writeFileSync(path.join(projectRoot, 'already-dirty.txt'), 'old\n')
+
+      const result = await runTerminalCommand({
+        command: 'printf new > created-by-sync.txt',
+        process_type: 'SYNC',
+        cwd: projectRoot,
+        projectRoot,
+        timeout_seconds: 10,
+      })
+      const value = result[0].value as {
+        errorMessage?: string
+        touchedPaths?: string[]
+        exitCode?: number
+      }
+
+      expect(value.errorMessage).toBeUndefined()
+      expect(value.touchedPaths).toContain('created-by-sync.txt')
+      expect(value.touchedPaths).not.toContain('already-dirty.txt')
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('attributes paths relative to projectRoot when cwd is a subdirectory', async () => {
+    const projectRoot = initTempGitRepo()
+    try {
+      const sub = path.join(projectRoot, 'pkg')
+      fs.mkdirSync(sub)
+
+      const result = await runTerminalCommand({
+        command: 'printf nested > from-sub.txt',
+        process_type: 'SYNC',
+        cwd: 'pkg',
+        projectRoot,
+        timeout_seconds: 10,
+      })
+      const value = result[0].value as {
+        errorMessage?: string
+        touchedPaths?: string[]
+      }
+
+      expect(value.errorMessage).toBeUndefined()
+      expect(value.touchedPaths).toContain('pkg/from-sub.txt')
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('omits touchedPaths when the project is not a git repo', async () => {
+    const projectRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'terminal-nongit-'),
+    )
+    try {
+      const result = await runTerminalCommand({
+        command: 'printf x > bare.txt',
+        process_type: 'SYNC',
+        cwd: projectRoot,
+        projectRoot,
+        timeout_seconds: 10,
+      })
+      const value = result[0].value as {
+        errorMessage?: string
+        touchedPaths?: string[]
+      }
+
+      expect(value.errorMessage).toBeUndefined()
+      expect(value.touchedPaths).toBeUndefined()
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('runTerminalCommand BACKGROUND dirty snapshot at start', () => {
+  function initTempGitRepo(): string {
+    const projectRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'terminal-bg-dirty-'),
+    )
+    const run = (args: string[]) =>
+      spawnSync('git', args, {
+        cwd: projectRoot,
+        encoding: 'utf8',
+      })
+    expect(run(['init']).status).toBe(0)
+    run(['config', 'user.email', 'test@example.com'])
+    run(['config', 'user.name', 'Test'])
+    fs.writeFileSync(path.join(projectRoot, 'README'), 'seed\n')
+    run(['add', 'README'])
+    run(['commit', '-m', 'seed'])
+    return projectRoot
+  }
+
+  it('stores pre-start dirty snapshot on the job without emitting touchedPaths', async () => {
+    const projectRoot = initTempGitRepo()
+    try {
+      fs.writeFileSync(path.join(projectRoot, 'already-dirty.txt'), 'old\n')
+
+      const result = await runTerminalCommand({
+        command: 'printf new > created-by-bg.txt; sleep 30',
+        process_type: 'BACKGROUND',
+        cwd: projectRoot,
+        projectRoot,
+        timeout_seconds: 5,
+      })
+      const value = result[0].value as {
+        jobId?: string
+        touchedPaths?: string[]
+        backgroundProcessStatus?: string
+      }
+
+      expect(value.jobId).toBeDefined()
+      expect(value.backgroundProcessStatus).toBe('running')
+      // Start must never credit settlement dirt.
+      expect(value.touchedPaths).toBeUndefined()
+
+      const job = getBackgroundJob(value.jobId!)
+      expect(job?.projectRoot).toBe(projectRoot)
+      expect(job?.dirtyBeforePaths).toContain('already-dirty.txt')
+      expect(job?.dirtyBeforePaths).not.toContain('created-by-bg.txt')
+      expect(job?.settlementTouchedPaths).toBeUndefined()
+
+      killBackgroundJob(value.jobId!, 'SIGKILL')
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('omits dirtyBeforePaths when the project is not a git repo', async () => {
+    const projectRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'terminal-bg-nongit-'),
+    )
+    try {
+      const result = await runTerminalCommand({
+        command: 'sleep 30',
+        process_type: 'BACKGROUND',
+        cwd: projectRoot,
+        projectRoot,
+        timeout_seconds: 5,
+      })
+      const value = result[0].value as {
+        jobId?: string
+        touchedPaths?: string[]
+      }
+      expect(value.jobId).toBeDefined()
+      expect(value.touchedPaths).toBeUndefined()
+
+      const job = getBackgroundJob(value.jobId!)
+      expect(job?.projectRoot).toBe(projectRoot)
+      expect(job?.dirtyBeforePaths).toBeUndefined()
+
+      killBackgroundJob(value.jobId!, 'SIGKILL')
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true })
     }
   })
 })

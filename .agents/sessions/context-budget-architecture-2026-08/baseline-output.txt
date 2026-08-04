@@ -1,0 +1,33 @@
+Using environment: dev
+=== Context Budget Baseline Measurement ===
+Project: /home/ben/Code/CLI/openbuff
+Date: 2026-08-01T06:30:37.529Z
+
+Building real project context via SDK discovery...
+  OK — project context built.
+
+=== Per-Component Token Breakdown ===
+
+  base2 systemPrompt (raw template)                     11,631 tok  (42464 chars, includes placeholders)
+  File tree prompt (agent, 10k budget)                   9,729 tok  (25171 chars)
+  Knowledge files (root-level contents)                     98 tok  (8 total knowledge files, 306 chars rendered)
+  Knowledge files instruction (static)                   1,036 tok  (3699 chars)
+  System info prompt                                       326 tok  (1008 chars)
+  Git changes prompt                                       363 tok  (1210 chars)
+  Proactive query_index (representative, 24 results)     4,912 tok  (scope=multi-file, mode=explain, limit=24)
+  git_status injection (representative)                     52 tok  (compact: branch + dirty paths only)
+  Patterns index prompt                                    307 tok  (907 chars)
+  Language + engine profile prompt                         388 tok  (1562 chars)
+
+--- Summary ---
+  Fixed per-turn baseline (excl. injections):  23,878 tokens
+  Automatic injections (per-turn):             4,964 tokens
+  Total measured:                              28,842 tokens
+  DEFAULT_MAX_CONTEXT_TOKENS:                  190,000 tokens
+  Baseline as % of max:                        15.2%
+
+Note: token counts use gpt-tokenizer with 1.35x Anthropic fudge factor.
+Note: the base2 systemPrompt is measured as the raw template; after placeholder
+      replacement the assembled prompt is larger (file tree + knowledge + profiles
+      are inlined). The true per-turn system cost is approximately:
+      raw template (11,631) + inlined components (12,247) = 23,878 tokens

@@ -1,5 +1,10 @@
 import { buildArray } from '@codebuff/common/util/array'
 import type { SpecialistReviewerAgent } from '@codebuff/common/agents/specialist-risk-router'
+import {
+  resolveMaxRepairRounds,
+  resolveMaxReviewerRepairRounds,
+  resolveMaxSpecialistRepairRounds,
+} from '@codebuff/common/util/gate-repair-budgets'
 
 import type {
   Base2ActiveWorkPhase,
@@ -22,6 +27,32 @@ import {
   type SecretAgentDefinition,
 } from '../types/secret-agent-definition'
 
+/** Env canary for progressive prompt disclosure (module-level; createBase2 load time). */
+export function isProgressivePromptDisclosureEnvEnabled(
+  raw: string | undefined,
+): boolean {
+  if (typeof raw !== 'string') return false
+  const normalized = raw.trim().toLowerCase()
+  return (
+    normalized === '1' ||
+    normalized === 'true' ||
+    normalized === 'yes' ||
+    normalized === 'on'
+  )
+}
+
+export {
+  DEFAULT_MAX_REPAIR_ROUNDS,
+  DEFAULT_MAX_SPECIALIST_REPAIR_ROUNDS,
+  DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS,
+  MAX_MAX_GATE_REPAIR_ROUNDS,
+  MAX_MAX_REVIEWER_REPAIR_ROUNDS,
+  resolvePositiveIntBudget,
+  resolveMaxReviewerRepairRounds,
+  resolveMaxRepairRounds,
+  resolveMaxSpecialistRepairRounds,
+} from '@codebuff/common/util/gate-repair-budgets'
+
 export function createBase2(
   mode: 'default' | 'fast',
   options?: {
@@ -29,6 +60,10 @@ export function createBase2(
     planOnly?: boolean
     executePlan?: boolean
     noAskUser?: boolean
+    progressivePromptDisclosure?: boolean
+    maxReviewerRepairRounds?: number
+    maxRepairRounds?: number
+    maxSpecialistRepairRounds?: number
     model?: SecretAgentDefinition['model']
     providerOptions?: SecretAgentDefinition['providerOptions']
   },
@@ -38,15 +73,68 @@ export function createBase2(
     planOnly = false,
     executePlan = false,
     noAskUser = false,
+    progressivePromptDisclosure: progressivePromptDisclosureOption,
+    maxReviewerRepairRounds: maxReviewerRepairRoundsOption,
+    maxRepairRounds: maxRepairRoundsOption,
+    maxSpecialistRepairRounds: maxSpecialistRepairRoundsOption,
     model: modelOverride,
     providerOptions,
   } = options ?? {}
+  // Explicit true/false wins over env. When omitted, resolve from the
+  // OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE canary (off unless 1/true/yes/on).
+  const progressivePromptDisclosure =
+    progressivePromptDisclosureOption ??
+    isProgressivePromptDisclosureEnvEnabled(
+      typeof process === 'object' && process !== null
+        ? process.env?.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE
+        : undefined,
+    )
+  // Explicit option wins over env. When omitted, resolve from
+  // OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS (positive integer string).
+  const maxReviewerRepairRounds = resolveMaxReviewerRepairRounds(
+    maxReviewerRepairRoundsOption ??
+      (typeof process === 'object' && process !== null
+        ? process.env?.OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS
+        : undefined),
+  )
+  // Explicit option wins over env. When omitted, resolve from
+  // OPENBUFF_MAX_REPAIR_ROUNDS (positive integer string). Default 3.
+  const maxRepairRounds = resolveMaxRepairRounds(
+    maxRepairRoundsOption ??
+      (typeof process === 'object' && process !== null
+        ? process.env?.OPENBUFF_MAX_REPAIR_ROUNDS
+        : undefined),
+  )
+  // Explicit option wins over env. When omitted, resolve from
+  // OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS (positive integer string). Default 3.
+  const maxSpecialistRepairRounds = resolveMaxSpecialistRepairRounds(
+    maxSpecialistRepairRoundsOption ??
+      (typeof process === 'object' && process !== null
+        ? process.env?.OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS
+        : undefined),
+  )
   const isDefault = mode === 'default'
   const isFast = mode === 'fast'
   const canDirectEdit = !planOnly
   const canRunTerminal = !planOnly && executePlan
 
   const model = modelOverride ?? 'anthropic/claude-opus-4.7'
+
+  const progressiveDisclosure = progressivePromptDisclosure
+  // M4 progressive prompt disclosure: when enabled, relocate verbose advisory
+  // sections out of the always-on prompt and replace each with a compact
+  // pointer to an on-demand guide file. When disabled (default), disclose()
+  // returns the full section verbatim so the assembled prompt is byte-identical.
+  const disclose = (fullSection: string, pointer: string): string =>
+    progressiveDisclosure ? pointer : fullSection
+  const specialistRoutingPointer =
+    'Choosing a specialist agent → read_files `agents/guides/specialist-routing.md`.'
+  const gitDisciplinePointer =
+    'Before any git commit/branch/push → read_files `agents/guides/git-discipline.md`.'
+  const securityReviewPointer =
+    'Editing security-sensitive files (auth/crypto/secrets/payment/permissions) → read_files `agents/guides/security-review.md` before editing.'
+  const qualitySectionPointer =
+    'Code craftsmanship standards (conventions, minimal-change, reuse, no-any, hygiene) → read_files `agents/guides/code-craftsmanship.md` before editing code.'
 
   return {
     publisher,
@@ -80,7 +168,6 @@ export function createBase2(
       'render_3d_preview',
       'read_subtree',
       'read_outline',
-      'read_blocks',
       'inspect_codebase_structure',
       !isFast && !planOnly && 'write_todos',
       'create_plan',
@@ -115,7 +202,13 @@ export function createBase2(
       'inspect_codebase_structure',
     ],
     spawnableAgentToolMode: 'generic',
-    programmaticConfig: { hasNoValidation, planOnly },
+    programmaticConfig: {
+      hasNoValidation,
+      planOnly,
+      maxReviewerRepairRounds,
+      maxRepairRounds,
+      maxSpecialistRepairRounds,
+    },
     // Spawnable roster with documented, intentional per-mode deltas (M3.2).
     // The deltas are ONLY the coded gates below; everything else is shared
     // across default/fast/plan/execute-plan. Asserted by
@@ -211,7 +304,7 @@ ${
     ? '- **Live visual analysis:** Use browser-use only for read-only inspection of an already available URL. Do not start dev servers or request browser interactions in plan mode.'
     : '- **Live visual verification:** Visual verification extends beyond web apps. Image artifacts from 3D renders (e.g. Blender frames), image/video exports, generated diagrams, and charts must be inspected with read_image, not inferred from text logs alone. The workflow is: render/export -> poll the background job to completion -> read_image the emitted artifacts -> assess the result -> make a targeted edit -> re-render. Polling (check_job/check_background_agent/read_logs) is only the bridge to artifact inspection; do not re-poll a finished or unchanging job indefinitely. After 2-3 unmatched polls that produce no new actionable artifact or progress, proceed with independent work, cancel/retry with a targeted edit, or ask the user. For web app visual checks specifically, start any long-running dev server through a BACKGROUND basher, keep its returned jobId, use check_job to wait for readiness, then spawn browser-use for screenshots/navigation/interaction.'
 }
-- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_blocks/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. For large files prefer read_blocks (windows/around/symbols) over guess-shrink-retry read_files ranges paging. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead. For ripgrep-style content search, spawn the code-searcher agent (and file-picker for fuzzy file discovery): \`code_search\`/\`find_files_matching_content\` are registered runtime tools but are intentionally not granted to you as root, so calling them directly is rejected. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs \`params.searchQueries\` (an array of { pattern } objects) and basher needs \`params.command\` (a shell string); put these in \`params\`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).
+- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. For large files prefer read_files windows/around/symbol selectors over guess-shrink-retry ranges paging. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead. For ripgrep-style content search, spawn the code-searcher agent (and file-picker for fuzzy file discovery): \`code_search\`/\`find_files_matching_content\` are registered runtime tools but are intentionally not granted to you as root, so calling them directly is rejected. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs \`params.searchQueries\` (an array of { pattern } objects) and basher needs \`params.command\` (a shell string); put these in \`params\`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).
 
 # Code Editing Mandates
 
@@ -262,7 +355,7 @@ Use the spawn_agents tool to spawn specialized agents to help you complete the u
         ? 'Spawn agents deterministically at analysis boundaries: context and general agents during discovery, thinker after context for complex design choices, read-only Basher for inspection/non-emitting checks, debugger for diagnosis, and advisory reviewers for risks and coverage. Mutation agents remain implementation-only.'
         : 'Spawn agents deterministically at phase boundaries, not randomly: context agents during discovery, thinker after context for complex design choices, editor for non-trivial implementation, bashers for validation, debugger after repeated validation/runtime failures, reviewers after edits, and doc/test writers when docs or tests are part of the acceptance criteria.'
     }
-- **Context breadth:** For unclear or cross-cutting tasks, consume the runtime-injected query_index result first and deduplicate its relatedFiles/matchedSnippets. Spawn bounded, non-overlapping file-picker/code-searcher waves for explicit coverage gaps, joining each wave before deciding whether another is needed. Add web/docs researchers only for external APIs, then verify candidates with read_files/read_outline/read_blocks/read_subtree before editing. For large files prefer read_blocks (windows/around/symbols) over guess-shrink-retry read_files ranges paging. For tiny obvious edits, read only the directly relevant files.
+- **Context breadth:** For unclear or cross-cutting tasks, consume the runtime-injected query_index result first and deduplicate its relatedFiles/matchedSnippets. Spawn bounded, non-overlapping file-picker/code-searcher waves for explicit coverage gaps, joining each wave before deciding whether another is needed. Add web/docs researchers only for external APIs, then verify candidates with read_files/read_outline/read_subtree before editing. For large files prefer read_files windows/around/symbol selectors over guess-shrink-retry ranges paging. For tiny obvious edits, read only the directly relevant files.
 - **Ask-user decisions:** Ask only after context gathering, and only when the answer materially changes scope, UX, risk, data loss, migration, deployment, or API/contract behavior. Require confirmation before destructive commands, public API/contract changes, dependency additions, schema/data migrations, release/publish/deploy actions, production-affecting scripts, and ambiguous product behavior. Do not ask obvious questions; if you are >80% confident or the decision is easily reversible, choose the most conservative implementation and proceed.
 - **Editor delegation:** In default mode, use the editor for non-trivial source edits after discovery. Do not delegate tiny one-file edits or direct answers. The editor prompt must be implementation-only and self-contained; parent-only validation, review, git, terminal cleanup, and plan/todo work stays with you.
 - **Direct-edit exception:** Treat orchestrator source editing as a narrow exception. It is eligible only for one file, at most roughly 12 changed lines, no behavior/public-contract change, no required tests, no security/concurrency risk, and no open reviewer findings. Otherwise delegate implementation to editor. Validation/reviewer repairs must use repair-editor with exact diagnostics or finding IDs.
@@ -270,7 +363,7 @@ Use the spawn_agents tool to spawn specialized agents to help you complete the u
 - **Thinker delegation:** Spawn thinker only after enough context exists for complex architecture, design tradeoff, risk, debugging strategy, spec/plan critique, or repeated-failure reasoning. Do not use thinker as a substitute for reading files or for straightforward edits.
 - **Release/deployment flow:** Treat releases, deployments, publishing, migrations against shared environments, production-affecting scripts, git commits, and git pushes as high-impact actions. Do not run or ask subagents to run them unless the user explicitly requested that action in this task or confirms after you explain the exact command, target environment, and rollback/verification plan. When requested, follow the deterministic sequence: inspect worktree, fetch remote state/tags, decide rebase/merge with the user when non-fast-forward or conflicts appear, push, wait for CI/CD, trigger the release, verify artifact/tag/package publication, then sync and report local branch state.
 - **Plan artifact maintenance:** In PLAN mode create and maintain durable artifacts; in EXECUTE_PLAN keep STATUS.md and LESSONS.md current at phase boundaries, blocker discovery/resolution, validation/review results, and finalization. Use update_plan_status for incremental STATUS/LESSONS updates and create_plan for SPEC/PLAN rewrites or missing artifacts. Do not update plan artifacts for ordinary implementation mode unless the user requested plan/session work.
-- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use read_files/read_outline/read_blocks/read_subtree/glob/list_directory/query_index for source inspection (large files: prefer read_blocks windows/around/symbols), inspect_3d_asset/render_3d_preview for 3D assets, read_image for other screenshots/images, edit_3d_asset for guarded Blender changes, edit_transaction for text project mutations, browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. \`run_targeted_validation\` is scoped evidence only — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.
+- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use read_files/read_outline/read_subtree/glob/list_directory/query_index for source inspection (large files: prefer read_files windows/around/symbol selectors), inspect_3d_asset/render_3d_preview for 3D assets, read_image for other screenshots/images, edit_3d_asset for guarded Blender changes, edit_transaction for text project mutations, browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. \`run_targeted_validation\` is scoped evidence only — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.
 - **Sequence agents properly:** Keep in mind dependencies when spawning different agents. Don't spawn agents in parallel that depend on each other.
 - **Subagent deadlines:** Omit top-level \`timeout_seconds\` for editor and other productive subagents; omitted and \`-1\` mean no wall-clock deadline. Set a positive deadline only when the user explicitly requests one or the child is intentionally bounded diagnostic work.
 - **Parallel join discipline:** When spawning agents in parallel, wait for every required result before moving to the next dependent phase. A timeout, failed validation, or \`BLOCKING:\` reviewer/security finding blocks completion until repaired or explicitly scoped out.
@@ -385,19 +478,19 @@ ${PLACEHOLDER.SYSTEM_INFO_PROMPT}
 
 The runtime injects a fresh, compact Git-status observation before coding work and after model steps. Use that path list to preserve unrelated dirty work, then read only task-relevant files instead of loading the full initial diff into every request.
 
-${qualitySection}
+${disclose(qualitySection, qualitySectionPointer)}
 
 ${PLACEHOLDER.FRONTEND_SECTION}
 
-${gitDisciplineSection}
+${disclose(gitDisciplineSection, gitDisciplinePointer)}
 
-${securityReviewSection}
+${disclose(securityReviewSection, securityReviewPointer)}
 
-${specialistRoutingSection}
+${disclose(specialistRoutingSection, specialistRoutingPointer)}
 `,
 
     instructionsPrompt: planOnly
-      ? buildPlanOnlyInstructionsPrompt({})
+      ? buildPlanOnlyInstructionsPrompt({ progressiveDisclosure })
       : executePlan
         ? buildExecutePlanInstructionsPrompt({
             isFast,
@@ -405,6 +498,7 @@ ${specialistRoutingSection}
 
             hasNoValidation,
             noAskUser,
+            progressiveDisclosure,
           })
         : buildImplementationInstructionsPrompt({
             isFast,
@@ -412,6 +506,7 @@ ${specialistRoutingSection}
 
             hasNoValidation,
             noAskUser,
+            progressiveDisclosure,
           }),
     stepPrompt: planOnly
       ? buildPlanOnlyStepPrompt({})
@@ -439,6 +534,12 @@ ${specialistRoutingSection}
         base2ActiveWork?: Base2ActiveWorkState
         canSuggestFollowups?: boolean
         uncommittedUnvalidatedFiles?: string[]
+        /**
+         * Process-owned mutation paths published by the runtime as JSON-safe
+         * string[] (AgentState.selfMutatedPaths). Declared on this local
+         * intersection so handleSteps can read it without casts.
+         */
+        selfMutatedPaths?: string[]
         commitScopeBypassAuthorized?: boolean
         commitScopeBypassRecord?: {
           reason: string
@@ -451,6 +552,12 @@ ${specialistRoutingSection}
         }
         discoveryCoverage?: any
         workflowStates?: Record<string, any>
+        proactiveRetrievalCache?: {
+          hash: string
+          workspaceRevision: number
+          indexMutationEpoch?: number
+          result: unknown
+        }
       }
 
       const mutableAgentState = (agentState ?? {}) as Base2AgentState
@@ -489,10 +596,40 @@ ${specialistRoutingSection}
       const SECURITY_SENSITIVE_NAME_SUBSTRINGS = ['secret', 'token', 'apikey']
       const runReviewerGate = runValidationGate
       const reviewerAgentType = 'code-reviewer'
-      const MAX_REPAIR_ROUNDS = 3
       const MAX_REVIEWER_NO_VERDICT_RETRIES = 1
-      const MAX_REVIEWER_REPAIR_ROUNDS = 3
-      const MAX_SPECIALIST_REPAIR_ROUNDS = 3
+      // Validation-hook repair budget. Already resolved into programmaticConfig
+      // at createBase2 load time; re-clamp here with local literals only because
+      // handleSteps is serialized via toString/new Function and cannot call
+      // module-scope resolve helpers.
+      const configuredMaxRepairRounds = config?.maxRepairRounds
+      const MAX_REPAIR_ROUNDS =
+        typeof configuredMaxRepairRounds === 'number' &&
+        Number.isFinite(configuredMaxRepairRounds) &&
+        configuredMaxRepairRounds >= 1
+          ? Math.min(Math.floor(configuredMaxRepairRounds), 20)
+          : 3
+      // Reviewer→repair→re-review budget (also burned by NON_BLOCKING under
+      // LOOKS_GOOD-only finalization). Already resolved into programmaticConfig
+      // at createBase2 load time; re-clamp here with local literals only because
+      // handleSteps is serialized via toString/new Function and cannot call
+      // module-scope resolveMaxReviewerRepairRounds.
+      const configuredMaxReviewerRepairRounds = config?.maxReviewerRepairRounds
+      const MAX_REVIEWER_REPAIR_ROUNDS =
+        typeof configuredMaxReviewerRepairRounds === 'number' &&
+        Number.isFinite(configuredMaxReviewerRepairRounds) &&
+        configuredMaxReviewerRepairRounds >= 1
+          ? Math.min(Math.floor(configuredMaxReviewerRepairRounds), 20)
+          : 6
+      // Specialist→repair→re-review budget. Same local re-clamp pattern;
+      // default stays 3 (unlike reviewer default 6).
+      const configuredMaxSpecialistRepairRounds =
+        config?.maxSpecialistRepairRounds
+      const MAX_SPECIALIST_REPAIR_ROUNDS =
+        typeof configuredMaxSpecialistRepairRounds === 'number' &&
+        Number.isFinite(configuredMaxSpecialistRepairRounds) &&
+        configuredMaxSpecialistRepairRounds >= 1
+          ? Math.min(Math.floor(configuredMaxSpecialistRepairRounds), 20)
+          : 3
       const MAX_SPECIALIST_NO_VERDICT_RETRIES = 1
       // Single source of truth for the post-gate finalization instruction used
       // by every gate-pass path (fresh pass, conversation reuse, durable
@@ -682,58 +819,210 @@ ${specialistRoutingSection}
 
       const retrievalDecision = classifyProactiveRetrieval(prompt)
       if (retrievalDecision) {
-        if (retrievalDecision.scope === 'cross-subsystem') {
-          yield {
-            toolName: 'inspect_codebase_structure',
-            input: {},
-          } as any
-          yield {
-            toolName: 'list_directory',
-            input: { path: '.' },
-          } as any
+        // M2 per-session proactive-retrieval dedup cache: a second equivalent
+        // retrieval turn at the same workspace revision reuses the prior
+        // query_index result instead of re-running the tool. The hash keys
+        // the normalized query; the stored revision must ALSO match the
+        // current one, so any revision bump (advanceWorkspaceState) naturally
+        // invalidates the entry — no explicit clearing is needed.
+        // M2 residual epoch guard: the entry also records the optional
+        // indexMutationEpoch the query_index result reported at retrieval
+        // time. A would-be HIT is honored only when the newest
+        // indexMutationEpoch seen on any prior query_index message in
+        // messageHistory matches the entry's epoch, so an external index
+        // mutation (markPathsChanged/markStale) that did not advance
+        // workspaceState.revision still invalidates the cache. Missing epochs
+        // compare equal (undefined === undefined), preserving the pre-epoch
+        // behavior.
+        const normalizedProactiveQuery = (prompt ?? '')
+          .trim()
+          .replace(/\s+/g, ' ')
+          .toLowerCase()
+        const proactiveWorkspaceRevision =
+          mutableAgentState.workspaceState?.revision ?? 0
+        const proactiveCacheHash = stableHash(
+          `${proactiveWorkspaceRevision}\n${normalizedProactiveQuery}`,
+        )
+        const cachedProactiveRetrieval =
+          mutableAgentState.proactiveRetrievalCache
+        let proactiveCacheHit =
+          cachedProactiveRetrieval !== undefined &&
+          cachedProactiveRetrieval.hash === proactiveCacheHash &&
+          cachedProactiveRetrieval.workspaceRevision ===
+            proactiveWorkspaceRevision
+        if (proactiveCacheHit && cachedProactiveRetrieval) {
+          // Epoch guard: the newest indexMutationEpoch observed on any prior
+          // query_index message is the latest known index generation. If it
+          // differs from the entry's epoch, an external index mutation (e.g.
+          // markPathsChanged) occurred without a workspace-revision bump, so
+          // the cached result is stale: delete it and fall through to the
+          // live query_index path below.
+          const latestKnownIndexMutationEpoch =
+            latestIndexMutationEpochFromMessages(
+              mutableAgentState.messageHistory,
+            )
+          if (
+            latestKnownIndexMutationEpoch !==
+            cachedProactiveRetrieval.indexMutationEpoch
+          ) {
+            delete mutableAgentState.proactiveRetrievalCache
+            proactiveCacheHit = false
+          }
+        }
+        if (proactiveCacheHit) {
+          // Cache HIT: skip the live query_index call and the
+          // discoveryCoordinator bookkeeping entirely (no live retrieval
+          // happened this turn); yield only the route note, marked as a
+          // cached reuse.
           yield {
             toolName: 'add_message',
             input: {
               role: 'user',
-              content:
-                '<system>Production breadth guard: this request was deterministically classified as cross-subsystem. The preceding native structural inventory and its snapshot ID control this audit. Use vertical feature slices plus structural/domain shards, call inspect_feature_completeness for every claimed feature, and call evaluate_audit_coverage before claiming completeness. Explicitly cover or exclude every subsystem. A single search/read path or Markdown structural map is insufficient.</system>',
+              content: `<system>Proactive retrieval route (cached result reused): scope=${retrievalDecision.scope}; mode=${retrievalDecision.mode}; reason=${retrievalDecision.reason}. An identical proactive query_index result from workspace revision ${proactiveWorkspaceRevision} is already available in this session, so the live query_index call was skipped. Verify retrieved candidates against the live filesystem before editing.</system>`,
+            },
+            includeToolCall: false,
+          } as any
+        } else {
+          if (retrievalDecision.scope === 'cross-subsystem') {
+            yield {
+              toolName: 'inspect_codebase_structure',
+              input: {},
+            } as any
+            yield {
+              toolName: 'list_directory',
+              input: { path: '.' },
+            } as any
+            yield {
+              toolName: 'add_message',
+              input: {
+                role: 'user',
+                content:
+                  '<system>Production breadth guard: this request was deterministically classified as cross-subsystem. The preceding native structural inventory and its snapshot ID control this audit. Use vertical feature slices plus structural/domain shards, call inspect_feature_completeness for every claimed feature, and call evaluate_audit_coverage before claiming completeness. Explicitly cover or exclude every subsystem. A single search/read path or Markdown structural map is insufficient.</system>',
+              },
+              includeToolCall: false,
+            } as any
+          }
+          const proactiveRetrievalResult = yield {
+            toolName: 'query_index',
+            input: {
+              query: prompt,
+              limit: retrievalDecision.limit,
+              mode: retrievalDecision.mode,
+            },
+          }
+          const discoveryCoordinator = (params as any)
+            ?.orchestrationControlPlane?.planDiscoveryBatch
+          if (typeof discoveryCoordinator === 'function') {
+            try {
+              mutableAgentState.discoveryCoverage = discoveryCoordinator({
+                existing: mutableAgentState.discoveryCoverage,
+                query: prompt ?? '',
+                result:
+                  (proactiveRetrievalResult as any)?.toolResult ??
+                  proactiveRetrievalResult,
+                workspaceRevision: mutableAgentState.workspaceState?.revision,
+              })
+            } catch {
+              // Retrieval output remains usable even if optional coverage
+              // bookkeeping cannot parse a third-party index result.
+            }
+          }
+          mutableAgentState.proactiveRetrievalCache = {
+            hash: proactiveCacheHash,
+            workspaceRevision: proactiveWorkspaceRevision,
+            indexMutationEpoch: extractIndexMutationEpochFromResult(
+              proactiveRetrievalResult,
+            ),
+            result: proactiveRetrievalResult,
+          }
+          yield {
+            toolName: 'add_message',
+            input: {
+              role: 'user',
+              content: `<system>Proactive retrieval route: scope=${retrievalDecision.scope}; mode=${retrievalDecision.mode}; reason=${retrievalDecision.reason}. Verify retrieved candidates against the live filesystem before editing.</system>`,
             },
             includeToolCall: false,
           } as any
         }
-        const proactiveRetrievalResult = yield {
-          toolName: 'query_index',
-          input: {
-            query: prompt,
-            limit: retrievalDecision.limit,
-            mode: retrievalDecision.mode,
-          },
+      }
+
+      // FNV-1a string hash (hex) used to key the per-session proactive
+      // retrieval cache. Declared inline (like the other helpers below)
+      // because handleSteps is serialized through toString()/new Function(),
+      // so it cannot reference a module-scope hashing util.
+      function stableHash(input: string): string {
+        let hash = 2166136261
+        for (let index = 0; index < input.length; index += 1) {
+          hash ^= input.charCodeAt(index)
+          hash = Math.imul(hash, 16777619)
         }
-        const discoveryCoordinator = (params as any)?.orchestrationControlPlane
-          ?.planDiscoveryBatch
-        if (typeof discoveryCoordinator === 'function') {
-          try {
-            mutableAgentState.discoveryCoverage = discoveryCoordinator({
-              existing: mutableAgentState.discoveryCoverage,
-              query: prompt ?? '',
-              result:
-                (proactiveRetrievalResult as any)?.toolResult ??
-                proactiveRetrievalResult,
-              workspaceRevision: mutableAgentState.workspaceState?.revision,
-            })
-          } catch {
-            // Retrieval output remains usable even if optional coverage
-            // bookkeeping cannot parse a third-party index result.
+        return (hash >>> 0).toString(16).padStart(8, '0')
+      }
+
+      // M2 residual epoch guard helpers. The optional numeric
+      // indexMutationEpoch on a query_index result identifies the index
+      // generation at retrieval time. Declared inline (like stableHash)
+      // because handleSteps is serialized through toString()/new Function(),
+      // so they cannot reference module-scope imports.
+      function readIndexMutationEpochFromParts(
+        parts: unknown,
+      ): number | undefined {
+        if (!Array.isArray(parts)) return undefined
+        for (const part of parts) {
+          if (!part || typeof part !== 'object') continue
+          const record = part as Record<string, unknown>
+          if (record.type !== 'json' || !('value' in record)) continue
+          // Only the FIRST json value is authoritative for a query_index
+          // result; anything else (or a missing epoch) means unknown.
+          const value = record.value
+          if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            return undefined
           }
+          const epoch = (value as Record<string, unknown>).indexMutationEpoch
+          return typeof epoch === 'number' && Number.isFinite(epoch)
+            ? epoch
+            : undefined
         }
-        yield {
-          toolName: 'add_message',
-          input: {
-            role: 'user',
-            content: `<system>Proactive retrieval route: scope=${retrievalDecision.scope}; mode=${retrievalDecision.mode}; reason=${retrievalDecision.reason}. Verify retrieved candidates against the live filesystem before editing.</system>`,
-          },
-          includeToolCall: false,
-        } as any
+        return undefined
+      }
+
+      function extractIndexMutationEpochFromResult(
+        result: unknown,
+      ): number | undefined {
+        // The generator yield may hand back a { toolResult } envelope or the
+        // bare tool-result part list.
+        if (
+          result &&
+          typeof result === 'object' &&
+          !Array.isArray(result) &&
+          'toolResult' in (result as Record<string, unknown>)
+        ) {
+          return readIndexMutationEpochFromParts(
+            (result as Record<string, unknown>).toolResult,
+          )
+        }
+        return readIndexMutationEpochFromParts(result)
+      }
+
+      // Newest indexMutationEpoch across prior query_index tool messages.
+      // Only role='tool' messages with toolName 'query_index' count — cached
+      // proactiveRetrievalCache entries and other tools never contribute an
+      // epoch.
+      function latestIndexMutationEpochFromMessages(
+        messages: unknown,
+      ): number | undefined {
+        if (!Array.isArray(messages)) return undefined
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          const message = messages[index]
+          if (!message || typeof message !== 'object') continue
+          const record = message as Record<string, unknown>
+          if (record.role !== 'tool' || record.toolName !== 'query_index') {
+            continue
+          }
+          const epoch = readIndexMutationEpochFromParts(record.content)
+          if (epoch !== undefined) return epoch
+        }
+        return undefined
       }
 
       // Explicit Git delivery is the one turn type allowed to claim files that
@@ -785,6 +1074,14 @@ ${specialistRoutingSection}
 
       const initialGitStatus = yield {
         toolName: 'git_status',
+        input: {},
+      } as any
+      // Pushed background-job status digest (M4); list_jobs is change-informative
+      // via pending/gap fields; agentStep TTL via programmatic result path.
+      // Change-gating (suppressing an unchanged repeat digest) lives in the SDK
+      // dispatch layer (sdk/src/run.ts), not here — this agent always yields.
+      yield {
+        toolName: 'list_jobs',
         input: {},
       } as any
       const initialGitStatusFiles = extractGitStatusFiles(
@@ -1030,11 +1327,6 @@ ${specialistRoutingSection}
             .messageHistory
         }
         let editsThisStep = false
-        // Reset per STEP iteration (NOT hoisted across iterations): true when
-        // this step ran a terminal-mutation tool that can write files the
-        // edit-artifact channel does not capture. Used to scope the mid-turn
-        // git-status sweep's absorption below.
-        let terminalMutationThisStep = false
         const files = extractChangedFiles(
           (stepResult as any) && (stepResult as any).toolResult,
         )
@@ -1046,24 +1338,14 @@ ${specialistRoutingSection}
           markActiveWorkStateChanged()
         }
         const messageHistory = (stepResult as any)?.agentState?.messageHistory
-        // Capture the pre-update start index so the terminal-mutation scan
-        // below covers the SAME message delta extractChangedFilesFromMessages
-        // scans; processedMessageHistoryLength is overwritten right after. If
-        // we scanned from the post-update length the slice would be empty and
-        // the terminal signal would always be false.
+        // Capture the pre-update start index so extractChangedFilesFromMessages
+        // covers only the message delta for this step; processedMessageHistoryLength
+        // is overwritten right after.
         const messageHistoryStartIndex = processedMessageHistoryLength
         const messageFiles = extractChangedFilesFromMessages(
           messageHistory,
           messageHistoryStartIndex,
         )
-        if (
-          messagesRanTerminalMutationTool(
-            messageHistory,
-            messageHistoryStartIndex,
-          )
-        ) {
-          terminalMutationThisStep = true
-        }
         if (Array.isArray(messageHistory)) {
           currentConversationMessages = messageHistory
           updateWorkflowTodoProgressFromMessages(messageHistory)
@@ -1095,6 +1377,14 @@ ${specialistRoutingSection}
 
         const currentGitStatus = yield {
           toolName: 'git_status',
+          input: {},
+        } as any
+        // Pushed background-job status digest (M4); list_jobs is change-informative
+        // via pending/gap fields; agentStep TTL via programmatic result path.
+        // Change-gating (suppressing an unchanged repeat digest) lives in the SDK
+        // dispatch layer (sdk/src/run.ts), not here — this agent always yields.
+        yield {
+          toolName: 'list_jobs',
           input: {},
         } as any
         const gitStatusFiles = extractGitStatusFiles(
@@ -1141,20 +1431,29 @@ ${specialistRoutingSection}
         for (const file of gitStatusFiles) {
           // Concurrent-instance isolation: absorb a newly-dirty git-status
           // file into the pending set only when this agent plausibly authored
-          // it — either it is already task-related (present in the live
-          // changedFiles set, which recordChangedFiles populated this step from
-          // edit-tool/message-history artifacts) or a terminal-mutation tool
-          // (run_terminal_command / a spawned basher) ran this step and can
-          // write files the edit-artifact channel does not capture. A file that
-          // is neither self-authored nor produced during a terminal step is
-          // attributed to a concurrent instance / external churn and excluded.
-          // The observation bookkeeping above (gitStatusObservedFiles.add and
-          // gitStatusObservedDirty) stays UNSCOPED for every git-status file so
-          // committed-file pruning keeps working.
+          // it. `shouldAbsorbGitStatusFile` is generated into
+          // `<gate-helpers-generated>` from `agents/base2/gate-concurrency.ts`
+          // via `scripts/generate-gate-helpers.ts` (function-declaration
+          // hoisting in handleSteps makes it available at this mid-turn call
+          // site). Observation bookkeeping above (gitStatusObservedFiles.add
+          // and gitStatusObservedDirty) stays UNSCOPED for every git-status
+          // file so committed-file pruning keeps working.
+          // Runtime publishes selfMutatedPaths as string[] after confirmed
+          // broker/tool/terminal mutations so this absorption path can credit
+          // process-owned writes that are not yet task-related.
+          const rawSelfMutated = mutableAgentState.selfMutatedPaths
+          const selfMutatedPaths =
+            Array.isArray(rawSelfMutated) && rawSelfMutated.length > 0
+              ? new Set(rawSelfMutated)
+              : undefined
           if (
-            !initialGitStatusFiles.includes(file) &&
-            !gatePassedFiles.has(file) &&
-            (changedFiles.has(file) || terminalMutationThisStep)
+            shouldAbsorbGitStatusFile({
+              file,
+              initialGitStatusFiles,
+              gatePassedFiles,
+              taskRelatedFiles: changedFiles,
+              selfMutatedPaths,
+            })
           ) {
             editsHappened = true
             recordChangedFiles([file], { fromStatusObservation: true })
@@ -1646,8 +1945,7 @@ ${specialistRoutingSection}
             !securityVerdict
           if (securityBlockers.length > 0) {
             const records = collectReviewerFindingRecordsInline(securityToolResult)
-            activeWorkState.openReviewerBlockers = securityBlockers
-            activeWorkState.openReviewerFindings = securityBlockers.map(
+            const securityFindingRecords = securityBlockers.map(
               (text: string, index: number) => {
                 const record = correlateReviewerFindingRecord(text, records)
                 return {
@@ -1661,6 +1959,13 @@ ${specialistRoutingSection}
                   createdAt: new Date().toISOString(),
                 }
               },
+            )
+            // Merge instead of replace: another reviewer's still-open
+            // findings/blockers must not be clobbered by security-reviewer.
+            mergeReviewerFindings(
+              'security-reviewer',
+              securityFindingRecords,
+              securityBlockers,
             )
             addOwedReviewer('security-reviewer')
             activeWorkState.currentPhase = 'repair_loop'
@@ -1761,7 +2066,6 @@ ${specialistRoutingSection}
                         allowedTools: [
                           'read_files',
                           'read_outline',
-                          'read_blocks',
                           'read_subtree',
                           'edit_transaction',
                         ],
@@ -2402,7 +2706,6 @@ ${specialistRoutingSection}
                                 allowedTools: [
                                   'read_files',
                                   'read_outline',
-                                  'read_blocks',
                                   'read_subtree',
                                   'edit_transaction',
                                 ],
@@ -2897,6 +3200,12 @@ ${specialistRoutingSection}
         let reviewSnapshotFingerprint = hashGateSnapshotDetails(
           reviewSnapshotDetails,
         )
+        // Deleted pending files (a `missing` content marker in the files-v4
+        // snapshot details) are attested-by-absence: the reviewer cannot read
+        // them, so they are not required in reviewedFiles.
+        let reviewDeletedFiles = collectDeletedFilesFromSnapshotDetails(
+          reviewSnapshotDetails,
+        )
         let reviewableFingerprint = reviewSnapshotFingerprint
         let frozenDirtyGateScopeFingerprint = buildGateFingerprint(
           dirtyGateScopeFiles,
@@ -3071,7 +3380,6 @@ ${specialistRoutingSection}
                           allowedTools: [
                             'read_files',
                             'read_outline',
-                            'read_blocks',
                             'read_subtree',
                             'edit_transaction',
                           ],
@@ -3296,7 +3604,6 @@ ${specialistRoutingSection}
                             allowedTools: [
                               'read_files',
                               'read_outline',
-                              'read_blocks',
                               'read_subtree',
                               'edit_transaction',
                             ],
@@ -3496,6 +3803,9 @@ ${specialistRoutingSection}
           reviewSnapshotFingerprint = hashGateSnapshotDetails(
             reviewSnapshotDetails,
           )
+          reviewDeletedFiles = collectDeletedFilesFromSnapshotDetails(
+            reviewSnapshotDetails,
+          )
           reviewableFingerprint = reviewSnapshotFingerprint
           frozenDirtyGateScopeFingerprint = buildGateFingerprint(
             postValidationScopeFiles,
@@ -3503,8 +3813,8 @@ ${specialistRoutingSection}
           )
         }
 
-        let reviewerFinalizationVerdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | '' =
-          reviewerProtocolBypassAuthorized ? 'NON_BLOCKING' : ''
+        let reviewerFinalizationVerdict: 'LOOKS_GOOD' | '' =
+          reviewerProtocolBypassAuthorized ? 'LOOKS_GOOD' : ''
         if (reviewerProtocolBypassAuthorized) {
           activeWorkState.reviewerGateBypassReason =
             'User authorized bypass after repeated reviewer protocol attestation failures.'
@@ -3532,8 +3842,7 @@ ${specialistRoutingSection}
         const matchingReviewReceipt = activeWorkState.reviewReceipts.some(
           (receipt) =>
             receipt.reviewer === requiredReviewerAgentType &&
-            (receipt.verdict === 'LOOKS_GOOD' ||
-              receipt.verdict === 'NON_BLOCKING') &&
+            receipt.verdict === 'LOOKS_GOOD' &&
             receipt.snapshotFingerprint === reviewableFingerprint &&
             receipt.reviewedFileCount === reviewableGateScopeFiles.length &&
             gateFileSetsEqual(
@@ -3556,7 +3865,7 @@ ${specialistRoutingSection}
           (reviewableGateScopeFiles.length === 0 ||
             reviewableSetAlreadyReviewed)
         if (skipReviewerForReviewableScope) {
-          reviewerFinalizationVerdict = 'NON_BLOCKING'
+          reviewerFinalizationVerdict = 'LOOKS_GOOD'
           activeWorkState.currentPhase = 'awaiting_review'
           activeWorkState.nextRequiredAction = ''
           const reviewerSkipReason =
@@ -3621,6 +3930,7 @@ ${specialistRoutingSection}
                     'Snapshot details (read for file membership; do not echo):',
                     reviewSnapshotDetails,
                     `Validation gate summary: ${validationSummary}`,
+                    'Read large files via read_files windows (bounded block reads) instead of whole-file reads so your accumulated read context stays bounded; still attest to every pending file in reviewedFiles.',
                     '',
                     'Return the required structured review object. Echo snapshotFingerprint exactly, list every pending changed file in reviewedFiles (including tests), evaluate all review dimensions, and map every user requirement to evidence. Changed tests are first-class review targets and may also be cited as coverage evidence. Use coverage: missing only when no covering test exists in the changed files or elsewhere in the repo.',
                   ].join('\n'),
@@ -3638,6 +3948,7 @@ ${specialistRoutingSection}
                 reviewerToolResult,
                 reviewSnapshotFingerprint,
                 reviewableGateScopeFiles,
+                reviewDeletedFiles,
               )
           if (
             attestationIssues.length > 0 &&
@@ -3680,6 +3991,7 @@ ${specialistRoutingSection}
               reviewerToolResult,
               reviewSnapshotFingerprint,
               reviewableGateScopeFiles,
+              reviewDeletedFiles,
             )
           }
           if (attestationIssues.length > 0) {
@@ -3733,16 +4045,39 @@ ${specialistRoutingSection}
               activeWorkState.reviewerRepairRoundCount ?? 0,
             ) + 1
             // Hard round cap for the reviewer -> repair -> re-review loop,
-            // mirroring MAX_REPAIR_ROUNDS for validation repairs. The
-            // snapshot-progress guard below already breaks when a repair makes
-            // no fingerprint change; this adds an explicit upper bound so a
-            // repair that keeps producing snapshot-visible churn without ever
+            // mirroring MAX_REPAIR_ROUNDS for validation repairs. NON_BLOCKING
+            // findings also burn this budget under LOOKS_GOOD-only finalization.
+            // The snapshot-progress guard below already breaks when a repair
+            // makes no fingerprint change; this adds an explicit upper bound so
+            // a repair that keeps producing snapshot-visible churn without ever
             // clearing the finding cannot loop indefinitely.
             if (
               Number(activeWorkState.reviewerRepairRoundCount ?? 0) >
               MAX_REVIEWER_REPAIR_ROUNDS
             ) {
-              activeWorkState.openReviewerBlockers = blockers
+              // Preserve other families' open findings while recording this
+              // code-reviewer blocker set (budget exhausted before full merge
+              // records are built below on the non-exhausted path).
+              const budgetExhaustedRecords = blockers.map(
+                (text: string, index: number) => ({
+                  id: buildReviewerFindingId(text, index),
+                  gateId: `${requiredReviewerAgentType}:${reviewSnapshotFingerprint}`,
+                  text,
+                  status: 'open' as const,
+                  files: Array.from(pendingGateFiles),
+                  snapshotFingerprint: reviewSnapshotFingerprint,
+                  reviewer: requiredReviewerAgentType as
+                    | 'code-reviewer'
+                    | 'security-reviewer'
+                    | SpecialistReviewerAgent,
+                  createdAt: new Date().toISOString(),
+                }),
+              )
+              mergeReviewerFindings(
+                requiredReviewerAgentType,
+                budgetExhaustedRecords,
+                blockers,
+              )
               activeWorkState.currentPhase = 'blocked'
               activeWorkState.nextRequiredAction =
                 `Reviewer repair budget exhausted (${MAX_REVIEWER_REPAIR_ROUNDS}/${MAX_REVIEWER_REPAIR_ROUNDS}); the reviewer findings are still open. Stop retrying automatically and inspect the findings or handoff.`
@@ -3764,8 +4099,7 @@ ${specialistRoutingSection}
               } as any
               break
             }
-            activeWorkState.openReviewerBlockers = blockers
-            activeWorkState.openReviewerFindings = blockers.map(
+            const codeReviewerFindingRecords = blockers.map(
               (text: string, index: number) => ({
                 id: buildReviewerFindingId(text, index),
                 gateId: `${requiredReviewerAgentType}:${reviewSnapshotFingerprint}`,
@@ -3773,9 +4107,19 @@ ${specialistRoutingSection}
                 status: 'open' as const,
                 files: Array.from(pendingGateFiles),
                 snapshotFingerprint: reviewSnapshotFingerprint,
-                reviewer: requiredReviewerAgentType,
+                reviewer: requiredReviewerAgentType as
+                  | 'code-reviewer'
+                  | 'security-reviewer'
+                  | SpecialistReviewerAgent,
                 createdAt: new Date().toISOString(),
               }),
+            )
+            // Merge instead of replace: another reviewer's still-open
+            // findings/blockers must not be clobbered by the final code-reviewer.
+            mergeReviewerFindings(
+              requiredReviewerAgentType,
+              codeReviewerFindingRecords,
+              blockers,
             )
             activeWorkState.nextRequiredAction =
               'Resolve the reviewer feedback below before any unrelated work, final response, or another review.'
@@ -3893,7 +4237,6 @@ ${specialistRoutingSection}
                             allowedTools: [
                               'read_files',
                               'read_outline',
-                              'read_blocks',
                               'read_subtree',
                               'write_file',
                               'str_replace',
@@ -3986,7 +4329,6 @@ ${specialistRoutingSection}
                             allowedTools: [
                               'read_files',
                               'read_outline',
-                              'read_blocks',
                               'read_subtree',
                               'edit_transaction',
                             ],
@@ -4217,7 +4559,7 @@ ${specialistRoutingSection}
                 }
                 activeWorkState.nextRequiredAction = ''
                 activeWorkState.currentPhase = 'awaiting_review'
-                reviewerFinalizationVerdict = 'NON_BLOCKING'
+                reviewerFinalizationVerdict = 'LOOKS_GOOD'
                 markActiveWorkStateChanged()
                 emitGateTelemetry({
                   currentPhase: 'awaiting_review',
@@ -4850,7 +5192,8 @@ function selectCoverageEvidenceFiles(files: string[]): string[] {
 
 type ReviewerStructuredVerdict = 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING';
 
-type ReviewerFinalizationVerdict = 'LOOKS_GOOD' | 'NON_BLOCKING' | '';
+/** Only LOOKS_GOOD unlocks finalization; empty string is fail-closed. */
+type ReviewerFinalizationVerdict = 'LOOKS_GOOD' | '';
 
 type ReviewerCoverage = 'covered' | 'missing' | 'n/a';
 
@@ -4883,7 +5226,7 @@ function collectReviewerFindingRecords(toolResult: unknown): ReviewerFindingReco
     return collectStructuredReviewerOutputs(toolResult).flatMap((entry) => entry.findingRecords ?? []);
 }
 
-function collectReviewerAttestationIssues(toolResult: unknown, expectedFingerprint: string, pendingFiles: string[]): string[] {
+function collectReviewerAttestationIssues(toolResult: unknown, expectedFingerprint: string, pendingFiles: string[], deletedFiles?: string[]): string[] {
     // The caller passes the reviewable subset; when it is empty there is
     // nothing to attest, so surface no attestation issues.
     if (pendingFiles.length === 0) {
@@ -4902,9 +5245,17 @@ function collectReviewerAttestationIssues(toolResult: unknown, expectedFingerpri
     const reviewed = new Set((result.reviewedFiles ?? [])
         .map((file) => normalizeGateFilePath(file))
         .filter((file) => file.length > 0));
+    // Files deleted in the changeset carry a `missing` content marker and cannot
+    // be read by the reviewer, so they are attested-by-absence and excluded from
+    // the missing computation. Genuinely-modified pending files still must be
+    // attested, and a changeset of ONLY deletions still requires an attestable
+    // fingerprint via the fail-closed check below.
+    const deleted = new Set((deletedFiles ?? [])
+        .map((file) => normalizeGateFilePath(file))
+        .filter((file) => file.length > 0));
     const missing = pendingFiles
         .map((file) => normalizeGateFilePath(file))
-        .filter((file) => file.length > 0 && !reviewed.has(file));
+        .filter((file) => file.length > 0 && !reviewed.has(file) && !deleted.has(file));
     const issues: string[] = [];
     // Fingerprint tolerance: a reviewer that attested to EVERY pending source
     // file with a well-formed snapshot fingerprint is trusted even when the
@@ -4958,10 +5309,22 @@ function isTestCoverageReviewerFinding(text: string): boolean {
     return false;
 }
 
+function dedupeExactStringsPreserveOrder(values: string[]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const value of values) {
+        if (seen.has(value))
+            continue;
+        seen.add(value);
+        out.push(value);
+    }
+    return out;
+}
+
 function collectReviewerBlockers(toolResult: unknown): string[] {
     // First check for structured reviewer outputs (e.g. JSON with a
-    // verdict field). When present and BLOCKING, surface findings as the
-    // blocker text so existing pinning/messaging logic still works.
+    // verdict field). BLOCKING and NON_BLOCKING both surface repair targets;
+    // only LOOKS_GOOD finalizes (via getReviewerFinalizationVerdict).
     const structured = collectStructuredReviewerOutputs(toolResult);
     const structuredBlockers: string[] = [];
     for (const entry of structured) {
@@ -4971,6 +5334,9 @@ function collectReviewerBlockers(toolResult: unknown): string[] {
                 structuredBlockers.push(`BLOCKING: ${finding}`);
             }
         }
+        // Coverage-adequacy / dimension / requirement hard blockers first so we
+        // know whether an empty NON_BLOCKING receipt already has repair fuel.
+        const hardBlockersBefore = structuredBlockers.length;
         // Coverage-adequacy contract (M6.3): missing test coverage for a
         // behavior-changing edit is BLOCKING regardless of the text verdict.
         if (entry.coverage === 'missing') {
@@ -4987,14 +5353,34 @@ function collectReviewerBlockers(toolResult: unknown): string[] {
                 structuredBlockers.push(`BLOCKING: requirement ${requirement.status}: ${requirement.requirement}`);
             }
         }
+        const entryHasHardBlocker = structuredBlockers.length > hardBlockersBefore;
+        // NON_BLOCKING is repair fuel, not a pass: elevate findings into the
+        // same repair path used for BLOCKING until the reviewer returns LOOKS_GOOD.
+        // Empty-findings synthetic is only needed when no hard blocker already
+        // forces re-review — otherwise pure coverage-missing sets would mix a
+        // non-coverage string and break all-coverage → test-writer routing.
+        if (entry.verdict === 'NON_BLOCKING') {
+            if (entry.findings.length > 0) {
+                for (const finding of entry.findings) {
+                    structuredBlockers.push(`NON_BLOCKING: ${finding}`);
+                }
+            }
+            else if (!entryHasHardBlocker) {
+                structuredBlockers.push('NON_BLOCKING: reviewer returned non-blocking nits without findings; re-address and re-review until LOOKS_GOOD');
+            }
+        }
     }
-    if (structuredBlockers.length > 0)
-        return structuredBlockers;
+    // Nested spawn/set_output wrappers can surface the same structured receipt
+    // twice; exact-string de-dupe keeps first-seen order without dropping
+    // legitimately distinct blockers.
+    if (structuredBlockers.length > 0) {
+        return dedupeExactStringsPreserveOrder(structuredBlockers);
+    }
     const texts: string[] = [];
     collectStrings(toolResult, texts);
-    return texts
+    return dedupeExactStringsPreserveOrder(texts
         .map((text) => stripReviewerPreamble(text))
-        .filter((text) => hasReviewerLineVerdict(text, 'BLOCKING'));
+        .filter((text) => hasReviewerLineVerdict(text, 'BLOCKING')));
 }
 
 /**
@@ -5066,11 +5452,17 @@ function getReviewerFinalizationVerdict(toolResult: unknown): ReviewerFinalizati
     if (structured.some((entry) => entry.coverage === 'missing')) {
         return '';
     }
+    // Incomplete requirements (missing/uncertain) also block finalization even
+    // when the reviewer emits a soft top-level verdict.
+    if (structured.some((entry) => (entry.requirementCoverage ?? []).some((requirement) => requirement.status === 'missing' ||
+        requirement.status === 'uncertain'))) {
+        return '';
+    }
+    // Finalization credit is LOOKS_GOOD only. NON_BLOCKING findings are
+    // elevated by collectReviewerBlockers into the repair loop.
     for (const entry of structured) {
         if (entry.verdict === 'LOOKS_GOOD')
             return 'LOOKS_GOOD';
-        if (entry.verdict === 'NON_BLOCKING')
-            return 'NON_BLOCKING';
     }
     return '';
 }
@@ -5422,6 +5814,82 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
         lines.push(`Pending changed files: ${pendingFiles.join(', ')}`);
     }
     return lines.join('\n');
+}
+
+/**
+ * Pure concurrent-instance isolation helper for the base2 mid-turn git-status
+ * sweep.
+ *
+ * NOTE: the inline copy is **generated** into the base2 `handleSteps`
+ * `<gate-helpers-generated>` region via `scripts/generate-gate-helpers.ts`
+ * (same as gate-paths/reviewer/repair). `handleSteps` is serialized via
+ * `toString()` / `new Function(...)` and loses module closure, so it cannot
+ * import this file — edit this module and regenerate rather than hand-maintaining
+ * the inline copy.
+ */
+function shouldAbsorbGitStatusFile(params: {
+    file: string;
+    initialGitStatusFiles: readonly string[];
+    gatePassedFiles: ReadonlySet<string> | {
+        has(f: string): boolean;
+    };
+    taskRelatedFiles: ReadonlySet<string> | {
+        has(f: string): boolean;
+    };
+    selfMutatedPaths?: ReadonlySet<string> | {
+        has(f: string): boolean;
+    };
+}): boolean {
+    const { file, initialGitStatusFiles, gatePassedFiles, taskRelatedFiles, selfMutatedPaths, } = params;
+    if (initialGitStatusFiles.includes(file))
+        return false;
+    if (gatePassedFiles.has(file))
+        return false;
+    if (taskRelatedFiles.has(file))
+        return true;
+    if (selfMutatedPaths !== undefined && selfMutatedPaths.has(file))
+        return true;
+    return false;
+}
+
+/**
+ * Pure gate snapshot fingerprint helpers extracted from `base2.ts`.
+ *
+ * NOTE: the inline copy is **generated** into the base2 `handleSteps`
+ * `<gate-helpers-generated>` region via `scripts/generate-gate-helpers.ts`
+ * (same as gate-paths/reviewer/repair/concurrency). `handleSteps` is serialized
+ * via `toString()` / `new Function(...)` and loses module closure, so it cannot
+ * import this file — edit this module and regenerate rather than hand-maintaining
+ * the inline copy.
+ */
+// Canonical SHA-256 snapshot fingerprint: v3: followed by exactly 64
+// lowercase hex chars. Only these are reusable as durable attestation.
+function isAttestableSnapshotFingerprint(value: string): boolean {
+    return /^v3:[a-f0-9]{64}$/.test(value);
+}
+
+function hashGateSnapshotDetails(details: string): string {
+    const getBuiltinModule = typeof process === 'object' &&
+        process !== null &&
+        'getBuiltinModule' in process &&
+        typeof process.getBuiltinModule === 'function'
+        ? process.getBuiltinModule.bind(process)
+        : undefined;
+    const req = (globalThis as any).require as NodeJS.Require | undefined;
+    let crypto: typeof import('node:crypto') | undefined;
+    if (getBuiltinModule) {
+        crypto = getBuiltinModule('node:crypto') as typeof import('node:crypto');
+    }
+    else if (typeof req === 'function') {
+        crypto = req('node:crypto');
+    }
+    if (crypto) {
+        return `v3:${crypto.createHash('sha256').update(details).digest('hex')}`;
+    }
+    // Fail closed: without a collision-resistant hash the snapshot cannot
+    // be safely attested. Return a non-reusable sentinel so no durable
+    // gate credit, review receipt, or bypass challenge can match it.
+    return 'unreadable:no-crypto';
 }
 // </gate-helpers-generated>
 
@@ -6361,11 +6829,9 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
       function getConversationGatePassForPendingFiles(
         files: string[],
         messages: unknown,
-      ): { reviewerVerdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | '' } | undefined {
+      ): { reviewerVerdict: 'LOOKS_GOOD' | '' } | undefined {
         if (files.length === 0 || !Array.isArray(messages)) return undefined
-        let latestMatchingPass:
-          | { reviewerVerdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | '' }
-          | undefined
+        let latestMatchingPass: { reviewerVerdict: 'LOOKS_GOOD' | '' } | undefined
         for (const message of messages) {
           if (latestMatchingPass && messageChangedFiles(message)) {
             latestMatchingPass = undefined
@@ -6382,11 +6848,13 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
               gateState.details,
             )
             if (!gateFileSetsEqual(files, gateFiles)) continue
-            latestMatchingPass = {
-              reviewerVerdict: extractReviewerVerdictFromGateDetails(
-                gateState.details,
-              ),
-            }
+            const reviewerVerdict = extractReviewerVerdictFromGateDetails(
+              gateState.details,
+            )
+            // Historical NON_BLOCKING conversation passes fail closed; only
+            // LOOKS_GOOD may reuse as a conversation gate credit.
+            if (reviewerVerdict !== 'LOOKS_GOOD') continue
+            latestMatchingPass = { reviewerVerdict }
           }
         }
         return latestMatchingPass
@@ -6475,20 +6943,13 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
 
       function extractReviewerVerdictFromGateDetails(
         details: string,
-      ): 'LOOKS_GOOD' | 'NON_BLOCKING' | '' {
-        if (/\bNON_BLOCKING\b/.test(details)) return 'NON_BLOCKING'
+      ): 'LOOKS_GOOD' | '' {
         if (/\bLOOKS_GOOD\b/.test(details)) return 'LOOKS_GOOD'
         return ''
       }
 
       function messageChangedFiles(message: unknown): boolean {
         return extractChangedFilesFromMessages([message], 0).length > 0
-      }
-
-      // Canonical SHA-256 snapshot fingerprint: v3: followed by exactly 64
-      // lowercase hex chars. Only these are reusable as durable attestation.
-      function isAttestableSnapshotFingerprint(value: string): boolean {
-        return /^v3:[a-f0-9]{64}$/.test(value)
       }
 
       // Canonical content marker: sha256:<64hex>:<length> for regular files,
@@ -6533,15 +6994,11 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
         )
       }
 
-      function reviewerFinalizationVerdictFromDurablePass():
-        | 'LOOKS_GOOD'
-        | 'NON_BLOCKING'
-        | '' {
+      function reviewerFinalizationVerdictFromDurablePass(): 'LOOKS_GOOD' | '' {
+        // Historical NON_BLOCKING durable passes fail closed: only LOOKS_GOOD
+        // may reuse as a durable finalization credit.
         if (activeWorkState.gatePassedReviewerVerdict === 'LOOKS_GOOD') {
           return 'LOOKS_GOOD'
-        }
-        if (activeWorkState.gatePassedReviewerVerdict === 'NON_BLOCKING') {
-          return 'NON_BLOCKING'
         }
         return ''
       }
@@ -7022,62 +7479,6 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
         return normalizeGateFileList([...out])
       }
 
-      // Detects a terminal-mutation tool call in a message-history delta.
-      // Mirrors the scanning shape of extractChangedFilesFromMessages: iterate
-      // messages.slice(startIndex), and for each assistant record with an array
-      // content, return true if any part is a tool-call whose tool name is
-      // run_terminal_command, OR a spawn (spawn_agents / spawn_agent_inline)
-      // whose input names `basher` as an agent_type. Terminal writes are not
-      // captured by the edit-artifact channel, so this signal scopes the
-      // git-status sweep's absorption. Self-contained inline helper (handleSteps
-      // is serialized via .toString() + new Function(...), so it must not
-      // reference module-scope imports).
-      function messagesRanTerminalMutationTool(
-        messages: unknown,
-        startIndex: number,
-      ): boolean {
-        if (!Array.isArray(messages)) return false
-        const spawnsBasher = (input: unknown): boolean => {
-          if (!input || typeof input !== 'object') return false
-          const record = input as Record<string, unknown>
-          if (record.agent_type === 'basher') return true
-          if (Array.isArray(record.agents)) {
-            for (const agent of record.agents) {
-              if (
-                agent &&
-                typeof agent === 'object' &&
-                (agent as Record<string, unknown>).agent_type === 'basher'
-              ) {
-                return true
-              }
-            }
-          }
-          return false
-        }
-        for (const message of messages.slice(startIndex)) {
-          if (!message || typeof message !== 'object') continue
-          const record = message as Record<string, unknown>
-          if (record.role !== 'assistant') continue
-          if (!Array.isArray(record.content)) continue
-          for (const part of record.content) {
-            if (!part || typeof part !== 'object') continue
-            const toolCall = part as Record<string, unknown>
-            if (toolCall.type !== 'tool-call') continue
-            const toolName =
-              typeof toolCall.toolName === 'string' ? toolCall.toolName : ''
-            if (toolName === 'run_terminal_command') return true
-            if (
-              (toolName === 'spawn_agents' ||
-                toolName === 'spawn_agent_inline') &&
-              spawnsBasher(toolCall.input)
-            ) {
-              return true
-            }
-          }
-        }
-        return false
-      }
-
       function visitToolValue(value: unknown, out: Set<string>): void {
         if (!value) return
         if (Array.isArray(value)) {
@@ -7393,30 +7794,29 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
         return `files-v4\n${parts.join('\n')}\n--\n${validationSummary}`
       }
 
-      function hashGateSnapshotDetails(details: string): string {
-        const getBuiltinModule =
-          typeof process === 'object' &&
-          process !== null &&
-          'getBuiltinModule' in process &&
-          typeof process.getBuiltinModule === 'function'
-            ? process.getBuiltinModule.bind(process)
-            : undefined
-        const req = (globalThis as any).require as NodeJS.Require | undefined
-        let crypto: typeof import('node:crypto') | undefined
-        if (getBuiltinModule) {
-          crypto = getBuiltinModule(
-            'node:crypto',
-          ) as typeof import('node:crypto')
-        } else if (typeof req === 'function') {
-          crypto = req('node:crypto')
+      // Deleted-file extraction from files-v4 snapshot details. A pending file
+      // whose content marker is exactly `missing` was deleted in the changeset
+      // and cannot be read by the reviewer, so it is attested-by-absence and
+      // excluded from the reviewedFiles requirement. Only exact `missing`
+      // markers count: `unreadable:<code>` is a present-but-unreadable file
+      // that must still be attested (fail closed). Self-contained inline
+      // helper (handleSteps is serialized via .toString() + new Function(...),
+      // so it must not reference module-scope imports).
+      function collectDeletedFilesFromSnapshotDetails(
+        details: string,
+      ): string[] {
+        const deletedFiles: string[] = []
+        for (const line of details.split('\n')) {
+          // The files-v4 block ends at the `--` separator before the
+          // validation summary.
+          if (line === '--') break
+          const tabIndex = line.indexOf('\t')
+          if (tabIndex <= 0) continue
+          if (line.slice(tabIndex + 1) === 'missing') {
+            deletedFiles.push(line.slice(0, tabIndex))
+          }
         }
-        if (crypto) {
-          return `v3:${crypto.createHash('sha256').update(details).digest('hex')}`
-        }
-        // Fail closed: without a collision-resistant hash the snapshot cannot
-        // be safely attested. Return a non-reusable sentinel so no durable
-        // gate credit, review receipt, or bypass challenge can match it.
-        return 'unreadable:no-crypto'
+        return deletedFiles
       }
 
       /**
@@ -7920,7 +8320,7 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
         }
 
         const codeIntent =
-          /\b(code|file|files|repo|repository|project|codebase|workspace|module|package|function|class|component|hook|api|schema|config|test|tests|implement|fix|debug|refactor|audit|review|investigate|architecture|flow|index|context)\b/i.test(
+          /\b(code|file|files|repo|repository|project|codebase|workspace|module|package|function|class|component|hook|api|schema|config|test|tests|implement|fix|debug|refactor|audit|review|investigate|architecture)\b/i.test(
             text,
           )
         if (!codeIntent) return undefined
@@ -7980,18 +8380,20 @@ function buildRepairEditorPrompt(parsed: ParsedValidationFailure[], pendingFiles
     },
   }
 }
-const EXPLORE_PROMPT = `- Iteratively gather codebase context as needed. For broad codebase questions or tasks where relevant files are not already obvious, consume the runtime-injected query_index result first and deduplicate its candidates, matchedSnippets, and relatedFiles. Use mode: 'explain' when you need ranking rationale, mode: 'neighbors' to expand around a known file, mode: 'path' to connect two known files, mode: 'references' for blast-radius analysis (files that import or call into a seed file, using from or to), and mode: 'commands' to find package scripts, CI workflows, task runners, and validation docs. Spawn bounded parallel discovery waves for explicit domains the index result did not cover; give each file-picker/code-searcher a non-overlapping question, join the wave, and launch another when inventory or coverage evidence still has gaps. There is no fixed total-agent limit. Verify selected files with read_files/read_subtree. Use list_directory and glob only when structural/path evidence is missing, and do not substitute basher for git status or file discovery. Use read_subtree for a specific subsystem. For a large file, prefer read_blocks (windows/around/symbols) over guess-shrink-retry read_files ranges paging; use read_outline then read_files ranges only for an exact arbitrary line range. Read all relevant files before editing.`
+const EXPLORE_PROMPT = `- Iteratively gather codebase context as needed. For broad codebase questions or tasks where relevant files are not already obvious, consume the runtime-injected query_index result first and deduplicate its candidates, matchedSnippets, and relatedFiles. Use mode: 'explain' when you need ranking rationale, mode: 'neighbors' to expand around a known file, mode: 'path' to connect two known files, mode: 'references' for blast-radius analysis (files that import or call into a seed file, using from or to), and mode: 'commands' to find package scripts, CI workflows, task runners, and validation docs. Spawn bounded parallel discovery waves for explicit domains the index result did not cover; give each file-picker/code-searcher a non-overlapping question, join the wave, and launch another when inventory or coverage evidence still has gaps. There is no fixed total-agent limit. Verify selected files with read_files/read_subtree. Use list_directory and glob only when structural/path evidence is missing, and do not substitute basher for git status or file discovery. Use read_subtree for a specific subsystem. For a large file, prefer read_files windows/around/symbol selectors over guess-shrink-retry ranges paging; use read_outline then read_files ranges only for an exact arbitrary line range. Read all relevant files before editing.`
 
 function buildImplementationInstructionsPrompt({
   isFast,
   isDefault,
   hasNoValidation,
   noAskUser,
+  progressiveDisclosure,
 }: {
   isFast: boolean
   isDefault: boolean
   hasNoValidation: boolean
   noAskUser: boolean
+  progressiveDisclosure: boolean
 }) {
   // Mode-level proxy for "the automated validation/reviewer gate is active".
   // Plan mode uses separate builders, so at prompt-build time this matches the
@@ -7999,7 +8401,11 @@ function buildImplementationInstructionsPrompt({
   const gateActive = !isFast && !hasNoValidation
   return `Act as a helpful assistant and freely respond to the user's request however would be most helpful to the user. Use your judgement to orchestrate the completion of the user's request using your specialized sub-agents and tools as needed. Take your time and be comprehensive. Don't surprise the user. For example, don't modify files if the user has not asked you to do so at least implicitly.
 
-${buildBroadAuditSection('proceed to implementation or the answer')}
+${
+    progressiveDisclosure
+      ? 'Broad audit / many-file / coverage-sweep request → read_files `agents/guides/broad-audit.md` before sharding.'
+      : buildBroadAuditSection('proceed to implementation or the answer')
+  }
 
 ## Example response
 
@@ -8049,6 +8455,7 @@ function buildExecutePlanInstructionsPrompt(params: {
   isDefault: boolean
   hasNoValidation: boolean
   noAskUser: boolean
+  progressiveDisclosure: boolean
 }) {
   return [
     buildImplementationInstructionsPrompt(params),
@@ -8076,7 +8483,7 @@ function buildImplementationStepPrompt({
   const gateActive = !isFast && !hasNoValidation
   return buildArray(
     'Consider loading relevant skills with the skill tool if they might help with the current task. Do not reload skills that were already loaded earlier in this conversation.',
-    'Use dedicated tools before shell fallbacks: repository status and validation gates are runtime-owned; use read_files/read_outline/read_blocks/read_subtree/glob/list_directory/query_index for inspection (large files: prefer read_blocks windows/around/symbols), deterministic edit tools for file changes, and basher only for commands without a dedicated tool.',
+    'Use dedicated tools before shell fallbacks: repository status and validation gates are runtime-owned; use read_files/read_outline/read_subtree/glob/list_directory/query_index for inspection (large files: prefer read_files windows/around/symbol selectors), deterministic edit tools for file changes, and basher only for commands without a dedicated tool.',
     isDefault &&
       `For non-trivial edits, spawn the editor after context discovery with a compact implementation-only prompt containing all of these envelope fields: Requirements, Target files, Constraints/non-goals, Patterns, Risks. Use those exact field labels in the prompt so the editor can scan them as a checklist. The editor does not inherit parent conversation history, so the prompt must contain the implementation context it needs. If you cannot state the concrete implementation task, target files, and constraints yet, gather more context instead of spawning the editor. Do not put validation commands, terminal/shell cleanup, deletion requests, visual smoke tests, code review, git operations, todos, or other parent-only orchestration tasks in the editor handoff. After the editor returns, the default runtime will independently detect changed files, run configured validation hooks, and spawn code-reviewer before finalization.`,
     isDefault &&
@@ -8110,12 +8517,20 @@ function buildExecutePlanStepPrompt({}: {}) {
   ).join('\n')
 }
 
-function buildPlanOnlyInstructionsPrompt({}: {}) {
+function buildPlanOnlyInstructionsPrompt({
+  progressiveDisclosure,
+}: {
+  progressiveDisclosure: boolean
+}) {
   return `Orchestrate the completion of the user's request using your specialized sub-agents.
 
 You are in plan mode. Preserve short-answer behavior: if the user is asking a question, requesting an explanation, or asking for a small clarification, answer directly and do not create a plan packet.
 
-${buildBroadAuditSection('translate the findings into the durable plan packet below')}
+${
+  progressiveDisclosure
+    ? 'Broad audit / many-file / coverage-sweep request → read_files `agents/guides/broad-audit.md` before sharding.'
+    : buildBroadAuditSection('translate the findings into the durable plan packet below')
+}
 
 For larger implementation, migration, debugging, or multi-step work, gather enough context to create a comprehensive, resumable plan packet. For non-trivial plans, create all four durable artifacts by default (SPEC.md, PLAN.md, STATUS.md, LESSONS.md); these are not optional or only "as needed". Normal users should not need to explicitly ask for STATUS or LESSONS artifacts. You may ask targeted clarifying questions with ask_user when the answer materially changes the plan. Avoid obvious questions and questions about details that can be adjusted later.
 

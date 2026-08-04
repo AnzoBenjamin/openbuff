@@ -32,6 +32,7 @@ import { parseUserMessage } from '../util/messages'
 
 import type { AgentTemplate, PlaceholderValue } from './types'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { ContextBudgetLedger } from '../util/context-budget'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type {
   Message,
@@ -69,6 +70,7 @@ export async function formatPrompt(
       ProjectFileContext['customToolDefinitions']
     >
     logger: Logger
+    ledger?: ContextBudgetLedger
   } & ParamsExcluding<
     typeof getAgentTemplate,
     'agentId' | 'localAgentTemplates'
@@ -83,6 +85,7 @@ export async function formatPrompt(
     intitialAgentPrompt,
     additionalToolDefinitions: _additionalToolDefinitions,
     logger,
+    ledger,
   } = params
   let { prompt } = params
 
@@ -119,6 +122,7 @@ export async function formatPrompt(
         fileTreeTokenBudget: 2_500,
         mode: 'agent',
         logger,
+        ledger,
       }),
     [PLACEHOLDER.FRONTEND_SECTION]: () =>
       fileTreeHasFrontendFiles(fileContext.fileTree) ? frontendSection : '',
@@ -133,6 +137,7 @@ export async function formatPrompt(
         fileTreeTokenBudget: 10_000,
         mode: 'agent',
         logger,
+        ledger,
       }),
     [PLACEHOLDER.FILE_TREE_PROMPT_LARGE]: () =>
       getProjectFileTreePrompt({
@@ -140,14 +145,17 @@ export async function formatPrompt(
         fileTreeTokenBudget: 190_000,
         mode: 'search',
         logger,
+        ledger,
       }),
-    [PLACEHOLDER.GIT_CHANGES_PROMPT]: () => getGitChangesPrompt(fileContext),
+    [PLACEHOLDER.GIT_CHANGES_PROMPT]: () =>
+      getGitChangesPrompt(fileContext, ledger),
     [PLACEHOLDER.REMAINING_STEPS]: () =>
       agentState.stepsRemaining < 0
         ? 'unlimited (no-progress watchdog active)'
         : `${agentState.stepsRemaining}`,
     [PLACEHOLDER.PROJECT_ROOT]: () => fileContext.projectRoot,
-    [PLACEHOLDER.SYSTEM_INFO_PROMPT]: () => getSystemInfoPrompt(fileContext),
+    [PLACEHOLDER.SYSTEM_INFO_PROMPT]: () =>
+      getSystemInfoPrompt(fileContext, ledger),
     [PLACEHOLDER.USER_CWD]: () => fileContext.cwd,
     [PLACEHOLDER.USER_INPUT_PROMPT]: () => escapeString(lastUserInput ?? ''),
     [PLACEHOLDER.INITIAL_AGENT_PROMPT]: () =>
@@ -227,6 +235,12 @@ export async function formatPrompt(
   }
 
   for (const varName of placeholderValues) {
+    // Skip providers for placeholders that are absent from the prompt.
+    // Besides avoiding wasted work (e.g. building unused file trees), this
+    // keeps the shared ledger honest: providers record a ledger line when
+    // they run, so running a provider whose block is never inserted would
+    // inflate totalTokens/byCategory with tokens that never reach the model.
+    if (!prompt.includes(varName)) continue
     const valueProvider = toInject[varName] ?? (() => '')
     const value = await valueProvider()
     prompt = prompt.replaceAll(varName, value)

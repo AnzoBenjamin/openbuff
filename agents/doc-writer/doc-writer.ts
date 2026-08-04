@@ -95,7 +95,6 @@ const definition: SecretAgentDefinition = {
   },
   toolNames: [
     'read_files',
-    'read_blocks',
     'read_outline',
     'read_subtree',
     'edit_transaction',

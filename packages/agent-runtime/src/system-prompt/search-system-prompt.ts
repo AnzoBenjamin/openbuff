@@ -9,11 +9,13 @@ import { countTokens } from '../util/token-counter'
 
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ProjectFileContext } from '@codebuff/common/util/file'
+import type { ContextBudgetLedger } from '../util/context-budget'
 
 export function getSearchSystemPrompt(params: {
   fileContext: ProjectFileContext
   messagesTokens: number
   logger: Logger
+  ledger?: ContextBudgetLedger
   options: {
     agentStepId: string
     clientSessionId: string
@@ -22,14 +24,14 @@ export function getSearchSystemPrompt(params: {
     userId: string | undefined
   }
 }): string {
-  const { fileContext, messagesTokens, logger } = params
+  const { fileContext, messagesTokens, logger, ledger } = params
 
   const maxTokens = 500_000 // costMode === 'lite' ? 64_000 :
   const maxFilesTokens = 100_000
   const miscTokens = 10_000
   const systemPromptTokenBudget = maxTokens - messagesTokens - miscTokens
 
-  const gitChangesPrompt = getGitChangesPrompt(fileContext)
+  const gitChangesPrompt = getGitChangesPrompt(fileContext, ledger)
   const fileTreeTokenBudget =
     // Give file tree as much token budget as possible,
     // but stick to fixed increments so as not to break prompt caching too often.
@@ -45,9 +47,10 @@ export function getSearchSystemPrompt(params: {
     fileTreeTokenBudget,
     mode: 'search',
     logger,
+    ledger,
   })
 
-  const systemInfoPrompt = getSystemInfoPrompt(fileContext)
+  const systemInfoPrompt = getSystemInfoPrompt(fileContext, ledger)
 
   const systemPrompt = buildArray([
     projectFileTreePrompt,

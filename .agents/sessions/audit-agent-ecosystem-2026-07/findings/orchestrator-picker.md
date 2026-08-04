@@ -1,5 +1,7 @@
 # Orchestrator core — file-picker audit
 
+> **As-of audit snapshot (2026-07):** tables that mention "inline mirrors" in `base2.ts` describe the **audit-time** dual-copy layout. Today, `gate-paths` / `gate-reviewer` / `gate-repair` / `gate-concurrency` are generator-synced via `scripts/generate-gate-helpers.ts` into `<gate-helpers-generated>` (not hand-maintained). Findings below remain historical evidence unless re-verified.
+
 ## Compact inventory for paired code-searcher
 
 | Flow                        | Primary files / symbols                                                                                                                                           | Tests to inspect                                                                                           | Search next                                                                                                |

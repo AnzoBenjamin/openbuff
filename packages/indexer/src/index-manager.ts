@@ -47,6 +47,7 @@ export class IndexManager {
   private fileVectors: FileVector[] = []
   private lastBuildError: IndexBuildError | undefined
   private pendingMutationDelta: IndexMutationDelta | undefined
+  private mutationEpoch = 0
   private snapshotCache:
     | { index: MetadataIndex; identity: IndexSnapshotIdentity }
     | undefined
@@ -139,18 +140,30 @@ export class IndexManager {
   }
 
   /**
+   * Monotonic in-process epoch incremented on every filesystem-mutation
+   * signal ({@link markStale} / {@link markPathsChanged}). Readonly and never
+   * persisted: it lets callers (e.g. the query_index tool result) detect
+   * external index mutations that did not advance a workspace revision.
+   */
+  get indexMutationEpoch(): number {
+    return this.mutationEpoch
+  }
+
+  /**
    * Signal that on-disk files changed (e.g. the agent just edited code), so the
    * next {@link waitUntilReady}/{@link query} performs an incremental refresh
    * even if the index is not yet time-stale. Cheap and path-less: the
    * incremental update detects exactly which files changed by mtime/hash.
    */
   markStale(): void {
+    this.mutationEpoch += 1
     this.pendingMutationDelta = undefined
     this.forceRefresh = true
   }
 
   /** Queue a precise filesystem mutation delta for the next refresh. */
   markPathsChanged(delta: IndexMutationDelta): void {
+    this.mutationEpoch += 1
     this.pendingMutationDelta = mergeMutationDeltas(
       this.pendingMutationDelta,
       delta,

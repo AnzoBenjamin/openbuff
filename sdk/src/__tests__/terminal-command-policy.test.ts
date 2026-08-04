@@ -343,6 +343,69 @@ describe('terminal command permission policy', () => {
     }
   })
 
+  it('rejects placeholder git commit messages but allows real imperative ones', () => {
+    const placeholderReason =
+      'git commit message appears to be a placeholder (probe/test/wip/etc.); write a real imperative commit message'
+    for (const command of [
+      'git commit -m probe',
+      'git commit -m "probe"',
+      "git commit -m 'wip'",
+      'git commit -m WIP',
+      'git commit -m test',
+      'git commit -m "test commit"',
+      'git commit -m "wip commit"',
+      'git commit -m tmp',
+      'git commit -m temp',
+      'git commit -m asdf',
+      'git commit -m foo',
+      'git commit -m bar',
+      'git commit -m x',
+      'git commit -m xx',
+      'git commit -m xxx',
+      'git commit -m commit',
+      'git commit -m update',
+      'git commit -m changes',
+      'git commit -m stuff',
+      'git commit -m misc',
+      'git commit --message probe',
+      'git commit --message=probe',
+      'git commit --message="wip"',
+      'git commit -m "probe."',
+      // Any placeholder among multiple -m flags rejects the whole commit.
+      'git commit -m "Fix the parser" -m wip',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'git-commit',
+          projectRoot,
+          allowedPaths: ['src/a.ts'],
+        }),
+      ).toEqual({ allowed: false, reason: placeholderReason })
+    }
+    // Whole-subject matching: real messages that merely contain a
+    // placeholder word (or use none) stay allowed.
+    for (const command of [
+      'git commit -m "Add probe support for X"',
+      'git commit -m "Fix issue"',
+      'git commit -m "Update the installer to fetch dependencies"',
+      'git commit -m "Test the retry logic before release"',
+      'git commit -m "Remove temp files from the build output"',
+      'git commit -m "Miscellaneous cleanups are not misc"',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'git-commit',
+          projectRoot,
+          allowedPaths: ['src/a.ts'],
+        }).allowed,
+      ).toBe(true)
+    }
+  })
+
   it('rejects raw newlines before normalization for non-full-access profiles', () => {
     for (const [permissionProfile, command] of [
       ['git-commit', 'git status --short\ntouch pwned.txt'],
@@ -408,8 +471,6 @@ describe('terminal command permission policy', () => {
       ).toBe(true)
     }
     for (const command of [
-      'git branch -d feature/x',
-      'git branch newname',
       'git config user.name bob',
       'git config --unset user.name',
       'git log --oneline -1 | sh',
@@ -421,6 +482,92 @@ describe('terminal command permission policy', () => {
       'git branch -r `whoami`',
       'git push --force origin main',
       'git commit --amend -m x',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'git-commit',
+          projectRoot,
+          allowedPaths: ['src/a.ts'],
+        }).allowed,
+      ).toBe(false)
+    }
+  })
+
+  it('allows safe complex git operations for git-commit agents', () => {
+    for (const command of [
+      'git switch feature/x',
+      'git switch -c feature/x',
+      'git checkout feature/x',
+      'git checkout -b feature/x',
+      'git branch newname',
+      'git branch -d feature/x',
+      'git merge --no-ff feature/x',
+      'git merge --no-commit feature/x',
+      'git cherry-pick 2025ef865',
+      'git stash push -m wip',
+      'git stash pop',
+      'git stash list',
+      'git reset --soft HEAD~1',
+      'git reset --mixed',
+      'git tag v1.0.0',
+      'git tag -a v1.0.0 -m rel',
+      'git restore --staged src/a.ts',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'git-commit',
+          projectRoot,
+          allowedPaths: ['src/a.ts'],
+        }).allowed,
+      ).toBe(true)
+    }
+  })
+
+  it('forbids data-loss and history-rewrite git operations for git-commit agents', () => {
+    for (const command of [
+      'git reset --hard HEAD',
+      'git reset --hard',
+      'git branch -D feature/x',
+      'git branch --delete feature/x',
+      'git clean -fd',
+      'git clean -f',
+      'git checkout -- src/a.ts',
+      'git checkout HEAD -- src/a.ts',
+      'git push --force origin feature/x',
+      'git push -f origin feature/x',
+      'git push origin feature/x:main',
+      'git rebase origin/main',
+      'git rebase --onto a b',
+      'git commit --amend -m x',
+      'git stash drop',
+      'git stash clear',
+      'git config user.name bob',
+      'git switch -c x; rm -rf src',
+      'git merge --strategy=recursive feature/x',
+      'git cherry-pick --strategy=recursive 2025ef865',
+      'git merge -Xours feature/x',
+      'git restore --staged --worktree src/a.ts',
+      'git restore --staged -W src/a.ts',
+      'git switch -f feature/x',
+      'git switch --force feature/x',
+      'git switch --discard-changes feature/x',
+      'git switch -C feature/x',
+      'git checkout -f',
+      'git checkout --force',
+      'git checkout -p',
+      'git checkout --patch',
+      'git checkout -f feature/x',
+      'git checkout --merge feature/x',
+      'git checkout --theirs feature/x',
+      'git checkout --ours feature/x',
+      'git branch -f feature/x',
+      'git branch --force feature/x',
+      'git merge -sours feature/x',
+      'git merge -s ours feature/x',
     ]) {
       expect(
         evaluateTerminalCommandPolicy({

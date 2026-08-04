@@ -4,6 +4,8 @@
 
 The Openbuff harness has accumulated a large, capable set of agents (46 shipped), 61 registered tools, 14 specialists, 3 aux gates + a validation/reviewer gate, and a multi-mode orchestrator family (`base2` / `base2-plan` / `base2-execute-plan` / `base-deep` / fast variants). A recent burst of feature additions left the pieces individually strong but weakly coordinated: multiple hand-maintained rosters drift against each other, some prompt guidance tells the coordinator to do things the tools/gates don't actually support (and omits capabilities that do exist), and gate logic is duplicated inline without full parity guards.
 
+> **Historical note (post-remediation):** The five handleSteps gate helpers in `scripts/generate-gate-helpers.ts` `SOURCE_MODULES` (`gate-paths`, `gate-reviewer`, `gate-repair`, `gate-concurrency`, `gate-fingerprint`) are now **generator-synced** into `<gate-helpers-generated>` (freshness + parity tests). The overview line about "duplicated inline without full parity guards" and the goal to "close drift risk in the inline-mirrored gate logic" describe the **audit-time** debt; fingerprint is no longer a residual dual-copy.
+
 This spec captures a source-backed audit and a remediation plan to restore cohesion so the orchestrator fully and correctly uses every part of the harness.
 
 ## Goals

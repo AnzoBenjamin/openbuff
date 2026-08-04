@@ -333,6 +333,51 @@ reasoning unsupported receive no reasoning parameter. A one-model setup simply
 reuses that model for every phase. Set `"adaptiveReasoning": false` to disable
 this fallback.
 
+## Context budget and proactive retrieval
+
+Openbuff ships several context-window reductions (context budget ledger,
+model-aware semantic compaction, proactive retrieval caching, git_status
+gating, and tool-result lifecycle trimming). There is **no new JSON config
+field** for these systems yet — the behavior is code-default and always on.
+
+- **`progressivePromptDisclosure`** is an SDK/agent option on `createBase2`,
+  not a JSON config key. When the option is omitted, it defaults from the
+  `OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE` env canary (`1`/`true`/`yes`/`on`
+  → true; otherwise false). Explicit `true`/`false` always wins over the env.
+  When enabled, verbose advisory prompt sections are replaced by `read_files`
+  pointers to `agents/guides/*.md`. It is opt-in (option or canary); production
+  stays off without either.
+- **`maxReviewerRepairRounds`** is an SDK/agent option on `createBase2` (also
+  not a JSON config key). Default `6`, max `20`. When omitted, it resolves from
+  `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS` (positive integer string). Explicit
+  option values win over the env; invalid/missing values fall back to `6`.
+  This bounds the reviewer→repair→re-review loop (including NON_BLOCKING
+  findings under LOOKS_GOOD-only finalization).
+- **`maxRepairRounds`** is an SDK/agent option on `createBase2` (not a JSON
+  config key). Default `3`, max `20`. When omitted, it resolves from
+  `OPENBUFF_MAX_REPAIR_ROUNDS`. Explicit option values win over the env;
+  invalid/missing values fall back to `3`. Bounds validation-hook
+  repair-editor rounds.
+- **`maxSpecialistRepairRounds`** is an SDK/agent option on `createBase2` (not
+  a JSON config key). Default `3`, max `20`. When omitted, it resolves from
+  `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS`. Explicit option values win over the
+  env; invalid/missing values fall back to `3`. Bounds the specialist→repair→
+  re-review loop.
+- **`/context`** is a read-only slash command that prints the per-component
+  token breakdown recorded for the current turn (advisory telemetry, not a
+  hard gate). It also always prints the effective gate repair budgets
+  (validation / reviewer / specialist) resolved from env vars and defaults
+  (`OPENBUFF_MAX_REPAIR_ROUNDS`, `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS`,
+  `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS`; createBase2 options still win at
+  agent load).
+- **Indexing** (`indexing.enabled`, semantic settings) controls the local
+  index backing `query_index` and the proactive retrieval cache; see
+  [Indexing and retrieval](#indexing-and-retrieval) above.
+
+All reductions and gates are on by default; progressive prompt disclosure is
+the only opt-in (via the agent option above). Gate repair budgets are always
+on with configurable defaults (reviewer `6`, validation/specialist `3`).
+
 ## Merge semantics
 
 When multiple config sources are loaded (global → ancestor → project, or
