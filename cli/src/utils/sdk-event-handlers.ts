@@ -20,6 +20,7 @@ import {
   extractPlanFromBuffer,
   extractSpawnAgentResultContent,
   findAgentTypeById,
+  getBackgroundShellJobIdFromToolOutput,
   insertPlanBlock,
   nestBlockUnderParent,
   transformAskUserBlocks,
@@ -660,13 +661,27 @@ const appendResultOnlyToolBlockToAgent = (
       return block
     }
 
+    const hasError = hasMultipartError(event.output)
+    const backgroundJobId =
+      !hasError && event.toolName === 'run_terminal_command'
+        ? getBackgroundShellJobIdFromToolOutput(event.output)
+        : undefined
+    // BACKGROUND shell start is fire-and-forget: keep the card running until
+    // live job_update settles it. A successful BACKGROUND start is not terminal.
+    const lifecycle: ToolContentBlock['lifecycle'] = hasError
+      ? 'failed'
+      : backgroundJobId
+        ? 'running'
+        : 'succeeded'
+
     const resultOnlyToolBlock: ToolContentBlock = {
       type: 'tool',
       toolCallId: event.toolCallId,
       toolName: event.toolName as ToolName,
       input: {},
       agentId: event.agentId,
-      lifecycle: hasMultipartError(event.output) ? 'failed' : 'succeeded',
+      lifecycle,
+      ...(backgroundJobId !== undefined ? { backgroundJobId } : {}),
     }
 
     return {
@@ -725,6 +740,10 @@ const handleToolResult = (
       toolCallId: event.toolCallId,
       toolOutput: event.output,
     })
+    const backgroundShellJobId =
+      event.toolName === 'run_terminal_command'
+        ? getBackgroundShellJobIdFromToolOutput(event.output)
+        : undefined
     const withLifecycle = updatedBlocks.map(
       function markResult(block): ContentBlock {
         if (block.type === 'tool' && block.toolCallId === event.toolCallId) {
@@ -741,9 +760,23 @@ const handleToolResult = (
                   : 'failed',
             }
           }
+          if (hasMultipartError(event.output)) {
+            return { ...block, lifecycle: 'failed' }
+          }
+          // Successful BACKGROUND shell start: keep lifecycle running and ensure
+          // backgroundJobId is set so job_update can settle the card later.
+          // Do NOT mark succeeded merely because the tool call returned.
+          const jobId = block.backgroundJobId ?? backgroundShellJobId
+          if (jobId) {
+            return {
+              ...block,
+              backgroundJobId: jobId,
+              lifecycle: 'running',
+            }
+          }
           return {
             ...block,
-            lifecycle: hasMultipartError(event.output) ? 'failed' : 'succeeded',
+            lifecycle: 'succeeded',
           }
         }
         if (block.type === 'agent' && block.blocks) {

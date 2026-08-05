@@ -44,7 +44,7 @@ const inputSchema = z
   )
 
 const description = `
-Read-only \`git status --short\` (and optionally \`git diff\`) for the current project. Use this when you need a quick "what changed" view without shelling out via run_terminal_command.
+Read-only \`git status --short\` (and optionally \`git diff\`) for the current project. Use this when you need a quick "what changed" view without shelling out via run_terminal_command. If nothing changed since the previous git_status observation this turn, the tool may instead return a small suppression payload of the form { unchanged: true, note } (with no status/diff/branch fields), meaning the earlier observation is still current.
 
 Example:
 ${$getNativeToolCallExampleString({
@@ -72,6 +72,14 @@ export const gitStatusParams = {
       }),
       z.object({
         errorMessage: z.string(),
+      }),
+      // Suppressed variant: the per-turn change-gate (applyGitStatusGate)
+      // swaps the full observation for this payload when the worktree is
+      // byte-identical to the prior observation — it deliberately omits
+      // status/diff/branch so an empty status can't read as "clean tree".
+      z.object({
+        unchanged: z.literal(true),
+        note: z.string(),
       }),
     ]),
   ),

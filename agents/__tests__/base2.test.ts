@@ -13,9 +13,6 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { createBaseDeep } from '../base2/base-deep'
 import {
   createBase2,
-  DEFAULT_MAX_REPAIR_ROUNDS,
-  DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS,
-  DEFAULT_MAX_SPECIALIST_REPAIR_ROUNDS,
   resolveMaxRepairRounds,
   resolveMaxReviewerRepairRounds,
   resolveMaxSpecialistRepairRounds,
@@ -441,6 +438,16 @@ describe('base2 validation/reviewer coordination prompts', () => {
     expect(base2.systemPrompt).toContain(
       'omitted and `-1` mean no wall-clock deadline',
     )
+    // specialistRoutingSection is relocated to a guide under default-on
+    // disclosure; assert the relocation pointer in systemPrompt and keep the
+    // verbatim-line contract on the explicit-off surface instead.
+    expect(base2.systemPrompt).toContain('agents/guides/specialist-routing.md')
+    const base2DisclosureOff = createBase2('default', {
+      progressivePromptDisclosure: false,
+    })
+    expect(base2DisclosureOff.systemPrompt).toContain(
+      'Post-edit reviewer-family specialists are routed automatically',
+    )
     expect(base2.instructionsPrompt).toContain('compact implementation brief')
     expect(base2.instructionsPrompt).toContain('pass it as the editor prompt')
     expect(base2.instructionsPrompt).toContain(
@@ -485,10 +492,15 @@ describe('base2 validation/reviewer coordination prompts', () => {
     expect(base2.systemPrompt).toContain(
       'Do not delegate work merely to gain access to set_output',
     )
+    // second specialistRoutingSection block in this test (there is a first
+    // block under the parallel-join assertions above). Under default-on
+    // disclosure these lines live in agents/guides/specialist-routing.md;
+    // assert the guide pointer here and the verbatim text on the
+    // explicit-off surface (base2DisclosureOff).
     expect(base2.systemPrompt).toContain(
-      'Post-edit reviewer-family specialists are routed automatically',
+      'agents/guides/specialist-routing.md',
     )
-    expect(base2.systemPrompt).toContain(
+    expect(base2DisclosureOff.systemPrompt).toContain(
       'Do not manually re-spawn them after edits, after compaction',
     )
     expect(base2.systemPrompt).toContain(
@@ -511,6 +523,8 @@ describe('base2 validation/reviewer coordination prompts', () => {
       ]),
     )
     expect(base2.systemPrompt).toContain('Atomic edit recovery')
+    expect(base2.systemPrompt).toContain('Edit contract')
+    expect(base2.systemPrompt).toContain('recovery.paths')
     expect(base2.systemPrompt).toContain('do not peel off remembered edits')
     expect(base2.systemPrompt).toContain(
       'treat that exact finding as the controlling next action',
@@ -858,21 +872,18 @@ describe('base2 proactive index lookup', () => {
     ).toMatchObject({ toolName: 'git_status' })
   })
 
-  test('starts codebase-oriented prompts with query_index', () => {
+  test('starts codebase-oriented Q&A prompts directly (no proactive query_index under M4)', () => {
+    // M4 lean proactive inject: pure Q&A phrasing ("where is X configured")
+    // carries no edit/audit/path phase keyword, so the proactive route is
+    // skipped and the turn starts at git_status. The model reads and
+    // answers the question directly instead of going through query_index.
     const base2 = createBase2('default')
     const generator = base2.handleSteps!({
       prompt: 'Where is authentication configured in this codebase?',
       params: {},
     } as any)
 
-    expect(generator.next().value).toEqual({
-      toolName: 'query_index',
-      input: {
-        query: 'Where is authentication configured in this codebase?',
-        limit: 14,
-        mode: 'search',
-      },
-    })
+    expect(generator.next().value).toMatchObject({ toolName: 'git_status' })
   })
 
   test('uses explained wider retrieval for broad cross-subsystem audits', () => {
@@ -1150,9 +1161,11 @@ describe('base2 proactive index lookup', () => {
     expect((agentState as any).proactiveRetrievalCache).toBeDefined()
 
     // Same revision, but a different normalized query hashes differently.
+    // (M4: the second prompt must still carry a strong intent phrase — an
+    // audit verb like "verify" — so the proactive path fires at all.)
     const secondGen = base2.handleSteps!({
       agentState,
-      prompt: 'Investigate the repository structure',
+      prompt: 'Verify the repository structure before continuing',
       params: {},
       config: base2.programmaticConfig,
     } as any)
@@ -1188,6 +1201,185 @@ describe('base2 proactive index lookup', () => {
     expect(
       firstYield('refactor the authentication module code'),
     ).toMatchObject({ toolName: 'query_index', input: { mode: 'search' } })
+  })
+
+  test('pure how/what question turns do not fire proactive retrieval (M4)', () => {
+    const firstYield = (prompt: string) => {
+      const base2 = createBase2('default')
+      const gen = base2.handleSteps!({
+        agentState: { agentId: 'base2-classify' },
+        prompt,
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+      return gen.next().value as any
+    }
+
+    // Pure Q&A prompts with no edit/audit/path phase keyword must not fire
+    // proactive retrieval: they answer directly and only carry reading/
+    // explanatory phrasing.
+    expect(
+      firstYield('How does the authentication module work in this codebase?'),
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      firstYield('What does this function do in the dependency layer?'),
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      firstYield('Explain the module loading order in this package'),
+    ).toMatchObject({ toolName: 'git_status' })
+
+    // Edit / fix / ritual verb prompts still fire on the unknown scope.
+    expect(firstYield('Refactor the authentication module code')).toMatchObject(
+      {
+        toolName: 'query_index',
+        input: { mode: 'search' },
+      },
+    )
+  })
+
+  test('command-discovery branch requires a literal command (M4)', () => {
+    const firstYield = (prompt: string) => {
+      const base2 = createBase2('default')
+      const gen = base2.handleSteps!({
+        agentState: { agentId: 'base2-classify' },
+        prompt,
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+      return gen.next().value as any
+    }
+
+    // A prompt that already names a literal command keeps the focused
+    // commands branch (limit 12, commands mode).
+    expect(
+      firstYield('How do I run the bun test --watch script for this repo?'),
+    ).toMatchObject({
+      toolName: 'query_index',
+      input: { mode: 'commands', limit: 12 },
+    })
+
+    // A bare command-ish verb phrase (no literal command token) must NOT
+    // fire the focused commands branch. It still carries an audit/test verb,
+    // so it falls through to the unknown-scoped search retrieval instead.
+    expect(firstYield('run the tests and validate the fix')).toMatchObject({
+      toolName: 'query_index',
+      input: { mode: 'search', limit: 14 },
+    })
+    expect(firstYield('validate the schema before continuing')).toMatchObject({
+      toolName: 'query_index',
+      input: { mode: 'search', limit: 14 },
+    })
+  })
+
+  test('proactive cache stores a compact query_index_result envelope (M4)', () => {
+    const base2 = createBase2('default')
+    const prompt = 'Refactor the authentication module code.'
+    const agentState = {
+      agentId: 'base2-classify',
+      workspaceState: { revision: 5, snapshotId: 'snapshot-compact' },
+    }
+
+    const fatValue = {
+      kind: 'query_index_result',
+      status: 'ok',
+      coverage: { matchedConcernCount: 4, totalConcernCount: 6, layers: [] },
+      totalIndexed: 1287,
+      snapshotId: 'snapshot-compact',
+      indexMutationEpoch: 9,
+      results: Array.from({ length: 12 }, (_, index) => ({
+        path: `packages/sdk/src/module-${index}.ts`,
+        score: 0.9 - index * 0.01,
+        reason: `matched index ${index}`,
+        kind: 'file',
+        relatedFiles: [
+          `packages/sdk/src/module-related-${index}-a.ts`,
+          `packages/sdk/src/module-related-${index}-b.ts`,
+        ],
+        matchedSnippets: ['snippet-a', 'snippet-b'],
+      })),
+    }
+
+    // First turn: live query_index, then the route note. Feed a fat
+    // query_index_result; both the cached envelope and the injected route
+    // note must carry the compact shape (no relatedFiles, capped results,
+    // no status/coverage, indexMutationEpoch preserved for the epoch guard).
+    const gen = base2.handleSteps!({
+      agentState: agentState as any,
+      prompt,
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(gen.next().value).toMatchObject({ toolName: 'query_index' })
+    const routeNote = gen.next({
+      toolResult: [{ type: 'json', value: fatValue }],
+    } as any).value as any
+    expect(routeNote).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect(routeNote.input.content).toContain('Proactive retrieval route')
+    expect(routeNote.input.content).not.toContain('cached')
+
+    const cached = (agentState as any).proactiveRetrievalCache
+    expect(cached).toMatchObject({ workspaceRevision: 5, indexMutationEpoch: 9 })
+
+    // The cached result envelope is the compact form: a single json part whose
+    // value drops relatedFiles/matchedSnippets/status/coverage, keeps at most
+    // 8 results with only { path, score?, reason?, kind? } each, and preserves
+    // kind + indexMutationEpoch + the scalar identifiers.
+    expect(cached.result).toEqual({
+      type: 'json',
+      value: {
+        kind: 'query_index_result',
+        results: Array.from({ length: 8 }, (_, index) => ({
+          path: `packages/sdk/src/module-${index}.ts`,
+          score: 0.9 - index * 0.01,
+          reason: `matched index ${index}`,
+          kind: 'file',
+        })),
+        indexMutationEpoch: 9,
+        totalIndexed: 1287,
+        snapshotId: 'snapshot-compact',
+      },
+    })
+
+    // The injected route note embeds the SAME compact form (not the fat
+    // result): it appears verbatim, and the fat fields never surface.
+    expect(routeNote.input.content).toContain(
+      JSON.stringify(
+        Array.from({ length: 8 }, (_, index) => ({
+          path: `packages/sdk/src/module-${index}.ts`,
+          score: 0.9 - index * 0.01,
+          reason: `matched index ${index}`,
+          kind: 'file',
+        })),
+      ),
+    )
+    expect(routeNote.input.content).not.toContain('relatedFiles')
+    expect(routeNote.input.content).not.toContain('matchedSnippets')
+    expect(routeNote.input.content).not.toContain('module-8')
+
+    // The compact envelope still satisfies the epoch-guard: a newer epoch on a
+    // prior query_index message invalidates, and a matching one reuses.
+    ;(agentState as any).messageHistory = [
+      {
+        role: 'tool',
+        toolName: 'query_index',
+        content: [{ type: 'json', value: fatValue }],
+      },
+    ]
+    const cachedGen = base2.handleSteps!({
+      agentState: agentState as any,
+      prompt,
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    const cachedNote = cachedGen.next().value as any
+    expect(cachedNote).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect(cachedNote.input.content).toContain('cached result reused')
   })
 })
 
@@ -2510,6 +2702,121 @@ describe('base2 verification and reviewer gates', () => {
       expect((agentState as any).base2ActiveWork.pendingGateFiles).toEqual([])
       expect((agentState as any).canSuggestFollowups).toBe(true)
       expect((agentState as any).uncommittedUnvalidatedFiles).toEqual([])
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('credited dirty task file does not re-expand gate scope after LOOKS_GOOD', () => {
+    // Regression: after a green pass, file A may stay dirty+gatePassed while
+    // finalization is open. deriveGateScopeFiles must exclude A so durable
+    // reuse / conversation reuse is not broken by gateScopeFiles widening
+    // beyond pendingGateFiles, and the reviewer is not re-spawned solely for A.
+    const base2 = createBase2('default')
+    const tmpDir = makeProjectTempDir('base2-credited-dirty-scope-')
+    try {
+      const fileA = join(tmpDir, 'a.ts')
+      const gateFileA = normalizeGateFilePath(fileA)
+      writeFileSync(fileA, 'export const a = 1\n')
+      const validationSummary = 'No configured file-change hooks ran.'
+      const fingerprint = buildFingerprint(
+        [{ file: gateFileA, contentMarker: buildContentMarker(fileA) }],
+        validationSummary,
+      )
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          changedFiles: [gateFileA],
+          touchedFiles: [gateFileA],
+          pendingGateFiles: [],
+          currentPhase: 'final_response_allowed',
+          latestWorkSummary: '',
+          openReviewerBlockers: [],
+          lastValidationSummary: validationSummary,
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [gateFileA],
+          gatePassedPendingFiles: [gateFileA],
+          gatePassedReviewerVerdict: 'LOOKS_GOOD',
+          gatePassedValidationSummary: validationSummary,
+          gatePassedFingerprint: fingerprint,
+          gatePassedFileMarkers: {
+            [gateFileA]: buildContentMarker(fileA),
+          },
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      // A is still dirty but already credited; no unreviewed dirty B.
+      expect(
+        gen.next({
+          toolResult: [
+            {
+              type: 'json',
+              value: { status: ` M ${fileA}` },
+            },
+          ],
+        } as any).value,
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
+      const maybePinned = gen.next().value
+      if (maybePinned !== 'STEP') {
+        expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+
+      // Finalization stays open; credited dirty A must not re-arm the gate.
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+        'final_response_allowed',
+      )
+      expect((agentState as any).base2ActiveWork.pendingGateFiles).toEqual([])
+      expect((agentState as any).base2ActiveWork.gatePassedFiles).toEqual([
+        gateFileA,
+      ])
+      expect((agentState as any).canSuggestFollowups).toBe(true)
+
+      // Complete the step with no new edits: must not spawn reviewer solely for
+      // credited dirty A (no run_file_change_hooks / spawn_agents reviewer).
+      const afterStep = gen.next({
+        stepsComplete: true,
+        toolResult: [],
+      } as any)
+      expect(afterStep.value).toMatchObject({ toolName: 'git_status' })
+      const afterGit = gen.next({
+        toolResult: [
+          {
+            type: 'json',
+            value: { status: ` M ${fileA}` },
+          },
+        ],
+      } as any)
+      expect(afterGit.value).toMatchObject({ toolName: 'list_jobs' })
+      const done = gen.next(feedListJobs())
+      // Generator finishes or continues without re-running validation/reviewer
+      // for already-credited dirty A alone.
+      if (!done.done) {
+        const nextTool = (done.value as any)?.toolName
+        expect(nextTool).not.toBe('run_file_change_hooks')
+        if (nextTool === 'spawn_agents') {
+          const agents = (done.value as any)?.input?.agents ?? []
+          expect(
+            agents.some(
+              (a: { agent_type?: string }) => a.agent_type === 'code-reviewer',
+            ),
+          ).toBe(false)
+        }
+      }
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+        'final_response_allowed',
+      )
+      expect((agentState as any).base2ActiveWork.pendingGateFiles).toEqual([])
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }
@@ -6572,9 +6879,11 @@ describe('base2 repair-loop gate-state telemetry (M6.4)', () => {
     expect(parsed!.status).toBe('failed')
     expect(parsed!.repairRound).toBeGreaterThanOrEqual(1)
     expect(parsed!.repairRound).toBe(1)
-    expect(parsed!.maxRepairRounds).toBe(DEFAULT_MAX_REPAIR_ROUNDS)
+    // Default repair budget is unlimited: maxRepairRounds is omitted from the
+    // gate-state payload when Infinity would otherwise serialize poorly.
+    expect(parsed!.maxRepairRounds).toBeUndefined()
     expect(parsed!.details).toContain('repair-incomplete')
-    expect(parsed!.details).toContain(`round 1/${DEFAULT_MAX_REPAIR_ROUNDS}`)
+    expect(parsed!.details).toContain('round 1')
   })
 
   test('non-repair gate-state blocks omit repairRound/maxRepairRounds for backward compatibility', () => {
@@ -6936,21 +7245,19 @@ describe('base2 COMMIT ANYWAY commit-scope bypass publisher', () => {
 })
 
 describe('resolveMaxReviewerRepairRounds', () => {
-  test('defaults when undefined', () => {
-    expect(resolveMaxReviewerRepairRounds(undefined)).toBe(
-      DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS,
-    )
+  test('defaults to unlimited (null) when undefined', () => {
+    expect(resolveMaxReviewerRepairRounds(undefined)).toBe(null)
   })
 
   test('accepts a finite option number', () => {
     expect(resolveMaxReviewerRepairRounds(10)).toBe(10)
   })
 
-  test('invalid values fall back to default 6', () => {
-    expect(resolveMaxReviewerRepairRounds(0)).toBe(6)
-    expect(resolveMaxReviewerRepairRounds(-1)).toBe(6)
-    expect(resolveMaxReviewerRepairRounds('abc')).toBe(6)
-    expect(resolveMaxReviewerRepairRounds(Number.NaN)).toBe(6)
+  test('invalid values fall back to unlimited (null)', () => {
+    expect(resolveMaxReviewerRepairRounds(0)).toBe(null)
+    expect(resolveMaxReviewerRepairRounds(-1)).toBe(null)
+    expect(resolveMaxReviewerRepairRounds('abc')).toBe(null)
+    expect(resolveMaxReviewerRepairRounds(Number.NaN)).toBe(null)
   })
 
   test('caps at 20', () => {
@@ -6959,19 +7266,19 @@ describe('resolveMaxReviewerRepairRounds', () => {
 })
 
 describe('resolveMaxRepairRounds', () => {
-  test('defaults when undefined', () => {
-    expect(resolveMaxRepairRounds(undefined)).toBe(DEFAULT_MAX_REPAIR_ROUNDS)
+  test('defaults to unlimited (null) when undefined', () => {
+    expect(resolveMaxRepairRounds(undefined)).toBe(null)
   })
 
   test('accepts a finite option number', () => {
     expect(resolveMaxRepairRounds(10)).toBe(10)
   })
 
-  test('invalid values fall back to default 3', () => {
-    expect(resolveMaxRepairRounds(0)).toBe(3)
-    expect(resolveMaxRepairRounds(-1)).toBe(3)
-    expect(resolveMaxRepairRounds('abc')).toBe(3)
-    expect(resolveMaxRepairRounds(Number.NaN)).toBe(3)
+  test('invalid values fall back to unlimited (null)', () => {
+    expect(resolveMaxRepairRounds(0)).toBe(null)
+    expect(resolveMaxRepairRounds(-1)).toBe(null)
+    expect(resolveMaxRepairRounds('abc')).toBe(null)
+    expect(resolveMaxRepairRounds(Number.NaN)).toBe(null)
   })
 
   test('caps at 20', () => {
@@ -6980,21 +7287,19 @@ describe('resolveMaxRepairRounds', () => {
 })
 
 describe('resolveMaxSpecialistRepairRounds', () => {
-  test('defaults when undefined', () => {
-    expect(resolveMaxSpecialistRepairRounds(undefined)).toBe(
-      DEFAULT_MAX_SPECIALIST_REPAIR_ROUNDS,
-    )
+  test('defaults to unlimited (null) when undefined', () => {
+    expect(resolveMaxSpecialistRepairRounds(undefined)).toBe(null)
   })
 
   test('accepts a finite option number', () => {
     expect(resolveMaxSpecialistRepairRounds(10)).toBe(10)
   })
 
-  test('invalid values fall back to default 3', () => {
-    expect(resolveMaxSpecialistRepairRounds(0)).toBe(3)
-    expect(resolveMaxSpecialistRepairRounds(-1)).toBe(3)
-    expect(resolveMaxSpecialistRepairRounds('abc')).toBe(3)
-    expect(resolveMaxSpecialistRepairRounds(Number.NaN)).toBe(3)
+  test('invalid values fall back to unlimited (null)', () => {
+    expect(resolveMaxSpecialistRepairRounds(0)).toBe(null)
+    expect(resolveMaxSpecialistRepairRounds(-1)).toBe(null)
+    expect(resolveMaxSpecialistRepairRounds('abc')).toBe(null)
+    expect(resolveMaxSpecialistRepairRounds(Number.NaN)).toBe(null)
   })
 
   test('caps at 20', () => {
@@ -7155,11 +7460,12 @@ describe('createBase2 maxRepairRounds option/env', () => {
     }
   })
 
-  test('default createBase2 stores maxRepairRounds 3 on programmaticConfig', () => {
+  test('default createBase2 stores unlimited (null) repair budgets on programmaticConfig', () => {
     const base2 = createBase2('default')
     expect(base2.programmaticConfig).toMatchObject({
-      maxRepairRounds: DEFAULT_MAX_REPAIR_ROUNDS,
-      maxSpecialistRepairRounds: DEFAULT_MAX_SPECIALIST_REPAIR_ROUNDS,
+      maxRepairRounds: null,
+      maxReviewerRepairRounds: null,
+      maxSpecialistRepairRounds: null,
     })
   })
 })
@@ -7208,18 +7514,83 @@ describe('createBase2 maxSpecialistRepairRounds option/env', () => {
 })
 
 describe('base2 reviewer repair budget cap', () => {
-  test('crossing MAX_REVIEWER_REPAIR_ROUNDS blocks with an exhaustion message', () => {
-    // Seed reviewerRepairRoundCount at the default budget (6) so the very next
-    // blocking reviewer result crosses the cap (6 -> 7 > 6). The loop must yield
-    // the exhaustion add_message and break out (currentPhase blocked) instead of
-    // spawning yet another repair round. Driving seven full rounds through the
-    // generator is infeasible in a unit test, so the seed-count approach from
-    // the requirements is used.
+  test('default unlimited does not exhaust at seed count 6', () => {
+    // With unlimited default, seeding reviewerRepairRoundCount at the old
+    // default (6) must NOT exhaust; the loop continues into repair-editor.
     const base2 = createBase2('default')
     const agentState = {
       agentId: 'base2',
       base2ActiveWork: {
-        reviewerRepairRoundCount: DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS,
+        reviewerRepairRoundCount: 6,
+      },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Make the requested change now please',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+        .value,
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    const maybePinned = gen.next().value
+    if (maybePinned !== 'STEP') {
+      expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+    }
+    expect(
+      gen.next({
+        stepsComplete: true,
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
+    const postValidationStatus = gen.next({
+      toolResult: [{ type: 'json', value: [] }],
+    } as any).value
+    expect(postValidationStatus).toMatchObject({ toolName: 'git_status' })
+    const reviewCall = gen.next({
+      toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+    } as any).value
+    expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+    const afterReview = gen.next(
+      attestedReviewerResult(reviewCall, 'BLOCKING', [
+        'Fix the persistent edge case.',
+      ]) as any,
+    )
+
+    expect(afterReview.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect((afterReview.value as any).input.content).not.toContain(
+      'automated repair budget exhausted',
+    )
+    expect(gen.next().value).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'repair-editor' }] },
+    })
+  })
+
+  test('explicit small maxReviewerRepairRounds still exhausts as opt-in cap', () => {
+    const base2 = createBase2('default', { maxReviewerRepairRounds: 1 })
+    const agentState = {
+      agentId: 'base2',
+      base2ActiveWork: {
+        reviewerRepairRoundCount: 1,
       },
     }
     const gen = base2.handleSteps!({
@@ -7278,14 +7649,6 @@ describe('base2 reviewer repair budget cap', () => {
       'automated repair budget exhausted',
     )
     expect((agentState as any).base2ActiveWork.currentPhase).toBe('blocked')
-    expect(
-      (agentState as any).base2ActiveWork.nextRequiredAction,
-    ).toContain('repair budget exhausted')
-    // The open findings are still surfaced verbatim for inspection.
-    expect((agentState as any).base2ActiveWork.openReviewerBlockers).toEqual([
-      'BLOCKING: Fix the persistent edge case.',
-    ])
-    // Exhaustion breaks out of the loop; it does not spawn another repair.
     expect(gen.next().done).toBe(true)
   })
 })

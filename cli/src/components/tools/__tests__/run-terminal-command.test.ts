@@ -15,6 +15,9 @@ import type { ReactElement } from 'react'
 interface RenderContentElement extends ReactElement {
   props: {
     timeoutSeconds?: number
+    isRunning?: boolean
+    status?: string
+    jobId?: string
   }
 }
 
@@ -23,15 +26,17 @@ const createToolBlock = (
   command: string,
   output?: string,
   timeoutSeconds?: number,
+  extras?: Partial<ToolBlock>,
 ): ToolBlock & { toolName: 'run_terminal_command' } => ({
   type: 'tool',
-  toolName: 'run_terminal_command',
   toolCallId: 'test-tool-call-id',
   input: {
     command,
     ...(timeoutSeconds !== undefined && { timeout_seconds: timeoutSeconds }),
   },
   output,
+  ...extras,
+  toolName: 'run_terminal_command',
 })
 
 // Helper to create JSON output in the format the component expects
@@ -227,6 +232,72 @@ describe('RunTerminalCommandComponent', () => {
       expect(
         (result.content as RenderContentElement).props.timeoutSeconds,
       ).toBe(-1)
+    })
+  })
+
+  describe('background job live status', () => {
+    const mockTheme = {} as ChatTheme
+    const mockOptions = {
+      availableWidth: 80,
+      indentationOffset: 0,
+      labelWidth: 10,
+    }
+
+    const backgroundLaunchOutput = JSON.stringify([
+      {
+        type: 'json',
+        value: {
+          command: 'npm run dev',
+          processId: 1,
+          backgroundProcessStatus: 'running',
+          jobId: 'job-live',
+          logFile: '/tmp/job-live.log',
+          startingCwd: '/project',
+        },
+      },
+    ])
+
+    test('prefers tool-block lifecycle over frozen backgroundProcessStatus for isRunning', () => {
+      const runningBlock = createToolBlock(
+        'npm run dev',
+        backgroundLaunchOutput,
+        undefined,
+        { backgroundJobId: 'job-live', lifecycle: 'running' },
+      )
+      const runningResult = RunTerminalCommandComponent.render(
+        runningBlock,
+        mockTheme,
+        mockOptions,
+      )
+      expect(
+        (runningResult.content as RenderContentElement).props.isRunning,
+      ).toBe(true)
+      expect(
+        (runningResult.content as RenderContentElement).props.status,
+      ).toBe('running')
+      expect(
+        (runningResult.content as RenderContentElement).props.jobId,
+      ).toBe('job-live')
+
+      // After job_update settles the card, frozen JSON still says "running",
+      // but lifecycle-driven status must flip so the UI is not stuck.
+      const settledBlock = createToolBlock(
+        'npm run dev',
+        backgroundLaunchOutput,
+        undefined,
+        { backgroundJobId: 'job-live', lifecycle: 'succeeded' },
+      )
+      const settledResult = RunTerminalCommandComponent.render(
+        settledBlock,
+        mockTheme,
+        mockOptions,
+      )
+      expect(
+        (settledResult.content as RenderContentElement).props.isRunning,
+      ).toBe(false)
+      expect(
+        (settledResult.content as RenderContentElement).props.status,
+      ).toBe('completed')
     })
   })
 

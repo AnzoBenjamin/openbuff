@@ -12,6 +12,8 @@ import {
   extractBlockById,
   transformAskUserBlocks,
   updateToolBlockWithOutput,
+  extractBackgroundShellJobId,
+  getBackgroundShellJobIdFromToolOutput,
   scrubPlanTags,
   scrubPlanTagsInBlocks,
   insertPlanBlock,
@@ -1586,6 +1588,52 @@ describe('transformAskUserBlocks', () => {
   })
 })
 
+describe('extractBackgroundShellJobId', () => {
+  test('extracts jobId from successful BACKGROUND launch payload', () => {
+    expect(
+      extractBackgroundShellJobId({
+        command: 'npm run dev',
+        backgroundProcessStatus: 'running',
+        jobId: 'job-1',
+        logFile: '/tmp/j.log',
+      }),
+    ).toBe('job-1')
+  })
+
+  test('returns undefined for error payloads even with a jobId field', () => {
+    expect(
+      extractBackgroundShellJobId({
+        errorMessage: 'spawn failed',
+        jobId: 'nope',
+      }),
+    ).toBeUndefined()
+  })
+
+  test('returns undefined for SYNC completion payloads', () => {
+    expect(
+      extractBackgroundShellJobId({
+        command: 'echo hi',
+        stdout: 'hi\n',
+        exitCode: 0,
+      }),
+    ).toBeUndefined()
+  })
+
+  test('getBackgroundShellJobIdFromToolOutput reads first output value', () => {
+    expect(
+      getBackgroundShellJobIdFromToolOutput([
+        {
+          type: 'json',
+          value: {
+            backgroundProcessStatus: 'running',
+            jobId: 'from-array',
+          },
+        },
+      ]),
+    ).toBe('from-array')
+  })
+})
+
 describe('updateToolBlockWithOutput', () => {
   test('updates tool block with formatted output', () => {
     const blocks: ContentBlock[] = [
@@ -1617,6 +1665,85 @@ describe('updateToolBlockWithOutput', () => {
       toolOutput: [{ value: { stdout: 'hi\n', stderr: '' } }],
     })
     expect((result[0] as ToolContentBlock).output).toBe('hi\n')
+  })
+
+  test('wires backgroundJobId from BACKGROUND terminal tool_result', () => {
+    const blocks: ContentBlock[] = [
+      {
+        type: 'tool',
+        toolCallId: 'tool-bg',
+        toolName: 'run_terminal_command',
+        input: { command: 'npm run dev', process_type: 'BACKGROUND' },
+      },
+    ]
+    const result = updateToolBlockWithOutput(blocks, {
+      toolCallId: 'tool-bg',
+      toolOutput: [
+        {
+          value: {
+            command: 'npm run dev',
+            processId: 42,
+            backgroundProcessStatus: 'running',
+            jobId: 'job-from-result',
+            logFile: '/tmp/job.log',
+            startingCwd: '/project',
+          },
+        },
+      ],
+    })
+    expect((result[0] as ToolContentBlock).backgroundJobId).toBe(
+      'job-from-result',
+    )
+  })
+
+  test('does not wire backgroundJobId from terminal error results', () => {
+    const blocks: ContentBlock[] = [
+      {
+        type: 'tool',
+        toolCallId: 'tool-err',
+        toolName: 'run_terminal_command',
+        input: { command: 'bad' },
+      },
+    ]
+    const result = updateToolBlockWithOutput(blocks, {
+      toolCallId: 'tool-err',
+      toolOutput: [
+        {
+          value: {
+            command: 'bad',
+            errorMessage: 'spawn failed',
+            jobId: 'should-not-wire',
+          },
+        },
+      ],
+    })
+    expect((result[0] as ToolContentBlock).backgroundJobId).toBeUndefined()
+  })
+
+  test('BACKGROUND launch leaves display output empty for live job_update streaming', () => {
+    const blocks: ContentBlock[] = [
+      {
+        type: 'tool',
+        toolCallId: 'tool-bg-empty',
+        toolName: 'run_terminal_command',
+        input: { command: 'npm run dev' },
+      },
+    ]
+    const result = updateToolBlockWithOutput(blocks, {
+      toolCallId: 'tool-bg-empty',
+      toolOutput: [
+        {
+          value: {
+            command: 'npm run dev',
+            backgroundProcessStatus: 'running',
+            jobId: 'job-empty',
+            logFile: '/tmp/x.log',
+          },
+        },
+      ],
+    })
+    expect((result[0] as ToolContentBlock).output).toBe('')
+    expect((result[0] as ToolContentBlock).backgroundJobId).toBe('job-empty')
   })
 
   test('combines stdout and stderr for terminal commands', () => {

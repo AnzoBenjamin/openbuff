@@ -19,73 +19,112 @@ export const truncateFileTreeBasedOnTokenBudget = (params: {
   fileContext: ProjectFileContext
   tokenBudget: number
   logger: Logger
+  /** When true, skip symbol-rich trees and start from path-only (agent SMALL trees). */
+  preferPathOnly?: boolean
 }): {
   printedTree: string
   tokenCount: number
   truncationLevel: TruncationLevel
 } => {
-  const { fileContext, tokenBudget, logger } = params
+  const { fileContext, tokenBudget, logger, preferPathOnly = false } = params
   const startTime = performance.now()
   const { fileTree, fileTokenScores } = fileContext
 
   // NOTE: We are always filtering out files with "unimportant" extensions.
   const filteredTree = removeUnimportantFiles(fileTree)
 
-  const treeWithTokens = printFileTreeWithTokens(filteredTree, fileTokenScores)
-  const treeWithTokensCount = countTokensJson(treeWithTokens)
+  let filteredTreeNoTokensCount: number
 
-  if (treeWithTokensCount <= tokenBudget) {
-    return {
-      printedTree: treeWithTokens,
-      tokenCount: treeWithTokensCount,
-      truncationLevel: 'none',
-    }
-  }
+  if (preferPathOnly) {
+    // Agent-mode path bias: skip symbol-rich prints; start from path-only.
+    const printedFilteredTree = printFileTree(filteredTree)
+    filteredTreeNoTokensCount = countTokensJson(printedFilteredTree)
 
-  const printedFilteredTree = printFileTree(filteredTree)
-  const filteredTreeNoTokensCount = countTokensJson(printedFilteredTree)
-
-  if (filteredTreeNoTokensCount <= tokenBudget) {
-    const filteredTreeWithTokens = printFileTreeWithTokens(
-      filteredTree,
-      fileTokenScores,
-    )
-    const filteredTreeWithTokensCount = countTokensJson(filteredTreeWithTokens)
-    if (filteredTreeWithTokensCount <= tokenBudget) {
+    if (filteredTreeNoTokensCount <= tokenBudget) {
       if (DEBUG) {
         logger.debug(
           {
             tokenBudget,
-            filteredTreeWithTokensCount,
+            filteredTreeNoTokensCount,
             duration: performance.now() - startTime,
           },
-          'truncateFileTreeBasedOnTokenBudget unimportant-files',
+          'truncateFileTreeBasedOnTokenBudget preferPathOnly path-only',
         )
       }
+      // Full path-only print of the filtered tree — no depth pruning.
       return {
-        printedTree: filteredTreeWithTokens,
-        tokenCount: filteredTreeWithTokensCount,
-        truncationLevel: 'unimportant-files',
+        printedTree: printedFilteredTree,
+        tokenCount: filteredTreeNoTokensCount,
+        truncationLevel: 'none',
       }
     }
-    const { printedTree, tokenCount } = pruneFileTokenScores({
-      fileTree: filteredTree,
+    // Path-only still over budget: fall through to depth-based path-only truncation.
+  } else {
+    const treeWithTokens = printFileTreeWithTokens(
+      filteredTree,
       fileTokenScores,
-      tokenBudget,
-      logger,
-    })
+    )
+    const treeWithTokensCount = countTokensJson(treeWithTokens)
 
-    if (tokenCount <= tokenBudget) {
-      if (DEBUG) {
-        logger.debug(
-          { tokenBudget, tokenCount, duration: performance.now() - startTime },
-          'truncateFileTreeBasedOnTokenBudget tokens',
-        )
-      }
+    if (treeWithTokensCount <= tokenBudget) {
       return {
-        printedTree,
-        tokenCount,
-        truncationLevel: 'tokens',
+        printedTree: treeWithTokens,
+        tokenCount: treeWithTokensCount,
+        truncationLevel: 'none',
+      }
+    }
+
+    const printedFilteredTree = printFileTree(filteredTree)
+    filteredTreeNoTokensCount = countTokensJson(printedFilteredTree)
+
+    if (filteredTreeNoTokensCount <= tokenBudget) {
+      const filteredTreeWithTokens = printFileTreeWithTokens(
+        filteredTree,
+        fileTokenScores,
+      )
+      const filteredTreeWithTokensCount = countTokensJson(
+        filteredTreeWithTokens,
+      )
+      if (filteredTreeWithTokensCount <= tokenBudget) {
+        if (DEBUG) {
+          logger.debug(
+            {
+              tokenBudget,
+              filteredTreeWithTokensCount,
+              duration: performance.now() - startTime,
+            },
+            'truncateFileTreeBasedOnTokenBudget unimportant-files',
+          )
+        }
+        return {
+          printedTree: filteredTreeWithTokens,
+          tokenCount: filteredTreeWithTokensCount,
+          truncationLevel: 'unimportant-files',
+        }
+      }
+      const { printedTree, tokenCount } = pruneFileTokenScores({
+        fileTree: filteredTree,
+        fileTokenScores,
+        tokenBudget,
+        logger,
+      })
+
+      if (tokenCount <= tokenBudget) {
+        if (DEBUG) {
+          logger.debug(
+            {
+              tokenBudget,
+              tokenCount,
+              duration: performance.now() - startTime,
+            },
+            'truncateFileTreeBasedOnTokenBudget tokens',
+          )
+        }
+        return {
+          printedTree,
+          tokenCount,
+          truncationLevel: 'tokens',
+        }
       }
     }
   }
@@ -220,6 +259,7 @@ export const truncateFileTreeBasedOnTokenBudget = (params: {
   }
 }
 
+
 function pruneFileTokenScores(params: {
   fileTree: FileTreeNode[]
   fileTokenScores: Record<string, Record<string, number>>
@@ -305,24 +345,9 @@ function pruneFileTokenScores(params: {
 }
 
 const removeUnimportantFiles = (fileTree: FileTreeNode[]): FileTreeNode[] => {
+  // File-only predicate: rebuild never invokes this for directories (dirs are
+  // filtered via the rebuild directory branch below).
   const shouldKeepFile = (node: FileTreeNode): boolean => {
-    if (node.type === 'directory') {
-      // Filter out common build/cache directories
-      const dirPath = node.filePath.toLowerCase()
-      const isUnimportantDir = unimportantExtensions.some(
-        (ext) =>
-          ext.startsWith('/') && ext.endsWith('/') && dirPath.includes(ext),
-      )
-      if (isUnimportantDir) {
-        return false
-      }
-      // Keep directory if it has any important children. Build a filtered
-      // children array WITHOUT mutating the original node — the caller's file
-      // tree must remain pristine for other consumers.
-      const filteredChildren = node.children?.filter(shouldKeepFile) ?? []
-      return filteredChildren.length > 0
-    }
-
     const filePath = node.filePath.toLowerCase()
     return !unimportantExtensions.some(
       (ext) => !ext.startsWith('/') && filePath.endsWith(ext),

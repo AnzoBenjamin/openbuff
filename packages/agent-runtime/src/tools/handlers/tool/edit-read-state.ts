@@ -20,9 +20,19 @@ export function markEditRequiresFreshRead(params: {
   } = params
   fileProcessingState.failedEditRequiresReadByPath[path] = true
   fileProcessingState.editRereadRequirementsByPath ??= {}
+  // Do not downgrade context_compacted to weaker preflight/no_match-class reasons:
+  // write_file stays blocked with the compaction marker until a fresh whole-file read.
+  // When retaining context_compacted, also keep the original sourceTool so error copy
+  // attributes compaction (not a later weaker caller like str_replace).
+  const existing = fileProcessingState.editRereadRequirementsByPath[path]
+  const retainContextCompacted = existing?.reason === 'context_compacted'
+  const effectiveReason = retainContextCompacted ? 'context_compacted' : reason
+  const effectiveSourceTool = retainContextCompacted
+    ? existing.sourceTool
+    : sourceTool
   fileProcessingState.editRereadRequirementsByPath[path] = {
-    reason,
-    ...(sourceTool ? { sourceTool } : {}),
+    reason: effectiveReason,
+    ...(effectiveSourceTool ? { sourceTool: effectiveSourceTool } : {}),
   }
   if (revokeReadAuthorization) {
     delete fileProcessingState.readAuthorizationsByPath?.[path]
@@ -62,9 +72,20 @@ export function strictEditAuthorizationError(params: {
       errorMessage: string
       errorCode: 'fresh_read_required'
       recovery: {
+        /**
+         * Fallback tool when no capability can be echoed. Automated consumers
+         * must honor `preferredStrategy` first: when it is `'basedOnRead'`,
+         * retry the edit with `basedOnRead` and do not call `tool` first.
+         */
         tool: 'read_files'
         input: { paths: string[] }
         basedOnRead?: string
+        /**
+         * Primary recovery signal. `'basedOnRead'` means retry the blocked edit
+         * with `recovery.basedOnRead` (skip exploratory re-read). `'read_files'`
+         * means call `tool` with `input` because no capability is available.
+         */
+        preferredStrategy: 'basedOnRead' | 'read_files'
       }
     }
   | undefined {
@@ -119,19 +140,28 @@ export function strictEditAuthorizationError(params: {
     fileProcessingState.confirmedPostEditAnchorsByPath?.[path]?.readCapability
   // Prefer capability-retry when a whole-file token is already available; keep
   // read_files only as the secondary path when no capability can be echoed.
+  // recovery.preferredStrategy is the machine-readable primary signal so
+  // automated consumers do not always re-read first when basedOnRead is set.
   const nextLine = effectiveFreshReadCapability
     ? `Next: retry with basedOnRead set to the capability below on the next edit (write_file basedOnRead, or basedOnRead on every str_replace replacement). Do not exploratory re-read first when basedOnRead is provided.\nbasedOnRead="${effectiveFreshReadCapability}"`
     : `Next: call read_files with paths: [${JSON.stringify(path)}].`
   return {
     errorMessage: `${firstLine}\n${nextLine}${scopeNote}`,
     errorCode: 'fresh_read_required',
-    recovery: {
-      tool: 'read_files',
-      input: { paths: [path] },
-      ...(effectiveFreshReadCapability
-        ? { basedOnRead: effectiveFreshReadCapability }
-        : {}),
-    },
+    recovery: effectiveFreshReadCapability
+      ? {
+          // tool/input remain the documented fallback only; preferredStrategy +
+          // basedOnRead are the primary signals for capability-first recovery.
+          tool: 'read_files' as const,
+          input: { paths: [path] },
+          basedOnRead: effectiveFreshReadCapability,
+          preferredStrategy: 'basedOnRead' as const,
+        }
+      : {
+          tool: 'read_files' as const,
+          input: { paths: [path] },
+          preferredStrategy: 'read_files' as const,
+        },
   }
 }
 

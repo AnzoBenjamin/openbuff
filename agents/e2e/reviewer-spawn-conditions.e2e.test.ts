@@ -146,19 +146,6 @@ describe('base2 reviewer spawn conditions e2e', () => {
     } as any)
 
     expect(gen.next().value).toMatchObject({
-      toolName: 'query_index',
-      input: {
-        query: 'Edit the lifecycle file.',
-        limit: 14,
-        mode: 'search',
-      },
-    })
-    expect(gen.next(feedJson([])).value).toMatchObject({
-      toolName: 'add_message',
-      input: { role: 'user' },
-      includeToolCall: false,
-    })
-    expect(gen.next(feedJson([])).value).toMatchObject({
       toolName: 'git_status',
     })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
@@ -212,19 +199,6 @@ describe('base2 reviewer spawn conditions e2e', () => {
     } as any)
 
     expect(gen.next().value).toMatchObject({
-      toolName: 'query_index',
-      input: {
-        query: 'Edit the lifecycle file quickly.',
-        limit: 14,
-        mode: 'search',
-      },
-    })
-    expect(gen.next(feedJson([])).value).toMatchObject({
-      toolName: 'add_message',
-      input: { role: 'user' },
-      includeToolCall: false,
-    })
-    expect(gen.next(feedJson([])).value).toMatchObject({
       toolName: 'git_status',
     })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
@@ -281,9 +255,7 @@ describe('base2 reviewer spawn conditions e2e', () => {
       config: base2.programmaticConfig,
     } as any)
 
-    expect(gen.next().value).toMatchObject({ toolName: 'query_index' })
-    expect(gen.next(feedJson([])).value).toMatchObject({ toolName: 'add_message' })
-    expect(gen.next(feedJson([])).value).toMatchObject({ toolName: 'git_status' })
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
       toolName: 'list_jobs',
     })
@@ -317,9 +289,7 @@ describe('base2 reviewer spawn conditions e2e', () => {
       config: base2.programmaticConfig,
     } as any)
 
-    expect(gen.next().value).toMatchObject({ toolName: 'query_index' })
-    expect(gen.next(feedJson([])).value).toMatchObject({ toolName: 'add_message' })
-    expect(gen.next(feedJson([])).value).toMatchObject({ toolName: 'git_status' })
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
       toolName: 'list_jobs',
     })

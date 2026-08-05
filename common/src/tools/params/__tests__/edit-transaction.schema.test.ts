@@ -58,7 +58,7 @@ describe('editTransactionParams inputSchema transform — whole-file readCapabil
     ).toBe(true)
   })
 
-  it('derives complete bounds and capabilityHash when bounds are omitted', () => {
+  it('accepts replace_range when startLine/endLine bounds are omitted', () => {
     const parsed = editTransactionParams.inputSchema.safeParse({
       edits: [
         {
@@ -104,6 +104,40 @@ describe('editTransactionParams inputSchema transform — whole-file readCapabil
     expect(
       editTransactionParams.inputSchema.safeParse({
         edits: [{ ...edit, wholeFileCapabilityHash: wholeFileHash }],
+      }).success,
+    ).toBe(false)
+  })
+
+  it('accepts replace_range occurrence targeting and rejects co-supplied line bounds', () => {
+    const occurrenceEdit = {
+      type: 'replace_range' as const,
+      path,
+      readCapability: wholeFileCap,
+      occurrence: { match: 'line 2', occurrence: 1 },
+      newContent: 'replacement',
+    }
+
+    const accepted = editTransactionParams.inputSchema.safeParse({
+      edits: [occurrenceEdit],
+    })
+    expect(accepted.success).toBe(true)
+    if (accepted.success) {
+      expect(accepted.data.edits[0]).toEqual(occurrenceEdit)
+      expect(
+        editTransactionParams.providerInputSchema.safeParse(accepted.data)
+          .success,
+      ).toBe(true)
+    }
+
+    expect(
+      editTransactionParams.inputSchema.safeParse({
+        edits: [
+          {
+            ...occurrenceEdit,
+            startLine: 2,
+            endLine: 2,
+          },
+        ],
       }).success,
     ).toBe(false)
   })
@@ -263,6 +297,37 @@ describe('editTransactionParams inputSchema transform — whole-file readCapabil
               basedOnRead: wholeFileCap,
             },
           ],
+        },
+      },
+    ])
+    expect(parsed.success).toBe(true)
+  })
+
+  it('outputSchema accepts structured recovery packet fields', () => {
+    const parsed = editTransactionParams.outputSchema.safeParse([
+      {
+        type: 'json',
+        value: {
+          errorMessage: 'edit_transaction aborted during preflight',
+          requiresFreshRead: true,
+          errorCode: 'no_match',
+          failures: [
+            {
+              editIndex: 1,
+              path,
+              errorMessage: 'not an exact contiguous match',
+              failureKind: 'no_match',
+            },
+          ],
+          recovery: {
+            action: 'rebuild_whole_transaction',
+            requiresFreshRead: true,
+            paths: [path, 'src/other.ts'],
+            failedEditIndex: 1,
+            preferredStrategy: 'replace_range',
+            tool: 'read_files',
+            input: { paths: [path, 'src/other.ts'] },
+          },
         },
       },
     ])

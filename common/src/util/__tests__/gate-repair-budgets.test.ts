@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 
 import {
-  DEFAULT_MAX_REPAIR_ROUNDS,
-  DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS,
-  DEFAULT_MAX_SPECIALIST_REPAIR_ROUNDS,
   formatGateRepairBudgetsForCli,
   MAX_MAX_GATE_REPAIR_ROUNDS,
   resolveEffectiveGateRepairBudgets,
@@ -39,35 +36,31 @@ describe('gate-repair-budgets', () => {
     }
   }
 
-  it('resolvePositiveIntBudget defaults, rejects invalid, and caps', () => {
-    expect(resolvePositiveIntBudget(undefined, 3)).toBe(3)
-    expect(resolvePositiveIntBudget('  ', 3)).toBe(3)
-    expect(resolvePositiveIntBudget('nope', 3)).toBe(3)
-    expect(resolvePositiveIntBudget(0, 3)).toBe(3)
-    expect(resolvePositiveIntBudget(-2, 3)).toBe(3)
-    expect(resolvePositiveIntBudget(4.9, 3)).toBe(4)
-    expect(resolvePositiveIntBudget('7', 3)).toBe(7)
+  it('resolvePositiveIntBudget defaults to unlimited, rejects invalid, and caps', () => {
+    expect(resolvePositiveIntBudget(undefined)).toBe(null)
+    expect(resolvePositiveIntBudget('  ')).toBe(null)
+    expect(resolvePositiveIntBudget('nope')).toBe(null)
+    expect(resolvePositiveIntBudget(0)).toBe(null)
+    expect(resolvePositiveIntBudget(-2)).toBe(null)
+    expect(resolvePositiveIntBudget(4.9)).toBe(4)
+    expect(resolvePositiveIntBudget('7')).toBe(7)
     expect(
-      resolvePositiveIntBudget(99, 3, MAX_MAX_GATE_REPAIR_ROUNDS),
+      resolvePositiveIntBudget(99, null, MAX_MAX_GATE_REPAIR_ROUNDS),
     ).toBe(MAX_MAX_GATE_REPAIR_ROUNDS)
   })
 
-  it('per-budget resolvers use their defaults', () => {
-    expect(resolveMaxRepairRounds(undefined)).toBe(DEFAULT_MAX_REPAIR_ROUNDS)
-    expect(resolveMaxReviewerRepairRounds(undefined)).toBe(
-      DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS,
-    )
-    expect(resolveMaxSpecialistRepairRounds(undefined)).toBe(
-      DEFAULT_MAX_SPECIALIST_REPAIR_ROUNDS,
-    )
+  it('per-budget resolvers default to unlimited (null)', () => {
+    expect(resolveMaxRepairRounds(undefined)).toBe(null)
+    expect(resolveMaxReviewerRepairRounds(undefined)).toBe(null)
+    expect(resolveMaxSpecialistRepairRounds(undefined)).toBe(null)
   })
 
-  it('resolveEffectiveGateRepairBudgets reads defaults from process.env', () => {
+  it('resolveEffectiveGateRepairBudgets defaults unlimited from process.env', () => {
     snapshotEnv()
     expect(resolveEffectiveGateRepairBudgets()).toEqual({
-      maxRepairRounds: DEFAULT_MAX_REPAIR_ROUNDS,
-      maxReviewerRepairRounds: DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS,
-      maxSpecialistRepairRounds: DEFAULT_MAX_SPECIALIST_REPAIR_ROUNDS,
+      maxRepairRounds: null,
+      maxReviewerRepairRounds: null,
+      maxSpecialistRepairRounds: null,
     })
   })
 
@@ -98,25 +91,37 @@ describe('gate-repair-budgets', () => {
     })
   })
 
-  it('formatGateRepairBudgetsForCli is byte-stable with labels and numbers', () => {
+  it('formatGateRepairBudgetsForCli shows unlimited for null budgets', () => {
     const output = formatGateRepairBudgetsForCli({
-      maxRepairRounds: 3,
-      maxReviewerRepairRounds: 6,
-      maxSpecialistRepairRounds: 3,
+      maxRepairRounds: null,
+      maxReviewerRepairRounds: null,
+      maxSpecialistRepairRounds: null,
     })
     const labelWidth = 'reviewer (code-review)'.length
+    const valueWidth = 'unlimited'.length
     expect(output).toBe(
       [
         'Gate repair budgets',
         '-------------------',
-        `${'validation (hooks)'.padEnd(labelWidth)}  3`,
-        `${'reviewer (code-review)'.padEnd(labelWidth)}  6`,
-        `${'specialist (aux)'.padEnd(labelWidth)}  3`,
-        '(env: OPENBUFF_MAX_REPAIR_ROUNDS / OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS / OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS; createBase2 options win at agent load)',
+        `${'validation (hooks)'.padEnd(labelWidth)}  ${'unlimited'.padStart(valueWidth)}`,
+        `${'reviewer (code-review)'.padEnd(labelWidth)}  ${'unlimited'.padStart(valueWidth)}`,
+        `${'specialist (aux)'.padEnd(labelWidth)}  ${'unlimited'.padStart(valueWidth)}`,
+        '(default unlimited / progress-gated; set OPENBUFF_MAX_REPAIR_ROUNDS / OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS / OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS or createBase2 options to a positive int to cap; createBase2 options win at agent load)',
       ].join('\n'),
     )
     expect(output).toContain('validation (hooks)')
-    expect(output).toContain('reviewer (code-review)')
-    expect(output).toContain('specialist (aux)')
+    expect(output).toContain('unlimited')
+  })
+
+  it('formatGateRepairBudgetsForCli is byte-stable with mixed caps', () => {
+    const output = formatGateRepairBudgetsForCli({
+      maxRepairRounds: 3,
+      maxReviewerRepairRounds: 6,
+      maxSpecialistRepairRounds: null,
+    })
+    expect(output).toContain('validation (hooks)')
+    expect(output).toContain('3')
+    expect(output).toContain('6')
+    expect(output).toContain('unlimited')
   })
 })

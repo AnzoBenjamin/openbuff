@@ -325,6 +325,38 @@ describe('terminal command permission policy', () => {
     }
   })
 
+  it('accepts git commit --message forms matching the -m allow', () => {
+    for (const command of [
+      'git commit --message "Fix the parser"',
+      'git commit --message="Fix the parser"',
+      'git commit --message "Use Option<T> in the public API"',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'git-commit',
+          projectRoot,
+          allowedPaths: ['src/a.ts'],
+        }).allowed,
+      ).toBe(true)
+    }
+    for (const command of [
+      'git commit --message "wip"',
+      'git commit --message=probe',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'git-commit',
+          projectRoot,
+          allowedPaths: ['src/a.ts'],
+        }).allowed,
+      ).toBe(false)
+    }
+  })
+
   it('allows multiple git commit message args containing path-like tokens', () => {
     for (const command of [
       'git commit -m "subject" -m "body with / slashes and (from ?? to) code"',
@@ -406,7 +438,10 @@ describe('terminal command permission policy', () => {
     }
   })
 
-  it('rejects raw newlines before normalization for non-full-access profiles', () => {
+  it('rejects multi-line multi-command composition under restricted profiles', () => {
+    // Unquoted newlines are shell separators (like `;`). Multi-line multi-command
+    // strings stay denied by remaining composition/allowlist rules — not a blanket
+    // raw-newline ban — so a disallowed second segment cannot slip through.
     for (const [permissionProfile, command] of [
       ['git-commit', 'git status --short\ntouch pwned.txt'],
       ['git-commit', 'git log --oneline -1\nsh -c "touch pwned.txt"'],
@@ -415,22 +450,45 @@ describe('terminal command permission policy', () => {
       ['tmux-test', 'tmux list-sessions\ntouch pwned.txt'],
       ['validation-diagnosis', 'cat > repro/fixture.log\ntouch pwned.txt'],
     ] as const) {
+      const decision = evaluateTerminalCommandPolicy({
+        command,
+        mode: 'assistant',
+        permissionProfile,
+        projectRoot,
+        allowedPaths: ['src/a.ts'],
+      })
+      expect(decision.allowed).toBe(false)
+      if (!decision.allowed) {
+        expect(decision.reason).not.toBe(
+          'terminal commands cannot contain raw newlines',
+        )
+      }
+    }
+  })
+
+  it('allows quoted <> in commit/stash messages but rejects active substitution and unquoted redirection', () => {
+    // Quoted subjects are inert data: bash does not treat quoted <> as redirections.
+    for (const command of [
+      'git commit -m "Fix A -> B"',
+      "git commit -m 'Use <T> in API'",
+      'git stash push -m "a -> b"',
+    ]) {
       expect(
         evaluateTerminalCommandPolicy({
           command,
           mode: 'assistant',
-          permissionProfile,
+          permissionProfile: 'git-commit',
           projectRoot,
           allowedPaths: ['src/a.ts'],
         }).allowed,
-      ).toBe(false)
+      ).toBe(true)
     }
-  })
-
-  it('rejects shell composition inside double-quoted commit messages', () => {
+    // Double-quoted $( / backticks stay active under bash -c; unquoted > is redirection.
     for (const command of [
       'git commit -m "$(rm -rf /)"',
+      'git commit -m "`id`"',
       'git commit -m "`whoami`"',
+      'git cat-file -p HEAD > /tmp/x',
     ]) {
       expect(
         evaluateTerminalCommandPolicy({
@@ -507,6 +565,7 @@ describe('terminal command permission policy', () => {
       'git merge --no-commit feature/x',
       'git cherry-pick 2025ef865',
       'git stash push -m wip',
+      'git stash push -m "a -> b"',
       'git stash pop',
       'git stash list',
       'git reset --soft HEAD~1',
@@ -732,6 +791,23 @@ describe('terminal command permission policy', () => {
           projectRoot,
         }).allowed,
       ).toBe(true)
+    }
+  })
+
+  it('fails closed on unparseable tmux-test composition around mutators', () => {
+    for (const command of [
+      'tmux kill-session; touch workspace.txt',
+      'tmux kill-session;; rm -rf src',
+      '; rm -f workspace.txt',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'tmux-test',
+          projectRoot,
+        }).allowed,
+      ).toBe(false)
     }
   })
 

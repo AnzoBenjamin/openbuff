@@ -204,7 +204,6 @@ export async function processStrReplace(params: {
       const authorityError = validateReadCapabilityAuthority({
         capability: basedOnRead,
         expectedScope: readCapabilityScope,
-        requireBoundCapability: requireFreshReadCapability,
       })
       if (authorityError) {
         capabilityAuthorityErrors.push(
@@ -788,9 +787,8 @@ function getReadCapabilityKey(basedOnRead: ReplacementReadCapability): string {
 function validateReadCapabilityAuthority(params: {
   capability: ReplacementReadCapability
   expectedScope?: ReadCapabilityScope
-  requireBoundCapability: boolean
 }): string | null {
-  const { capability, expectedScope, requireBoundCapability } = params
+  const { capability, expectedScope } = params
   if (!expectedScope) {
     return 'The authenticated capability cannot be verified because this edit has no runtime project/path/run scope. Re-read the target through the active runtime.'
   }
@@ -1278,6 +1276,19 @@ function findClosestMatches(params: {
 }
 
 const MIN_USEFUL_DIAGNOSTIC_SIMILARITY = 0.45
+/** Large oldString threshold for reactive replace_range / smaller-anchor guidance. */
+const LARGE_OLD_STRING_LINE_THRESHOLD = 40
+const LARGE_OLD_STRING_CHAR_THRESHOLD = 1_500
+
+const LARGE_OR_LOW_SIMILARITY_STRATEGY_NUDGE = [
+  'Prefer re-reading a narrow range with read_files and using replace_range with its readCapability, or a smaller unique oldString.',
+  'Do not reconstruct huge blocks from memory; only exact contiguous matches from live sourceContent/read output are safe.',
+].join(' ')
+
+function isLargeOldString(oldStr: string): boolean {
+  if (oldStr.length > LARGE_OLD_STRING_CHAR_THRESHOLD) return true
+  return oldStr.split('\n').length > LARGE_OLD_STRING_LINE_THRESHOLD
+}
 
 function formatClosestMatchDiagnostics(
   path: string,
@@ -1287,22 +1298,34 @@ function formatClosestMatchDiagnostics(
     endLine: number
     similarity: number
   }[],
+  oldStr?: string,
 ): string {
   const usefulMatches = matches.filter(
     (match) => match.similarity >= MIN_USEFUL_DIAGNOSTIC_SIMILARITY,
   )
+  const bestSimilarity = matches[0]?.similarity
+  const lowSimilarity =
+    bestSimilarity === undefined ||
+    bestSimilarity < MIN_USEFUL_DIAGNOSTIC_SIMILARITY
+  const largeOldString = typeof oldStr === 'string' && isLargeOldString(oldStr)
+  const strategyNudge =
+    lowSimilarity || largeOldString ? LARGE_OR_LOW_SIMILARITY_STRATEGY_NUDGE : ''
 
   if (usefulMatches.length === 0) {
-    const bestSimilarity = matches[0]?.similarity
-    if (bestSimilarity === undefined) return ''
+    if (bestSimilarity === undefined) {
+      return strategyNudge
+    }
 
     return [
       `No useful candidate ranges found (best similarity ${Math.round(bestSimilarity * 100)}%).`,
       'Do not use the low-similarity candidates from memory; re-read the current file/range and build a new oldString from that output.',
-    ].join('\n')
+      strategyNudge,
+    ]
+      .filter(Boolean)
+      .join('\n')
   }
 
-  return usefulMatches
+  const candidateBlock = usefulMatches
     .map((match, index) =>
       [
         `Candidate ${index + 1}: lines ${match.startLine}-${match.endLine} (similarity ${Math.round(match.similarity * 100)}%)`,
@@ -1313,6 +1336,8 @@ function formatClosestMatchDiagnostics(
       ].join('\n'),
     )
     .join('\n\n')
+
+  return strategyNudge ? `${candidateBlock}\n\n${strategyNudge}` : candidateBlock
 }
 
 function getOccurrenceLineRanges(params: {
@@ -1843,9 +1868,11 @@ const tryMatchOldStr = (params: {
     `The old string ${JSON.stringify(oldStr)} is not an exact contiguous match of the current file, so it was not applied.`,
     'It may be incomplete, may omit punctuation from the middle of a line, or may refer to content that changed or was removed.',
   ].join(' ')
-  const diagnostics = formatClosestMatchDiagnostics(path, closestMatches)
+  const diagnostics = formatClosestMatchDiagnostics(path, closestMatches, oldStr)
   if (diagnostics) {
     errorMsg += `\n\nClosest candidate ranges for read_files.ranges recovery:\n${diagnostics}`
+  } else if (isLargeOldString(oldStr)) {
+    errorMsg += `\n\n${LARGE_OR_LOW_SIMILARITY_STRATEGY_NUDGE}`
   }
 
   return {

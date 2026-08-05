@@ -4,18 +4,23 @@ All notable changes to the `@openbuff/cli` package will be documented in this fi
 
 ## [Unreleased] - 2026-08-03
 
+### Changed
+
+- Gate repair loops default to **unlimited / progress-gated** (no hard round caps). Optional positive-int caps remain via `createBase2` options (`maxRepairRounds`, `maxReviewerRepairRounds`, `maxSpecialistRepairRounds`) and env (`OPENBUFF_MAX_*_REPAIR_ROUNDS`, max `20`). Unset/invalid → unlimited (`null` in programmaticConfig). `/context` prints `unlimited` for defaults. Shared helpers in `common/src/util/gate-repair-budgets.ts`.
+- Already-credited (`gatePassedFiles`) dirty task files no longer re-expand final gate scope via `deriveGateScopeFiles`, so durable/conversation reuse is not broken and the reviewer is not re-spawned solely for still-dirty credited paths. Marker eviction and unreviewed re-arm still handle real content drift.
+- Validation/reviewer gate finalization is **LOOKS_GOOD-only**. Structured `NON_BLOCKING` no longer passes the gate: findings are elevated into the same repair-editor / re-review loop as `BLOCKING` and burn the reviewer repair counter until a later review returns `LOOKS_GOOD` (or an optional hard cap is exhausted).
+
 ### Added
 
-- Configurable gate repair budgets on `createBase2`: `maxRepairRounds` (validation hooks, default `3`), `maxReviewerRepairRounds` (code-reviewer → repair → re-review, default `6`), and `maxSpecialistRepairRounds` (specialist aux gate, default `3`). Each accepts a positive integer capped at `20`, with option values winning over env (`OPENBUFF_MAX_REPAIR_ROUNDS`, `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS`, `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS`). Shared resolve/format helpers live in `common/src/util/gate-repair-budgets.ts` and are re-exported from `agents/base2/base2.ts`. Documented in `docs/configuration.md` and `docs/environment-variables.md`.
+- Optional gate repair budget caps on `createBase2` / env (see Changed). Shared resolve/format helpers live in `common/src/util/gate-repair-budgets.ts` and are re-exported from `agents/base2/base2.ts`. Documented in `docs/configuration.md` and `docs/environment-variables.md`.
 - `/context` (alias `/ctx`) now always prints the effective **Gate repair budgets** section (validation / reviewer / specialist), resolved from env/defaults even when no context-budget ledger exists yet. Ledger output, when present, is shown first with budgets appended after a blank line.
 - The `code-reviewer` gate now recognizes an embedded JSON verdict object emitted after a prose preamble (e.g. `"I now have full context. … {\"verdict\":\"LOOKS_GOOD\",…}"`). The new `extractEmbeddedJsonVerdict` helper in `agents/base2/gate-reviewer.ts` tracks brace depth with `\"`-escape and JSON-string-boundary awareness so a `}` inside a string value does not prematurely close the object, uses the last embedded verdict when a reviewer echoes a prior `BLOCKING` before a final `LOOKS_GOOD`, and rejects truncated/unknown/`coverage:"missing"` verdicts. The inline `base2.handleSteps` mirror is kept in sync and parity-tested in `agents/__tests__/gate-reviewer.test.ts`. Documented in `docs/agents-and-tools.md` under a new "## Reviewer verdict contract" section.
 
-### Changed
-
-- Validation/reviewer gate finalization is **LOOKS_GOOD-only**. Structured `NON_BLOCKING` no longer passes the gate: findings are elevated into the same repair-editor / re-review loop as `BLOCKING` and burn the reviewer repair budget until a later review returns `LOOKS_GOOD` (or the budget is exhausted).
-
 ### Fixed
 
+- Security aux LOOKS_GOOD credit fingerprints the **reviewable** pending subset only (`selectReviewableGateFiles`), so non-reviewable plan/session dirt (e.g. `.agents/sessions/**/STATUS.md`) no longer thrash-invalidates security credit; entry still uses full pending for `matchesSecuritySensitiveGlob`. Bundle docs clarify bare `get_change_review_bundle.snapshotId` is evidence-only — gate attestation stays opaque `v3:…` tokens.
+- Post-edit specialist review attestation now uses the **gate-owned v3 fingerprint** (same family as security/code-reviewer) as the sole review token: spawn `params.snapshot_id`, prompt echo, `specialistSnapshots`, finding `snapshotFingerprint`, and gateId all use `specialistCreditFingerprint` (`v3:…` from `hashGateSnapshotDetails`). Bare `get_change_review_bundle.snapshotId` hex is evidence-only (files/diff/empty-tree) and is no longer accepted as specialist credit identity. Stale retry recomputes the gate fingerprint from current pending files; bundle refresh is optional for evidence. Non-attestable fingerprints (`unreadable:no-crypto`) fail closed without spawning bare bundle ids. Empty/failed bundles never auto-credit specialists while reviewable pending files still exist — the gate always spawns with the gate-owned v3 token instead of fail-open empty-tree attestation.
+- `git_status` tool result schema now accepts the per-turn suppressed `{ unchanged: true, note }` payload (mirroring `list_jobs`), so byte-identical worktree re-observations no longer fail as `malformed_result`.
 - Inline reviewers now receive the orchestrator history as read context without copying their private file reads, tool results, and `set_output` transcript back into the parent prompt. Deliberate `set_messages` control-plane rewrites and context-pruner compaction still propagate.
 - Structured reviewer results are bounded before entering parent history, while retaining verdicts, snapshots, findings, corrections, dimensions, and representative evidence.
 - Semantic compaction preserves a larger beginning-and-end task contract and next action so trailing instructions survive long pasted diagnostics.

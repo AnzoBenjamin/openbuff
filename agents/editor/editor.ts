@@ -106,6 +106,7 @@ You may make edits across multiple turns. After each edit you will see whether i
 - Same-file mixed edit modes are allowed only when their original spans are disjoint and provenance maps unambiguously. The runtime rejects overlap or ambiguous provenance. For large files, prefer read_files windows/around/symbol selectors for complete cap.v3 blocks; use read_files ranges when you need an exact arbitrary line range. Use read_outline to discover structure, and pull a complete symbol only when rewrite_symbol is the intended edit. Otherwise submit replace_range with editAnchor.readCapability.
 - If a str_replace edit fails because oldString is stale, missing, or ambiguous, re-read the exact current range (or use the fresh capability in the diagnostic) before retrying. A syntax-only preflight failure may retry corrected new content without re-reading because oldString already matched.
 - If edit_transaction aborts, no files changed. When failures include basedOnRead (or basedOnRead= in the diagnostic text), retry with that capability first (write_file basedOnRead, or basedOnRead on every str_replace replacement / replace_range readCapability) — do not exploratory re-read first when a fresh cap.v3 is already echoed. Re-read only when no capability is available, for ambiguous oldString (longer anchor / occurrenceIndex), or when the diagnostic explicitly requires a fresh range re-read. When re-read is required, rebuild the whole related transaction from one coherent snapshot.
+- Edit contract: exact contiguous oldString from live read/sourceContent; multi-file abort → re-read ALL recovery.paths (requiresFreshRead) from one snapshot and rebuild the whole txn; prefer small unique anchors; large block → replace_range + readCapability; obey recovery.preferredStrategy when present.
 - Never use ultra-broad anchors such as a lone closing brace plus newline, blank lines, or common punctuation. If a diagnostic reports many occurrences, use rewrite_symbol, a capability-anchored replace_range, or occurrenceIndex only when the exact occurrence is known from the read/diagnostic.
 - Put dependent edits in one transaction so they preflight together. A simple one-file change is also a one-edit transaction.
 - Keep editing until the entire request is implemented across all files. Do not stop after a single file when more files still need changes.
@@ -252,7 +253,12 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
       const { messageHistory } = agentState
 
       const newMessages = messageHistory.slice(initialMessageHistoryLength)
+      // Receipt-only committed paths drive status. Tool-input paths are collected
+      // separately (via collectToolInputFiles, kept in sync with gate-files) so
+      // blocked diagnostics can name attempted targets without treating attempts
+      // as successful mutations.
       const changedFiles = extractChangedFiles(newMessages)
+      const attemptedEditFiles = extractAttemptedEditFiles(newMessages)
       const targetFileProgress = buildTargetFileProgress(
         targetFiles,
         changedFiles,
@@ -269,7 +275,7 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
       // explicit diagnostic only — never a security/authority statement.
       const blockedReason =
         changedFiles.length === 0
-          ? collectFailedEditReason(newMessages)
+          ? collectFailedEditReason(newMessages, attemptedEditFiles)
           : undefined
       // Changed paths prove only that mutations committed, not that a reviewer
       // finding was semantically addressed. Leave finding attestation to the
@@ -304,8 +310,12 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
       // Called only when `changedFiles.length === 0` (so the status resolves to
       // `blocked`). Produces a deterministic, cheap diagnostic for why no edit
       // landed without inspecting any authority/security internals — just two
-      // boolean flags derived from the edit_transaction tool messages.
-      function collectFailedEditReason(messages: unknown[]): string {
+      // boolean flags derived from the edit_transaction tool messages, plus any
+      // attempted tool-input paths collected via collectToolInputFiles.
+      function collectFailedEditReason(
+        messages: unknown[],
+        attemptedFiles: string[] = [],
+      ): string {
         let sawEditTransaction = false
         let committedUnrecognized = false
         for (const message of messages) {
@@ -342,13 +352,43 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
             }
           }
         }
+        const attemptedNote =
+          attemptedFiles.length > 0
+            ? ` Attempted paths: ${attemptedFiles.join(', ')}.`
+            : ''
         if (committedUnrecognized) {
-          return 'edit_transaction committed but the change was not recognized as an edited file. Check that the receipt finalHashes/actions all correlate and the target path matches what you intended to change.'
+          return `edit_transaction committed but the change was not recognized as an edited file. Check that the receipt finalHashes/actions all correlate and the target path matches what you intended to change.${attemptedNote}`
         }
         if (sawEditTransaction) {
-          return 'edit_transaction was attempted but no edit committed. Re-read the exact target range (or the failure diagnostic capability) and retry with a precise anchor.'
+          return `edit_transaction was attempted but no edit committed. Re-read the exact target range (or the failure diagnostic capability) and retry with a precise anchor.${attemptedNote}`
         }
-        return 'no edit_transaction was submitted; no file changes were produced.'
+        return `no edit_transaction was submitted; no file changes were produced.${attemptedNote}`
+      }
+
+      // Walks assistant tool-call inputs with collectToolInputFiles so the
+      // gate-files helper stays live inside handleSteps (parity with base2).
+      // Results are diagnostic-only and must not drive changedFiles/status.
+      function extractAttemptedEditFiles(messages: unknown[]): string[] {
+        const files = new Set<string>()
+        for (const message of messages) {
+          if (!message || typeof message !== 'object') continue
+          const record = message as Record<string, unknown>
+          if (record.role !== 'assistant' || !Array.isArray(record.content)) {
+            continue
+          }
+          for (const part of record.content) {
+            if (!part || typeof part !== 'object') continue
+            const toolCall = part as Record<string, unknown>
+            if (
+              toolCall.type === 'tool-call' &&
+              typeof toolCall.toolName === 'string' &&
+              isFileChangingTool(toolCall.toolName)
+            ) {
+              collectToolInputFiles(toolCall.input, files)
+            }
+          }
+        }
+        return [...files]
       }
 
       // NOTE: these helpers are inlined here (rather than imported from
@@ -367,6 +407,24 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
           toolName === 'str_replace' ||
           toolName === 'write_file'
         )
+      }
+
+      function collectToolInputFiles(input: unknown, out: Set<string>): void {
+        if (!input || typeof input !== 'object') return
+        const record = input as Record<string, unknown>
+        if (typeof record.path === 'string') out.add(record.path)
+        const operation = record.operation
+        if (operation && typeof operation === 'object' && typeof (operation as Record<string, unknown>).path === 'string') {
+          out.add((operation as Record<string, string>).path)
+        }
+        const edits = record.edits
+        if (Array.isArray(edits)) {
+          for (const edit of edits) {
+            if (edit && typeof edit === 'object' && typeof (edit as Record<string, unknown>).path === 'string') {
+              out.add((edit as Record<string, string>).path)
+            }
+          }
+        }
       }
 
       // Mutation evidence is accepted only from canonical committed receipts.
@@ -474,32 +532,6 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
             finalHashes[effectivePath] === entry.afterHash
           )
         })
-      }
-
-      function collectToolInputFiles(input: unknown, out: Set<string>): void {
-        if (!input || typeof input !== 'object') return
-        const record = input as Record<string, unknown>
-        if (typeof record.path === 'string') out.add(record.path)
-        const operation = record.operation
-        if (
-          operation &&
-          typeof operation === 'object' &&
-          typeof (operation as Record<string, unknown>).path === 'string'
-        ) {
-          out.add((operation as Record<string, string>).path)
-        }
-        const edits = record.edits
-        if (Array.isArray(edits)) {
-          for (const edit of edits) {
-            if (
-              edit &&
-              typeof edit === 'object' &&
-              typeof (edit as Record<string, unknown>).path === 'string'
-            ) {
-              out.add((edit as Record<string, string>).path)
-            }
-          }
-        }
       }
 
       function visit(

@@ -144,10 +144,11 @@ export type Base2ActiveWorkState = Base2GateState & {
   /**
    * Number of automated repair-editor rounds that have run for the current
    * batch of pending gate files. Reset to 0 whenever the gate passes or a
-   * fresh set of edits is recorded. Bounded by the configurable validation
-   * repair budget (default 3; option maxRepairRounds / env
-   * OPENBUFF_MAX_REPAIR_ROUNDS, max 20). Backward-compatible: older
-   * serialized state without this field is treated as 0.
+   * fresh set of edits is recorded. Telemetry/counter only by default:
+   * repair loops are progress-gated and unlimited unless an optional cap is
+   * set (option maxRepairRounds / env OPENBUFF_MAX_REPAIR_ROUNDS, max 20).
+   * Backward-compatible: older serialized state without this field is
+   * treated as 0.
    */
   repairRoundCount?: number
   /**
@@ -161,11 +162,9 @@ export type Base2ActiveWorkState = Base2GateState & {
    */
   repairSessionId?: string
   /**
-   * True after the single post-budget escalation editor round has run. The
-   * escalation round fires once after MAX_REPAIR_ROUNDS is exhausted, with a
-   * broader root-cause prompt, before the gate falls back to blocked. Ensures
-   * escalation is not repeated on every re-entry to the same failing batch.
-   * Backward-compatible.
+   * Legacy flag from the removed post-budget escalation editor path. Kept for
+   * serialized-state compatibility; the default unlimited repair loop no
+   * longer sets or depends on this. Backward-compatible.
    */
   repairEscalationDone?: boolean
   /**
@@ -187,9 +186,10 @@ export type Base2ActiveWorkState = Base2GateState & {
   reviewerProtocolRetryCount?: number
   /**
    * Number of reviewer-finding repair rounds for the current snapshot family.
-   * Bounded by the configurable reviewer repair budget (default 6; option
-   * maxReviewerRepairRounds / env OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS, max 20).
-   * NON_BLOCKING findings also burn rounds under LOOKS_GOOD-only finalization.
+   * Telemetry/counter only by default (unlimited / progress-gated). Optional
+   * hard cap via maxReviewerRepairRounds / OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS
+   * (max 20). NON_BLOCKING findings also burn rounds under LOOKS_GOOD-only
+   * finalization.
    */
   reviewerRepairRoundCount?: number
   /** Number of consecutive schema-valid agent runs that produced no verdict. */
@@ -255,10 +255,11 @@ export type Base2ActiveWorkState = Base2GateState & {
    */
   securityReviewGateFingerprint?: string
   /**
-   * Repair rounds for the specialist -> repair -> re-review loop. Bounded by
-   * the configurable specialist repair budget (default 3; option
-   * maxSpecialistRepairRounds / env OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS,
-   * max 20) so the loop always terminates. Absent legacy state is treated as 0.
+   * Repair rounds for the specialist -> repair -> re-review loop. Telemetry
+   * only by default (unlimited / progress-gated via no-progress and incomplete
+   * receipt exits). Optional hard cap via maxSpecialistRepairRounds /
+   * OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS (max 20). Absent legacy state is
+   * treated as 0.
    */
   specialistRepairRoundCount?: number
   /**

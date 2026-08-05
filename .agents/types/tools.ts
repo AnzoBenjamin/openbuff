@@ -809,7 +809,7 @@ export interface RunTargetedValidationParams {
 export interface RunTerminalCommandParams {
   /** CLI command valid for user's OS. */
   command: string
-  /** Either SYNC (waits, returns output) or BACKGROUND (starts a detached job and returns immediately with a jobId — poll/follow it with check_job). Use BACKGROUND for long-running or never-exiting processes (dev servers, watchers, log tails) so you don't block the turn. Default SYNC */
+  /** SYNC (default) for finite commands that exit: waits and returns output. BACKGROUND only for long-running or never-exiting processes (dev servers, watchers, log tails): starts a detached job and returns a jobId immediately so the turn is not blocked. Live job_update already drives the user UI; use check_job for agent-side readiness/exitCode/join, not solely for user progress. */
   process_type?: 'SYNC' | 'BACKGROUND'
   /** For BACKGROUND commands only: keep the job running if the owning request is cancelled. Defaults to false. */
   detach?: boolean

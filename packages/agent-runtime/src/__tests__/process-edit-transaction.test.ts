@@ -162,6 +162,7 @@ describe('processEditTransaction', () => {
           editIndex: 1,
           id: 'update-test',
           path: 'src/helper.test.ts',
+          failureKind: 'no_match',
         }),
       ])
       expect(result.failures[0]!.errorMessage).toContain(
@@ -169,6 +170,19 @@ describe('processEditTransaction', () => {
       )
       expect(result.failures[0]!.errorMessage).not.toContain('omit atomic')
       expect(result.error).not.toContain('+export const value = 2')
+      expect(result.requiresFreshRead).toBe(true)
+      expect(result.errorCode).toBe('no_match')
+      expect(result.recovery).toMatchObject({
+        action: 'rebuild_whole_transaction',
+        requiresFreshRead: true,
+        failedEditIndex: 1,
+        tool: 'read_files',
+        input: { paths: expect.arrayContaining(['src/helper.ts', 'src/helper.test.ts']) },
+      })
+      expect(result.recovery?.paths).toEqual(
+        expect.arrayContaining(['src/helper.ts', 'src/helper.test.ts']),
+      )
+      expect(result.recovery?.paths).toHaveLength(2)
     }
   })
 
@@ -1856,5 +1870,139 @@ describe('processEditTransaction', () => {
       )
     }
     expect('files' in result).toBe(false)
+  })
+
+  it('resolves replace_range occurrence targeting to absolute lines inside the capability', async () => {
+    const initial = 'alpha\nMARKER\nbeta\nMARKER\ngamma\n'
+    const capabilityContent = 'alpha\nMARKER\nbeta\nMARKER\ngamma'
+    const result = await processEditTransaction({
+      initialContentByPath: new Map([['src/file.ts', initial]]),
+      logger,
+      readCapabilityIssuer: defaultReadCapabilityIssuer,
+      edits: [
+        {
+          type: 'replace_range',
+          path: 'src/file.ts',
+          ...readAuthorization({
+            path: 'src/file.ts',
+            startLine: 1,
+            endLine: 5,
+            content: capabilityContent,
+          }),
+          occurrence: { match: 'MARKER', occurrence: 2 },
+          newContent: 'MARKER_TWO',
+        },
+      ],
+    })
+
+    expect('files' in result).toBe(true)
+    if ('files' in result) {
+      expect(result.files[0]?.content).toBe(
+        'alpha\nMARKER\nbeta\nMARKER_TWO\ngamma\n',
+      )
+    }
+  })
+
+  it('aborts replace_range when the requested occurrence is missing', async () => {
+    const initial = 'alpha\nMARKER\nbeta\nMARKER\ngamma\n'
+    const capabilityContent = 'alpha\nMARKER\nbeta\nMARKER\ngamma'
+    const result = await processEditTransaction({
+      initialContentByPath: new Map([['src/file.ts', initial]]),
+      logger,
+      readCapabilityIssuer: defaultReadCapabilityIssuer,
+      edits: [
+        {
+          type: 'replace_range',
+          path: 'src/file.ts',
+          ...readAuthorization({
+            path: 'src/file.ts',
+            startLine: 1,
+            endLine: 5,
+            content: capabilityContent,
+          }),
+          occurrence: { match: 'MARKER', occurrence: 3 },
+          newContent: 'MARKER_THREE',
+        },
+      ],
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.failures[0]?.errorMessage).toContain(
+        'found 2 occurrence(s) of the requested match',
+      )
+      expect(result.failures[0]?.errorMessage).toContain(
+        'occurrence 3 does not exist',
+      )
+      expect(result.failures[0]?.failureKind).toBe('no_match')
+      expect(result.errorCode).toBe('no_match')
+    }
+    expect('files' in result).toBe(false)
+  })
+
+  it('classifies str_replace capability scope and invalid failures distinctly from stale', async () => {
+    const initial = 'export const value = 1\n'
+    const scopeResult = await processEditTransaction({
+      initialContentByPath: new Map([['src/file.ts', initial]]),
+      logger,
+      readCapabilityIssuer: defaultReadCapabilityIssuer,
+      // Strict mode so a supplied basedOnRead remains an authenticity gate rather
+      // than being auto-stripped when oldString is unique.
+      requireFreshReadCapabilityForPaths: new Set(['src/file.ts']),
+      edits: [
+        {
+          type: 'str_replace',
+          path: 'src/file.ts',
+          replacements: [
+            {
+              oldString: 'export const value = 1',
+              newString: 'export const value = 2',
+              allowMultiple: false,
+              basedOnRead: basedOnRead({
+                path: 'src/other.ts',
+                startLine: 1,
+                endLine: 1,
+                content: initial.trimEnd(),
+              }),
+            },
+          ],
+        },
+      ],
+    })
+
+    expect('error' in scopeResult).toBe(true)
+    if ('error' in scopeResult) {
+      expect(scopeResult.failures[0]?.errorMessage).toMatch(
+        /different project, path, or agent run/i,
+      )
+      expect(scopeResult.failures[0]?.failureKind).toBe('capability_scope')
+    }
+
+    const invalidResult = await processEditTransaction({
+      initialContentByPath: new Map([['src/file.ts', initial]]),
+      logger,
+      readCapabilityIssuer: defaultReadCapabilityIssuer,
+      requireFreshReadCapabilityForPaths: new Set(['src/file.ts']),
+      edits: [
+        {
+          type: 'str_replace',
+          path: 'src/file.ts',
+          replacements: [
+            {
+              oldString: 'export const value = 1',
+              newString: 'export const value = 2',
+              allowMultiple: false,
+              basedOnRead: 'dummy',
+            },
+          ],
+        },
+      ],
+    })
+
+    expect('error' in invalidResult).toBe(true)
+    if ('error' in invalidResult) {
+      expect(invalidResult.failures[0]?.errorMessage).toMatch(/Invalid basedOnRead/i)
+      expect(invalidResult.failures[0]?.failureKind).toBe('capability_invalid')
+    }
   })
 })

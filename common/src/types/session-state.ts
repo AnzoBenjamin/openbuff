@@ -221,6 +221,28 @@ export type AgentState = {
    * runtime after confirmed mutations / terminal touchedPaths.
    */
   selfMutatedPaths?: string[]
+  /**
+   * Progressive tool-disclosure tiers beyond CORE that are currently unlocked
+   * (published by base2's handleSteps under the progressive canary).
+   *
+   * Serialization / resume contract (do not change lightly):
+   *   - When the live template has progressive disclosure **off**
+   *     (`programmaticConfig.progressiveToolDisclosure === false`), this field
+   *     is ignored even if non-empty. Stale unlocks from a prior canary-on run
+   *     must not re-activate CORE+tiers filtering on resume/canary-off (that
+   *     would permanently shrink a full-surface template). base2's
+   *     publishUnlockedToolTiers also clears non-empty values when the canary
+   *     is off so later checkpoints drop the stale list.
+   *   - absent or `[]` → do **not** apply progressive filtering; the effective
+   *     surface is the template's own `toolNames` (full mode-resolved surface
+   *     for default-off agents; CORE-only static template for progressive
+   *     base2 before any unlock). Empty is therefore equivalent to absent for
+   *     checkpoint/resume consumers.
+   *   - non-empty + progressive on/unspecified → runtime narrows/expands to
+   *     CORE plus these tiers, still capped by the template's mode-resolved
+   *     fullToolSurface when present.
+   */
+  unlockedToolTiers?: string[]
   /** Ordered, resumable control-plane events that survive transcript compaction. */
   orchestrationLedger?: OrchestrationLedgerV1
   /** Spawn-bound writable path ownership used to prevent overlapping writers. */

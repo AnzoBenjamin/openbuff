@@ -17,6 +17,11 @@ import { beforeEach, describe, expect, it } from 'bun:test'
 import { mockFileContext } from './test-utils'
 import { processStream } from '../tools/stream-parser'
 import {
+  markEditRequiresFreshRead,
+  strictEditAuthorizationError,
+} from '../tools/handlers/tool/edit-read-state'
+import type { FileProcessingState } from '../tools/handlers/tool/write-file'
+import {
   buildSpawnAgentsHandlerFailureOutput,
   buildUnavailableToolMessage,
   executeToolCall,
@@ -1940,11 +1945,13 @@ describe('tool validation error handling', () => {
       toolNames: ['set_output'],
       outputSchema: z.object({ verdict: z.string() }),
     }
+    // Unrecoverable incomplete JSON that remains a string after decode (product
+    // recovery may complete `{"verdict":"LOOKS_GOOD"` into a valid object).
     const invalidOutput: StreamChunk = {
       type: 'tool-call',
       toolName: 'set_output',
       toolCallId: 'incomplete-set-output-tool-call-id',
-      input: { data: '{"verdict":"LOOKS_GOOD"' },
+      input: { data: '{"verdict":' },
     }
     async function* mockStream() {
       yield invalidOutput
@@ -3544,5 +3551,86 @@ describe('getToolSet provider schema compaction', () => {
     expect(schemaJson('edit_transaction')).toContain('description')
     // Read-only tools stay fully compacted: no description annotations survive.
     expect(schemaJson('read_files')).not.toContain('description')
+  })
+})
+
+describe('edit-read-state focused unit cases', () => {
+  function createFileProcessingState(): FileProcessingState {
+    return {
+      promisesByPath: {},
+      allPromises: [],
+      fileChangeErrors: [],
+      fileChanges: [],
+      firstFileProcessed: false,
+      failedEditRequiresReadByPath: {},
+      consecutiveStrReplaceFailuresByPath: {},
+    }
+  }
+
+  it('markEditRequiresFreshRead does not downgrade context_compacted to a weaker reason', () => {
+    const path = 'src/compacted.ts'
+    const fileProcessingState = createFileProcessingState()
+    markEditRequiresFreshRead({
+      fileProcessingState,
+      path,
+      reason: 'context_compacted',
+      sourceTool: 'compaction',
+    })
+    expect(fileProcessingState.editRereadRequirementsByPath?.[path]).toEqual({
+      reason: 'context_compacted',
+      sourceTool: 'compaction',
+    })
+
+    markEditRequiresFreshRead({
+      fileProcessingState,
+      path,
+      reason: 'preflight_failed',
+      sourceTool: 'str_replace',
+    })
+    expect(fileProcessingState.editRereadRequirementsByPath?.[path]).toEqual({
+      reason: 'context_compacted',
+      sourceTool: 'compaction',
+    })
+    expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
+  })
+
+  it('strictEditAuthorizationError uses capability-first basedOnRead recovery when a token is present', () => {
+    const path = 'src/auth-miss.ts'
+    const fileProcessingState = createFileProcessingState()
+    fileProcessingState.strictReadBeforeEdit = true
+    const capability =
+      'cap.v3.1.1.test-whole-file-capability-token-for-recovery-message'
+
+    const withCap = strictEditAuthorizationError({
+      fileProcessingState,
+      path,
+      toolName: 'write_file',
+      hasFreshWholeFileAuthorization: false,
+      freshReadCapability: capability,
+    })
+    expect(withCap).toBeDefined()
+    expect(String(withCap?.errorMessage)).toContain(
+      'Next: retry with basedOnRead',
+    )
+    expect(String(withCap?.errorMessage)).toContain(
+      `basedOnRead="${capability}"`,
+    )
+    expect(String(withCap?.errorMessage)).not.toMatch(/Next: call read_files/)
+    // Primary machine-readable signal is preferredStrategy + basedOnRead;
+    // tool remains the documented fallback only.
+    expect(withCap?.recovery.preferredStrategy).toBe('basedOnRead')
+    expect(withCap?.recovery.basedOnRead).toBe(capability)
+    expect(withCap?.recovery.tool).toBe('read_files')
+
+    const withoutCap = strictEditAuthorizationError({
+      fileProcessingState,
+      path,
+      toolName: 'write_file',
+      hasFreshWholeFileAuthorization: false,
+    })
+    expect(String(withoutCap?.errorMessage)).toContain('Next: call read_files')
+    expect(withoutCap?.recovery.preferredStrategy).toBe('read_files')
+    expect(withoutCap?.recovery.basedOnRead).toBeUndefined()
+    expect(withoutCap?.recovery.tool).toBe('read_files')
   })
 })

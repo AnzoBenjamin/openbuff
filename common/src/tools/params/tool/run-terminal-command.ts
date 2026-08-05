@@ -85,7 +85,7 @@ const inputSchema = z
       .enum(['SYNC', 'BACKGROUND'])
       .default('SYNC')
       .describe(
-        `Either SYNC (waits, returns output) or BACKGROUND (starts a detached job and returns immediately with a jobId — poll/follow it with check_job). Use BACKGROUND for long-running or never-exiting processes (dev servers, watchers, log tails) so you don't block the turn. Default SYNC`,
+        `SYNC (default) for finite commands that exit: waits and returns output. BACKGROUND only for long-running or never-exiting processes (dev servers, watchers, log tails): starts a detached job and returns a jobId immediately so the turn is not blocked. Live job_update already drives the user UI; use check_job for agent-side readiness/exitCode/join, not solely for user progress.`,
       ),
     detach: z
       .boolean()
@@ -142,7 +142,7 @@ Do:
 Notes:
 - If the user references a specific file, it could be either from their cwd or from the project root. You **must** determine which they are referring to (either infer or ask). Then, you must specify the path relative to the project root (or use the cwd parameter)
 - Commands can succeed without giving any output, e.g. if no type errors were found.
-- For long-running or never-exiting commands (dev servers, watchers, \`tail -f\`), set process_type: BACKGROUND. It returns a jobId immediately; read new output (and wait for a readiness pattern) with check_job instead of blocking the turn.
+- Use SYNC for finite commands. For long-running or never-exiting commands (dev servers, watchers, \`tail -f\`), set process_type: BACKGROUND — fire-and-forget start that returns a jobId immediately. Live job_update streams progress to the user; call check_job only when you need agent-side readiness/exitCode/join (e.g. wait_for a pattern), not to poll solely for user progress.
 
 ${gitCommitGuidePrompt}
 

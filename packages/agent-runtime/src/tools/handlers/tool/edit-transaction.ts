@@ -728,32 +728,85 @@ export const handleEditTransaction = (async (
       /different project, path, or agent run|Invalid basedOnRead|readCapability-covered (?:symbol )?content is stale|normalized capability metadata does not match|readCapability does not cover the exact original symbol replacement span/i.test(
         failureText,
       )
-    // Deterministic preflight failures made no writes and preserve existing
-    // authorization. Capability freshness/scope failures are different: retrying
-    // the atomic transaction requires one new snapshot for every target so no
-    // stale token from another path is replayed alongside the refreshed failure.
+    const isMatchOrAtomicAbort =
+      transactionResult.failures.some(
+        (failure) =>
+          failure.failureKind === 'no_match' ||
+          failure.failureKind === 'preflight_failed',
+      ) ||
+      /not an exact contiguous match|Atomic str_replace batch aborted|Found \d+ occurrences of|only \d+ exact occurrence\(s\) of the oldString exist/i.test(
+        failureText,
+      )
+    // Match / atomic-batch aborts and capability failures both require one new
+    // snapshot for every transaction target so multi-file retries cannot reuse
+    // other paths from memory. Pure syntax failures never reach this branch.
+    const requiresFreshRead =
+      requiresFreshCapability ||
+      isMatchOrAtomicAbort ||
+      transactionResult.requiresFreshRead === true
+    const recovery =
+      transactionResult.recovery ??
+      (requiresFreshRead
+        ? {
+            action: 'rebuild_whole_transaction' as const,
+            requiresFreshRead: true,
+            paths: uniquePaths,
+            failedEditIndex: transactionResult.failures[0]?.editIndex,
+            tool: 'read_files' as const,
+            input: { paths: uniquePaths },
+            ...(isMatchOrAtomicAbort && !requiresFreshCapability
+              ? {
+                  preferredStrategy: /replace_range with its readCapability|Do not reconstruct huge blocks from memory|No useful candidate ranges found/i.test(
+                    failureText,
+                  )
+                    ? ('replace_range' as const)
+                    : ('smaller_oldString' as const),
+                }
+              : {}),
+          }
+        : undefined)
+    const errorCode =
+      transactionResult.errorCode ??
+      (requiresFreshCapability
+        ? ('stale_capability' as const)
+        : isMatchOrAtomicAbort
+          ? ('no_match' as const)
+          : requiresFreshRead
+            ? ('preflight_failed' as const)
+            : undefined)
     invalidatePreparedEditPaths({
       fileProcessingState,
       paths: uniquePaths,
-      revokeReadAuthorization: requiresFreshCapability,
-      requiresFreshRead: requiresFreshCapability,
-      ...(requiresFreshCapability
-        ? { reason: 'stale_capability' as const, sourceTool: 'edit_transaction' }
+      revokeReadAuthorization: requiresFreshRead,
+      requiresFreshRead,
+      ...(requiresFreshRead
+        ? {
+            reason: requiresFreshCapability
+              ? ('stale_capability' as const)
+              : ('preflight_failed' as const),
+            sourceTool: 'edit_transaction',
+          }
         : {}),
     })
+
+    const multiTargetRecoveryProse = requiresFreshRead
+      ? [
+          `Atomic recovery requires fresh read state for every transaction target in this run: ${uniquePaths.join(', ')}. Re-read all targets and rebuild the complete transaction from one coherent snapshot; do not refresh only the first failed path or replay any other stale token/oldString from memory.`,
+        ]
+      : []
 
     return {
       output: [
         {
           type: 'json',
           value: {
-            errorMessage: requiresFreshCapability
-              ? [
-                  transactionResult.error,
-                  `Atomic recovery requires fresh read state for every transaction target in this run: ${uniquePaths.join(', ')}. Re-read all targets and rebuild the complete transaction with only those fresh capabilities; do not refresh only the first failed path or replay any other stale token.`,
-                ].join('\n')
-              : transactionResult.error,
+            errorMessage: [transactionResult.error, ...multiTargetRecoveryProse]
+              .filter(Boolean)
+              .join('\n'),
             failures: transactionResult.failures,
+            ...(requiresFreshRead && { requiresFreshRead: true }),
+            ...(errorCode && { errorCode }),
+            ...(recovery && { recovery }),
           },
         },
       ],

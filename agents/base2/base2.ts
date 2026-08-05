@@ -21,6 +21,11 @@ import {
   securityReviewSection,
   specialistRoutingSection,
 } from './quality-prompt-section'
+import {
+  isProgressiveToolDisclosureEnvEnabled,
+  resolveModelToolNames,
+  type ToolTier,
+} from './tool-tiers'
 import { publisher } from '../constants'
 import {
   PLACEHOLDER,
@@ -40,6 +45,14 @@ export function isProgressivePromptDisclosureEnvEnabled(
     normalized === 'on'
   )
 }
+
+/**
+ * Default for progressive prompt disclosure when the caller omits the
+ * `progressivePromptDisclosure` option. Post-flip (M2): ON by default. The
+ * OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE canary can only force ON, never OFF;
+ * an explicit `progressivePromptDisclosure: false` still wins.
+ */
+const DEFAULT_PROGRESSIVE_PROMPT_DISCLOSURE: boolean = true
 
 export {
   DEFAULT_MAX_REPAIR_ROUNDS,
@@ -61,6 +74,7 @@ export function createBase2(
     executePlan?: boolean
     noAskUser?: boolean
     progressivePromptDisclosure?: boolean
+    progressiveToolDisclosure?: boolean
     maxReviewerRepairRounds?: number
     maxRepairRounds?: number
     maxSpecialistRepairRounds?: number
@@ -74,23 +88,39 @@ export function createBase2(
     executePlan = false,
     noAskUser = false,
     progressivePromptDisclosure: progressivePromptDisclosureOption,
+    progressiveToolDisclosure: progressiveToolDisclosureOption,
     maxReviewerRepairRounds: maxReviewerRepairRoundsOption,
     maxRepairRounds: maxRepairRoundsOption,
     maxSpecialistRepairRounds: maxSpecialistRepairRoundsOption,
     model: modelOverride,
     providerOptions,
   } = options ?? {}
-  // Explicit true/false wins over env. When omitted, resolve from the
-  // OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE canary (off unless 1/true/yes/on).
+  // Explicit true/false wins over env. When omitted, the DEFAULT is now ON
+  // (M2 prompt disclosure flipped default-on); the
+  // OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE canary (1/true/yes/on) remains a
+  // force-on override consulted on this omitted-option path.
   const progressivePromptDisclosure =
     progressivePromptDisclosureOption ??
-    isProgressivePromptDisclosureEnvEnabled(
+    (isProgressivePromptDisclosureEnvEnabled(
       typeof process === 'object' && process !== null
         ? process.env?.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE
+        : undefined,
+    ) ||
+      DEFAULT_PROGRESSIVE_PROMPT_DISCLOSURE)
+  // Explicit true/false wins over env. When omitted, resolve from the
+  // OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE canary (off unless 1/true/yes/on).
+  // Static toolNames start core-only when on (unlockedTiers: []). handleSteps
+  // publishes live unlocks via publishUnlockedToolTiers before each STEP.
+  const progressiveToolDisclosure =
+    progressiveToolDisclosureOption ??
+    isProgressiveToolDisclosureEnvEnabled(
+      typeof process === 'object' && process !== null
+        ? process.env?.OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE
         : undefined,
     )
   // Explicit option wins over env. When omitted, resolve from
   // OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS (positive integer string).
+  // Missing/invalid → null (unlimited, progress-gated). Positive int = optional cap.
   const maxReviewerRepairRounds = resolveMaxReviewerRepairRounds(
     maxReviewerRepairRoundsOption ??
       (typeof process === 'object' && process !== null
@@ -98,7 +128,8 @@ export function createBase2(
         : undefined),
   )
   // Explicit option wins over env. When omitted, resolve from
-  // OPENBUFF_MAX_REPAIR_ROUNDS (positive integer string). Default 3.
+  // OPENBUFF_MAX_REPAIR_ROUNDS (positive integer string).
+  // Missing/invalid → null (unlimited). Positive int = optional cap.
   const maxRepairRounds = resolveMaxRepairRounds(
     maxRepairRoundsOption ??
       (typeof process === 'object' && process !== null
@@ -106,7 +137,8 @@ export function createBase2(
         : undefined),
   )
   // Explicit option wins over env. When omitted, resolve from
-  // OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS (positive integer string). Default 3.
+  // OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS (positive integer string).
+  // Missing/invalid → null (unlimited). Positive int = optional cap.
   const maxSpecialistRepairRounds = resolveMaxSpecialistRepairRounds(
     maxSpecialistRepairRoundsOption ??
       (typeof process === 'object' && process !== null
@@ -115,15 +147,14 @@ export function createBase2(
   )
   const isDefault = mode === 'default'
   const isFast = mode === 'fast'
-  const canDirectEdit = !planOnly
-  const canRunTerminal = !planOnly && executePlan
 
   const model = modelOverride ?? 'anthropic/claude-opus-4.7'
 
   const progressiveDisclosure = progressivePromptDisclosure
-  // M4 progressive prompt disclosure: when enabled, relocate verbose advisory
-  // sections out of the always-on prompt and replace each with a compact
-  // pointer to an on-demand guide file. When disabled (default), disclose()
+  // M4 progressive prompt disclosure (default ON; opt out with an explicit
+  // `progressivePromptDisclosure: false`): when enabled, relocate verbose
+  // advisory sections out of the always-on prompt and replace each with a
+  // compact pointer to an on-demand guide file. When disabled, disclose()
   // returns the full section verbatim so the assembled prompt is byte-identical.
   const disclose = (fullSection: string, pointer: string): string =>
     progressiveDisclosure ? pointer : fullSection
@@ -159,42 +190,14 @@ export function createBase2(
     },
     outputMode: 'last_message',
     includeMessageHistory: true,
-    toolNames: buildArray(
-      'spawn_agents',
-      'query_index',
-      'read_files',
-      'read_image',
-      'inspect_3d_asset',
-      'render_3d_preview',
-      'read_subtree',
-      'read_outline',
-      'inspect_codebase_structure',
-      !isFast && !planOnly && 'write_todos',
-      'create_plan',
-      'update_plan_status',
-      canDirectEdit && 'edit_transaction',
-      canDirectEdit && 'edit_3d_asset',
-      canRunTerminal && 'run_terminal_command',
-      'suggest_followups',
-      !noAskUser && 'ask_user',
-      'skill',
-      'list_directory',
-      'glob',
-      'check_background_agent',
-      'check_job',
-      'kill_job',
-      'read_logs',
-      'list_jobs',
-      'inspect_workspace',
-      'get_task',
-      'get_change_review_bundle',
-      'inspect_environment',
-      'get_affected_tests',
-      'get_build_targets',
-      !planOnly && 'run_targeted_validation',
-      'inspect_feature_completeness',
-      'evaluate_audit_coverage',
-    ),
+    toolNames: resolveModelToolNames({
+      mode,
+      planOnly,
+      executePlan,
+      noAskUser,
+      progressiveToolDisclosure,
+      unlockedTiers: [],
+    }),
     programmaticToolNames: [
       'spawn_agent_inline',
       'git_status',
@@ -208,6 +211,21 @@ export function createBase2(
       maxReviewerRepairRounds,
       maxRepairRounds,
       maxSpecialistRepairRounds,
+      // Threaded through programmaticConfig (plain JSON) so the serialized
+      // handleSteps generator can read it via config?.progressiveToolDisclosure
+      // without relying on a module-scope closure that .toString() drops.
+      progressiveToolDisclosure,
+      // Mode-resolved FULL tool surface (progressive off ordering). The runtime
+      // uses this as the additive ceiling when re-adding unlocked tier tools
+      // onto the core-only static template, so plan-only / no-ask-user / fast
+      // mode gates are never widened by progressive unlock.
+      fullToolSurface: resolveModelToolNames({
+        mode,
+        planOnly,
+        executePlan,
+        noAskUser,
+        progressiveToolDisclosure: false,
+      }),
     },
     // Spawnable roster with documented, intentional per-mode deltas (M3.2).
     // The deltas are ONLY the coded gates below; everything else is shared
@@ -298,13 +316,23 @@ ${
 }
 - **Validation is dependency-neutral:** A test, typecheck, lint, or build request authorizes only that validation command. Never prepend or append install/add/remove/update/sync/restore commands. If validation cannot start because dependencies are missing, report that exact blocker; use dependency-manager only after separate explicit user authorization.
 - **Don't use set_output:** The set_output tool is for spawned subagents to report results. Its absence from the root toolset is expected. Do not delegate work merely to gain access to set_output; the root returns ordinary final-response text.
-- **Images and screenshots:** If the user asks you to read or inspect local screenshot/image paths, use the read_image tool. Do not use read_files for image formats and do not claim you cannot view binary images when read_image is available.
+${
+  progressiveToolDisclosure
+    ? '- **Images and screenshots:** Prefer dedicated image inspection tools once they unlock for media work. Until then, do not invent binary image viewers or claim you can open image formats with read_files; continue with available discovery tools or spawn browser-use for live pages when appropriate.'
+    : '- **Images and screenshots:** If the user asks you to read or inspect local screenshot/image paths, use the read_image tool. Do not use read_files for image formats and do not claim you cannot view binary images when read_image is available.'
+}
 ${
   planOnly
     ? '- **Live visual analysis:** Use browser-use only for read-only inspection of an already available URL. Do not start dev servers or request browser interactions in plan mode.'
-    : '- **Live visual verification:** Visual verification extends beyond web apps. Image artifacts from 3D renders (e.g. Blender frames), image/video exports, generated diagrams, and charts must be inspected with read_image, not inferred from text logs alone. The workflow is: render/export -> poll the background job to completion -> read_image the emitted artifacts -> assess the result -> make a targeted edit -> re-render. Polling (check_job/check_background_agent/read_logs) is only the bridge to artifact inspection; do not re-poll a finished or unchanging job indefinitely. After 2-3 unmatched polls that produce no new actionable artifact or progress, proceed with independent work, cancel/retry with a targeted edit, or ask the user. For web app visual checks specifically, start any long-running dev server through a BACKGROUND basher, keep its returned jobId, use check_job to wait for readiness, then spawn browser-use for screenshots/navigation/interaction.'
+    : progressiveToolDisclosure
+      ? '- **Live visual verification:** Visual verification extends beyond web apps. Prefer CORE job tools (check_job/check_background_agent/read_logs/list_jobs) for agent-side readiness/exitCode — live job_update already covers user progress. Then use image/3D inspection and kill_job only after those tools unlock for media or job-management work. Do not re-poll a finished or unchanging job indefinitely. After 2-3 unmatched polls that produce no new actionable artifact or progress, proceed with independent work, cancel/retry with a targeted edit once edit tools unlock, or ask the user. For web app visual checks specifically, start any long-running dev server through a BACKGROUND basher (finite commands stay SYNC), keep its returned jobId, use check_job to wait for readiness, then spawn browser-use for screenshots/navigation/interaction.'
+      : '- **Live visual verification:** Visual verification extends beyond web apps. Image artifacts from 3D renders (e.g. Blender frames), image/video exports, generated diagrams, and charts must be inspected with read_image, not inferred from text logs alone. The workflow is: render/export -> wait for the background job (check_job for agent readiness/exit; live job_update for users) -> read_image the emitted artifacts -> assess the result -> make a targeted edit -> re-render. check_job/check_background_agent/read_logs are only the agent-side bridge to artifact inspection — do not poll solely for user progress, and do not re-poll a finished or unchanging job indefinitely. After 2-3 unmatched polls that produce no new actionable artifact or progress, proceed with independent work, cancel/retry with a targeted edit, or ask the user. For web app visual checks specifically, start any long-running dev server through a BACKGROUND basher (finite commands stay SYNC), keep its returned jobId, use check_job to wait for readiness, then spawn browser-use for screenshots/navigation/interaction.'
 }
-- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. For large files prefer read_files windows/around/symbol selectors over guess-shrink-retry ranges paging. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead. For ripgrep-style content search, spawn the code-searcher agent (and file-picker for fuzzy file discovery): \`code_search\`/\`find_files_matching_content\` are registered runtime tools but are intentionally not granted to you as root, so calling them directly is rejected. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs \`params.searchQueries\` (an array of { pattern } objects) and basher needs \`params.command\` (a shell string); put these in \`params\`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).
+${
+  progressiveToolDisclosure
+    ? '- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. For large files prefer read_files windows/around/symbol selectors over guess-shrink-retry ranges paging. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (`<<\'EOF\' ... EOF`) inside `basher.params.command`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. When edit tools unlock, author files with the dedicated edit surface and run them via a short basher command instead. For ripgrep-style content search, spawn the code-searcher agent (and file-picker for fuzzy file discovery): `code_search`/`find_files_matching_content` are registered runtime tools but are intentionally not granted to you as root, so calling them directly is rejected. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs `params.searchQueries` (an array of { pattern } objects) and basher needs `params.command` (a shell string); put these in `params`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).'
+    : '- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. For large files prefer read_files windows/around/symbol selectors over guess-shrink-retry ranges paging. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (`<<\'EOF\' ... EOF`) inside `basher.params.command`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with `write_file`/`edit_transaction` and run them via a short basher command instead. For ripgrep-style content search, spawn the code-searcher agent (and file-picker for fuzzy file discovery): `code_search`/`find_files_matching_content` are registered runtime tools but are intentionally not granted to you as root, so calling them directly is rejected. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs `params.searchQueries` (an array of { pattern } objects) and basher needs `params.command` (a shell string); put these in `params`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).'
+}
 
 # Code Editing Mandates
 
@@ -322,8 +350,17 @@ ${
     - Remove unused variables, functions, and files as a result of your changes.
     - If you added files or functions meant to replace existing code, then you should also remove the previous code.
 - **Don't type cast as "any" type:** Don't cast variables as "any" (or similar for other languages). This is a bad practice as it leads to bugs. Exception: when the value can truly be any type.
-- **Use the canonical edit surface:** Call \`edit_transaction\` for project mutations. Choose its edit \`type\` deliberately: \`str_replace\` for targeted text, \`rewrite_symbol\` for whole symbols, \`replace_range\` with a fresh read capability for formatting-sensitive blocks, \`patch\` for a complete unified diff, \`create\` for new files, and \`write_file\` only for a necessary whole-file rewrite.
-- **Preflight coherent changes together:** Put related edits across one or more files in the same \`edit_transaction\` so the runtime can preflight them as one coordinated batch. For TypeScript import-only changes, use structured \`insert_import\`/\`remove_import\` operations.
+${
+  progressiveToolDisclosure
+    ? '- **Use the canonical edit surface once it unlocks:** When implement-tier tools are available, call `edit_transaction` for project mutations. Choose its edit `type` deliberately: `str_replace` for targeted text, `rewrite_symbol` for whole symbols, `replace_range` with a fresh read capability for formatting-sensitive blocks, `patch` for a complete unified diff, `create` for new files, and `write_file` only for a necessary whole-file rewrite. Until then, gather context with CORE tools and spawn editor when appropriate.'
+    : '- **Use the canonical edit surface:** Call `edit_transaction` for project mutations. Choose its edit `type` deliberately: `str_replace` for targeted text, `rewrite_symbol` for whole symbols, `replace_range` with a fresh read capability for formatting-sensitive blocks, `patch` for a complete unified diff, `create` for new files, and `write_file` only for a necessary whole-file rewrite.'
+}
+${
+  progressiveToolDisclosure
+    ? '- **Preflight coherent changes together:** Once edit tools unlock, put related edits across one or more files in the same `edit_transaction` so the runtime can preflight them as one coordinated batch. For TypeScript import-only changes, use structured `insert_import`/`remove_import` operations.'
+    : '- **Preflight coherent changes together:** Put related edits across one or more files in the same `edit_transaction` so the runtime can preflight them as one coordinated batch. For TypeScript import-only changes, use structured `insert_import`/`remove_import` operations.'
+}
+- **Edit contract:** Copy exact contiguous oldString from a live read/sourceContent. Multi-file is all-or-nothing; on abort re-read ALL recovery.paths from one snapshot and rebuild the whole txn. Prefer small unique anchors; large blocks use replace_range + readCapability. Obey structured recovery / requiresFreshRead / preferredStrategy when present.
 - **Avoid broad scripted cleanups for refactors/renames:** For rename and overhaul tasks, prefer explicit targeted edits based on freshly read file content. Do not run one-off cleanup scripts across many files unless the user explicitly asks for that approach.
 
 # Harness-enforced recovery workflow
@@ -363,7 +400,11 @@ Use the spawn_agents tool to spawn specialized agents to help you complete the u
 - **Thinker delegation:** Spawn thinker only after enough context exists for complex architecture, design tradeoff, risk, debugging strategy, spec/plan critique, or repeated-failure reasoning. Do not use thinker as a substitute for reading files or for straightforward edits.
 - **Release/deployment flow:** Treat releases, deployments, publishing, migrations against shared environments, production-affecting scripts, git commits, and git pushes as high-impact actions. Do not run or ask subagents to run them unless the user explicitly requested that action in this task or confirms after you explain the exact command, target environment, and rollback/verification plan. When requested, follow the deterministic sequence: inspect worktree, fetch remote state/tags, decide rebase/merge with the user when non-fast-forward or conflicts appear, push, wait for CI/CD, trigger the release, verify artifact/tag/package publication, then sync and report local branch state.
 - **Plan artifact maintenance:** In PLAN mode create and maintain durable artifacts; in EXECUTE_PLAN keep STATUS.md and LESSONS.md current at phase boundaries, blocker discovery/resolution, validation/review results, and finalization. Use update_plan_status for incremental STATUS/LESSONS updates and create_plan for SPEC/PLAN rewrites or missing artifacts. Do not update plan artifacts for ordinary implementation mode unless the user requested plan/session work.
-- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use read_files/read_outline/read_subtree/glob/list_directory/query_index for source inspection (large files: prefer read_files windows/around/symbol selectors), inspect_3d_asset/render_3d_preview for 3D assets, read_image for other screenshots/images, edit_3d_asset for guarded Blender changes, edit_transaction for text project mutations, browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. \`run_targeted_validation\` is scoped evidence only — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.
+${
+  progressiveToolDisclosure
+    ? '- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use CORE read_files/read_outline/read_subtree/glob/list_directory/query_index for source inspection (large files: prefer read_files windows/around/symbol selectors), browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. Media, edit, validation, and kill_job tools appear only after their tiers unlock — continue with available tools until then. `run_targeted_validation` is scoped evidence only once unlocked — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.'
+    : '- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use read_files/read_outline/read_subtree/glob/list_directory/query_index for source inspection (large files: prefer read_files windows/around/symbol selectors), inspect_3d_asset/render_3d_preview for 3D assets, read_image for other screenshots/images, edit_3d_asset for guarded Blender changes, edit_transaction for text project mutations, browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. `run_targeted_validation` is scoped evidence only — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.'
+}
 - **Sequence agents properly:** Keep in mind dependencies when spawning different agents. Don't spawn agents in parallel that depend on each other.
 - **Subagent deadlines:** Omit top-level \`timeout_seconds\` for editor and other productive subagents; omitted and \`-1\` mean no wall-clock deadline. Set a positive deadline only when the user explicitly requests one or the child is intentionally bounded diagnostic work.
 - **Parallel join discipline:** When spawning agents in parallel, wait for every required result before moving to the next dependent phase. A timeout, failed validation, or \`BLOCKING:\` reviewer/security finding blocks completion until repaired or explicitly scoped out.
@@ -382,8 +423,12 @@ Use the spawn_agents tool to spawn specialized agents to help you complete the u
     '- Spawn the debugger after repeated validation failures, runtime failures, or unclear crash behavior where focused diagnosis is needed.',
     '- Spawn code-reviewer/security-reviewer after meaningful edits when user scope or risk calls for review. Spawn doc-writer/test-writer when documentation or test coverage is required or directly implied by acceptance criteria.',
     '- Spawn bashers sequentially if the second command depends on the the first.',
-    '- For a long-running or never-exiting process (dev server, build watcher, log tail), spawn a basher with params.process_type set to BACKGROUND: it returns a jobId immediately instead of blocking. Then call the check_job tool to poll new output and status, or to follow it (pass wait_for to block until a readiness/error pattern appears, with a timeout_seconds bound). Use kill_job when a background job is no longer needed. To watch an existing log file, start a BACKGROUND `tail -f <file>` and check_job it. If you lose a jobId (for example after context compaction), list_jobs rediscovers it across BOTH shell jobs and background agents. Live job status and output are surfaced to the user automatically, so you do not need to poll purely for the user to see progress.',
-    '- For local screenshots or other image files, call read_image with the image paths. Do not call read_files on image formats. Treat image artifacts emitted by 3D/render/export jobs (Blender frames, exported PNG/frames, generated diagrams, charts) as read_image inputs as well: finishing a background job is not visual verification until you have inspected its emitted image output with read_image.',
+    progressiveToolDisclosure
+      ? '- Use SYNC basher for finite commands that exit. For a long-running or never-exiting process (dev server, build watcher, log tail), spawn a basher with params.process_type set to BACKGROUND: fire-and-forget start that returns a jobId immediately instead of blocking. Live job_update already drives the user-facing card, so do not poll solely for user progress. Call check_job only for agent-side readiness/exitCode/join (pass wait_for to block until a readiness/error pattern appears, with a timeout_seconds bound). Use kill_job only after job-management tools unlock when a background job is no longer needed. To watch an existing log file, start a BACKGROUND `tail -f <file>` and check_job it when you need agent-side follow. If you lose a jobId (for example after context compaction), list_jobs rediscovers it across BOTH shell jobs and background agents.'
+      : '- Use SYNC basher for finite commands that exit. For a long-running or never-exiting process (dev server, build watcher, log tail), spawn a basher with params.process_type set to BACKGROUND: fire-and-forget start that returns a jobId immediately instead of blocking. Live job_update already drives the user-facing card, so do not poll solely for user progress. Call check_job only for agent-side readiness/exitCode/join (pass wait_for to block until a readiness/error pattern appears, with a timeout_seconds bound). Use kill_job when a background job is no longer needed. To watch an existing log file, start a BACKGROUND `tail -f <file>` and check_job it when you need agent-side follow. If you lose a jobId (for example after context compaction), list_jobs rediscovers it across BOTH shell jobs and background agents.',
+    progressiveToolDisclosure
+      ? '- For local screenshots or other image files, use dedicated image inspection once media tools unlock. Do not call read_files on image formats. Treat image artifacts emitted by 3D/render/export jobs as media-tier inputs once unlocked: finishing a background job is not visual verification until those artifacts are inspected with the unlocked image tools.'
+      : '- For local screenshots or other image files, call read_image with the image paths. Do not call read_files on image formats. Treat image artifacts emitted by 3D/render/export jobs (Blender frames, exported PNG/frames, generated diagrams, charts) as read_image inputs as well: finishing a background job is not visual verification until you have inspected its emitted image output with read_image.',
   ).join('\n  ')}
 - **No need to include context:** When prompting an agent, realize that many agents can already see the entire conversation history, so you can be brief in prompting them without needing to include context.
 - **Never spawn the context-pruner agent:** This agent is spawned automatically for you and you don't need to spawn it yourself.
@@ -478,7 +523,15 @@ ${PLACEHOLDER.SYSTEM_INFO_PROMPT}
 
 The runtime injects a fresh, compact Git-status observation before coding work and after model steps. Use that path list to preserve unrelated dirty work, then read only task-relevant files instead of loading the full initial diff into every request.
 
-${disclose(qualitySection, qualitySectionPointer)}
+${
+  progressiveToolDisclosure
+    ? `# Tool surface
+
+Core discovery and orchestration tools are always available. Edit, validation, audit, 3D, and job-management tools unlock automatically when implementation, review, or media work begins. If a tool you need is unavailable, it will appear once the relevant phase starts — continue with the tools you have.
+
+`
+    : ''
+}${disclose(qualitySection, qualitySectionPointer)}
 
 ${PLACEHOLDER.FRONTEND_SECTION}
 
@@ -534,6 +587,19 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         base2ActiveWork?: Base2ActiveWorkState
         canSuggestFollowups?: boolean
         uncommittedUnvalidatedFiles?: string[]
+        /**
+         * Progressive tool-disclosure tiers beyond CORE currently unlocked
+         * for this step. Published below before each `yield 'STEP'` when the
+         * progressiveToolDisclosure canary is on.
+         *
+         * Contract matches AgentState.unlockedToolTiers:
+         *   - absent or `[]` → no progressive filtering; template.toolNames
+         *     is the effective surface (CORE-only static template when the
+         *     canary is on; full surface when off).
+         *   - non-empty → runtime expands to CORE + these tiers (capped by
+         *     programmaticConfig.fullToolSurface).
+         */
+        unlockedToolTiers?: ToolTier[]
         /**
          * Process-owned mutation paths published by the runtime as JSON-safe
          * string[] (AgentState.selfMutatedPaths). Declared on this local
@@ -597,31 +663,28 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
       const runReviewerGate = runValidationGate
       const reviewerAgentType = 'code-reviewer'
       const MAX_REVIEWER_NO_VERDICT_RETRIES = 1
-      // Validation-hook repair budget. Already resolved into programmaticConfig
-      // at createBase2 load time; re-clamp here with local literals only because
-      // handleSteps is serialized via toString/new Function and cannot call
-      // module-scope resolve helpers.
+      // Optional validation-hook repair cap. Already resolved into
+      // programmaticConfig at createBase2 load time (null = unlimited).
+      // Re-clamp here with local literals only because handleSteps is
+      // serialized via toString/new Function and cannot call module-scope
+      // resolve helpers. Missing/null/invalid → Infinity (progress guards only).
       const configuredMaxRepairRounds = config?.maxRepairRounds
       const MAX_REPAIR_ROUNDS =
         typeof configuredMaxRepairRounds === 'number' &&
         Number.isFinite(configuredMaxRepairRounds) &&
         configuredMaxRepairRounds >= 1
           ? Math.min(Math.floor(configuredMaxRepairRounds), 20)
-          : 3
-      // Reviewer→repair→re-review budget (also burned by NON_BLOCKING under
-      // LOOKS_GOOD-only finalization). Already resolved into programmaticConfig
-      // at createBase2 load time; re-clamp here with local literals only because
-      // handleSteps is serialized via toString/new Function and cannot call
-      // module-scope resolveMaxReviewerRepairRounds.
+          : Number.POSITIVE_INFINITY
+      // Optional reviewer→repair→re-review cap (also burned by NON_BLOCKING under
+      // LOOKS_GOOD-only finalization). null/omitted → unlimited.
       const configuredMaxReviewerRepairRounds = config?.maxReviewerRepairRounds
       const MAX_REVIEWER_REPAIR_ROUNDS =
         typeof configuredMaxReviewerRepairRounds === 'number' &&
         Number.isFinite(configuredMaxReviewerRepairRounds) &&
         configuredMaxReviewerRepairRounds >= 1
           ? Math.min(Math.floor(configuredMaxReviewerRepairRounds), 20)
-          : 6
-      // Specialist→repair→re-review budget. Same local re-clamp pattern;
-      // default stays 3 (unlike reviewer default 6).
+          : Number.POSITIVE_INFINITY
+      // Optional specialist→repair→re-review cap. null/omitted → unlimited.
       const configuredMaxSpecialistRepairRounds =
         config?.maxSpecialistRepairRounds
       const MAX_SPECIALIST_REPAIR_ROUNDS =
@@ -629,7 +692,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         Number.isFinite(configuredMaxSpecialistRepairRounds) &&
         configuredMaxSpecialistRepairRounds >= 1
           ? Math.min(Math.floor(configuredMaxSpecialistRepairRounds), 20)
-          : 3
+          : Number.POSITIVE_INFINITY
       const MAX_SPECIALIST_NO_VERDICT_RETRIES = 1
       // Single source of truth for the post-gate finalization instruction used
       // by every gate-pass path (fresh pass, conversation reuse, durable
@@ -813,6 +876,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           includeToolCall: false,
         } as any
         mutableAgentState.canSuggestFollowups = false
+        publishUnlockedToolTiers()
         yield 'STEP'
         return
       }
@@ -873,12 +937,16 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           // Cache HIT: skip the live query_index call and the
           // discoveryCoordinator bookkeeping entirely (no live retrieval
           // happened this turn); yield only the route note, marked as a
-          // cached reuse.
+          // cached reuse, and re-emit the persisted compact envelope
+          // (cachedProactiveRetrieval.result) so the cached payload is
+          // genuinely consumed rather than write-only. Defensive: if the
+          // cache entry is somehow missing, omit the envelope suffix
+          // instead of throwing.
           yield {
             toolName: 'add_message',
             input: {
               role: 'user',
-              content: `<system>Proactive retrieval route (cached result reused): scope=${retrievalDecision.scope}; mode=${retrievalDecision.mode}; reason=${retrievalDecision.reason}. An identical proactive query_index result from workspace revision ${proactiveWorkspaceRevision} is already available in this session, so the live query_index call was skipped. Verify retrieved candidates against the live filesystem before editing.</system>`,
+              content: `<system>Proactive retrieval route (cached result reused): scope=${retrievalDecision.scope}; mode=${retrievalDecision.mode}; reason=${retrievalDecision.reason}. An identical proactive query_index result from workspace revision ${proactiveWorkspaceRevision} is already available in this session, so the live query_index call was skipped. Verify retrieved candidates against the live filesystem before editing. Compact result: ${cachedProactiveRetrieval?.result ? JSON.stringify(cachedProactiveRetrieval.result) : ''}</system>`,
             },
             includeToolCall: false,
           } as any
@@ -927,19 +995,30 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               // bookkeeping cannot parse a third-party index result.
             }
           }
+          // M4 lean proactive inject: the cached continuation envelope is
+          // bounded. toCompactProactiveRetrievalResult drops
+          // results[*].relatedFiles, caps results at 8 entries keeping only
+          // { path, score?, reason?, kind? }, and drops status/coverage and
+          // other fat fields while preserving `kind`, `results`,
+          // `indexMutationEpoch` (required by the epoch-guard
+          // invalidation above), and minimal scalar identifiers
+          // (totalIndexed, snapshotId) when present. Non-matching tool
+          // outputs pass through unchanged so they never throw.
+          const compactProactiveRetrievalResult =
+            toCompactProactiveRetrievalResult(proactiveRetrievalResult)
           mutableAgentState.proactiveRetrievalCache = {
             hash: proactiveCacheHash,
             workspaceRevision: proactiveWorkspaceRevision,
             indexMutationEpoch: extractIndexMutationEpochFromResult(
               proactiveRetrievalResult,
             ),
-            result: proactiveRetrievalResult,
+            result: compactProactiveRetrievalResult,
           }
           yield {
             toolName: 'add_message',
             input: {
               role: 'user',
-              content: `<system>Proactive retrieval route: scope=${retrievalDecision.scope}; mode=${retrievalDecision.mode}; reason=${retrievalDecision.reason}. Verify retrieved candidates against the live filesystem before editing.</system>`,
+              content: `<system>Proactive retrieval route: scope=${retrievalDecision.scope}; mode=${retrievalDecision.mode}; reason=${retrievalDecision.reason}. Verify retrieved candidates against the live filesystem before editing. Compact result: ${JSON.stringify(compactProactiveRetrievalResult)}</system>`,
             },
             includeToolCall: false,
           } as any
@@ -1002,6 +1081,90 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           )
         }
         return readIndexMutationEpochFromParts(result)
+      }
+
+      // M4 lean proactive inject: compact the proactive query_index result
+      // into a bounded continuation envelope. Extracts the first `json`
+      // content part whose value has kind === 'query_index_result', drops
+      // results[*].relatedFiles plus the fat top-level fields (status,
+      // coverage, matchedSnippets, etc.), caps results at 8 entries keeping
+      // only { path, score?, reason?, kind? } per result, and preserves
+      // only `kind`, `results`, `indexMutationEpoch` (required by the
+      // epoch-guard invalidation logic), and the minimal scalar identifiers
+      // `totalIndexed` / `snapshotId` when present. A result whose json value
+      // is NOT the query_index_result shape is returned unchanged so
+      // non-matching tool outputs never throw. Self-contained inline helper
+      // (handleSteps is serialized via .toString() + new Function(...), so it
+      // must not reference module-scope imports); walks the parts the same
+      // way readIndexMutationEpochFromParts does
+      // (record.type === 'json' && 'value' in record).
+      function toCompactProactiveRetrievalResult(result: unknown): unknown {
+        // The generator yield may hand back a { toolResult } envelope or the
+        // bare tool-result part list; resolve the part list first.
+        let parts: unknown = result
+        if (
+          result &&
+          typeof result === 'object' &&
+          !Array.isArray(result) &&
+          'toolResult' in (result as Record<string, unknown>)
+        ) {
+          parts = (result as Record<string, unknown>).toolResult
+        }
+        if (!Array.isArray(parts)) return result
+        for (const part of parts) {
+          if (!part || typeof part !== 'object') continue
+          const record = part as Record<string, unknown>
+          if (record.type !== 'json' || !('value' in record)) continue
+          const value = record.value
+          if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            return result
+          }
+          const valueRecord = value as Record<string, unknown>
+          if (valueRecord.kind !== 'query_index_result') return result
+          const rawResults = Array.isArray(valueRecord.results)
+            ? valueRecord.results
+            : []
+          const compactResults: Array<Record<string, unknown>> = []
+          for (let index = 0; index < rawResults.length && index < 8; index += 1) {
+            const entry = rawResults[index]
+            if (!entry || typeof entry !== 'object') continue
+            const entryRecord = entry as Record<string, unknown>
+            const path = entryRecord.path
+            if (typeof path !== 'string' || !path) continue
+            const compactEntry: Record<string, unknown> = { path }
+            if (
+              typeof entryRecord.score === 'number' &&
+              Number.isFinite(entryRecord.score)
+            ) {
+              compactEntry.score = entryRecord.score
+            }
+            if (typeof entryRecord.reason === 'string' && entryRecord.reason) {
+              compactEntry.reason = entryRecord.reason
+            }
+            if (typeof entryRecord.kind === 'string' && entryRecord.kind) {
+              compactEntry.kind = entryRecord.kind
+            }
+            compactResults.push(compactEntry)
+          }
+          const compactValue: Record<string, unknown> = {
+            kind: 'query_index_result',
+            results: compactResults,
+          }
+          const epoch = valueRecord.indexMutationEpoch
+          if (typeof epoch === 'number' && Number.isFinite(epoch)) {
+            compactValue.indexMutationEpoch = epoch
+          }
+          const totalIndexed = valueRecord.totalIndexed
+          if (typeof totalIndexed === 'number' && Number.isFinite(totalIndexed)) {
+            compactValue.totalIndexed = totalIndexed
+          }
+          const snapshotId = valueRecord.snapshotId
+          if (typeof snapshotId === 'string' && snapshotId) {
+            compactValue.snapshotId = snapshotId
+          }
+          return { type: 'json', value: compactValue }
+        }
+        return result
       }
 
       // Newest indexMutationEpoch across prior query_index tool messages.
@@ -1302,6 +1465,9 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           } as any
         }
 
+        // Publish the current unlocked tool tiers before the LLM step so the
+        // runtime surfaces CORE + the tiers relevant to the active phase.
+        publishUnlockedToolTiers()
         const stepResult = yield 'STEP'
         const { stepsComplete, hitStepCap } = stepResult as {
           stepsComplete: boolean
@@ -1885,8 +2051,15 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         // the condition so the gate also re-fires when a stored credit no
         // longer matches the current pending bytes (fail closed for legacy
         // state that stored no fingerprint at all).
-        const securitySnapshotDetails = buildGateSnapshotDetails(
+        // Scope fingerprint to the REVIEWABLE pending subset (same family as
+        // specialist credit): non-reviewable plan/session artifacts such as
+        // `.agents/sessions/**/STATUS.md` must not thrash security credit.
+        // Entry still uses the full pending list for matchesSecuritySensitiveGlob.
+        const securityReviewableFiles = selectReviewableGateFiles(
           currentPendingGateFiles,
+        )
+        const securitySnapshotDetails = buildGateSnapshotDetails(
+          securityReviewableFiles,
           '',
         )
         const securitySnapshotFingerprint = hashGateSnapshotDetails(
@@ -1911,18 +2084,24 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           matchesSecuritySensitiveGlob(currentPendingGateFiles)
         ) {
           auxGateFiredThisIteration = true
+          // Prefer reviewable changed_files for spawn/attestation identity;
+          // fall back to the full pending list when nothing is reviewable yet.
+          const securityChangedFiles =
+            securityReviewableFiles.length > 0
+              ? securityReviewableFiles
+              : currentPendingGateFiles
           const securityReviewResult = yield {
             toolName: 'spawn_agent_inline',
             input: {
               agent_type: 'security-reviewer',
               prompt: [
                 'Perform the required snapshot-bound security review.',
-                `Pending changed files: ${currentPendingGateFiles.join(', ')}`,
+                `Pending changed files: ${securityChangedFiles.join(', ')}`,
                 `Snapshot fingerprint: ${securitySnapshotFingerprint}`,
                 'Return only the declared structured output.',
               ].join('\n'),
               params: {
-                changed_files: currentPendingGateFiles,
+                changed_files: securityChangedFiles,
                 snapshot_fingerprint: securitySnapshotFingerprint,
               },
             },
@@ -1935,7 +2114,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           const securityAttestationIssues = collectReviewerAttestationIssues(
             securityToolResult,
             securitySnapshotFingerprint,
-            currentPendingGateFiles,
+            securityChangedFiles,
           )
           const securityVerdict =
             getReviewerFinalizationVerdict(securityToolResult)
@@ -1953,7 +2132,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                   gateId: `security-reviewer:${securitySnapshotFingerprint}`,
                   text: record?.text ?? text,
                   status: 'open' as const,
-                  files: currentPendingGateFiles,
+                  files: securityChangedFiles,
                   snapshotFingerprint: securitySnapshotFingerprint,
                   reviewer: 'security-reviewer' as const,
                   createdAt: new Date().toISOString(),
@@ -2275,8 +2454,9 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           ) {
             // Requirements may still route a specialist, but with no
             // reviewable pending files there is nothing to attest. Mark done
-            // like the empty-snapshot path instead of spawning a reviewer that
-            // can only fail file attestation.
+            // instead of spawning a reviewer that can only fail file
+            // attestation. (Empty-bundle evidence must NOT auto-credit when
+            // pending files still exist — that path always spawns.)
             for (const agentType of routedSpecialists) {
               activeWorkState.specialistReviewGatesDone = Array.from(
                 new Set([
@@ -2300,6 +2480,25 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               reuseReason: 'no-pending-changes-in-snapshot',
             })
           } else if (routedSpecialists.length > 0) {
+            // Gate-owned v3 fingerprint is the sole specialist attestation
+            // token (same family as security/code-reviewer). Fail closed when
+            // crypto is unavailable rather than spawning with a bare bundle id.
+            if (
+              !isAttestableSnapshotFingerprint(specialistCreditFingerprint)
+            ) {
+              activeWorkState.currentPhase = 'blocked'
+              activeWorkState.openReviewerBlockers = [
+                'Specialist review cannot attest: gate snapshot fingerprint is non-attestable (crypto unavailable).',
+              ]
+              activeWorkState.nextRequiredAction =
+                'Restore a runtime with collision-resistant hashing before specialist review can continue.'
+              activeWorkState.latestWorkSummary =
+                'Specialist review blocked because the gate fingerprint is non-attestable.'
+              markActiveWorkStateChanged()
+              continue
+            }
+            // get_change_review_bundle is read-only evidence (files/diff/
+            // empty-tree). Bundle snapshotId is NOT the gate attestation token.
             const bundleResult = yield {
               toolName: 'get_change_review_bundle',
               input: {},
@@ -2308,49 +2507,13 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             const bundle = extractChangeReviewBundle(
               (bundleResult as any)?.toolResult ?? bundleResult,
             )
-            if (!bundle.snapshotId) {
-              activeWorkState.currentPhase = 'blocked'
-              activeWorkState.openReviewerBlockers = [
-                `Specialist review snapshot failed: ${bundle.errorMessage || 'missing snapshotId'}`,
-              ]
-              activeWorkState.nextRequiredAction =
-                'Restore a valid change-review snapshot before specialist review.'
-              markActiveWorkStateChanged()
-              continue
-            }
-            if (bundle.files.length === 0) {
-              // The snapshot has zero changed files (working tree already
-              // clean/committed). A specialist reviewer spawned here can only
-              // find nothing to review and would then fail file attestation,
-              // so mark every routed specialist done and skip the spawn
-              // instead of wasting a reviewer that can never pass. Do not set
-              // auxGateFiredThisIteration; let control fall through so the
-              // loop proceeds toward finalization.
-              for (const agentType of routedSpecialists) {
-                activeWorkState.specialistReviewGatesDone = Array.from(
-                  new Set([
-                    ...(activeWorkState.specialistReviewGatesDone ?? []),
-                    agentType,
-                  ]),
-                )
-                // Record the credit fingerprint here too so this early-out
-                // path stays idempotent under the snapshot-bound credit test.
-                ;(activeWorkState.specialistReviewGateFingerprints ??= {})[
-                  agentType
-                ] = specialistCreditFingerprint
-              }
-              activeWorkState.lastReviewerGateSkipReason =
-                'no-pending-changes-in-snapshot'
-              markActiveWorkStateChanged()
-              emitGateTelemetry({
-                currentPhase: 'final_response_allowed',
-                pendingFileCount: 0,
-                pendingFiles: [],
-                reviewerStatus: 'skipped',
-                validationStatus: 'skipped',
-                reuseReason: 'no-pending-changes-in-snapshot',
-              })
-            } else {
+            // Empty/failed bundle must not falsely clear specialist review when
+            // reviewable pending files exist. This branch only runs after the
+            // specialistPendingFiles.length === 0 early credit path, so always
+            // spawn with the gate-owned v3 token — never auto-credit from
+            // empty-tree evidence alone (bundle snapshotId is not attestation).
+            void bundle
+            {
               auxGateFiredThisIteration = true
               let specialistBlocked = false
               let specialistTerminalFailure = false
@@ -2363,7 +2526,10 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               const specialistResults = new Map<string, unknown>()
               const specialistSnapshots = new Map<string, string>()
               for (const agentType of routedSpecialists) {
-                specialistSnapshots.set(agentType, bundle.snapshotId)
+                specialistSnapshots.set(
+                  agentType,
+                  specialistCreditFingerprint,
+                )
               }
               const firstSpecialistBatch = yield {
                 toolName: 'spawn_agents',
@@ -2374,11 +2540,11 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                       'Perform the routed post-edit specialist review.',
                       `Requirements: ${prompt ?? '(none supplied)'}`,
                       `Changed files: ${specialistPendingFiles.join(', ') || '(none)'}`,
-                      `Snapshot ID (echo exactly): ${bundle.snapshotId}`,
+                      `Snapshot fingerprint (echo exactly): ${specialistCreditFingerprint}`,
                     ].join('\n'),
                     params: {
                       files: specialistPendingFiles,
-                      snapshot_id: bundle.snapshotId,
+                      snapshot_id: specialistCreditFingerprint,
                     },
                   })),
                 },
@@ -2403,7 +2569,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 // snapshot drift never triggers a pointless refresh+retry.
                 const attestationIssues = collectReviewerAttestationIssues(
                   result,
-                  bundle.snapshotId,
+                  specialistCreditFingerprint,
                   specialistPendingFiles,
                 )
                 return (
@@ -2412,19 +2578,23 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 )
               })
               if (retrySpecialists.length > 0) {
-                const refreshedBundleResult = yield {
-                  toolName: 'get_change_review_bundle',
-                  input: {},
-                  includeToolCall: false,
-                } as any
-                const refreshedBundle = extractChangeReviewBundle(
-                  (refreshedBundleResult as any)?.toolResult ??
-                    refreshedBundleResult,
+                // Retry identity is the recomputed gate fingerprint of the
+                // current pending set — not a new bare bundle snapshotId.
+                // Bundle refresh is optional evidence only.
+                const retryCreditFingerprint = hashGateSnapshotDetails(
+                  buildGateSnapshotDetails(
+                    selectReviewableGateFiles(
+                      selectAuxRelevantFiles(currentPendingGateFiles),
+                    ),
+                    '',
+                  ),
                 )
-                if (!refreshedBundle.snapshotId) {
+                if (
+                  !isAttestableSnapshotFingerprint(retryCreditFingerprint)
+                ) {
                   activeWorkState.currentPhase = 'blocked'
                   activeWorkState.openReviewerBlockers = [
-                    'Specialist review could not obtain a refreshed snapshot after attestation failure.',
+                    'Specialist review retry cannot attest: recomputed gate snapshot fingerprint is non-attestable.',
                   ]
                   // Only drop the retrying specialists' findings; another
                   // reviewer's still-open findings must survive.
@@ -2435,13 +2605,19 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                       !retrySpecialists.includes(finding.reviewer as string),
                   )
                   activeWorkState.nextRequiredAction =
-                    'Stop concurrent edits and resume once the working tree is stable; the runtime will obtain a fresh review bundle.'
+                    'Restore a runtime with collision-resistant hashing before specialist review can continue.'
                   activeWorkState.latestWorkSummary =
-                    'Specialist review stopped because snapshot refresh failed.'
+                    'Specialist review stopped because the retry gate fingerprint is non-attestable.'
                   markActiveWorkStateChanged()
                   specialistBlocked = true
                   specialistTerminalFailure = true
                 } else {
+                  // Optional evidence refresh; ignore missing snapshotId.
+                  yield {
+                    toolName: 'get_change_review_bundle',
+                    input: {},
+                    includeToolCall: false,
+                  } as any
                   const retryBatch = yield {
                     toolName: 'spawn_agents',
                     input: {
@@ -2451,12 +2627,12 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                           'Retry the routed specialist review after snapshot/file attestation failure.',
                           `Requirements: ${prompt ?? '(none supplied)'}`,
                           `Changed files: ${specialistPendingFiles.join(', ') || '(none)'}`,
-                          `Snapshot ID (echo exactly): ${refreshedBundle.snapshotId}`,
+                          `Snapshot fingerprint (echo exactly): ${retryCreditFingerprint}`,
                           'Correct the structured output directly; do not request source edits for this protocol error.',
                         ].join('\n'),
                         params: {
                           files: specialistPendingFiles,
-                          snapshot_id: refreshedBundle.snapshotId,
+                          snapshot_id: retryCreditFingerprint,
                         },
                       })),
                     },
@@ -2465,7 +2641,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                   const retryToolResult =
                     (retryBatch as any)?.toolResult ?? retryBatch
                   for (const agentType of retrySpecialists) {
-                    specialistSnapshots.set(agentType, refreshedBundle.snapshotId)
+                    specialistSnapshots.set(agentType, retryCreditFingerprint)
                     specialistResults.set(
                       agentType,
                       extractSpawnedAgentResult(retryToolResult, agentType),
@@ -2476,7 +2652,8 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               if (!specialistTerminalFailure) {
                 for (const agentType of routedSpecialists) {
                   const expectedSnapshotId =
-                    specialistSnapshots.get(agentType) ?? bundle.snapshotId
+                    specialistSnapshots.get(agentType) ??
+                    specialistCreditFingerprint
                   const specialistToolResult = specialistResults.get(agentType)
                   const specialistAttestationIssues =
                     collectReviewerAttestationIssues(
@@ -2568,7 +2745,13 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                     activeWorkState.specialistRepairRoundCount =
                       specialistRepairRound
                     specialistBlocked = true
-                    if (specialistRepairRound > MAX_SPECIALIST_REPAIR_ROUNDS) {
+                    // Optional hard cap only when createBase2/env set a finite
+                    // maxSpecialistRepairRounds; default is unlimited and exits
+                    // via no-progress / incomplete-receipt / crash guards.
+                    if (
+                      Number.isFinite(MAX_SPECIALIST_REPAIR_ROUNDS) &&
+                      specialistRepairRound > MAX_SPECIALIST_REPAIR_ROUNDS
+                    ) {
                       activeWorkState.currentPhase = 'blocked'
                       activeWorkState.nextRequiredAction = `Specialist repair budget exhausted (${MAX_SPECIALIST_REPAIR_ROUNDS}/${MAX_SPECIALIST_REPAIR_ROUNDS}); the ${agentType} findings are still open. Stop retrying automatically and inspect the findings or handoff.`
                       activeWorkState.latestWorkSummary = `Specialist repair budget exhausted for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`
@@ -3265,15 +3448,24 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 failure,
               ),
             )
+            // Default unlimited: repair whenever failures are parseable.
+            // Optional finite MAX_REPAIR_ROUNDS (createBase2/env) still caps.
+            // Incomplete receipts / remaining failures / infrastructure path
+            // remain fail-closed as before (no budget-only escalation).
             const canRepair =
-              repairRound < MAX_REPAIR_ROUNDS && hasParseableFailures
+              hasParseableFailures &&
+              (!Number.isFinite(MAX_REPAIR_ROUNDS) ||
+                repairRound < MAX_REPAIR_ROUNDS)
             if (canRepair) {
               if (!activeWorkState.repairSessionId) {
                 activeWorkState.repairSessionId = `repair-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
               }
               activeWorkState.currentPhase = 'repair_loop'
               activeWorkState.repairRoundCount = repairRound + 1
-              activeWorkState.latestWorkSummary = `Repair round ${repairRound + 1}/${MAX_REPAIR_ROUNDS}: parsing ${failures.length} validation failure(s) and spawning targeted editor fix.`
+              const repairRoundLabel = Number.isFinite(MAX_REPAIR_ROUNDS)
+                ? `${repairRound + 1}/${MAX_REPAIR_ROUNDS}`
+                : `${repairRound + 1}`
+              activeWorkState.latestWorkSummary = `Repair round ${repairRoundLabel}: parsing ${failures.length} validation failure(s) and spawning targeted editor fix.`
               activeWorkState.nextRequiredAction = ''
               markActiveWorkStateChanged()
               emitGateTelemetry({
@@ -3450,7 +3642,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               )
               if (repairChangedFiles.length > 0) {
                 recordChangedFiles(repairChangedFiles, { fromRepair: true })
-                activeWorkState.latestWorkSummary = `Repair editor (round ${repairRound + 1}/${MAX_REPAIR_ROUNDS}) fixed: ${repairChangedFiles.join(', ')}`
+                activeWorkState.latestWorkSummary = `Repair editor (round ${repairRoundLabel}) fixed: ${repairChangedFiles.join(', ')}`
                 markActiveWorkStateChanged()
               }
               const reVerify = yield {
@@ -3483,7 +3675,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 activeWorkState.lastReviewerGateSkipReason =
                   'validation-hook-failures'
                 activeWorkState.currentPhase = 'blocked'
-                activeWorkState.latestWorkSummary = `Repair editor (round ${repairRound + 1}/${MAX_REPAIR_ROUNDS}) ran but ${reFailures.length} failure(s) remain.`
+                activeWorkState.latestWorkSummary = `Repair editor (round ${repairRoundLabel}) ran but ${reFailures.length} failure(s) remain.`
                 markActiveWorkStateChanged()
                 emitGateTelemetry({
                   currentPhase: 'blocked',
@@ -3499,7 +3691,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                   input: {
                     role: 'user',
                     content: [
-                      `Automated repair editor ran (round ${repairRound + 1}/${MAX_REPAIR_ROUNDS}) but ${reFailures.length} validation failure(s) remain. Fix these before ending your turn:`,
+                      `Automated repair editor ran (round ${repairRoundLabel}) but ${reFailures.length} validation failure(s) remain. Fix these before ending your turn:`,
                       '',
                       ...reFailures,
                       '',
@@ -3507,7 +3699,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                       formatGateStateBlock(
                         'validation',
                         'failed',
-                        `repair-incomplete: round ${repairRound + 1}/${MAX_REPAIR_ROUNDS}; ${reFailures.length} failure(s) remain for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`,
+                        `repair-incomplete: round ${repairRoundLabel}; ${reFailures.length} failure(s) remain for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`,
                         repairRound + 1,
                       ),
                     ].join('\n'),
@@ -3517,190 +3709,9 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 continue
               }
             } else {
-              const canEscalate =
-                hasParseableFailures && !activeWorkState.repairEscalationDone
-              if (canEscalate) {
-                activeWorkState.currentPhase = 'repair_loop'
-                activeWorkState.repairEscalationDone = true
-                activeWorkState.latestWorkSummary = `Repair budget exhausted (${MAX_REPAIR_ROUNDS}/${MAX_REPAIR_ROUNDS}); spawning one escalation editor with broader root-cause context.`
-                activeWorkState.nextRequiredAction = ''
-                markActiveWorkStateChanged()
-                emitGateTelemetry({
-                  currentPhase: 'repair_loop',
-                  pendingFileCount: pendingGateFiles.size,
-                  pendingFiles: Array.from(pendingGateFiles),
-                  validationStatus: 'failed',
-                  repairRound: MAX_REPAIR_ROUNDS,
-                  blockerCount: failures.length,
-                  reuseReason: 'repair-budget-escalation',
-                })
-                const escalate = yield {
-                  toolName: 'spawn_agents',
-                  input: {
-                    agents: [
-                      {
-                        agent_type: 'repair-editor',
-                        handoff: {
-                          schemaVersion: 1,
-                          taskId:
-                            activeWorkState.repairSessionId ??
-                            'validation-escalation',
-                          role: 'repair-editor',
-                          objective:
-                            'Resolve the exhausted validation failures through root-cause repair.',
-                          requirements: failures.map(
-                            (text: string, index: number) => ({
-                              id: `VF-${index + 1}`,
-                              text,
-                              required: true,
-                            }),
-                          ),
-                          acceptanceCriteria: [
-                            {
-                              id: 'validation-passes',
-                              behavior:
-                                'The root cause of every remaining validation failure is resolved.',
-                              verification:
-                                'The parent reruns the targeted validation gate on the resulting workspace snapshot.',
-                            },
-                          ],
-                          context: [],
-                          invariants: [
-                            'Read each live target before editing.',
-                            'Do not modify files outside the pending gate file set.',
-                          ],
-                          nonGoals: [
-                            'Speculative refactors or unrelated cleanup.',
-                          ],
-                          risks: [
-                            'Repeated surface-level fixes can hide the actual root cause.',
-                          ],
-                          unknowns: [],
-                          findings: failures.map(
-                            (text: string, index: number) => ({
-                              id: `VF-${index + 1}`,
-                              text,
-                              files: Array.from(pendingGateFiles),
-                              snapshotFingerprint: buildGateFingerprint(
-                                Array.from(pendingGateFiles),
-                                validationSummary,
-                              ),
-                            }),
-                          ),
-                          permissions: {
-                            readablePaths: repairEditorReadablePaths(
-                              [
-                                ...pendingGateFiles,
-                                ...parsed.map((p: { file: string }) => p.file),
-                              ],
-                              failures,
-                            ),
-                            writablePaths: Array.from(
-                              new Set([
-                                ...pendingGateFiles,
-                                ...parsed.map((p: { file: string }) => p.file),
-                              ]),
-                            ),
-                            allowedTools: [
-                              'read_files',
-                              'read_outline',
-                              'read_subtree',
-                              'edit_transaction',
-                            ],
-                          },
-                          workspaceRevision:
-                            mutableAgentState.workspaceState?.revision,
-                          workspaceSnapshotId:
-                            mutableAgentState.workspaceState?.snapshotId,
-                          artifacts: [],
-                          successCriteria: ['Targeted validation passes.'],
-                          constraints: [
-                            'Keep every change causally tied to a supplied failure.',
-                          ],
-                        },
-                        prompt: buildEscalationEditorPrompt(
-                          parsed,
-                          Array.from(pendingGateFiles),
-                          MAX_REPAIR_ROUNDS,
-                        ),
-                      },
-                    ],
-                  },
-                } as any
-                const escalationFindingIds = failures.map(
-                  (_text: string, index: number) => `VF-${index + 1}`,
-                )
-                const escalationReceipt = extractAgentReceipt(
-                  (escalate as any)?.toolResult ?? escalate,
-                )
-                const escalationHasProgress =
-                  !!escalationReceipt &&
-                  escalationReceipt.changedFiles.some(
-                    (file: { path: string }) =>
-                      typeof file.path === 'string' &&
-                      file.path.trim().length > 0,
-                  )
-                if (
-                  !escalationReceipt ||
-                  (!escalationHasProgress &&
-                    (escalationReceipt.status !== 'completed' ||
-                      escalationFindingIds.some(
-                        (id: string) =>
-                          !escalationReceipt.findingsAddressed.includes(id),
-                      )))
-                ) {
-                  activeWorkState.currentPhase = 'blocked'
-                  activeWorkState.nextRequiredAction =
-                    'Escalation repair-editor did not return a completed receipt addressing every validation failure.'
-                  activeWorkState.latestWorkSummary =
-                    'Validation escalation receipt was incomplete or missing.'
-                  markActiveWorkStateChanged()
-                  break
-                }
-                const escalateGitStatus = yield {
-                  toolName: 'git_status',
-                  input: {},
-                } as any
-                const escalateChangedFiles = extractGitStatusFiles(
-                  (escalateGitStatus as any)?.toolResult,
-                ).filter(
-                  (file: string) =>
-                    !initialGitStatusFiles.includes(file) &&
-                    !gatePassedFiles.has(file),
-                )
-                if (escalateChangedFiles.length > 0) {
-                  recordChangedFiles(escalateChangedFiles, { fromRepair: true })
-                  activeWorkState.latestWorkSummary = `Escalation editor fixed: ${escalateChangedFiles.join(', ')}`
-                  markActiveWorkStateChanged()
-                }
-                const escalateVerify = yield {
-                  toolName: 'run_file_change_hooks',
-                  input: { files: Array.from(pendingGateFiles) },
-                } as any
-                const escalateFailures = collectHookFailures(
-                  (escalateVerify as any) && (escalateVerify as any).toolResult,
-                )
-                if (escalateFailures.length === 0) {
-                  validationSummary = summarizeHookResults(
-                    (escalateVerify as any) &&
-                      (escalateVerify as any).toolResult,
-                  )
-                  activeWorkState.lastValidationSummary = validationSummary
-                  activeWorkState.currentPhase = 'awaiting_review'
-                  activeWorkState.nextRequiredAction = ''
-                  markActiveWorkStateChanged()
-                  emitGateTelemetry({
-                    currentPhase: 'awaiting_review',
-                    pendingFileCount: pendingGateFiles.size,
-                    pendingFiles: Array.from(pendingGateFiles),
-                    validationStatus: 'passed',
-                    repairRound: MAX_REPAIR_ROUNDS,
-                    reuseReason: 'escalation-succeeded',
-                  })
-                  continue
-                }
-                failures = escalateFailures
-              }
+              // Unparseable failures, infrastructure failures, or optional
+              // hard cap exhausted. Prefer reduced-assurance for pure
+              // infrastructure; otherwise block. No budget-only escalation.
               if (!hasParseableFailures && hasInfrastructureFailures) {
                 validationSummary = `REDUCED_ASSURANCE: Validation infrastructure could not produce source diagnostics: ${failures.join(' | ')}`
                 activeWorkState.validationInfrastructureBypassFingerprint =
@@ -3734,9 +3745,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 pendingFiles: Array.from(pendingGateFiles),
                 validationStatus: 'failed',
                 skipReason: hasParseableFailures
-                  ? activeWorkState.repairEscalationDone
-                    ? 'escalation-exhausted'
-                    : 'repair-budget-exhausted'
+                  ? 'repair-budget-exhausted'
                   : 'unparseable-failures',
                 blockerCount: failures.length,
                 repairRound,
@@ -3755,7 +3764,9 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                       'validation',
                       'failed',
                       `validation-hook-failures: ${failures.length} hook failure(s) for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`,
-                      MAX_REPAIR_ROUNDS,
+                      Number.isFinite(MAX_REPAIR_ROUNDS)
+                        ? MAX_REPAIR_ROUNDS
+                        : repairRound,
                     ),
                   ].join('\n'),
                 },
@@ -4044,16 +4055,15 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             activeWorkState.reviewerRepairRoundCount = Number(
               activeWorkState.reviewerRepairRoundCount ?? 0,
             ) + 1
-            // Hard round cap for the reviewer -> repair -> re-review loop,
-            // mirroring MAX_REPAIR_ROUNDS for validation repairs. NON_BLOCKING
-            // findings also burn this budget under LOOKS_GOOD-only finalization.
-            // The snapshot-progress guard below already breaks when a repair
-            // makes no fingerprint change; this adds an explicit upper bound so
-            // a repair that keeps producing snapshot-visible churn without ever
-            // clearing the finding cannot loop indefinitely.
+            // Optional hard round cap for the reviewer -> repair -> re-review
+            // loop when createBase2/env set a finite maxReviewerRepairRounds.
+            // Default is unlimited; NON_BLOCKING findings still burn the counter
+            // for telemetry. The snapshot-progress guard below breaks when a
+            // repair makes no fingerprint change.
             if (
+              Number.isFinite(MAX_REVIEWER_REPAIR_ROUNDS) &&
               Number(activeWorkState.reviewerRepairRoundCount ?? 0) >
-              MAX_REVIEWER_REPAIR_ROUNDS
+                MAX_REVIEWER_REPAIR_ROUNDS
             ) {
               // Preserve other families' open findings while recording this
               // code-reviewer blocker set (budget exhausted before full merge
@@ -4848,6 +4858,75 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         activeWorkState.lastPinnedStateMessage = ''
       }
 
+      // Progressive tool disclosure (M1-T3/T4/T5): publish the tool tiers
+      // unlocked for the upcoming LLM step onto mutableAgentState so the
+      // runtime can narrow the effective tool surface to CORE + these tiers.
+      // Called live before each STEP. Self-contained inline logic (no
+      // module-scope imports) because handleSteps is serialized via
+      // .toString() + new Function(...): the deriveIntentSignals /
+      // resolveUnlockedTiersForPhase helpers from tool-tiers.ts are inlined
+      // here. The canary flag is read from programmaticConfig (plain JSON),
+      // never a module-scope closure.
+      function publishUnlockedToolTiers(): void {
+        if (config?.progressiveToolDisclosure !== true) {
+          // Serialization hygiene: drop stale non-empty unlocks from a prior
+          // canary-on run so resume/canary-off checkpoints do not re-carry a
+          // progressive filter list. getEffectiveAgentToolNames also ignores
+          // tiers when progressiveToolDisclosure === false, but clearing here
+          // keeps persisted agentState honest for later resume consumers.
+          if (
+            Array.isArray(mutableAgentState.unlockedToolTiers) &&
+            mutableAgentState.unlockedToolTiers.length > 0
+          ) {
+            delete mutableAgentState.unlockedToolTiers
+          }
+          return
+        }
+        const phase = String(activeWorkState.currentPhase ?? 'idle')
+        const promptText = typeof prompt === 'string' ? prompt : ''
+        const pendingGateFileCount = Array.isArray(
+          activeWorkState.pendingGateFiles,
+        )
+          ? activeWorkState.pendingGateFiles.length
+          : 0
+        const hasOpenReviewerBlockers =
+          Array.isArray(activeWorkState.openReviewerBlockers) &&
+          activeWorkState.openReviewerBlockers.length > 0
+
+        // deriveIntentSignals (inlined).
+        const implementIntent =
+          phase === 'awaiting_validation' ||
+          phase === 'repair_loop' ||
+          phase === 'awaiting_review' ||
+          phase === 'blocked' ||
+          pendingGateFileCount > 0 ||
+          hasOpenReviewerBlockers ||
+          /\b(?:implement|fix|refactor|update|create|add)\b/i.test(promptText)
+        const auditIntent =
+          /\b(?:audit|coverage|completeness|review[- ]across|systematic)\b/i.test(
+            promptText,
+          ) || phase === 'awaiting_review'
+        const mediaIntent =
+          /\.(?:png|jpe?g|webp|gif|blend|obj|gltf|glb)\b/i.test(promptText)
+        // Keep job_extra rare: require job-management phrasing, not bare
+        // kill/server/logs/watch/tail tokens (mirrors tool-tiers JOB_KEYWORD_RE).
+        const jobIntent =
+          /\b(?:(?:background|bg)\s+(?:job|agent|process|task|basher)|kill(?:_|\s+)(?:the\s+)?(?:job|process)|(?:list|check|kill)_jobs?|job(?:Id|\s*id)|tail\s+-f|watch\s+(?:the\s+)?(?:build|logs?|job|process)|long[- ]running\s+(?:dev\s+)?server|dev\s+server)\b/i.test(
+            promptText,
+          )
+
+        // resolveUnlockedTiersForPhase (inlined). CORE is always on and is
+        // never emitted here. Tier decisions depend only on the four intent
+        // booleans above; `phase` is already folded into them by the inlined
+        // deriveIntentSignals logic, so it is not a separate input here.
+        const tiers: ToolTier[] = []
+        if (implementIntent) tiers.push('implement')
+        if (auditIntent) tiers.push('audit')
+        if (mediaIntent) tiers.push('media_3d')
+        if (jobIntent) tiers.push('job_extra')
+        mutableAgentState.unlockedToolTiers = tiers
+      }
+
       // Durable one-line mid-turn gate-progress note. Rendered by
       // buildPinnedActiveWorkMessage as a "Gate progress:" line inside the
       // existing pinned active-work message — no new yield/add_message is
@@ -4888,7 +4967,11 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           repairRound >= 0
         ) {
           payload.repairRound = repairRound
-          payload.maxRepairRounds = MAX_REPAIR_ROUNDS
+          // Only emit a finite optional cap; unlimited (Infinity) is omitted
+          // so JSON stays finite and CLI consumers do not see null/Infinity.
+          if (Number.isFinite(MAX_REPAIR_ROUNDS)) {
+            payload.maxRepairRounds = MAX_REPAIR_ROUNDS
+          }
         }
         return `<gate-state>${JSON.stringify(payload)}</gate-state>`
       }
@@ -7748,12 +7831,15 @@ function hashGateSnapshotDetails(details: string): string {
       }
 
       // Derive the cumulative final-gate scope from the live dirty set and the
-      // complete task-related path ledger. This helper is inline because
-      // handleSteps is serialized through toString()/new Function().
+      // complete task-related path ledger. Already-credited (gatePassedFiles)
+      // dirty files stay out of gate scope: they remain dirty for commit UX /
+      // uncommittedUnvalidated, but must not re-arm validation/review.
+      // Marker eviction + unreviewed re-arm still handle real content drift.
+      // Inline because handleSteps is serialized through toString()/new Function().
       function deriveGateScopeFiles(dirtyFiles: string[]): string[] {
         const taskRelatedFiles = collectTaskRelatedFiles()
-        return normalizeGateFileList(dirtyFiles).filter((file) =>
-          taskRelatedFiles.has(file),
+        return normalizeGateFileList(dirtyFiles).filter(
+          (file) => taskRelatedFiles.has(file) && !gatePassedFiles.has(file),
         )
       }
 
@@ -8325,16 +8411,57 @@ function hashGateSnapshotDetails(details: string): string {
           )
         if (!codeIntent) return undefined
 
+        // M4 lean proactive inject precondition: proactive retrieval fires
+        // only when the prompt carries at least one STRONG action/intent
+        // phrase — an edit/implement verb, an audit/coverage/analysis verb,
+        // a file/path token, a commit/git verb, or a risky broad/exploratory
+        // phase keyword. Pure Q&A / reading prompts ("how does this work",
+        // "what does this function do", "explain the codebase") return
+        // undefined so the model reads and answers directly without a
+        // proactive query_index. The file-path guard above runs BEFORE this
+        // check, so the file-token arm below only fires for path-like tokens
+        // the guard doesn't already short-circuit (e.g. bare ".ts").
+        const hasStrongProactiveIntent =
+          /\b(implement|fix|refactor|update|create|add|delete|remove|rewrite|patch)\b/i.test(
+            text,
+          ) ||
+          /\b(audit|review|analyze|verify|check|test|validate|measure)\b/i.test(
+            text,
+          ) ||
+          /\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|swift|c|cpp|h|hpp|cs|php|sh)\b/i.test(
+            text,
+          ) ||
+          /\b(commit|push|branch|git)\b/i.test(text) ||
+          /\b(broad|across|whole|entire|cross[- ]cutting|production\s+readiness|architecture)\b/i.test(
+            text,
+          )
+        if (!hasStrongProactiveIntent) return undefined
+
         if (
           /\b(command|script|typecheck|lint|build|ci|workflow|validation|test command|package script)\b/i.test(
             text,
           )
         ) {
-          return {
-            scope: 'focused',
-            mode: 'commands',
-            limit: 12,
-            reason: 'validation-or-command discovery',
+          // M4: the focused commands branch only fires when the prompt already
+          // names a literal command ("npm run typecheck", "bun test --watch",
+          // "./gradlew lint"). A bare command-ish verb phrase ("run tests",
+          // "validate it", "work through this") names NO literal command, so
+          // it must not fire command discovery — it falls through to the
+          // broad/multi/unknown branches like any other verb-bearing prompt.
+          const namesLiteralCommand =
+            /\b(?:bun|npm|npx|pnpm|yarn|deno|node|tsc|tsx|vite|vitest|jest|mocha|pytest|pyright|mypy|ruff|eslint(?:js)?|biome|prettier|turbo(?:repo)?|nx|make|cmake|gradle|mvn|cargo|rustc|go|rustc|pip|pip3|uv|poetry|pdm|conda|docker|git)\b(?:\s+[\w@./:-]+){0,2}\s+(?:run|exec|test|tests|typecheck|lint|build|check|verify|validate|compile|coverage|fmt|format|ci|watch|start|serve)\b|\bnpm\s+run\s+[\w:@./-]+|\b(?:bun|pnpm|yarn|deno)\s+(?:run\s+)?[\w:@./-]+|\b(?:make|task|mise)\s+[a-z][\w:-]*|\b[\w.-]+\.(?:sh|bash|zsh|ps1|bat|cmd)\b|(?:^|[\s'"(=`])(?:\/|\.{1,2}\/)?\.[\/\\][\w./\\-]+|[\w@/.-]+\/[\w@/.-]+\s*$/im.test(
+              text,
+            ) ||
+            /\b(?:bun|npm|npx|pnpm|yarn|deno|node)\s+[\w@./-]*test/i.test(
+              text,
+            )
+          if (namesLiteralCommand) {
+            return {
+              scope: 'focused',
+              mode: 'commands',
+              limit: 12,
+              reason: 'validation-or-command discovery',
+            }
           }
         }
 
@@ -8380,7 +8507,7 @@ function hashGateSnapshotDetails(details: string): string {
     },
   }
 }
-const EXPLORE_PROMPT = `- Iteratively gather codebase context as needed. For broad codebase questions or tasks where relevant files are not already obvious, consume the runtime-injected query_index result first and deduplicate its candidates, matchedSnippets, and relatedFiles. Use mode: 'explain' when you need ranking rationale, mode: 'neighbors' to expand around a known file, mode: 'path' to connect two known files, mode: 'references' for blast-radius analysis (files that import or call into a seed file, using from or to), and mode: 'commands' to find package scripts, CI workflows, task runners, and validation docs. Spawn bounded parallel discovery waves for explicit domains the index result did not cover; give each file-picker/code-searcher a non-overlapping question, join the wave, and launch another when inventory or coverage evidence still has gaps. There is no fixed total-agent limit. Verify selected files with read_files/read_subtree. Use list_directory and glob only when structural/path evidence is missing, and do not substitute basher for git status or file discovery. Use read_subtree for a specific subsystem. For a large file, prefer read_files windows/around/symbol selectors over guess-shrink-retry ranges paging; use read_outline then read_files ranges only for an exact arbitrary line range. Read all relevant files before editing.`
+const EXPLORE_PROMPT = `- Iteratively gather codebase context as needed. For broad codebase questions or tasks where relevant files are not already obvious, consume the runtime-injected query_index result first and deduplicate its candidates by path, score, reason, and kind. Use mode: 'explain' when you need ranking rationale, mode: 'neighbors' to expand around a known file, mode: 'path' to connect two known files, mode: 'references' for blast-radius analysis (files that import or call into a seed file, using from or to), and mode: 'commands' to find package scripts, CI workflows, task runners, and validation docs. Spawn bounded parallel discovery waves for explicit domains the index result did not cover; give each file-picker/code-searcher a non-overlapping question, join the wave, and launch another when inventory or coverage evidence still has gaps. There is no fixed total-agent limit. Verify selected files with read_files/read_subtree. Use list_directory and glob only when structural/path evidence is missing, and do not substitute basher for git status or file discovery. Use read_subtree for a specific subsystem. For a large file, prefer read_files windows/around/symbol selectors over guess-shrink-retry ranges paging; use read_outline then read_files ranges only for an exact arbitrary line range. Read all relevant files before editing.`
 
 function buildImplementationInstructionsPrompt({
   isFast,

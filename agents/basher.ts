@@ -54,7 +54,7 @@ const basher: AgentDefinition = {
         process_type: {
           type: 'string',
           description:
-            'SYNC (default, waits and returns output) or BACKGROUND (starts a detached job and returns a jobId immediately). Use BACKGROUND for long-running or never-exiting commands (dev servers, watchers, log tails); poll/follow the returned jobId with the check_job tool. The returned jobId can be rediscovered via list_jobs and inspected with check_job/read_logs/kill_job.',
+            'SYNC (default) for finite commands that exit: waits and returns stdout/stderr/exitCode. BACKGROUND only for long-running or never-exiting processes (dev servers, watchers, log tails): starts a detached job and returns a jobId immediately. Live job_update events already drive the user-facing card; use check_job only when you need agent-side readiness/exitCode/join (or list_jobs/read_logs/kill_job to rediscover or manage the job) — not to poll solely for user progress.',
         },
         cwd: {
           type: 'string',

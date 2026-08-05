@@ -243,13 +243,21 @@ async function additionalToolDefinitions(
   params: {
     agentTemplate: AgentTemplate
     fileContext: ProjectFileContext
+    // Current agent state. When base2 publishes `unlockedToolTiers` under
+    // progressive tool disclosure, custom/MCP tool definitions are filtered
+    // against the same progressively narrowed surface the model sees, so a
+    // tier-gated tool's custom/MCP definition is never exposed while locked.
+    agentState: Pick<AgentState, 'unlockedToolTiers'>
   } & ParamsExcluding<
     typeof getMCPToolData,
     'toolNames' | 'mcpServers' | 'writeTo'
   >,
 ): Promise<CustomToolDefinitions> {
-  const { agentTemplate, fileContext } = params
-  const effectiveToolNames = getEffectiveAgentToolNames(agentTemplate)
+  const { agentTemplate, fileContext, agentState } = params
+  const effectiveToolNames = getEffectiveAgentToolNames(
+    agentTemplate,
+    agentState,
+  )
 
   const defs = cloneDeep(
     Object.fromEntries(
@@ -438,7 +446,9 @@ export const runAgentStep = async (
   // instead of being cut off mid-edit when stepsRemaining hits 0.
   if (agentState.stepsRemaining === NEAR_STEP_CAP_WARNING_THRESHOLD) {
     const hasWriteTodos =
-      getEffectiveAgentToolNames(agentTemplate).includes('write_todos')
+      getEffectiveAgentToolNames(agentTemplate, agentState).includes(
+        'write_todos',
+      )
     const warningMessage = hasWriteTodos
       ? NEAR_STEP_CAP_WARNING_MESSAGE
       : NEAR_STEP_CAP_WARNING_MESSAGE_NO_WRITE_TODOS
@@ -639,7 +649,7 @@ export const runAgentStep = async (
         id: agentTemplate.id,
         displayName: agentTemplate.displayName,
         model: agentTemplate.model,
-        toolNames: getEffectiveAgentToolNames(agentTemplate),
+        toolNames: getEffectiveAgentToolNames(agentTemplate, agentState),
         programmaticToolNames: agentTemplate.programmaticToolNames,
         spawnableAgents: agentTemplate.spawnableAgents,
         mcpServerNames: Object.keys(agentTemplate.mcpServers ?? {}),
@@ -905,8 +915,10 @@ export const runAgentStep = async (
     fullResponse.trim().length > 0
 
   // If the agent has the task_completed tool, it must be called to end its turn.
-  const requiresExplicitCompletion =
-    getEffectiveAgentToolNames(agentTemplate).includes('task_completed')
+  const requiresExplicitCompletion = getEffectiveAgentToolNames(
+    agentTemplate,
+    agentState,
+  ).includes('task_completed')
 
   let shouldEndTurn: boolean
   if (requiresExplicitCompletion) {
@@ -1278,7 +1290,46 @@ export async function loopAgentSteps(
   // reached. The inner try/catch (further down) keeps owning error handling and
   // the abort/failure return values; this wrapper only adds the cleanup.
   try {
-    let cachedAdditionalToolDefinitions: CustomToolDefinitions | undefined
+    // Custom/MCP tool definitions are cached per `unlockedToolTiers` snapshot.
+    // The prompt-facing callback (instructions/system prompts) must stay
+    // byte-stable across turns so the session-cached system prompt keeps
+    // provider prompt-cache hits, so it shares the cached entry for the
+    // current tier state. The per-step ToolSet build below bypasses the cache
+    // when tiers changed mid-turn so the model only ever sees the currently
+    // unlocked surface.
+    let cachedAdditionalToolDefinitions:
+      | { tiersKey: string; defs: CustomToolDefinitions }
+      | undefined
+    // Single cache-backed implementation shared by both consumers,
+    // parameterized by which agent-state snapshot keys the tier cache: the
+    // prompt-facing callback keys on the initial state (byte-stable prompts
+    // across turns) while the per-step callback keys on the live state
+    // (tracks mid-turn tier unlocks). Sharing one factory keeps the two from
+    // drifting apart.
+    const createAdditionalToolDefinitionsWithCache = (
+      getAgentState: () => Pick<AgentState, 'unlockedToolTiers'>,
+    ) => {
+      return async () => {
+        const agentState = getAgentState()
+        const tiersKey = JSON.stringify(agentState.unlockedToolTiers ?? null)
+        if (
+          !cachedAdditionalToolDefinitions ||
+          cachedAdditionalToolDefinitions.tiersKey !== tiersKey
+        ) {
+          cachedAdditionalToolDefinitions = {
+            tiersKey,
+            defs: await additionalToolDefinitions({
+              ...params,
+              agentTemplate,
+              agentState,
+            }),
+          }
+        }
+        return cachedAdditionalToolDefinitions.defs
+      }
+    }
+    const additionalToolDefinitionsForPrompt =
+      createAdditionalToolDefinitionsWithCache(() => initialAgentState)
     // Use parent's tools for prompt caching when inheritParentSystemPrompt is true
     const useParentTools =
       agentTemplate.inheritParentSystemPrompt &&
@@ -1291,15 +1342,7 @@ export async function loopAgentSteps(
       promptType: { type: 'instructionsPrompt' },
       agentTemplates: localAgentTemplates,
       useParentTools,
-      additionalToolDefinitions: async () => {
-        if (!cachedAdditionalToolDefinitions) {
-          cachedAdditionalToolDefinitions = await additionalToolDefinitions({
-            ...params,
-            agentTemplate,
-          })
-        }
-        return cachedAdditionalToolDefinitions
-      },
+      additionalToolDefinitions: additionalToolDefinitionsForPrompt,
     })
 
     // Build the initial message history with user prompt and instructions
@@ -1347,15 +1390,7 @@ export async function loopAgentSteps(
         promptType: { type: 'systemPrompt' },
         agentTemplates: localAgentTemplates,
         ledger: contextBudgetLedger,
-        additionalToolDefinitions: async () => {
-          if (!cachedAdditionalToolDefinitions) {
-            cachedAdditionalToolDefinitions = await additionalToolDefinitions({
-              ...params,
-              agentTemplate,
-            })
-          }
-          return cachedAdditionalToolDefinitions
-        },
+        additionalToolDefinitions: additionalToolDefinitionsForPrompt,
       })
       system = systemPrompt ?? ''
     }
@@ -1372,24 +1407,71 @@ export async function loopAgentSteps(
           agentTemplates: localAgentTemplates,
         })
 
-    const tools: ToolSet = useParentTools
-      ? parentTools!
-      : await getToolSet({
-          toolNames: getEffectiveAgentToolNames(agentTemplate),
-          additionalToolDefinitions: async () => {
-            if (!cachedAdditionalToolDefinitions) {
-              cachedAdditionalToolDefinitions = await additionalToolDefinitions(
-                {
-                  ...params,
-                  agentTemplate,
-                },
-              )
-            }
-            return cachedAdditionalToolDefinitions
-          },
-          agentTools,
-          skills: fileContext.skills ?? {},
-        })
+    // Build the effective ToolSet from the current agent state. Base2's
+    // handleSteps publishes `unlockedToolTiers` under progressive tool
+    // disclosure, so the tool surface is rebuilt per LLM step (below) to pick
+    // up newly unlocked tiers. For all other agents, default-off templates, or
+    // canary-off with stale persisted unlocks, getEffectiveAgentToolNames leaves
+    // the template's full list unchanged (progressive filtering only when the
+    // canary is not explicitly off and unlocks are non-empty).
+    //
+    // Tool *execution* (processStream → executeToolCall) still gates permission
+    // via getEffectiveAgentToolNames(agentTemplate) without agentState. Project
+    // the progressive surface onto a per-step template.toolNames so unlocked
+    // model tools are accepted and still-locked tools stay rejected at execute
+    // time without changing the tool-executor signature.
+    const projectEffectiveAgentTemplate = (
+      state: AgentState,
+    ): AgentTemplate => {
+      const effectiveToolNames = getEffectiveAgentToolNames(
+        agentTemplate,
+        state,
+      )
+      if (
+        effectiveToolNames.length === agentTemplate.toolNames.length &&
+        effectiveToolNames.every(
+          (name, index) => name === agentTemplate.toolNames[index],
+        )
+      ) {
+        return agentTemplate
+      }
+      return {
+        ...agentTemplate,
+        toolNames: effectiveToolNames,
+      }
+    }
+    const buildTools = (state: AgentState): Promise<ToolSet> =>
+      useParentTools
+        ? Promise.resolve(parentTools!)
+        : getToolSet({
+            toolNames: getEffectiveAgentToolNames(agentTemplate, state),
+            // Computed fresh from the passed state (not the prompt cache):
+            // this runs on the per-step rebuild when the programmatic step
+            // just changed `unlockedToolTiers`, so the new surface —
+            // including custom/MCP definitions — must reflect `state`.
+            additionalToolDefinitions: () =>
+              additionalToolDefinitions({
+                ...params,
+                agentTemplate,
+                agentState: state,
+              }),
+            agentTools,
+            skills: fileContext.skills ?? {},
+          })
+
+    let tools: ToolSet = await buildTools(initialAgentState)
+    let effectiveAgentTemplate =
+      projectEffectiveAgentTemplate(initialAgentState)
+    // Tracks the `unlockedToolTiers` value the current `tools` was built from,
+    // so the per-step rebuild below can be skipped when the programmatic step
+    // left the tiers unchanged. `undefined` covers every non-base2 agent and
+    // the default-off canary (tiers never published), so the default path pays
+    // zero added per-step cost.
+    let builtUnlockedToolTiers = Array.isArray(
+      initialAgentState.unlockedToolTiers,
+    )
+      ? [...initialAgentState.unlockedToolTiers]
+      : initialAgentState.unlockedToolTiers
 
     // P2-3: On resume from a checkpoint, the user prompt is already in
     // messageHistory — do not re-add it. Duplicating it would double the prompt
@@ -1439,25 +1521,19 @@ export async function loopAgentSteps(
     )
 
     // Convert tools to a serializable format for context-pruner token counting
-    const toolDefinitions = mapValues(tools, (tool) => ({
+    // (`let`: recomputed mid-turn when a tier unlock rebuilds the tool surface).
+    let toolDefinitions = mapValues(tools, (tool) => ({
       description: tool.description,
       inputSchema: tool.inputSchema as {},
     }))
 
-    const additionalToolDefinitionsWithCache = async () => {
-      if (!cachedAdditionalToolDefinitions) {
-        cachedAdditionalToolDefinitions = await additionalToolDefinitions({
-          ...params,
-          agentTemplate,
-        })
-      }
-      return cachedAdditionalToolDefinitions
-    }
+    const additionalToolDefinitionsWithCache =
+      createAdditionalToolDefinitionsWithCache(() => currentAgentState)
 
     // Convert tool definitions to Anthropic format for accurate token counting
     // Tool definitions are stored as { [name]: { description, inputSchema } }
     // Anthropic count_tokens API expects [{ name, description, input_schema }]
-    const toolsForTokenCount = Object.entries(toolDefinitions).map(
+    let toolsForTokenCount = Object.entries(toolDefinitions).map(
       ([name, def]) => ({
         name,
         ...(def.description && { description: def.description }),
@@ -1575,9 +1651,12 @@ export async function loopAgentSteps(
             }),
         )
 
-        // Cache system + tools token count once — these don't change between
-        // the initial compute and the post-prune recompute (only messages do).
-        const systemAndToolsTokens =
+        // Cache system + tools token count for this iteration — between the
+        // initial compute and the post-prune recompute only messages change.
+        // Under progressive tool disclosure, a mid-turn tier unlock rebuilds
+        // `tools` below and recomputes this total and the serialized
+        // toolDefinitions, so pruning estimates track the live tool surface.
+        let systemAndToolsTokens =
           countTokensJson(system) + countTokensJson(toolsForTokenCount)
 
         const estimateContextTokensLocally = () =>
@@ -1636,6 +1715,54 @@ export async function loopAgentSteps(
           // this step. Clear it so a later programmatic step can't read the same
           // stale responses again.
           nResponses = undefined
+
+          // Rebuild the tool surface only when the programmatic step actually
+          // changed `unlockedToolTiers` on the agent state (progressive tool
+          // disclosure). Recomputed from the fresh `currentAgentState` so the
+          // model only ever sees CORE + currently-unlocked tiers. Skipped for
+          // non-base2 agents and default-off (unlockedToolTiers stays absent),
+          // and when the published tiers are unchanged from the last build.
+          const nextUnlockedToolTiers = currentAgentState.unlockedToolTiers
+          const prevUnlockedToolTiers = builtUnlockedToolTiers
+          const tiersUnchanged =
+            nextUnlockedToolTiers === prevUnlockedToolTiers ||
+            (Array.isArray(nextUnlockedToolTiers) &&
+              Array.isArray(prevUnlockedToolTiers) &&
+              nextUnlockedToolTiers.length === prevUnlockedToolTiers.length &&
+              nextUnlockedToolTiers.every(
+                (tier, index) => tier === prevUnlockedToolTiers[index],
+              ))
+          if (!tiersUnchanged) {
+            tools = await buildTools(currentAgentState)
+            // Keep the execute-time permission template in lockstep with the
+            // ToolSet offered to the model for this step.
+            effectiveAgentTemplate =
+              projectEffectiveAgentTemplate(currentAgentState)
+            // Snapshot a copy so a later in-place mutation of the published
+            // array cannot alias this baseline and mask a real tier change.
+            builtUnlockedToolTiers = Array.isArray(nextUnlockedToolTiers)
+              ? [...nextUnlockedToolTiers]
+              : nextUnlockedToolTiers
+            // Progressive disclosure: the live tool surface just changed, so
+            // recompute the serialized toolDefinitions and their token counts
+            // too — otherwise pruning estimates (systemAndToolsTokens) and
+            // agentState.toolDefinitions keep describing the pre-unlock
+            // surface for the rest of the turn.
+            toolDefinitions = mapValues(tools, (tool) => ({
+              description: tool.description,
+              inputSchema: tool.inputSchema as {},
+            }))
+            toolsForTokenCount = Object.entries(toolDefinitions).map(
+              ([name, def]) => ({
+                name,
+                ...(def.description && { description: def.description }),
+                ...(def.inputSchema && { input_schema: def.inputSchema }),
+              }),
+            )
+            systemAndToolsTokens =
+              countTokensJson(system) + countTokensJson(toolsForTokenCount)
+            initialAgentState.toolDefinitions = toolDefinitions
+          }
         }
 
         // Programmatic orchestrators (notably Base2) get the first opportunity
@@ -1850,7 +1977,10 @@ export async function loopAgentSteps(
           ...params,
 
           agentState: currentAgentState,
-          agentTemplate,
+          // Projected progressive surface so executeToolCall (which gates via
+          // getEffectiveAgentToolNames without agentState) accepts unlocked
+          // model tools and rejects still-locked ones for this step.
+          agentTemplate: effectiveAgentTemplate,
           n,
           prompt: currentPrompt,
           runId,

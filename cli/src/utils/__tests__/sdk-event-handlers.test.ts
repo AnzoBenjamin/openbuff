@@ -474,19 +474,46 @@ describe('sdk-event-handlers', () => {
     expect(captured).toEqual([{ used: 150000, max: 200000 }])
   })
 
-  test('tool_call wires backgroundJobId in production so job_update correlates without manual mutation', () => {
+  test('BACKGROUND tool_result wires backgroundJobId so job_update settles without check_job', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
-    // A run_terminal_command BACKGROUND launch carries its detached job id on
-    // the tool_call event itself; no test-only block mutation is required.
+    // Production path: job id is only known after the SDK starts the process,
+    // so it arrives on tool_result — not on tool_call. No manual mutation.
     handleEvent({
       type: 'tool_call',
       toolCallId: 'term-bg',
       toolName: 'run_terminal_command',
-      input: { command: 'npm run dev', mode: 'BACKGROUND' },
-      backgroundJobId: 'job-bg',
+      input: { command: 'npm run dev', process_type: 'BACKGROUND' },
     } as any)
 
+    expect(getMessages()[0].blocks?.[0]).toMatchObject({
+      type: 'tool',
+      lifecycle: 'running',
+    })
+    expect(
+      (getMessages()[0].blocks?.[0] as any).backgroundJobId,
+    ).toBeUndefined()
+
+    handleEvent({
+      type: 'tool_result',
+      toolCallId: 'term-bg',
+      toolName: 'run_terminal_command',
+      output: [
+        {
+          type: 'json',
+          value: {
+            command: 'npm run dev',
+            processId: 1234,
+            backgroundProcessStatus: 'running',
+            jobId: 'job-bg',
+            logFile: '/tmp/job-bg.log',
+            startingCwd: '/project',
+          },
+        },
+      ],
+    } as any)
+
+    // Successful BACKGROUND start keeps the card running (not succeeded).
     expect(getMessages()[0].blocks?.[0]).toMatchObject({
       type: 'tool',
       backgroundJobId: 'job-bg',
@@ -512,8 +539,9 @@ describe('sdk-event-handlers', () => {
 
     expect(getMessages()[0].blocks?.[0]).toMatchObject({
       type: 'tool',
+      backgroundJobId: 'job-bg',
       lifecycle: 'succeeded',
-      output: 'listening\n',
+      output: expect.stringContaining('listening\n'),
     })
   })
 
