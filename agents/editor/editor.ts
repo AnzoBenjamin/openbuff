@@ -253,7 +253,12 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
       const { messageHistory } = agentState
 
       const newMessages = messageHistory.slice(initialMessageHistoryLength)
+      // Receipt-only committed paths drive status. Tool-input paths are collected
+      // separately (via collectToolInputFiles, kept in sync with gate-files) so
+      // blocked diagnostics can name attempted targets without treating attempts
+      // as successful mutations.
       const changedFiles = extractChangedFiles(newMessages)
+      const attemptedEditFiles = extractAttemptedEditFiles(newMessages)
       const targetFileProgress = buildTargetFileProgress(
         targetFiles,
         changedFiles,
@@ -270,7 +275,7 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
       // explicit diagnostic only — never a security/authority statement.
       const blockedReason =
         changedFiles.length === 0
-          ? collectFailedEditReason(newMessages)
+          ? collectFailedEditReason(newMessages, attemptedEditFiles)
           : undefined
       // Changed paths prove only that mutations committed, not that a reviewer
       // finding was semantically addressed. Leave finding attestation to the
@@ -305,8 +310,12 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
       // Called only when `changedFiles.length === 0` (so the status resolves to
       // `blocked`). Produces a deterministic, cheap diagnostic for why no edit
       // landed without inspecting any authority/security internals — just two
-      // boolean flags derived from the edit_transaction tool messages.
-      function collectFailedEditReason(messages: unknown[]): string {
+      // boolean flags derived from the edit_transaction tool messages, plus any
+      // attempted tool-input paths collected via collectToolInputFiles.
+      function collectFailedEditReason(
+        messages: unknown[],
+        attemptedFiles: string[] = [],
+      ): string {
         let sawEditTransaction = false
         let committedUnrecognized = false
         for (const message of messages) {
@@ -343,13 +352,43 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
             }
           }
         }
+        const attemptedNote =
+          attemptedFiles.length > 0
+            ? ` Attempted paths: ${attemptedFiles.join(', ')}.`
+            : ''
         if (committedUnrecognized) {
-          return 'edit_transaction committed but the change was not recognized as an edited file. Check that the receipt finalHashes/actions all correlate and the target path matches what you intended to change.'
+          return `edit_transaction committed but the change was not recognized as an edited file. Check that the receipt finalHashes/actions all correlate and the target path matches what you intended to change.${attemptedNote}`
         }
         if (sawEditTransaction) {
-          return 'edit_transaction was attempted but no edit committed. Re-read the exact target range (or the failure diagnostic capability) and retry with a precise anchor.'
+          return `edit_transaction was attempted but no edit committed. Re-read the exact target range (or the failure diagnostic capability) and retry with a precise anchor.${attemptedNote}`
         }
-        return 'no edit_transaction was submitted; no file changes were produced.'
+        return `no edit_transaction was submitted; no file changes were produced.${attemptedNote}`
+      }
+
+      // Walks assistant tool-call inputs with collectToolInputFiles so the
+      // gate-files helper stays live inside handleSteps (parity with base2).
+      // Results are diagnostic-only and must not drive changedFiles/status.
+      function extractAttemptedEditFiles(messages: unknown[]): string[] {
+        const files = new Set<string>()
+        for (const message of messages) {
+          if (!message || typeof message !== 'object') continue
+          const record = message as Record<string, unknown>
+          if (record.role !== 'assistant' || !Array.isArray(record.content)) {
+            continue
+          }
+          for (const part of record.content) {
+            if (!part || typeof part !== 'object') continue
+            const toolCall = part as Record<string, unknown>
+            if (
+              toolCall.type === 'tool-call' &&
+              typeof toolCall.toolName === 'string' &&
+              isFileChangingTool(toolCall.toolName)
+            ) {
+              collectToolInputFiles(toolCall.input, files)
+            }
+          }
+        }
+        return [...files]
       }
 
       // NOTE: these helpers are inlined here (rather than imported from
@@ -368,6 +407,24 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
           toolName === 'str_replace' ||
           toolName === 'write_file'
         )
+      }
+
+      function collectToolInputFiles(input: unknown, out: Set<string>): void {
+        if (!input || typeof input !== 'object') return
+        const record = input as Record<string, unknown>
+        if (typeof record.path === 'string') out.add(record.path)
+        const operation = record.operation
+        if (operation && typeof operation === 'object' && typeof (operation as Record<string, unknown>).path === 'string') {
+          out.add((operation as Record<string, string>).path)
+        }
+        const edits = record.edits
+        if (Array.isArray(edits)) {
+          for (const edit of edits) {
+            if (edit && typeof edit === 'object' && typeof (edit as Record<string, unknown>).path === 'string') {
+              out.add((edit as Record<string, string>).path)
+            }
+          }
+        }
       }
 
       // Mutation evidence is accepted only from canonical committed receipts.

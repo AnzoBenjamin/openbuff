@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
-import { readFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import path from 'path'
+import { fileURLToPath } from 'url'
 
 import { getStubProjectFileContext } from '@codebuff/common/util/file'
 
@@ -201,10 +202,20 @@ describe('knowledgeFilesPrompt M3 shrink', () => {
   })
 
   it('full essay lives in agents/guides/knowledge-files.md, not the always-on prompt', () => {
-    const guidePath = path.join(
-      process.cwd(),
-      'agents/guides/knowledge-files.md',
-    )
+    // Resolve monorepo root from this file so the package-cwd CI job still finds
+    // agents/guides (cwd may be packages/agent-runtime rather than repo root).
+    const guideRel = path.join('agents', 'guides', 'knowledge-files.md')
+    let dir = path.dirname(fileURLToPath(import.meta.url))
+    let guidePath = path.join(dir, guideRel)
+    while (!existsSync(guidePath)) {
+      const parent = path.dirname(dir)
+      if (parent === dir) {
+        guidePath = path.join(process.cwd(), guideRel)
+        break
+      }
+      dir = parent
+      guidePath = path.join(dir, guideRel)
+    }
     const guide = readFileSync(guidePath, 'utf8')
     // Phrase unique to the full essay body.
     const uniqueEssayPhrase =
