@@ -202,4 +202,48 @@ Both M4 reviewer advisories fixed and locally validated (agents suites: base2 19
 - **NF-1:** `EXPLORE_PROMPT` now says "deduplicate its candidates by path, score, reason, and kind" — matching the compact proactive envelope's surviving fields instead of dropped `relatedFiles`/`matchedSnippets`.
 - **NF-2:** cache-HIT route note now embeds `cachedProactiveRetrieval.result` (compact envelope) alongside the route metadata, so the persisted envelope is genuinely consumed rather than write-only. Defensive fallback omits the suffix when the entry is somehow absent.
 - **Scope correction:** an attempted M4 mirror of the classifier onto `general-agent`'s `shouldProactivelyQueryIndex` (M4-T2) broke 3 audit-loop tests (audit prompts began firing query_index first, shifting the expected yield sequence). The file was reverted to HEAD; the mirror is re-queued as its own scoped change with test updates if pursued.
-- Gate: hooks green on `agents/base2/base2.ts` + `agents/__tests__/base2.test.ts` (+ session artifacts); reviewer pass pending on runtime.
+- Gate: hooks green on `agents/base2/base2.ts` + `agents/__tests__/base2.test.ts` (+ session artifacts); reviewer pass returned LOOKS_GOOD on the NF-1/NF-2 scope; deliverables committed as `77f403b`.
+
+## AC-A1 evaluation + M2 default-on flip — 2026-08-05
+
+Pre-flip smoke baselines (S1–S4) were recorded on the pre-flip tree; the M2 default-on flip was then applied (`DEFAULT_PROGRESSIVE_PROMPT_DISCLOSURE = true`, resolver = `option ?? (envCanary || default)`) and the same suites re-run.
+
+Post-flip vs. baseline:
+
+| Suite | Baseline | Post-flip | Verdict |
+|---|---|---|---|
+| S1 gate-lifecycle e2e | 3/3 | 3/3 (17/17 combined with S2) | no worse |
+| S2 gate-aux-ordering e2e | 14/14 | 14/14 (combined above) | no worse |
+| S3 progressive-disclosure unit | 9/9 | 9/9 (3 assertions realigned to default-on contract, equal strength) | no worse |
+| S4 tool-tier + context-budget unit | 52/52 (61/61 combined with S3 pre-flip) | 52/52 | no worse |
+| base2.test.ts (regression net) | 137/137 | 137/137 (2 stale verbatim-prompt assertions moved to explicit-off surface) | no worse |
+| agents typecheck | clean | clean | no worse |
+
+AC4 metric confirmed post-flip by `scripts/measure-context-baseline.ts`: authored surface 15,290 -> 11,288 tok (-4,002, 26.2% >= 25% target). Caveat: the script's `Default fixed (prod)` line (48,034 tok) is unchanged because it measures the raw system template with unreplaced placeholders; the disclosure saving flows only through production runtime assembly (known SPEC open item #3 measurement gap).
+
+AC-A1 **satisfied for the prompt-disclosure flip**: no suite is worse than its recorded baseline. The M2 flip is ready to gate and commit.
+
+<!-- update_plan_status:appended -->
+## Deliverables committed — 2026-08-05 — 2026-08-05T02:59:40.287Z
+
+H1 landed on `77f403b0110da31acff3b3e6b18db509bf44d8fa` (`feat(base2): tier model-visible tools by phase + slim proactive retrieval`, +3004/−129 across 14 files). M1 (progressive tool disclosure) and M4 (lean proactive inject) shipped; NF-1/NF-2 follow-ups resolved; session artifacts committed. The branch is ahead 1 of origin; no push was requested or performed.
+
+**Still outstanding:** M2 default-on for progressive prompt disclosure is blocked on AC-A1 smoke evidence (S1–S4 commands + pre-flip baselines not yet recorded in STATUS.md). That is the only remaining commitment-gate item.
+
+
+<!-- update_plan_status:appended -->
+## AC-A1 pre-flip smoke baselines — 2026-08-05 — 2026-08-05T06:02:55.271Z
+
+## AC-A1 pre-flip smoke baselines — 2026-08-05
+
+Recorded against HEAD `77f403b` (post-M1/M4, disclosure default OFF — the M2 flip candidate). All ran on this tree.
+
+| ID | Task | Command | Pre-flip result |
+|---|---|---|---|
+| S1 | Gate lifecycle e2e | `bun test agents/e2e/gate-lifecycle.e2e.test.ts` | **3 pass / 0 fail** (3 gate events visible: blocked→awaiting_review→final_response_allowed per test) |
+| S2 | Gate aux ordering e2e | `bun test agents/e2e/gate-aux-ordering.e2e.test.ts` | **14 pass / 0 fail** |
+| S3 | Progressive disclosure unit | `bun test agents/__tests__/base2-progressive-disclosure.test.ts` | **9 pass / 0 fail** |
+| S4 | Context budget tools unit | `bun test agents/__tests__/base2-context-budget.test.ts` + `base2-progressive-tool-disclosure.test.ts` | **52 pass / 0 fail** (combined) |
+| S5 | buffbench subset | (none wired) | deferred — no default-on attempt yet |
+
+AC-A1 rule: M2 default-on is acceptable only if the post-flip runs match these results on the same tree.

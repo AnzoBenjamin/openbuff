@@ -13,12 +13,13 @@ import {
   specialistRoutingSection,
 } from '../base2/quality-prompt-section'
 
-// M4 progressive prompt disclosure. When the flag is OFF (default), the
-// assembled base2 prompt must be byte-identical to the pre-M4 prompt: the
-// disclose() helper is a pure passthrough, so the verbose advisory sections
-// stay inline verbatim. When the flag is ON, each verbose section is replaced
-// by a compact pointer to an on-demand guide file under agents/guides/, and
-// the authored prompt surface shrinks by at least 25%.
+// M2/M4 progressive prompt disclosure. Default is ON (M2 flip): each verbose
+// advisory section is replaced by a compact pointer to an on-demand guide
+// under agents/guides/, shrinking the authored prompt surface by at least
+// 25% vs explicit-off. Explicit progressivePromptDisclosure: false keeps the
+// disclose() helper as a pure passthrough so the verbose bodies stay inline
+// verbatim (pre-M4 surface). The OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE
+// canary can only force ON, never OFF; explicit false always wins.
 
 type Base2Agent = ReturnType<typeof createBase2>
 
@@ -42,30 +43,37 @@ const BROAD_AUDIT_PLAN = buildBroadAuditSection(
 )
 
 describe('base2 progressive prompt disclosure (M4)', () => {
-  test('flag defaults off: the verbose advisory sections stay inline verbatim', () => {
+  test('flag defaults on: the verbose advisory sections relocate to guides', () => {
     const agent = createBase2('default')
     const system = agent.systemPrompt as string
-    // The four relocatable systemPrompt sections are present byte-for-byte.
-    expect(system).toContain(qualitySection)
-    expect(system).toContain(gitDisciplineSection)
-    expect(system).toContain(securityReviewSection)
-    expect(system).toContain(specialistRoutingSection)
-    // The broad-audit section is present verbatim in the instructions prompt.
-    expect(agent.instructionsPrompt as string).toContain(BROAD_AUDIT_IMPL)
+    // The four relocatable systemPrompt sections are replaced by pointers.
+    expect(system).not.toContain(qualitySection)
+    expect(system).not.toContain(gitDisciplineSection)
+    expect(system).not.toContain(securityReviewSection)
+    expect(system).not.toContain(specialistRoutingSection)
+    expect(system).toContain('agents/guides/code-craftsmanship.md')
+    expect(system).toContain('agents/guides/git-discipline.md')
+    expect(system).toContain('agents/guides/security-review.md')
+    expect(system).toContain('agents/guides/specialist-routing.md')
+    // The broad-audit section relocates out of the instructions prompt.
+    const instructions = agent.instructionsPrompt as string
+    expect(instructions).not.toContain(BROAD_AUDIT_IMPL)
+    expect(instructions).toContain('agents/guides/broad-audit.md')
   })
 
-  test('flag off is byte-identical to omitting the option entirely', () => {
-    // Passing the option explicitly false must equal the default.
+  test('flag on with an omitted option is byte-identical to flag explicitly on', () => {
+    // Default-on flip: omitting the option must equal passing it explicitly
+    // true; the previous explicit-false-equals-default contract inverted.
     for (const mode of ['default', 'fast'] as const) {
       const implicit = createBase2(mode)
-      const explicit = createBase2(mode, { progressivePromptDisclosure: false })
+      const explicit = createBase2(mode, { progressivePromptDisclosure: true })
       expect(authoredSurface(explicit)).toBe(authoredSurface(implicit))
     }
     // Plan mode too.
     const implicitPlan = createBase2('default', { planOnly: true })
     const explicitPlan = createBase2('default', {
       planOnly: true,
-      progressivePromptDisclosure: false,
+      progressivePromptDisclosure: true,
     })
     expect(authoredSurface(explicitPlan)).toBe(authoredSurface(implicitPlan))
   })
@@ -114,10 +122,16 @@ describe('base2 progressive prompt disclosure (M4)', () => {
     expect(system.toLowerCase()).toContain('specialist')
   })
 
-  // AC4 canary acceptance metric: progressive disclosure must shrink the
-  // authored always-on surface by >=25%. No separate buffbench harness.
+  // AC4 acceptance metric: progressive disclosure must shrink the authored
+  // always-on surface by >=25%. Post-flip both `createBase2('default')` and
+  // `progressivePromptDisclosure: true` resolve to ON, so the explicit-off
+  // branch is the only verbose baseline. No separate buffbench harness.
   test('flag on shrinks the authored prompt surface by at least 25%', () => {
-    const off = countTokens(authoredSurface(createBase2('default')))
+    const off = countTokens(
+      authoredSurface(
+        createBase2('default', { progressivePromptDisclosure: false }),
+      ),
+    )
     const on = countTokens(
       authoredSurface(
         createBase2('default', { progressivePromptDisclosure: true }),
@@ -127,10 +141,14 @@ describe('base2 progressive prompt disclosure (M4)', () => {
     expect(reduction).toBeGreaterThanOrEqual(0.25)
   })
 
-  test('env canary enables disclosure when option is omitted', () => {
+  test('canary can only force-on; a `0` value falls through to the true default', () => {
+    // Contract: OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE canary can only force
+    // ON, never OFF. `0` is not an off override; with no explicit option the
+    // flag resolves to DEFAULT_PROGRESSIVE_PROMPT_DISCLOSURE (true), so the
+    // surface stays disclosed.
     const previous = process.env.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE
     try {
-      process.env.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE = 'true'
+      process.env.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE = '0'
       const agent = createBase2('default')
       const system = agent.systemPrompt as string
       expect(system).not.toContain(qualitySection)

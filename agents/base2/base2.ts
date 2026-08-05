@@ -46,6 +46,14 @@ export function isProgressivePromptDisclosureEnvEnabled(
   )
 }
 
+/**
+ * Default for progressive prompt disclosure when the caller omits the
+ * `progressivePromptDisclosure` option. Post-flip (M2): ON by default. The
+ * OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE canary can only force ON, never OFF;
+ * an explicit `progressivePromptDisclosure: false` still wins.
+ */
+const DEFAULT_PROGRESSIVE_PROMPT_DISCLOSURE: boolean = true
+
 export {
   DEFAULT_MAX_REPAIR_ROUNDS,
   DEFAULT_MAX_SPECIALIST_REPAIR_ROUNDS,
@@ -87,15 +95,18 @@ export function createBase2(
     model: modelOverride,
     providerOptions,
   } = options ?? {}
-  // Explicit true/false wins over env. When omitted, resolve from the
-  // OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE canary (off unless 1/true/yes/on).
+  // Explicit true/false wins over env. When omitted, the DEFAULT is now ON
+  // (M2 prompt disclosure flipped default-on); the
+  // OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE canary (1/true/yes/on) remains a
+  // force-on override consulted on this omitted-option path.
   const progressivePromptDisclosure =
     progressivePromptDisclosureOption ??
-    isProgressivePromptDisclosureEnvEnabled(
+    (isProgressivePromptDisclosureEnvEnabled(
       typeof process === 'object' && process !== null
         ? process.env?.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE
         : undefined,
-    )
+    ) ||
+      DEFAULT_PROGRESSIVE_PROMPT_DISCLOSURE)
   // Explicit true/false wins over env. When omitted, resolve from the
   // OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE canary (off unless 1/true/yes/on).
   // Static toolNames start core-only when on (unlockedTiers: []). handleSteps
@@ -137,9 +148,10 @@ export function createBase2(
   const model = modelOverride ?? 'anthropic/claude-opus-4.7'
 
   const progressiveDisclosure = progressivePromptDisclosure
-  // M4 progressive prompt disclosure: when enabled, relocate verbose advisory
-  // sections out of the always-on prompt and replace each with a compact
-  // pointer to an on-demand guide file. When disabled (default), disclose()
+  // M4 progressive prompt disclosure (default ON; opt out with an explicit
+  // `progressivePromptDisclosure: false`): when enabled, relocate verbose
+  // advisory sections out of the always-on prompt and replace each with a
+  // compact pointer to an on-demand guide file. When disabled, disclose()
   // returns the full section verbatim so the assembled prompt is byte-identical.
   const disclose = (fullSection: string, pointer: string): string =>
     progressiveDisclosure ? pointer : fullSection

@@ -441,6 +441,16 @@ describe('base2 validation/reviewer coordination prompts', () => {
     expect(base2.systemPrompt).toContain(
       'omitted and `-1` mean no wall-clock deadline',
     )
+    // specialistRoutingSection is relocated to a guide under default-on
+    // disclosure; assert the relocation pointer in systemPrompt and keep the
+    // verbatim-line contract on the explicit-off surface instead.
+    expect(base2.systemPrompt).toContain('agents/guides/specialist-routing.md')
+    const base2DisclosureOff = createBase2('default', {
+      progressivePromptDisclosure: false,
+    })
+    expect(base2DisclosureOff.systemPrompt).toContain(
+      'Post-edit reviewer-family specialists are routed automatically',
+    )
     expect(base2.instructionsPrompt).toContain('compact implementation brief')
     expect(base2.instructionsPrompt).toContain('pass it as the editor prompt')
     expect(base2.instructionsPrompt).toContain(
@@ -485,10 +495,15 @@ describe('base2 validation/reviewer coordination prompts', () => {
     expect(base2.systemPrompt).toContain(
       'Do not delegate work merely to gain access to set_output',
     )
+    // second specialistRoutingSection block in this test (there is a first
+    // block under the parallel-join assertions above). Under default-on
+    // disclosure these lines live in agents/guides/specialist-routing.md;
+    // assert the guide pointer here and the verbatim text on the
+    // explicit-off surface (base2DisclosureOff).
     expect(base2.systemPrompt).toContain(
-      'Post-edit reviewer-family specialists are routed automatically',
+      'agents/guides/specialist-routing.md',
     )
-    expect(base2.systemPrompt).toContain(
+    expect(base2DisclosureOff.systemPrompt).toContain(
       'Do not manually re-spawn them after edits, after compaction',
     )
     expect(base2.systemPrompt).toContain(

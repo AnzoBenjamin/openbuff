@@ -41,14 +41,23 @@ Document only environment variables that are implemented in code. During the for
 `CODEBUFF_API_KEY` functions as a runtime fallback (`OPENBUFF_API_KEY ?? CODEBUFF_API_KEY` in `sdk/src/env.ts`, Openbuff primary). `CODEBUFF_CHATGPT_OAUTH_TOKEN` also has an `OPENBUFF_*` alias but with reversed precedence (legacy name primary). `OPENBUFF_GIT_BASH_PATH` takes precedence over the legacy `CODEBUFF_GIT_BASH_PATH` fallback.
 
 Context-budget and proactive-retrieval behaviors remain code-default (no new
-env vars). Progressive prompt disclosure and gate repair budgets each have optional env
-canaries:
+env vars). Progressive prompt/tool disclosure and gate repair budgets each have
+optional env canaries:
 
-- `OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE` — when set to `1`, `true`, `yes`, or
-  `on` (case-insensitive), `createBase2` defaults `progressivePromptDisclosure`
+- `OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE` — `progressivePromptDisclosure`
+  is ON by default: when the option is omitted, `createBase2` enables
+  progressive prompt disclosure even without any env var set. The canary
+  (`1`, `true`, `yes`, or `on`, case-insensitive) still forces it on when the
+  option is omitted. Explicit option values always win:
+  `progressivePromptDisclosure: false` turns disclosure off (the
+  pre-disclosure prompt surface), and explicit `true` wins over the env
+  canary.
+- `OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE` — when set to `1`, `true`, `yes`, or
+  `on` (case-insensitive), `createBase2` defaults `progressiveToolDisclosure`
   to `true` if the option is omitted. Explicit `true`/`false` on the agent
-  option always wins over the env canary. Production stays off unless the
-  canary or option is set.
+  option always wins over the env canary. When enabled with no unlocked tiers,
+  the model-visible tool surface is CORE-only (mode gates still apply).
+  Production stays off unless the canary or option is set.
 - `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS` — positive integer string for the
   reviewer→repair→re-review budget (default `6`, max `20`). Invalid or missing
   values fall back to `6`. Explicit `createBase2({ maxReviewerRepairRounds })`

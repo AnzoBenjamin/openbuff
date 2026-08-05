@@ -341,12 +341,20 @@ gating, and tool-result lifecycle trimming). There is **no new JSON config
 field** for these systems yet — the behavior is code-default and always on.
 
 - **`progressivePromptDisclosure`** is an SDK/agent option on `createBase2`,
-  not a JSON config key. When the option is omitted, it defaults from the
+  not a JSON config key. It is ON by default when the option is omitted. The
   `OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE` env canary (`1`/`true`/`yes`/`on`
-  → true; otherwise false). Explicit `true`/`false` always wins over the env.
-  When enabled, verbose advisory prompt sections are replaced by `read_files`
-  pointers to `agents/guides/*.md`. It is opt-in (option or canary); production
-  stays off without either.
+  → true) still forces it on when the option is omitted, and explicit
+  `true`/`false` on the option always wins over both the default and the
+  canary — pass `progressivePromptDisclosure: false` to restore the
+  pre-disclosure prompt assembly. When enabled, verbose advisory prompt
+  sections are replaced by `read_files` pointers to `agents/guides/*.md`.
+- **`progressiveToolDisclosure`** is an SDK/agent option on `createBase2`, not
+  a JSON config key. When the option is omitted, it defaults from the
+  `OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE` env canary (`1`/`true`/`yes`/`on` →
+  true; otherwise false). Explicit `true`/`false` always wins over the env.
+  When enabled with no unlocked tiers, model-visible tools are CORE only
+  (mode gates still apply); full surface remains the default when off. Opt-in
+  only; production stays off without the option or canary.
 - **`maxReviewerRepairRounds`** is an SDK/agent option on `createBase2` (also
   not a JSON config key). Default `6`, max `20`. When omitted, it resolves from
   `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS` (positive integer string). Explicit
@@ -374,9 +382,11 @@ field** for these systems yet — the behavior is code-default and always on.
   index backing `query_index` and the proactive retrieval cache; see
   [Indexing and retrieval](#indexing-and-retrieval) above.
 
-All reductions and gates are on by default; progressive prompt disclosure is
-the only opt-in (via the agent option above). Gate repair budgets are always
-on with configurable defaults (reviewer `6`, validation/specialist `3`).
+All reductions and gates are on by default, including progressive prompt
+disclosure (opt out with an explicit `progressivePromptDisclosure: false`);
+progressive tool disclosure remains the opt-in (via the agent option / env
+canary above). Gate repair budgets are always on with configurable defaults
+(reviewer `6`, validation/specialist `3`).
 
 ## Merge semantics
 
