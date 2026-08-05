@@ -50,6 +50,8 @@ type InlineFunctionName =
   | keyof GateAuxHelpers
   | 'findJsonRecordWithArray'
   | 'inferWorkspaceRootFromPath'
+  | 'isAlnumChar'
+  | 'basenameContainsSensitiveName'
 
 // Minimal structural stand-in for Base2ActiveWorkState fields the inline
 // functions touch. Constructed in tests via a local factory; never imported
@@ -77,6 +79,8 @@ type InlineHelperFactory = (processValue: typeof process) => GateAuxHelpers
 const INLINE_FUNCTION_NAMES: InlineFunctionName[] = [
   'normalizeGateFilePath',
   'gateFileSetsEqual',
+  'isAlnumChar',
+  'basenameContainsSensitiveName',
   'matchesSecuritySensitiveGlob',
   'inferPackageTestCommand',
   'isNonTestSourceFile',
@@ -201,6 +205,59 @@ describe('gate-aux-triggers', () => {
           'packages/sdk/src/auth-token.ts',
         ]),
       ).toBe(true)
+    })
+
+    // Word-boundary basename matching: bare includes('token') false-positived on
+    // measure scripts named *tokens* (token-count metrics) and re-fired security
+    // aux forever. Longer words must not match; delimited runs still do.
+    test('measure/rank *tokens* basenames do not match token', () => {
+      expect(
+        helpers.matchesSecuritySensitiveGlob([
+          'scripts/rank-core-tool-tokens.ts',
+        ]),
+      ).toBe(false)
+      expect(
+        helpers.matchesSecuritySensitiveGlob([
+          'scripts/measure-context-tokens.ts',
+        ]),
+      ).toBe(false)
+      expect(
+        helpers.matchesSecuritySensitiveGlob(['common/src/util/tokens.ts']),
+      ).toBe(false)
+    })
+
+    test('tokenize / polygon basenames do not match token', () => {
+      expect(
+        helpers.matchesSecuritySensitiveGlob(['tokenize.ts']),
+      ).toBe(false)
+      expect(
+        helpers.matchesSecuritySensitiveGlob(['polygon.ts']),
+      ).toBe(false)
+    })
+
+    test('delimited token/secret/apikey basenames still match', () => {
+      expect(helpers.matchesSecuritySensitiveGlob(['token.ts'])).toBe(true)
+      expect(
+        helpers.matchesSecuritySensitiveGlob(['foo_token_bar.ts']),
+      ).toBe(true)
+      expect(
+        helpers.matchesSecuritySensitiveGlob(['api.token.json']),
+      ).toBe(true)
+      expect(
+        helpers.matchesSecuritySensitiveGlob(['api-secret.ts']),
+      ).toBe(true)
+      expect(
+        helpers.matchesSecuritySensitiveGlob(['client-apikey.ts']),
+      ).toBe(true)
+    })
+
+    // secrets.ts no longer matches basename substring `secret` (word boundary);
+    // directory segment secrets/ still matches via SECURITY_SENSITIVE_GLOBS.
+    test('secrets directory still matches; bare secrets.ts basename does not', () => {
+      expect(
+        helpers.matchesSecuritySensitiveGlob(['secrets/config.ts']),
+      ).toBe(true)
+      expect(helpers.matchesSecuritySensitiveGlob(['secrets.ts'])).toBe(false)
     })
 
     test('.env file startsWith .env', () => {

@@ -52,12 +52,11 @@ const inputSchema = z
   )
 
 const description = `
-Join (poll) or wait (follow) on a background agent turn started by spawn_agents with background: true. Every call returns a unified event-slice result from the job registry: \`events\` (the new \`{type:'agent_chunk',chunkType,data}\` events since the cursor), \`nextCursor\` (pass it back on the next call), \`state\` (running|completed|error|cancelled), and the resolved result/error when finished.
+Poll or follow a spawn_agents({ background: true }) agent job. Returns agent_chunk \`events\`, \`nextCursor\`, \`state\`, and result/error when finished.
 
-- Poll mode (no wait_for/timeout): returns immediately with the agent_chunk events (text, tool_call, tool_result, subagent_* payloads) produced since the supplied cursor (or since your last poll when the cursor is omitted).
-- Follow mode (wait_for and/or timeout_seconds): blocks — bounded by timeout_seconds — until wait_for appears in any new chunk payload or the job settles, then returns. \`matched\` indicates whether wait_for was seen. A follow-timeout is observational (\`timedOut: true\`) and leaves the agent running. Set \`cancel: true\` to explicitly abort it.
-
-The cursor is per-consumer: chunk events never repeat across calls that thread nextCursor. \`truncated\` flags that events at or below the cursor were evicted from the bounded buffer (\`dropped\` is the cumulative eviction count). Background agent turns are in-process coroutines — they cannot outlive this CLI session and are not recoverable across crashes (their partial state is preserved only via mid-turn checkpointing).
+- Poll: immediate chunks since cursor (or last poll if omitted).
+- Follow (wait_for and/or timeout_seconds > 0): block until match or settle; timeout is observational. Set cancel true to abort.
+- Thread nextCursor; truncated/dropped mark eviction. In-process only — cannot outlive this CLI session.
 
 Example:
 ${$getNativeToolCallExampleString({

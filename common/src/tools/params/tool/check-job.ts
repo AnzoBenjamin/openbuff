@@ -36,7 +36,7 @@ const inputSchema = z
       .default(false)
       .optional()
       .describe(
-        'Follow mode only: when true and the follow-timeout fires (deadline reached, wait_for not yet matched, job still running), send SIGTERM to the background job and reflect the post-kill status/exitCode plus `killed: true` in the result. Defaults to false so observational polling never terminates work unless explicitly requested. Poll mode (timeout_seconds 0/omitted) never kills regardless of this flag.',
+        'Follow mode only: SIGTERM the job on follow-timeout. Poll mode never kills. Default false.',
       ),
   })
   .describe(
@@ -44,12 +44,11 @@ const inputSchema = z
   )
 
 const description = `
-Join (poll) or wait (follow) on a background job started by run_terminal_command with process_type: BACKGROUND. Every call returns a unified event-slice result from the job registry: \`events\` (the new \`{type:'output',data}\` events since your cursor), \`nextCursor\` (pass it back on the next call), \`state\` (running|completed|error|stopped|lost|cancelled), and \`exitCode\` when finished.
+Poll or follow a BACKGROUND run_terminal_command job. Returns new \`events\`, \`nextCursor\`, \`state\`, and \`exitCode\` when finished.
 
-- Poll mode (no wait_for/timeout): returns immediately with the output events produced since your last check_job for this job.
-- Follow mode (wait_for and/or timeout_seconds): blocks — bounded by timeout_seconds — until wait_for appears in new output or the job exits, then returns. \`matched\` indicates whether wait_for was seen. A timeout leaves the job running by default (\`timedOut: true\`); set kill_on_timeout to true only when the timeout should explicitly terminate it. Poll mode never kills.
-
-The cursor is per-consumer: output events never repeat across calls that thread nextCursor. \`truncated\` flags that events at or below your cursor were evicted from the bounded buffer (\`dropped\` is the cumulative eviction count). If you need the full/latest tail without consuming incremental output, use read_logs with the jobId. Prefer check_job over blocking SYNC commands for dev servers, build watchers, and log tails.
+- Poll (no wait_for / timeout_seconds 0): immediate new output since last cursor.
+- Follow (wait_for and/or timeout_seconds > 0): block until match or exit; \`matched\` / \`timedOut\`. Timeout leaves job running unless kill_on_timeout. Poll never kills.
+- Thread nextCursor so events do not repeat; truncated/dropped mark buffer eviction. Prefer read_logs(jobId) for a non-consuming tail snapshot.
 
 Example:
 ${$getNativeToolCallExampleString({

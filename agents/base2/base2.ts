@@ -1640,6 +1640,28 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
 
         if (finalResponseGateOpen && !editsThisStep) break
 
+        // Drop deleted/missing paths from the pending gate set before aux
+        // gates run. Deleted measure scripts / renames can leave ghost
+        // pending paths that re-fire security aux forever; only exact
+        // `missing` markers are pruned (not unreadable:*). Do not credit
+        // them as gate-passed — they were never reviewed.
+        {
+          let prunedMissingPendingCount = 0
+          for (const file of Array.from(pendingGateFiles)) {
+            const normalized = normalizeGateFilePath(file) || file
+            if (readGateFileContentMarker(normalized) === 'missing') {
+              pendingGateFiles.delete(file)
+              changedFiles.delete(file)
+              prunedMissingPendingCount += 1
+            }
+          }
+          if (prunedMissingPendingCount > 0) {
+            activeWorkState.pendingGateFiles = Array.from(pendingGateFiles)
+            activeWorkState.latestWorkSummary = `Pruned ${prunedMissingPendingCount} missing path(s) from the pending gate set.`
+            markActiveWorkStateChanged()
+          }
+        }
+
         const currentPendingGateFiles = Array.from(pendingGateFiles)
         // M3 (R1d) — reset the aux-gate done-flags when the AUX-RELEVANT
         // pending gate file set changes, so security-reviewer / test-writer
@@ -2051,16 +2073,25 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         // the condition so the gate also re-fires when a stored credit no
         // longer matches the current pending bytes (fail closed for legacy
         // state that stored no fingerprint at all).
-        // Scope fingerprint to the REVIEWABLE pending subset (same family as
-        // specialist credit): non-reviewable plan/session artifacts such as
-        // `.agents/sessions/**/STATUS.md` must not thrash security credit.
         // Entry still uses the full pending list for matchesSecuritySensitiveGlob.
+        // Spawn/attestation/credit fingerprint use only the security-sensitive
+        // reviewable subset so co-pending non-sensitive files (tool diets,
+        // base2.ts, tests, etc.) are not forced into security attestation.
         const securityReviewableFiles = selectReviewableGateFiles(
           currentPendingGateFiles,
         )
+        const securitySensitiveReviewableFiles = securityReviewableFiles.filter(
+          (file) => matchesSecuritySensitiveGlob([file]),
+        )
+        const securityChangedFiles = securitySensitiveReviewableFiles
         const securitySnapshotDetails = buildGateSnapshotDetails(
-          securityReviewableFiles,
+          securityChangedFiles,
           '',
+        )
+        // Deleted pending files (a `missing` content marker) are
+        // attested-by-absence, matching the final code-reviewer path.
+        const securityDeletedFiles = collectDeletedFilesFromSnapshotDetails(
+          securitySnapshotDetails,
         )
         const securitySnapshotFingerprint = hashGateSnapshotDetails(
           securitySnapshotDetails,
@@ -2074,22 +2105,72 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           activeWorkState.securityReviewGateFingerprint ===
             securitySnapshotFingerprint
         const owedReviewers = activeWorkState.owedReviewerRevalidations ?? []
-        if (
+        const securityWouldRefire =
           runValidationGate &&
           editsHappened &&
           currentPendingGateFiles.length > 0 &&
           (!activeWorkState.securityReviewGateDone || !securityCreditIsFresh) &&
           (owedReviewers.length === 0 ||
-            owedReviewers.includes('security-reviewer')) &&
-          matchesSecuritySensitiveGlob(currentPendingGateFiles)
+            owedReviewers.includes('security-reviewer'))
+        // If a prior security protocol block left the gate stuck but the current
+        // pending set is no longer security-sensitive, clear the stuck credit so
+        // validation can continue without re-firing security-reviewer.
+        if (
+          securityWouldRefire &&
+          !matchesSecuritySensitiveGlob(currentPendingGateFiles)
+        ) {
+          const nextRequired = activeWorkState.nextRequiredAction ?? ''
+          const latestSummary = activeWorkState.latestWorkSummary ?? ''
+          const stuckOnSecurityProtocol =
+            nextRequired.includes(
+              'fresh matching snapshot-bound security review',
+            ) ||
+            /security review is incomplete/i.test(latestSummary)
+          if (stuckOnSecurityProtocol) {
+            activeWorkState.securityReviewGateDone = true
+            activeWorkState.preEditSecurityReviewDone = true
+            activeWorkState.securityReviewGateFingerprint =
+              securitySnapshotFingerprint
+            if (
+              activeWorkState.currentPhase === 'blocked' &&
+              nextRequired.includes(
+                'fresh matching snapshot-bound security review',
+              )
+            ) {
+              activeWorkState.currentPhase = 'awaiting_validation'
+              activeWorkState.nextRequiredAction = ''
+            }
+            markActiveWorkStateChanged()
+          }
+        }
+        // Entry matched on full pending, but only sensitive reviewable files are
+        // spawned/attested. Empty sensitive set credits done without spawn.
+        if (
+          securityWouldRefire &&
+          matchesSecuritySensitiveGlob(currentPendingGateFiles) &&
+          securityChangedFiles.length === 0
+        ) {
+          activeWorkState.securityReviewGateDone = true
+          activeWorkState.preEditSecurityReviewDone = true
+          activeWorkState.securityReviewGateFingerprint =
+            securitySnapshotFingerprint
+          if (
+            activeWorkState.currentPhase === 'blocked' &&
+            (activeWorkState.nextRequiredAction ?? '').includes(
+              'fresh matching snapshot-bound security review',
+            )
+          ) {
+            activeWorkState.currentPhase = 'awaiting_validation'
+            activeWorkState.nextRequiredAction = ''
+          }
+          markActiveWorkStateChanged()
+        }
+        if (
+          securityWouldRefire &&
+          matchesSecuritySensitiveGlob(currentPendingGateFiles) &&
+          securityChangedFiles.length > 0
         ) {
           auxGateFiredThisIteration = true
-          // Prefer reviewable changed_files for spawn/attestation identity;
-          // fall back to the full pending list when nothing is reviewable yet.
-          const securityChangedFiles =
-            securityReviewableFiles.length > 0
-              ? securityReviewableFiles
-              : currentPendingGateFiles
           const securityReviewResult = yield {
             toolName: 'spawn_agent_inline',
             input: {
@@ -2115,6 +2196,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             securityToolResult,
             securitySnapshotFingerprint,
             securityChangedFiles,
+            securityDeletedFiles,
           )
           const securityVerdict =
             getReviewerFinalizationVerdict(securityToolResult)
@@ -6119,6 +6201,32 @@ function hashGateSnapshotDetails(details: string): string {
         return false
       }
 
+      // Word-boundary basename match for SECURITY_SENSITIVE_NAME_SUBSTRINGS.
+      // Bare lowerBase.includes('token') false-positives on measure scripts
+      // named *tokens* (token-count metrics), which re-fired security aux forever.
+      // Sensitive names match only as whole alphanumeric runs (e.g. auth-token,
+      // token.ts, foo_token_bar) — not longer words like tokens/tokenize/polygon.
+      function isAlnumChar(ch: string): boolean {
+        return (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')
+      }
+      function basenameContainsSensitiveName(
+        lowerBase: string,
+        name: string,
+      ): boolean {
+        let from = 0
+        while (from <= lowerBase.length) {
+          const idx = lowerBase.indexOf(name, from)
+          if (idx < 0) return false
+          const beforeOk = idx === 0 || !isAlnumChar(lowerBase[idx - 1]!)
+          const afterIdx = idx + name.length
+          const afterOk =
+            afterIdx >= lowerBase.length || !isAlnumChar(lowerBase[afterIdx]!)
+          if (beforeOk && afterOk) return true
+          from = idx + 1
+        }
+        return false
+      }
+
       function matchesSecuritySensitiveGlob(files: string[]): boolean {
         if (!files.length) return false
         for (const file of files) {
@@ -6132,7 +6240,7 @@ function hashGateSnapshotDetails(details: string): string {
             return true
           }
           for (const name of SECURITY_SENSITIVE_NAME_SUBSTRINGS) {
-            if (lowerBase.includes(name)) {
+            if (basenameContainsSensitiveName(lowerBase, name)) {
               return true
             }
           }

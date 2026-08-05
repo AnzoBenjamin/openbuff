@@ -25,31 +25,15 @@ const inputSchema = z
     `Search for files matching a glob pattern. Returns matching file paths sorted by modification time (newest first, then path for deterministic ties).`,
   )
 const description = `
+Find files by glob name pattern (not content). Optional \`cwd\` scopes pattern evaluation; results stay project-relative. Supports *, **, ?, [abc], {a,b}. Sorted by mtime then path.
+
 Example:
 ${$getNativeToolCallExampleString({
   toolName,
   inputSchema,
-  input: {
-    pattern: '**/*.test.ts',
-  },
+  input: { pattern: '**/*.test.ts' },
   endsAgentStep,
 })}
-
-Purpose: Search for files matching a glob pattern to discover files by name patterns rather than content. When \`cwd\` is provided, \`pattern\` is evaluated relative to that cwd (e.g. \`pattern: "*.ts", cwd: "src"\` matches \`src/foo.ts\`).
-Use cases:
-- Find all files with a specific extension (e.g., "*.js", "*.test.ts")
-- Locate files in specific directories (e.g., "src/**/*.ts")
-- Find files with specific naming patterns (e.g., "**/test_*.go", "**/*-config.json")
-- Discover test files, configuration files, or other files with predictable naming
-
-Glob patterns support:
-- * matches any characters except /
-- ** matches any characters including /
-- ? matches a single character
-- [abc] matches one of the characters in brackets
-- {a,b} matches one of the comma-separated patterns
-
-This tool is fast and works well for discovering files by name patterns.
 `.trim()
 
 export const globParams = {

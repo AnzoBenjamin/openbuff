@@ -47,25 +47,13 @@ const inputSchema = z
   )
 
 const description = `
-Read the last N lines from a log/text file, or pass \`jobId\` to read the temp log file for a background job directly. Prefer this over starting a background \`tail -f\` job when you only need a snapshot of recent logs.
+Read trailing lines from a log file or BACKGROUND job log (path or jobId). Prefer over tail -f when you only need a snapshot.
 
 Example:
 ${$getNativeToolCallExampleString({
   toolName,
   inputSchema,
-  input: {
-    path: 'logs/dev.log',
-    lines: 100,
-  },
-  endsAgentStep,
-})}
-${$getNativeToolCallExampleString({
-  toolName,
-  inputSchema,
-  input: {
-    jobId: 'job-1234-1',
-    lines: 100,
-  },
+  input: { path: 'logs/dev.log', lines: 100 },
   endsAgentStep,
 })}
 `.trim()

@@ -4,3 +4,8 @@
 {"ts":"2026-08-05T02:59:40.287Z","kind":"append_lesson","summary":"Appended entry \"Deliverables committed — 2026-08-05\" to STATUS.md","payload":{"heading":"Deliverables committed — 2026-08-05","artifact":"STATUS.md"}}
 {"ts":"2026-08-05T06:02:55.271Z","kind":"append_lesson","summary":"Appended entry \"AC-A1 pre-flip smoke baselines — 2026-08-05\" to STATUS.md","payload":{"heading":"AC-A1 pre-flip smoke baselines — 2026-08-05","artifact":"STATUS.md"}}
 {"ts":"2026-08-05T10:11:05.320Z","kind":"append_lesson","summary":"Appended entry \"M3 tree/knowledge reductions — 2026-08-05\" to STATUS.md","payload":{"heading":"M3 tree/knowledge reductions — 2026-08-05","artifact":"STATUS.md"}}
+{"ts":"2026-08-05T17:37:42.620Z","kind":"append_lesson","summary":"Appended entry \"Resume 2026-08-05 — continue open plan\" to STATUS.md","payload":{"heading":"Resume 2026-08-05 — continue open plan","artifact":"STATUS.md"}}
+{"ts":"2026-08-05T17:44:16.775Z","kind":"append_lesson","summary":"Appended entry \"M5-T1 ranking — 2026-08-05\" to STATUS.md","payload":{"heading":"M5-T1 ranking — 2026-08-05","artifact":"STATUS.md"}}
+{"ts":"2026-08-05T17:46:34.461Z","kind":"append_lesson","summary":"Appended entry \"M5 schema diet complete — 2026-08-05\" to STATUS.md","payload":{"heading":"M5 schema diet complete — 2026-08-05","artifact":"STATUS.md"}}
+{"ts":"2026-08-05T17:59:42.119Z","kind":"append_lesson","summary":"Appended entry \"M5 security review cleared\" to STATUS.md","payload":{"heading":"M5 security review cleared","artifact":"STATUS.md"}}
+{"ts":"2026-08-05T17:59:42.119Z","kind":"session_status","summary":"Session status -> validating","payload":{"status":"validating"}}
