@@ -1125,7 +1125,14 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             ? valueRecord.results
             : []
           const compactResults: Array<Record<string, unknown>> = []
-          for (let index = 0; index < rawResults.length && index < 8; index += 1) {
+          // Cap on usable compact entries, not raw index: continue on
+          // malformed rows must still scan later valid paths so the first 8
+          // bad entries cannot empty the envelope.
+          for (
+            let index = 0;
+            index < rawResults.length && compactResults.length < 8;
+            index += 1
+          ) {
             const entry = rawResults[index]
             if (!entry || typeof entry !== 'object') continue
             const entryRecord = entry as Record<string, unknown>
@@ -1639,28 +1646,6 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         }
 
         if (finalResponseGateOpen && !editsThisStep) break
-
-        // Drop deleted/missing paths from the pending gate set before aux
-        // gates run. Deleted measure scripts / renames can leave ghost
-        // pending paths that re-fire security aux forever; only exact
-        // `missing` markers are pruned (not unreadable:*). Do not credit
-        // them as gate-passed — they were never reviewed.
-        {
-          let prunedMissingPendingCount = 0
-          for (const file of Array.from(pendingGateFiles)) {
-            const normalized = normalizeGateFilePath(file) || file
-            if (readGateFileContentMarker(normalized) === 'missing') {
-              pendingGateFiles.delete(file)
-              changedFiles.delete(file)
-              prunedMissingPendingCount += 1
-            }
-          }
-          if (prunedMissingPendingCount > 0) {
-            activeWorkState.pendingGateFiles = Array.from(pendingGateFiles)
-            activeWorkState.latestWorkSummary = `Pruned ${prunedMissingPendingCount} missing path(s) from the pending gate set.`
-            markActiveWorkStateChanged()
-          }
-        }
 
         const currentPendingGateFiles = Array.from(pendingGateFiles)
         // M3 (R1d) — reset the aux-gate done-flags when the AUX-RELEVANT
@@ -6528,6 +6513,15 @@ function hashGateSnapshotDetails(details: string): string {
             while ((match = pathLikeRe.exec(text)) !== null) {
               const candidate = match[1]
               if (/^https?:\/\//i.test(candidate)) continue
+              // URL path capture after `:` (e.g. https://example.com/src/x.ts
+              // yields example.com/src/x.ts) never has a protocol prefix — reject
+              // host-like first segments (dot / TLD in the first path component).
+              // Use split('/')[0] (or limit 2): JS split limit 1 returns only one
+              // element and is easy to confuse with Python maxsplit; first path
+              // component must not be the full candidate or extension-bearing
+              // citations (common/.../replace-range.ts) are rejected as host-like.
+              const firstSegment = candidate.split('/')[0] ?? ''
+              if (firstSegment.includes('.')) continue
               if (candidate.includes('node_modules/')) continue
               if (/(^|\/)\.env($|\.)/.test(candidate)) continue
               seedPaths.push(candidate)
@@ -8557,7 +8551,7 @@ function hashGateSnapshotDetails(details: string): string {
           // it must not fire command discovery — it falls through to the
           // broad/multi/unknown branches like any other verb-bearing prompt.
           const namesLiteralCommand =
-            /\b(?:bun|npm|npx|pnpm|yarn|deno|node|tsc|tsx|vite|vitest|jest|mocha|pytest|pyright|mypy|ruff|eslint(?:js)?|biome|prettier|turbo(?:repo)?|nx|make|cmake|gradle|mvn|cargo|rustc|go|rustc|pip|pip3|uv|poetry|pdm|conda|docker|git)\b(?:\s+[\w@./:-]+){0,2}\s+(?:run|exec|test|tests|typecheck|lint|build|check|verify|validate|compile|coverage|fmt|format|ci|watch|start|serve)\b|\bnpm\s+run\s+[\w:@./-]+|\b(?:bun|pnpm|yarn|deno)\s+(?:run\s+)?[\w:@./-]+|\b(?:make|task|mise)\s+[a-z][\w:-]*|\b[\w.-]+\.(?:sh|bash|zsh|ps1|bat|cmd)\b|(?:^|[\s'"(=`])(?:\/|\.{1,2}\/)?\.[\/\\][\w./\\-]+|[\w@/.-]+\/[\w@/.-]+\s*$/im.test(
+            /\b(?:bun|npm|npx|pnpm|yarn|deno|node|tsc|tsx|vite|vitest|jest|mocha|pytest|pyright|mypy|ruff|eslint(?:js)?|biome|prettier|turbo(?:repo)?|nx|make|cmake|gradle|mvn|cargo|rustc|go|pip|pip3|uv|poetry|pdm|conda|docker|git)\b(?:\s+[\w@./:-]+){0,2}\s+(?:run|exec|test|tests|typecheck|lint|build|check|verify|validate|compile|coverage|fmt|format|ci|watch|start|serve)\b|\bnpm\s+run\s+[\w:@./-]+|\b(?:bun|pnpm|yarn|deno)\s+(?:run\s+)?[\w:@./-]+|\b(?:make|task|mise)\s+[a-z][\w:-]*|\b[\w.-]+\.(?:sh|bash|zsh|ps1|bat|cmd)\b|(?:^|[\s'"(=`])(?:\/|\.{1,2}\/)?\.[\/\\][\w./\\-]+|[\w@/.-]+\/[\w@/.-]+\s*$/im.test(
               text,
             ) ||
             /\b(?:bun|npm|npx|pnpm|yarn|deno|node)\s+[\w@./-]*test/i.test(

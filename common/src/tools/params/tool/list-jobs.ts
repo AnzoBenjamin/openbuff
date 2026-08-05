@@ -18,7 +18,7 @@ const inputSchema = z
 const description = `
 List this run's background jobs: process (run_terminal_command BACKGROUND) and agent (spawn_agents background). Includes running and recently settled jobs.
 
-Each entry has status, pending output buckets vs last check_job cursor (agents often pending: 'none'), gap when buffer events were dropped, and optional tail/exitCode. Use to rediscover jobIds for check_job/read_logs/kill_job or check_background_agent. Unchanged digests may return { unchanged: true, note }. No agent-supplied input (owner is runtime-managed).
+Each entry has status, pending output buckets vs last check_job cursor (agents often pending: 'none'), gap when buffer events were dropped, and optional tail/exitCode. Use to rediscover jobIds for check_job/read_logs/kill_job or check_background_agent. Unchanged digests may return { unchanged: true, note } (with no jobs field). No agent-supplied input (owner is runtime-managed).
 
 Example:
 ${$getNativeToolCallExampleString({

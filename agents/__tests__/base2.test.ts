@@ -384,6 +384,10 @@ describe('base2 inline repairEditorReadablePaths', () => {
     expect(paths.some((p) => p.includes('node_modules'))).toBe(false)
     expect(paths.some((p) => p.includes('.env'))).toBe(false)
     expect(paths).not.toContain('https://example.com/src/schema.ts')
+    // Protocol is stripped by the path-like capture (match starts after `:`),
+    // so host-looking first segments must also be rejected.
+    expect(paths).not.toContain('example.com/src/schema.ts')
+    expect(paths.some((p) => p.startsWith('example.com'))).toBe(false)
     expect(paths).not.toEqual(expect.arrayContaining(['*', '**/*']))
   })
 
@@ -1380,6 +1384,101 @@ describe('base2 proactive index lookup', () => {
       input: { role: 'user' },
     })
     expect(cachedNote.input.content).toContain('cached result reused')
+  })
+
+  test('compact proactive envelope skips malformed early rows and still fills 8 usable paths (M4 RF-2)', () => {
+    const base2 = createBase2('default')
+    const prompt = 'Refactor the authentication module code.'
+    const agentState = {
+      agentId: 'base2-classify',
+      workspaceState: { revision: 7, snapshotId: 'snapshot-malformed-cap' },
+    }
+
+    const malformedRows = [
+      {},
+      { path: '' },
+      { score: 1 },
+      { path: null },
+      { path: undefined },
+      { reason: 'no path' },
+      { kind: 'file' },
+      null,
+    ]
+    const validRows = Array.from({ length: 10 }, (_, index) => ({
+      path: `packages/sdk/src/good-${index}.ts`,
+      score: 0.95 - index * 0.01,
+      reason: `matched good ${index}`,
+      kind: 'file',
+      relatedFiles: [
+        `packages/sdk/src/good-related-${index}-a.ts`,
+        `packages/sdk/src/good-related-${index}-b.ts`,
+      ],
+      matchedSnippets: ['snippet-a', 'snippet-b'],
+    }))
+    const fatValue = {
+      kind: 'query_index_result',
+      status: 'ok',
+      coverage: { matchedConcernCount: 3, totalConcernCount: 5, layers: [] },
+      totalIndexed: 2048,
+      snapshotId: 'snapshot-malformed-cap',
+      indexMutationEpoch: 11,
+      results: [...malformedRows, ...validRows],
+    }
+
+    const gen = base2.handleSteps!({
+      agentState: agentState as any,
+      prompt,
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(gen.next().value).toMatchObject({ toolName: 'query_index' })
+    const routeNote = gen.next({
+      toolResult: [{ type: 'json', value: fatValue }],
+    } as any).value as any
+    expect(routeNote).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect(routeNote.input.content).toContain('Proactive retrieval route')
+    expect(routeNote.input.content).not.toContain('cached')
+
+    const cached = (agentState as any).proactiveRetrievalCache
+    expect(cached).toMatchObject({
+      workspaceRevision: 7,
+      indexMutationEpoch: 11,
+    })
+
+    // Malformed early rows are skipped; compact envelope fills the 8-path cap
+    // from usable paths only (good-0..good-7), strips fat fields, keeps epoch.
+    expect(cached.result).toEqual({
+      type: 'json',
+      value: {
+        kind: 'query_index_result',
+        results: Array.from({ length: 8 }, (_, index) => ({
+          path: `packages/sdk/src/good-${index}.ts`,
+          score: 0.95 - index * 0.01,
+          reason: `matched good ${index}`,
+          kind: 'file',
+        })),
+        indexMutationEpoch: 11,
+        totalIndexed: 2048,
+        snapshotId: 'snapshot-malformed-cap',
+      },
+    })
+
+    expect(routeNote.input.content).toContain(
+      JSON.stringify(
+        Array.from({ length: 8 }, (_, index) => ({
+          path: `packages/sdk/src/good-${index}.ts`,
+          score: 0.95 - index * 0.01,
+          reason: `matched good ${index}`,
+          kind: 'file',
+        })),
+      ),
+    )
+    expect(routeNote.input.content).not.toContain('relatedFiles')
+    expect(routeNote.input.content).not.toContain('matchedSnippets')
+    expect(routeNote.input.content).not.toContain('good-8')
   })
 })
 
