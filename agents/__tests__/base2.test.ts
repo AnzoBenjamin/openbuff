@@ -526,6 +526,8 @@ describe('base2 validation/reviewer coordination prompts', () => {
       ]),
     )
     expect(base2.systemPrompt).toContain('Atomic edit recovery')
+    expect(base2.systemPrompt).toContain('Edit contract')
+    expect(base2.systemPrompt).toContain('recovery.paths')
     expect(base2.systemPrompt).toContain('do not peel off remembered edits')
     expect(base2.systemPrompt).toContain(
       'treat that exact finding as the controlling next action',

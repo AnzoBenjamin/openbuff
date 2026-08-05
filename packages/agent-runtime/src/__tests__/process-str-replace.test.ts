@@ -1243,7 +1243,39 @@ function test3() {
       expect(result.error).toContain('may refer to content that changed')
       expect(result.error).toContain('No useful candidate ranges found')
       expect(result.error).toContain('re-read the current file/range')
+      expect(result.error).toContain('replace_range with its readCapability')
+      expect(result.error).toContain('Do not reconstruct huge blocks from memory')
       expect(result.error).not.toContain('Candidate 1: lines')
+    }
+  })
+
+  it('nudges replace_range for large no-match oldString blocks', async () => {
+    const initialContent = Array.from({ length: 20 }, (_, index) =>
+      `const line${index} = ${index};`,
+    ).join('\n')
+    const oldStr = Array.from({ length: 45 }, (_, index) =>
+      `const missingBlockLine${index} = ${index};`,
+    ).join('\n')
+
+    const result = await processStrReplace({
+      path: 'large-old-string.ts',
+      replacements: [
+        {
+          oldString: oldStr,
+          newString: 'const replacement = true;',
+          allowMultiple: false,
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('not an exact contiguous match')
+      expect(result.error).toContain('replace_range with its readCapability')
+      expect(result.error).toContain('smaller unique oldString')
+      expect(result.error).toContain('Do not reconstruct huge blocks from memory')
     }
   })
 

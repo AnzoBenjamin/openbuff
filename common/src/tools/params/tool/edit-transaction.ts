@@ -495,14 +495,55 @@ export const editTransactionResultSchema = z.union([
             'capability_stale',
             'capability_scope',
             'capability_invalid',
+            'no_match',
+            'preflight_failed',
             'generic',
           ])
           .optional()
           .describe(
-            'Structured classification of a capability freshness/scope failure; lets consumers classify without parsing errorMessage.',
+            'Structured classification of capability, match, or preflight failures; lets consumers classify without parsing errorMessage.',
           ),
       }),
     ),
+    requiresFreshRead: z
+      .boolean()
+      .optional()
+      .describe(
+        'True when retrying this aborted transaction requires a fresh read of every recovery.paths target from one coherent snapshot.',
+      ),
+    errorCode: z
+      .enum(['no_match', 'stale_capability', 'preflight_failed'])
+      .optional()
+      .describe(
+        'Compact machine-readable abort code models can key off without parsing errorMessage.',
+      ),
+    recovery: z
+      .object({
+        action: z.enum([
+          'rebuild_whole_transaction',
+          'read_again',
+          'change_edit_strategy',
+        ]),
+        requiresFreshRead: z.boolean(),
+        paths: z.array(z.string()).describe(
+          'All unique transaction paths that must be re-read before rebuilding the whole aborting transaction.',
+        ),
+        failedEditIndex: z.number().int().min(0).optional(),
+        failedReplacementIndex: z.number().int().min(0).optional(),
+        preferredStrategy: z
+          .enum(['replace_range', 'smaller_oldString', 'rewrite_symbol'])
+          .optional(),
+        tool: z.literal('read_files').optional(),
+        input: z
+          .object({
+            paths: z.array(z.string()),
+          })
+          .optional(),
+      })
+      .optional()
+      .describe(
+        'Structured abort recovery packet. Additive; models should obey these fields when present without parsing prose.',
+      ),
   }),
 ])
 

@@ -92,7 +92,30 @@ type TransactionFailureKind =
   | 'capability_stale'
   | 'capability_scope'
   | 'capability_invalid'
+  | 'no_match'
+  | 'preflight_failed'
   | 'generic'
+
+type TransactionRecoveryAction =
+  | 'rebuild_whole_transaction'
+  | 'read_again'
+  | 'change_edit_strategy'
+
+type TransactionPreferredStrategy =
+  | 'replace_range'
+  | 'smaller_oldString'
+  | 'rewrite_symbol'
+
+type TransactionRecovery = {
+  action: TransactionRecoveryAction
+  requiresFreshRead: boolean
+  paths: string[]
+  failedEditIndex?: number
+  failedReplacementIndex?: number
+  preferredStrategy?: TransactionPreferredStrategy
+  tool?: 'read_files'
+  input?: { paths: string[] }
+}
 
 type TransactionFailure = {
   editIndex: number
@@ -102,7 +125,7 @@ type TransactionFailure = {
   /** Optional whole-file capability echoed by the handler for residual recovery. */
   basedOnRead?: string
   /**
-   * Structured failure classification for capability freshness/scope failures.
+   * Structured failure classification for capability, match, or preflight failures.
    * Lets consumers classify without regex-matching errorMessage. Optional and
    * additive; older consumers ignore it (the output schema strips unknown keys).
    */
@@ -132,6 +155,9 @@ export async function processEditTransaction(params: {
       tool: 'edit_transaction'
       error: string
       failures: TransactionFailure[]
+      requiresFreshRead?: boolean
+      errorCode?: 'no_match' | 'stale_capability' | 'preflight_failed'
+      recovery?: TransactionRecovery
     }
 > {
   const {
@@ -214,12 +240,14 @@ export async function processEditTransaction(params: {
         coalescedEdit,
         result.error,
       )
+      const failureKind =
+        result.failureKind ?? classifyTransactionFailureKind(result.error)
       failures.push({
         editIndex: failedEdit.editIndex,
         ...(failedEdit.edit.id && { id: failedEdit.edit.id }),
         path: effectiveEdit.path,
         errorMessage: result.error,
-        ...(result.failureKind && { failureKind: result.failureKind }),
+        ...(failureKind && { failureKind }),
       })
       break
     }
@@ -244,7 +272,19 @@ export async function processEditTransaction(params: {
   }
 
   if (failures.length > 0) {
-    const firstFailure = failures[0]
+    const firstFailure = failures[0]!
+    const uniquePaths = collectTransactionPaths(edits, initialContentByPath)
+    const failedEdit = resolveFailedEdit(
+      edits,
+      firstFailure.editIndex,
+      coalesceAdjacentStrReplaceEdits(edits, firstFailure.editIndex),
+      firstFailure.errorMessage,
+    )
+    const recovery = buildTransactionRecovery({
+      paths: uniquePaths,
+      failure: firstFailure,
+      failedReplacementIndex: failedEdit.failedReplacementIndex,
+    })
     return {
       tool: 'edit_transaction',
       error: [
@@ -252,6 +292,9 @@ export async function processEditTransaction(params: {
         'The detailed cause is listed once in failures below. If that failure requires fresh read/capability state, re-read EVERY target in this transaction in the current run, then rebuild and retry the whole transaction from that one current snapshot. Do not refresh only the first failed path while replaying stale tokens for the remaining targets.',
       ].join('\n\n'),
       failures,
+      requiresFreshRead: recovery.requiresFreshRead,
+      errorCode: recoveryErrorCode(firstFailure),
+      recovery,
     }
   }
 
@@ -338,7 +381,11 @@ function resolveFailedEdit(
   editIndex: number,
   coalescedEdit: ReturnType<typeof coalesceAdjacentStrReplaceEdits>,
   errorMessage: string,
-): { editIndex: number; edit: TransactionEdit } {
+): {
+  editIndex: number
+  edit: TransactionEdit
+  failedReplacementIndex?: number
+} {
   const replacementMatch = errorMessage.match(/replacement (\d+)/i)
   const replacementIndex = replacementMatch
     ? Number.parseInt(replacementMatch[1], 10) - 1
@@ -350,7 +397,111 @@ function resolveFailedEdit(
   const failedEditIndex = sourceEditIndex ?? editIndex
   return {
     editIndex: failedEditIndex,
-    edit: edits[failedEditIndex] ?? edits[editIndex],
+    edit: edits[failedEditIndex] ?? edits[editIndex]!,
+    ...(replacementIndex >= 0 && { failedReplacementIndex: replacementIndex }),
+  }
+}
+
+function collectTransactionPaths(
+  edits: TransactionEdit[],
+  initialContentByPath: Map<string, string | null>,
+): string[] {
+  const paths = new Set<string>()
+  for (const path of initialContentByPath.keys()) {
+    if (path) paths.add(path)
+  }
+  for (const edit of edits) {
+    if (edit.path) paths.add(edit.path)
+  }
+  return [...paths]
+}
+
+function classifyTransactionFailureKind(
+  errorMessage: string,
+): TransactionFailureKind | undefined {
+  if (
+    /not an exact contiguous match|Found \d+ occurrences of|Atomic str_replace batch aborted|only \d+ exact occurrence\(s\) of the oldString exist/i.test(
+      errorMessage,
+    )
+  ) {
+    return 'no_match'
+  }
+  // Scope mismatches (cross-run/path replay, out-of-range target, missing runtime
+  // scope) are authenticity boundaries — not content-hash staleness.
+  if (
+    /different project, path, or agent run|outside the observed capability range|authenticated readCapability scope is unavailable|no runtime project\/path\/run scope/i.test(
+      errorMessage,
+    )
+  ) {
+    return 'capability_scope'
+  }
+  // Malformed or undecodable capability tokens / object-form basedOnRead.
+  if (
+    /Invalid basedOnRead|readCapability requires an authenticated|basedOnRead\.(?:startLine|endLine|hash) must/i.test(
+      errorMessage,
+    )
+  ) {
+    return 'capability_invalid'
+  }
+  if (
+    /readCapability-covered (?:symbol )?content is stale|normalized capability metadata does not match|readCapability does not cover the exact original symbol replacement span/i.test(
+      errorMessage,
+    )
+  ) {
+    return 'capability_stale'
+  }
+  return 'generic'
+}
+
+function recoveryErrorCode(
+  failure: TransactionFailure,
+): 'no_match' | 'stale_capability' | 'preflight_failed' | undefined {
+  if (
+    failure.failureKind === 'capability_stale' ||
+    failure.failureKind === 'capability_scope' ||
+    failure.failureKind === 'capability_invalid'
+  ) {
+    return 'stale_capability'
+  }
+  if (failure.failureKind === 'no_match') return 'no_match'
+  if (failure.failureKind === 'preflight_failed') return 'preflight_failed'
+  if (classifyTransactionFailureKind(failure.errorMessage) === 'no_match') {
+    return 'no_match'
+  }
+  return 'preflight_failed'
+}
+
+function buildTransactionRecovery(params: {
+  paths: string[]
+  failure: TransactionFailure
+  failedReplacementIndex?: number
+}): TransactionRecovery {
+  const { paths, failure, failedReplacementIndex } = params
+  const kind =
+    failure.failureKind ?? classifyTransactionFailureKind(failure.errorMessage)
+  const isCapability =
+    typeof kind === 'string' && kind.startsWith('capability')
+  const isMatchFailure = kind === 'no_match'
+  const prefersReplaceRange =
+    /replace_range with its readCapability|Do not reconstruct huge blocks from memory|No useful candidate ranges found/i.test(
+      failure.errorMessage,
+    )
+  const preferredStrategy: TransactionPreferredStrategy | undefined =
+    prefersReplaceRange
+      ? 'replace_range'
+      : isMatchFailure
+        ? 'smaller_oldString'
+        : undefined
+
+  return {
+    action: 'rebuild_whole_transaction',
+    requiresFreshRead: isCapability || isMatchFailure || kind === 'generic',
+    paths,
+    failedEditIndex: failure.editIndex,
+    ...(failedReplacementIndex !== undefined && { failedReplacementIndex }),
+    ...(preferredStrategy && { preferredStrategy }),
+    tool: 'read_files',
+    input: { paths },
   }
 }
 
@@ -446,7 +597,10 @@ function resolveReplaceRangeEdit(
     if (typeof currentContent !== 'string') {
       return {
         error: `replace_range blocked for ${edit.path}: current content is unavailable, so the requested occurrence could not be resolved. Re-read the target range and retry.`,
-        failureKind: 'generic' as const,
+        // Unresolved occurrence targeting is a match failure (not a capability
+        // authenticity problem), so recovery/errorCode stay aligned with other
+        // no_match cases.
+        failureKind: 'no_match' as const,
       }
     }
     const resolved = resolveOccurrenceRangeInCapabilityRange({
@@ -459,7 +613,7 @@ function resolveReplaceRangeEdit(
     if (!resolved.range) {
       return {
         error: `replace_range blocked for ${edit.path}: found ${resolved.found} occurrence(s) of the requested match inside the authorized range ${decoded.startLine}-${decoded.endLine}, so occurrence ${edit.occurrence.occurrence ?? 1} does not exist. Re-read the range and target an existing occurrence or absolute lines.`,
-        failureKind: 'generic' as const,
+        failureKind: 'no_match' as const,
       }
     }
     return {

@@ -357,6 +357,7 @@ ${
     ? '- **Preflight coherent changes together:** Once edit tools unlock, put related edits across one or more files in the same `edit_transaction` so the runtime can preflight them as one coordinated batch. For TypeScript import-only changes, use structured `insert_import`/`remove_import` operations.'
     : '- **Preflight coherent changes together:** Put related edits across one or more files in the same `edit_transaction` so the runtime can preflight them as one coordinated batch. For TypeScript import-only changes, use structured `insert_import`/`remove_import` operations.'
 }
+- **Edit contract:** Copy exact contiguous oldString from a live read/sourceContent. Multi-file is all-or-nothing; on abort re-read ALL recovery.paths from one snapshot and rebuild the whole txn. Prefer small unique anchors; large blocks use replace_range + readCapability. Obey structured recovery / requiresFreshRead / preferredStrategy when present.
 - **Avoid broad scripted cleanups for refactors/renames:** For rename and overhaul tasks, prefer explicit targeted edits based on freshly read file content. Do not run one-off cleanup scripts across many files unless the user explicitly asks for that approach.
 
 # Harness-enforced recovery workflow

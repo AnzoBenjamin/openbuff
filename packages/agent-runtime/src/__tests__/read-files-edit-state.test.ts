@@ -1700,7 +1700,9 @@ describe('read_files edit-state recovery', () => {
     }
   })
 
-  it('preserves valid read authorization after edit_transaction preflight fails', async () => {
+  it('match/no-match edit_transaction preflight requires fresh read before retry', async () => {
+    // Match failures force preflight_failed re-read markers on every transaction
+    // path so multi-file retries cannot reuse other targets from memory.
     const path = 'src/helper.ts'
     const diskContent = 'export const value = 1\n'
     const fileProcessingState = createFileProcessingState()
@@ -1710,7 +1712,8 @@ describe('read_files edit-state recovery', () => {
       [path]: getContentHash(diskContent),
     }
 
-    const transactionResult = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+    const transactionResult = await handleEditTransaction({
+      ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
         toolCallId: 'transaction-preflight-failed',
@@ -1743,50 +1746,26 @@ describe('read_files edit-state recovery', () => {
     const output = transactionResult.output[0]
     expect(output.type).toBe('json')
     if (output.type === 'json') {
-      expect(output.value).toHaveProperty('errorMessage')
+      const value = output.value as {
+        errorMessage?: string
+        requiresFreshRead?: boolean
+        errorCode?: string
+        recovery?: { paths?: string[]; requiresFreshRead?: boolean }
+      }
+      expect(value).toHaveProperty('errorMessage')
+      expect(value.requiresFreshRead).toBe(true)
+      expect(value.errorCode).toBe('no_match')
+      expect(value.recovery?.requiresFreshRead).toBe(true)
+      expect(value.recovery?.paths).toEqual(expect.arrayContaining([path]))
     }
+    expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
     expect(
-      fileProcessingState.failedEditRequiresReadByPath[path],
-    ).toBeUndefined()
-    expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
-
-    let followUpApplied = false
-    const strReplaceResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
-      previousToolCallFinished: Promise.resolve(),
-      toolCall: {
-        toolCallId: 'replace-after-failed-preflight',
-        toolName: 'str_replace',
-        input: {
-          path,
-          replacements: [
-            {
-              oldString: 'export const value = 1',
-              newString: 'export const value = 2',
-              allowMultiple: false,
-            },
-          ],
-        },
-      },
-      fileProcessingState,
-      logger,
-      requestOptionalFile: async ({ filePath }: { filePath: string }) =>
-        filePath === path ? diskContent : null,
-      requestClientToolCall: async (clientToolCall: any) => {
-        followUpApplied = true
-        return confirmedMutationOutput(clientToolCall, {
-          [path]: 'export const value = 2\n',
-        })
-      },
-      writeToClient: () => {},
-    } as any)
-
-    expect(followUpApplied).toBe(true)
-    const replaceOutput = strReplaceResult.output[0]
-    expect(fileProcessingState.editRereadRequirementsByPath?.[path]).toBeUndefined()
-    expect(replaceOutput.type).toBe('json')
-    if (replaceOutput.type === 'json') {
-      expect(replaceOutput.value).not.toHaveProperty('errorMessage')
-    }
+      fileProcessingState.editRereadRequirementsByPath?.[path],
+    ).toMatchObject({
+      reason: 'preflight_failed',
+      sourceTool: 'edit_transaction',
+    })
+    expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBeUndefined()
   })
 
   it('preserves valid authorization for all transaction paths when the client explicitly rejects without applying', async () => {
@@ -7184,56 +7163,54 @@ describe('read_files edit-state recovery', () => {
       ).toBe('stale_capability')
     })
 
-    it('generic (untagged) preflight failure preserves authorization', async () => {
-      // Contrast: a str_replace whose per-replacement basedOnRead is valid
-      // (correct scope/run, fresh hash) but whose oldString does not match the
-      // current content fails preflight with NO failureKind (untagged /
-      // generic). Its message does not match the capability regex either, so
-      // requiresFreshCapability stays false and the existing authorization is
-      // preserved with no stale_capability requirement.
-      const path = 'src/generic-preflight-preserved.ts'
-      // Snapshot content and the seeded authorization hash must match so the
-      // freshness pre-scan keeps the authorization (isolating the classifier's
-      // preserve behavior from the separate stale-revocation path).
-      const diskContent = 'export const value = 1\n'
-      const runId = 'generic-preflight-preserved-run'
+    it('match/no-match preflight failure requires fresh read on all transaction paths', async () => {
+      // Match failures on edit_transaction now mark every unique path for a
+      // fresh re-read so multi-file retries cannot reuse other paths from memory.
+      // Pure syntax preflight failures remain special-cased and do not reach here.
+      const pathA = 'src/match-a.ts'
+      const pathB = 'src/match-b.ts'
+      const contentA = 'export const value = 1\n'
+      const contentB = 'export const peer = 1\n'
+      const runId = 'match-preflight-fresh-read-run'
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
-      fileProcessingState.readAuthorizationsByPath = { [path]: true }
-      fileProcessingState.readAuthorizationHashesByPath = {
-        [path]: getContentHash(diskContent),
+      fileProcessingState.readAuthorizationsByPath = {
+        [pathA]: true,
+        [pathB]: true,
       }
-      // Valid capability: correct scope (this run) and a hash matching the
-      // snapshot content (the whole 1-line file).
-      const freshCapability = encodeReadCapabilityToken({
-        startLine: 1,
-        endLine: 1,
-        hash: getContentHash(diskContent),
-        scope: {
-          projectId: mockFileContext.projectRoot,
-          path,
-          runId,
-        },
-      })
+      fileProcessingState.readAuthorizationHashesByPath = {
+        [pathA]: getContentHash(contentA),
+        [pathB]: getContentHash(contentB),
+      }
 
-      const result = await handleEditTransaction({ ...defaultTestHandlerAuthority,
+      let clientCalls = 0
+      const result = await handleEditTransaction({
+        ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
-          toolCallId: 'generic-preflight-preserved-tx',
+          toolCallId: 'match-preflight-fresh-read-tx',
           toolName: 'edit_transaction',
           input: {
             edits: [
               {
                 type: 'str_replace',
-                path,
+                path: pathA,
                 replacements: [
                   {
-                    // oldString does not match current content: a generic
-                    // no-match preflight failure, not a capability failure.
-                    oldString: 'export const value = 999',
+                    oldString: 'export const value = 1',
                     newString: 'export const value = 2',
                     allowMultiple: false,
-                    basedOnRead: freshCapability,
+                  },
+                ],
+              },
+              {
+                type: 'str_replace',
+                path: pathB,
+                replacements: [
+                  {
+                    oldString: 'export const peer = 999',
+                    newString: 'export const peer = 2',
+                    allowMultiple: false,
                   },
                 ],
               },
@@ -7244,30 +7221,54 @@ describe('read_files edit-state recovery', () => {
         fileContext: mockFileContext,
         runId,
         logger,
-        requestOptionalFile: async ({ filePath }: { filePath: string }) =>
-          filePath === path ? diskContent : null,
+        requestOptionalFile: async ({ filePath }: { filePath: string }) => {
+          if (filePath === pathA) return contentA
+          if (filePath === pathB) return contentB
+          return null
+        },
         requestClientToolCall: async () => {
-          throw new Error('must not apply a generic no-match preflight failure')
+          clientCalls += 1
+          throw new Error('must not apply multi-file match abort')
         },
       } as any)
+
+      expect(clientCalls).toBe(0)
+      for (const path of [pathA, pathB]) {
+        expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
+        expect(
+          fileProcessingState.editRereadRequirementsByPath?.[path],
+        ).toMatchObject({
+          reason: 'preflight_failed',
+          sourceTool: 'edit_transaction',
+        })
+      }
 
       const output = result.output[0]
       expect(output.type).toBe('json')
       if (output.type === 'json') {
-        expect(output.value).toHaveProperty('errorMessage')
+        const value = output.value as {
+          errorMessage?: string
+          requiresFreshRead?: boolean
+          errorCode?: string
+          recovery?: {
+            paths?: string[]
+            requiresFreshRead?: boolean
+            action?: string
+          }
+        }
+        expect(value.requiresFreshRead).toBe(true)
+        expect(value.errorCode).toBe('no_match')
+        expect(value.recovery?.action).toBe('rebuild_whole_transaction')
+        expect(value.recovery?.requiresFreshRead).toBe(true)
+        expect(value.recovery?.paths).toEqual(
+          expect.arrayContaining([pathA, pathB]),
+        )
+        expect(String(value.errorMessage)).toContain(
+          'Atomic recovery requires fresh read state for every transaction target',
+        )
+        expect(String(value.errorMessage)).toContain(pathA)
+        expect(String(value.errorMessage)).toContain(pathB)
       }
-      // Non-capability failure: authorization is preserved and no stale_capability
-      // reread requirement is recorded for the transaction path.
-      expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
-      expect(fileProcessingState.readAuthorizationHashesByPath?.[path]).toBe(
-        getContentHash(diskContent),
-      )
-      expect(
-        fileProcessingState.editRereadRequirementsByPath?.[path]?.reason,
-      ).not.toBe('stale_capability')
-      expect(
-        fileProcessingState.editRereadRequirementsByPath?.[path],
-      ).toBeUndefined()
     })
   })
 })

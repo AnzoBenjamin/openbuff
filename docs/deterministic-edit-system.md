@@ -275,6 +275,33 @@ rejects overlap or ambiguous provenance, and then maps accepted actions through
 prior edits deterministically. Splitting an overlapping rewrite into different
 edit variants does not bypass this rule.
 
+### Multi-file `edit_transaction` abort recovery
+
+`edit_transaction` is all-or-nothing: any preflight failure means **no disk
+writes**. Match/no-match and capability aborts require a fresh read of **every**
+transaction target in that run, not only the failed path. Pure syntax preflight
+failures do **not** force multi-path re-read (fix the new content only).
+
+This is **not** an always-on force-read before the first multi-file attempt. Fresh
+multi-path reads are abort-time / capability / match recovery only.
+
+On those aborts the model-visible result is additive and machine-readable:
+
+- `requiresFreshRead: true`
+- `errorCode`: `no_match` | `stale_capability` | `preflight_failed`
+- `failures[].failureKind`: `capability_*`, `no_match`, `preflight_failed`, or
+  `generic`
+- `recovery`: `{ action: 'rebuild_whole_transaction', requiresFreshRead, paths,
+  failedEditIndex?, failedReplacementIndex?, preferredStrategy?, tool:
+  'read_files', input: { paths } }`
+
+Correct next step: one multi-path `read_files` (or range/symbol selectors) over
+`recovery.paths`, copy exact live text into new `oldString`s / use
+`replace_range` with `readCapability`, then resubmit the **whole** transaction
+from that one snapshot. Do not refresh only the failed path or replay memory for
+other targets. Large or low-similarity `oldString` diagnostics may set
+`preferredStrategy` to `replace_range` or `smaller_oldString`.
+
 ### Post-edit anchors and reread telemetry
 
 Confirmed action-local anchors are reusable operational state. Semantic

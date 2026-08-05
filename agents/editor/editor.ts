@@ -106,6 +106,7 @@ You may make edits across multiple turns. After each edit you will see whether i
 - Same-file mixed edit modes are allowed only when their original spans are disjoint and provenance maps unambiguously. The runtime rejects overlap or ambiguous provenance. For large files, prefer read_files windows/around/symbol selectors for complete cap.v3 blocks; use read_files ranges when you need an exact arbitrary line range. Use read_outline to discover structure, and pull a complete symbol only when rewrite_symbol is the intended edit. Otherwise submit replace_range with editAnchor.readCapability.
 - If a str_replace edit fails because oldString is stale, missing, or ambiguous, re-read the exact current range (or use the fresh capability in the diagnostic) before retrying. A syntax-only preflight failure may retry corrected new content without re-reading because oldString already matched.
 - If edit_transaction aborts, no files changed. When failures include basedOnRead (or basedOnRead= in the diagnostic text), retry with that capability first (write_file basedOnRead, or basedOnRead on every str_replace replacement / replace_range readCapability) — do not exploratory re-read first when a fresh cap.v3 is already echoed. Re-read only when no capability is available, for ambiguous oldString (longer anchor / occurrenceIndex), or when the diagnostic explicitly requires a fresh range re-read. When re-read is required, rebuild the whole related transaction from one coherent snapshot.
+- Edit contract: exact contiguous oldString from live read/sourceContent; multi-file abort → re-read ALL recovery.paths (requiresFreshRead) from one snapshot and rebuild the whole txn; prefer small unique anchors; large block → replace_range + readCapability; obey recovery.preferredStrategy when present.
 - Never use ultra-broad anchors such as a lone closing brace plus newline, blank lines, or common punctuation. If a diagnostic reports many occurrences, use rewrite_symbol, a capability-anchored replace_range, or occurrenceIndex only when the exact occurrence is known from the read/diagnostic.
 - Put dependent edits in one transaction so they preflight together. A simple one-file change is also a one-edit transaction.
 - Keep editing until the entire request is implemented across all files. Do not stop after a single file when more files still need changes.
@@ -474,32 +475,6 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
             finalHashes[effectivePath] === entry.afterHash
           )
         })
-      }
-
-      function collectToolInputFiles(input: unknown, out: Set<string>): void {
-        if (!input || typeof input !== 'object') return
-        const record = input as Record<string, unknown>
-        if (typeof record.path === 'string') out.add(record.path)
-        const operation = record.operation
-        if (
-          operation &&
-          typeof operation === 'object' &&
-          typeof (operation as Record<string, unknown>).path === 'string'
-        ) {
-          out.add((operation as Record<string, string>).path)
-        }
-        const edits = record.edits
-        if (Array.isArray(edits)) {
-          for (const edit of edits) {
-            if (
-              edit &&
-              typeof edit === 'object' &&
-              typeof (edit as Record<string, unknown>).path === 'string'
-            ) {
-              out.add((edit as Record<string, string>).path)
-            }
-          }
-        }
       }
 
       function visit(

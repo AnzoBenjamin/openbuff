@@ -128,7 +128,8 @@ Under `strictReadBeforeEdit`:
 - **replace_range**: requires explicit `readCapability` when not sticky-fresh.
 - **write_file**: sticky hash-fresh **or** validated whole-file-covering `basedOnRead`; blocked under `context_compacted` until whole-file re-read **or** that explicit capability (sticky alone insufficient).
 - **delete / move**: a fresh confirmed post-edit anchor on the source path authorizes without another read, but only when the anchor is whole-file (`startLine === 1`) **and** its hash matches the transaction's snapshotted current content. A hash mismatch means the file changed since that confirmed apply — the edit fails closed via the generic strict-mode block. A move's destination needs no read authorization: it must not exist, and the lifecycle preflight (`Move destination already exists`) enforces that. On anchor-authorized delete/move, any stale reread marker on the source path is cleared so a later edit does not inherit a lingering gate; `context_compacted` is deliberately **preserved** so `write_file` on that path stays blocked until a fresh whole-file read.
-- Capability / scope failures that invalidate the atomic batch require **fresh reads for every transaction target**, not only the first failed path (or paste echoed per-failure `basedOnRead` where provided).
+- Capability / scope failures **and** match/no-match aborts that invalidate the atomic batch require **fresh reads for every transaction target**, not only the first failed path (or paste echoed per-failure `basedOnRead` where provided). Pure syntax preflight failures do **not** force multi-path re-read. This is abort-time recovery only — not always-on force-read before the first multi-file attempt.
+- Abort recovery packet (additive, model-visible): `requiresFreshRead: true`; `errorCode` of `no_match` | `stale_capability` | `preflight_failed`; `failures[].failureKind` of `capability_*` | `no_match` | `preflight_failed` | `generic`; `recovery` with `{ action: 'rebuild_whole_transaction', requiresFreshRead, paths, failedEditIndex?, failedReplacementIndex?, preferredStrategy?, tool: 'read_files', input: { paths } }`. Large/low-similarity match diagnostics may set `preferredStrategy` to `replace_range` or `smaller_oldString`.
 
 ## Agent / editor contract
 
@@ -137,6 +138,8 @@ Under `strictReadBeforeEdit`:
 3. After compaction, either re-read whole files before sticky-only `write_file`, or retry overwrite with the echoed whole-file-covering `basedOnRead`. Unique `str_replace` may still work when sticky remains hash-fresh.
 4. On auth failures, prefer the echoed `basedOnRead` / `recovery` payload over inventing a new exploratory read loop when the capability is already provided.
 5. Do not use `create` for existing paths; use `write_file` or `str_replace` with authorization. If create-exists fails with a minted `basedOnRead`, pass it on `write_file`.
+6. On multi-file `edit_transaction` abort with `recovery.action === 'rebuild_whole_transaction'`, re-read **all** of `recovery.paths` in one coherent snapshot and resubmit the whole transaction. Do not refresh only the failed path or replay memory for other targets.
+7. Obey `recovery.paths` / `recovery.input` as the authoritative multi-target re-read set; sticky auth from before the abort is revoked for those paths until the fresh read lands.
 
 ## Non-negotiable safeguards
 
