@@ -208,7 +208,7 @@ export interface CheckJobParams {
   wait_for?: string
   /** Max seconds to wait for new output / the wait_for pattern. 0 (default) returns immediately with whatever new output exists (poll mode); >0 blocks up to this long (follow mode). */
   timeout_seconds?: number
-  /** Follow mode only: when true and the follow-timeout fires (deadline reached, wait_for not yet matched, job still running), send SIGTERM to the background job and reflect the post-kill status/exitCode plus `killed: true` in the result. Defaults to false so observational polling never terminates work unless explicitly requested. Poll mode (timeout_seconds 0/omitted) never kills regardless of this flag. */
+  /** Follow mode only: SIGTERM the job on follow-timeout. Poll mode never kills. Default false. */
   kill_on_timeout?: boolean
 }
 
@@ -607,7 +607,7 @@ export interface QueryIndexParams {
   fileTypes?: string[]
   /** Optional normalized project-relative directory prefixes. Results outside every prefix are excluded before ranking/limiting. */
   pathPrefixes?: string[]
-  /** Query mode. search returns ranked files, explain includes ranking rationale, neighbors returns adjacent graph files, path returns a graph path between files, commands prioritizes package scripts, CI workflows, task runners, and validation docs, and references returns files that import or call into a seed file (blast-radius analysis before editing an exported symbol). */
+  /** search|explain|neighbors|path|commands|references — see tool description. */
   mode?: 'search' | 'neighbors' | 'path' | 'explain' | 'commands' | 'references'
   /** Optional source file path for neighbors, path, and references modes. */
   from?: string
@@ -631,18 +631,18 @@ export interface ReadDocsParams {
  * Read multiple files from disk and return their contents. Use this tool to read as many files as would be helpful to answer the user's request.
  */
 export interface ReadFilesParams {
-  /** List of file paths to read. Each complete result includes a readCapability that can be copied directly to basedOnRead for a follow-up edit. Batch results include a separate summary entry with ok/failed/requested counts when available. */
+  /** Whole-file paths to read. Complete results include editAnchor.readCapability for follow-up edits. */
   paths?: string[]
-  /** Optional: read only a 1-indexed inclusive line range of specific files. Use this to page through large files that exceeded the read limit. Each entry reads `path` from startLine..endLine. When exactly one paths entry is supplied, a missing range path is inferred from it. */
+  /** 1-indexed inclusive line ranges. Sole `paths` entry infers missing path. */
   ranges?: {
-    /** File path to read a line range from, relative to the project root. */
+    /** Project-relative file path. */
     path: string
     /** 1-indexed inclusive start line. Defaults to 1. */
     startLine?: number
     /** 1-indexed inclusive end line. Defaults to the last line. */
     endLine?: number
   }[]
-  /** Optional: windowed reads for large files. Each returned window is a COMPLETE contiguous line block that mints its own cap.v3 editAnchor, so you can edit it directly via replace_range/basedOnRead without a guess-shrink-retry loop. When exactly one paths entry is supplied, a missing window path is inferred from it. */
+  /** Contiguous line windows; each complete window mints a scoped cap.v3 editAnchor. */
   windows?: {
     /** File path to read in contiguous line windows, relative to the project root. */
     path: string
@@ -651,7 +651,7 @@ export interface ReadFilesParams {
     /** 1-indexed window number to return. Omit to get the window manifest (totalLines, windowSize, windowCount) plus the first window. */
     window?: number
   }[]
-  /** Optional: content-anchored reads. Finds the Nth exact literal match and returns a complete bounded block around it, minting a cap.v3 editAnchor for that block. When exactly one paths entry is supplied, a missing around path is inferred from it. */
+  /** Literal-anchored context blocks with a scoped cap.v3 editAnchor per block. */
   around?: {
     /** File path to read a content-anchored block from, relative to the project root. */
     path: string
@@ -662,7 +662,7 @@ export interface ReadFilesParams {
     /** Lines of context to include on each side of the match, clamped at file boundaries. Defaults to 40, capped at 2000. */
     contextLines?: number
   }[]
-  /** Optional: occurrence-aware single-symbol reads. Each entry pulls the Nth (default 1) top-level symbol with the given name, mirroring rewrite_symbol occurrence semantics, and returns one `symbol` block item with its own editAnchor. Prefer batch `symbols` for several symbols from one file; use `symbol` when you need a specific occurrence of a same-named symbol. When exactly one paths entry is supplied, a missing symbol path is inferred from it. */
+  /** Nth top-level symbol by name (rewrite_symbol occurrence semantics); prefer batch `symbols` when possible. */
   symbol?: {
     /** File path to extract a symbol slice from, relative to the project root. */
     path: string
@@ -671,11 +671,11 @@ export interface ReadFilesParams {
     /** When multiple top-level symbols share this name, the 1-indexed one to return. Defaults to 1. Matches rewrite_symbol occurrence semantics. */
     occurrence?: number
   }[]
-  /** Optional: instead of (or in addition to) whole files, pull just the implementation slices for named symbols. Prefer this over a full read when you already know which functions/classes you need, especially in large files. Each returned slice includes one editAnchor whose readCapability can anchor a later edit. */
+  /** Named symbol slices with editAnchors; prefer over full reads when names are known. */
   symbols?: {
-    /** File path to extract symbol slices from, relative to the project root. */
+    /** Project-relative file path. */
     path: string
-    /** Symbol names (functions, classes, interfaces, methods) to slice. */
+    /** Symbol names to slice. */
     names: string[]
   }[]
 }
@@ -895,9 +895,9 @@ export interface SpawnAgentsParams {
     agent_type: string
     /** Prompt to send to the agent */
     prompt?: string
-    /** If true, launch the agent detached from this turn. spawn_agents returns immediately with a jobId; the agent runs as an in-process coroutine. Poll its progress with check_background_agent. Use for long-running, non-blocking work (e.g. indexing, eval runs, multi-step research) where you do not need the result before ending your turn. The background agent shares the same process so it cannot outlive this CLI session. Defaults to false (blocking). */
+    /** If true, return jobId immediately and run as in-process coroutine; poll with check_background_agent. Defaults to false (blocking). Cannot outlive this CLI session. */
     background?: boolean
-    /** Optional structured handoff payload. Purely additive — children that do not consume `handoff` continue to receive `prompt` and `params` as before. */
+    /** Optional structured handoff; additive — non-consumers still get prompt/params. */
     handoff?:
       | {
           schemaVersion: 1
@@ -966,7 +966,7 @@ export interface SpawnAgentsParams {
           constraints?: string[]
         }
       | Record<string, any>
-    /** Optional per-spawn wall-clock deadline in seconds. Omit it or set -1 for no timeout. Positive deadlines are opt-in and should be used only when the caller deliberately wants to stop a long-running child. A configured agent template defaultTimeoutMs still applies when present. */
+    /** Optional wall-clock deadline seconds; omit or -1 for none. Agent defaultTimeoutMs still applies when set. */
     timeout_seconds?: number
     /** Parameters object for the agent */
     params?: {
