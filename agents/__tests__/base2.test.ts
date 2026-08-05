@@ -858,21 +858,18 @@ describe('base2 proactive index lookup', () => {
     ).toMatchObject({ toolName: 'git_status' })
   })
 
-  test('starts codebase-oriented prompts with query_index', () => {
+  test('starts codebase-oriented Q&A prompts directly (no proactive query_index under M4)', () => {
+    // M4 lean proactive inject: pure Q&A phrasing ("where is X configured")
+    // carries no edit/audit/path phase keyword, so the proactive route is
+    // skipped and the turn starts at git_status. The model reads and
+    // answers the question directly instead of going through query_index.
     const base2 = createBase2('default')
     const generator = base2.handleSteps!({
       prompt: 'Where is authentication configured in this codebase?',
       params: {},
     } as any)
 
-    expect(generator.next().value).toEqual({
-      toolName: 'query_index',
-      input: {
-        query: 'Where is authentication configured in this codebase?',
-        limit: 14,
-        mode: 'search',
-      },
-    })
+    expect(generator.next().value).toMatchObject({ toolName: 'git_status' })
   })
 
   test('uses explained wider retrieval for broad cross-subsystem audits', () => {
@@ -1150,9 +1147,11 @@ describe('base2 proactive index lookup', () => {
     expect((agentState as any).proactiveRetrievalCache).toBeDefined()
 
     // Same revision, but a different normalized query hashes differently.
+    // (M4: the second prompt must still carry a strong intent phrase — an
+    // audit verb like "verify" — so the proactive path fires at all.)
     const secondGen = base2.handleSteps!({
       agentState,
-      prompt: 'Investigate the repository structure',
+      prompt: 'Verify the repository structure before continuing',
       params: {},
       config: base2.programmaticConfig,
     } as any)
@@ -1188,6 +1187,185 @@ describe('base2 proactive index lookup', () => {
     expect(
       firstYield('refactor the authentication module code'),
     ).toMatchObject({ toolName: 'query_index', input: { mode: 'search' } })
+  })
+
+  test('pure how/what question turns do not fire proactive retrieval (M4)', () => {
+    const firstYield = (prompt: string) => {
+      const base2 = createBase2('default')
+      const gen = base2.handleSteps!({
+        agentState: { agentId: 'base2-classify' },
+        prompt,
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+      return gen.next().value as any
+    }
+
+    // Pure Q&A prompts with no edit/audit/path phase keyword must not fire
+    // proactive retrieval: they answer directly and only carry reading/
+    // explanatory phrasing.
+    expect(
+      firstYield('How does the authentication module work in this codebase?'),
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      firstYield('What does this function do in the dependency layer?'),
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      firstYield('Explain the module loading order in this package'),
+    ).toMatchObject({ toolName: 'git_status' })
+
+    // Edit / fix / ritual verb prompts still fire on the unknown scope.
+    expect(firstYield('Refactor the authentication module code')).toMatchObject(
+      {
+        toolName: 'query_index',
+        input: { mode: 'search' },
+      },
+    )
+  })
+
+  test('command-discovery branch requires a literal command (M4)', () => {
+    const firstYield = (prompt: string) => {
+      const base2 = createBase2('default')
+      const gen = base2.handleSteps!({
+        agentState: { agentId: 'base2-classify' },
+        prompt,
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+      return gen.next().value as any
+    }
+
+    // A prompt that already names a literal command keeps the focused
+    // commands branch (limit 12, commands mode).
+    expect(
+      firstYield('How do I run the bun test --watch script for this repo?'),
+    ).toMatchObject({
+      toolName: 'query_index',
+      input: { mode: 'commands', limit: 12 },
+    })
+
+    // A bare command-ish verb phrase (no literal command token) must NOT
+    // fire the focused commands branch. It still carries an audit/test verb,
+    // so it falls through to the unknown-scoped search retrieval instead.
+    expect(firstYield('run the tests and validate the fix')).toMatchObject({
+      toolName: 'query_index',
+      input: { mode: 'search', limit: 14 },
+    })
+    expect(firstYield('validate the schema before continuing')).toMatchObject({
+      toolName: 'query_index',
+      input: { mode: 'search', limit: 14 },
+    })
+  })
+
+  test('proactive cache stores a compact query_index_result envelope (M4)', () => {
+    const base2 = createBase2('default')
+    const prompt = 'Refactor the authentication module code.'
+    const agentState = {
+      agentId: 'base2-classify',
+      workspaceState: { revision: 5, snapshotId: 'snapshot-compact' },
+    }
+
+    const fatValue = {
+      kind: 'query_index_result',
+      status: 'ok',
+      coverage: { matchedConcernCount: 4, totalConcernCount: 6, layers: [] },
+      totalIndexed: 1287,
+      snapshotId: 'snapshot-compact',
+      indexMutationEpoch: 9,
+      results: Array.from({ length: 12 }, (_, index) => ({
+        path: `packages/sdk/src/module-${index}.ts`,
+        score: 0.9 - index * 0.01,
+        reason: `matched index ${index}`,
+        kind: 'file',
+        relatedFiles: [
+          `packages/sdk/src/module-related-${index}-a.ts`,
+          `packages/sdk/src/module-related-${index}-b.ts`,
+        ],
+        matchedSnippets: ['snippet-a', 'snippet-b'],
+      })),
+    }
+
+    // First turn: live query_index, then the route note. Feed a fat
+    // query_index_result; both the cached envelope and the injected route
+    // note must carry the compact shape (no relatedFiles, capped results,
+    // no status/coverage, indexMutationEpoch preserved for the epoch guard).
+    const gen = base2.handleSteps!({
+      agentState: agentState as any,
+      prompt,
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(gen.next().value).toMatchObject({ toolName: 'query_index' })
+    const routeNote = gen.next({
+      toolResult: [{ type: 'json', value: fatValue }],
+    } as any).value as any
+    expect(routeNote).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect(routeNote.input.content).toContain('Proactive retrieval route')
+    expect(routeNote.input.content).not.toContain('cached')
+
+    const cached = (agentState as any).proactiveRetrievalCache
+    expect(cached).toMatchObject({ workspaceRevision: 5, indexMutationEpoch: 9 })
+
+    // The cached result envelope is the compact form: a single json part whose
+    // value drops relatedFiles/matchedSnippets/status/coverage, keeps at most
+    // 8 results with only { path, score?, reason?, kind? } each, and preserves
+    // kind + indexMutationEpoch + the scalar identifiers.
+    expect(cached.result).toEqual({
+      type: 'json',
+      value: {
+        kind: 'query_index_result',
+        results: Array.from({ length: 8 }, (_, index) => ({
+          path: `packages/sdk/src/module-${index}.ts`,
+          score: 0.9 - index * 0.01,
+          reason: `matched index ${index}`,
+          kind: 'file',
+        })),
+        indexMutationEpoch: 9,
+        totalIndexed: 1287,
+        snapshotId: 'snapshot-compact',
+      },
+    })
+
+    // The injected route note embeds the SAME compact form (not the fat
+    // result): it appears verbatim, and the fat fields never surface.
+    expect(routeNote.input.content).toContain(
+      JSON.stringify(
+        Array.from({ length: 8 }, (_, index) => ({
+          path: `packages/sdk/src/module-${index}.ts`,
+          score: 0.9 - index * 0.01,
+          reason: `matched index ${index}`,
+          kind: 'file',
+        })),
+      ),
+    )
+    expect(routeNote.input.content).not.toContain('relatedFiles')
+    expect(routeNote.input.content).not.toContain('matchedSnippets')
+    expect(routeNote.input.content).not.toContain('module-8')
+
+    // The compact envelope still satisfies the epoch-guard: a newer epoch on a
+    // prior query_index message invalidates, and a matching one reuses.
+    ;(agentState as any).messageHistory = [
+      {
+        role: 'tool',
+        toolName: 'query_index',
+        content: [{ type: 'json', value: fatValue }],
+      },
+    ]
+    const cachedGen = base2.handleSteps!({
+      agentState: agentState as any,
+      prompt,
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    const cachedNote = cachedGen.next().value as any
+    expect(cachedNote).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect(cachedNote.input.content).toContain('cached result reused')
   })
 })
 
