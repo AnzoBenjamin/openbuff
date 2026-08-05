@@ -17,6 +17,12 @@ const isSessionArtifactPath = (file: string): boolean => {
   return normalized.startsWith('.agents/sessions/')
 }
 
+/**
+ * Bare hex evidence id for the change-review bundle (files/diff/empty-tree).
+ * Not a gate attestation token — specialist/security/code-reviewer credit uses
+ * opaque gate-owned `v3:…` fingerprints (`snapshot_id` / `snapshot_fingerprint`).
+ * Empty-tree evidence must not clear specialist review while pending files exist.
+ */
 async function buildSnapshotId(params: {
   cwd: string
   headCommit: string
@@ -72,7 +78,15 @@ export async function getChangeReviewBundle(params: {
     resolveWorkspaceIdentity({ cwd: params.cwd, signal: params.signal }),
   ])
   const value = git[0]?.type === 'json' ? git[0].value : undefined
-  if (!value || 'errorMessage' in value || head.exitCode !== 0) {
+  // Direct gitStatus() never emits the per-turn suppressed { unchanged }
+  // variant (only applyGitStatusGate does). Fail closed if it appears so
+  // TypeScript narrows to the full status/diff/truncated branch below.
+  if (
+    !value ||
+    'errorMessage' in value ||
+    'unchanged' in value ||
+    head.exitCode !== 0
+  ) {
     return [
       {
         type: 'json',
@@ -80,7 +94,10 @@ export async function getChangeReviewBundle(params: {
           errorMessage:
             (value && 'errorMessage' in value
               ? value.errorMessage
-              : undefined) ??
+              : value && 'unchanged' in value
+                ? value.note ||
+                  'git_status returned a suppressed unchanged payload; expected a full status observation.'
+                : undefined) ??
             head.stderr.trim() ??
             'Unable to build change review bundle.',
         },

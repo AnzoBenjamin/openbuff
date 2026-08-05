@@ -80,7 +80,7 @@ The root orchestrator has a versioned, local control-plane surface for work that
 
 - `inspect_workspace` records repository/worktree identity, branch state, and a content snapshot.
 - `get_task` reads the current durable task and lifecycle revision.
-- `get_change_review_bundle` produces snapshot-bound changed-file and diff evidence for reviewers.
+- `get_change_review_bundle` produces snapshot-bound changed-file and diff **evidence** for reviewers. Its bare hex `snapshotId` is evidence-only — gate/specialist/security attestation uses opaque gate-owned `v3:…` tokens (`snapshot_id` / `snapshot_fingerprint`), never bare bundle hex as credit identity. An empty or failed bundle must not clear specialist review when reviewable pending files still exist; specialists still spawn under the gate-owned v3 token.
 - `inspect_environment` recursively reports nested JavaScript, Python, Rust, Go, Maven/Gradle, .NET, and Swift workspaces, their manifests/lockfiles, inferred managers with explicit confidence, and locally available toolchains without executing project code.
 - `get_affected_tests` and `get_build_targets` map changed files to the nearest workspace, existing test candidates, and manager-specific validation/build commands. Targets report `confirmed`, `inferred`, or `unknown` confidence instead of presenting guesses as discovered facts.
 - `run_targeted_validation` executes only an explicitly selected target against an expected snapshot and rejects stale or mid-run-mutated snapshots. It is **snapshot-scoped optional evidence only**: green targeted validation does **not** clear reviewer findings, does **not** unlock `git-committer`, and does **not** replace the validation/reviewer gate.
@@ -1167,7 +1167,8 @@ entry or silently drops required parameters. Stringified `params` and
 `handoff` objects are decoded at their envelope boundary only; legitimate
 nested string values such as shell commands remain strings. Basher requires
 `params.command`, and snapshot-scoped reviewers require the exact current
-`params.snapshot_id` from `get_change_review_bundle`.
+gate-owned `v3:…` `params.snapshot_id` / `snapshot_fingerprint` from the parent
+gate (not bare `get_change_review_bundle.snapshotId` hex, which is evidence-only).
 
 Example:
 

@@ -11,7 +11,7 @@ export const getChangeReviewBundleParams = {
   toolName,
   endsAgentStep,
   description:
-    'Builds a read-only, snapshot-scoped change-review bundle from the current Git worktree, including changed files, unified diff, ownership records when available, validation evidence, and reviewer findings. It never clears findings or mutates state.',
+    'Builds a read-only, snapshot-scoped change-review bundle from the current Git worktree, including changed files, unified diff, ownership records when available, validation evidence, and reviewer findings. It never clears findings or mutates state. The returned snapshotId is bare hex evidence-only (files/diff/empty-tree identity) — not the gate attestation token. Gate/specialist/security credit uses opaque v3:… tokens from the parent gate (snapshot_id / snapshot_fingerprint), never bare bundle hex as credit identity. Empty/failed bundles must not auto-credit specialists while reviewable pending files still exist.',
   inputSchema: z.object({
     max_chars: z.number().int().min(500).max(200_000).optional(),
   }),

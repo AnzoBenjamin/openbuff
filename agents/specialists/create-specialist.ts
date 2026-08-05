@@ -103,7 +103,7 @@ export function createSpecialist(
             type: 'string',
             maxLength: 512,
             description:
-              'Required assigned gate snapshot fingerprint for this spawn (opaque token from the parent gate). Echo it exactly as snapshotFingerprint; do not invent a different value.',
+              'Required gate-assigned opaque snapshot token for this spawn (v3:… from the parent gate, not get_change_review_bundle.snapshotId). Echo it exactly as snapshotFingerprint; do not invent a different value.',
           },
           command: {
             type: 'string',
@@ -233,7 +233,7 @@ export function createSpecialist(
     instructionsPrompt: [
       config.advisory
         ? 'Read the exact current sources and task state. A snapshot_id is optional for pre-edit advisory work; when supplied, it is the assigned gate snapshot fingerprint for this spawn — echo it exactly as snapshotFingerprint and do not invent a different value or re-validate against a live bundle that may have moved.'
-        : 'params.snapshot_id is the authoritative assigned snapshot for this review spawn (opaque single-line token from the parent gate). Echo that exact value as snapshotFingerprint. You may use get_change_review_bundle as read-only evidence of the assigned snapshot (file list/diff for that fingerprint if available), but if a fresh call returns a different id, keep reviewing against params.snapshot_id and echo params.snapshot_id — do not emit stale-snapshot solely because the live bundle moved. List the exact normalized project-relative paths you read. Stale-snapshot BLOCKING is only for: missing/empty snapshot_id, inventing a different fingerprint, or inability to read the assigned files — not live-bundle drift during review.',
+        : 'params.snapshot_id is the authoritative gate-assigned snapshot for this review spawn (opaque v3:… token from the parent gate — not the bare hex snapshotId from get_change_review_bundle). Echo that exact value as snapshotFingerprint. You may use get_change_review_bundle as read-only evidence (file list/diff/empty-tree check); if a fresh call returns a different bare id, keep reviewing against params.snapshot_id and echo params.snapshot_id — do not emit stale-snapshot solely because the live bundle moved. List the exact normalized project-relative paths you read. Stale-snapshot BLOCKING is only for: missing/empty snapshot_id, inventing a different fingerprint, or inability to read the assigned files — not live-bundle drift during review.',
       config.advisory
         ? 'Return family=advisory. Your output is design/coordination evidence; do not invent a blocking gate verdict and do not mutate files or external systems.'
         : 'Return family=reviewer. Any material issue requiring a code or contract change is BLOCKING.',

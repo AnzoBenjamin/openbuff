@@ -52,65 +52,47 @@ const DEPENDENCY_MUTATION_COMMANDS = [
 ]
 
 function normalizeCommand(command: string): string {
-  return command.trim().replace(/\s+/g, ' ')
+  // Collapse only horizontal whitespace so unquoted newlines stay visible as
+  // shell command separators for later composition checks.
+  return command.trim().replace(/[ \t]+/g, ' ')
 }
 
-/** Detect shell operators only when they are active syntax, not quoted data. */
-function hasUnquotedShellSyntax(command: string): boolean {
-  let quote: "'" | '"' | null = null
-  let escaped = false
-  for (let index = 0; index < command.length; index += 1) {
-    const char = command[index]
-    if (escaped) {
-      escaped = false
-      continue
-    }
-    if (char === '\\' && quote !== "'") {
-      escaped = true
-      continue
-    }
-    if (quote) {
-      if (char === quote) {
-        quote = null
-      } else if (quote === '"') {
-        // Inside double quotes, $( and backtick are still active shell syntax.
-        if (char === '`') return true
-        if (char === '$' && command[index + 1] === '(') return true
-      }
-      continue
-    }
-    if (char === "'" || char === '"') {
-      quote = char
-      continue
-    }
-    if (
-      char === ';' ||
-      char === '|' ||
-      char === '&' ||
-      char === '`' ||
-      char === '<' ||
-      char === '>'
-    ) {
-      return true
-    }
-    if (char === '$' && command[index + 1] === '(') return true
-  }
-  return false
+type ShellSyntaxScanState = {
+  command: string
+  index: number
+  char: string
 }
+
+type ShellSyntaxMatcher = (state: ShellSyntaxScanState) => boolean
+
+/** Backticks and `$(` substitution stay active unquoted and in double quotes. */
+const isCommandSubstitution: ShellSyntaxMatcher = ({ command, index, char }) =>
+  char === '`' || (char === '$' && command[index + 1] === '(')
+
+/** Any `$` outside single quotes starts an expansion the policy must inspect. */
+const isParameterExpansion: ShellSyntaxMatcher = ({ char }) => char === '$'
+
+/** Composition/redirection operators count as syntax only when unquoted. */
+const isShellComposition: ShellSyntaxMatcher = (state) =>
+  state.char === ';' ||
+  state.char === '|' ||
+  state.char === '&' ||
+  state.char === '<' ||
+  state.char === '>' ||
+  state.char === '\n' ||
+  state.char === '\r' ||
+  isCommandSubstitution(state)
 
 /**
- * Raw-string active-syntax guard for the git-commit profile. Deliberately
- * NOT quote-aware: `runTerminalCommand` executes via `bash -c`, which expands
- * substitution and redirection even inside quotes, and git-commit read-only
- * commands never need redirection or substitution. Rejects the command if
- * `$(`, a backtick, `<`, or `>` appears anywhere in the raw string.
+ * Shared quote/escape scanner for shell-syntax detection. Single quotes make
+ * their content inert; outside single quotes a backslash escapes the next
+ * character. The unquoted matcher runs outside quotes; the doubleQuoted
+ * matcher runs inside double quotes, where substitution/expansion stay active.
  */
-function hasActiveShellSyntaxAnywhere(command: string): boolean {
-  return /\$\(|`|<|>/.test(command)
-}
-
-/** Detect command substitution/backticks that execute outside single quotes. */
-function hasActiveCommandSubstitution(command: string): boolean {
+function scanActiveShellSyntax(
+  command: string,
+  matchers: { unquoted: ShellSyntaxMatcher; doubleQuoted?: ShellSyntaxMatcher },
+): boolean {
   let quote: "'" | '"' | null = null
   let escaped = false
   for (let index = 0; index < command.length; index += 1) {
@@ -125,35 +107,10 @@ function hasActiveCommandSubstitution(command: string): boolean {
     }
     if (quote) {
       if (char === quote) quote = null
-      else if (quote === '"' && (char === '`' || (char === '$' && command[index + 1] === '('))) return true
-      continue
-    }
-    if (char === "'" || char === '"') {
-      quote = char
-      continue
-    }
-    if (char === '`' || (char === '$' && command[index + 1] === '(')) return true
-  }
-  return false
-}
-
-/** Detect active parameter expansion outside single-quoted literal data. */
-function hasActiveParameterExpansion(command: string): boolean {
-  let quote: "'" | '"' | null = null
-  let escaped = false
-  for (let index = 0; index < command.length; index += 1) {
-    const char = command[index]
-    if (escaped) {
-      escaped = false
-      continue
-    }
-    if (char === '\\' && quote !== "'") {
-      escaped = true
-      continue
-    }
-    if (quote) {
-      if (char === quote) quote = null
-      else if (quote === '"' && char === '$') {
+      else if (
+        quote === '"' &&
+        matchers.doubleQuoted?.({ command, index, char })
+      ) {
         return true
       }
       continue
@@ -162,9 +119,34 @@ function hasActiveParameterExpansion(command: string): boolean {
       quote = char
       continue
     }
-    if (char === '$') return true
+    if (matchers.unquoted({ command, index, char })) return true
   }
   return false
+}
+
+/** Detect shell operators only when they are active syntax, not quoted data. */
+function hasUnquotedShellSyntax(command: string): boolean {
+  // Inside double quotes, $( and backticks are still active shell syntax.
+  return scanActiveShellSyntax(command, {
+    unquoted: isShellComposition,
+    doubleQuoted: isCommandSubstitution,
+  })
+}
+
+/** Detect command substitution/backticks that execute outside single quotes. */
+function hasActiveCommandSubstitution(command: string): boolean {
+  return scanActiveShellSyntax(command, {
+    unquoted: isCommandSubstitution,
+    doubleQuoted: isCommandSubstitution,
+  })
+}
+
+/** Detect active parameter expansion outside single-quoted literal data. */
+function hasActiveParameterExpansion(command: string): boolean {
+  return scanActiveShellSyntax(command, {
+    unquoted: isParameterExpansion,
+    doubleQuoted: isParameterExpansion,
+  })
 }
 
 /** Detect active shell compound/control syntax outside quoted literal data. */
@@ -271,6 +253,10 @@ const TMUX_UNSAFE_EXECUTABLES = new Set([
   'sh',
   'shred',
   'source',
+  // Writers not caught by hasUnsafeTmuxFileMutation (rm/mv/cp/mkdir/touch/
+  // truncate/install executables) or the redirection scanner: bare
+  // `tee path`, `command tee`, `env X=1 tee`, `/usr/bin/tee` are the
+  // container-masquerade side channel for workspace writes. Keep `tee` here.
   'tee',
   'xargs',
   'zsh',
@@ -420,7 +406,7 @@ function hasUnsafeTmuxExecutable(command: string): boolean {
         executable === '__unsafe-tmux-wrapper__' ||
         (executable !== undefined && TMUX_UNSAFE_EXECUTABLES.has(executable))
       )
-    }) ?? false
+    }) ?? true
   )
 }
 
@@ -473,9 +459,23 @@ function splitReadOnlyShellSegments(command: string): string[] | undefined {
     if (char === '&' && command[index + 1] !== '&') {
       return undefined
     }
-    if (char === '|' || char === ';' || char === '&') {
+    if (
+      char === '|' ||
+      char === ';' ||
+      char === '&' ||
+      char === '\n' ||
+      char === '\r'
+    ) {
       segments.push(command.slice(start, index).trim())
-      if (command[index + 1] === char) index += 1
+      // Treat \r\n as one separator; collapse ||, &&, and ;; the same as before.
+      if (char === '\r' && command[index + 1] === '\n') {
+        index += 1
+      } else if (
+        (char === '|' || char === ';' || char === '&') &&
+        command[index + 1] === char
+      ) {
+        index += 1
+      }
       start = index + 1
     }
   }
@@ -554,7 +554,7 @@ function hasUnsafeTmuxSedInPlace(command: string): boolean {
             /^-[A-Za-z]*i[A-Za-z]*(?:\..*)?$/.test(argument),
         )
       )
-    }) ?? false
+    }) ?? true
   )
 }
 
@@ -578,7 +578,7 @@ function hasUnsafeTmuxFileMutation(command: string): boolean {
     segments?.some((segment) => {
       const resolved = resolveTmuxCommand(segment)
       return Boolean(resolved && mutationExecutables.has(resolved.executable))
-    }) ?? false
+    }) ?? true
   )
 }
 
@@ -865,7 +865,8 @@ function hasUnsafeReadOnlyGitOption(command: string): boolean {
  * never counts as read-only.
  */
 function isReadOnlyGitCommand(command: string): boolean {
-  if (hasActiveShellSyntaxAnywhere(command)) return false
+  // Quote-aware: double-quoted `$(`/backticks stay dangerous; quoted `<>` does not.
+  if (hasActiveCommandSubstitution(command)) return false
   if (hasUnquotedShellSyntax(command)) return false
   if (hasUnsafeReadOnlyGitOption(command)) return false
   // `\b` after `show` treats `show-ref` as `show` + `-ref` (`-` is a word
@@ -909,12 +910,12 @@ function isReadOnlyGitCommand(command: string): boolean {
 /**
  * Safe complex git operations for the git-commit profile: branch switch/create,
  * safe branch delete, merge, cherry-pick, stash, soft/mixed reset, tag create,
- * and staged restore. The upstream hasUnquotedShellSyntax and
- * hasActiveShellSyntaxAnywhere guards already ensure each of these is a single
- * clean command with no composition, substitution, or redirection, so the
- * anchored regexes below only police git-level flags. Data-loss and
- * history-rewrite shapes (reset --hard, branch -D/--delete/-f/--force, clean,
- * path checkout, checkout -f/--force/-p/--patch/--merge/--theirs/--ours,
+ * and staged restore. Upstream quote-aware substitution checks plus
+ * hasUnquotedShellSyntax already ensure each of these is a single clean command
+ * with no active composition, substitution, or redirection, so the anchored
+ * regexes below only police git-level flags. Data-loss and history-rewrite
+ * shapes (reset --hard, branch -D/--delete/-f/--force, clean, path checkout,
+ * checkout -f/--force/-p/--patch/--merge/--theirs/--ours,
  * switch -f/--force/--discard-changes/-C, merge -s/-s<strategy>, rebase,
  * stash drop/clear, config writes) fail closed via explicit guards before any
  * allow regex is consulted.
@@ -923,7 +924,9 @@ function isAllowedComplexGitCommand(command: string): boolean {
   // Single clean command only: composition/substitution/redirection are
   // rejected upstream, but fail closed here too so the helper stays safe if it
   // is ever reused outside the single-command branch.
-  if (hasActiveShellSyntaxAnywhere(command)) return false
+  // Quote-aware substitution (including double-quoted `$(`/backticks); unquoted
+  // `<>`/composition only — quoted subjects like `Fix A -> B` stay allowed.
+  if (hasActiveCommandSubstitution(command)) return false
   if (hasUnquotedShellSyntax(command)) return false
   // Defense-in-depth: the read-only option denylist also applies to the complex
   // path so --exec-path/--output/--ext-diff/--textconv/-o are rejected by
@@ -956,46 +959,51 @@ function isAllowedComplexGitCommand(command: string): boolean {
   // strategy (such as `ours`) that discards one side of the merge.
   if (/^git\s+merge\b/i.test(command) && /(?:\s-s\b|\s-s[A-Za-z])/.test(command)) return false
 
+  // Message bodies are inert data (already substitution-scanned on the full
+  // string). Strip -m/--message values so quoted subjects like `a -> b` do not
+  // have to fit the path/flag token grammar below.
+  const commandForAllow = stripCommitMessageArgs(command)
+
   return (
     // switch: `git switch foo`, `git switch -c foo [start-point]`.
-    /^git\s+switch\s+(?:-[A-Za-z]+\s+)*[A-Za-z0-9._/-]+\s*$/i.test(command) ||
+    /^git\s+switch\s+(?:-[A-Za-z]+\s+)*[A-Za-z0-9._/-]+\s*$/i.test(commandForAllow) ||
     // checkout (branch-only): the standalone `--` path form is rejected above
     // and by the negative lookahead, so this cannot overwrite the worktree.
     /^git\s+checkout\s+(?!.*(?:^|\s)--(?:\s|$))(?:-[bB]\s+)?[A-Za-z0-9._/][A-Za-z0-9._/-]*\s*$/i.test(
-      command,
+      commandForAllow,
     ) ||
     // branch create / safe delete: lowercase short flags only, so `-d` (safe
     // delete) and plain create pass while `-D`/`--delete` (force) do not.
-    /^git\s+branch\s+(?:-[a-z]+\s+)*[A-Za-z0-9._/-]+\s*$/i.test(command) ||
+    /^git\s+branch\s+(?:-[a-z]+\s+)*[A-Za-z0-9._/-]+\s*$/i.test(commandForAllow) ||
     // merge (no strategy/exec/upload-pack/-X; standalone/attached -X also denied above).
     /^git\s+merge\s+(?!.*(?:--(?:strategy|exec-path|upload-pack)\b|(?:^|\s)-[sX]))(?:--(?:no-ff|ff-only|no-commit|no-edit|edit|squash|abort|continue|quit)\s+)*(?:-[A-Za-z]+\s+)*[A-Za-z0-9._/-]+\s*$/i.test(
-      command,
+      commandForAllow,
     ) ||
     // cherry-pick (no strategy/exec/-X; standalone/attached -X also denied above)
     // with a commit-ish argument.
     /^git\s+cherry-pick\s+(?!.*(?:--(?:strategy|exec-path)\b|(?:^|\s)-X))(?:--(?:abort|continue|skip|no-commit|edit|-?\w+)\s+)*[A-Za-z0-9._/-]+\s*$/i.test(
-      command,
+      commandForAllow,
     ) ||
     // stash (drop/clear rejected above).
     /^git\s+stash\s+(?:push|pop|apply|list|show|save|create|store)(?:\s+(?:-[A-Za-z]+|--(?:message|keep-index|include-untracked|patch|quiet)))*(?:\s+(?:--\s+)?[A-Za-z0-9._/-]+)*\s*$/i.test(
-      command,
+      commandForAllow,
     ) ||
     // reset (soft/mixed/merge/keep only; --hard and pathspec -- rejected above).
     // The commit-ish accepts `~`/`^` revision suffixes (e.g. HEAD~1).
     /^git\s+reset\s+(?:--(?:soft|mixed|merge|keep)\s+)?(?:[A-Za-z0-9._/^~-]+\s*)?$/i.test(
-      command,
+      commandForAllow,
     ) ||
     // tag create/annotate only: the tag name must start with a non-dash so
     // `-d`/`--delete` cannot be consumed as a name; explicit deny for safety.
-    (!/(?:^|\s)-d\b/i.test(command) &&
-      !/--delete\b/i.test(command) &&
+    (!/(?:^|\s)-d\b/i.test(commandForAllow) &&
+      !/--delete\b/i.test(commandForAllow) &&
       /^git\s+tag\s+(?:-[aA]\s+)?(?:-m\s+\S+\s+)*[A-Za-z0-9._/][A-Za-z0-9._/-]*(?:\s+-m\s+\S+)?(?:\s+[A-Za-z0-9._/][A-Za-z0-9._/-]*)?\s*$/i.test(
-        command,
+        commandForAllow,
       )) ||
     // restore --staged only: every path token must start with a non-dash
     // (negative lookahead) so --worktree/-W/--patch/-p/--source/--overlay cannot
     // be smuggled as a path; those shapes are also denied by the guard above.
-    /^git\s+restore\s+--staged(?:\s+(?!-)[A-Za-z0-9._/-]+)+\s*$/i.test(command)
+    /^git\s+restore\s+--staged(?:\s+(?!-)[A-Za-z0-9._/-]+)+\s*$/i.test(commandForAllow)
   )
 }
 
@@ -1010,7 +1018,7 @@ function hasUnsafeTmuxGitCommand(command: string): boolean {
         (resolved.arguments[0]?.toLowerCase() === 'fetch' ||
           !isReadOnlyGitCommand(`git ${resolved.arguments.join(' ')}`))
       )
-    }) ?? false
+    }) ?? true
   )
 }
 
@@ -1064,19 +1072,19 @@ export function evaluateTerminalCommandPolicy(params: {
   allowedPaths?: string[]
 }): TerminalPolicyDecision {
   if (params.mode === 'user') return { allowed: true }
-  const hasRawNewline = /\r|\n/.test(params.command)
   const heredocCommand =
-    params.permissionProfile === 'validation-diagnosis' && hasRawNewline
+    params.permissionProfile === 'validation-diagnosis'
       ? stripBoundedDiagnosticHeredoc(params.command)
       : undefined
   if (
-    params.permissionProfile !== 'full-access' &&
-    hasRawNewline &&
+    params.permissionProfile === 'validation-diagnosis' &&
+    /\r|\n/.test(params.command) &&
     !heredocCommand
   ) {
     return {
       allowed: false,
-      reason: 'terminal commands cannot contain raw newlines',
+      reason:
+        'validation-diagnosis multi-line commands must be a single bounded quoted cat > file heredoc',
     }
   }
   const command = normalizeCommand(heredocCommand ?? params.command)
@@ -1139,10 +1147,13 @@ export function evaluateTerminalCommandPolicy(params: {
           'git-commit commands cannot use shell composition or substitution',
       }
     }
-    // Fail-closed raw guard: `bash -c` expands substitution and redirection
-    // even inside quotes, so reject `$(`, backtick, `<`, and `>` anywhere in
-    // the command before any single-command or composed-segment validation.
-    if (hasActiveShellSyntaxAnywhere(command)) {
+    // Quote-aware substitution guard: `$(` and backticks remain active inside
+    // double quotes (and unquoted), so reject them on the full command before
+    // allowlisting. Redirection/`<>` is NOT active inside quotes — bash does
+    // not treat quoted arrows as redirections — so unquoted `<>` and other
+    // composition are handled by hasUnquotedShellSyntax below rather than a
+    // raw anywhere-`<>` scan that rejected legitimate subjects like `Fix A -> B`.
+    if (hasActiveCommandSubstitution(command)) {
       return {
         allowed: false,
         reason:
@@ -1234,7 +1245,7 @@ export function evaluateTerminalCommandPolicy(params: {
         // the allow clause stays fail-closed on its own.
         (!/(?:^|\s)--amend\b/i.test(command) &&
           !hasPlaceholderCommitMessage(command) &&
-          /^git\s+commit\s+(?=.*-m(?:\s|$)).+/i.test(command)) ||
+          /^git\s+commit\s+(?=.*(?:-m|--message)(?:\s|=|$)).+/i.test(command)) ||
         /^git\s+push\s+(?!.*(?:--force|-f\b|--delete\b|:))(?:-u\s+|--set-upstream\s+)?[A-Za-z0-9._/-]+\s+[A-Za-z0-9._/-]+$/i.test(
           command,
         )
@@ -1262,8 +1273,7 @@ export function evaluateTerminalCommandPolicy(params: {
   if (params.permissionProfile === 'dependency-mutation') {
     if (
       hasUnquotedShellSyntax(command) ||
-      hasShellInterpreterEscape(command) ||
-      /\r|\n/.test(command)
+      hasShellInterpreterEscape(command)
     ) {
       return {
         allowed: false,

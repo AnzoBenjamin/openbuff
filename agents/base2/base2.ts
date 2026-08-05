@@ -2051,8 +2051,15 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         // the condition so the gate also re-fires when a stored credit no
         // longer matches the current pending bytes (fail closed for legacy
         // state that stored no fingerprint at all).
-        const securitySnapshotDetails = buildGateSnapshotDetails(
+        // Scope fingerprint to the REVIEWABLE pending subset (same family as
+        // specialist credit): non-reviewable plan/session artifacts such as
+        // `.agents/sessions/**/STATUS.md` must not thrash security credit.
+        // Entry still uses the full pending list for matchesSecuritySensitiveGlob.
+        const securityReviewableFiles = selectReviewableGateFiles(
           currentPendingGateFiles,
+        )
+        const securitySnapshotDetails = buildGateSnapshotDetails(
+          securityReviewableFiles,
           '',
         )
         const securitySnapshotFingerprint = hashGateSnapshotDetails(
@@ -2077,18 +2084,24 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           matchesSecuritySensitiveGlob(currentPendingGateFiles)
         ) {
           auxGateFiredThisIteration = true
+          // Prefer reviewable changed_files for spawn/attestation identity;
+          // fall back to the full pending list when nothing is reviewable yet.
+          const securityChangedFiles =
+            securityReviewableFiles.length > 0
+              ? securityReviewableFiles
+              : currentPendingGateFiles
           const securityReviewResult = yield {
             toolName: 'spawn_agent_inline',
             input: {
               agent_type: 'security-reviewer',
               prompt: [
                 'Perform the required snapshot-bound security review.',
-                `Pending changed files: ${currentPendingGateFiles.join(', ')}`,
+                `Pending changed files: ${securityChangedFiles.join(', ')}`,
                 `Snapshot fingerprint: ${securitySnapshotFingerprint}`,
                 'Return only the declared structured output.',
               ].join('\n'),
               params: {
-                changed_files: currentPendingGateFiles,
+                changed_files: securityChangedFiles,
                 snapshot_fingerprint: securitySnapshotFingerprint,
               },
             },
@@ -2101,7 +2114,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           const securityAttestationIssues = collectReviewerAttestationIssues(
             securityToolResult,
             securitySnapshotFingerprint,
-            currentPendingGateFiles,
+            securityChangedFiles,
           )
           const securityVerdict =
             getReviewerFinalizationVerdict(securityToolResult)
@@ -2119,7 +2132,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                   gateId: `security-reviewer:${securitySnapshotFingerprint}`,
                   text: record?.text ?? text,
                   status: 'open' as const,
-                  files: currentPendingGateFiles,
+                  files: securityChangedFiles,
                   snapshotFingerprint: securitySnapshotFingerprint,
                   reviewer: 'security-reviewer' as const,
                   createdAt: new Date().toISOString(),
@@ -2441,8 +2454,9 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           ) {
             // Requirements may still route a specialist, but with no
             // reviewable pending files there is nothing to attest. Mark done
-            // like the empty-snapshot path instead of spawning a reviewer that
-            // can only fail file attestation.
+            // instead of spawning a reviewer that can only fail file
+            // attestation. (Empty-bundle evidence must NOT auto-credit when
+            // pending files still exist — that path always spawns.)
             for (const agentType of routedSpecialists) {
               activeWorkState.specialistReviewGatesDone = Array.from(
                 new Set([
@@ -2466,6 +2480,25 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               reuseReason: 'no-pending-changes-in-snapshot',
             })
           } else if (routedSpecialists.length > 0) {
+            // Gate-owned v3 fingerprint is the sole specialist attestation
+            // token (same family as security/code-reviewer). Fail closed when
+            // crypto is unavailable rather than spawning with a bare bundle id.
+            if (
+              !isAttestableSnapshotFingerprint(specialistCreditFingerprint)
+            ) {
+              activeWorkState.currentPhase = 'blocked'
+              activeWorkState.openReviewerBlockers = [
+                'Specialist review cannot attest: gate snapshot fingerprint is non-attestable (crypto unavailable).',
+              ]
+              activeWorkState.nextRequiredAction =
+                'Restore a runtime with collision-resistant hashing before specialist review can continue.'
+              activeWorkState.latestWorkSummary =
+                'Specialist review blocked because the gate fingerprint is non-attestable.'
+              markActiveWorkStateChanged()
+              continue
+            }
+            // get_change_review_bundle is read-only evidence (files/diff/
+            // empty-tree). Bundle snapshotId is NOT the gate attestation token.
             const bundleResult = yield {
               toolName: 'get_change_review_bundle',
               input: {},
@@ -2474,49 +2507,13 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             const bundle = extractChangeReviewBundle(
               (bundleResult as any)?.toolResult ?? bundleResult,
             )
-            if (!bundle.snapshotId) {
-              activeWorkState.currentPhase = 'blocked'
-              activeWorkState.openReviewerBlockers = [
-                `Specialist review snapshot failed: ${bundle.errorMessage || 'missing snapshotId'}`,
-              ]
-              activeWorkState.nextRequiredAction =
-                'Restore a valid change-review snapshot before specialist review.'
-              markActiveWorkStateChanged()
-              continue
-            }
-            if (bundle.files.length === 0) {
-              // The snapshot has zero changed files (working tree already
-              // clean/committed). A specialist reviewer spawned here can only
-              // find nothing to review and would then fail file attestation,
-              // so mark every routed specialist done and skip the spawn
-              // instead of wasting a reviewer that can never pass. Do not set
-              // auxGateFiredThisIteration; let control fall through so the
-              // loop proceeds toward finalization.
-              for (const agentType of routedSpecialists) {
-                activeWorkState.specialistReviewGatesDone = Array.from(
-                  new Set([
-                    ...(activeWorkState.specialistReviewGatesDone ?? []),
-                    agentType,
-                  ]),
-                )
-                // Record the credit fingerprint here too so this early-out
-                // path stays idempotent under the snapshot-bound credit test.
-                ;(activeWorkState.specialistReviewGateFingerprints ??= {})[
-                  agentType
-                ] = specialistCreditFingerprint
-              }
-              activeWorkState.lastReviewerGateSkipReason =
-                'no-pending-changes-in-snapshot'
-              markActiveWorkStateChanged()
-              emitGateTelemetry({
-                currentPhase: 'final_response_allowed',
-                pendingFileCount: 0,
-                pendingFiles: [],
-                reviewerStatus: 'skipped',
-                validationStatus: 'skipped',
-                reuseReason: 'no-pending-changes-in-snapshot',
-              })
-            } else {
+            // Empty/failed bundle must not falsely clear specialist review when
+            // reviewable pending files exist. This branch only runs after the
+            // specialistPendingFiles.length === 0 early credit path, so always
+            // spawn with the gate-owned v3 token — never auto-credit from
+            // empty-tree evidence alone (bundle snapshotId is not attestation).
+            void bundle
+            {
               auxGateFiredThisIteration = true
               let specialistBlocked = false
               let specialistTerminalFailure = false
@@ -2529,7 +2526,10 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               const specialistResults = new Map<string, unknown>()
               const specialistSnapshots = new Map<string, string>()
               for (const agentType of routedSpecialists) {
-                specialistSnapshots.set(agentType, bundle.snapshotId)
+                specialistSnapshots.set(
+                  agentType,
+                  specialistCreditFingerprint,
+                )
               }
               const firstSpecialistBatch = yield {
                 toolName: 'spawn_agents',
@@ -2540,11 +2540,11 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                       'Perform the routed post-edit specialist review.',
                       `Requirements: ${prompt ?? '(none supplied)'}`,
                       `Changed files: ${specialistPendingFiles.join(', ') || '(none)'}`,
-                      `Snapshot ID (echo exactly): ${bundle.snapshotId}`,
+                      `Snapshot fingerprint (echo exactly): ${specialistCreditFingerprint}`,
                     ].join('\n'),
                     params: {
                       files: specialistPendingFiles,
-                      snapshot_id: bundle.snapshotId,
+                      snapshot_id: specialistCreditFingerprint,
                     },
                   })),
                 },
@@ -2569,7 +2569,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 // snapshot drift never triggers a pointless refresh+retry.
                 const attestationIssues = collectReviewerAttestationIssues(
                   result,
-                  bundle.snapshotId,
+                  specialistCreditFingerprint,
                   specialistPendingFiles,
                 )
                 return (
@@ -2578,19 +2578,23 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 )
               })
               if (retrySpecialists.length > 0) {
-                const refreshedBundleResult = yield {
-                  toolName: 'get_change_review_bundle',
-                  input: {},
-                  includeToolCall: false,
-                } as any
-                const refreshedBundle = extractChangeReviewBundle(
-                  (refreshedBundleResult as any)?.toolResult ??
-                    refreshedBundleResult,
+                // Retry identity is the recomputed gate fingerprint of the
+                // current pending set — not a new bare bundle snapshotId.
+                // Bundle refresh is optional evidence only.
+                const retryCreditFingerprint = hashGateSnapshotDetails(
+                  buildGateSnapshotDetails(
+                    selectReviewableGateFiles(
+                      selectAuxRelevantFiles(currentPendingGateFiles),
+                    ),
+                    '',
+                  ),
                 )
-                if (!refreshedBundle.snapshotId) {
+                if (
+                  !isAttestableSnapshotFingerprint(retryCreditFingerprint)
+                ) {
                   activeWorkState.currentPhase = 'blocked'
                   activeWorkState.openReviewerBlockers = [
-                    'Specialist review could not obtain a refreshed snapshot after attestation failure.',
+                    'Specialist review retry cannot attest: recomputed gate snapshot fingerprint is non-attestable.',
                   ]
                   // Only drop the retrying specialists' findings; another
                   // reviewer's still-open findings must survive.
@@ -2601,13 +2605,19 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                       !retrySpecialists.includes(finding.reviewer as string),
                   )
                   activeWorkState.nextRequiredAction =
-                    'Stop concurrent edits and resume once the working tree is stable; the runtime will obtain a fresh review bundle.'
+                    'Restore a runtime with collision-resistant hashing before specialist review can continue.'
                   activeWorkState.latestWorkSummary =
-                    'Specialist review stopped because snapshot refresh failed.'
+                    'Specialist review stopped because the retry gate fingerprint is non-attestable.'
                   markActiveWorkStateChanged()
                   specialistBlocked = true
                   specialistTerminalFailure = true
                 } else {
+                  // Optional evidence refresh; ignore missing snapshotId.
+                  yield {
+                    toolName: 'get_change_review_bundle',
+                    input: {},
+                    includeToolCall: false,
+                  } as any
                   const retryBatch = yield {
                     toolName: 'spawn_agents',
                     input: {
@@ -2617,12 +2627,12 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                           'Retry the routed specialist review after snapshot/file attestation failure.',
                           `Requirements: ${prompt ?? '(none supplied)'}`,
                           `Changed files: ${specialistPendingFiles.join(', ') || '(none)'}`,
-                          `Snapshot ID (echo exactly): ${refreshedBundle.snapshotId}`,
+                          `Snapshot fingerprint (echo exactly): ${retryCreditFingerprint}`,
                           'Correct the structured output directly; do not request source edits for this protocol error.',
                         ].join('\n'),
                         params: {
                           files: specialistPendingFiles,
-                          snapshot_id: refreshedBundle.snapshotId,
+                          snapshot_id: retryCreditFingerprint,
                         },
                       })),
                     },
@@ -2631,7 +2641,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                   const retryToolResult =
                     (retryBatch as any)?.toolResult ?? retryBatch
                   for (const agentType of retrySpecialists) {
-                    specialistSnapshots.set(agentType, refreshedBundle.snapshotId)
+                    specialistSnapshots.set(agentType, retryCreditFingerprint)
                     specialistResults.set(
                       agentType,
                       extractSpawnedAgentResult(retryToolResult, agentType),
@@ -2642,7 +2652,8 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               if (!specialistTerminalFailure) {
                 for (const agentType of routedSpecialists) {
                   const expectedSnapshotId =
-                    specialistSnapshots.get(agentType) ?? bundle.snapshotId
+                    specialistSnapshots.get(agentType) ??
+                    specialistCreditFingerprint
                   const specialistToolResult = specialistResults.get(agentType)
                   const specialistAttestationIssues =
                     collectReviewerAttestationIssues(

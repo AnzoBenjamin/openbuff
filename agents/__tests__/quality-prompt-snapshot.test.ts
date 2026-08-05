@@ -181,11 +181,12 @@ describe('shared craftsmanship prompt sections', () => {
   })
 
   test('specialistRoutingSection names the exact snapshot param contract for reviewer-family specialists', () => {
-    // Reviewer-family specialists require params.snapshot_id from
-    // get_change_review_bundle, while security-reviewer requires
-    // changed_files + snapshot_fingerprint. Guard that the guidance names both
-    // contracts so a spawn does not fail on the wrong/missing snapshot key.
+    // Reviewer-family specialists require params.snapshot_id as the gate-owned
+    // v3 token (not bare get_change_review_bundle.snapshotId), while
+    // security-reviewer requires changed_files + snapshot_fingerprint.
     expect(specialistRoutingSection).toContain('snapshot_id')
+    expect(specialistRoutingSection).toContain('gate-assigned opaque')
+    expect(specialistRoutingSection).toContain('v3:')
     expect(specialistRoutingSection).toContain('get_change_review_bundle')
     expect(specialistRoutingSection).toContain('changed_files')
     expect(specialistRoutingSection).toContain('snapshot_fingerprint')
@@ -194,7 +195,12 @@ describe('shared craftsmanship prompt sections', () => {
   test('all three consumers interpolate shared sections and leave conditional sections gated', () => {
     // Frontend and language guidance are runtime placeholders so unrelated
     // repos do not receive prompt pollution.
-    const base2 = createBase2('default')
+    // base2 progressive disclosure defaults ON (pointers to agents/guides/*);
+    // force OFF here so this test asserts the full shared-section wiring.
+    // Default-on pointer relocation is covered by base2-progressive-disclosure.
+    const base2 = createBase2('default', {
+      progressivePromptDisclosure: false,
+    })
     const baseDeep = createBaseDeep()
     const editor = createCodeEditor({ model: 'opus' })
 
