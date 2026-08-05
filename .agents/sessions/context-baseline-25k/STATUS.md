@@ -247,3 +247,24 @@ Recorded against HEAD `77f403b` (post-M1/M4, disclosure default OFF — the M2 f
 | S5 | buffbench subset | (none wired) | deferred — no default-on attempt yet |
 
 AC-A1 rule: M2 default-on is acceptable only if the post-flip runs match these results on the same tree.
+
+<!-- update_plan_status:appended -->
+## M3 tree/knowledge reductions — 2026-08-05 — 2026-08-05T10:11:05.319Z
+
+M3-T1..T4 landed (AC-A1 for M2 already satisfied).
+
+**Code**
+- `FILE_TREE_PROMPT_SMALL` budget **2_500 → 1_750** (`packages/agent-runtime/src/templates/strings.ts`).
+- Agent-mode truncation **preferPathOnly** (`truncate-file-tree.ts` + `getProjectFileTreePrompt` passes `preferPathOnly: mode === 'agent'`); search/LARGE unchanged (symbol-rich).
+- Static `knowledgeFilesPrompt` shrunk to short blurb + pointer; full essay at `agents/guides/knowledge-files.md`. Root knowledge **contents** injection unchanged.
+- Baseline script `FILE_TREE_SMALL_BUDGET = 1_750` + comments.
+
+**Validation**
+- `bun test` truncate-file-tree + prompts-ledger: **10/10 pass**
+- `packages/agent-runtime` typecheck: clean
+- `bun run scripts/measure-context-baseline.ts`:
+  - File tree SMALL (1750 budget): **1,773** tok (was ~2.0k @ 2500)
+  - Knowledge instruction static: **99** tok (was ~1,036)
+  - Default fixed (prod, SMALL, no proactive): **46,808** tok (session-dependent git still inflates)
+
+**Next:** gate this M3 diff; optional commit after GATE: PASSED. M5 schema diet / M1 tool default-on still separate.

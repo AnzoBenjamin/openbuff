@@ -119,7 +119,7 @@ export async function formatPrompt(
     [PLACEHOLDER.FILE_TREE_PROMPT_SMALL]: () =>
       getProjectFileTreePrompt({
         fileContext,
-        fileTreeTokenBudget: 2_500,
+        fileTreeTokenBudget: 1_750,
         mode: 'agent',
         logger,
         ledger,
