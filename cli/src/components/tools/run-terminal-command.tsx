@@ -63,6 +63,25 @@ export const parseTerminalOutput = (
  * Displays the command in bold next to the bullet point,
  * with the output indented below.
  */
+/** Map tool-block lifecycle to the status string shown in the terminal card. */
+const lifecycleToDisplayStatus = (
+  lifecycle: string | undefined,
+): string | undefined => {
+  switch (lifecycle) {
+    case 'queued':
+    case 'running':
+      return 'running'
+    case 'succeeded':
+      return 'completed'
+    case 'failed':
+      return 'error'
+    case 'cancelled':
+      return 'cancelled'
+    default:
+      return undefined
+  }
+}
+
 export const RunTerminalCommandComponent = defineToolComponent({
   toolName: 'run_terminal_command',
 
@@ -79,8 +98,31 @@ export const RunTerminalCommandComponent = defineToolComponent({
         : undefined
 
     // Extract output and startingCwd from tool result
-    const { output, startingCwd, jobId, status, detached, logFile } =
-      parseTerminalOutput(toolBlock.output)
+    const {
+      output,
+      startingCwd,
+      jobId: parsedJobId,
+      status: parsedStatus,
+      detached,
+      logFile,
+    } = parseTerminalOutput(toolBlock.output)
+
+    // Prefer the live tool-block correlation id + lifecycle over the frozen
+    // backgroundProcessStatus string baked into the initial tool_result JSON
+    // (which stays "running" even after job_update settles the card).
+    const jobId = toolBlock.backgroundJobId ?? parsedJobId
+    const isBackgroundJob = Boolean(jobId)
+    const lifecycleStatus = lifecycleToDisplayStatus(toolBlock.lifecycle)
+    const status = isBackgroundJob
+      ? (lifecycleStatus ?? parsedStatus)
+      : parsedStatus
+    const isRunning =
+      toolBlock.lifecycle === 'running' ||
+      toolBlock.lifecycle === 'queued' ||
+      // Pre-result or missing lifecycle: fall back to parsed BACKGROUND status.
+      (toolBlock.lifecycle === undefined &&
+        isBackgroundJob &&
+        parsedStatus === 'running')
 
     // Custom content component using shared TerminalCommandDisplay
     const content = (
@@ -92,6 +134,7 @@ export const RunTerminalCommandComponent = defineToolComponent({
         cwd={startingCwd}
         jobId={jobId}
         status={status}
+        isRunning={isRunning}
         detached={detached}
         logFile={logFile}
         timeoutSeconds={timeoutSeconds}

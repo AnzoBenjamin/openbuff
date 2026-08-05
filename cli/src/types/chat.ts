@@ -56,10 +56,11 @@ export type ToolContentBlock = {
   interrupted?: boolean
   /**
    * Detached background shell (process) job associated with this tool card.
-   * Wired in production from the `tool_call` print-mode event's
-   * `backgroundJobId` for a run_terminal_command BACKGROUND call so live
-   * `job_update` events (M5) can correlate to this card and update its
-   * lifecycle/output in place.
+   * For run_terminal_command BACKGROUND launches, the job id is known only
+   * after the SDK starts the process and is wired from the tool_result
+   * payload so live `job_update` events can correlate to this card and update
+   * its lifecycle/output in place. May also be set on spawn result paths for
+   * background agents.
    */
   backgroundJobId?: string
   /**

@@ -1060,6 +1060,49 @@ const getFirstToolOutputValue = (toolOutput: unknown[]): unknown => {
     : undefined
 }
 
+/**
+ * Extract a BACKGROUND shell job id from a successful run_terminal_command
+ * tool_result value. The job id is only known after the SDK starts the
+ * detached process, so production correlation is via tool_result — not tool_call.
+ *
+ * Successful BACKGROUND launch shape:
+ * `{ command, processId, backgroundProcessStatus: 'running', jobId, logFile, ... }`
+ * Error results have `errorMessage` and must not wire a backgroundJobId.
+ */
+export const extractBackgroundShellJobId = (
+  value: unknown,
+): string | undefined => {
+  if (!isRecordValue(value)) return undefined
+  if (typeof value.errorMessage === 'string') return undefined
+  if (typeof value.jobId !== 'string' || value.jobId.length === 0) {
+    return undefined
+  }
+
+  // Primary contract: BACKGROUND start reports status "running" with a jobId.
+  if (value.backgroundProcessStatus === 'running') {
+    return value.jobId
+  }
+
+  // Defensive fallback: jobId without completion fields (stdout/stderr/exitCode).
+  // Do not treat a SYNC result that happens to include jobId as BACKGROUND.
+  if (
+    value.backgroundProcessStatus === undefined &&
+    value.exitCode === undefined &&
+    value.stdout === undefined &&
+    value.stderr === undefined
+  ) {
+    return value.jobId
+  }
+
+  return undefined
+}
+
+/** Resolve BACKGROUND shell jobId from a tool_result output array. */
+export const getBackgroundShellJobIdFromToolOutput = (
+  toolOutput: unknown[],
+): string | undefined =>
+  extractBackgroundShellJobId(getFirstToolOutputValue(toolOutput))
+
 const formatTransactionToolOutput = (toolOutput: unknown[]): string => {
   const value = getFirstToolOutputValue(toolOutput)
   if (!value || typeof value !== 'object') {
@@ -1103,6 +1146,11 @@ const formatToolOutput = (
       | undefined
     if (parsed?.stdout || parsed?.stderr) {
       return (parsed.stdout || '') + (parsed.stderr || '')
+    }
+    // BACKGROUND launch has no stdout/stderr yet; leave output empty so live
+    // job_update deltas stream cleanly instead of a frozen JSON dump.
+    if (extractBackgroundShellJobId(parsed) !== undefined) {
+      return ''
     }
     return JSON.stringify(toolOutput, null, 2)
   }
@@ -1152,6 +1200,8 @@ export const updateToolBlockWithOutput = (
   options: UpdateToolBlockOptions,
 ): ContentBlock[] => {
   const { toolCallId, toolOutput } = options
+  const backgroundJobId =
+    getBackgroundShellJobIdFromToolOutput(toolOutput)
 
   return blocks.map((block) => {
     if (block.type === 'tool' && block.toolCallId === toolCallId) {
@@ -1162,6 +1212,13 @@ export const updateToolBlockWithOutput = (
         ...block,
         output: formatToolOutput(block.toolName, displayToolOutput),
         outputRaw: displayToolOutput,
+        // Wire BACKGROUND shell jobId so live job_update events can correlate.
+        // Only set when the result is a successful BACKGROUND launch; do not
+        // clear an existing backgroundJobId from spawn_agents agent wiring.
+        ...(backgroundJobId !== undefined &&
+        block.toolName === 'run_terminal_command'
+          ? { backgroundJobId }
+          : {}),
       }
     } else if (block.type === 'agent' && block.blocks) {
       const updatedBlocks = updateToolBlockWithOutput(block.blocks, options)

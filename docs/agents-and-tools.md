@@ -520,7 +520,7 @@ SYNC commands take a pre/post `git status --porcelain -uall` dirty delta and may
 
 ### BACKGROUND settlement `touchedPaths`
 
-BACKGROUND start stores `dirtyBeforePaths` + `projectRoot` on the in-memory job and does **not** emit `touchedPaths` while the job is running (start result is `jobId`-only). The first settled `check_job` success observation may include one-shot `touchedPaths` (settlement dirty delta); later polls omit the field. Soft-fail when the job was recovered without a snapshot, or outside git / on git failure — settlement is locked so re-polls do not re-attribute post-settle dirt. Schema: optional `touchedPaths` on `check_job` success output in `common/src/tools/params/tool/check-job.ts`.
+BACKGROUND start is fire-and-forget: it stores `dirtyBeforePaths` + `projectRoot` on the in-memory job and does **not** emit `touchedPaths` while the job is running (start result is `jobId`-only). Live `job_update` events drive the user-facing terminal card (output + lifecycle). `check_job` is the agent-side join/follow path for readiness/exitCode; the first settled `check_job` success observation may include one-shot `touchedPaths` (settlement dirty delta); later polls omit the field. Soft-fail when the job was recovered without a snapshot, or outside git / on git failure — settlement is locked so re-polls do not re-attribute post-settle dirt. Schema: optional `touchedPaths` on `check_job` success output in `common/src/tools/params/tool/check-job.ts`.
 
 ## Reviewer verdict contract
 
