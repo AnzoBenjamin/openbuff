@@ -5328,8 +5328,9 @@ describe('read_files edit-state recovery', () => {
     })
 
     it('failed str_replace after compaction revokes authorization so write_file stays blocked', async () => {
-      // A failed no-match may strengthen context_compacted to stale_capability,
-      // but it must revoke authority and keep whole-file overwrite blocked.
+      // Sticky context_compacted: a failed no-match must not overwrite the reread
+      // reason/sourceTool with a weaker str_replace caller. Auth is still revoked
+      // and whole-file overwrite stays blocked until a real re-read.
       const path = 'src/compacted-failed-replace.ts'
       const diskContent = 'export const value = 1\n'
       const fileProcessingState = createFileProcessingState()
@@ -5370,8 +5371,11 @@ describe('read_files edit-state recovery', () => {
 
       expect(failResult.output[0]?.type).toBe('json')
       expect(
-        fileProcessingState.editRereadRequirementsByPath?.[path]?.reason,
-      ).toBe('stale_capability')
+        fileProcessingState.editRereadRequirementsByPath?.[path],
+      ).toMatchObject({
+        reason: 'context_compacted',
+        sourceTool: 'compaction',
+      })
       expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBeUndefined()
       expect(
         fileProcessingState.readAuthorizationHashesByPath?.[path],
@@ -5409,8 +5413,11 @@ describe('read_files edit-state recovery', () => {
         ).toMatch(/context compaction|read_files|basedOnRead/i)
       }
       expect(
-        fileProcessingState.editRereadRequirementsByPath?.[path]?.reason,
-      ).toBe('stale_capability')
+        fileProcessingState.editRereadRequirementsByPath?.[path],
+      ).toMatchObject({
+        reason: 'context_compacted',
+        sourceTool: 'compaction',
+      })
     })
 
     it('allowMultiple str_replace apply does not clear context_compacted so write_file stays blocked', async () => {
