@@ -356,28 +356,33 @@ field** for these systems yet — the behavior is code-default and always on.
   (mode gates still apply); full surface remains the default when off. Opt-in
   only; production stays off without the option or canary.
 - **`maxReviewerRepairRounds`** is an SDK/agent option on `createBase2` (also
-  not a JSON config key). Default `6`, max `20`. When omitted, it resolves from
-  `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS` (positive integer string). Explicit
-  option values win over the env; invalid/missing values fall back to `6`.
-  This bounds the reviewer→repair→re-review loop (including NON_BLOCKING
-  findings under LOOKS_GOOD-only finalization).
+  not a JSON config key). Default **unlimited** (progress-gated: no-progress
+  fingerprint and incomplete-receipt exits). Optional positive integer cap,
+  max `20`. When omitted, it resolves from
+  `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS` only when that env is a valid positive
+  int; unset/invalid → unlimited. Explicit option values win over the env.
+  Counters still track rounds for telemetry; NON_BLOCKING findings still burn
+  the counter under LOOKS_GOOD-only finalization.
 - **`maxRepairRounds`** is an SDK/agent option on `createBase2` (not a JSON
-  config key). Default `3`, max `20`. When omitted, it resolves from
-  `OPENBUFF_MAX_REPAIR_ROUNDS`. Explicit option values win over the env;
-  invalid/missing values fall back to `3`. Bounds validation-hook
-  repair-editor rounds.
+  config key). Default **unlimited** (progress-gated). Optional positive int
+  cap, max `20`. When omitted, resolves from `OPENBUFF_MAX_REPAIR_ROUNDS` only
+  when set to a valid positive int; unset/invalid → unlimited. Explicit option
+  values win over the env. Validation keeps repairing on parseable failures
+  until progress guards fail; infrastructure failures still use reduced
+  assurance.
 - **`maxSpecialistRepairRounds`** is an SDK/agent option on `createBase2` (not
-  a JSON config key). Default `3`, max `20`. When omitted, it resolves from
-  `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS`. Explicit option values win over the
-  env; invalid/missing values fall back to `3`. Bounds the specialist→repair→
-  re-review loop.
+  a JSON config key). Default **unlimited** (progress-gated). Optional
+  positive int cap, max `20`. When omitted, resolves from
+  `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS` only when set to a valid positive
+  int; unset/invalid → unlimited. Explicit option values win over the env.
 - **`/context`** is a read-only slash command that prints the per-component
   token breakdown recorded for the current turn (advisory telemetry, not a
   hard gate). It also always prints the effective gate repair budgets
-  (validation / reviewer / specialist) resolved from env vars and defaults
-  (`OPENBUFF_MAX_REPAIR_ROUNDS`, `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS`,
-  `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS`; createBase2 options still win at
-  agent load).
+  (validation / reviewer / specialist) as `unlimited` by default, or the
+  optional positive caps from env (`OPENBUFF_MAX_REPAIR_ROUNDS`,
+  `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS`, `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS`;
+  createBase2 options still win at agent load). Progress guards terminate
+  loops when no hard cap is set.
 - **Indexing** (`indexing.enabled`, semantic settings) controls the local
   index backing `query_index` and the proactive retrieval cache; see
   [Indexing and retrieval](#indexing-and-retrieval) above.
@@ -385,8 +390,8 @@ field** for these systems yet — the behavior is code-default and always on.
 All reductions and gates are on by default, including progressive prompt
 disclosure (opt out with an explicit `progressivePromptDisclosure: false`);
 progressive tool disclosure remains the opt-in (via the agent option / env
-canary above). Gate repair budgets are always on with configurable defaults
-(reviewer `6`, validation/specialist `3`).
+canary above). Gate repair loops default to unlimited/progress-gated; optional
+env or createBase2 caps remain available.
 
 ## Merge semantics
 

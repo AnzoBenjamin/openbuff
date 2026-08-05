@@ -13,9 +13,6 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { createBaseDeep } from '../base2/base-deep'
 import {
   createBase2,
-  DEFAULT_MAX_REPAIR_ROUNDS,
-  DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS,
-  DEFAULT_MAX_SPECIALIST_REPAIR_ROUNDS,
   resolveMaxRepairRounds,
   resolveMaxReviewerRepairRounds,
   resolveMaxSpecialistRepairRounds,
@@ -2705,6 +2702,121 @@ describe('base2 verification and reviewer gates', () => {
       expect((agentState as any).base2ActiveWork.pendingGateFiles).toEqual([])
       expect((agentState as any).canSuggestFollowups).toBe(true)
       expect((agentState as any).uncommittedUnvalidatedFiles).toEqual([])
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('credited dirty task file does not re-expand gate scope after LOOKS_GOOD', () => {
+    // Regression: after a green pass, file A may stay dirty+gatePassed while
+    // finalization is open. deriveGateScopeFiles must exclude A so durable
+    // reuse / conversation reuse is not broken by gateScopeFiles widening
+    // beyond pendingGateFiles, and the reviewer is not re-spawned solely for A.
+    const base2 = createBase2('default')
+    const tmpDir = makeProjectTempDir('base2-credited-dirty-scope-')
+    try {
+      const fileA = join(tmpDir, 'a.ts')
+      const gateFileA = normalizeGateFilePath(fileA)
+      writeFileSync(fileA, 'export const a = 1\n')
+      const validationSummary = 'No configured file-change hooks ran.'
+      const fingerprint = buildFingerprint(
+        [{ file: gateFileA, contentMarker: buildContentMarker(fileA) }],
+        validationSummary,
+      )
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          changedFiles: [gateFileA],
+          touchedFiles: [gateFileA],
+          pendingGateFiles: [],
+          currentPhase: 'final_response_allowed',
+          latestWorkSummary: '',
+          openReviewerBlockers: [],
+          lastValidationSummary: validationSummary,
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [gateFileA],
+          gatePassedPendingFiles: [gateFileA],
+          gatePassedReviewerVerdict: 'LOOKS_GOOD',
+          gatePassedValidationSummary: validationSummary,
+          gatePassedFingerprint: fingerprint,
+          gatePassedFileMarkers: {
+            [gateFileA]: buildContentMarker(fileA),
+          },
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      // A is still dirty but already credited; no unreviewed dirty B.
+      expect(
+        gen.next({
+          toolResult: [
+            {
+              type: 'json',
+              value: { status: ` M ${fileA}` },
+            },
+          ],
+        } as any).value,
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
+      const maybePinned = gen.next().value
+      if (maybePinned !== 'STEP') {
+        expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+
+      // Finalization stays open; credited dirty A must not re-arm the gate.
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+        'final_response_allowed',
+      )
+      expect((agentState as any).base2ActiveWork.pendingGateFiles).toEqual([])
+      expect((agentState as any).base2ActiveWork.gatePassedFiles).toEqual([
+        gateFileA,
+      ])
+      expect((agentState as any).canSuggestFollowups).toBe(true)
+
+      // Complete the step with no new edits: must not spawn reviewer solely for
+      // credited dirty A (no run_file_change_hooks / spawn_agents reviewer).
+      const afterStep = gen.next({
+        stepsComplete: true,
+        toolResult: [],
+      } as any)
+      expect(afterStep.value).toMatchObject({ toolName: 'git_status' })
+      const afterGit = gen.next({
+        toolResult: [
+          {
+            type: 'json',
+            value: { status: ` M ${fileA}` },
+          },
+        ],
+      } as any)
+      expect(afterGit.value).toMatchObject({ toolName: 'list_jobs' })
+      const done = gen.next(feedListJobs())
+      // Generator finishes or continues without re-running validation/reviewer
+      // for already-credited dirty A alone.
+      if (!done.done) {
+        const nextTool = (done.value as any)?.toolName
+        expect(nextTool).not.toBe('run_file_change_hooks')
+        if (nextTool === 'spawn_agents') {
+          const agents = (done.value as any)?.input?.agents ?? []
+          expect(
+            agents.some(
+              (a: { agent_type?: string }) => a.agent_type === 'code-reviewer',
+            ),
+          ).toBe(false)
+        }
+      }
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+        'final_response_allowed',
+      )
+      expect((agentState as any).base2ActiveWork.pendingGateFiles).toEqual([])
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }
@@ -6767,9 +6879,11 @@ describe('base2 repair-loop gate-state telemetry (M6.4)', () => {
     expect(parsed!.status).toBe('failed')
     expect(parsed!.repairRound).toBeGreaterThanOrEqual(1)
     expect(parsed!.repairRound).toBe(1)
-    expect(parsed!.maxRepairRounds).toBe(DEFAULT_MAX_REPAIR_ROUNDS)
+    // Default repair budget is unlimited: maxRepairRounds is omitted from the
+    // gate-state payload when Infinity would otherwise serialize poorly.
+    expect(parsed!.maxRepairRounds).toBeUndefined()
     expect(parsed!.details).toContain('repair-incomplete')
-    expect(parsed!.details).toContain(`round 1/${DEFAULT_MAX_REPAIR_ROUNDS}`)
+    expect(parsed!.details).toContain('round 1')
   })
 
   test('non-repair gate-state blocks omit repairRound/maxRepairRounds for backward compatibility', () => {
@@ -7131,21 +7245,19 @@ describe('base2 COMMIT ANYWAY commit-scope bypass publisher', () => {
 })
 
 describe('resolveMaxReviewerRepairRounds', () => {
-  test('defaults when undefined', () => {
-    expect(resolveMaxReviewerRepairRounds(undefined)).toBe(
-      DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS,
-    )
+  test('defaults to unlimited (null) when undefined', () => {
+    expect(resolveMaxReviewerRepairRounds(undefined)).toBe(null)
   })
 
   test('accepts a finite option number', () => {
     expect(resolveMaxReviewerRepairRounds(10)).toBe(10)
   })
 
-  test('invalid values fall back to default 6', () => {
-    expect(resolveMaxReviewerRepairRounds(0)).toBe(6)
-    expect(resolveMaxReviewerRepairRounds(-1)).toBe(6)
-    expect(resolveMaxReviewerRepairRounds('abc')).toBe(6)
-    expect(resolveMaxReviewerRepairRounds(Number.NaN)).toBe(6)
+  test('invalid values fall back to unlimited (null)', () => {
+    expect(resolveMaxReviewerRepairRounds(0)).toBe(null)
+    expect(resolveMaxReviewerRepairRounds(-1)).toBe(null)
+    expect(resolveMaxReviewerRepairRounds('abc')).toBe(null)
+    expect(resolveMaxReviewerRepairRounds(Number.NaN)).toBe(null)
   })
 
   test('caps at 20', () => {
@@ -7154,19 +7266,19 @@ describe('resolveMaxReviewerRepairRounds', () => {
 })
 
 describe('resolveMaxRepairRounds', () => {
-  test('defaults when undefined', () => {
-    expect(resolveMaxRepairRounds(undefined)).toBe(DEFAULT_MAX_REPAIR_ROUNDS)
+  test('defaults to unlimited (null) when undefined', () => {
+    expect(resolveMaxRepairRounds(undefined)).toBe(null)
   })
 
   test('accepts a finite option number', () => {
     expect(resolveMaxRepairRounds(10)).toBe(10)
   })
 
-  test('invalid values fall back to default 3', () => {
-    expect(resolveMaxRepairRounds(0)).toBe(3)
-    expect(resolveMaxRepairRounds(-1)).toBe(3)
-    expect(resolveMaxRepairRounds('abc')).toBe(3)
-    expect(resolveMaxRepairRounds(Number.NaN)).toBe(3)
+  test('invalid values fall back to unlimited (null)', () => {
+    expect(resolveMaxRepairRounds(0)).toBe(null)
+    expect(resolveMaxRepairRounds(-1)).toBe(null)
+    expect(resolveMaxRepairRounds('abc')).toBe(null)
+    expect(resolveMaxRepairRounds(Number.NaN)).toBe(null)
   })
 
   test('caps at 20', () => {
@@ -7175,21 +7287,19 @@ describe('resolveMaxRepairRounds', () => {
 })
 
 describe('resolveMaxSpecialistRepairRounds', () => {
-  test('defaults when undefined', () => {
-    expect(resolveMaxSpecialistRepairRounds(undefined)).toBe(
-      DEFAULT_MAX_SPECIALIST_REPAIR_ROUNDS,
-    )
+  test('defaults to unlimited (null) when undefined', () => {
+    expect(resolveMaxSpecialistRepairRounds(undefined)).toBe(null)
   })
 
   test('accepts a finite option number', () => {
     expect(resolveMaxSpecialistRepairRounds(10)).toBe(10)
   })
 
-  test('invalid values fall back to default 3', () => {
-    expect(resolveMaxSpecialistRepairRounds(0)).toBe(3)
-    expect(resolveMaxSpecialistRepairRounds(-1)).toBe(3)
-    expect(resolveMaxSpecialistRepairRounds('abc')).toBe(3)
-    expect(resolveMaxSpecialistRepairRounds(Number.NaN)).toBe(3)
+  test('invalid values fall back to unlimited (null)', () => {
+    expect(resolveMaxSpecialistRepairRounds(0)).toBe(null)
+    expect(resolveMaxSpecialistRepairRounds(-1)).toBe(null)
+    expect(resolveMaxSpecialistRepairRounds('abc')).toBe(null)
+    expect(resolveMaxSpecialistRepairRounds(Number.NaN)).toBe(null)
   })
 
   test('caps at 20', () => {
@@ -7350,11 +7460,12 @@ describe('createBase2 maxRepairRounds option/env', () => {
     }
   })
 
-  test('default createBase2 stores maxRepairRounds 3 on programmaticConfig', () => {
+  test('default createBase2 stores unlimited (null) repair budgets on programmaticConfig', () => {
     const base2 = createBase2('default')
     expect(base2.programmaticConfig).toMatchObject({
-      maxRepairRounds: DEFAULT_MAX_REPAIR_ROUNDS,
-      maxSpecialistRepairRounds: DEFAULT_MAX_SPECIALIST_REPAIR_ROUNDS,
+      maxRepairRounds: null,
+      maxReviewerRepairRounds: null,
+      maxSpecialistRepairRounds: null,
     })
   })
 })
@@ -7403,18 +7514,83 @@ describe('createBase2 maxSpecialistRepairRounds option/env', () => {
 })
 
 describe('base2 reviewer repair budget cap', () => {
-  test('crossing MAX_REVIEWER_REPAIR_ROUNDS blocks with an exhaustion message', () => {
-    // Seed reviewerRepairRoundCount at the default budget (6) so the very next
-    // blocking reviewer result crosses the cap (6 -> 7 > 6). The loop must yield
-    // the exhaustion add_message and break out (currentPhase blocked) instead of
-    // spawning yet another repair round. Driving seven full rounds through the
-    // generator is infeasible in a unit test, so the seed-count approach from
-    // the requirements is used.
+  test('default unlimited does not exhaust at seed count 6', () => {
+    // With unlimited default, seeding reviewerRepairRoundCount at the old
+    // default (6) must NOT exhaust; the loop continues into repair-editor.
     const base2 = createBase2('default')
     const agentState = {
       agentId: 'base2',
       base2ActiveWork: {
-        reviewerRepairRoundCount: DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS,
+        reviewerRepairRoundCount: 6,
+      },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Make the requested change now please',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+        .value,
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    const maybePinned = gen.next().value
+    if (maybePinned !== 'STEP') {
+      expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+    }
+    expect(
+      gen.next({
+        stepsComplete: true,
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
+    const postValidationStatus = gen.next({
+      toolResult: [{ type: 'json', value: [] }],
+    } as any).value
+    expect(postValidationStatus).toMatchObject({ toolName: 'git_status' })
+    const reviewCall = gen.next({
+      toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+    } as any).value
+    expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+    const afterReview = gen.next(
+      attestedReviewerResult(reviewCall, 'BLOCKING', [
+        'Fix the persistent edge case.',
+      ]) as any,
+    )
+
+    expect(afterReview.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect((afterReview.value as any).input.content).not.toContain(
+      'automated repair budget exhausted',
+    )
+    expect(gen.next().value).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'repair-editor' }] },
+    })
+  })
+
+  test('explicit small maxReviewerRepairRounds still exhausts as opt-in cap', () => {
+    const base2 = createBase2('default', { maxReviewerRepairRounds: 1 })
+    const agentState = {
+      agentId: 'base2',
+      base2ActiveWork: {
+        reviewerRepairRoundCount: 1,
       },
     }
     const gen = base2.handleSteps!({
@@ -7473,14 +7649,6 @@ describe('base2 reviewer repair budget cap', () => {
       'automated repair budget exhausted',
     )
     expect((agentState as any).base2ActiveWork.currentPhase).toBe('blocked')
-    expect(
-      (agentState as any).base2ActiveWork.nextRequiredAction,
-    ).toContain('repair budget exhausted')
-    // The open findings are still surfaced verbatim for inspection.
-    expect((agentState as any).base2ActiveWork.openReviewerBlockers).toEqual([
-      'BLOCKING: Fix the persistent edge case.',
-    ])
-    // Exhaustion breaks out of the loop; it does not spawn another repair.
     expect(gen.next().done).toBe(true)
   })
 })

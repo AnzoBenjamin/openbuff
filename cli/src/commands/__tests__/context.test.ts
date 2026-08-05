@@ -36,9 +36,9 @@ const buildLedger = (): ContextBudgetLedger => ({
 
 const defaultGateBudgets = () =>
   formatGateRepairBudgetsForCli({
-    maxRepairRounds: 3,
-    maxReviewerRepairRounds: 6,
-    maxSpecialistRepairRounds: 3,
+    maxRepairRounds: null,
+    maxReviewerRepairRounds: null,
+    maxSpecialistRepairRounds: null,
   })
 
 describe('handleContextCommand', () => {
@@ -116,9 +116,9 @@ describe('handleContextCommand', () => {
       expect(content).toContain('11')
       expect(content).toBe(
         formatGateRepairBudgetsForCli({
-          maxRepairRounds: 3,
+          maxRepairRounds: null,
           maxReviewerRepairRounds: 11,
-          maxSpecialistRepairRounds: 3,
+          maxSpecialistRepairRounds: null,
         }),
       )
     } finally {

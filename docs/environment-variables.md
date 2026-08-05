@@ -58,19 +58,20 @@ optional env canaries:
   option always wins over the env canary. When enabled with no unlocked tiers,
   the model-visible tool surface is CORE-only (mode gates still apply).
   Production stays off unless the canary or option is set.
-- `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS` — positive integer string for the
-  reviewer→repair→re-review budget (default `6`, max `20`). Invalid or missing
-  values fall back to `6`. Explicit `createBase2({ maxReviewerRepairRounds })`
-  always wins over the env canary. NON_BLOCKING findings also burn this budget
-  under LOOKS_GOOD-only finalization.
-- `OPENBUFF_MAX_REPAIR_ROUNDS` — positive integer string for the validation-hook
-  repair-editor budget (default `3`, max `20`). Invalid or missing values fall
-  back to `3`. Explicit `createBase2({ maxRepairRounds })` always wins over the
-  env canary.
-- `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS` — positive integer string for the
-  specialist→repair→re-review budget (default `3`, max `20`). Invalid or missing
-  values fall back to `3`. Explicit `createBase2({ maxSpecialistRepairRounds })`
-  always wins over the env canary.
+- `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS` — optional positive integer string that
+  caps the reviewer→repair→re-review loop (max `20`). Unset or invalid →
+  **unlimited** (progress-gated). Explicit
+  `createBase2({ maxReviewerRepairRounds })` always wins over the env.
+  NON_BLOCKING findings still burn the round counter under LOOKS_GOOD-only
+  finalization.
+- `OPENBUFF_MAX_REPAIR_ROUNDS` — optional positive integer string that caps
+  validation-hook repair-editor rounds (max `20`). Unset or invalid →
+  **unlimited** (progress-gated). Explicit `createBase2({ maxRepairRounds })`
+  always wins over the env.
+- `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS` — optional positive integer string that
+  caps the specialist→repair→re-review loop (max `20`). Unset or invalid →
+  **unlimited** (progress-gated). Explicit
+  `createBase2({ maxSpecialistRepairRounds })` always wins over the env.
 
 Do not document an `OPENBUFF_*` alias unless the code implements it.
 

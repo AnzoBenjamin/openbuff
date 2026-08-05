@@ -120,6 +120,7 @@ export function createBase2(
     )
   // Explicit option wins over env. When omitted, resolve from
   // OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS (positive integer string).
+  // Missing/invalid → null (unlimited, progress-gated). Positive int = optional cap.
   const maxReviewerRepairRounds = resolveMaxReviewerRepairRounds(
     maxReviewerRepairRoundsOption ??
       (typeof process === 'object' && process !== null
@@ -127,7 +128,8 @@ export function createBase2(
         : undefined),
   )
   // Explicit option wins over env. When omitted, resolve from
-  // OPENBUFF_MAX_REPAIR_ROUNDS (positive integer string). Default 3.
+  // OPENBUFF_MAX_REPAIR_ROUNDS (positive integer string).
+  // Missing/invalid → null (unlimited). Positive int = optional cap.
   const maxRepairRounds = resolveMaxRepairRounds(
     maxRepairRoundsOption ??
       (typeof process === 'object' && process !== null
@@ -135,7 +137,8 @@ export function createBase2(
         : undefined),
   )
   // Explicit option wins over env. When omitted, resolve from
-  // OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS (positive integer string). Default 3.
+  // OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS (positive integer string).
+  // Missing/invalid → null (unlimited). Positive int = optional cap.
   const maxSpecialistRepairRounds = resolveMaxSpecialistRepairRounds(
     maxSpecialistRepairRoundsOption ??
       (typeof process === 'object' && process !== null
@@ -660,31 +663,28 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
       const runReviewerGate = runValidationGate
       const reviewerAgentType = 'code-reviewer'
       const MAX_REVIEWER_NO_VERDICT_RETRIES = 1
-      // Validation-hook repair budget. Already resolved into programmaticConfig
-      // at createBase2 load time; re-clamp here with local literals only because
-      // handleSteps is serialized via toString/new Function and cannot call
-      // module-scope resolve helpers.
+      // Optional validation-hook repair cap. Already resolved into
+      // programmaticConfig at createBase2 load time (null = unlimited).
+      // Re-clamp here with local literals only because handleSteps is
+      // serialized via toString/new Function and cannot call module-scope
+      // resolve helpers. Missing/null/invalid → Infinity (progress guards only).
       const configuredMaxRepairRounds = config?.maxRepairRounds
       const MAX_REPAIR_ROUNDS =
         typeof configuredMaxRepairRounds === 'number' &&
         Number.isFinite(configuredMaxRepairRounds) &&
         configuredMaxRepairRounds >= 1
           ? Math.min(Math.floor(configuredMaxRepairRounds), 20)
-          : 3
-      // Reviewer→repair→re-review budget (also burned by NON_BLOCKING under
-      // LOOKS_GOOD-only finalization). Already resolved into programmaticConfig
-      // at createBase2 load time; re-clamp here with local literals only because
-      // handleSteps is serialized via toString/new Function and cannot call
-      // module-scope resolveMaxReviewerRepairRounds.
+          : Number.POSITIVE_INFINITY
+      // Optional reviewer→repair→re-review cap (also burned by NON_BLOCKING under
+      // LOOKS_GOOD-only finalization). null/omitted → unlimited.
       const configuredMaxReviewerRepairRounds = config?.maxReviewerRepairRounds
       const MAX_REVIEWER_REPAIR_ROUNDS =
         typeof configuredMaxReviewerRepairRounds === 'number' &&
         Number.isFinite(configuredMaxReviewerRepairRounds) &&
         configuredMaxReviewerRepairRounds >= 1
           ? Math.min(Math.floor(configuredMaxReviewerRepairRounds), 20)
-          : 6
-      // Specialist→repair→re-review budget. Same local re-clamp pattern;
-      // default stays 3 (unlike reviewer default 6).
+          : Number.POSITIVE_INFINITY
+      // Optional specialist→repair→re-review cap. null/omitted → unlimited.
       const configuredMaxSpecialistRepairRounds =
         config?.maxSpecialistRepairRounds
       const MAX_SPECIALIST_REPAIR_ROUNDS =
@@ -692,7 +692,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         Number.isFinite(configuredMaxSpecialistRepairRounds) &&
         configuredMaxSpecialistRepairRounds >= 1
           ? Math.min(Math.floor(configuredMaxSpecialistRepairRounds), 20)
-          : 3
+          : Number.POSITIVE_INFINITY
       const MAX_SPECIALIST_NO_VERDICT_RETRIES = 1
       // Single source of truth for the post-gate finalization instruction used
       // by every gate-pass path (fresh pass, conversation reuse, durable
@@ -2734,7 +2734,13 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                     activeWorkState.specialistRepairRoundCount =
                       specialistRepairRound
                     specialistBlocked = true
-                    if (specialistRepairRound > MAX_SPECIALIST_REPAIR_ROUNDS) {
+                    // Optional hard cap only when createBase2/env set a finite
+                    // maxSpecialistRepairRounds; default is unlimited and exits
+                    // via no-progress / incomplete-receipt / crash guards.
+                    if (
+                      Number.isFinite(MAX_SPECIALIST_REPAIR_ROUNDS) &&
+                      specialistRepairRound > MAX_SPECIALIST_REPAIR_ROUNDS
+                    ) {
                       activeWorkState.currentPhase = 'blocked'
                       activeWorkState.nextRequiredAction = `Specialist repair budget exhausted (${MAX_SPECIALIST_REPAIR_ROUNDS}/${MAX_SPECIALIST_REPAIR_ROUNDS}); the ${agentType} findings are still open. Stop retrying automatically and inspect the findings or handoff.`
                       activeWorkState.latestWorkSummary = `Specialist repair budget exhausted for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`
@@ -3431,15 +3437,24 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 failure,
               ),
             )
+            // Default unlimited: repair whenever failures are parseable.
+            // Optional finite MAX_REPAIR_ROUNDS (createBase2/env) still caps.
+            // Incomplete receipts / remaining failures / infrastructure path
+            // remain fail-closed as before (no budget-only escalation).
             const canRepair =
-              repairRound < MAX_REPAIR_ROUNDS && hasParseableFailures
+              hasParseableFailures &&
+              (!Number.isFinite(MAX_REPAIR_ROUNDS) ||
+                repairRound < MAX_REPAIR_ROUNDS)
             if (canRepair) {
               if (!activeWorkState.repairSessionId) {
                 activeWorkState.repairSessionId = `repair-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
               }
               activeWorkState.currentPhase = 'repair_loop'
               activeWorkState.repairRoundCount = repairRound + 1
-              activeWorkState.latestWorkSummary = `Repair round ${repairRound + 1}/${MAX_REPAIR_ROUNDS}: parsing ${failures.length} validation failure(s) and spawning targeted editor fix.`
+              const repairRoundLabel = Number.isFinite(MAX_REPAIR_ROUNDS)
+                ? `${repairRound + 1}/${MAX_REPAIR_ROUNDS}`
+                : `${repairRound + 1}`
+              activeWorkState.latestWorkSummary = `Repair round ${repairRoundLabel}: parsing ${failures.length} validation failure(s) and spawning targeted editor fix.`
               activeWorkState.nextRequiredAction = ''
               markActiveWorkStateChanged()
               emitGateTelemetry({
@@ -3616,7 +3631,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               )
               if (repairChangedFiles.length > 0) {
                 recordChangedFiles(repairChangedFiles, { fromRepair: true })
-                activeWorkState.latestWorkSummary = `Repair editor (round ${repairRound + 1}/${MAX_REPAIR_ROUNDS}) fixed: ${repairChangedFiles.join(', ')}`
+                activeWorkState.latestWorkSummary = `Repair editor (round ${repairRoundLabel}) fixed: ${repairChangedFiles.join(', ')}`
                 markActiveWorkStateChanged()
               }
               const reVerify = yield {
@@ -3649,7 +3664,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 activeWorkState.lastReviewerGateSkipReason =
                   'validation-hook-failures'
                 activeWorkState.currentPhase = 'blocked'
-                activeWorkState.latestWorkSummary = `Repair editor (round ${repairRound + 1}/${MAX_REPAIR_ROUNDS}) ran but ${reFailures.length} failure(s) remain.`
+                activeWorkState.latestWorkSummary = `Repair editor (round ${repairRoundLabel}) ran but ${reFailures.length} failure(s) remain.`
                 markActiveWorkStateChanged()
                 emitGateTelemetry({
                   currentPhase: 'blocked',
@@ -3665,7 +3680,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                   input: {
                     role: 'user',
                     content: [
-                      `Automated repair editor ran (round ${repairRound + 1}/${MAX_REPAIR_ROUNDS}) but ${reFailures.length} validation failure(s) remain. Fix these before ending your turn:`,
+                      `Automated repair editor ran (round ${repairRoundLabel}) but ${reFailures.length} validation failure(s) remain. Fix these before ending your turn:`,
                       '',
                       ...reFailures,
                       '',
@@ -3673,7 +3688,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                       formatGateStateBlock(
                         'validation',
                         'failed',
-                        `repair-incomplete: round ${repairRound + 1}/${MAX_REPAIR_ROUNDS}; ${reFailures.length} failure(s) remain for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`,
+                        `repair-incomplete: round ${repairRoundLabel}; ${reFailures.length} failure(s) remain for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`,
                         repairRound + 1,
                       ),
                     ].join('\n'),
@@ -3683,190 +3698,9 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 continue
               }
             } else {
-              const canEscalate =
-                hasParseableFailures && !activeWorkState.repairEscalationDone
-              if (canEscalate) {
-                activeWorkState.currentPhase = 'repair_loop'
-                activeWorkState.repairEscalationDone = true
-                activeWorkState.latestWorkSummary = `Repair budget exhausted (${MAX_REPAIR_ROUNDS}/${MAX_REPAIR_ROUNDS}); spawning one escalation editor with broader root-cause context.`
-                activeWorkState.nextRequiredAction = ''
-                markActiveWorkStateChanged()
-                emitGateTelemetry({
-                  currentPhase: 'repair_loop',
-                  pendingFileCount: pendingGateFiles.size,
-                  pendingFiles: Array.from(pendingGateFiles),
-                  validationStatus: 'failed',
-                  repairRound: MAX_REPAIR_ROUNDS,
-                  blockerCount: failures.length,
-                  reuseReason: 'repair-budget-escalation',
-                })
-                const escalate = yield {
-                  toolName: 'spawn_agents',
-                  input: {
-                    agents: [
-                      {
-                        agent_type: 'repair-editor',
-                        handoff: {
-                          schemaVersion: 1,
-                          taskId:
-                            activeWorkState.repairSessionId ??
-                            'validation-escalation',
-                          role: 'repair-editor',
-                          objective:
-                            'Resolve the exhausted validation failures through root-cause repair.',
-                          requirements: failures.map(
-                            (text: string, index: number) => ({
-                              id: `VF-${index + 1}`,
-                              text,
-                              required: true,
-                            }),
-                          ),
-                          acceptanceCriteria: [
-                            {
-                              id: 'validation-passes',
-                              behavior:
-                                'The root cause of every remaining validation failure is resolved.',
-                              verification:
-                                'The parent reruns the targeted validation gate on the resulting workspace snapshot.',
-                            },
-                          ],
-                          context: [],
-                          invariants: [
-                            'Read each live target before editing.',
-                            'Do not modify files outside the pending gate file set.',
-                          ],
-                          nonGoals: [
-                            'Speculative refactors or unrelated cleanup.',
-                          ],
-                          risks: [
-                            'Repeated surface-level fixes can hide the actual root cause.',
-                          ],
-                          unknowns: [],
-                          findings: failures.map(
-                            (text: string, index: number) => ({
-                              id: `VF-${index + 1}`,
-                              text,
-                              files: Array.from(pendingGateFiles),
-                              snapshotFingerprint: buildGateFingerprint(
-                                Array.from(pendingGateFiles),
-                                validationSummary,
-                              ),
-                            }),
-                          ),
-                          permissions: {
-                            readablePaths: repairEditorReadablePaths(
-                              [
-                                ...pendingGateFiles,
-                                ...parsed.map((p: { file: string }) => p.file),
-                              ],
-                              failures,
-                            ),
-                            writablePaths: Array.from(
-                              new Set([
-                                ...pendingGateFiles,
-                                ...parsed.map((p: { file: string }) => p.file),
-                              ]),
-                            ),
-                            allowedTools: [
-                              'read_files',
-                              'read_outline',
-                              'read_subtree',
-                              'edit_transaction',
-                            ],
-                          },
-                          workspaceRevision:
-                            mutableAgentState.workspaceState?.revision,
-                          workspaceSnapshotId:
-                            mutableAgentState.workspaceState?.snapshotId,
-                          artifacts: [],
-                          successCriteria: ['Targeted validation passes.'],
-                          constraints: [
-                            'Keep every change causally tied to a supplied failure.',
-                          ],
-                        },
-                        prompt: buildEscalationEditorPrompt(
-                          parsed,
-                          Array.from(pendingGateFiles),
-                          MAX_REPAIR_ROUNDS,
-                        ),
-                      },
-                    ],
-                  },
-                } as any
-                const escalationFindingIds = failures.map(
-                  (_text: string, index: number) => `VF-${index + 1}`,
-                )
-                const escalationReceipt = extractAgentReceipt(
-                  (escalate as any)?.toolResult ?? escalate,
-                )
-                const escalationHasProgress =
-                  !!escalationReceipt &&
-                  escalationReceipt.changedFiles.some(
-                    (file: { path: string }) =>
-                      typeof file.path === 'string' &&
-                      file.path.trim().length > 0,
-                  )
-                if (
-                  !escalationReceipt ||
-                  (!escalationHasProgress &&
-                    (escalationReceipt.status !== 'completed' ||
-                      escalationFindingIds.some(
-                        (id: string) =>
-                          !escalationReceipt.findingsAddressed.includes(id),
-                      )))
-                ) {
-                  activeWorkState.currentPhase = 'blocked'
-                  activeWorkState.nextRequiredAction =
-                    'Escalation repair-editor did not return a completed receipt addressing every validation failure.'
-                  activeWorkState.latestWorkSummary =
-                    'Validation escalation receipt was incomplete or missing.'
-                  markActiveWorkStateChanged()
-                  break
-                }
-                const escalateGitStatus = yield {
-                  toolName: 'git_status',
-                  input: {},
-                } as any
-                const escalateChangedFiles = extractGitStatusFiles(
-                  (escalateGitStatus as any)?.toolResult,
-                ).filter(
-                  (file: string) =>
-                    !initialGitStatusFiles.includes(file) &&
-                    !gatePassedFiles.has(file),
-                )
-                if (escalateChangedFiles.length > 0) {
-                  recordChangedFiles(escalateChangedFiles, { fromRepair: true })
-                  activeWorkState.latestWorkSummary = `Escalation editor fixed: ${escalateChangedFiles.join(', ')}`
-                  markActiveWorkStateChanged()
-                }
-                const escalateVerify = yield {
-                  toolName: 'run_file_change_hooks',
-                  input: { files: Array.from(pendingGateFiles) },
-                } as any
-                const escalateFailures = collectHookFailures(
-                  (escalateVerify as any) && (escalateVerify as any).toolResult,
-                )
-                if (escalateFailures.length === 0) {
-                  validationSummary = summarizeHookResults(
-                    (escalateVerify as any) &&
-                      (escalateVerify as any).toolResult,
-                  )
-                  activeWorkState.lastValidationSummary = validationSummary
-                  activeWorkState.currentPhase = 'awaiting_review'
-                  activeWorkState.nextRequiredAction = ''
-                  markActiveWorkStateChanged()
-                  emitGateTelemetry({
-                    currentPhase: 'awaiting_review',
-                    pendingFileCount: pendingGateFiles.size,
-                    pendingFiles: Array.from(pendingGateFiles),
-                    validationStatus: 'passed',
-                    repairRound: MAX_REPAIR_ROUNDS,
-                    reuseReason: 'escalation-succeeded',
-                  })
-                  continue
-                }
-                failures = escalateFailures
-              }
+              // Unparseable failures, infrastructure failures, or optional
+              // hard cap exhausted. Prefer reduced-assurance for pure
+              // infrastructure; otherwise block. No budget-only escalation.
               if (!hasParseableFailures && hasInfrastructureFailures) {
                 validationSummary = `REDUCED_ASSURANCE: Validation infrastructure could not produce source diagnostics: ${failures.join(' | ')}`
                 activeWorkState.validationInfrastructureBypassFingerprint =
@@ -3900,9 +3734,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 pendingFiles: Array.from(pendingGateFiles),
                 validationStatus: 'failed',
                 skipReason: hasParseableFailures
-                  ? activeWorkState.repairEscalationDone
-                    ? 'escalation-exhausted'
-                    : 'repair-budget-exhausted'
+                  ? 'repair-budget-exhausted'
                   : 'unparseable-failures',
                 blockerCount: failures.length,
                 repairRound,
@@ -3921,7 +3753,9 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                       'validation',
                       'failed',
                       `validation-hook-failures: ${failures.length} hook failure(s) for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`,
-                      MAX_REPAIR_ROUNDS,
+                      Number.isFinite(MAX_REPAIR_ROUNDS)
+                        ? MAX_REPAIR_ROUNDS
+                        : repairRound,
                     ),
                   ].join('\n'),
                 },
@@ -4210,16 +4044,15 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             activeWorkState.reviewerRepairRoundCount = Number(
               activeWorkState.reviewerRepairRoundCount ?? 0,
             ) + 1
-            // Hard round cap for the reviewer -> repair -> re-review loop,
-            // mirroring MAX_REPAIR_ROUNDS for validation repairs. NON_BLOCKING
-            // findings also burn this budget under LOOKS_GOOD-only finalization.
-            // The snapshot-progress guard below already breaks when a repair
-            // makes no fingerprint change; this adds an explicit upper bound so
-            // a repair that keeps producing snapshot-visible churn without ever
-            // clearing the finding cannot loop indefinitely.
+            // Optional hard round cap for the reviewer -> repair -> re-review
+            // loop when createBase2/env set a finite maxReviewerRepairRounds.
+            // Default is unlimited; NON_BLOCKING findings still burn the counter
+            // for telemetry. The snapshot-progress guard below breaks when a
+            // repair makes no fingerprint change.
             if (
+              Number.isFinite(MAX_REVIEWER_REPAIR_ROUNDS) &&
               Number(activeWorkState.reviewerRepairRoundCount ?? 0) >
-              MAX_REVIEWER_REPAIR_ROUNDS
+                MAX_REVIEWER_REPAIR_ROUNDS
             ) {
               // Preserve other families' open findings while recording this
               // code-reviewer blocker set (budget exhausted before full merge
@@ -5123,7 +4956,11 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           repairRound >= 0
         ) {
           payload.repairRound = repairRound
-          payload.maxRepairRounds = MAX_REPAIR_ROUNDS
+          // Only emit a finite optional cap; unlimited (Infinity) is omitted
+          // so JSON stays finite and CLI consumers do not see null/Infinity.
+          if (Number.isFinite(MAX_REPAIR_ROUNDS)) {
+            payload.maxRepairRounds = MAX_REPAIR_ROUNDS
+          }
         }
         return `<gate-state>${JSON.stringify(payload)}</gate-state>`
       }
@@ -7983,12 +7820,15 @@ function hashGateSnapshotDetails(details: string): string {
       }
 
       // Derive the cumulative final-gate scope from the live dirty set and the
-      // complete task-related path ledger. This helper is inline because
-      // handleSteps is serialized through toString()/new Function().
+      // complete task-related path ledger. Already-credited (gatePassedFiles)
+      // dirty files stay out of gate scope: they remain dirty for commit UX /
+      // uncommittedUnvalidated, but must not re-arm validation/review.
+      // Marker eviction + unreviewed re-arm still handle real content drift.
+      // Inline because handleSteps is serialized through toString()/new Function().
       function deriveGateScopeFiles(dirtyFiles: string[]): string[] {
         const taskRelatedFiles = collectTaskRelatedFiles()
-        return normalizeGateFileList(dirtyFiles).filter((file) =>
-          taskRelatedFiles.has(file),
+        return normalizeGateFileList(dirtyFiles).filter(
+          (file) => taskRelatedFiles.has(file) && !gatePassedFiles.has(file),
         )
       }
 
