@@ -22,14 +22,441 @@ const WORKSPACE_DENY_PATTERNS: Array<[RegExp, string]> = [
   ],
   [/\brm\s+-[^\n]*r[^\n]*\s+\/(?:\s|$)/i, 'root deletion is forbidden'],
   [
-    /^(?:env|printenv|set|export)(?:\s|$)/i,
-    'dumping the inherited process environment is not allowed',
-  ],
-  [
     /^git\s+push\b[\s\S]*(?:--force(?:-with-lease)?|-f\b|--delete\b)/i,
     'force and delete pushes are not allowed',
   ],
 ]
+
+const WORKSPACE_ENV_DUMP_REASON =
+  'dumping the inherited process environment is not allowed'
+const READ_ONLY_ENV_DUMP_REASON =
+  'dumping or mutating the process environment is not allowed'
+
+/**
+ * True when `set` arguments are only shell option toggles (`-e`, `+x`,
+ * `-o pipefail`, `-euo pipefail`, …). Positional/`--` forms are not safe:
+ * they can rewrite `$@` rather than just enable errexit/pipefail.
+ */
+function isSafeShellSetOptions(rest: string): boolean {
+  const trimmed = rest.trim()
+  if (!trimmed) return false
+  const tokens = trimmed.split(/\s+/)
+  let index = 0
+  while (index < tokens.length) {
+    const token = tokens[index]
+    if (!/^[+-][A-Za-z]+$/.test(token)) return false
+    // `-o` / `+o` (alone or at the end of a cluster like `-euo`) consume the
+    // next token as the option name (`pipefail`, `noclobber`, …).
+    if (token.slice(1).endsWith('o')) {
+      const optionName = tokens[index + 1]
+      if (!optionName || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(optionName)) {
+        return false
+      }
+      index += 2
+      continue
+    }
+    index += 1
+  }
+  return true
+}
+
+/** `export NAME` / `export NAME=value` (possibly repeated); not `export -p`. */
+function isExportAssignmentForm(rest: string): boolean {
+  const tokens = rest.trim().split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return false
+  return tokens.every(
+    (token) =>
+      /^[A-Za-z_][A-Za-z0-9_]*$/.test(token) ||
+      /^[A-Za-z_][A-Za-z0-9_]*=/.test(token),
+  )
+}
+
+/**
+ * `env` with a real utility to run after optional POSIX assignments/options.
+ * Bare `env` and assignment-only forms dump the environment and stay denied.
+ */
+function envRestHasCommand(rest: string): boolean {
+  return envRestUtilityBasename(rest) !== undefined
+}
+
+/**
+ * Basename of the utility `env` would exec after options/assignments, or
+ * `undefined` when the rest is dump-only / unparseable.
+ */
+function envRestUtilityBasename(rest: string): string | undefined {
+  const tokens = rest.trim().split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return undefined
+  let index = 0
+  let optionsEnded = false
+  while (index < tokens.length) {
+    const token = tokens[index]
+    if (!optionsEnded && token === '--') {
+      optionsEnded = true
+      index += 1
+      continue
+    }
+    if (
+      !optionsEnded &&
+      (token === '-i' ||
+        token === '--ignore-environment' ||
+        token === '-0' ||
+        token === '--null')
+    ) {
+      // `-0`/`--null` are GNU dump-format flags (null-terminated lines). Skip
+      // like `-i` so bare `env -0` stays dump-only while `env -0 true` keeps a
+      // utility. Unknown/clustered dash options still fail closed below.
+      index += 1
+      continue
+    }
+    if (!optionsEnded && (token === '-u' || token === '--unset')) {
+      if (!tokens[index + 1]) return undefined
+      index += 2
+      continue
+    }
+    if (!optionsEnded && token.startsWith('--unset=')) {
+      index += 1
+      continue
+    }
+    if (!optionsEnded && token.startsWith('-')) {
+      // Unknown/clustered env options: fail closed (treat as non-run form).
+      return undefined
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
+      index += 1
+      continue
+    }
+    return (
+      token
+        .split('/')
+        .filter(Boolean)
+        .at(-1)
+        ?.toLowerCase() ?? undefined
+    )
+  }
+  return undefined
+}
+
+/** Read-only: `-a`/`allexport` and `-x`/`xtrace` mutate or mirror the environment. */
+function hasMutationOrientedShellSetOptions(rest: string): boolean {
+  const tokens = rest.trim().split(/\s+/).filter(Boolean)
+  let index = 0
+  while (index < tokens.length) {
+    const token = tokens[index]
+    if (!/^[+-][A-Za-z]+$/.test(token)) return false
+    const body = token.slice(1)
+    if (body.endsWith('o')) {
+      const optionName = tokens[index + 1]?.toLowerCase()
+      if (optionName === 'allexport' || optionName === 'xtrace') return true
+      if (/[ax]/i.test(body.slice(0, -1))) return true
+      index += 2
+      continue
+    }
+    if (/[ax]/i.test(body)) return true
+    index += 1
+  }
+  return false
+}
+
+function classifyShellSetIssue(
+  rest: string,
+  style: 'workspace' | 'read-only',
+  reason: string,
+): string | undefined {
+  if (!isSafeShellSetOptions(rest)) return reason
+  if (style === 'read-only' && hasMutationOrientedShellSetOptions(rest)) {
+    return reason
+  }
+  return undefined
+}
+
+function classifyExportIssue(
+  rest: string,
+  style: 'workspace' | 'read-only',
+  reason: string,
+): string | undefined {
+  if (!rest || /^-p(?:\s|$)/i.test(rest)) return reason
+  if (isExportAssignmentForm(rest)) {
+    return style === 'read-only' ? reason : undefined
+  }
+  return reason
+}
+
+/**
+ * Execution wrappers that only shift argv before a real utility. Unwrapped
+ * during env-dump resolution so `nice printenv` / `timeout 1 env` still deny.
+ * Keep in sync with the wrapper names listed in TMUX_UNSAFE_EXECUTABLES.
+ */
+const ENVIRONMENT_DUMP_EXEC_WRAPPERS = new Set([
+  'nice',
+  'nohup',
+  'stdbuf',
+  'timeout',
+  'time',
+  'setsid',
+  'chrt',
+  'ionice',
+  'flock',
+  'unshare',
+])
+
+/**
+ * Advance past an execution wrapper and conservative option/operand forms.
+ * Returns the index of the trailing utility, or `undefined` when the wrapper
+ * form is incomplete or option arity is too ambiguous to unwrap safely.
+ */
+function advancePastEnvironmentDumpWrapper(
+  executable: string,
+  tokens: TmuxShellWord[],
+  wrapperIndex: number,
+): number | undefined {
+  let index = wrapperIndex + 1
+  while (index < tokens.length) {
+    const argument = tokens[index].value
+    if (argument === '--') {
+      index += 1
+      break
+    }
+    if (!(argument.startsWith('-') && argument !== '-')) break
+    index += 1
+    // Separate numeric option args only (`nice -n 10`, `timeout -s 9`, …).
+    // Non-numeric next tokens are treated as the utility (`time -p printenv`).
+    const next = tokens[index]?.value
+    if (next && !next.startsWith('-') && /^-?\d/.test(next)) {
+      index += 1
+    }
+  }
+  // Positional preamble required before the utility for some wrappers.
+  if (index < tokens.length && (executable === 'timeout' || executable === 'flock')) {
+    index += 1
+  } else if (
+    index < tokens.length &&
+    (executable === 'chrt' || executable === 'nice') &&
+    /^-?\d/.test(tokens[index].value)
+  ) {
+    index += 1
+  }
+  return index < tokens.length ? index : undefined
+}
+
+/**
+ * Resolve dump builtins after leading assignments, `env` wrappers, `command`,
+ * `busybox` applet launchers, execution wrappers (`nice`/`timeout`/…), and
+ * path basenames. Unlike resolveTmuxCommand, a terminal `env` with no utility
+ * is returned as `env` (dump) rather than an unsafe wrapper.
+ */
+function resolveEnvironmentDumpCommand(segment: string): {
+  executable: string
+  arguments: string[]
+} {
+  const tokens = tokenizeTmuxShellWords(segment)
+  if (!tokens) return { executable: '__unsafe-tmux-wrapper__', arguments: [] }
+  let index = 0
+
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index]?.value ?? '')) {
+    index += 1
+  }
+
+  while (index < tokens.length) {
+    const token = tokens[index]
+    const executable = token.value
+      .split('/')
+      .filter(Boolean)
+      .at(-1)
+      ?.toLowerCase()
+    if (!executable || !/^[a-z0-9._+-]+$/.test(executable)) {
+      return { executable: '__unsafe-tmux-wrapper__', arguments: [] }
+    }
+
+    if (executable === 'env') {
+      index += 1
+      let optionsEnded = false
+      while (index < tokens.length) {
+        const argument = tokens[index].value
+        if (!optionsEnded && argument === '--') {
+          optionsEnded = true
+          index += 1
+        } else if (
+          !optionsEnded &&
+          (argument === '-i' ||
+            argument === '--ignore-environment' ||
+            argument === '-0' ||
+            argument === '--null')
+        ) {
+          // Skip GNU null-terminated dump flags like `-i` so bare `env -0`
+          // remains dump-only while `env -0 true` continues to the utility.
+          index += 1
+        } else if (
+          !optionsEnded &&
+          (argument === '-u' || argument === '--unset')
+        ) {
+          if (!tokens[index + 1]) {
+            return { executable: '__unsafe-tmux-wrapper__', arguments: [] }
+          }
+          index += 2
+        } else if (!optionsEnded && argument.startsWith('--unset=')) {
+          index += 1
+        } else if (!optionsEnded && argument.startsWith('-')) {
+          return { executable: '__unsafe-tmux-wrapper__', arguments: [] }
+        } else if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(argument)) {
+          index += 1
+        } else {
+          break
+        }
+      }
+      if (index >= tokens.length) {
+        return { executable: 'env', arguments: [] }
+      }
+      continue
+    }
+    if (executable === 'command') {
+      index += 1
+      // POSIX `command -p/-v/-V` are safe to unwrap; any other dash option is
+      // dump-ambiguous and fails closed via the unsafe wrapper marker.
+      while (index < tokens.length) {
+        const argument = tokens[index].value
+        if (argument === '--') {
+          index += 1
+          break
+        }
+        if (argument.startsWith('-')) {
+          if (/^-[pvV]+$/.test(argument)) {
+            index += 1
+            continue
+          }
+          return { executable: '__unsafe-tmux-wrapper__', arguments: [] }
+        }
+        break
+      }
+      if (index >= tokens.length) {
+        return { executable: '__unsafe-tmux-wrapper__', arguments: [] }
+      }
+      continue
+    }
+    // busybox is an applet launcher (`busybox env`, `/usr/bin/busybox printenv`).
+    // Advance past it so the next token is re-classified as the real utility.
+    if (executable === 'busybox') {
+      index += 1
+      if (index >= tokens.length) {
+        return { executable: '__unsafe-tmux-wrapper__', arguments: [] }
+      }
+      continue
+    }
+    if (ENVIRONMENT_DUMP_EXEC_WRAPPERS.has(executable)) {
+      const nextIndex = advancePastEnvironmentDumpWrapper(
+        executable,
+        tokens,
+        index,
+      )
+      if (nextIndex === undefined) {
+        return { executable: '__unsafe-tmux-wrapper__', arguments: [] }
+      }
+      index = nextIndex
+      continue
+    }
+    return {
+      executable,
+      arguments: tokens.slice(index + 1).map((argument) => argument.raw),
+    }
+  }
+  return { executable: '__unsafe-tmux-wrapper__', arguments: [] }
+}
+
+/**
+ * Segment-level gate for env/printenv/set/export. Workspace style blocks
+ * dumps but allows option-only `set`, `export NAME[=value]`, and
+ * `env NAME=value cmd` when the utility is not itself a dumper. Read-only
+ * also blocks env mutation forms. Wrappers (`command`, `busybox`, assignments,
+ * paths, nested `env`) resolve before the dump check.
+ */
+function findProcessEnvironmentIssue(
+  segment: string,
+  style: 'workspace' | 'read-only',
+): string | undefined {
+  const reason =
+    style === 'workspace' ? WORKSPACE_ENV_DUMP_REASON : READ_ONLY_ENV_DUMP_REASON
+  const trimmed = segment.trim()
+
+  // Bare leading builtins: preserve safe set / export assignment / env+cmd.
+  const leading = /^(env|printenv|set|export)(?:\s+(.*))?$/i.exec(trimmed)
+  if (leading) {
+    const builtin = leading[1].toLowerCase()
+    const rest = (leading[2] ?? '').trim()
+
+    if (builtin === 'set') {
+      return classifyShellSetIssue(rest, style, reason)
+    }
+    if (builtin === 'printenv') {
+      return reason
+    }
+    if (builtin === 'export') {
+      return classifyExportIssue(rest, style, reason)
+    }
+    // env: bare / assignment-only dumps; read-only treats any env as dump/mutation.
+    // Workspace with a utility falls through to resolver so nested `env env true`
+    // allows while `env printenv` / terminal `env` still deny.
+    if (!rest || !envRestHasCommand(rest)) return reason
+    if (style === 'read-only') return reason
+  }
+
+  const resolved = resolveEnvironmentDumpCommand(trimmed)
+  if (resolved.executable === '__unsafe-tmux-wrapper__') {
+    // Fail closed for dump-adjacent ambiguity (e.g. `command -x printenv` or
+    // untokenizable junk that still names a dumper). Non-dump segments that
+    // merely tokenize poorly stay allowed so ordinary workspace commands are
+    // not false-denied by the env-dump gate.
+    if (/\b(?:printenv|env|export|set)\b/i.test(trimmed)) {
+      return reason
+    }
+    return undefined
+  }
+
+  if (resolved.executable === 'printenv' || resolved.executable === 'env') {
+    return reason
+  }
+  if (resolved.executable === 'set') {
+    return classifyShellSetIssue(
+      resolved.arguments.join(' '),
+      style,
+      reason,
+    )
+  }
+  if (resolved.executable === 'export') {
+    return classifyExportIssue(
+      resolved.arguments.join(' '),
+      style,
+      reason,
+    )
+  }
+  return undefined
+}
+
+
+function findProcessEnvironmentIssueInCommand(
+  command: string,
+  style: 'workspace' | 'read-only',
+): string | undefined {
+  const reason =
+    style === 'workspace' ? WORKSPACE_ENV_DUMP_REASON : READ_ONLY_ENV_DUMP_REASON
+  // Double-quoted `$(…)`/backticks stay active and can hide dumps, but
+  // splitReadOnlyShellSegments only fails closed on unquoted substitution.
+  // Process substitution `<(…)` / `>(…)` similarly conceals dump utilities.
+  if (
+    hasActiveCommandSubstitution(command) ||
+    hasActiveProcessSubstitution(command)
+  ) {
+    return reason
+  }
+  const segments = splitReadOnlyShellSegments(command)
+  // Unparseable composition can hide `printenv`/`env`; fail closed.
+  if (!segments) {
+    return reason
+  }
+  for (const segment of segments) {
+    const issue = findProcessEnvironmentIssue(segment, style)
+    if (issue) return issue
+  }
+  return undefined
+}
 
 const DEPENDENCY_MUTATION_COMMANDS = [
   /^(?:npm|pnpm|yarn|bun)\s+(?:install|add|remove|update)(?:\s|$)/i,
@@ -68,6 +495,10 @@ type ShellSyntaxMatcher = (state: ShellSyntaxScanState) => boolean
 /** Backticks and `$(` substitution stay active unquoted and in double quotes. */
 const isCommandSubstitution: ShellSyntaxMatcher = ({ command, index, char }) =>
   char === '`' || (char === '$' && command[index + 1] === '(')
+
+/** Process substitution is active only when unquoted (not inside double quotes). */
+const isProcessSubstitution: ShellSyntaxMatcher = ({ command, index, char }) =>
+  (char === '<' || char === '>') && command[index + 1] === '('
 
 /** Any `$` outside single quotes starts an expansion the policy must inspect. */
 const isParameterExpansion: ShellSyntaxMatcher = ({ char }) => char === '$'
@@ -138,6 +569,13 @@ function hasActiveCommandSubstitution(command: string): boolean {
   return scanActiveShellSyntax(command, {
     unquoted: isCommandSubstitution,
     doubleQuoted: isCommandSubstitution,
+  })
+}
+
+/** Detect unquoted process substitution `<(…)` / `>(…)` used to hide utilities. */
+function hasActiveProcessSubstitution(command: string): boolean {
+  return scanActiveShellSyntax(command, {
+    unquoted: isProcessSubstitution,
   })
 }
 
@@ -699,16 +1137,15 @@ function findReadOnlyDanger(command: string): string | undefined {
     return 'dependency mutation is not allowed in read-only mode'
   }
 
+  const envIssue = findProcessEnvironmentIssue(command, 'read-only')
+  if (envIssue) return envIssue
+
   const dangerousCommands: Array<[RegExp, string]> = [
     [
       /^(?:(?:env\s+)?(?:command\s+)?(?:bash|sh|zsh|dash|fish)|eval|source)\b/i,
       'shell indirection requires an explicit full-access workflow',
     ],
     [/^(?:sudo|su)\b/i, 'privilege escalation is not allowed'],
-    [
-      /^(?:env|printenv|set|export)(?:\s|$)/i,
-      'dumping or mutating the process environment is not allowed',
-    ],
     [
       /^(?:perl|awk|sed|ruby)\b[\s\S]*?(?:--in-place(?:=|\s|$)|\s-[a-zA-Z]*i(?:\.[^\s]*)?(?=\s|$))/i,
       'in-place file edits are not allowed in read-only mode',
@@ -1353,8 +1790,8 @@ export function evaluateTerminalCommandPolicy(params: {
   if (params.permissionProfile !== 'full-access') {
     // tmux-test keeps its own workspace-write guard above and skips the
     // shell-indirection and workspace deny patterns so it can drive tmux
-    // fixtures, but outside-absolute-path containment applies to it too, so
-    // reads like `cat /etc/passwd` or `cat ~/.ssh/id_rsa` stay blocked.
+    // fixtures, but env-dump policy and outside-absolute-path containment
+    // still apply, so `printenv` / `cat /etc/passwd` stay blocked.
     if (params.permissionProfile !== 'tmux-test') {
       if (/(?:^|[;&|(\n]\s*)(?:eval|source)\b|\b(?:bash|sh|zsh|fish)\s+-c\b/i.test(command)) {
         return {
@@ -1366,6 +1803,8 @@ export function evaluateTerminalCommandPolicy(params: {
         if (pattern.test(command)) return { allowed: false, reason }
       }
     }
+    const envIssue = findProcessEnvironmentIssueInCommand(command, 'workspace')
+    if (envIssue) return { allowed: false, reason: envIssue }
     const outsidePath = findOutsideAbsolutePath(command, params.projectRoot)
     if (outsidePath) {
       return {

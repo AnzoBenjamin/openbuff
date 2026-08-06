@@ -147,6 +147,19 @@ describe('terminal command permission policy', () => {
       'bun add left-pad',
       'curl https://example.com/asset.glb',
       'kubectl apply -f deploy.yaml',
+      // Option-only `set` is not an environment dump (basher / strict-mode prelude).
+      'set -euo pipefail',
+      'set -o pipefail',
+      'set -euo pipefail; git status --short',
+      'export FOO=bar',
+      // env with a non-dump utility is assignment wrapping, not an env dump.
+      // Keep assignment values project-safe: absolute paths still trip containment.
+      'env FOO=bar true',
+      'env CI=1 bun test',
+      // Null-terminated dump flags still leave a non-dump utility runnable.
+      'env -0 true',
+      // busybox non-dump applets are not env dumps under workspace-write.
+      'busybox true',
     ]) {
       expect(
         evaluateTerminalCommandPolicy({
@@ -162,6 +175,46 @@ describe('terminal command permission policy', () => {
       'cat /etc/passwd',
       'cat ~/.config/openbuff/config',
       'printenv',
+      'set',
+      'env',
+      'export',
+      'export -p',
+      'pwd; printenv',
+      // Nested/wrapped/path dump forms must not slip past bare-leading checks.
+      'env printenv',
+      'env env',
+      'env /usr/bin/printenv',
+      'env FOO=1 printenv',
+      'command printenv',
+      '/usr/bin/printenv',
+      'FOO=1 printenv',
+      'pwd; command printenv',
+      'echo $(printenv)',
+      'echo $(env)',
+      // Double-quoted substitution stays active and must not bypass the dump gate.
+      'echo "$(printenv)"',
+      'echo "`printenv`"',
+      // `command -p` and execution wrappers must unwrap before dump classification.
+      'command -p printenv',
+      'nice printenv',
+      'timeout 1 printenv',
+      'nohup env',
+      // busybox applet launcher must unwrap dump applets (env/printenv/export).
+      'busybox env',
+      'busybox printenv',
+      '/usr/bin/busybox env',
+      'busybox export -p',
+      // GNU env null-terminated dump flags (bare / dump utility).
+      'env -0',
+      'env --null',
+      'env -0 printenv',
+      // export -p wrappers (bare export -p already denied above).
+      'command export -p',
+      'command -p export -p',
+      'nice export -p',
+      'FOO=1 export -p',
+      // Process substitution can hide printenv from bare-leading checks.
+      'cat <(printenv)',
       'cat /tmp/../../etc/passwd',
       'bash -c "cat /etc/passwd"',
       'eval "git push origin main"',
@@ -172,6 +225,73 @@ describe('terminal command permission policy', () => {
           command,
           mode: 'assistant',
           permissionProfile: 'workspace-write',
+          projectRoot,
+        }).allowed,
+      ).toBe(false)
+    }
+  })
+
+  it('denies process environment dumps under tmux-test without re-enabling workspace deny patterns', () => {
+    for (const command of [
+      'printenv',
+      'env',
+      'command printenv',
+      '/usr/bin/printenv',
+      'busybox env',
+      'env -0',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'tmux-test',
+          projectRoot,
+        }).allowed,
+      ).toBe(false)
+    }
+    // Still allow ordinary tmux fixture inspection (not a full workspace deny list).
+    expect(
+      evaluateTerminalCommandPolicy({
+        command: 'rg TODO src >/dev/null',
+        mode: 'assistant',
+        permissionProfile: 'tmux-test',
+        projectRoot,
+      }),
+    ).toEqual({ allowed: true })
+  })
+
+  it('allows option-only set under read-only but still blocks env dumps and mutations', () => {
+    for (const command of [
+      'set -euo pipefail',
+      'set -euo pipefail; git status --short',
+      'set -euo pipefail && true',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'read-only',
+          projectRoot,
+        }),
+      ).toEqual({ allowed: true })
+    }
+    for (const command of [
+      'set',
+      'env',
+      'printenv',
+      'export',
+      'export -p',
+      'export FOO=bar',
+      'env FOO=bar true',
+      'pwd; printenv',
+      'busybox env',
+      'env -0',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'read-only',
           projectRoot,
         }).allowed,
       ).toBe(false)
