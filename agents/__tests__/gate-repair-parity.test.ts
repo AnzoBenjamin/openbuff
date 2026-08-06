@@ -7,6 +7,7 @@ import {
   parseValidationFailures,
   type ParsedValidationFailure,
 } from '../base2/gate-repair'
+import { extractInlineFunctionSource } from './helpers/extract-inline-function-source'
 
 type GateRepairHelpers = {
   parseValidationFailures: (failures: string[]) => ParsedValidationFailure[]
@@ -23,33 +24,6 @@ const INLINE_HELPER_NAMES: GateRepairFunctionName[] = [
   'parseValidationFailures',
   'buildRepairEditorPrompt',
 ]
-
-function extractInlineFunctionSource(
-  source: string,
-  functionName: string,
-): string {
-  const declarationStart = source.indexOf(`function ${functionName}(`)
-  if (declarationStart < 0) {
-    throw new Error(`Unable to find inline ${functionName} declaration`)
-  }
-
-  const bodyStart = source.indexOf('{', declarationStart)
-  if (bodyStart < 0) {
-    throw new Error(`Unable to find inline ${functionName} body`)
-  }
-
-  let depth = 0
-  for (let index = bodyStart; index < source.length; index += 1) {
-    const character = source[index]
-    if (character === '{') depth += 1
-    if (character === '}') depth -= 1
-    if (depth === 0) {
-      return source.slice(declarationStart, index + 1)
-    }
-  }
-
-  throw new Error(`Unable to find end of inline ${functionName} declaration`)
-}
 
 function loadInlineGateRepairHelpers(): GateRepairHelpers {
   const base2Source = readFileSync(
@@ -159,5 +133,39 @@ describe('gate-repair helpers — inline copies match canonical exports', () => 
         ).toBe(buildRepairEditorPrompt(parsed, pendingFiles))
       }
     }
+  })
+})
+
+describe('extractInlineFunctionSource — regex literals in early walks', () => {
+  test('does not mis-slice a function with a regex default param', () => {
+    const source = [
+      'function target(a = /}/, b = 2) {',
+      '  return a.test("x")',
+      '}',
+      'function other() {}',
+    ].join('\n')
+    const sliced = extractInlineFunctionSource(source, 'target')
+    // The `}` inside the regex default must not terminate the param-list walk,
+    // and `other`'s body must not be swallowed into the slice.
+    expect(sliced).toBe(
+      'function target(a = /}/, b = 2) {\n  return a.test("x")\n}',
+    )
+    expect(sliced).not.toContain('other')
+  })
+
+  test('does not mis-slice a function with a regex in a return-type annotation', () => {
+    const source = [
+      'function target(a: string): { pattern: /}/; name: string } {',
+      '  return { pattern: /}/, name: a }',
+      '}',
+    ].join('\n')
+    const sliced = extractInlineFunctionSource(source, 'target')
+    // The annotation's `{` must be consumed as the return type, and the `}`
+    // inside its regex must not be mistaken for the annotation's closing brace,
+    // so the real function body is still located.
+    expect(sliced).toContain('function target(a: string)')
+    expect(sliced).toContain('pattern: /}/;')
+    expect(sliced).toContain('return { pattern: /}/, name: a }')
+    expect(sliced.endsWith('}')).toBe(true)
   })
 })

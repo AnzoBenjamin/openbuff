@@ -1,61 +1,44 @@
 import { buildArray } from '@codebuff/common/util/array'
 
+import {
+  BASE2_CORE_TOOL_NAMES,
+  BASE2_TIER_TOOL_NAMES,
+} from '@codebuff/agent-runtime/util/base2-tool-tiers'
+
 import type { AllToolNames } from '../types/secret-agent-definition'
 
 /** Progressive model-visible tool tiers for base2 (M1). */
 export type ToolTier = 'core' | 'implement' | 'audit' | 'media_3d' | 'job_extra'
 
+/**
+ * Tier tool membership is owned by the runtime mirror in
+ * `packages/agent-runtime/src/util/base2-tool-tiers.ts`
+ * (`BASE2_CORE_TOOL_NAMES` / `BASE2_TIER_TOOL_NAMES`), because `agent-runtime`
+ * must not import from `agents/` (wrong dependency direction). `agents` is the
+ * correct direction, so these constants re-export the runtime truth instead of
+ * duplicating it. Re-exporting (rather than copying) makes the two lists
+ * identical BY CONSTRUCTION, so a one-sided edit to either list now fails at
+ * compile time (missing/mismatched re-export) instead of only failing the
+ * progressive-disclosure test suite at runtime.
+ */
+
 /** Base CORE names without mode conditionals — gates live in resolveModelToolNames. */
-export const CORE_TOOLS = [
-  'spawn_agents',
-  'query_index',
-  'read_files',
-  'read_outline',
-  'read_subtree',
-  'list_directory',
-  'glob',
-  'ask_user',
-  'skill',
-  'suggest_followups',
-  'write_todos',
-  'list_jobs',
-  'check_job',
-  'check_background_agent',
-  'read_logs',
-] as const
+export const CORE_TOOLS: readonly string[] = BASE2_CORE_TOOL_NAMES
 
 /** Base IMPLEMENT names without mode conditionals. */
-export const IMPLEMENT_TOOLS = [
-  'edit_transaction',
-  'create_plan',
-  'update_plan_status',
-  'inspect_workspace',
-  'inspect_environment',
-  'get_affected_tests',
-  'get_build_targets',
-  'run_targeted_validation',
-  'run_terminal_command',
-] as const
+export const IMPLEMENT_TOOLS: readonly string[] =
+  BASE2_TIER_TOOL_NAMES.implement
 
 /** Base AUDIT names without mode conditionals. */
-export const AUDIT_TOOLS = [
-  'inspect_codebase_structure',
-  'inspect_feature_completeness',
-  'evaluate_audit_coverage',
-  'get_change_review_bundle',
-  'get_task',
-] as const
+export const AUDIT_TOOLS: readonly string[] = BASE2_TIER_TOOL_NAMES.audit
 
 /** Base MEDIA_3D names without mode conditionals. */
-export const MEDIA_3D_TOOLS = [
-  'read_image',
-  'inspect_3d_asset',
-  'render_3d_preview',
-  'edit_3d_asset',
-] as const
+export const MEDIA_3D_TOOLS: readonly string[] =
+  BASE2_TIER_TOOL_NAMES.media_3d
 
 /** Base JOB_EXTRA names without mode conditionals. */
-export const JOB_EXTRA_TOOLS = ['kill_job'] as const
+export const JOB_EXTRA_TOOLS: readonly string[] =
+  BASE2_TIER_TOOL_NAMES.job_extra
 
 /** Canary-on starts core-only until handleSteps unlocks further tiers. */
 export const DEFAULT_UNLOCKED_TIERS_WHEN_PROGRESSIVE: readonly ToolTier[] = []
@@ -224,6 +207,7 @@ export function resolveModelToolNames(
       'skill',
       'list_directory',
       'glob',
+      'code_search',
       'check_background_agent',
       'check_job',
       'kill_job',
@@ -256,6 +240,7 @@ export function resolveModelToolNames(
     'read_subtree',
     'list_directory',
     'glob',
+    'code_search',
     !noAskUser && 'ask_user',
     'skill',
     'suggest_followups',

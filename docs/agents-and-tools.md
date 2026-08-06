@@ -502,6 +502,20 @@ Mid-turn git-status absorption must not claim foreign worktree dirt from concurr
 
 The pure helper lives in `agents/base2/gate-concurrency.ts`. The inline copy is generated via `scripts/generate-gate-helpers.ts` from `gate-concurrency.ts` into the `<gate-helpers-generated>` marker region of `createBase2.handleSteps` (serialized via `.toString()` / `new Function(...)`). Freshness is enforced by `agents/__tests__/gate-helpers-freshness.test.ts` and by `prebuild:agents` regenerating the region.
 
+### Explicit Git-delivery adoption is reviewable-scoped
+
+A turn with explicit Git-delivery intent (`commit`/`push`/`stage` the changes — the
+only turn type that claims files already dirty at turn start) adopts turn-start
+worktree dirt into the gate through **reviewable files only**. The delivery path
+runs `selectReviewableGateFiles(initialGitStatusFiles)` instead of absorbing the
+full dirty worktree, so non-reviewable dirt (docs, session `STATE.json`, `.jsonl`,
+config) that belongs to the worktree or other tabs never enters `pendingGateFiles`
+and is never pushed onto the reviewer's attestation list. Reviewable source/test
+files the delivery is committing still enter the gate. This mirrors the general
+mid-turn absorb rule above and keeps a clean `"commit our changes"` turn from
+turning into a worktree-wide review. Regression coverage:
+`agents/e2e/reviewer-spawn-conditions.e2e.test.ts`.
+
 ### `AgentState.selfMutatedPaths`
 
 Optional JSON-safe `string[]` on `AgentState` in `common/src/types/session-state.ts`. The runtime publishes it after each stream step so mid-turn absorption can credit process-owned writes without sweeping the whole dirty tree.
@@ -636,19 +650,20 @@ registry. Calling a tool the agent was not granted is rejected: the runtime
 fails closed, changes nothing, and returns a diagnostic instead of executing
 the tool.
 
-Codebase search for orchestrator/base agents (`base2` / `base-deep`) is done
-with `query_index` (the local graph index) or by spawning the `code-searcher`
-agent. `code_search` is a registered tool in the global registry but is not
-granted to those agents, so calling it directly from an orchestrator is
-rejected.
+Codebase search for orchestrator/base agents (`base2` / `base-deep`) and the
+`general-agent` discovery/analysis shard may use `code_search` directly for
+single-pattern content search,
+`query_index` for graph/index retrieval, or spawn the `code-searcher` agent for
+multi-query batch search with `params.searchQueries`. Ungranted tools still
+fail closed.
 
 The rejection message names the tools the agent actually has available. When
 the attempted name is a real-but-ungranted registry tool, the message says so;
 for a likely typo it also suggests a near lexical match ("Did you mean ...").
 When you hit this error, pick a tool from the listed available tools, or spawn
 an agent that provides the capability (for example, spawn `code-searcher` for
-codebase search). Do not retry the same unavailable name — the result will not
-change.
+multi-query batch search). Do not retry the same unavailable name — the result
+will not change.
 
 ### Background shell jobs (`check_job` / `read_logs` / `kill_job` / `list_jobs`)
 

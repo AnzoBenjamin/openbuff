@@ -234,17 +234,17 @@ describe('shared craftsmanship prompt sections', () => {
     expect(editor.instructionsPrompt).not.toContain(frontendSection)
   })
 
-  test('base2 system prompt routes ripgrep-style search through code-searcher', () => {
-    // The root orchestrator is not granted code_search/find_files_matching_content;
-    // its prompt must tell it to spawn code-searcher instead of calling them
-    // directly (otherwise the runtime rejects the call). Guard the semantic
-    // content without freezing the exact wording.
+  test('base2 system prompt prefers direct code_search and multi-query code-searcher', () => {
+    // Root content-search tools are granted; the prompt must prefer direct
+    // code_search for single-pattern search and code-searcher for multi-query
+    // batching. Guard the semantic content without freezing the exact wording.
     const base2 = createBase2('default')
 
     expect(base2.systemPrompt).toContain('code-searcher')
     expect(base2.systemPrompt).toContain('code_search')
-    expect(base2.systemPrompt).toContain('find_files_matching_content')
-    expect(base2.systemPrompt).toContain('not granted to you as root')
+    expect(base2.systemPrompt).toContain('Prefer direct')
+    expect(base2.systemPrompt).toContain('multi-query')
+    expect(base2.systemPrompt).not.toContain('not granted to you as root')
   })
 
   test('base2 system prompt names required spawn params for code-searcher and basher', () => {

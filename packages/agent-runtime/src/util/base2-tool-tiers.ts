@@ -12,7 +12,20 @@
  * beyond the template's mode-appropriate ceiling.
  */
 
-/** Base2 CORE tool names — always available when progressive disclosure is on. */
+/**
+ * Base2 CORE tool names — always available when progressive disclosure is on.
+ *
+ * Semantically broader than the template's CORE surface: `ask_user` and
+ * `write_todos` are listed unconditionally here, but fast/plan-only
+ * progressive base2 never exposes them (they are mode-gated in the template's
+ * buildArray). `filterByUnlockedTiers` only *keeps* names already present in
+ * its input, and `base2` always passes the template's full surface as
+ * `templateAllows` to cap tier adds, so this never widens the surfaced set.
+ * The unconditional list is a deliberate ceiling: a runtime-side CORE-only
+ * path MUST still pass `templateAllows` (or otherwise apply the same mode
+ * gates), or it could expose `ask_user`/`write_todos` in a mode that forbids
+ * them.
+ */
 export const BASE2_CORE_TOOL_NAMES: readonly string[] = [
   'spawn_agents',
   'query_index',
@@ -21,6 +34,7 @@ export const BASE2_CORE_TOOL_NAMES: readonly string[] = [
   'read_subtree',
   'list_directory',
   'glob',
+  'code_search',
   'ask_user',
   'skill',
   'suggest_followups',
