@@ -2177,10 +2177,12 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             (securityReviewResult as any)?.toolResult ?? securityReviewResult
           const securityCrash = detectReviewerCrash(securityToolResult)
           // Parent-owned process RF strings are not repair targets for security.
+          // Pass toolResult so evidence-only parent ownership matches finalization.
           const securityBlockers = collectReviewerBlockers(
             securityToolResult,
           ).filter(
-            (blocker: string) => !isParentOwnedRequirementBlocker(blocker),
+            (blocker: string) =>
+              !isParentOwnedRequirementBlocker(blocker, securityToolResult),
           )
           const securityAttestationIssues = collectReviewerAttestationIssues(
             securityToolResult,
@@ -2777,10 +2779,15 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                   const rawBlockers =
                     collectReviewerBlockers(specialistToolResult)
                   // Defense in depth: parent-owned process RF strings must not
-                  // alone force a specialist repair-editor spawn.
+                  // alone force a specialist repair-editor spawn. Pass
+                  // toolResult so evidence-only parent ownership matches
+                  // getReviewerFinalizationVerdict.
                   const blockers = rawBlockers.filter(
                     (blocker: string) =>
-                      !isParentOwnedRequirementBlocker(blocker),
+                      !isParentOwnedRequirementBlocker(
+                        blocker,
+                        specialistToolResult,
+                      ),
                   )
                   const parentOwnedOnlyBlockers =
                     rawBlockers.length > 0 && blockers.length === 0
@@ -4163,8 +4170,10 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           activeWorkState.reviewerProtocolRetryCount = 0
           // Parent-owned process RF strings are not repair targets; filter at
           // the consumer so raw collectReviewerBlockers can still surface them.
+          // Pass toolResult so evidence-only parent ownership matches finalization.
           const blockers = collectReviewerBlockers(reviewerToolResult).filter(
-            (blocker: string) => !isParentOwnedRequirementBlocker(blocker),
+            (blocker: string) =>
+              !isParentOwnedRequirementBlocker(blocker, reviewerToolResult),
           )
           if (blockers.length > 0) {
             // Coverage-style findings (a missing/uncertain test-coverage gap)
@@ -5523,7 +5532,6 @@ function isTestCoverageReviewerFinding(text: string): boolean {
  * Process/orchestrator work a source specialist or code reviewer cannot satisfy
  * from diff/source evidence. Keep patterns specific so real source requirements
  * that merely mention "commit" or "validation" are not suppressed.
- * Inline mirror of gate-reviewer.ts — keep in sync.
  */
 function isParentOwnedOrOutOfScopeRequirement(requirement: string, evidence?: string[]): boolean {
     if (typeof requirement !== 'string')
@@ -5562,14 +5570,45 @@ function isParentOwnedOrOutOfScopeRequirement(requirement: string, evidence?: st
     return false;
 }
 
-/** True when a blocker string is only a parent-owned requirementCoverage gap. */
-function isParentOwnedRequirementBlocker(blocker: string): boolean {
+/**
+ * True when a blocker string is only a parent-owned requirementCoverage gap.
+ *
+ * When `toolResult` is provided, re-check structured `requirementCoverage`
+ * (requirement text + evidence) the same way `getReviewerFinalizationVerdict`
+ * does. Without that, a LOOKS_GOOD receipt that is parent-owned only via
+ * evidence can finalize yet still spawn repair-editor at call sites that only
+ * see `BLOCKING: requirement missing|uncertain: <text>`.
+ */
+function isParentOwnedRequirementBlocker(blocker: string, toolResult?: unknown): boolean {
     if (typeof blocker !== 'string')
         return false;
-    const match = blocker.match(/^BLOCKING:\s*requirement\s+(?:missing|uncertain):\s*(.+)$/i);
+    const match = blocker.match(/^BLOCKING:\s*requirement\s+(missing|uncertain):\s*(.+)$/i);
     if (!match)
         return false;
-    return isParentOwnedOrOutOfScopeRequirement(match[1].trim());
+    const status = match[1].toLowerCase();
+    const requirementText = match[2].trim();
+    if (toolResult !== undefined) {
+        const structured = collectStructuredReviewerOutputs(toolResult);
+        let sawStructuredRow = false;
+        for (const entry of structured) {
+            for (const requirement of entry.requirementCoverage ?? []) {
+                if (requirement.requirement !== requirementText ||
+                    (requirement.status !== 'missing' &&
+                        requirement.status !== 'uncertain') ||
+                    requirement.status !== status) {
+                    continue;
+                }
+                sawStructuredRow = true;
+                if (isParentOwnedOrOutOfScopeRequirement(requirement.requirement, requirement.evidence)) {
+                    return true;
+                }
+            }
+        }
+        // Structured row(s) matched: trust evidence-aware classification only.
+        if (sawStructuredRow)
+            return false;
+    }
+    return isParentOwnedOrOutOfScopeRequirement(requirementText);
 }
 
 function dedupeExactStringsPreserveOrder(values: string[]): string[] {
@@ -5613,10 +5652,12 @@ function collectReviewerBlockers(toolResult: unknown): string[] {
         // Keep parent-owned process requirement gaps in the raw blocker list so
         // consumers can credit LOOKS_GOOD via parentOwnedOnlyBlockers (filter at
         // the call site; do not elevating-filter here).
-        // Inline mirror of gate-reviewer.ts — keep in sync.
         for (const requirement of entry.requirementCoverage ?? []) {
             if (requirement.status === 'missing' ||
                 requirement.status === 'uncertain') {
+                // Requirement text only in the string; call-site parent-owned filters
+                // re-check structured requirementCoverage (+ evidence) via
+                // isParentOwnedRequirementBlocker(blocker, toolResult).
                 structuredBlockers.push(`BLOCKING: requirement ${requirement.status}: ${requirement.requirement}`);
             }
         }

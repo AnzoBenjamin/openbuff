@@ -35,8 +35,77 @@ const LIST_JOBS_RESULT = {
   jobs: [],
   note: 'No action required unless you need this output.',
 }
+
+function feedJson(value: unknown) {
+  return { toolResult: [{ type: 'json', value }] } as any
+}
+
+function finishStepWithToolResult(value: unknown) {
+  return {
+    stepsComplete: true,
+    toolResult: [{ type: 'json', value }],
+  } as any
+}
+
 function feedListJobs() {
-  return { toolResult: [{ type: 'json', value: LIST_JOBS_RESULT }] } as any
+  return feedJson(LIST_JOBS_RESULT)
+}
+
+/**
+ * LOOKS_GOOD specialist receipt whose only requirementCoverage gaps are
+ * parent-owned process duties. Includes rows parent-owned only via evidence
+ * (requirement text alone is not a process cue) so call-site filters must
+ * re-check structured requirementCoverage the same way finalization does.
+ * Gate helpers must credit the specialist without spawning repair-editor.
+ */
+function looksGoodWithParentOwnedRequirements(
+  agentType: string,
+  snapshotFingerprint: string,
+  files: string[],
+) {
+  return feedJson({
+    agentType,
+    value: {
+      schemaVersion: 1,
+      family: 'reviewer',
+      verdict: 'LOOKS_GOOD',
+      snapshotFingerprint,
+      reviewedFiles: files,
+      findings: [],
+      coverage: 'covered',
+      dimensions: {},
+      requirementCoverage: [
+        {
+          requirement: 'Rewrite git commit messages',
+          status: 'missing',
+          evidence: ['parent only'],
+        },
+        {
+          requirement: 'Run full validation gate',
+          status: 'missing',
+          evidence: ['parent only'],
+        },
+        {
+          requirement: 'Commit and push',
+          status: 'missing',
+          evidence: ['parent only'],
+        },
+        {
+          requirement: 'Confirm CI/CD is green',
+          status: 'uncertain',
+          evidence: ['parent only'],
+        },
+        // Parent-owned only via evidence; requirement text alone is in-scope.
+        {
+          requirement: 'Ship remaining workflow steps',
+          status: 'missing',
+          evidence: [
+            'parent must run full validation gate after this specialist',
+          ],
+        },
+      ],
+    },
+  })
 }
 
 /**
@@ -7848,5 +7917,153 @@ describe('base2 content-based reviewer finding correlation', () => {
     // The object-finding blocker correlates by [id] to its real record.
     expect(findings[1].id).toBe('security-reviewer:containment:real')
     expect(findings[1].text).toBe('Reject nested fixture paths.')
+  })
+})
+
+describe('base2 specialist parent-owned LOOKS_GOOD credit', () => {
+  test('LOOKS_GOOD reliability-reviewer with only parent-owned requirementCoverage does not spawn repair-editor', () => {
+    // Mirror of agents/e2e/gate-aux-ordering.e2e.test.ts parent-owned credit:
+    // a state/session path routes to reliability-reviewer; LOOKS_GOOD whose only
+    // requirementCoverage gaps are parent process duties must credit the
+    // specialist without spawning repair-editor.
+    const tmpDir = makeProjectTempDir('base2-parent-owned-specialist-')
+    try {
+      const stateDir = join(tmpDir, 'state')
+      mkdirSync(stateDir, { recursive: true })
+      const absoluteFile = join(stateDir, 'session.ts')
+      writeFileSync(absoluteFile, 'export const session = "v1"\n')
+      // Prefer project-relative path under .base2-test-scratch when cwd is the
+      // openbuff root so the reliability router sees a `state` segment.
+      const gateFile = normalizeGateFilePath(absoluteFile)
+      const base2 = createBase2('default')
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          changedFiles: [gateFile],
+          touchedFiles: [gateFile],
+          pendingGateFiles: [gateFile],
+          currentPhase: 'awaiting_validation',
+          openReviewerBlockers: [],
+          openReviewerFindings: [],
+          lastValidationSummary: '',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [],
+          gatePassedPendingFiles: [],
+          gatePassedReviewerVerdict: '',
+          gatePassedValidationSummary: '',
+          gatePassedFingerprint: '',
+          lastReviewerGateSkipReason: '',
+          reviewReceipts: [],
+          testWriterGateDone: true,
+          docWriterGateDone: true,
+          securityReviewGateDone: true,
+          preEditSecurityReviewDone: true,
+          specialistReviewGatesDone: [],
+          auxGatesLastPendingFiles: [gateFile],
+        },
+      }
+      // Process tasks stay in the prompt for non-blocking parent context; avoid
+      // classifyProactiveRetrieval code-intent keywords so first yield is git_status.
+      const prompt =
+        'Please finish the pending reliability finding. Parent will later commit and push then confirm CI/CD is green.'
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt,
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'list_jobs', input: {} })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+        input: { agent_type: 'context-pruner' },
+      })
+      expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+      expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+        toolName: 'git_status',
+        input: {},
+      })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'list_jobs', input: {} })
+
+      const bundle = gen.next(feedListJobs())
+      expect(bundle.value).toMatchObject({
+        toolName: 'get_change_review_bundle',
+        input: {},
+      })
+      const spawn = gen.next(
+        feedJson({
+          snapshotId: 'unit-spec-snap-parent-owned',
+          files: [gateFile],
+        }),
+      )
+      expect(spawn.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      })
+      const spawnPrompt = (spawn.value as any).input.agents[0].prompt as string
+      expect(typeof spawnPrompt).toBe('string')
+      expect(
+        spawnPrompt.includes('specialist-domain only') ||
+          spawnPrompt.includes('Do NOT treat parent workflow'),
+      ).toBe(true)
+      expect(spawnPrompt).not.toMatch(
+        new RegExp(
+          `^Requirements:\\s*${prompt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+          'm',
+        ),
+      )
+      const fingerprint = String(
+        (spawn.value as any).input.agents[0].params?.snapshot_id ?? '',
+      )
+      expect(fingerprint).toMatch(/^v3:[a-f0-9]{64}$/)
+
+      const after = gen.next(
+        looksGoodWithParentOwnedRequirements(
+          'reliability-reviewer',
+          fingerprint,
+          [gateFile],
+        ),
+      )
+      const afterValue = after.value as any
+      const isRepairEditorSpawn =
+        afterValue?.toolName === 'spawn_agents' &&
+        afterValue?.input?.agents?.[0]?.agent_type === 'repair-editor'
+      expect(isRepairEditorSpawn).toBe(false)
+
+      let creditYield = after
+      if (
+        afterValue?.toolName === 'add_message' &&
+        typeof afterValue?.input?.content === 'string' &&
+        afterValue.input.content.includes(
+          'parent-owned process requirements were ignored',
+        )
+      ) {
+        creditYield = gen.next()
+      }
+      expect(
+        (creditYield.value as any)?.toolName === 'spawn_agents' &&
+          ((creditYield.value as any)?.input?.agents ?? []).some(
+            (a: { agent_type?: string }) => a?.agent_type === 'repair-editor',
+          ),
+      ).toBe(false)
+
+      expect(
+        (agentState as any).base2ActiveWork.specialistReviewGatesDone,
+      ).toContain('reliability-reviewer')
+      expect((agentState as any).base2ActiveWork.currentPhase).not.toBe(
+        'repair_loop',
+      )
+      expect((agentState as any).base2ActiveWork.currentPhase).not.toBe(
+        'blocked',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
   })
 })

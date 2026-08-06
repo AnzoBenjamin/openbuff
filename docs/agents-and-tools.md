@@ -554,19 +554,34 @@ of scope for those reviewers, including duties such as:
 - confirming CI/CD is green
 - similar "parent must" / operator-only process steps
 
-Gate helpers (`isParentOwnedOrOutOfScopeRequirement` in
-`agents/base2/gate-reviewer.ts`) skip elevating those missing/uncertain rows to
-review-finding blockers and still allow `LOOKS_GOOD` finalization when
-dimensions and behavior coverage pass. Specialists receive a scoped spawn brief
-(`Requirements (specialist-domain only)` via `buildSpecialistScopedReviewPrompt`),
-not the raw user prompt as a checklist; parent process wording may appear only
-under non-blocking parent context. Defense in depth: pure parent-owned RF sets
-with `LOOKS_GOOD` do not spawn `repair-editor`. Real in-scope incomplete
-requirements still hard-block. Unit coverage lives in
-`agents/__tests__/gate-reviewer.test.ts`; the e2e regression is in
-`agents/e2e/gate-aux-ordering.e2e.test.ts`.
+Canonical helpers live in `agents/base2/gate-reviewer.ts`
+(`isParentOwnedOrOutOfScopeRequirement`, `isParentOwnedRequirementBlocker`,
+`buildSpecialistScopedReviewPrompt`, etc.). They skip elevating parent-owned
+missing/uncertain rows to review-finding blockers and still allow `LOOKS_GOOD`
+finalization when dimensions and behavior coverage pass. Call-site parent-owned
+filters pass the reviewer `toolResult` into `isParentOwnedRequirementBlocker` so
+structured `requirementCoverage` evidence is consulted the same way as
+`getReviewerFinalizationVerdict` (a gap that is parent-owned only via evidence
+must not finalize while still spawning `repair-editor`). Specialists receive a
+scoped spawn brief (`Requirements (specialist-domain only)`), not the raw user
+prompt as a checklist; parent process wording may appear only under non-blocking
+parent context. Defense in depth: pure parent-owned RF sets with `LOOKS_GOOD` do
+not spawn `repair-editor`. Real in-scope incomplete requirements still
+hard-block. Unit coverage lives in `agents/__tests__/gate-reviewer.test.ts` and
+the handleSteps credit path in `agents/__tests__/base2.test.ts`; the e2e
+regression is in `agents/e2e/gate-aux-ordering.e2e.test.ts`.
 
-The inline mirror is generated, not hand-maintained. `scripts/generate-gate-helpers.ts` is its single source of truth: it reads `agents/base2/gate-paths.ts`, `agents/base2/gate-reviewer.ts`, `agents/base2/gate-repair.ts`, `agents/base2/gate-concurrency.ts`, and `agents/base2/gate-fingerprint.ts`, strips their `export` modifiers, and emits a deterministic block spliced into the `<gate-helpers-generated>` marker region of `agents/base2/base2.ts`. Pass `--write <path>` to refresh that region (the `prebuild:agents` script in `cli/package.json` does this automatically) or `--check <path>` to fail when it is stale; `agents/__tests__/gate-helpers-freshness.test.ts` enforces the same freshness check in CI.
+The inline base2 mirror is generated from that canonical module — do **not**
+hand-edit the `<gate-helpers-generated>` region in `agents/base2/base2.ts`.
+`scripts/generate-gate-helpers.ts` is the single source of truth: it reads
+`agents/base2/gate-paths.ts`, `agents/base2/gate-reviewer.ts`,
+`agents/base2/gate-repair.ts`, `agents/base2/gate-concurrency.ts`, and
+`agents/base2/gate-fingerprint.ts`, strips their `export` modifiers, and emits a
+deterministic block into the marker region. Refresh with
+`bun run scripts/generate-gate-helpers.ts --write agents/base2/base2.ts` (the
+`prebuild:agents` script in `cli/package.json` does this automatically) or
+`--check` to fail when stale; `agents/__tests__/gate-helpers-freshness.test.ts`
+enforces the same freshness check in CI.
 
 A reviewer may emit its verdict in either text mode or structured (JSON) mode:
 

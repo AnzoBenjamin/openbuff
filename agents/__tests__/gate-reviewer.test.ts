@@ -9,6 +9,7 @@ import {
   detectReviewerCrash,
   getReviewerFinalizationVerdict,
   isParentOwnedOrOutOfScopeRequirement,
+  isParentOwnedRequirementBlocker,
   isTestCoverageReviewerFinding,
   stripReviewerPreamble,
 } from '../base2/gate-reviewer'
@@ -383,6 +384,65 @@ describe('gate-reviewer helpers', () => {
         ],
       }),
     ).toBe('')
+  })
+
+  test('isParentOwnedRequirementBlocker re-checks structured evidence at call sites', () => {
+    // Requirement text alone is not parent-owned; evidence carries the process cue.
+    // Finalization and call-site filters must both consult evidence so LOOKS_GOOD
+    // does not finalize while still spawning repair-editor.
+    const evidenceOnlyReceipt = {
+      verdict: 'LOOKS_GOOD' as const,
+      findings: [] as string[],
+      coverage: 'covered' as const,
+      requirementCoverage: [
+        {
+          requirement: 'Ship remaining workflow steps',
+          status: 'missing' as const,
+          evidence: [
+            'parent must run full validation gate after this specialist',
+          ],
+        },
+      ],
+    }
+    const rawBlockers = collectReviewerBlockers(evidenceOnlyReceipt)
+    expect(rawBlockers).toEqual([
+      'BLOCKING: requirement missing: Ship remaining workflow steps',
+    ])
+    // Without toolResult, only the requirement text is visible → not parent-owned.
+    expect(isParentOwnedRequirementBlocker(rawBlockers[0]!)).toBe(false)
+    // With toolResult, structured evidence matches getReviewerFinalizationVerdict.
+    expect(
+      isParentOwnedRequirementBlocker(rawBlockers[0]!, evidenceOnlyReceipt),
+    ).toBe(true)
+    expect(getReviewerFinalizationVerdict(evidenceOnlyReceipt)).toBe(
+      'LOOKS_GOOD',
+    )
+    // Call-site filter shape used by specialist/security/code-reviewer.
+    const filtered = rawBlockers.filter(
+      (blocker) =>
+        !isParentOwnedRequirementBlocker(blocker, evidenceOnlyReceipt),
+    )
+    expect(filtered).toEqual([])
+
+    // Evidence that does not establish parent ownership must keep the gap in-scope.
+    const inScopeEvidenceReceipt = {
+      ...evidenceOnlyReceipt,
+      requirementCoverage: [
+        {
+          requirement: 'Ship remaining workflow steps',
+          status: 'missing' as const,
+          evidence: ['unit tests still fail on the new path'],
+        },
+      ],
+    }
+    const inScopeBlockers = collectReviewerBlockers(inScopeEvidenceReceipt)
+    expect(
+      isParentOwnedRequirementBlocker(
+        inScopeBlockers[0]!,
+        inScopeEvidenceReceipt,
+      ),
+    ).toBe(false)
+    expect(getReviewerFinalizationVerdict(inScopeEvidenceReceipt)).toBe('')
   })
 
   test('structured v1 reviews must attest to the exact snapshot and every pending file', () => {

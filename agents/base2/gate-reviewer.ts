@@ -203,14 +203,56 @@ export function isParentOwnedOrOutOfScopeRequirement(
   return false
 }
 
-/** True when a blocker string is only a parent-owned requirementCoverage gap. */
-export function isParentOwnedRequirementBlocker(blocker: string): boolean {
+/**
+ * True when a blocker string is only a parent-owned requirementCoverage gap.
+ *
+ * When `toolResult` is provided, re-check structured `requirementCoverage`
+ * (requirement text + evidence) the same way `getReviewerFinalizationVerdict`
+ * does. Without that, a LOOKS_GOOD receipt that is parent-owned only via
+ * evidence can finalize yet still spawn repair-editor at call sites that only
+ * see `BLOCKING: requirement missing|uncertain: <text>`.
+ */
+export function isParentOwnedRequirementBlocker(
+  blocker: string,
+  toolResult?: unknown,
+): boolean {
   if (typeof blocker !== 'string') return false
   const match = blocker.match(
-    /^BLOCKING:\s*requirement\s+(?:missing|uncertain):\s*(.+)$/i,
+    /^BLOCKING:\s*requirement\s+(missing|uncertain):\s*(.+)$/i,
   )
   if (!match) return false
-  return isParentOwnedOrOutOfScopeRequirement(match[1].trim())
+  const status = match[1].toLowerCase()
+  const requirementText = match[2].trim()
+
+  if (toolResult !== undefined) {
+    const structured = collectStructuredReviewerOutputs(toolResult)
+    let sawStructuredRow = false
+    for (const entry of structured) {
+      for (const requirement of entry.requirementCoverage ?? []) {
+        if (
+          requirement.requirement !== requirementText ||
+          (requirement.status !== 'missing' &&
+            requirement.status !== 'uncertain') ||
+          requirement.status !== status
+        ) {
+          continue
+        }
+        sawStructuredRow = true
+        if (
+          isParentOwnedOrOutOfScopeRequirement(
+            requirement.requirement,
+            requirement.evidence,
+          )
+        ) {
+          return true
+        }
+      }
+    }
+    // Structured row(s) matched: trust evidence-aware classification only.
+    if (sawStructuredRow) return false
+  }
+
+  return isParentOwnedOrOutOfScopeRequirement(requirementText)
 }
 
 function dedupeExactStringsPreserveOrder(values: string[]): string[] {
@@ -263,6 +305,9 @@ export function collectReviewerBlockers(toolResult: unknown): string[] {
         requirement.status === 'missing' ||
         requirement.status === 'uncertain'
       ) {
+        // Requirement text only in the string; call-site parent-owned filters
+        // re-check structured requirementCoverage (+ evidence) via
+        // isParentOwnedRequirementBlocker(blocker, toolResult).
         structuredBlockers.push(
           `BLOCKING: requirement ${requirement.status}: ${requirement.requirement}`,
         )
