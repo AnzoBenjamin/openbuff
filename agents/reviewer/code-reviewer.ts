@@ -40,6 +40,7 @@ export const createReviewer = (
     type: 'object',
     properties: {
       schemaVersion: { type: 'number' },
+      family: { type: 'string', enum: ['reviewer'] },
       verdict: {
         type: 'string',
         enum: ['LOOKS_GOOD', 'NON_BLOCKING', 'BLOCKING'],
@@ -86,6 +87,7 @@ export const createReviewer = (
     },
     required: [
       'schemaVersion',
+      'family',
       'verdict',
       'snapshotFingerprint',
       'reviewedFiles',

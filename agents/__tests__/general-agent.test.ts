@@ -11,6 +11,20 @@ describe('general-agent programmatic tools', () => {
     expect(agent.toolNames).toContain('task_completed')
   })
 
+  test('gpt-5 branch adds reasoningOptions and drops file-picker from spawnableAgents', () => {
+    const agent = createGeneralAgent({ model: 'gpt-5' })
+
+    expect(agent.reasoningOptions).toEqual({ effort: 'high' })
+    expect(agent.spawnableAgents).not.toContain('file-picker')
+    expect(agent.displayName).toBe('Deep Reasoning General Agent')
+
+    // The shared (opus) surface must remain intact so the two branches do not
+    // silently converge or regress.
+    expect(agent.spawnableAgents).toContain('researcher-web')
+    expect(agent.spawnableAgents).toContain('context-pruner')
+    expect(agent.programmaticToolNames).toContain('spawn_agent_inline')
+  })
+
   test('routes directory-like bootstrap paths through read_subtree', () => {
     const agent = createGeneralAgent({ model: 'opus' })
     const generator = agent.handleSteps!({
@@ -34,17 +48,34 @@ describe('general-agent programmatic tools', () => {
     })
   })
 
-  test('routes ripgrep-style search through code-searcher with required params', () => {
-    // general-agent is not granted code_search directly; its prompt must tell
-    // it to spawn code-searcher and to pass the required params.searchQueries,
-    // otherwise the runtime rejects the direct code_search call and an empty
-    // code-searcher spawn fails with "Missing required: searchQueries".
+  test('fires query_index proactively on a qualifying prompt with no paths', () => {
+    const agent = createGeneralAgent({ model: 'opus' })
+    const generator = agent.handleSteps!({
+      prompt: 'Audit and fix the codebase for test coverage gaps',
+      params: {},
+    } as any)
+
+    expect(generator.next().value).toEqual({
+      toolName: 'query_index',
+      input: {
+        query: 'Audit and fix the codebase for test coverage gaps',
+        limit: 20,
+      },
+    })
+  })
+
+  test('prefers direct code_search and multi-query code-searcher with required params', () => {
+    // general-agent may call code_search directly for single-pattern work,
+    // and spawn code-searcher for multi-query batches with
+    // params.searchQueries.
     const agent = createGeneralAgent({ model: 'opus' })
 
-    expect(agent.toolNames).not.toContain('code_search')
+    expect(agent.toolNames).toContain('code_search')
     expect(agent.instructionsPrompt).toContain('code_search')
-    expect(agent.instructionsPrompt).toContain('not granted to you')
+    expect(agent.instructionsPrompt).toContain('prefer direct')
+    expect(agent.instructionsPrompt).toContain('multi-query')
     expect(agent.instructionsPrompt).toContain('params.searchQueries')
+    expect(agent.instructionsPrompt).not.toContain('not granted to you')
   })
 
   test('binds durable audit shards to composable snapshot receipts', () => {
@@ -121,6 +152,47 @@ describe('general-agent programmatic tools', () => {
 
     expect(completion.done).toBe(true)
     expect((completion.value as any)?.toolName).not.toBe('add_message')
+  })
+
+  test('keeps rejecting when the present receipt is for a different snapshot', () => {
+    const agent = createGeneralAgent({ model: 'opus' })
+    const generator = agent.handleSteps!({
+      prompt: 'Audit service completeness',
+      params: {
+        sessionSlug: 'readiness',
+        shardId: 'services',
+        // snapshotId intentionally absent: the shard is unbound-by-snapshot
+        // and must fail closed even when a structural receipt for a
+        // DIFFERENT snapshot is present.
+      },
+    } as any)
+
+    expect(generator.next().value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    expect(generator.next({ toolResult: [] } as any).value).toBe('STEP')
+
+    const mismatchReceipt = generator.next({
+      stepsComplete: true,
+      agentState: {
+        messageHistory: [
+          {
+            role: 'tool',
+            content: [
+              {
+                type: 'json',
+                value: { structuralReceipt: { snapshot_id: 'snapshot-1' } },
+              },
+            ],
+          },
+        ],
+      },
+      toolResult: [],
+    } as any)
+
+    expect(mismatchReceipt.value).toMatchObject({
+      toolName: 'add_message',
+    })
   })
 
   test('breaks the audit loop after exhausting completion retries', () => {

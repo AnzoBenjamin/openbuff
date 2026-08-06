@@ -32,20 +32,6 @@ import {
   type SecretAgentDefinition,
 } from '../types/secret-agent-definition'
 
-/** Env canary for progressive prompt disclosure (module-level; createBase2 load time). */
-export function isProgressivePromptDisclosureEnvEnabled(
-  raw: string | undefined,
-): boolean {
-  if (typeof raw !== 'string') return false
-  const normalized = raw.trim().toLowerCase()
-  return (
-    normalized === '1' ||
-    normalized === 'true' ||
-    normalized === 'yes' ||
-    normalized === 'on'
-  )
-}
-
 /**
  * Default for progressive prompt disclosure when the caller omits the
  * `progressivePromptDisclosure` option. Post-flip (M2): ON by default. The
@@ -101,7 +87,7 @@ export function createBase2(
   // force-on override consulted on this omitted-option path.
   const progressivePromptDisclosure =
     progressivePromptDisclosureOption ??
-    (isProgressivePromptDisclosureEnvEnabled(
+    (isProgressiveToolDisclosureEnvEnabled(
       typeof process === 'object' && process !== null
         ? process.env?.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE
         : undefined,
@@ -330,8 +316,8 @@ ${
 }
 ${
   progressiveToolDisclosure
-    ? '- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. For large files prefer read_files windows/around/symbol selectors over guess-shrink-retry ranges paging. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (`<<\'EOF\' ... EOF`) inside `basher.params.command`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. When edit tools unlock, author files with the dedicated edit surface and run them via a short basher command instead. For ripgrep-style content search, spawn the code-searcher agent (and file-picker for fuzzy file discovery): `code_search`/`find_files_matching_content` are registered runtime tools but are intentionally not granted to you as root, so calling them directly is rejected. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs `params.searchQueries` (an array of { pattern } objects) and basher needs `params.command` (a shell string); put these in `params`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).'
-    : '- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. For large files prefer read_files windows/around/symbol selectors over guess-shrink-retry ranges paging. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (`<<\'EOF\' ... EOF`) inside `basher.params.command`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with `write_file`/`edit_transaction` and run them via a short basher command instead. For ripgrep-style content search, spawn the code-searcher agent (and file-picker for fuzzy file discovery): `code_search`/`find_files_matching_content` are registered runtime tools but are intentionally not granted to you as root, so calling them directly is rejected. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs `params.searchQueries` (an array of { pattern } objects) and basher needs `params.command` (a shell string); put these in `params`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).'
+    ? '- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Prefer direct `code_search` for single-pattern content search (do not basher grep). Spawn `code-searcher` for multi-query batch search with `params.searchQueries`. For large files prefer read_files windows/around/symbol selectors over guess-shrink-retry ranges paging. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (`<<\'EOF\' ... EOF`) inside `basher.params.command`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. When edit tools unlock, author files with the dedicated edit surface and run them via a short basher command instead. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs `params.searchQueries` (an array of { pattern } objects) and basher needs `params.command` (a shell string); put these in `params`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).'
+    : '- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Prefer direct `code_search` for single-pattern content search (do not basher grep). Spawn `code-searcher` for multi-query batch search with `params.searchQueries`. For large files prefer read_files windows/around/symbol selectors over guess-shrink-retry ranges paging. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (`<<\'EOF\' ... EOF`) inside `basher.params.command`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with `write_file`/`edit_transaction` and run them via a short basher command instead. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs `params.searchQueries` (an array of { pattern } objects) and basher needs `params.command` (a shell string); put these in `params`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).'
 }
 
 # Code Editing Mandates
@@ -1280,13 +1266,24 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         hasExplicitGitDeliveryIntent(prompt) &&
         initialGitStatusFiles.length > 0
       ) {
-        recordChangedFiles(initialGitStatusFiles)
-        editsHappened = true
-        finalResponseGateOpen = false
-        mutableAgentState.canSuggestFollowups = false
-        activeWorkState.currentPhase = 'awaiting_validation'
-        activeWorkState.latestWorkSummary = `Explicit Git delivery request adopted turn-start dirty files: ${initialGitStatusFiles.join(', ')}`
-        markActiveWorkStateChanged()
+        // Scope the git-delivery adoption to REVIEWABLE dirty files only.
+        // Non-reviewable turn-start dirt (docs, session STATE.json, jsonl,
+        // config) belongs to the whole worktree, not to any one conversation's
+        // gate; forcing the reviewer to attest to every unrelated dirty path
+        // turns a clean commit turn into a worktree-wide review. Reviewable
+        // source/test files the user asked us to commit still enter the gate.
+        const reviewableDeliveryFiles = selectReviewableGateFiles(
+          initialGitStatusFiles,
+        )
+        if (reviewableDeliveryFiles.length > 0) {
+          recordChangedFiles(reviewableDeliveryFiles)
+          editsHappened = true
+          finalResponseGateOpen = false
+          mutableAgentState.canSuggestFollowups = false
+          activeWorkState.currentPhase = 'awaiting_validation'
+          activeWorkState.latestWorkSummary = `Explicit Git delivery request adopted turn-start dirty files: ${initialGitStatusFiles.join(', ')}`
+          markActiveWorkStateChanged()
+        }
       }
       // Track files previously observed dirty in git status so we can safely
       // prune them from the pending set when they disappear (committed).

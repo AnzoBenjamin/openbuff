@@ -3303,7 +3303,22 @@ describe('buildUnavailableToolMessage', () => {
     expect(message).toContain('is not available for agent `base2`')
   })
 
-  it('gives concrete code-searcher recovery for ungranted content-search tools', () => {
+  it('prefers direct code_search when that tool is already available', () => {
+    for (const toolName of ['code_search', 'find_files_matching_content']) {
+      const message = buildUnavailableToolMessage({
+        toolName,
+        agentId: 'base2',
+        availableTools: ['read_files', 'code_search'],
+        input: { pattern: 'alpha' },
+      })
+
+      expect(message).toContain('Use the granted `code_search` tool directly')
+      expect(message).toContain('params.searchQueries')
+      expect(message).not.toContain('"pattern": "alpha"')
+    }
+  })
+
+  it('gives concrete code-searcher recovery when code_search is unavailable', () => {
     for (const toolName of ['code_search', 'find_files_matching_content']) {
       const message = buildUnavailableToolMessage({
         toolName,
@@ -3313,7 +3328,21 @@ describe('buildUnavailableToolMessage', () => {
 
       expect(message).toContain('code-searcher')
       expect(message).toContain('searchQueries')
+      expect(message).toContain('"pattern": "<regex>"')
     }
+  })
+
+  it('inlines an explicit input pattern into the code-searcher spawn recipe', () => {
+    const message = buildUnavailableToolMessage({
+      toolName: 'code_search',
+      agentId: 'base2',
+      availableTools: ['read_files'],
+      input: { pattern: 'normalizeSpawnAgentList' },
+    })
+
+    expect(message).toContain('code-searcher')
+    expect(message).toContain('"pattern": "normalizeSpawnAgentList"')
+    expect(message).not.toContain('"pattern": "<regex>"')
   })
 
   it('suggests the closest granted tool for a likely typo', () => {

@@ -1028,8 +1028,9 @@ export function buildUnavailableToolMessage(params: {
   toolName: string
   agentId: string
   availableTools: string[]
+  input?: unknown
 }): string {
-  const { toolName, agentId, availableTools } = params
+  const { toolName, agentId, availableTools, input } = params
   const availableList =
     availableTools.length > 0
       ? availableTools.map((name) => `\`${name}\``).join(', ')
@@ -1039,12 +1040,26 @@ export function buildUnavailableToolMessage(params: {
   // granted. Point the model at the granted tools / spawnable agents instead
   // of letting it guess another unavailable name.
   if ((toolNames as readonly string[]).includes(toolName)) {
-    // Concrete recovery for the two content-search tools the root orchestrator
-    // is intentionally not granted: point the model at the code-searcher agent
-    // with a copyable params shape instead of the generic sentence. This stays
-    // message-only; the tool remains fail-closed and nothing is auto-spawned.
+    // Concrete recovery for content-search tools: prefer direct code_search
+    // when already granted; otherwise point at the code-searcher spawn recipe.
+    // This stays message-only; the tool remains fail-closed and nothing is
+    // auto-spawned. When the rejected input carried an explicit pattern, bake
+    // that exact string into the spawn recipe instead of a placeholder.
     if (toolName === 'code_search' || toolName === 'find_files_matching_content') {
-      return `${base} \`${toolName}\` is a registered tool the root orchestrator is not granted; spawn the code-searcher agent instead: { "agent_type": "code-searcher", "params": { "searchQueries": [{ "pattern": "<regex>", "flags": "-g *.ts" }] } }.`
+      if (availableTools.includes('code_search')) {
+        return `${base} Use the granted \`code_search\` tool directly (pattern/flags/cwd/maxResults). For multi-query batching, spawn code-searcher with params.searchQueries.`
+      }
+      const inputPattern =
+        input !== null &&
+        typeof input === 'object' &&
+        !Array.isArray(input) &&
+        typeof (input as Record<string, unknown>).pattern === 'string' &&
+        ((input as Record<string, unknown>).pattern as string).trim() !== ''
+          ? ((input as Record<string, unknown>).pattern as string)
+          : undefined
+      const patternJson =
+        inputPattern !== undefined ? JSON.stringify(inputPattern) : '"<regex>"'
+      return `${base} \`${toolName}\` is a registered tool but is not granted to this agent; spawn the code-searcher agent instead: { "agent_type": "code-searcher", "params": { "searchQueries": [{ "pattern": ${patternJson}, "flags": "-g *.ts" }] } }.`
     }
     return `${base} \`${toolName}\` is a registered tool but is not granted to this agent; use one of the available tools above, or spawn an agent that provides that capability.`
   }
@@ -1790,6 +1805,7 @@ export async function executeToolCall<T extends ToolName>(
         toolName,
         agentId: agentTemplate.id,
         availableTools,
+        input,
       }),
     })
     return abortablePreviousToolCallFinished
@@ -1802,6 +1818,7 @@ export async function executeToolCall<T extends ToolName>(
       : 'Original tool call input'
     onResponseChunk({
       type: 'error',
+
       message: `${toolCall.error}\n\n${inputLabel}:\n${formattedInput}`,
       userMessage: `The model sent a malformed \`${toolName}\` tool call and is correcting it automatically. No action is needed.`,
     })
@@ -2834,6 +2851,7 @@ export async function executeCustomToolCall(
         toolName,
         agentId: agentTemplate.id,
         availableTools,
+        input,
       }),
     })
     return abortablePreviousToolCallFinished
@@ -2851,6 +2869,7 @@ export async function executeCustomToolCall(
     })
     logger.debug(
       { toolCall, error: toolCall.error },
+
       `${toolName} error: ${toolCall.error}`,
     )
     return abortablePreviousToolCallFinished

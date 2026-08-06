@@ -53,6 +53,7 @@ const CORE_ALWAYS = [
   'read_subtree',
   'list_directory',
   'glob',
+  'code_search',
   'skill',
   'suggest_followups',
   'list_jobs',
@@ -147,6 +148,11 @@ describe('base2 progressive tool disclosure (M1)', () => {
     expect(tools).toContain('edit_3d_asset')
     expect(tools).toContain('create_plan')
     expect(tools).toContain('run_targeted_validation')
+    expect(tools).toContain('code_search')
+  })
+
+  test('CORE_TOOLS includes root content-search tool', () => {
+    expect(CORE_TOOLS).toContain('code_search')
   })
 
   test('flag on core-only: CORE present; IMPLEMENT/AUDIT/MEDIA/JOB_EXTRA absent', () => {
@@ -755,7 +761,54 @@ describe('tier resolution helpers (M1-T3)', () => {
 // instead of silently narrowing the runtime tool surface.
 describe('base2 tier membership — runtime mirror stays in sync', () => {
   test('BASE2_CORE_TOOL_NAMES equals CORE_TOOLS', () => {
+    // CORE_TOOLS re-exports BASE2_CORE_TOOL_NAMES by construction, so this is
+    // intentionally vacuous — it cannot catch a drift. The real progressive
+    // core-only surface lives in the hand-encoded CORE buildArray inside
+    // resolveModelToolNames; the tests below tie THAT copy (and the other
+    // mode-gated modes) to the runtime constant so a one-sided edit fails.
     expect([...BASE2_CORE_TOOL_NAMES]).toEqual([...CORE_TOOLS])
+  })
+
+  test('progressive core-only surface matches BASE2_CORE_TOOL_NAMES exactly', () => {
+    // resolveModelToolNames' progressive CORE buildArray is a SECOND copy of
+    // CORE membership that no test previously exercised. In the default mode
+    // (ask_user + write_todos both allowed) the surfaced set must equal the
+    // runtime constant byte-for-byte, so a tool added/removed on either side
+    // fails loudly instead of silently narrowing/widening the tool surface.
+    const coreOnly = resolveModelToolNames({
+      mode: 'default',
+      progressiveToolDisclosure: true,
+      unlockedTiers: [],
+    })
+    // Bidirectional membership over string sets — avoids the ToolName[] sort()
+    // widening that would break the AllToolNames[] toEqual overload, while still
+    // making a one-sided edit to either list fail loudly.
+    const coreSet = new Set<string>(BASE2_CORE_TOOL_NAMES)
+    expect(coreOnly.length).toBe(coreSet.size)
+    for (const name of coreOnly) {
+      expect(coreSet.has(name)).toBe(true)
+    }
+    for (const name of BASE2_CORE_TOOL_NAMES) {
+      expect(coreSet.has(name)).toBe(true)
+    }
+  })
+
+  test('mode-gated CORE tools stay within BASE2_CORE_TOOL_NAMES', () => {
+    // fast + noAskUser drops the mode-gated CORE tools (ask_user/write_todos).
+    // Every remaining surfaced name must still be a declared CORE member so
+    // the mode-gated variants cannot diverge from (or exceed) the constant.
+    const gated = resolveModelToolNames({
+      mode: 'fast',
+      noAskUser: true,
+      progressiveToolDisclosure: true,
+      unlockedTiers: [],
+    })
+    const coreSet = new Set(BASE2_CORE_TOOL_NAMES)
+    for (const name of gated) {
+      expect(coreSet.has(name)).toBe(true)
+    }
+    expect(gated).not.toContain('ask_user')
+    expect(gated).not.toContain('write_todos')
   })
 
   test('BASE2_TIER_TOOL_NAMES.implement equals IMPLEMENT_TOOLS', () => {

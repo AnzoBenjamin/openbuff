@@ -32,7 +32,8 @@ function outputText(result: any): string {
   return (result.events ?? [])
     .filter((event: any) => event?.payload?.type === 'output')
     .map((event: any) => event.payload.data)
-    .join('')}
+    .join('')
+}
 
 let counter = 0
 const tempFiles: string[] = []
@@ -511,37 +512,55 @@ describe('checkJob', () => {
   })
 
   test('follow timeout kills a running job when kill_on_timeout is true', async () => {
+    // On non-Windows platforms terminateProcessTree terminates the running job
+    // via a process-group kill: process.kill(-pid, signal). Stub process.kill
+    // to observe that actual path deterministically (a real pid 1234 may not
+    // exist), and restore it so the test stays hermetic.
+    const originalKill = process.kill
     let killCalled = false
+    // Exposed fallback that would only run if the group kill errored.
+    let childKillCalled = false
     const job = makeJob({
       child: {
         pid: 1234,
         kill: () => {
-          killCalled = true
+          childKillCalled = true
           return true
         },
       } as unknown as BackgroundJob['child'],
     })
 
-    const result = value(
-      await withElapsedFollowTimeout(() =>
-        checkJob({
-          jobId: job.jobId,
-          wait_for: 'never appears',
-          timeout_seconds: 1,
-          kill_on_timeout: true,
-          owner: TRUSTED_OWNER,
-        }),
-      ),
-    )
+    try {
+      ;(process.kill as any) = (pid: number, signal?: NodeJS.Signals | number) => {
+        // Group kill uses a negated pid (the process-group leader).
+        killCalled = true
+        return true
+      }
 
-    expect(killCalled).toBe(true)
-    expect(result).toMatchObject({
-      jobId: job.jobId,
-      state: 'stopped',
-      matched: false,
-      killed: true,
-    })
-    expect(job.status).toBe('stopped')
+      const result = value(
+        await withElapsedFollowTimeout(() =>
+          checkJob({
+            jobId: job.jobId,
+            wait_for: 'never appears',
+            timeout_seconds: 1,
+            kill_on_timeout: true,
+            owner: TRUSTED_OWNER,
+          }),
+        ),
+      )
+
+      expect(killCalled).toBe(true)
+      expect(childKillCalled).toBe(false)
+      expect(result).toMatchObject({
+        jobId: job.jobId,
+        state: 'stopped',
+        matched: false,
+        killed: true,
+      })
+      expect(job.status).toBe('stopped')
+    } finally {
+      process.kill = originalKill
+    }
   })
 
   test('follow timeout kill failure surfaces errorMessage through the output union', async () => {

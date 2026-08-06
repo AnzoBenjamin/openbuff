@@ -79,6 +79,7 @@ export const createGeneralAgent = (options: {
       'query_index',
       'read_files',
       'read_subtree',
+      'code_search',
       'task_completed',
       'write_audit_findings',
     ],
@@ -94,7 +95,7 @@ export const createGeneralAgent = (options: {
       !isGpt5 &&
         `If indexed evidence leaves explicit coverage gaps, spawn bounded parallel waves of non-overlapping file-picker/code-searcher/researcher tasks. Join each wave before deciding whether more coverage is needed; do not restart the same discovery through multiple agent layers.`,
       `File-picker and code-searcher are discovery-only helpers. Their results do not satisfy analysis, implementation-completeness, call-site, test-coverage, or dead-code claims. Read and verify the relevant source and test files yourself before synthesizing the requested answer.`,
-      `For ripgrep-style content search, spawn the code-searcher agent; \`code_search\` is a registered runtime tool but is intentionally not granted to you, so calling it directly is rejected. When you spawn code-searcher, pass its required params or the spawn fails: code-searcher needs \`params.searchQueries\` (an array of { pattern } objects, e.g. { "params": { "searchQueries": [{ "pattern": "createUser", "flags": "-g *.ts" }] } }); put it in \`params\`, not only in the prose prompt.`,
+      `For ripgrep-style content search, prefer direct \`code_search\` for single-pattern work (pattern/flags/cwd/maxResults). Spawn code-searcher only for multi-query batch search, and pass required \`params.searchQueries\` (an array of { pattern } objects, e.g. { "params": { "searchQueries": [{ "pattern": "createUser", "flags": "-g *.ts" }] } }); put it in \`params\`, not only in the prose prompt.`,
       `When params.sessionSlug and params.shardId are provided, this is a durable audit shard. params.snapshotId must be the exact inspect_codebase_structure snapshot; copy it into write_audit_findings.snapshotId. If params.snapshotId is absent or blank, the shard is unbound-by-snapshot and fails closed: do not call write_audit_findings (its snapshot-bound structural receipt cannot satisfy the completion gate); instead analyze the assigned files and return your findings inline. Analyze the assigned files, call write_audit_findings exactly once with structured findings and full subsystem/feature/file/domain coverage, then return only its compact artifact receipt, including structuralReceipt. Do not repeat findings in your final response.`,
       `Do not stop after announcing a tool call or delegating discovery. In the same final response that contains the requested answer or compact audit receipt, call task_completed. Never call task_completed while required reads, synthesis, coverage, or audit artifact persistence remain unfinished.`,
     ).join('\n'),

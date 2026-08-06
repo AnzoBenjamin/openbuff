@@ -294,6 +294,149 @@ describe('normalizeSpawnAgentList', () => {
     expect(normalizeSpawnAgentList([entry])).toEqual([entry])
   })
 
+  it('moves a top-level code-searcher pattern into params.searchQueries', () => {
+    expect(
+      normalizeSpawnAgentList([
+        {
+          agent_type: 'code-searcher',
+          pattern: 'foo',
+          flags: '-g *.ts',
+          params: {},
+        },
+      ]),
+    ).toEqual([
+      {
+        agent_type: 'code-searcher',
+        pattern: 'foo',
+        flags: '-g *.ts',
+        params: {
+          searchQueries: [{ pattern: 'foo', flags: '-g *.ts' }],
+        },
+      },
+    ])
+  })
+
+  it('builds code-searcher searchQueries from params.pattern', () => {
+    expect(
+      normalizeSpawnAgentList([
+        {
+          agent_type: 'code-searcher',
+          params: { pattern: 'bar', cwd: 'src', maxResults: 12 },
+        },
+      ]),
+    ).toEqual([
+      {
+        agent_type: 'code-searcher',
+        params: {
+          pattern: 'bar',
+          cwd: 'src',
+          maxResults: 12,
+          searchQueries: [{ pattern: 'bar', cwd: 'src', maxResults: 12 }],
+        },
+      },
+    ])
+  })
+
+  it('builds code-searcher searchQueries from a patterns array', () => {
+    expect(
+      normalizeSpawnAgentList([
+        {
+          agent_type: 'code-searcher',
+          patterns: ['one', 'two'],
+          params: {},
+        },
+      ]),
+    ).toEqual([
+      {
+        agent_type: 'code-searcher',
+        patterns: ['one', 'two'],
+        params: {
+          searchQueries: [{ pattern: 'one' }, { pattern: 'two' }],
+        },
+      },
+    ])
+  })
+
+  it('moves a top-level code-searcher searchQueries array into params', () => {
+    expect(
+      normalizeSpawnAgentList([
+        {
+          agent_type: 'code-searcher',
+          searchQueries: [{ pattern: 'top' }],
+          params: {},
+        },
+      ]),
+    ).toEqual([
+      {
+        agent_type: 'code-searcher',
+        searchQueries: [{ pattern: 'top' }],
+        params: { searchQueries: [{ pattern: 'top' }] },
+      },
+    ])
+  })
+
+  it('wraps a single code-searcher searchQueries object into an array', () => {
+    expect(
+      normalizeSpawnAgentList([
+        {
+          agent_type: 'code-searcher',
+          params: { searchQueries: { pattern: 'solo' } },
+        },
+      ]),
+    ).toEqual([
+      {
+        agent_type: 'code-searcher',
+        params: { searchQueries: [{ pattern: 'solo' }] },
+      },
+    ])
+  })
+
+  it('prefers nested code-searcher searchQueries over a top-level pattern', () => {
+    expect(
+      normalizeSpawnAgentList([
+        {
+          agent_type: 'code-searcher',
+          pattern: 'top-level',
+          params: { searchQueries: [{ pattern: 'nested' }] },
+        },
+      ]),
+    ).toEqual([
+      {
+        agent_type: 'code-searcher',
+        pattern: 'top-level',
+        params: { searchQueries: [{ pattern: 'nested' }] },
+      },
+    ])
+  })
+
+  it('does not invent code-searcher patterns from prompt prose', () => {
+    expect(
+      normalizeSpawnAgentList([
+        {
+          agent_type: 'code-searcher',
+          prompt: 'Search for normalizeSpawnAgentList',
+          params: {},
+        },
+      ]),
+    ).toEqual([
+      {
+        agent_type: 'code-searcher',
+        prompt: 'Search for normalizeSpawnAgentList',
+        params: {},
+      },
+    ])
+  })
+
+  it('does not move pattern fields for non-code-searcher agents', () => {
+    const entry = {
+      agent_type: 'editor',
+      pattern: 'should-not-move',
+      patterns: ['a', 'b'],
+      params: {},
+    }
+    expect(normalizeSpawnAgentList([entry])).toEqual([entry])
+  })
+
   it('repairs a stringified handoff object without decoding nested strings', () => {
     expect(
       normalizeSpawnAgentList([
