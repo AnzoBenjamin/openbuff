@@ -492,4 +492,62 @@ describe('handleSetOutput', () => {
       coverage: 'full',
     })
   })
+
+  test('unwraps nested editor output envelope for schema validation', async () => {
+    const template: AgentTemplate = {
+      id: 'repair-editor',
+      displayName: 'Repair Editor',
+      spawnerPrompt: 'Repair findings',
+      model: 'claude-3-5-sonnet-20241022',
+      inputSchema: {},
+      outputMode: 'structured_output',
+      outputSchema: z.object({
+        status: z.enum(['completed', 'partial', 'blocked']),
+        messages: z.array(z.any()),
+        changedFiles: z.array(z.string()),
+        requirementsAddressed: z.array(z.string()),
+        acceptanceCriteriaAddressed: z.array(z.string()),
+        findingsAddressed: z.array(z.string()),
+        unresolved: z.array(z.string()),
+        requestedValidation: z.array(z.string()),
+      }),
+      includeMessageHistory: false,
+      inheritParentSystemPrompt: false,
+      mcpServers: {},
+      toolNames: ['set_output'],
+      spawnableAgents: [],
+      systemPrompt: 'Test system prompt',
+      instructionsPrompt: 'Test instructions',
+      stepPrompt: 'Test step prompt',
+    }
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    agentState.agentType = template.id
+    const inner = {
+      status: 'blocked' as const,
+      messages: [],
+      changedFiles: [],
+      requirementsAddressed: [],
+      acceptanceCriteriaAddressed: [],
+      findingsAddressed: [],
+      unresolved: [],
+      requestedValidation: [],
+    }
+    const toolCall = {
+      toolName: 'set_output',
+      toolCallId: 'nested-editor-output',
+      input: { output: inner },
+    } as unknown as CodebuffToolCall<'set_output'>
+
+    const { output } = await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    expect(output).toEqual([{ type: 'json', value: { message: 'Output set' } }])
+    expect(agentState.output).toEqual(inner)
+  })
 })

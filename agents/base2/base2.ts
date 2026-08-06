@@ -2176,7 +2176,12 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           const securityToolResult =
             (securityReviewResult as any)?.toolResult ?? securityReviewResult
           const securityCrash = detectReviewerCrash(securityToolResult)
-          const securityBlockers = collectReviewerBlockers(securityToolResult)
+          // Parent-owned process RF strings are not repair targets for security.
+          const securityBlockers = collectReviewerBlockers(
+            securityToolResult,
+          ).filter(
+            (blocker: string) => !isParentOwnedRequirementBlocker(blocker),
+          )
           const securityAttestationIssues = collectReviewerAttestationIssues(
             securityToolResult,
             securitySnapshotFingerprint,
@@ -2603,12 +2608,14 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 input: {
                   agents: routedSpecialists.map((agentType) => ({
                     agent_type: agentType,
-                    prompt: [
-                      'Perform the routed post-edit specialist review.',
-                      `Requirements: ${prompt ?? '(none supplied)'}`,
-                      `Changed files: ${specialistPendingFiles.join(', ') || '(none)'}`,
-                      `Snapshot fingerprint (echo exactly): ${specialistCreditFingerprint}`,
-                    ].join('\n'),
+                    prompt: buildSpecialistScopedReviewPrompt({
+                      title:
+                        'Perform the routed post-edit specialist review.',
+                      agentType,
+                      files: specialistPendingFiles,
+                      snapshotFingerprint: specialistCreditFingerprint,
+                      userPrompt: prompt ?? '',
+                    }),
                     params: {
                       files: specialistPendingFiles,
                       snapshot_id: specialistCreditFingerprint,
@@ -2690,13 +2697,17 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                     input: {
                       agents: retrySpecialists.map((agentType) => ({
                         agent_type: agentType,
-                        prompt: [
-                          'Retry the routed specialist review after snapshot/file attestation failure.',
-                          `Requirements: ${prompt ?? '(none supplied)'}`,
-                          `Changed files: ${specialistPendingFiles.join(', ') || '(none)'}`,
-                          `Snapshot fingerprint (echo exactly): ${retryCreditFingerprint}`,
-                          'Correct the structured output directly; do not request source edits for this protocol error.',
-                        ].join('\n'),
+                        prompt: buildSpecialistScopedReviewPrompt({
+                          title:
+                            'Retry the routed specialist review after snapshot/file attestation failure.',
+                          agentType,
+                          files: specialistPendingFiles,
+                          snapshotFingerprint: retryCreditFingerprint,
+                          userPrompt: prompt ?? '',
+                          extraLines: [
+                            'Correct the structured output directly; do not request source edits for this protocol error.',
+                          ],
+                        }),
                         params: {
                           files: specialistPendingFiles,
                           snapshot_id: retryCreditFingerprint,
@@ -2763,9 +2774,54 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                     break
                   }
                   const crash = detectReviewerCrash(specialistToolResult)
-                  const blockers = collectReviewerBlockers(specialistToolResult)
+                  const rawBlockers =
+                    collectReviewerBlockers(specialistToolResult)
+                  // Defense in depth: parent-owned process RF strings must not
+                  // alone force a specialist repair-editor spawn.
+                  const blockers = rawBlockers.filter(
+                    (blocker: string) =>
+                      !isParentOwnedRequirementBlocker(blocker),
+                  )
+                  const parentOwnedOnlyBlockers =
+                    rawBlockers.length > 0 && blockers.length === 0
                   const verdict =
                     getReviewerFinalizationVerdict(specialistToolResult)
+                  if (parentOwnedOnlyBlockers && verdict === 'LOOKS_GOOD') {
+                    // Pure parent-owned requirementCoverage gaps with LOOKS_GOOD:
+                    // credit the specialist the same as a clean pass.
+                    delete (activeWorkState.specialistNoVerdictCounts ??= {})[
+                      agentType
+                    ]
+                    recordSuccessfulReviewReceipt(
+                      specialistToolResult,
+                      agentType,
+                      expectedSnapshotId,
+                    )
+                    activeWorkState.specialistReviewGatesDone = Array.from(
+                      new Set([
+                        ...(activeWorkState.specialistReviewGatesDone ?? []),
+                        agentType,
+                      ]),
+                    )
+                    ;(activeWorkState.specialistReviewGateFingerprints ??= {})[
+                      agentType
+                    ] = specialistCreditFingerprint
+                    clearOwedReviewer(agentType)
+                    markActiveWorkStateChanged()
+                    yield {
+                      toolName: 'add_message',
+                      input: {
+                        role: 'user',
+                        content: [
+                          `${agentType} returned LOOKS_GOOD; parent-owned process requirements were ignored for the specialist gate (not repair targets):`,
+                          '',
+                          ...rawBlockers,
+                        ].join('\n'),
+                      },
+                      includeToolCall: false,
+                    } as any
+                    continue
+                  }
                   if (blockers.length > 0) {
                     const records =
                       collectReviewerFindingRecordsInline(specialistToolResult)
@@ -4105,7 +4161,11 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             break
           }
           activeWorkState.reviewerProtocolRetryCount = 0
-          const blockers = collectReviewerBlockers(reviewerToolResult)
+          // Parent-owned process RF strings are not repair targets; filter at
+          // the consumer so raw collectReviewerBlockers can still surface them.
+          const blockers = collectReviewerBlockers(reviewerToolResult).filter(
+            (blocker: string) => !isParentOwnedRequirementBlocker(blocker),
+          )
           if (blockers.length > 0) {
             // Coverage-style findings (a missing/uncertain test-coverage gap)
             // are not code-diagnostic repairs: repair-editor cannot author the
@@ -5459,6 +5519,59 @@ function isTestCoverageReviewerFinding(text: string): boolean {
     return false;
 }
 
+/**
+ * Process/orchestrator work a source specialist or code reviewer cannot satisfy
+ * from diff/source evidence. Keep patterns specific so real source requirements
+ * that merely mention "commit" or "validation" are not suppressed.
+ * Inline mirror of gate-reviewer.ts — keep in sync.
+ */
+function isParentOwnedOrOutOfScopeRequirement(requirement: string, evidence?: string[]): boolean {
+    if (typeof requirement !== 'string')
+        return false;
+    const text = [requirement, ...(evidence ?? [])]
+        .filter((part): part is string => typeof part === 'string')
+        .join('\n')
+        .toLowerCase();
+    if (!text.trim())
+        return false;
+    if (/\brewrite\b[^.\n]{0,40}\bgit\b[^.\n]{0,40}\bcommit(?:\s+messages?)?\b/.test(text) ||
+        /\bamend\b[^.\n]{0,40}\bgit\b[^.\n]{0,40}\bcommit(?:\s+messages?|\s+history)?\b/.test(text) ||
+        /\brewrite\b[^.\n]{0,40}\bcommit\s+messages?\b/.test(text) ||
+        /\bamend\b[^.\n]{0,40}\bcommit\s+(?:messages?|history)\b/.test(text)) {
+        return true;
+    }
+    // Only the full validation gate / CI process step is parent-owned.
+    // Source requirements like "run validation of the new API" stay in-scope.
+    if (/\brun\b[^.\n]{0,24}\bfull\s+validation(?:\s+gate)?\b/.test(text)) {
+        return true;
+    }
+    if (/\bcommit\s+and\s+push\b/.test(text) ||
+        /\bpush\s+(?:the\s+)?changes\b/.test(text)) {
+        return true;
+    }
+    if (/\bconfirm\b[^.\n]{0,24}\bci\/?cd\b[^.\n]{0,24}\bgreen\b/.test(text) ||
+        /\bcheck\b[^.\n]{0,24}\bci(?:\/?cd)?\b[^.\n]{0,24}\bgreen\b/.test(text)) {
+        return true;
+    }
+    if (/\bparent\s+must\b/.test(text) ||
+        /\bparent\/?operator\b/.test(text) ||
+        /\bnot\s+performed\s+by\s+this\s+specialist\b/.test(text) ||
+        /\bspecialist\s+contract\s+forbids\s+basher\b/.test(text)) {
+        return true;
+    }
+    return false;
+}
+
+/** True when a blocker string is only a parent-owned requirementCoverage gap. */
+function isParentOwnedRequirementBlocker(blocker: string): boolean {
+    if (typeof blocker !== 'string')
+        return false;
+    const match = blocker.match(/^BLOCKING:\s*requirement\s+(?:missing|uncertain):\s*(.+)$/i);
+    if (!match)
+        return false;
+    return isParentOwnedOrOutOfScopeRequirement(match[1].trim());
+}
+
 function dedupeExactStringsPreserveOrder(values: string[]): string[] {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -5497,6 +5610,10 @@ function collectReviewerBlockers(toolResult: unknown): string[] {
                 structuredBlockers.push(`BLOCKING: ${dimension} review dimension failed`);
             }
         }
+        // Keep parent-owned process requirement gaps in the raw blocker list so
+        // consumers can credit LOOKS_GOOD via parentOwnedOnlyBlockers (filter at
+        // the call site; do not elevating-filter here).
+        // Inline mirror of gate-reviewer.ts — keep in sync.
         for (const requirement of entry.requirementCoverage ?? []) {
             if (requirement.status === 'missing' ||
                 requirement.status === 'uncertain') {
@@ -5602,10 +5719,12 @@ function getReviewerFinalizationVerdict(toolResult: unknown): ReviewerFinalizati
     if (structured.some((entry) => entry.coverage === 'missing')) {
         return '';
     }
-    // Incomplete requirements (missing/uncertain) also block finalization even
-    // when the reviewer emits a soft top-level verdict.
-    if (structured.some((entry) => (entry.requirementCoverage ?? []).some((requirement) => requirement.status === 'missing' ||
-        requirement.status === 'uncertain'))) {
+    // Incomplete in-scope requirements (missing/uncertain) also block
+    // finalization even when the reviewer emits a soft top-level verdict.
+    // Parent-owned process tasks are not RF blockers for source reviewers.
+    if (structured.some((entry) => (entry.requirementCoverage ?? []).some((requirement) => (requirement.status === 'missing' ||
+        requirement.status === 'uncertain') &&
+        !isParentOwnedOrOutOfScopeRequirement(requirement.requirement, requirement.evidence)))) {
         return '';
     }
     // Finalization credit is LOOKS_GOOD only. NON_BLOCKING findings are
@@ -6622,6 +6741,47 @@ function hashGateSnapshotDetails(details: string): string {
       ): boolean {
         const last = activeWorkState.auxGatesLastPendingFiles ?? []
         return !gateFileSetsEqual(last, currentFiles)
+      }
+
+      // Specialist spawn brief: domain-only requirements (not the full parent
+      // user prompt). Inline because handleSteps is serialized via
+      // toString()/new Function and cannot import module helpers.
+      function buildSpecialistScopedReviewPrompt(input: {
+        title: string
+        agentType: string
+        files: string[]
+        snapshotFingerprint: string
+        userPrompt: string
+        extraLines?: string[]
+      }): string {
+        const domainLabel = input.agentType
+          .replace(/-reviewer$/i, '')
+          .replace(/-specialist$/i, '')
+          .replace(/-/g, '/')
+        const truncatedIntent = (input.userPrompt ?? '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 400)
+        const lines = [
+          input.title,
+          'Requirements (specialist-domain only):',
+          `- Review only in-scope ${domainLabel} risks in the changed files.`,
+          '- Score requirementCoverage only for requirements this specialist can judge from source/diff evidence.',
+          '- Do NOT treat parent workflow as review requirements: rewriting git commits, running full validation, commit/push, confirming CI/CD green, or other operator/orchestrator duties. Omit those from requirementCoverage (or if mentioned only as context, never mark them missing/uncertain for the gate).',
+          `Changed files: ${input.files.join(', ') || '(none)'}`,
+          `Snapshot fingerprint (echo exactly): ${input.snapshotFingerprint}`,
+        ]
+        if (truncatedIntent) {
+          lines.push(
+            `Non-blocking parent context (not a Requirements checklist): ${truncatedIntent}`,
+          )
+        }
+        if (Array.isArray(input.extraLines)) {
+          for (const line of input.extraLines) {
+            if (typeof line === 'string' && line.trim()) lines.push(line)
+          }
+        }
+        return lines.join('\n')
       }
 
       function selectSpecialistReviewersInline(input: {
