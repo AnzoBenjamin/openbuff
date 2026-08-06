@@ -527,8 +527,8 @@ BACKGROUND start is fire-and-forget: it stores `dirtyBeforePaths` + `projectRoot
 Shipped reviewers use a structured, versioned verdict. Code-reviewer reports
 the reviewed snapshot fingerprint and files, separate correctness/security/
 tests/API-compatibility/performance dimensions, requirement coverage with
-evidence, findings, and test-coverage classification. Missing or uncertain
-requirements, a blocked dimension, or missing behavior coverage block
+evidence, findings, and test-coverage classification. **In-scope** missing or
+uncertain requirements, a blocked dimension, or missing behavior coverage block
 finalization regardless of the overall verdict. Security-reviewer similarly
 reports input-boundary, authorization, secret-handling, resource-safety, and
 fail-closed dimensions. Legacy label and compact-JSON parsing remains as a
@@ -540,9 +540,48 @@ include every pending file. Review guidance also covers meaningful test
 assertions, public and persisted compatibility, package boundaries,
 generated-artifact freshness, migration safety, and bounded resource use.
 
-The `code-reviewer` gate decides whether a turn may finish green. **Only structured `verdict === 'LOOKS_GOOD'` permits gate pass / finalization** (after coverage and requirement adequacy checks). `NON_BLOCKING` does **not** finalize: its findings are collected as open repair targets and enter the same repair-editor / test-writer re-review loop used for `BLOCKING`. Both BLOCKING and NON_BLOCKING rounds increment the reviewer repair counter for telemetry. Repair loops default to **unlimited / progress-gated** (no-progress fingerprint and incomplete-receipt exits); optional hard caps remain via `maxReviewerRepairRounds` / `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS` (max `20`). Validation-hook and specialist repair loops are likewise unlimited by default, with optional caps via `maxRepairRounds` / `maxSpecialistRepairRounds` and envs `OPENBUFF_MAX_REPAIR_ROUNDS` / `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS` (max `20`). Already-credited (`gatePassedFiles`) dirty task files stay out of gate scope so they do not re-arm validation/review while remaining dirty for commit UX. Coverage-missing and incomplete requirements still hard-block. The orchestrator parses the reviewer's tool result to extract a finalization verdict (`LOOKS_GOOD` or empty string `''`) and to surface any repair findings. The parser prefers structured (parsed-object) verdicts over text-mode fallbacks. The parsing helpers live in `agents/base2/gate-reviewer.ts` and are mirrored inline inside `createBase2.handleSteps` (the mirror is parity-tested by `agents/__tests__/gate-reviewer.test.ts`).
+The `code-reviewer` gate decides whether a turn may finish green. **Only structured `verdict === 'LOOKS_GOOD'` permits gate pass / finalization** (after coverage and requirement adequacy checks). `NON_BLOCKING` does **not** finalize: its findings are collected as open repair targets and enter the same repair-editor / test-writer re-review loop used for `BLOCKING`. Both BLOCKING and NON_BLOCKING rounds increment the reviewer repair counter for telemetry. Repair loops default to **unlimited / progress-gated** (no-progress fingerprint and incomplete-receipt exits); optional hard caps remain via `maxReviewerRepairRounds` / `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS` (max `20`). Validation-hook and specialist repair loops are likewise unlimited by default, with optional caps via `maxRepairRounds` / `maxSpecialistRepairRounds` and envs `OPENBUFF_MAX_REPAIR_ROUNDS` / `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS` (max `20`). Already-credited (`gatePassedFiles`) dirty task files stay out of gate scope so they do not re-arm validation/review while remaining dirty for commit UX. Coverage-missing and **in-scope** incomplete requirements still hard-block. The orchestrator parses the reviewer's tool result to extract a finalization verdict (`LOOKS_GOOD` or empty string `''`) and to surface any repair findings. The parser prefers structured (parsed-object) verdicts over text-mode fallbacks. The parsing helpers live in `agents/base2/gate-reviewer.ts` and are mirrored inline inside `createBase2.handleSteps` (the mirror is parity-tested by `agents/__tests__/gate-reviewer.test.ts`).
 
-The inline mirror is generated, not hand-maintained. `scripts/generate-gate-helpers.ts` is its single source of truth: it reads `agents/base2/gate-paths.ts`, `agents/base2/gate-reviewer.ts`, `agents/base2/gate-repair.ts`, `agents/base2/gate-concurrency.ts`, and `agents/base2/gate-fingerprint.ts`, strips their `export` modifiers, and emits a deterministic block spliced into the `<gate-helpers-generated>` marker region of `agents/base2/base2.ts`. Pass `--write <path>` to refresh that region (the `prebuild:agents` script in `cli/package.json` does this automatically) or `--check <path>` to fail when it is stale; `agents/__tests__/gate-helpers-freshness.test.ts` enforces the same freshness check in CI.
+### Parent-owned / process requirements
+
+Source and specialist reviewers score only **in-scope implementation**
+requirements in `requirementCoverage`. Parent/orchestrator process work is out
+of scope for those reviewers, including duties such as:
+
+- rewriting or amending git commit messages
+- running the full validation gate
+- commit and push
+- confirming CI/CD is green
+- similar "parent must" / operator-only process steps
+
+Canonical helpers live in `agents/base2/gate-reviewer.ts`
+(`isParentOwnedOrOutOfScopeRequirement`, `isParentOwnedRequirementBlocker`,
+`buildSpecialistScopedReviewPrompt`, etc.). They skip elevating parent-owned
+missing/uncertain rows to review-finding blockers and still allow `LOOKS_GOOD`
+finalization when dimensions and behavior coverage pass. Call-site parent-owned
+filters pass the reviewer `toolResult` into `isParentOwnedRequirementBlocker` so
+structured `requirementCoverage` evidence is consulted the same way as
+`getReviewerFinalizationVerdict` (a gap that is parent-owned only via evidence
+must not finalize while still spawning `repair-editor`). Specialists receive a
+scoped spawn brief (`Requirements (specialist-domain only)`), not the raw user
+prompt as a checklist; parent process wording may appear only under non-blocking
+parent context. Defense in depth: pure parent-owned RF sets with `LOOKS_GOOD` do
+not spawn `repair-editor`. Real in-scope incomplete requirements still
+hard-block. Unit coverage lives in `agents/__tests__/gate-reviewer.test.ts` and
+the handleSteps credit path in `agents/__tests__/base2.test.ts`; the e2e
+regression is in `agents/e2e/gate-aux-ordering.e2e.test.ts`.
+
+The inline base2 mirror is generated from that canonical module — do **not**
+hand-edit the `<gate-helpers-generated>` region in `agents/base2/base2.ts`.
+`scripts/generate-gate-helpers.ts` is the single source of truth: it reads
+`agents/base2/gate-paths.ts`, `agents/base2/gate-reviewer.ts`,
+`agents/base2/gate-repair.ts`, `agents/base2/gate-concurrency.ts`, and
+`agents/base2/gate-fingerprint.ts`, strips their `export` modifiers, and emits a
+deterministic block into the marker region. Refresh with
+`bun run scripts/generate-gate-helpers.ts --write agents/base2/base2.ts` (the
+`prebuild:agents` script in `cli/package.json` does this automatically) or
+`--check` to fail when stale; `agents/__tests__/gate-helpers-freshness.test.ts`
+enforces the same freshness check in CI.
 
 A reviewer may emit its verdict in either text mode or structured (JSON) mode:
 

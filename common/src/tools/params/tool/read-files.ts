@@ -217,14 +217,14 @@ const inputSchema = z
               .string()
               .min(1, 'Paths cannot be empty')
               .describe(
-                `File path to read relative to the **project root**. Absolute file paths will not work.`,
+                'File path relative to the project root (absolute paths fail).',
               ),
           ),
         )
         .optional()
         .default([])
         .describe(
-          'List of file paths to read. Each complete result includes a readCapability that can be copied directly to basedOnRead for a follow-up edit. Batch results include a separate summary entry with ok/failed/requested counts when available.',
+          'Whole-file paths to read. Complete results include editAnchor.readCapability for follow-up edits.',
         ),
       ranges: z
         .array(
@@ -232,9 +232,7 @@ const inputSchema = z
             path: z
               .string()
               .min(1)
-              .describe(
-                'File path to read a line range from, relative to the project root.',
-              ),
+              .describe('Project-relative file path.'),
             startLine: z
               .number()
               .int()
@@ -253,25 +251,25 @@ const inputSchema = z
         )
         .optional()
         .describe(
-          'Optional: read only a 1-indexed inclusive line range of specific files. Use this to page through large files that exceeded the read limit. Each entry reads `path` from startLine..endLine. When exactly one paths entry is supplied, a missing range path is inferred from it.',
+          '1-indexed inclusive line ranges. Sole `paths` entry infers missing path.',
         ),
       windows: z
         .preprocess(coerceToArray, z.array(readFilesWindowSelectorSchema))
         .optional()
         .describe(
-          'Optional: windowed reads for large files. Each returned window is a COMPLETE contiguous line block that mints its own cap.v3 editAnchor, so you can edit it directly via replace_range/basedOnRead without a guess-shrink-retry loop. When exactly one paths entry is supplied, a missing window path is inferred from it.',
+          'Contiguous line windows; each complete window mints a scoped cap.v3 editAnchor.',
         ),
       around: z
         .preprocess(coerceToArray, z.array(readFilesAroundSelectorSchema))
         .optional()
         .describe(
-          'Optional: content-anchored reads. Finds the Nth exact literal match and returns a complete bounded block around it, minting a cap.v3 editAnchor for that block. When exactly one paths entry is supplied, a missing around path is inferred from it.',
+          'Literal-anchored context blocks with a scoped cap.v3 editAnchor per block.',
         ),
       symbol: z
         .preprocess(coerceToArray, z.array(readFilesSymbolSelectorSchema))
         .optional()
         .describe(
-          'Optional: occurrence-aware single-symbol reads. Each entry pulls the Nth (default 1) top-level symbol with the given name, mirroring rewrite_symbol occurrence semantics, and returns one `symbol` block item with its own editAnchor. Prefer batch `symbols` for several symbols from one file; use `symbol` when you need a specific occurrence of a same-named symbol. When exactly one paths entry is supplied, a missing symbol path is inferred from it.',
+          'Nth top-level symbol by name (rewrite_symbol occurrence semantics); prefer batch `symbols` when possible.',
         ),
       symbols: z
         .array(
@@ -279,19 +277,15 @@ const inputSchema = z
             path: z
               .string()
               .min(1)
-              .describe(
-                'File path to extract symbol slices from, relative to the project root.',
-              ),
+              .describe('Project-relative file path.'),
             names: z
               .preprocess(coerceToArray, z.array(z.string().min(1)))
-              .describe(
-                'Symbol names (functions, classes, interfaces, methods) to slice.',
-              ),
+              .describe('Symbol names to slice.'),
           }),
         )
         .optional()
         .describe(
-          'Optional: instead of (or in addition to) whole files, pull just the implementation slices for named symbols. Prefer this over a full read when you already know which functions/classes you need, especially in large files. Each returned slice includes one editAnchor whose readCapability can anchor a later edit.',
+          'Named symbol slices with editAnchors; prefer over full reads when names are known.',
         ),
     }),
   )
@@ -316,43 +310,16 @@ const inputSchema = z
     `Read multiple files from disk and return their contents. Use this tool to read as many files as would be helpful to answer the user's request.`,
   )
 const description = `
-Read files from disk. For large files, prefer ranges, windows, around-blocks, or symbol slices over full-file reads before editing.
+Read files from disk. Prefer ranges/windows/around/symbol slices over full reads before editing large files.
 
-Important:
-- Full reads may be truncated for large files; the truncation marker includes the original character and line counts. Do not edit from truncated content.
-- Every complete read returns one structured editAnchor containing startLine, endLine, contentHash, and an authenticated cap.v3 readCapability bound to this project, path, and agent run. Copy editAnchor.readCapability verbatim to basedOnRead/readCapability; use the other fields for diagnostics only and never mix them into the same edit call.
-- Six selector kinds may be combined in one call: \`paths\` (whole files), \`ranges\` (line ranges), \`windows\` (contiguous line windows), \`around\` (literal-anchored context blocks), \`symbol\` (occurrence-aware single-symbol block), and \`symbols\` (batch named symbol slices).
-- Authority ladder: a whole-file-covering read (complete paths read, complete 1..totalLines range, or a window/around/symbol block spanning the whole file) grants sticky whole-file authorization. A complete sub-file block (window/around/symbol/range) mints only a scoped cap.v3 capability for that exact block. Partial or truncated reads mint nothing.
-- Symbol slices: pass \`symbols: [{ path, names }]\` to pull just the named functions/classes/methods instead of the whole file. Prefer this when you already know the symbol names — pair it with read_outline to discover names in a large file first (outline to see structure, then symbols to pull what you need). Use \`ranges\` when you're paging by line number instead.
-- Windowed read: pass \`windows: [{ path, windowSize?, window? }]\`. The file is split into complete contiguous line windows (default windowSize 400). Pick \`window\` (1-indexed) or omit it to get the manifest (totalLines, windowSize, windowCount) plus the first window.
-- Content-anchored read: pass \`around: [{ path, match, occurrence?, contextLines? }]\`. Finds the 1-indexed occurrence (default 1) of the exact literal \`match\` and returns a complete block covering the match plus \`contextLines\` (default 40) on each side, clamped at file boundaries.
-- Occurrence-aware symbol read: pass \`symbol: [{ path, name, occurrence? }]\` to pull the Nth (default 1) top-level symbol with that name, mirroring rewrite_symbol occurrence semantics. Prefer batch \`symbols\` for several symbols from one file; use \`symbol\` when you need a specific occurrence of a same-named symbol. Each complete symbol block mints its own cap.v3 editAnchor.
-- Block byte budget: for every window/around/symbol block, the decorated content and the exact sourceContent are each bounded independently by a ${MAX_READ_BLOCK_BYTES}-byte budget; it is a per-payload bound, not a combined total. A block whose decorated content or sourceContent exceeds that budget is returned as a \`too_large\` error item instead of a partial block, so request a smaller windowSize/contextLines.
-- Model-visible complete reads expose one editAnchor rather than duplicate top-level hash/capability fields.
-- Complete range results also return sourceContent containing the exact undecorated normalized range text used for the range hash. Use sourceContent—not the numbered display content—when an exact oldString is truly needed. Never splice a mid-line suffix together with following lines; that is not contiguous source text.
-- For a medium/large or formatting-sensitive block, use an edit_transaction replace_range edit and copy editAnchor.readCapability directly instead of reconstructing oldString or separate range fields.
-- For a large-file str_replace edit inside edit_transaction, copy editAnchor.readCapability into basedOnRead.
-
-Example:
-${$getNativeToolCallExampleString({
-  toolName,
-  inputSchema,
-  input: {
-    paths: ['path/to/file1.ts', 'path/to/file2.ts'],
-    ranges: [{ path: 'path/to/large-file.ts', startLine: 120, endLine: 160 }],
-    windows: [{ path: 'path/to/large-file.ts', window: 2 }],
-    around: [
-      {
-        path: 'path/to/large-file.ts',
-        match: 'export function loadConfig(',
-        contextLines: 40,
-      },
-    ],
-    symbol: [{ path: 'path/to/large-file.ts', name: 'loadConfig', occurrence: 2 }],
-    symbols: [{ path: 'path/to/large-file.ts', names: ['loadConfig'] }],
-  },
-  endsAgentStep,
-})}
+- Selectors (combinable): \`paths\`, \`ranges\`, \`windows\`, \`around\`, \`symbol\`, \`symbols\`.
+- Complete reads return one editAnchor (startLine, endLine, contentHash, cap.v3 readCapability). Copy editAnchor.readCapability verbatim to basedOnRead/readCapability; other fields are diagnostics only.
+- Authority: whole-file-covering reads grant sticky whole-file auth; complete sub-file blocks mint a scoped cap.v3 for that block only. Partial/truncated reads mint nothing — do not edit from truncated content.
+- \`windows\`: contiguous line windows (default size 400); omit \`window\` for manifest + first window.
+- \`around\`: Nth literal \`match\` + contextLines (default 40).
+- \`symbol\` / \`symbols\`: named top-level slices (pair with read_outline). Prefer batch \`symbols\`; use \`symbol\` for a specific occurrence.
+- Block budget: each window/around/symbol payload (decorated content and sourceContent independently) is capped at ${MAX_READ_BLOCK_BYTES} bytes; oversize blocks return \`too_large\` (shrink windowSize/contextLines).
+- Prefer replace_range with readCapability for medium/large blocks; for large-file str_replace copy readCapability into basedOnRead. Range results include sourceContent for exact oldString text.
 `.trim()
 export const readFilesParams = {
   toolName,

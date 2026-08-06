@@ -268,3 +268,61 @@ M3-T1..T4 landed (AC-A1 for M2 already satisfied).
   - Default fixed (prod, SMALL, no proactive): **46,808** tok (session-dependent git still inflates)
 
 **Next:** gate this M3 diff; optional commit after GATE: PASSED. M5 schema diet / M1 tool default-on still separate.
+
+<!-- update_plan_status:appended -->
+## Resume 2026-08-05 — continue open plan — 2026-08-05T17:37:42.619Z
+
+Resumed context-baseline-25k. Verified live tree:
+
+- M1 canary surface (tool tiers + unlock + locked-tool path + Tool surface prompt): landed earlier; default-on still blocked on AC-A1 for tools (prompt AC-A1 already satisfied for M2).
+- M2 progressive prompt disclosure default-on: committed `71eb68b44`.
+- M3 cheaper SMALL tree (1750) + knowledge blurb: committed `9ce22c079`.
+- M4 lean proactive: committed in `77f403b01` + NF-1/NF-2 follow-ups.
+
+PLAN checkboxes were stale; syncing done markers. Next implementation: **M5 schema/description diet** (rank CORE tools, shorten top descriptions, keep core ≤12k), then M6 history hygiene polish and remaining X-T docs if needed.
+
+
+<!-- update_plan_status:appended -->
+## M5-T1 ranking — 2026-08-05 — 2026-08-05T17:44:16.775Z
+
+Measured via `scripts/rank-core-tool-tokens.ts` (new):
+
+| Metric | Tokens |
+|---|---:|
+| CORE total | **14,183** |
+| progressive core-only | **14,183** |
+| full surface (33 tools) | **23,598** |
+| AC-F2 core target | ≤12,000 |
+
+Top CORE costs: read_files 3002, spawn_agents 2876, query_index 1219, ask_user 1078, check_job 954, check_background_agent 936, suggest_followups 754, write_todos 627, list_jobs 569, glob 549.
+
+Next: M5-T2 shorten top CORE tool descriptions (~2.5–4k savings needed).
+
+
+<!-- update_plan_status:appended -->
+## M5 schema diet complete — 2026-08-05 — 2026-08-05T17:46:34.460Z
+
+M5-T1 ranking + M5-T2/T3 description diet landed.
+
+**Token budget (scripts/rank-core-tool-tokens.ts):**
+| Metric | Before | After |
+|---|---:|---:|
+| CORE / progressive core-only | 14,183 | **9,680** (AC-F2 ≤12k met) |
+| Full surface (33 tools) | 23,598 | **19,095** (≤25k still met) |
+
+**Edits:** shortened model-facing `description` prose on top CORE tools under `common/src/tools/params/tool/` (read_files, spawn_agents, query_index, ask_user, check_job, check_background_agent, suggest_followups, write_todos, list_jobs, glob, read_subtree, read_logs). Ranking helper: `scripts/rank-core-tool-tokens.ts`.
+
+**Validation (local):**
+- `bun test` coerce-to-array + base2-progressive-tool-disclosure + base2-context-budget: green (core-only <12k assertion pass)
+- `cd common && bun run typecheck`: clean
+
+**M6 quick check:** `tool-result-lifecycle.ts` already tags `query_index` as VERBOSE + normal importance (not pinned/high); spawn tools stay high. M6-T1 largely already satisfied; residual M6-T2/T3 optional polish only.
+
+**Still open on this plan:** M1 tool default-on (AC-A1 for tools), M5 default-on N/A (diet is always-on), optional M6 polish, X-T docs for tool tiers + schema diet.
+
+
+<!-- update_plan_status:appended -->
+## M5 security review cleared — 2026-08-05T17:59:42.118Z
+
+Snapshot-bound security-reviewer returned LOOKS_GOOD (receipt 0xRtSQH7XPo / snapshot v3:8b8a8c283b248aeb571eb42f715cc448ac9d77f39c473a974eb8ecdeb6eb1db5). Coverage covered; no findingIds. Pending files: rank script + 12 CORE tool description diets. Local checks earlier: coreTotal 9680 (≤12k), 138+8 tests pass, common typecheck clean. Ending turn for automated hooks+reviewer gate.
+

@@ -117,17 +117,11 @@ const outputSchema = z.object({
 })
 
 const description = `
-Ask the user multiple choice questions and pause execution until they respond. Supports both single-select (radio) and multi-select (checkbox) modes.
+Ask multiple-choice questions and pause until the user answers. Default single-select; set multiSelect true for checkboxes. Users may pick options, type custom text, or skip.
 
-The user can either:
-- Select one option (single-select mode, default)
-- Select multiple options (multi-select mode, set multiSelect: true)
-- Type a custom answer in the "Other" text field
-- Skip the questions to provide different instructions instead
+Do NOT add "Custom"/"Other"/"None of the above" options — the UI already provides a custom text field.
 
-IMPORTANT: Do NOT include options like "Custom", "Other", "None of the above", or similar catch-all options. The UI automatically provides a "Custom" text input field for users to type their own answer. Including such options would be redundant and confusing.
-
-Single-select example:
+Example:
 ${$getNativeToolCallExampleString({
   toolName,
   inputSchema,
@@ -137,41 +131,13 @@ ${$getNativeToolCallExampleString({
         question: 'Which authentication method should we use?',
         header: 'Auth method',
         options: [
-          {
-            label: 'JWT tokens',
-            description: 'Stateless tokens stored in localStorage',
-          },
+          { label: 'JWT tokens', description: 'Stateless localStorage tokens' },
           {
             label: 'Session cookies',
-            description: 'Server-side sessions with httpOnly cookies',
+            description: 'Server sessions with httpOnly cookies',
           },
-          {
-            label: 'OAuth2',
-            description: 'Third-party authentication (Google, GitHub, etc.)',
-          },
+          { label: 'OAuth2', description: 'Third-party auth (Google, GitHub)' },
         ],
-      },
-    ],
-  },
-  endsAgentStep,
-})}
-
-Multi-select example:
-${$getNativeToolCallExampleString({
-  toolName,
-  inputSchema,
-  input: {
-    questions: [
-      {
-        question: 'Which features should we implement?',
-        header: 'Features',
-        options: [
-          { label: 'Rate limiting' },
-          { label: 'Caching' },
-          { label: 'Logging' },
-          { label: 'Monitoring' },
-        ],
-        multiSelect: true,
       },
     ],
   },

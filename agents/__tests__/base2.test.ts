@@ -35,8 +35,77 @@ const LIST_JOBS_RESULT = {
   jobs: [],
   note: 'No action required unless you need this output.',
 }
+
+function feedJson(value: unknown) {
+  return { toolResult: [{ type: 'json', value }] } as any
+}
+
+function finishStepWithToolResult(value: unknown) {
+  return {
+    stepsComplete: true,
+    toolResult: [{ type: 'json', value }],
+  } as any
+}
+
 function feedListJobs() {
-  return { toolResult: [{ type: 'json', value: LIST_JOBS_RESULT }] } as any
+  return feedJson(LIST_JOBS_RESULT)
+}
+
+/**
+ * LOOKS_GOOD specialist receipt whose only requirementCoverage gaps are
+ * parent-owned process duties. Includes rows parent-owned only via evidence
+ * (requirement text alone is not a process cue) so call-site filters must
+ * re-check structured requirementCoverage the same way finalization does.
+ * Gate helpers must credit the specialist without spawning repair-editor.
+ */
+function looksGoodWithParentOwnedRequirements(
+  agentType: string,
+  snapshotFingerprint: string,
+  files: string[],
+) {
+  return feedJson({
+    agentType,
+    value: {
+      schemaVersion: 1,
+      family: 'reviewer',
+      verdict: 'LOOKS_GOOD',
+      snapshotFingerprint,
+      reviewedFiles: files,
+      findings: [],
+      coverage: 'covered',
+      dimensions: {},
+      requirementCoverage: [
+        {
+          requirement: 'Rewrite git commit messages',
+          status: 'missing',
+          evidence: ['parent only'],
+        },
+        {
+          requirement: 'Run full validation gate',
+          status: 'missing',
+          evidence: ['parent only'],
+        },
+        {
+          requirement: 'Commit and push',
+          status: 'missing',
+          evidence: ['parent only'],
+        },
+        {
+          requirement: 'Confirm CI/CD is green',
+          status: 'uncertain',
+          evidence: ['parent only'],
+        },
+        // Parent-owned only via evidence; requirement text alone is in-scope.
+        {
+          requirement: 'Ship remaining workflow steps',
+          status: 'missing',
+          evidence: [
+            'parent must run full validation gate after this specialist',
+          ],
+        },
+      ],
+    },
+  })
 }
 
 /**
@@ -384,6 +453,10 @@ describe('base2 inline repairEditorReadablePaths', () => {
     expect(paths.some((p) => p.includes('node_modules'))).toBe(false)
     expect(paths.some((p) => p.includes('.env'))).toBe(false)
     expect(paths).not.toContain('https://example.com/src/schema.ts')
+    // Protocol is stripped by the path-like capture (match starts after `:`),
+    // so host-looking first segments must also be rejected.
+    expect(paths).not.toContain('example.com/src/schema.ts')
+    expect(paths.some((p) => p.startsWith('example.com'))).toBe(false)
     expect(paths).not.toEqual(expect.arrayContaining(['*', '**/*']))
   })
 
@@ -1380,6 +1453,101 @@ describe('base2 proactive index lookup', () => {
       input: { role: 'user' },
     })
     expect(cachedNote.input.content).toContain('cached result reused')
+  })
+
+  test('compact proactive envelope skips malformed early rows and still fills 8 usable paths (M4 RF-2)', () => {
+    const base2 = createBase2('default')
+    const prompt = 'Refactor the authentication module code.'
+    const agentState = {
+      agentId: 'base2-classify',
+      workspaceState: { revision: 7, snapshotId: 'snapshot-malformed-cap' },
+    }
+
+    const malformedRows = [
+      {},
+      { path: '' },
+      { score: 1 },
+      { path: null },
+      { path: undefined },
+      { reason: 'no path' },
+      { kind: 'file' },
+      null,
+    ]
+    const validRows = Array.from({ length: 10 }, (_, index) => ({
+      path: `packages/sdk/src/good-${index}.ts`,
+      score: 0.95 - index * 0.01,
+      reason: `matched good ${index}`,
+      kind: 'file',
+      relatedFiles: [
+        `packages/sdk/src/good-related-${index}-a.ts`,
+        `packages/sdk/src/good-related-${index}-b.ts`,
+      ],
+      matchedSnippets: ['snippet-a', 'snippet-b'],
+    }))
+    const fatValue = {
+      kind: 'query_index_result',
+      status: 'ok',
+      coverage: { matchedConcernCount: 3, totalConcernCount: 5, layers: [] },
+      totalIndexed: 2048,
+      snapshotId: 'snapshot-malformed-cap',
+      indexMutationEpoch: 11,
+      results: [...malformedRows, ...validRows],
+    }
+
+    const gen = base2.handleSteps!({
+      agentState: agentState as any,
+      prompt,
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(gen.next().value).toMatchObject({ toolName: 'query_index' })
+    const routeNote = gen.next({
+      toolResult: [{ type: 'json', value: fatValue }],
+    } as any).value as any
+    expect(routeNote).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect(routeNote.input.content).toContain('Proactive retrieval route')
+    expect(routeNote.input.content).not.toContain('cached')
+
+    const cached = (agentState as any).proactiveRetrievalCache
+    expect(cached).toMatchObject({
+      workspaceRevision: 7,
+      indexMutationEpoch: 11,
+    })
+
+    // Malformed early rows are skipped; compact envelope fills the 8-path cap
+    // from usable paths only (good-0..good-7), strips fat fields, keeps epoch.
+    expect(cached.result).toEqual({
+      type: 'json',
+      value: {
+        kind: 'query_index_result',
+        results: Array.from({ length: 8 }, (_, index) => ({
+          path: `packages/sdk/src/good-${index}.ts`,
+          score: 0.95 - index * 0.01,
+          reason: `matched good ${index}`,
+          kind: 'file',
+        })),
+        indexMutationEpoch: 11,
+        totalIndexed: 2048,
+        snapshotId: 'snapshot-malformed-cap',
+      },
+    })
+
+    expect(routeNote.input.content).toContain(
+      JSON.stringify(
+        Array.from({ length: 8 }, (_, index) => ({
+          path: `packages/sdk/src/good-${index}.ts`,
+          score: 0.95 - index * 0.01,
+          reason: `matched good ${index}`,
+          kind: 'file',
+        })),
+      ),
+    )
+    expect(routeNote.input.content).not.toContain('relatedFiles')
+    expect(routeNote.input.content).not.toContain('matchedSnippets')
+    expect(routeNote.input.content).not.toContain('good-8')
   })
 })
 
@@ -7749,5 +7917,153 @@ describe('base2 content-based reviewer finding correlation', () => {
     // The object-finding blocker correlates by [id] to its real record.
     expect(findings[1].id).toBe('security-reviewer:containment:real')
     expect(findings[1].text).toBe('Reject nested fixture paths.')
+  })
+})
+
+describe('base2 specialist parent-owned LOOKS_GOOD credit', () => {
+  test('LOOKS_GOOD reliability-reviewer with only parent-owned requirementCoverage does not spawn repair-editor', () => {
+    // Mirror of agents/e2e/gate-aux-ordering.e2e.test.ts parent-owned credit:
+    // a state/session path routes to reliability-reviewer; LOOKS_GOOD whose only
+    // requirementCoverage gaps are parent process duties must credit the
+    // specialist without spawning repair-editor.
+    const tmpDir = makeProjectTempDir('base2-parent-owned-specialist-')
+    try {
+      const stateDir = join(tmpDir, 'state')
+      mkdirSync(stateDir, { recursive: true })
+      const absoluteFile = join(stateDir, 'session.ts')
+      writeFileSync(absoluteFile, 'export const session = "v1"\n')
+      // Prefer project-relative path under .base2-test-scratch when cwd is the
+      // openbuff root so the reliability router sees a `state` segment.
+      const gateFile = normalizeGateFilePath(absoluteFile)
+      const base2 = createBase2('default')
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          changedFiles: [gateFile],
+          touchedFiles: [gateFile],
+          pendingGateFiles: [gateFile],
+          currentPhase: 'awaiting_validation',
+          openReviewerBlockers: [],
+          openReviewerFindings: [],
+          lastValidationSummary: '',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [],
+          gatePassedPendingFiles: [],
+          gatePassedReviewerVerdict: '',
+          gatePassedValidationSummary: '',
+          gatePassedFingerprint: '',
+          lastReviewerGateSkipReason: '',
+          reviewReceipts: [],
+          testWriterGateDone: true,
+          docWriterGateDone: true,
+          securityReviewGateDone: true,
+          preEditSecurityReviewDone: true,
+          specialistReviewGatesDone: [],
+          auxGatesLastPendingFiles: [gateFile],
+        },
+      }
+      // Process tasks stay in the prompt for non-blocking parent context; avoid
+      // classifyProactiveRetrieval code-intent keywords so first yield is git_status.
+      const prompt =
+        'Please finish the pending reliability finding. Parent will later commit and push then confirm CI/CD is green.'
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt,
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'list_jobs', input: {} })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+        input: { agent_type: 'context-pruner' },
+      })
+      expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+      expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+        toolName: 'git_status',
+        input: {},
+      })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'list_jobs', input: {} })
+
+      const bundle = gen.next(feedListJobs())
+      expect(bundle.value).toMatchObject({
+        toolName: 'get_change_review_bundle',
+        input: {},
+      })
+      const spawn = gen.next(
+        feedJson({
+          snapshotId: 'unit-spec-snap-parent-owned',
+          files: [gateFile],
+        }),
+      )
+      expect(spawn.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      })
+      const spawnPrompt = (spawn.value as any).input.agents[0].prompt as string
+      expect(typeof spawnPrompt).toBe('string')
+      expect(
+        spawnPrompt.includes('specialist-domain only') ||
+          spawnPrompt.includes('Do NOT treat parent workflow'),
+      ).toBe(true)
+      expect(spawnPrompt).not.toMatch(
+        new RegExp(
+          `^Requirements:\\s*${prompt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+          'm',
+        ),
+      )
+      const fingerprint = String(
+        (spawn.value as any).input.agents[0].params?.snapshot_id ?? '',
+      )
+      expect(fingerprint).toMatch(/^v3:[a-f0-9]{64}$/)
+
+      const after = gen.next(
+        looksGoodWithParentOwnedRequirements(
+          'reliability-reviewer',
+          fingerprint,
+          [gateFile],
+        ),
+      )
+      const afterValue = after.value as any
+      const isRepairEditorSpawn =
+        afterValue?.toolName === 'spawn_agents' &&
+        afterValue?.input?.agents?.[0]?.agent_type === 'repair-editor'
+      expect(isRepairEditorSpawn).toBe(false)
+
+      let creditYield = after
+      if (
+        afterValue?.toolName === 'add_message' &&
+        typeof afterValue?.input?.content === 'string' &&
+        afterValue.input.content.includes(
+          'parent-owned process requirements were ignored',
+        )
+      ) {
+        creditYield = gen.next()
+      }
+      expect(
+        (creditYield.value as any)?.toolName === 'spawn_agents' &&
+          ((creditYield.value as any)?.input?.agents ?? []).some(
+            (a: { agent_type?: string }) => a?.agent_type === 'repair-editor',
+          ),
+      ).toBe(false)
+
+      expect(
+        (agentState as any).base2ActiveWork.specialistReviewGatesDone,
+      ).toContain('reliability-reviewer')
+      expect((agentState as any).base2ActiveWork.currentPhase).not.toBe(
+        'repair_loop',
+      )
+      expect((agentState as any).base2ActiveWork.currentPhase).not.toBe(
+        'blocked',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
   })
 })

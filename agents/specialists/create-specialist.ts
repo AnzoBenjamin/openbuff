@@ -235,7 +235,7 @@ export function createSpecialist(
         : 'params.snapshot_id is the authoritative assigned snapshot for this review spawn (opaque v3:… gate-assigned token from the parent gate — not the bare hex snapshotId from get_change_review_bundle). Echo that exact value as snapshotFingerprint. You may use get_change_review_bundle as read-only evidence (file list/diff/empty-tree check); if a fresh call returns a different bare id, keep reviewing against params.snapshot_id and echo params.snapshot_id — do not emit stale-snapshot solely because the live bundle moved. List the exact normalized project-relative paths you read. Stale-snapshot BLOCKING is only for: missing/empty snapshot_id, inventing a different fingerprint, or inability to read the assigned files — not live-bundle drift during review.',
       config.advisory
         ? 'Return family=advisory. Your output is design/coordination evidence; do not invent a blocking gate verdict and do not mutate files or external systems.'
-        : 'Return family=reviewer. Any material issue requiring a code or contract change is BLOCKING.',
+        : 'Return family=reviewer. Any material issue requiring a code or contract change is BLOCKING. Only enumerate requirementCoverage for in-scope review requirements this specialist can judge from source/diff evidence; omit parent/orchestrator workflow (git rewrite, validation runs, commit/push, CI green). Never mark those missing/uncertain.',
       'Focus areas:',
       ...config.focus.map((item) => `- ${item}`),
       config.terminal

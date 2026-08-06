@@ -67,10 +67,33 @@ export const handleSetOutput = (async (params: {
     })
   }
 
+  const decodedNestedOutputRecord =
+    decodedOutput.output &&
+    typeof decodedOutput.output === 'object' &&
+    !Array.isArray(decodedOutput.output)
+      ? (decodedOutput.output as Record<string, unknown>)
+      : undefined
+  const agentLooksLikeEditor =
+    agentState.agentType?.toLowerCase().includes('editor') === true
+  const nestedOutputHasEditorStatus =
+    typeof decodedNestedOutputRecord?.status === 'string' &&
+    (decodedNestedOutputRecord.status === 'completed' ||
+      decodedNestedOutputRecord.status === 'partial' ||
+      decodedNestedOutputRecord.status === 'blocked')
+  const shouldTryNestedOutput =
+    !!decodedNestedOutputRecord &&
+    (agentLooksLikeEditor || nestedOutputHasEditorStatus)
+
   let finalOutput: unknown
   if (agentTemplate?.outputSchema) {
     const candidates: Array<{
-      source: 'output' | 'normalized-output' | 'data' | 'normalized-data'
+      source:
+        | 'output'
+        | 'normalized-output'
+        | 'data'
+        | 'normalized-data'
+        | 'nested-output'
+        | 'normalized-nested-output'
       value: unknown
     }> = [{ source: 'output', value: decodedOutput }]
     if (shouldNormalizeReviewerOutput) {
@@ -85,6 +108,20 @@ export const handleSetOutput = (async (params: {
         candidates.push({
           source: 'normalized-data',
           value: normalizeStructuredOutputValue(decodedDataRecord),
+        })
+      }
+    }
+    // Editor/repair-editor often wrap the receipt as `{ output: { status, ... } }`.
+    // Prefer that nested object after top-level/data candidates fail schema parse.
+    if (shouldTryNestedOutput && decodedNestedOutputRecord) {
+      candidates.push({
+        source: 'nested-output',
+        value: decodedNestedOutputRecord,
+      })
+      if (shouldNormalizeReviewerOutput) {
+        candidates.push({
+          source: 'normalized-nested-output',
+          value: normalizeStructuredOutputValue(decodedNestedOutputRecord),
         })
       }
     }
@@ -108,9 +145,12 @@ export const handleSetOutput = (async (params: {
           : best,
       )
       const usedData = bestFailure.source.endsWith('data')
+      const usedNestedOutput = bestFailure.source.includes('nested-output')
       const prefix = usedData
         ? 'Output validation error: Your output was found inside the `data` field but still failed validation. Please fix the reported fields and retry with native object/array values. Issues: '
-        : 'Output validation error: Output failed to match the output schema and was ignored. Please fix the reported fields and retry with native object/array values. Issues: '
+        : usedNestedOutput
+          ? 'Output validation error: Your output was found inside the nested `output` field but still failed validation. Please fix the reported fields and retry with native object/array values. Issues: '
+          : 'Output validation error: Output failed to match the output schema and was ignored. Please fix the reported fields and retry with native object/array values. Issues: '
       const errorMessage = `${prefix}${bestFailure.error}\n\nOriginal output value:\n${formatValueForError(decodedOutput)}`
       logger.error(
         {

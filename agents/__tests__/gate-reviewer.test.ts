@@ -8,6 +8,8 @@ import {
   collectReviewerFindingRecords,
   detectReviewerCrash,
   getReviewerFinalizationVerdict,
+  isParentOwnedOrOutOfScopeRequirement,
+  isParentOwnedRequirementBlocker,
   isTestCoverageReviewerFinding,
   stripReviewerPreamble,
 } from '../base2/gate-reviewer'
@@ -40,6 +42,8 @@ const INLINE_DEPENDENCY_NAMES = [
   'hasReviewerLineVerdict',
   'collectStrings',
   'findReviewerCrash',
+  'isParentOwnedOrOutOfScopeRequirement',
+  'isParentOwnedRequirementBlocker',
 ] as const
 
 function extractInlineFunctionSource(
@@ -312,6 +316,135 @@ describe('gate-reviewer helpers', () => {
     ])
   })
 
+  test('parent-owned process requirements stay in raw blockers but do not block LOOKS_GOOD finalization', () => {
+    const parentOwnedReceipt = {
+      verdict: 'LOOKS_GOOD' as const,
+      findings: [] as string[],
+      coverage: 'covered' as const,
+      dimensions: {
+        correctness: 'pass',
+        security: 'pass',
+        tests: 'pass',
+        apiCompatibility: 'pass',
+        performance: 'pass',
+      },
+      requirementCoverage: [
+        { requirement: 'Rewrite git commit messages', status: 'missing' },
+        { requirement: 'Run full validation gate', status: 'uncertain' },
+        { requirement: 'Commit and push', status: 'missing' },
+        { requirement: 'Confirm CI/CD is green', status: 'uncertain' },
+      ],
+    }
+    // collectReviewerBlockers retains parent-owned rows so consumers can
+    // detect parentOwnedOnlyBlockers; filter only at the call site.
+    expect(collectReviewerBlockers(parentOwnedReceipt)).toEqual([
+      'BLOCKING: requirement missing: Rewrite git commit messages',
+      'BLOCKING: requirement uncertain: Run full validation gate',
+      'BLOCKING: requirement missing: Commit and push',
+      'BLOCKING: requirement uncertain: Confirm CI/CD is green',
+    ])
+    expect(getReviewerFinalizationVerdict(parentOwnedReceipt)).toBe('LOOKS_GOOD')
+    expect(
+      isParentOwnedOrOutOfScopeRequirement('Rewrite git commit messages'),
+    ).toBe(true)
+    expect(
+      isParentOwnedOrOutOfScopeRequirement('Run full validation gate'),
+    ).toBe(true)
+    // Source-owned validation work must not be suppressed as parent process.
+    expect(
+      isParentOwnedOrOutOfScopeRequirement(
+        'run validation of the new API',
+      ),
+    ).toBe(false)
+    expect(
+      isParentOwnedOrOutOfScopeRequirement('wire selfMutatedPaths'),
+    ).toBe(false)
+    // Real in-scope gaps still appear alongside parent-owned rows in raw blockers.
+    expect(
+      collectReviewerBlockers({
+        ...parentOwnedReceipt,
+        requirementCoverage: [
+          ...parentOwnedReceipt.requirementCoverage,
+          { requirement: 'preserve CLI compatibility', status: 'missing' },
+        ],
+      }),
+    ).toEqual([
+      'BLOCKING: requirement missing: Rewrite git commit messages',
+      'BLOCKING: requirement uncertain: Run full validation gate',
+      'BLOCKING: requirement missing: Commit and push',
+      'BLOCKING: requirement uncertain: Confirm CI/CD is green',
+      'BLOCKING: requirement missing: preserve CLI compatibility',
+    ])
+    expect(
+      getReviewerFinalizationVerdict({
+        ...parentOwnedReceipt,
+        requirementCoverage: [
+          ...parentOwnedReceipt.requirementCoverage,
+          { requirement: 'wire selfMutatedPaths', status: 'uncertain' },
+        ],
+      }),
+    ).toBe('')
+  })
+
+  test('isParentOwnedRequirementBlocker re-checks structured evidence at call sites', () => {
+    // Requirement text alone is not parent-owned; evidence carries the process cue.
+    // Finalization and call-site filters must both consult evidence so LOOKS_GOOD
+    // does not finalize while still spawning repair-editor.
+    const evidenceOnlyReceipt = {
+      verdict: 'LOOKS_GOOD' as const,
+      findings: [] as string[],
+      coverage: 'covered' as const,
+      requirementCoverage: [
+        {
+          requirement: 'Ship remaining workflow steps',
+          status: 'missing' as const,
+          evidence: [
+            'parent must run full validation gate after this specialist',
+          ],
+        },
+      ],
+    }
+    const rawBlockers = collectReviewerBlockers(evidenceOnlyReceipt)
+    expect(rawBlockers).toEqual([
+      'BLOCKING: requirement missing: Ship remaining workflow steps',
+    ])
+    // Without toolResult, only the requirement text is visible → not parent-owned.
+    expect(isParentOwnedRequirementBlocker(rawBlockers[0]!)).toBe(false)
+    // With toolResult, structured evidence matches getReviewerFinalizationVerdict.
+    expect(
+      isParentOwnedRequirementBlocker(rawBlockers[0]!, evidenceOnlyReceipt),
+    ).toBe(true)
+    expect(getReviewerFinalizationVerdict(evidenceOnlyReceipt)).toBe(
+      'LOOKS_GOOD',
+    )
+    // Call-site filter shape used by specialist/security/code-reviewer.
+    const filtered = rawBlockers.filter(
+      (blocker) =>
+        !isParentOwnedRequirementBlocker(blocker, evidenceOnlyReceipt),
+    )
+    expect(filtered).toEqual([])
+
+    // Evidence that does not establish parent ownership must keep the gap in-scope.
+    const inScopeEvidenceReceipt = {
+      ...evidenceOnlyReceipt,
+      requirementCoverage: [
+        {
+          requirement: 'Ship remaining workflow steps',
+          status: 'missing' as const,
+          evidence: ['unit tests still fail on the new path'],
+        },
+      ],
+    }
+    const inScopeBlockers = collectReviewerBlockers(inScopeEvidenceReceipt)
+    expect(
+      isParentOwnedRequirementBlocker(
+        inScopeBlockers[0]!,
+        inScopeEvidenceReceipt,
+      ),
+    ).toBe(false)
+    expect(getReviewerFinalizationVerdict(inScopeEvidenceReceipt)).toBe('')
+  })
+
   test('structured v1 reviews must attest to the exact snapshot and every pending file', () => {
     expect(
       collectReviewerAttestationIssues(
@@ -482,6 +615,101 @@ describe('gate-reviewer helpers', () => {
     ])
   })
 
+  test('deleted pending paths are excluded from missing attestation', () => {
+    // Deleted files cannot be read/attested in reviewedFiles; they are
+    // attested-by-absence via deletedFiles and must not appear as missing.
+    expect(
+      collectReviewerAttestationIssues(
+        {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'v3:' + 'd'.repeat(64),
+          reviewedFiles: ['src/a.ts'],
+        },
+        'v3:' + 'd'.repeat(64),
+        ['src/a.ts', 'src/deleted.ts'],
+        ['src/deleted.ts'],
+      ),
+    ).toEqual([])
+    // Path normalization applies to deletedFiles the same as reviewedFiles.
+    expect(
+      collectReviewerAttestationIssues(
+        {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'v3:' + 'e'.repeat(64),
+          reviewedFiles: ['./src/a.ts'],
+        },
+        'v3:' + 'e'.repeat(64),
+        ['src/a.ts', 'src/gone.ts'],
+        ['./src/gone.ts', 'src\\gone.ts'],
+      ),
+    ).toEqual([])
+    // A non-deleted pending gap still surfaces as missing.
+    expect(
+      collectReviewerAttestationIssues(
+        {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'v3:' + 'f'.repeat(64),
+          reviewedFiles: ['src/a.ts'],
+        },
+        'v3:' + 'f'.repeat(64),
+        ['src/a.ts', 'src/b.ts', 'src/deleted.ts'],
+        ['src/deleted.ts'],
+      ),
+    ).toEqual([
+      'BLOCKING: reviewer did not attest to every pending file: src/b.ts',
+    ])
+  })
+
+  test('deletions-only pending set still requires an attestable fingerprint', () => {
+    // When every pending path is a deletion, missing is empty after exclusion,
+    // but credit still requires a well-formed v3 fingerprint (fail closed).
+    expect(
+      collectReviewerAttestationIssues(
+        {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          reviewedFiles: [],
+        },
+        'v3:' + 'a'.repeat(64),
+        ['src/deleted.ts'],
+        ['src/deleted.ts'],
+      ),
+    ).toEqual([
+      'BLOCKING: reviewer did not report an attestable snapshot fingerprint',
+    ])
+    expect(
+      collectReviewerAttestationIssues(
+        {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'unreadable:no-crypto',
+          reviewedFiles: [],
+        },
+        'v3:' + 'a'.repeat(64),
+        ['src/deleted.ts', 'src/also-gone.ts'],
+        ['src/deleted.ts', 'src/also-gone.ts'],
+      ),
+    ).toEqual([
+      'BLOCKING: reviewer did not report an attestable snapshot fingerprint',
+    ])
+    expect(
+      collectReviewerAttestationIssues(
+        {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'v3:' + 'b'.repeat(64),
+          reviewedFiles: [],
+        },
+        'v3:' + 'a'.repeat(64),
+        ['src/deleted.ts'],
+        ['src/deleted.ts'],
+      ),
+    ).toEqual([])
+  })
+
   test('getReviewerFinalizationVerdict blocks finalization when coverage is missing', () => {
     expect(
       getReviewerFinalizationVerdict({
@@ -647,6 +875,53 @@ describe('gate-reviewer helpers', () => {
         type: 'json',
         value: [{ verdict: 'LOOKS_GOOD', coverage: 'covered' }],
       },
+      // RF-1-ac880186: parent-owned process requirementCoverage must match between
+      // gate-reviewer.ts and the base2 inline mirror (no RF elevation).
+      {
+        type: 'json',
+        value: [
+          {
+            verdict: 'LOOKS_GOOD',
+            findings: [],
+            coverage: 'covered',
+            dimensions: {
+              correctness: 'pass',
+              security: 'pass',
+              tests: 'pass',
+              apiCompatibility: 'pass',
+              performance: 'pass',
+            },
+            requirementCoverage: [
+              { requirement: 'Rewrite git commit messages', status: 'missing' },
+              { requirement: 'Run full validation gate', status: 'uncertain' },
+              { requirement: 'Commit and push', status: 'missing' },
+              { requirement: 'Confirm CI/CD is green', status: 'uncertain' },
+            ],
+          },
+        ],
+      },
+      // Mixed: parent-owned rows ignored; in-scope gap still blocks both copies.
+      {
+        type: 'json',
+        value: [
+          {
+            verdict: 'LOOKS_GOOD',
+            findings: [],
+            coverage: 'covered',
+            dimensions: {
+              correctness: 'pass',
+              security: 'pass',
+              tests: 'pass',
+              apiCompatibility: 'pass',
+              performance: 'pass',
+            },
+            requirementCoverage: [
+              { requirement: 'Rewrite git commit messages', status: 'missing' },
+              { requirement: 'preserve CLI compatibility', status: 'missing' },
+            ],
+          },
+        ],
+      },
       null,
     ]
 
@@ -740,16 +1015,12 @@ describe('gate-reviewer helpers', () => {
       'Preamble prose before a BLOCKING verdict.\n{"verdict":"BLOCKING","findings":["Fix A"],"coverage":"covered"}',
       'Earlier I thought this was off: {"verdict":"BLOCKING","findings":["x"],"coverage":"covered"}. After re-checking it passes. {"verdict":"LOOKS_GOOD","findings":[],"coverage":"covered"}',
       'I think this LOOKS_GOOD in spirit but I have not emitted a verdict line.',
-      // Brace/escape edge cases for the indexOf + brace-depth scanner:
-      // a `}` inside a JSON string value must not prematurely close the object.
+      // Prose-embedded JSON is not schema-backed structured output; finalization
+      // accepts only structured objects, so these all reject (parity both copies).
       'Preamble. {"verdict":"LOOKS_GOOD","note":"see {foo} for context","coverage":"covered"}',
-      // An escaped `\"` inside a JSON string value must not flip inString.
       'Preamble. {"verdict":"LOOKS_GOOD","findings":["has \\"q\\" inside"],"coverage":"covered"}',
-      // A truncated embedded JSON object (no matching closing brace) must yield ''.
       'Preamble. {"verdict":"LOOKS_GOOD","findings":[],"coverage":"covered"',
-      // Three embedded objects in sequence: the last verdict wins.
       'First pass: {"verdict":"LOOKS_GOOD","findings":[],"coverage":"covered"}. Second: {"verdict":"NON_BLOCKING","findings":["x"],"coverage":"covered"}. Final: {"verdict":"LOOKS_GOOD","findings":[],"coverage":"covered"}',
-      // An unknown verdict value must be rejected as a finalization verdict.
       'Preamble. {"verdict":"MAYBE","findings":[],"coverage":"covered"}',
     ]
     for (const toolResult of proseJsonInputs) {
@@ -759,10 +1030,8 @@ describe('gate-reviewer helpers', () => {
     }
   })
 
-  // The brace-depth scanner inside extractEmbeddedJsonVerdict must respect
-  // JSON string boundaries so a `}` appearing inside a string value does not
-  // prematurely close the object. This guards the reviewer-emit format where
-  // findings text may contain brace-like characters.
+  // Exported finalization only accepts structured objects; prose-embedded
+  // JSON (even well-formed) is not credited as a gate verdict.
   test('getReviewerFinalizationVerdict rejects JSON embedded in prose even with braces in strings', () => {
     expect(
       getReviewerFinalizationVerdict(
@@ -771,9 +1040,6 @@ describe('gate-reviewer helpers', () => {
     ).toBe('')
   })
 
-  // An escaped `\"` inside a JSON string value must not flip the inString
-  // flag, otherwise the scanner could lose track of string boundaries and
-  // either truncate early or span too far.
   test('getReviewerFinalizationVerdict rejects prose JSON with escaped quotes', () => {
     expect(
       getReviewerFinalizationVerdict(
@@ -782,9 +1048,6 @@ describe('gate-reviewer helpers', () => {
     ).toBe('')
   })
 
-  // A truncated JSON object (opener with no matching close) must not produce
-  // a verdict; the scanner breaks and returns ''. The reviewer is treated as
-  // no-verdict (re-prompt for format) rather than silently finalizing.
   test('getReviewerFinalizationVerdict returns empty when embedded JSON is truncated (no closing brace)', () => {
     expect(
       getReviewerFinalizationVerdict(
@@ -801,9 +1064,6 @@ describe('gate-reviewer helpers', () => {
     ).toBe('')
   })
 
-  // Embedded JSON with an unrecognized verdict value (not one of the three
-  // known labels) must be rejected as a finalization verdict — same contract
-  // as the structured and line-verdict paths.
   test('getReviewerFinalizationVerdict rejects embedded JSON with an unknown verdict value', () => {
     expect(
       getReviewerFinalizationVerdict(

@@ -49,18 +49,18 @@ const inputSchema = z
             .boolean()
             .optional()
             .describe(
-              'If true, launch the agent detached from this turn. spawn_agents returns immediately with a jobId; the agent runs as an in-process coroutine. Poll its progress with check_background_agent. Use for long-running, non-blocking work (e.g. indexing, eval runs, multi-step research) where you do not need the result before ending your turn. The background agent shares the same process so it cannot outlive this CLI session. Defaults to false (blocking).',
+              'If true, return jobId immediately and run as in-process coroutine; poll with check_background_agent. Defaults to false (blocking). Cannot outlive this CLI session.',
             ),
           handoff: spawnHandoffSchema
             .optional()
             .describe(
-              'Optional structured handoff payload. Purely additive — children that do not consume `handoff` continue to receive `prompt` and `params` as before.',
+              'Optional structured handoff; additive — non-consumers still get prompt/params.',
             ),
           timeout_seconds: z
             .number()
             .optional()
             .describe(
-              'Optional per-spawn wall-clock deadline in seconds. Omit it or set -1 for no timeout. Positive deadlines are opt-in and should be used only when the caller deliberately wants to stop a long-running child. A configured agent template defaultTimeoutMs still applies when present.',
+              'Optional wall-clock deadline seconds; omit or -1 for none. Agent defaultTimeoutMs still applies when set.',
             ),
           params: z
             .preprocess(
@@ -168,19 +168,12 @@ const inputSchema = z
     `Spawn up to ${MAX_SPAWN_BATCH_SIZE} agents and send a prompt and/or parameters to each of them. These agents will run in parallel. Note that that means they will run independently. Split larger work into bounded waves. If you need to run agents sequentially, use spawn_agents with one agent at a time instead.`,
   )
 const description = `
-Use this tool to spawn agents to help you complete the user request. Each agent has specific requirements for prompt and params based on their tools schema.
+Spawn agents in parallel (up to batch max). Pass \`agents\` as a real array of objects — do not JSON.stringify entries.
 
-The prompt field is a simple string, while params is a JSON object that gets validated against the agent's schema. Pass \`agents\` as an actual array of objects; do not JSON.stringify the array or its entries. The runtime repairs bounded complete JSON encodings, but malformed or truncated strings still fail closed.
-
-Each agent available is already defined as another tool, or, dynamically defined later in the conversation.
-
-**IMPORTANT**: \`agent_type\` must be an actual agent name (e.g., \`basher\`, \`code-searcher\`, \`general-agent\`), NOT a tool name like \`read_files\`, \`str_replace\`, \`code_search\`, etc. If you need to call a tool, use it directly as a tool call instead of wrapping it in spawn_agents.
-
-You can call agents either as direct tool calls (using the listed tool name, e.g. \`example_agent\`) or use \`spawn_agents\` with the canonical agent name in \`agent_type\` (e.g. \`example-agent\`). Both formats work, but **prefer using spawn_agents** because it allows you to spawn multiple agents in parallel for better performance. Both use the same schema with nested \`prompt\` and \`params\` fields.
-
-**IMPORTANT**: Many agents have REQUIRED fields in their params schema. Check the agent's schema before spawning - if params has required fields, you MUST include them in the params object. For example, code-searcher requires \`searchQueries\`, basher requires \`command\`.
-
-Agent-specific fields belong inside \`params\`. For Basher, use \`{ "agent_type": "basher", "params": { "command": "bun test" } }\`; do not send an empty params object and do not put a shell command only in the prompt.
+- **\`agent_type\` is an agent name** (e.g. basher, code-searcher, general-agent), **not a tool name** (read_files, str_replace, …). Call tools directly; do not wrap them in spawn_agents.
+- Prefer spawn_agents over single-agent tool aliases so multiple agents can run in parallel. Same nested \`prompt\` + \`params\` schema either way.
+- Include required agent params (e.g. basher \`command\`, code-searcher \`searchQueries\`). Agent-specific fields go in \`params\`, not only the prompt.
+- \`background: true\` returns a jobId immediately; poll with check_background_agent.
 
 Example:
 ${$getNativeToolCallExampleString({
@@ -191,9 +184,7 @@ ${$getNativeToolCallExampleString({
       {
         agent_type: 'basher',
         prompt: 'Check if tests pass',
-        params: {
-          command: 'npm test',
-        },
+        params: { command: 'npm test' },
       },
       {
         agent_type: 'code-searcher',

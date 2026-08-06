@@ -45,32 +45,17 @@ const outputSchema = z.object({
 })
 
 const description = `
-Suggest clickable followup prompts to the user. When the user clicks a suggestion, it sends that prompt as a new user message.
+Suggest ~3 clickable followup prompts (assistant-executable next steps). Write a brief user-visible summary first so the user is not left with only cards.
 
-Use this tool after completing a task to suggest what the user might want to do next. Before calling this tool, first write a concise user-visible summary of what you did or reviewed so the user is never left with only followup suggestions. Good suggestions include:
-- Alternatives to the latest implementation like "Cache the data to local storage instead"
-- Related features like "Add a hover card to show the data from the state"
-- Cleanup opportunities like "Refactor app.ts into multiple files"
-- Testing suggestions like "Add unit tests for this change"
-- "Continue with the next step" - when there are more steps in a plan
+Good: alternatives, related features, refactors, unit tests, "Continue with the next step". Avoid: bare commits, vague "test x", or manual user-only testing. Vary from prior suggestions.
 
-Don't include suggestions like:
-- "Commit these changes"
-- "Test x" without saying how you would test the changes (unit test, script, or something else?). Remember, this is a prompt for the assistant to do. Don't suggest manual testing that the user would have to do.
-
-Try to make different suggestions than you did in past steps. That's because users can still click previous suggestions if they want to.
-
-Aim for around 3 suggestions. The suggestions persist and remain clickable, with clicked ones visually updated to show they were used.
-
+Example:
 ${$getNativeToolCallExampleString({
   toolName,
   inputSchema,
   input: {
     followups: [
-      {
-        prompt: 'Continue with the next step',
-        label: 'Continue',
-      },
+      { prompt: 'Continue with the next step', label: 'Continue' },
       {
         prompt: 'Add unit tests for the new UserService class',
         label: 'Add tests',

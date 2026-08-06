@@ -137,17 +137,21 @@ describe('code-reviewer prompt isolation', () => {
     expect(reviewer.instructionsPrompt).toContain('coverage: "missing"')
   })
 
-  test('forces BLOCKING when any requirementCoverage status is missing or uncertain', () => {
+  test('forces BLOCKING when any in-scope requirementCoverage status is missing or uncertain', () => {
     const reviewer = createReviewer('anthropic/claude-opus-4.7')
 
+    // Parent-owned process tasks are out of scope; only in-scope gaps force BLOCKING.
     expect(reviewer.instructionsPrompt).toContain(
-      'If ANY `requirementCoverage[].status` is `missing` or `uncertain`',
+      'Parent-owned process tasks',
+    )
+    expect(reviewer.instructionsPrompt).toContain(
+      'if ANY in-scope `requirementCoverage[].status` is `missing` or `uncertain`',
     )
     expect(reviewer.instructionsPrompt).toContain(
       'the top-level `verdict` MUST be `"BLOCKING"`',
     )
     expect(reviewer.instructionsPrompt).toContain(
-      'put each incomplete requirement into `findings` as a concrete next action',
+      'put each incomplete in-scope requirement into `findings` as a concrete next action',
     )
   })
 

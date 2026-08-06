@@ -50,7 +50,7 @@ const inputSchema = z
       .optional()
       .default('search')
       .describe(
-        'Query mode. search returns ranked files, explain includes ranking rationale, neighbors returns adjacent graph files, path returns a graph path between files, commands prioritizes package scripts, CI workflows, task runners, and validation docs, and references returns files that import or call into a seed file (blast-radius analysis before editing an exported symbol).',
+        'search|explain|neighbors|path|commands|references — see tool description.',
       ),
     from: z
       .string()
@@ -133,56 +133,17 @@ const inputSchema = z
   )
 
 const description = `
-Purpose: Query the local codebase graph index to find relevant files ranked by their relevance to your query. Use this as your first step when looking for files related to a concept, feature, or module.
+Query the local codebase graph index (paths, symbols, imports, docs, commands, graph edges). Discovery only — verify with read_files before editing; fall back to read_subtree if the index is empty/building.
 
-The index tracks:
-- File paths and extensions
-- Exported/defined symbol names (functions, classes, types, constants)
-- Import paths and dependencies
-- Markdown headings and doc concepts (for .md/.mdx files)
-- Package scripts, CI workflow commands, task-runner files, and command/config concepts
-- Graph edges between files, symbols, imports, calls, headings, and concepts
+Modes: search (default ranked files), explain (with rationale), neighbors, path (from/to), commands (scripts/CI/validation), references (importers/callers of a seed file).
 
-Query tips:
-- Use descriptive natural language: "user authentication", "database connection", "react hooks"
-- Use camelCase or PascalCase terms to find symbols: "createUser", "AuthProvider"
-- Combine concept + type: "editor agent typescript", "test utilities"
-- For docs: use topic keywords that would appear in headings: "quick start", "provider configuration"
-- For project commands or validation suites, use mode: "commands" or queries like "run validation suite" to prioritize package.json, CI, and testing docs
+Tips: natural language or symbol names (createUser); mode "commands" for run/validation suites; optional fileTypes/pathPrefixes filters.
 
-Important:
-- If the index is not yet built (first run), results may be empty — fall back to read_subtree
-- Always verify file content with read_files before editing
-- The index is a discovery hint, not a source of truth for file contents
-
+Example:
 ${$getNativeToolCallExampleString({
   toolName,
   inputSchema,
   input: { query: 'authentication' },
-  endsAgentStep,
-})}
-${$getNativeToolCallExampleString({
-  toolName,
-  inputSchema,
-  input: { query: 'editor mutation workflow', limit: 10 },
-  endsAgentStep,
-})}
-${$getNativeToolCallExampleString({
-  toolName,
-  inputSchema,
-  input: { query: 'React components layout', fileTypes: ['tsx', 'ts'] },
-  endsAgentStep,
-})}
-${$getNativeToolCallExampleString({
-  toolName,
-  inputSchema,
-  input: { query: 'broader validation suite', mode: 'commands' },
-  endsAgentStep,
-})}
-${$getNativeToolCallExampleString({
-  toolName,
-  inputSchema,
-  input: { mode: 'references', from: 'src/auth.ts', limit: 15 },
   endsAgentStep,
 })}
 `.trim()

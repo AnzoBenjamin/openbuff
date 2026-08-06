@@ -73,7 +73,10 @@ function editReceipt(path: string) {
   }
 }
 
-function writerNoopResult(receiptId: string) {
+function writerNoopResult(
+  receiptId: string,
+  agentType: 'test-writer' | 'doc-writer' = 'test-writer',
+) {
   const agentReceipt = {
     schemaVersion: 1,
     receiptId,
@@ -87,7 +90,7 @@ function writerNoopResult(receiptId: string) {
   return feedJson({
     agentId: 'aux-writer-1',
     agentName: 'Auxiliary Writer',
-    agentType: 'test-writer',
+    agentType,
     value: {},
     agentReceipt,
   })
@@ -215,7 +218,51 @@ function isAuxSpawn(value: any): boolean {
   )
 }
 
+// Specialist scratch fixtures are shared by both describe suites (the first
+// suite's afterEach + specialist-path tests reference them). Declare them
+// above the first describe so source order matches runtime usage.
+const SPECIALIST_SCRATCH_ROOT = '.e2e-scratch/base2-gate-aux-specialist'
+// Reliability-routed: the `state` path segment matches the reliability
+// reviewer router regex (state/session/process/...), so
+// selectSpecialistReviewersInline routes this file to reliability-reviewer.
+const SPECIALIST_FILE = `${SPECIALIST_SCRATCH_ROOT}/state/session.ts`
+
+function specialistSeed(overrides: Record<string, unknown> = {}) {
+  return {
+    changedFiles: [SPECIALIST_FILE],
+    touchedFiles: [SPECIALIST_FILE],
+    pendingGateFiles: [SPECIALIST_FILE],
+    currentPhase: 'awaiting_validation',
+    openReviewerBlockers: [],
+    openReviewerFindings: [],
+    lastValidationSummary: '',
+    nextRequiredAction: '',
+    lastPinnedStateMessage: '',
+    gatePassedFiles: [],
+    gatePassedPendingFiles: [],
+    gatePassedReviewerVerdict: '',
+    gatePassedValidationSummary: '',
+    gatePassedFingerprint: '',
+    lastReviewerGateSkipReason: '',
+    reviewReceipts: [],
+    // Focus the turn on the specialist aux block only.
+    testWriterGateDone: true,
+    docWriterGateDone: true,
+    securityReviewGateDone: true,
+    preEditSecurityReviewDone: true,
+    specialistReviewGatesDone: [],
+    auxGatesLastPendingFiles: [SPECIALIST_FILE],
+    ...overrides,
+  }
+}
+
 describe('base2 pre-reviewer aux gate ordering e2e', () => {
+  // Specialist-path tests under this describe write `.e2e-scratch` files; clean
+  // them even when an assertion fails mid-test (not only on the happy path).
+  afterEach(() => {
+    rmSync(SPECIALIST_SCRATCH_ROOT, { recursive: true, force: true })
+  })
+
   test('fires test-writer -> doc-writer -> security-reviewer before validation hooks + code-reviewer, then does not re-spawn', () => {
     const base2 = createBase2('default')
     const agentState = { agentId: 'base2-custom' }
@@ -348,7 +395,9 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
 
     // Invariant 2b: the doc-writer yield suspends; the security-reviewer
     // if-block only runs AFTER we resume the generator.
-    const securityReviewerYield = gen.next(writerNoopResult('doc-writer-noop'))
+    const securityReviewerYield = gen.next(
+      writerNoopResult('doc-writer-noop', 'doc-writer'),
+    )
     // Invariant 1c: security-reviewer fires THIRD.
     expect(securityReviewerYield.value).toMatchObject({
       toolName: 'spawn_agent_inline',
@@ -614,7 +663,6 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       [],
     )
     expect((agentState as any).canSuggestFollowups).toBe(false)
-    rmSync(`${SPECIALIST_SCRATCH_ROOT}`, { recursive: true, force: true })
   })
 
   test('a coverage-complete routed specialist review with a matching gate fingerprint does not block the gate', () => {
@@ -737,9 +785,14 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     })
     // The coverage-complete reliability review was accepted: no open blockers
     // for reliability-reviewer and the specialist is credited done.
+    // Use explicit .some(...includes) rather than .not.toContain(expect.stringContaining(...)):
+    // asymmetric matchers are not reliably applied by toContain, so the .not case
+    // can pass even when reliability blockers are present.
     expect(
-      (agentState as any).base2ActiveWork.openReviewerBlockers,
-    ).not.toContain(expect.stringContaining('reliability-reviewer'))
+      ((agentState as any).base2ActiveWork.openReviewerBlockers as string[]).some(
+        (b) => b.includes('reliability-reviewer'),
+      ),
+    ).toBe(false)
     expect(
       (agentState as any).base2ActiveWork.specialistReviewGatesDone,
     ).toContain('reliability-reviewer')
@@ -836,7 +889,6 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       expect.stringContaining('crashed during specialist review'),
     ])
     expect((agentState as any).canSuggestFollowups).toBe(false)
-    rmSync(`${SPECIALIST_SCRATCH_ROOT}`, { recursive: true, force: true })
   })
 
   test('does not re-spawn any aux gate on a second iteration with the same aux-relevant pending file set', () => {
@@ -922,7 +974,7 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       input: { agent_type: 'doc-writer' },
     })
     const securityReviewerYield = gen.next(
-      writerNoopResult('doc-writer-noop-2'),
+      writerNoopResult('doc-writer-noop-2', 'doc-writer'),
     )
     expect(securityReviewerYield.value).toMatchObject({
       toolName: 'spawn_agent_inline',
@@ -1342,46 +1394,14 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
 /* only accepted as progress when the on-disk content marker actually         */
 /* changed (postRepairFingerprint !== preRepairFingerprint).                  */
 /*                                                                            */
+/* SPECIALIST_SCRATCH_ROOT / SPECIALIST_FILE / specialistSeed are declared    */
+/* above the first describe (shared fixtures).                                */
+/*                                                                            */
 /* Every prompt below is deliberately free of classifyProactiveRetrieval      */
 /* code-intent keywords (no fix/implement/refactor/review/test/file/...), so  */
 /* the generator emits NO query_index retrieval prelude and the first yield   */
 /* is the turn-start git_status.                                              */
 /* ------------------------------------------------------------------------ */
-
-const SPECIALIST_SCRATCH_ROOT = '.e2e-scratch/base2-gate-aux-specialist'
-// Reliability-routed: the `state` path segment matches the reliability
-// reviewer router regex (state/session/process/...), so
-// selectSpecialistReviewersInline routes this file to reliability-reviewer.
-const SPECIALIST_FILE = `${SPECIALIST_SCRATCH_ROOT}/state/session.ts`
-
-function specialistSeed(overrides: Record<string, unknown> = {}) {
-  return {
-    changedFiles: [SPECIALIST_FILE],
-    touchedFiles: [SPECIALIST_FILE],
-    pendingGateFiles: [SPECIALIST_FILE],
-    currentPhase: 'awaiting_validation',
-    openReviewerBlockers: [],
-    openReviewerFindings: [],
-    lastValidationSummary: '',
-    nextRequiredAction: '',
-    lastPinnedStateMessage: '',
-    gatePassedFiles: [],
-    gatePassedPendingFiles: [],
-    gatePassedReviewerVerdict: '',
-    gatePassedValidationSummary: '',
-    gatePassedFingerprint: '',
-    lastReviewerGateSkipReason: '',
-    reviewReceipts: [],
-    // Focus the turn on the specialist aux block only.
-    testWriterGateDone: true,
-    docWriterGateDone: true,
-    securityReviewGateDone: true,
-    preEditSecurityReviewDone: true,
-    specialistReviewGatesDone: [],
-    auxGatesLastPendingFiles: [SPECIALIST_FILE],
-    ...overrides,
-  }
-}
 
 /**
  * A structured specialist reviewer value that BLOCKS with exactly ONE typed
@@ -1415,6 +1435,53 @@ function blockingSpecialistValue(
     dimensions: {},
     requirementCoverage: [],
   }
+}
+
+/**
+ * LOOKS_GOOD specialist receipt whose only requirementCoverage gaps are
+ * parent-owned process duties. Gate helpers must ignore those rows and still
+ * credit the specialist without spawning repair-editor.
+ */
+function looksGoodWithParentOwnedRequirements(
+  agentType: string,
+  snapshotFingerprint: string,
+  files: string[],
+) {
+  return feedJson({
+    agentType,
+    value: {
+      schemaVersion: 1,
+      family: 'reviewer',
+      verdict: 'LOOKS_GOOD',
+      snapshotFingerprint,
+      reviewedFiles: files,
+      findings: [],
+      coverage: 'covered',
+      dimensions: {},
+      requirementCoverage: [
+        {
+          requirement: 'Rewrite git commit messages',
+          status: 'missing',
+          evidence: ['parent only'],
+        },
+        {
+          requirement: 'Run full validation gate',
+          status: 'missing',
+          evidence: ['parent only'],
+        },
+        {
+          requirement: 'Commit and push',
+          status: 'missing',
+          evidence: ['parent only'],
+        },
+        {
+          requirement: 'Confirm CI/CD is green',
+          status: 'uncertain',
+          evidence: ['parent only'],
+        },
+      ],
+    },
+  })
 }
 
 /** A single-agent spawn_agents result that BLOCKS with one typed finding. */
@@ -1563,6 +1630,138 @@ function blockingReviewerResult(
 describe('base2 specialist reviewer-gate state machine e2e', () => {
   afterEach(() => {
     rmSync(SPECIALIST_SCRATCH_ROOT, { recursive: true, force: true })
+  })
+
+  test('LOOKS_GOOD specialist with only parent-owned requirementCoverage does not spawn repair-editor', () => {
+    mkdirSync(`${SPECIALIST_SCRATCH_ROOT}/state`, { recursive: true })
+    writeFileSync(SPECIALIST_FILE, 'export const session = "v1"\n')
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2-custom',
+      base2ActiveWork: specialistSeed(),
+    }
+    // Process tasks (commit/push/CI) stay in the user prompt so the scoped
+    // specialist brief can place them under non-blocking parent context. Avoid
+    // classifyProactiveRetrieval code-intent keywords so the first yield is
+    // turn-start git_status.
+    const prompt =
+      'Please finish the pending reliability finding. Parent will later commit and push then confirm CI/CD is green.'
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt,
+      params: {},
+    } as any)
+
+    // Resumed-state prelude.
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+    expect(gen.next().value).toBe('STEP')
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+
+    // Aux block: router selects reliability-reviewer for the state/session
+    // path; the bundle freezes then the specialist spawns with a scoped brief.
+    const bundle = gen.next(feedListJobs())
+    expect(bundle.value).toMatchObject({
+      toolName: 'get_change_review_bundle',
+      input: {},
+      includeToolCall: false,
+    })
+    const spawn = gen.next(
+      feedJson({
+        snapshotId: 'spec-snap-parent-owned',
+        files: [SPECIALIST_FILE],
+      }),
+    )
+    expect(spawn.value).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      includeToolCall: false,
+    })
+    const spawnPrompt = (spawn.value as any).input.agents[0].prompt as string
+    expect(typeof spawnPrompt).toBe('string')
+    // Scoped specialist brief — not a bare `Requirements: ${full user prompt}`.
+    expect(
+      spawnPrompt.includes('specialist-domain only') ||
+        spawnPrompt.includes('Do NOT treat parent workflow'),
+    ).toBe(true)
+    expect(spawnPrompt).toContain('Snapshot fingerprint (echo exactly):')
+    expect(spawnPrompt).not.toMatch(
+      new RegExp(
+        `^Requirements:\\s*${prompt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+        'm',
+      ),
+    )
+    // Commit/push/CI may appear only as non-blocking parent context.
+    if (/commit|push|CI\/CD/i.test(spawnPrompt)) {
+      expect(spawnPrompt).toContain('Non-blocking parent context')
+      const requirementsSection = spawnPrompt.split(
+        'Non-blocking parent context',
+      )[0]
+      expect(requirementsSection).not.toMatch(/\bcommit and push\b/i)
+      expect(requirementsSection).not.toMatch(/\bconfirm CI\/CD is green\b/i)
+    }
+    const fingerprint = specialistFingerprintFromSpawn(spawn.value)
+
+    // LOOKS_GOOD with only parent-owned requirementCoverage gaps: credit the
+    // specialist and do not hand off to repair-editor.
+    const after = gen.next(
+      looksGoodWithParentOwnedRequirements(
+        'reliability-reviewer',
+        fingerprint,
+        [SPECIALIST_FILE],
+      ),
+    )
+    const afterValue = after.value as any
+    const isRepairEditorSpawn =
+      afterValue?.toolName === 'spawn_agents' &&
+      afterValue?.input?.agents?.[0]?.agent_type === 'repair-editor'
+    expect(isRepairEditorSpawn).toBe(false)
+
+    // Either the explicit parent-owned notice then continue, or direct credit
+    // to context-pruner. Drain at most one notice yield if present.
+    let creditYield = after
+    if (
+      afterValue?.toolName === 'add_message' &&
+      typeof afterValue?.input?.content === 'string' &&
+      afterValue.input.content.includes(
+        'parent-owned process requirements were ignored',
+      )
+    ) {
+      creditYield = gen.next()
+    }
+    expect(creditYield.value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    expect(
+      (creditYield.value as any)?.toolName === 'spawn_agents' &&
+        ((creditYield.value as any)?.input?.agents ?? []).some(
+          (a: any) => a?.agent_type === 'repair-editor',
+        ),
+    ).toBe(false)
+
+    expect(
+      (agentState as any).base2ActiveWork.specialistReviewGatesDone,
+    ).toContain('reliability-reviewer')
+    expect((agentState as any).base2ActiveWork.currentPhase).not.toBe(
+      'repair_loop',
+    )
+    expect((agentState as any).base2ActiveWork.currentPhase).not.toBe(
+      'blocked',
+    )
   })
 
   test('specialist blocking findings drive a repair->revalidate loop with the owed marker set in-turn (G1+G2)', () => {
@@ -2523,7 +2722,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     // The snapshot-progress guard sees postRepairFingerprint ===
     // preRepairFingerprint and exits the gate loop instead of re-spawning
     // repair-editor or re-firing the specialist: the turn ends immediately.
-    const afterGuard = gen.next(feedListJobs())
+    // Feed git_status JSON for the post-repair yield (same protocol as G8).
+    const afterGuard = gen.next(
+      feedJson({ status: ` M ${SPECIALIST_FILE}` }),
+    )
     expect(afterGuard.done).toBe(true)
 
     // The turn is blocked, the specialist is still owed and uncredited, and the

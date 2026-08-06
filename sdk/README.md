@@ -127,16 +127,30 @@ Profiles:
   rejected), and `>`/`>>`/heredoc writes are permitted only to plain,
   expansion-free paths that resolve inside the project.
 - `git-commit` — inspect/fetch Git state, stage explicit owned paths, create a
-  non-`--amend` commit with `-m`, and perform an explicit non-force branch
-  push. `git add` paths must be an exact subset of `allowedPaths`; broad
-  flags, dot staging, options, and globs are forbidden. No shell composition
-  or substitution.
+  non-`--amend` commit with `-m`/`--message`, and perform an explicit
+  non-force branch push. `git add` paths must be an exact subset of
+  `allowedPaths`; broad flags, dot staging, options, and globs are forbidden.
+  Whole-subject placeholder commit messages such as bare `probe`, `wip`,
+  `test`, `tmp`, `update`, or `misc` are denied; real imperative subjects that
+  merely contain those words stay allowed. Safe single-command branch/switch,
+  create, safe delete (`branch -d`), merge, cherry-pick, stash, soft/mixed
+  reset, tag create, and staged restore are allowed. Data-loss and history
+  rewrite shapes stay denied (`reset --hard`, force/delete branch, `clean`,
+  path checkout, rebase, amend, stash drop/clear, config writes, force switch,
+  strategy overrides, worktree restore). Shell composition is allowed only
+  between allowlisted read-only git inspection commands; staging, commit, and
+  push remain single-command-only. Active substitution and unquoted
+  redirection stay blocked.
 - `dependency-mutation` — supported ecosystem dependency operations only
   (npm/pnpm/yarn/bun, uv/poetry, pip, cargo, go, dotnet, bundler, composer,
   swift, dart/flutter, mix, maven, gradle). Global/user-level installs, shell
   composition, and multi-line commands are blocked.
-- `tmux-test` — may write only explicit `/tmp` fixtures and captures, not
-  workspace files; outside-absolute-path containment still applies.
+- `tmux-test` — inspection under a shell that cannot mutate the workspace.
+  File writers, archive extractors, interpreters, compound shell syntax,
+  active expansion/substitution, non-`/dev/null` redirects, and non-inspect
+  Git commands are denied. Fixture creation is not authorized through the
+  shell; use a dedicated terminal executor with private fixture creation.
+  Outside-absolute-path containment and env-dump denial still apply.
 - `workspace-write` — general workspace writes; in-project `..` references are
   allowed, escaping segments are rejected.
 - `full-access` — bypasses the policy gates. Use only through an explicit
@@ -149,11 +163,19 @@ that resolve outside the project root (with `/tmp`, `/bin`, `/usr/bin`, and
 
 In addition, every non-`full-access` profile except `tmux-test` always denies
 privilege escalation (`sudo`/`su`), system package managers, root deletion,
-environment dumping, force/delete pushes, and shell indirection
-(`eval`/`source`/`<shell> -c`). The `tmux-test` profile skips these workspace
-deny patterns because it is governed by its own stricter `/tmp`-only write
-guard described above. When a command is denied, `reason` names the specific
-rule that blocked it.
+force/delete pushes, and shell indirection (`eval`/`source`/`<shell> -c`).
+Environment dumps (`env`/`printenv`/bare `set`/`export`, including wrapped,
+path, busybox, execution-wrapper, double-quoted substitution, and process-
+substitution forms such as `command printenv`, `env printenv`, `nice env`, or
+`cat <(printenv)`; option-only `set -euo pipefail` and workspace-style
+`export NAME[=value]` / `env NAME=value <utility>` remain allowed where the
+profile permits) are denied for every non-`full-access` profile, including
+`tmux-test`. Under `read-only` / `librarian-read-only` / `validation-diagnosis`,
+env mutation forms such as `export NAME=value` and `env NAME=value cmd` are
+also denied. The `tmux-test` profile still skips the other workspace deny
+patterns because it is governed by its own stricter no-shell-write guard
+described above. When a command is denied, `reason` names the specific rule
+that blocked it.
 
 ## Search tool working directory
 

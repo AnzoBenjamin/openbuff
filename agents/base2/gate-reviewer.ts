@@ -148,6 +148,113 @@ export function isTestCoverageReviewerFinding(text: string): boolean {
   return false
 }
 
+/**
+ * Process/orchestrator work a source specialist or code reviewer cannot satisfy
+ * from diff/source evidence. Keep patterns specific so real source requirements
+ * that merely mention "commit" or "validation" are not suppressed.
+ */
+export function isParentOwnedOrOutOfScopeRequirement(
+  requirement: string,
+  evidence?: string[],
+): boolean {
+  if (typeof requirement !== 'string') return false
+  const text = [requirement, ...(evidence ?? [])]
+    .filter((part): part is string => typeof part === 'string')
+    .join('\n')
+    .toLowerCase()
+  if (!text.trim()) return false
+  if (
+    /\brewrite\b[^.\n]{0,40}\bgit\b[^.\n]{0,40}\bcommit(?:\s+messages?)?\b/.test(
+      text,
+    ) ||
+    /\bamend\b[^.\n]{0,40}\bgit\b[^.\n]{0,40}\bcommit(?:\s+messages?|\s+history)?\b/.test(
+      text,
+    ) ||
+    /\brewrite\b[^.\n]{0,40}\bcommit\s+messages?\b/.test(text) ||
+    /\bamend\b[^.\n]{0,40}\bcommit\s+(?:messages?|history)\b/.test(text)
+  ) {
+    return true
+  }
+  // Only the full validation gate / CI process step is parent-owned.
+  // Source requirements like "run validation of the new API" stay in-scope.
+  if (/\brun\b[^.\n]{0,24}\bfull\s+validation(?:\s+gate)?\b/.test(text)) {
+    return true
+  }
+  if (
+    /\bcommit\s+and\s+push\b/.test(text) ||
+    /\bpush\s+(?:the\s+)?changes\b/.test(text)
+  ) {
+    return true
+  }
+  if (
+    /\bconfirm\b[^.\n]{0,24}\bci\/?cd\b[^.\n]{0,24}\bgreen\b/.test(text) ||
+    /\bcheck\b[^.\n]{0,24}\bci(?:\/?cd)?\b[^.\n]{0,24}\bgreen\b/.test(text)
+  ) {
+    return true
+  }
+  if (
+    /\bparent\s+must\b/.test(text) ||
+    /\bparent\/?operator\b/.test(text) ||
+    /\bnot\s+performed\s+by\s+this\s+specialist\b/.test(text) ||
+    /\bspecialist\s+contract\s+forbids\s+basher\b/.test(text)
+  ) {
+    return true
+  }
+  return false
+}
+
+/**
+ * True when a blocker string is only a parent-owned requirementCoverage gap.
+ *
+ * When `toolResult` is provided, re-check structured `requirementCoverage`
+ * (requirement text + evidence) the same way `getReviewerFinalizationVerdict`
+ * does. Without that, a LOOKS_GOOD receipt that is parent-owned only via
+ * evidence can finalize yet still spawn repair-editor at call sites that only
+ * see `BLOCKING: requirement missing|uncertain: <text>`.
+ */
+export function isParentOwnedRequirementBlocker(
+  blocker: string,
+  toolResult?: unknown,
+): boolean {
+  if (typeof blocker !== 'string') return false
+  const match = blocker.match(
+    /^BLOCKING:\s*requirement\s+(missing|uncertain):\s*(.+)$/i,
+  )
+  if (!match) return false
+  const status = match[1].toLowerCase()
+  const requirementText = match[2].trim()
+
+  if (toolResult !== undefined) {
+    const structured = collectStructuredReviewerOutputs(toolResult)
+    let sawStructuredRow = false
+    for (const entry of structured) {
+      for (const requirement of entry.requirementCoverage ?? []) {
+        if (
+          requirement.requirement !== requirementText ||
+          (requirement.status !== 'missing' &&
+            requirement.status !== 'uncertain') ||
+          requirement.status !== status
+        ) {
+          continue
+        }
+        sawStructuredRow = true
+        if (
+          isParentOwnedOrOutOfScopeRequirement(
+            requirement.requirement,
+            requirement.evidence,
+          )
+        ) {
+          return true
+        }
+      }
+    }
+    // Structured row(s) matched: trust evidence-aware classification only.
+    if (sawStructuredRow) return false
+  }
+
+  return isParentOwnedOrOutOfScopeRequirement(requirementText)
+}
+
 function dedupeExactStringsPreserveOrder(values: string[]): string[] {
   const seen = new Set<string>()
   const out: string[] = []
@@ -190,11 +297,17 @@ export function collectReviewerBlockers(toolResult: unknown): string[] {
         )
       }
     }
+    // Keep parent-owned process requirement gaps in the raw blocker list so
+    // consumers can credit LOOKS_GOOD via parentOwnedOnlyBlockers (filter at
+    // the call site; do not elevating-filter here).
     for (const requirement of entry.requirementCoverage ?? []) {
       if (
         requirement.status === 'missing' ||
         requirement.status === 'uncertain'
       ) {
+        // Requirement text only in the string; call-site parent-owned filters
+        // re-check structured requirementCoverage (+ evidence) via
+        // isParentOwnedRequirementBlocker(blocker, toolResult).
         structuredBlockers.push(
           `BLOCKING: requirement ${requirement.status}: ${requirement.requirement}`,
         )
@@ -303,14 +416,19 @@ export function getReviewerFinalizationVerdict(
   if (structured.some((entry) => entry.coverage === 'missing')) {
     return ''
   }
-  // Incomplete requirements (missing/uncertain) also block finalization even
-  // when the reviewer emits a soft top-level verdict.
+  // Incomplete in-scope requirements (missing/uncertain) also block
+  // finalization even when the reviewer emits a soft top-level verdict.
+  // Parent-owned process tasks are not RF blockers for source reviewers.
   if (
     structured.some((entry) =>
       (entry.requirementCoverage ?? []).some(
         (requirement) =>
-          requirement.status === 'missing' ||
-          requirement.status === 'uncertain',
+          (requirement.status === 'missing' ||
+            requirement.status === 'uncertain') &&
+          !isParentOwnedOrOutOfScopeRequirement(
+            requirement.requirement,
+            requirement.evidence,
+          ),
       ),
     )
   ) {
