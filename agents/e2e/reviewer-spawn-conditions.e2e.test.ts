@@ -985,6 +985,45 @@ describe('base2 reviewer spawn conditions e2e', () => {
     })
   })
 
+  test('explicit Git delivery adopts only reviewable turn-start dirty files', () => {
+    // Git-delivery adoption must NOT drag the whole dirty worktree into the
+    // gate. Non-reviewable dirt (docs, session STATE.json, jsonl) belongs to
+    // the worktree / other tabs, not to this conversation's review; only
+    // reviewable source/test files the delivery is committing enter the gate.
+    const base2 = createBase2('default')
+    const agentState = { agentId: 'base2-custom' }
+    const prompt =
+      'Check the full validation gate, then commit and push our current changes'
+    const gen = base2.handleSteps!({ agentState, prompt, params: {} } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next(
+        feedJson({
+          status:
+            ' M src/owned.ts\n M docs/readme.md\n M .agents/sessions/x/STATE.json\n?? src/new.ts',
+        }),
+      ).value,
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    expect((agentState as any).base2ActiveWork).toMatchObject({
+      changedFiles: ['src/owned.ts', 'src/new.ts'],
+      touchedFiles: ['src/owned.ts', 'src/new.ts'],
+      pendingGateFiles: ['src/owned.ts', 'src/new.ts'],
+      currentPhase: 'awaiting_validation',
+    })
+    // Non-reviewable turn-start dirt is never adopted into the gate.
+    expect((agentState as any).base2ActiveWork.pendingGateFiles).not.toContain(
+      'docs/readme.md',
+    )
+    expect((agentState as any).base2ActiveWork.pendingGateFiles).not.toContain(
+      '.agents/sessions/x/STATE.json',
+    )
+  })
+
   test('non-Git turn does not adopt turn-start dirty files', () => {
     const base2 = createBase2('default')
     const agentState = { agentId: 'base2-custom' }
