@@ -2,7 +2,7 @@
 
 All notable changes to the `@openbuff/cli` package will be documented in this file.
 
-## [Unreleased] - 2026-08-03
+## [Unreleased] - 2026-08-07
 
 ### Changed
 
@@ -18,6 +18,7 @@ All notable changes to the `@openbuff/cli` package will be documented in this fi
 
 ### Fixed
 
+- Specialist crash taxonomy and gate attestation hardening (`#43`): classify specialist failures as `none` / `transient` / `protocol` / `fatal`, treating rate-limit / `resource_exhausted` as **transient** so the repair-editor is not thrashed; non-advisory `createSpecialist` / spawn recovery require gate-assigned opaque `v3:…` snapshot tokens (bare review-bundle hex remains evidence-only); clear terminal and rate-limit skip pins on successful specialist credit; coverage for gate-reviewer, spawn permissions, tool validation, and writer spawn rules.
 - Security aux LOOKS_GOOD credit fingerprints the **reviewable** pending subset only (`selectReviewableGateFiles`), so non-reviewable plan/session dirt (e.g. `.agents/sessions/**/STATUS.md`) no longer thrash-invalidates security credit; entry still uses full pending for `matchesSecuritySensitiveGlob`. Bundle docs clarify bare `get_change_review_bundle.snapshotId` is evidence-only — gate attestation stays opaque `v3:…` tokens.
 - Post-edit specialist review attestation now uses the **gate-owned v3 fingerprint** (same family as security/code-reviewer) as the sole review token: spawn `params.snapshot_id`, prompt echo, `specialistSnapshots`, finding `snapshotFingerprint`, and gateId all use `specialistCreditFingerprint` (`v3:…` from `hashGateSnapshotDetails`). Bare `get_change_review_bundle.snapshotId` hex is evidence-only (files/diff/empty-tree) and is no longer accepted as specialist credit identity. Stale retry recomputes the gate fingerprint from current pending files; bundle refresh is optional for evidence. Non-attestable fingerprints (`unreadable:no-crypto`) fail closed without spawning bare bundle ids. Empty/failed bundles never auto-credit specialists while reviewable pending files still exist — the gate always spawns with the gate-owned v3 token instead of fail-open empty-tree attestation.
 - `git_status` tool result schema now accepts the per-turn suppressed `{ unchanged: true, note }` payload (mirroring `list_jobs`), so byte-identical worktree re-observations no longer fail as `malformed_result`.
