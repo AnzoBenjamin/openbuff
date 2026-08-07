@@ -72,7 +72,7 @@ describe('CLI release build workflow', () => {
     for (const block of [legacyBlock, intelBlock]) {
       expect(block).toContain('xcode-select -s')
       expect(block).toContain('export DEVELOPER_DIR')
-      expect(block).toContain('/Contents/Developer/usr/bin/clang')
+      expect(block).toContain('xcrun --find clang')
     }
   })
 })
