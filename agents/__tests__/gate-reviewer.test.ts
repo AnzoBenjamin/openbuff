@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
 
 import {
+  classifyReviewerCrash,
   collectReviewerBlockers,
   collectReviewerAttestationIssues,
   collectReviewerFindingRecords,
@@ -11,6 +12,7 @@ import {
   isParentOwnedOrOutOfScopeRequirement,
   isParentOwnedRequirementBlocker,
   isTestCoverageReviewerFinding,
+  isTransientReviewerCrash,
   stripReviewerPreamble,
 } from '../base2/gate-reviewer'
 
@@ -42,6 +44,9 @@ const INLINE_DEPENDENCY_NAMES = [
   'hasReviewerLineVerdict',
   'collectStrings',
   'findReviewerCrash',
+  // Crash taxonomy helpers are generated into base2; parity for
+  // detectReviewerCrash only needs findReviewerCrash. Unit tests cover
+  // isTransientReviewerCrash / classifyReviewerCrash against the export.
   'isParentOwnedOrOutOfScopeRequirement',
   'isParentOwnedRequirementBlocker',
 ] as const
@@ -445,7 +450,7 @@ describe('gate-reviewer helpers', () => {
     expect(getReviewerFinalizationVerdict(inScopeEvidenceReceipt)).toBe('')
   })
 
-  test('structured v1 reviews must attest to the exact snapshot and every pending file', () => {
+  test('structured v1 reviews require file coverage; fingerprint mismatch only blocks when coverage is incomplete', () => {
     expect(
       collectReviewerAttestationIssues(
         {
@@ -470,6 +475,19 @@ describe('gate-reviewer helpers', () => {
           reviewedFiles: ['src/a.ts', 'src/b.ts'],
         },
         'v3:' + 'b'.repeat(64),
+        ['src/a.ts', 'src/b.ts'],
+      ),
+    ).toEqual([])
+    // Full coverage + different but well-formed v3 fingerprint → no issues.
+    expect(
+      collectReviewerAttestationIssues(
+        {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'v3:' + 'c'.repeat(64),
+          reviewedFiles: ['src/a.ts', 'src/b.ts'],
+        },
+        'v3:' + 'd'.repeat(64),
         ['src/a.ts', 'src/b.ts'],
       ),
     ).toEqual([])
@@ -818,6 +836,33 @@ describe('gate-reviewer helpers', () => {
     expect(detectReviewerCrash(null)).toBeNull()
     expect(detectReviewerCrash({})).toBeNull()
     expect(detectReviewerCrash({ errorMessage: '   ' })).toBeNull()
+  })
+
+  test('isTransientReviewerCrash and classifyReviewerCrash taxonomy', () => {
+    expect(isTransientReviewerCrash('rate_limit_error')).toBe(true)
+    expect(isTransientReviewerCrash('Concurrency limit exceeded')).toBe(true)
+    expect(isTransientReviewerCrash('HTTP 429 Too Many Requests')).toBe(true)
+    expect(isTransientReviewerCrash('please retry later')).toBe(true)
+    expect(isTransientReviewerCrash('resource_exhausted')).toBe(true)
+    expect(isTransientReviewerCrash('provider overloaded')).toBe(true)
+    expect(isTransientReviewerCrash('ordinary spawn failed')).toBe(false)
+    expect(isTransientReviewerCrash('')).toBe(false)
+
+    expect(classifyReviewerCrash(null)).toBe('none')
+    expect(classifyReviewerCrash('')).toBe('none')
+    expect(classifyReviewerCrash('   ')).toBe('none')
+    expect(classifyReviewerCrash('rate_limit_error')).toBe('transient')
+    expect(classifyReviewerCrash('Concurrency limit exceeded')).toBe(
+      'transient',
+    )
+    expect(classifyReviewerCrash('HTTP 429')).toBe('transient')
+    expect(
+      classifyReviewerCrash(
+        'snapshot attestation failed for bare fingerprint',
+      ),
+    ).toBe('protocol')
+    expect(classifyReviewerCrash('non-attestable fingerprint')).toBe('protocol')
+    expect(classifyReviewerCrash('ordinary spawn failed')).toBe('fatal')
   })
 
   test('detectReviewerCrash respects depth cap to avoid pathological recursion', () => {

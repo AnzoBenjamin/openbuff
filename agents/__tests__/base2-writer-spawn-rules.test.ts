@@ -809,4 +809,24 @@ describe('editor / repair-editor / test-writer cohesion', () => {
     expect(specialist.toolNames).not.toContain('spawn_agent_inline')
     expect(specialist.toolNames).toContain('set_output')
   })
+
+  test('non-advisory createSpecialist requires attestable v3 snapshot_id pattern', () => {
+    const specialist = createSpecialist({
+      id: 'compatibility-reviewer',
+      displayName: 'Compatibility Reviewer',
+      purpose: 'Review API and contract compatibility.',
+      focus: ['API compatibility'],
+    })
+    expect(specialist.inputSchema).toBeDefined()
+    const paramsSchema = specialist.inputSchema!.params as {
+      properties?: {
+        snapshot_id?: { type?: string; pattern?: string }
+      }
+      required?: string[]
+    }
+    expect(paramsSchema.properties?.snapshot_id?.pattern).toBe(
+      '^v3:[a-f0-9]{64}$',
+    )
+    expect(paramsSchema.required).toContain('snapshot_id')
+  })
 })

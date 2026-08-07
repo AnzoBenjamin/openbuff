@@ -476,11 +476,9 @@ export function normalizeSpawnAgentList(value: unknown, depth = 0): unknown {
         }
       }
 
-      // Snapshot-scoped specialists verify the supplied fingerprint against
-      // the live review bundle, so recovering an explicitly labelled SHA from
-      // their prompt does not grant authority or bypass freshness checks. This
-      // repairs model calls that preserve the snapshot in prose but omit the
-      // required params.snapshot_id field after context compaction.
+      // Recover labelled v3 gate tokens from prose after compaction; never bare
+      // hex. Snapshot-scoped specialists still verify the fingerprint against
+      // the live review bundle, so recovery does not grant authority.
       if (
         paramsRecord.snapshot_id === undefined &&
         typeof record.prompt === 'string'
@@ -490,8 +488,14 @@ export function normalizeSpawnAgentList(value: unknown, depth = 0): unknown {
             /\b(?:Snapshot(?: ID| fingerprint)?(?:\s*\([^\n)]*\)|\s+to verify)?|snapshot_id)\s*:\s*`?([A-Za-z0-9][A-Za-z0-9._:-]{0,511})`?/gi,
           ),
         ]
+        // Only recover gate-attestable tokens (v3: + 64 lowercase hex). Bare bundle
+        // hex and short/cap.v2 labels must not be injected: non-advisory createSpecialist
+        // requires ^v3:[a-f0-9]{64}$ and bare fill fails schema / contradicts recovery hints.
         const explicitSnapshot = matches.at(-1)?.[1]
-        if (explicitSnapshot) {
+        if (
+          typeof explicitSnapshot === 'string' &&
+          /^v3:[a-f0-9]{64}$/.test(explicitSnapshot)
+        ) {
           paramsRecord.snapshot_id = explicitSnapshot
           paramsRepaired = true
         }
