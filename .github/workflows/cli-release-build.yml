@@ -220,33 +220,64 @@ jobs:
           tar -xzf "$LEGACY_DIR/ripgrep.tar.gz" \
             -C "$LEGACY_DIR/ripgrep" --strip-components=1
 
-          # Select a usable Xcode with clang before cargo needs a C linker.
-          # Some runner images leave a broken default (e.g. Xcode_15.4 without clang).
+          # Select a usable developer dir with clang before cargo needs a C linker.
+          # Prefer xcrun --find clang over checking usr/bin/clang directly: some
+          # runner images omit that path even when the selected toolchain works.
           DEVELOPER_DIR=""
-          CANDIDATES=()
-          while IFS= read -r app; do
-            CANDIDATES+=("$app")
-          done < <(ls -1d /Applications/Xcode_*.app 2>/dev/null | sort -V -r || true)
-          if [[ -d /Applications/Xcode.app ]]; then
-            CANDIDATES+=("/Applications/Xcode.app")
-          fi
-          for app in "${CANDIDATES[@]}"; do
-            if [[ -x "$app/Contents/Developer/usr/bin/clang" ]]; then
-              DEVELOPER_DIR="$app/Contents/Developer"
-              break
+          if CURRENT_DEVELOPER_DIR="$(xcode-select -p 2>/dev/null || true)" \
+            && [[ -n "$CURRENT_DEVELOPER_DIR" ]]; then
+            export DEVELOPER_DIR="$CURRENT_DEVELOPER_DIR"
+            if ! xcrun --find clang >/dev/null 2>&1; then
+              DEVELOPER_DIR=""
             fi
-          done
+          fi
           if [[ -z "$DEVELOPER_DIR" ]]; then
-            echo "error: no Xcode app with an executable clang under /Applications" >&2
-            echo "Available apps:" >&2
+            CANDIDATES=()
+            while IFS= read -r app; do
+              CANDIDATES+=("$app")
+            done < <(ls -1d /Applications/Xcode_*.app 2>/dev/null | sort -V -r || true)
+            if [[ -d /Applications/Xcode.app ]]; then
+              CANDIDATES+=("/Applications/Xcode.app")
+            fi
+            for app in "${CANDIDATES[@]}"; do
+              candidate="$app/Contents/Developer"
+              export DEVELOPER_DIR="$candidate"
+              if sudo xcode-select -s "$candidate" \
+                && xcrun --find clang >/dev/null 2>&1; then
+                break
+              fi
+              DEVELOPER_DIR=""
+            done
+          fi
+          if [[ -z "$DEVELOPER_DIR" ]] && [[ -d /Library/Developer/CommandLineTools ]]; then
+            candidate="/Library/Developer/CommandLineTools"
+            export DEVELOPER_DIR="$candidate"
+            if sudo xcode-select -s "$candidate" \
+              && xcrun --find clang >/dev/null 2>&1; then
+              :
+            else
+              DEVELOPER_DIR=""
+            fi
+          fi
+          if [[ -z "$DEVELOPER_DIR" ]]; then
+            echo "error: no usable Xcode or Command Line Tools with clang" >&2
+            echo "xcode-select -p:" >&2
+            xcode-select -p 2>&1 || true
+            echo "Available Xcode apps:" >&2
             ls -la /Applications/Xcode*.app 2>/dev/null || echo "(none)" >&2
+            echo "which clang:" >&2
+            which clang 2>&1 || true
+            echo "xcrun --find clang:" >&2
+            xcrun --find clang 2>&1 || true
             exit 1
           fi
-          sudo xcode-select -s "$DEVELOPER_DIR"
           export DEVELOPER_DIR
           echo "Selected DEVELOPER_DIR=$DEVELOPER_DIR"
-          xcodebuild -version
-          clang --version
+          if command -v xcodebuild >/dev/null 2>&1; then
+            xcodebuild -version
+          fi
+          clang --version 2>/dev/null || true
+          xcrun clang --version
 
           pushd "$LEGACY_DIR/ripgrep"
           MACOSX_DEPLOYMENT_TARGET=11.0 cargo build --release --locked
@@ -269,33 +300,64 @@ jobs:
           tar -xzf "$RG_DIR/ripgrep.tar.gz" \
             -C "$RG_DIR/source" --strip-components=1
 
-          # Select a usable Xcode with clang before cargo needs a C linker.
-          # Some runner images leave a broken default (e.g. Xcode_15.4 without clang).
+          # Select a usable developer dir with clang before cargo needs a C linker.
+          # Prefer xcrun --find clang over checking usr/bin/clang directly: some
+          # runner images omit that path even when the selected toolchain works.
           DEVELOPER_DIR=""
-          CANDIDATES=()
-          while IFS= read -r app; do
-            CANDIDATES+=("$app")
-          done < <(ls -1d /Applications/Xcode_*.app 2>/dev/null | sort -V -r || true)
-          if [[ -d /Applications/Xcode.app ]]; then
-            CANDIDATES+=("/Applications/Xcode.app")
-          fi
-          for app in "${CANDIDATES[@]}"; do
-            if [[ -x "$app/Contents/Developer/usr/bin/clang" ]]; then
-              DEVELOPER_DIR="$app/Contents/Developer"
-              break
+          if CURRENT_DEVELOPER_DIR="$(xcode-select -p 2>/dev/null || true)" \
+            && [[ -n "$CURRENT_DEVELOPER_DIR" ]]; then
+            export DEVELOPER_DIR="$CURRENT_DEVELOPER_DIR"
+            if ! xcrun --find clang >/dev/null 2>&1; then
+              DEVELOPER_DIR=""
             fi
-          done
+          fi
           if [[ -z "$DEVELOPER_DIR" ]]; then
-            echo "error: no Xcode app with an executable clang under /Applications" >&2
-            echo "Available apps:" >&2
+            CANDIDATES=()
+            while IFS= read -r app; do
+              CANDIDATES+=("$app")
+            done < <(ls -1d /Applications/Xcode_*.app 2>/dev/null | sort -V -r || true)
+            if [[ -d /Applications/Xcode.app ]]; then
+              CANDIDATES+=("/Applications/Xcode.app")
+            fi
+            for app in "${CANDIDATES[@]}"; do
+              candidate="$app/Contents/Developer"
+              export DEVELOPER_DIR="$candidate"
+              if sudo xcode-select -s "$candidate" \
+                && xcrun --find clang >/dev/null 2>&1; then
+                break
+              fi
+              DEVELOPER_DIR=""
+            done
+          fi
+          if [[ -z "$DEVELOPER_DIR" ]] && [[ -d /Library/Developer/CommandLineTools ]]; then
+            candidate="/Library/Developer/CommandLineTools"
+            export DEVELOPER_DIR="$candidate"
+            if sudo xcode-select -s "$candidate" \
+              && xcrun --find clang >/dev/null 2>&1; then
+              :
+            else
+              DEVELOPER_DIR=""
+            fi
+          fi
+          if [[ -z "$DEVELOPER_DIR" ]]; then
+            echo "error: no usable Xcode or Command Line Tools with clang" >&2
+            echo "xcode-select -p:" >&2
+            xcode-select -p 2>&1 || true
+            echo "Available Xcode apps:" >&2
             ls -la /Applications/Xcode*.app 2>/dev/null || echo "(none)" >&2
+            echo "which clang:" >&2
+            which clang 2>&1 || true
+            echo "xcrun --find clang:" >&2
+            xcrun --find clang 2>&1 || true
             exit 1
           fi
-          sudo xcode-select -s "$DEVELOPER_DIR"
           export DEVELOPER_DIR
           echo "Selected DEVELOPER_DIR=$DEVELOPER_DIR"
-          xcodebuild -version
-          clang --version
+          if command -v xcodebuild >/dev/null 2>&1; then
+            xcodebuild -version
+          fi
+          clang --version 2>/dev/null || true
+          xcrun clang --version
 
           pushd "$RG_DIR/source"
           MACOSX_DEPLOYMENT_TARGET=13.0 cargo build --release --locked
