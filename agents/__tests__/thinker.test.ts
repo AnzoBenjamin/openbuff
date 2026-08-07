@@ -3,7 +3,7 @@ import { describe, test, expect } from 'bun:test'
 import thinker from '../thinker/thinker'
 
 import type { AgentState } from '../types/agent-definition'
-import type { Message, ToolResultOutput } from '../types/util-types'
+import type { Message } from '../types/util-types'
 
 describe('thinker agent', () => {
   const createMockAgentState = (
@@ -128,6 +128,17 @@ describe('thinker agent', () => {
     test('instructs not to call set_output', () => {
       expect(thinker.instructionsPrompt).toContain('DO NOT call')
       expect(thinker.instructionsPrompt).toContain('set_output')
+    })
+
+    test('prefers plain assistant text over set_output for the final answer', () => {
+      expect(thinker.instructionsPrompt).toContain('prefer plain assistant text')
+      expect(thinker.instructionsPrompt).toContain('ordinary response text')
+      expect(thinker.instructionsPrompt).toContain(
+        'harvested automatically from that plain text',
+      )
+      expect(thinker.instructionsPrompt).toContain(
+        'not only inside a tool call',
+      )
     })
   })
 
@@ -541,6 +552,226 @@ Actual response here`,
 
       const toolCall = result.value as unknown as { input: { message: string } }
       expect(toolCall.input.message).toBe('Simple string response')
+    })
+
+    // Regression: empty harvest after <think> strip must not clobber a
+    // successful prior set_output (buffbench spawn LsHOhL5cwBo).
+    test('does not clobber existing non-empty output with empty harvest', () => {
+      const messages: Message[] = [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'text',
+              text: '<think>only thinking, no final answer</think>',
+            },
+          ],
+        },
+      ]
+
+      const mockAgentState = createMockAgentState(messages)
+      const mockLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      }
+
+      const generator = thinker.handleSteps!({
+        agentState: mockAgentState,
+        logger: mockLogger as any,
+        params: {},
+      })
+
+      generator.next()
+
+      const updatedState = createMockAgentState(messages)
+      updatedState.output = { message: 'Prior successful answer' }
+      const result = generator.next({
+        agentState: updatedState,
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      // Must not yield set_output at all — leave existing output intact.
+      expect(result.done).toBe(true)
+      expect(result.value).toBeUndefined()
+    })
+
+    test('preserves existing output when no assistant message is present', () => {
+      const messages: Message[] = [
+        {
+          role: 'user',
+          content: [{ type: 'text', text: 'Hello' }],
+        },
+      ]
+
+      const mockAgentState = createMockAgentState(messages)
+      const mockLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      }
+
+      const generator = thinker.handleSteps!({
+        agentState: mockAgentState,
+        logger: mockLogger as any,
+        params: {},
+      })
+
+      generator.next()
+
+      const updatedState = createMockAgentState(messages)
+      updatedState.output = { message: 'Already set via set_output' }
+      const result = generator.next({
+        agentState: updatedState,
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect(result.done).toBe(true)
+      expect(result.value).toBeUndefined()
+    })
+
+    test('recovers message from set_output tool-call when assistant text is empty', () => {
+      const messages: Message[] = [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'text',
+              text: '<think>thinking only</think>',
+            },
+            {
+              type: 'tool-call',
+              toolCallId: '1',
+              toolName: 'set_output',
+              input: { message: 'Answer from tool call' },
+            },
+          ],
+        },
+      ]
+
+      const mockAgentState = createMockAgentState(messages)
+      const mockLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      }
+
+      const generator = thinker.handleSteps!({
+        agentState: mockAgentState,
+        logger: mockLogger as any,
+        params: {},
+      })
+
+      generator.next()
+
+      const updatedState = createMockAgentState(messages)
+      const result = generator.next({
+        agentState: updatedState,
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect(result.value).toEqual({
+        toolName: 'set_output',
+        input: { message: 'Answer from tool call' },
+        includeToolCall: false,
+      })
+    })
+
+    test('recovers message from set_output input.data.message when text is empty', () => {
+      const messages: Message[] = [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: '1',
+              toolName: 'set_output',
+              input: { data: { message: 'Nested data message' } },
+            },
+          ],
+        },
+      ]
+
+      const mockAgentState = createMockAgentState(messages)
+      const mockLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      }
+
+      const generator = thinker.handleSteps!({
+        agentState: mockAgentState,
+        logger: mockLogger as any,
+        params: {},
+      })
+
+      generator.next()
+
+      const updatedState = createMockAgentState(messages)
+      const result = generator.next({
+        agentState: updatedState,
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect(result.value).toEqual({
+        toolName: 'set_output',
+        input: { message: 'Nested data message' },
+        includeToolCall: false,
+      })
+    })
+
+    test('prefers cleaned assistant text over set_output tool-call message', () => {
+      const messages: Message[] = [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'Text answer wins' },
+            {
+              type: 'tool-call',
+              toolCallId: '1',
+              toolName: 'set_output',
+              input: { message: 'Tool call answer' },
+            },
+          ],
+        },
+      ]
+
+      const mockAgentState = createMockAgentState(messages)
+      const mockLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      }
+
+      const generator = thinker.handleSteps!({
+        agentState: mockAgentState,
+        logger: mockLogger as any,
+        params: {},
+      })
+
+      generator.next()
+
+      const updatedState = createMockAgentState(messages)
+      const result = generator.next({
+        agentState: updatedState,
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect(result.value).toEqual({
+        toolName: 'set_output',
+        input: { message: 'Text answer wins' },
+        includeToolCall: false,
+      })
     })
   })
 })

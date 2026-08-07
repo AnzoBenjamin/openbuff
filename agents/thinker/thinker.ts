@@ -55,7 +55,7 @@ const definition: SecretAgentDefinition = {
   instructionsPrompt: `
 You are a thinker agent. Reason from the self-contained decision packet in the current prompt. Do not assume access to parent conversation history or operational state. You have read-only repository access: you may call read_files to verify evidence in the packet when helpful, but do not modify anything. Use the <think> tag to think deeply about the request.
 
-When satisfied, write out a brief response to the user's request. The parent agent will see your response -- DO NOT call set_output or any tool to produce it. Structured output is captured automatically for you.
+When satisfied, prefer plain assistant text for the final answer: write it as ordinary response text after optional <think>...</think> tags so it is visible in the message itself (not only inside a tool call). The parent agent will see that response -- DO NOT call set_output or any tool just to publish the answer. Structured output is harvested automatically from that plain text for you.
 
 If the caller passed params.depth === 'shallow', keep your thinking chain short and lead with the answer. If params.depth === 'deep' (or omitted), reason thoroughly before the final answer.
 If the caller passed params.outputSchemaHint, format your final message content to match that shape (e.g. valid JSON with the requested fields). The runtime still wraps your output as { message: string }, so serialize structured content into that string.
@@ -73,12 +73,28 @@ If the caller passed params.outputSchemaHint, format your final message content 
     void params
     const { agentState } = yield 'STEP'
 
+    // Prefer non-empty cleaned assistant text > set_output tool-call message >
+    // existing agentState.output.message. Never clobber a successful prior
+    // set_output with an empty harvest (buffbench empty-harvest clobber).
+    const existingOutput = agentState.output
+    const existingMessage =
+      existingOutput &&
+      typeof existingOutput === 'object' &&
+      typeof existingOutput.message === 'string' &&
+      existingOutput.message.trim()
+        ? existingOutput.message
+        : undefined
+
     // Find the last assistant message
     const lastAssistantMessage = [...agentState.messageHistory]
       .reverse()
       .find((m) => m.role === 'assistant')
 
     if (!lastAssistantMessage) {
+      if (existingMessage) {
+        // Usable prior output already present — leave it intact.
+        return
+      }
       const errorMsg =
         'Error: No assistant message found in conversation history'
       yield {
@@ -88,9 +104,29 @@ If the caller passed params.outputSchemaHint, format your final message content 
       return
     }
 
-    // Extract text content from the assistant message
+    // Extract text content and optional set_output tool-call payload from the
+    // last assistant message. Helpers stay inside the generator so handleSteps
+    // remains serializable for sandbox execution.
     const content = lastAssistantMessage.content
     let textContent = ''
+    let toolCallMessage: string | undefined
+
+    const messageFromSetOutputInput = (
+      input: Record<string, unknown>,
+    ): string | undefined => {
+      if (typeof input.message === 'string' && input.message.trim()) {
+        return input.message
+      }
+      const data = input.data
+      if (data && typeof data === 'object' && !Array.isArray(data)) {
+        const nested = (data as Record<string, unknown>).message
+        if (typeof nested === 'string' && nested.trim()) {
+          return nested
+        }
+      }
+      return undefined
+    }
+
     if (typeof content === 'string') {
       textContent = content
     } else if (Array.isArray(content)) {
@@ -98,6 +134,28 @@ If the caller passed params.outputSchemaHint, format your final message content 
         .filter((part) => part.type === 'text')
         .map((part) => part.text)
         .join('')
+
+      for (const part of content) {
+        if (
+          !part ||
+          typeof part !== 'object' ||
+          part.type !== 'tool-call' ||
+          part.toolName !== 'set_output'
+        ) {
+          continue
+        }
+        const input = part.input
+        if (!input || typeof input !== 'object' || Array.isArray(input)) {
+          continue
+        }
+        const recovered = messageFromSetOutputInput(
+          input as Record<string, unknown>,
+        )
+        if (recovered) {
+          // Last matching set_output part wins (most recent in the message).
+          toolCallMessage = recovered
+        }
+      }
     }
 
     // Remove text within <think> tags (including the tags themselves)
@@ -105,6 +163,30 @@ If the caller passed params.outputSchemaHint, format your final message content 
       .replace(/<think>[\s\S]*?<\/think>/g, '')
       .trim()
 
+    if (cleanedText) {
+      yield {
+        toolName: 'set_output',
+        input: { message: cleanedText },
+        includeToolCall: false,
+      }
+      return
+    }
+
+    if (toolCallMessage) {
+      yield {
+        toolName: 'set_output',
+        input: { message: toolCallMessage },
+        includeToolCall: false,
+      }
+      return
+    }
+
+    if (existingMessage) {
+      // Empty harvest must not overwrite a successful prior set_output.
+      return
+    }
+
+    // No usable text, tool-call payload, or prior output — keep empty path.
     yield {
       toolName: 'set_output',
       input: { message: cleanedText },

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, mock } from 'bun:test'
 import z from 'zod/v4'
 
 import contextPruner from '../../../../agents/context-pruner'
+import thinker from '../../../../agents/thinker/thinker'
 import { loopAgentSteps } from '../run-agent-step'
 import { clearAgentGeneratorCache } from '../run-programmatic-step'
 import { PLACEHOLDER } from '../templates/types'
@@ -160,6 +161,64 @@ describe('loopAgentSteps', () => {
     expect(result.output).toEqual({
       type: 'structuredOutput',
       value: { result: 'reviewed' },
+    })
+  })
+
+  // Regression: empty harvest after a set_output-only STEP must not clobber
+  // a successful prior set_output (buffbench spawn LsHOhL5cwBo).
+  it('preserves set_output when thinker harvest finds no plain assistant text', async () => {
+    setup()
+    let llmCallCount = 0
+    agentTemplate.toolNames = ['read_files', 'set_output']
+    agentTemplate.outputSchema = z.object({ message: z.string() })
+    agentTemplate.handleSteps =
+      thinker.handleSteps as AgentTemplate['handleSteps']
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCallCount++
+      // Model publishes only via set_output — no plain text outside the call.
+      yield createToolCallChunk('set_output', { message: 'Good answer' })
+      return promptSuccess('mock-message-id')
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    expect(llmCallCount).toBe(1)
+    expect(result.output).toEqual({
+      type: 'structuredOutput',
+      value: { message: 'Good answer' },
+    })
+  })
+
+  it('harvests thinker plain-text final answer into structured output', async () => {
+    setup()
+    let llmCallCount = 0
+    agentTemplate.toolNames = ['read_files', 'set_output']
+    agentTemplate.outputSchema = z.object({ message: z.string() })
+    agentTemplate.handleSteps =
+      thinker.handleSteps as AgentTemplate['handleSteps']
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCallCount++
+      yield {
+        type: 'text' as const,
+        text: '<think>brief reasoning</think>\nPlain text final answer',
+      }
+      return promptSuccess('mock-message-id')
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    expect(llmCallCount).toBe(1)
+    expect(result.output).toEqual({
+      type: 'structuredOutput',
+      value: { message: 'Plain text final answer' },
     })
   })
 

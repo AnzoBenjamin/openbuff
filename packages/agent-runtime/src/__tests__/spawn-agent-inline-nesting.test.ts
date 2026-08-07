@@ -686,6 +686,38 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
     expect(receipt.errors[0]?.message).toContain('task_completed')
   })
 
+  // Early-exit contract: a realistic spawn finish shape often has the final
+  // answer only on agentState.messageHistory (not also re-wrapped in output).
+  // Missing task_completed still forces status partial + retryable error so
+  // parents can re-spawn rather than treating prose as completed work.
+  it('marks general agent partial for messageHistory final answer without task_completed (early-exit contract)', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'general-agent',
+      agentId: 'general-message-history-only',
+      output: {
+        type: 'lastMessage',
+        value: [],
+      },
+      agentState: {
+        messageHistory: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'text',
+                text: 'Here is the final answer without an explicit completion tool call.',
+              },
+            ],
+          },
+        ],
+      } as any,
+    })
+
+    expect(receipt.status).toBe('partial')
+    expect(receipt.errors[0]?.message).toContain('task_completed')
+    expect(receipt.errors[0]?.retryable).toBe(true)
+  })
+
   it('RF-2/RF-7/RF-11/RF-16 completes blocked repair-editor output when mutations are attested', () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'repair-editor',
