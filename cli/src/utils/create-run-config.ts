@@ -126,6 +126,53 @@ function resolveMaxAgentSteps(): number {
   return MAX_AGENT_STEPS_DEFAULT
 }
 
+const HARNESS_APPROVAL_TARGET_DISPLAY_MAX = 200
+
+export type HarnessApprovalRequest = {
+  action: string
+  target: string
+  reason: string
+  risk: 'routine' | 'high'
+}
+
+function truncateForApprovalDisplay(
+  target: string,
+  maxLength = HARNESS_APPROVAL_TARGET_DISPLAY_MAX,
+): string {
+  if (target.length <= maxLength) return target
+  return `${target.slice(0, Math.max(0, maxLength - 1))}…`
+}
+
+/**
+ * Build the ask-user question payload for harness terminal approvals.
+ * Keeps the Allow once label stable so createRunConfig can check the selection.
+ */
+export function buildHarnessApprovalPrompt(request: HarnessApprovalRequest) {
+  const displayTarget = truncateForApprovalDisplay(request.target)
+  const isHighRisk = request.risk === 'high'
+
+  return {
+    header: isHighRisk ? 'High-risk action' : 'Confirm action',
+    question: isHighRisk
+      ? `This may destroy data, deploy, or run eval code.\nAllow ${request.action}: ${displayTarget}?`
+      : `Allow ${request.action}?\n${displayTarget}`,
+    options: [
+      {
+        label: 'Allow once',
+        description: isHighRisk
+          ? `${request.reason} Runs once for this command only. High impact: may destroy worktree data, deploy, or evaluate code.`
+          : `${request.reason} Routine classified action; single-use for this exact target.`,
+      },
+      {
+        label: 'Deny',
+        description: 'Block this command and continue without running it.',
+      },
+    ],
+    multiSelect: false as const,
+  }
+}
+
+
 export const createRunConfig = (params: CreateRunConfigParams) => {
   const {
     logger,
@@ -175,22 +222,9 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
     onCheckpoint,
     resumeInterruptedTurn,
     approvalMode,
-    requestApproval: async (request: {
-      action: string
-      target: string
-      reason: string
-      risk: 'routine' | 'high'
-    }) => {
+    requestApproval: async (request: HarnessApprovalRequest) => {
       const response = (await AskUserBridge.request('harness-approval', [
-        {
-          header: request.risk === 'high' ? 'Risky action' : 'Approval',
-          question: `Allow ${request.action}: ${request.target}?`,
-          options: [
-            { label: 'Allow once', description: request.reason },
-            { label: 'Deny', description: 'Do not run this command.' },
-          ],
-          multiSelect: false,
-        },
+        buildHarnessApprovalPrompt(request),
       ])) as {
         answers?: Array<{ selectedOption?: string }>
         skipped?: boolean

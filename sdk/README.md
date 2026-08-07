@@ -65,10 +65,13 @@ does not represent the same workspace.
 Approval behavior is controlled by `approvalMode`:
 
 - `balanced` (default) allows routine dependency changes, commits, feature
-  branch pushes, pull requests, and ordinary downloads without prompting. It
-  asks only for destructive workspace/history changes, default-branch pushes,
-  deployments, releases, migrations, uploads/remote shells, and arbitrary code
-  evaluation.
+  branch pushes, pull requests, ordinary downloads, normal pipelines/tests, and
+  staged-only `git restore --staged` without prompting. It asks only for truly
+  destructive workspace/history shapes (for example `git reset --hard`,
+  `git clean -fd`, worktree-mutating restore, recursive deletes), default-branch
+  pushes, deployments, releases, migrations, uploads/remote shells, and
+  interpreter-eval / detached-process shapes — not ordinary pipes, command
+  substitution in project scripts, or background jobs.
 - `strict` asks for every classified package, Git, remote, or destructive
   effect.
 - `allow-all` auto-approves classified effects while retaining non-negotiable

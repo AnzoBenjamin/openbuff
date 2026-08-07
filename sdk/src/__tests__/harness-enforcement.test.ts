@@ -166,6 +166,84 @@ describe('harness enforcement services', () => {
         action: 'arbitrary-code',
       },
     )
+    expect(
+      classifyTerminalHarnessAction('git restore --staged src/a.ts'),
+    ).toBeUndefined()
+    expect(
+      classifyTerminalHarnessAction('git restore --staged -- src/a.ts'),
+    ).toBeUndefined()
+    expect(
+      classifyTerminalHarnessAction('git restore --staged src/a.ts src/b.ts'),
+    ).toBeUndefined()
+    expect(
+      classifyTerminalHarnessAction('git restore --worktree src/a.ts'),
+    ).toMatchObject({ action: 'workspace-delete' })
+    expect(
+      classifyTerminalHarnessAction('git restore src/a.ts'),
+    ).toMatchObject({ action: 'workspace-delete' })
+    expect(
+      classifyTerminalHarnessAction(
+        'git restore --staged --worktree src/a.ts',
+      ),
+    ).toMatchObject({ action: 'workspace-delete' })
+    expect(
+      classifyTerminalHarnessAction('git restore -W src/a.ts'),
+    ).toMatchObject({ action: 'workspace-delete' })
+    expect(
+      classifyTerminalHarnessAction('git restore --source=HEAD~1 src/a.ts'),
+    ).toMatchObject({ action: 'workspace-delete' })
+    expect(
+      classifyTerminalHarnessAction('git restore -p src/a.ts'),
+    ).toMatchObject({ action: 'workspace-delete' })
+    expect(
+      classifyTerminalHarnessAction('git restore --patch src/a.ts'),
+    ).toMatchObject({ action: 'workspace-delete' })
+    expect(
+      classifyTerminalHarnessAction('git restore --staged -W src/a.ts'),
+    ).toMatchObject({ action: 'workspace-delete' })
+    expect(
+      classifyTerminalHarnessAction('git reset --hard HEAD'),
+    ).toMatchObject({ action: 'workspace-delete' })
+    expect(
+      classifyTerminalHarnessAction(
+        'bun test packages/foo && bun run typecheck',
+      ),
+    ).toBeUndefined()
+    expect(classifyTerminalHarnessAction('echo $(pwd)')).toBeUndefined()
+    expect(
+      classifyTerminalHarnessAction(
+        'git log --oneline $(git rev-parse HEAD)',
+      ),
+    ).toBeUndefined()
+    expect(
+      classifyTerminalHarnessAction(
+        'set -o pipefail; (bun test) 2>&1 | tee /tmp/log | head -20',
+      ),
+    ).toBeUndefined()
+    expect(
+      classifyTerminalHarnessAction(
+        "set -o pipefail; (bun test sdk) 2>&1 | tee /tmp/openbuff-basher-x.log >/dev/null; status=${PIPESTATUS[0]}; echo exit_status=$status; grep -n -E '\\(fail\\)|error:' /tmp/x.log | head -120 || true; exit \"$status\"",
+      ),
+    ).toBeUndefined()
+    expect(
+      classifyTerminalHarnessAction(
+        "which blender && blender --version 2>/dev/null | head -3; echo '---'; ls -la public/models/ 2>/dev/null || true",
+      ),
+    ).toBeUndefined()
+    expect(classifyTerminalHarnessAction('bun run dev &')).toBeUndefined()
+    expect(classifyTerminalHarnessAction('echo `pwd`')).toBeUndefined()
+    expect(
+      classifyTerminalHarnessAction('echo "$(git rev-parse --short HEAD)"'),
+    ).toBeUndefined()
     expect(classifyTerminalHarnessAction('bun test')).toBeUndefined()
+    expect(classifyTerminalHarnessAction('nohup bun test')).toMatchObject({
+      action: 'arbitrary-code',
+    })
+    expect(
+      classifyTerminalHarnessAction("python3 -c 'print(1)'"),
+    ).toMatchObject({ action: 'arbitrary-code' })
+    expect(classifyTerminalHarnessAction('git clean -fd')).toMatchObject({
+      action: 'workspace-delete',
+    })
   })
 })

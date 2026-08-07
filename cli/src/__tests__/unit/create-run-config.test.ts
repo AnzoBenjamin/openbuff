@@ -1,9 +1,67 @@
 import { describe, test, expect } from 'bun:test'
 
 import {
+  buildHarnessApprovalPrompt,
   isSensitiveFile,
   isEnvTemplateFile,
 } from '../../utils/create-run-config'
+
+describe('buildHarnessApprovalPrompt', () => {
+  test('uses high-risk header and preserves Allow once label', () => {
+    const prompt = buildHarnessApprovalPrompt({
+      action: 'workspace-delete',
+      target: 'git clean -fd',
+      reason: 'Deletes untracked files.',
+      risk: 'high',
+    })
+
+    expect(prompt.header).toBe('High-risk action')
+    expect(prompt.question).toContain('Allow workspace-delete: git clean -fd?')
+    expect(prompt.question).toContain(
+      'This may destroy data, deploy, or run eval code.',
+    )
+    expect(prompt.options[0]?.label).toBe('Allow once')
+    expect(prompt.options[0]?.description).toContain('High impact')
+    expect(prompt.options[1]?.label).toBe('Deny')
+    expect(prompt.options[1]?.description).toBe(
+      'Block this command and continue without running it.',
+    )
+    expect(prompt.multiSelect).toBe(false)
+  })
+
+  test('uses routine Confirm action header and single-use framing', () => {
+    const prompt = buildHarnessApprovalPrompt({
+      action: 'dependency-install',
+      target: 'bun add zod',
+      reason: 'Installs a package.',
+      risk: 'routine',
+    })
+
+    expect(prompt.header).toBe('Confirm action')
+    expect(prompt.question).toBe('Allow dependency-install?\nbun add zod')
+    expect(prompt.options[0]?.label).toBe('Allow once')
+    expect(prompt.options[0]?.description).toContain(
+      'Routine classified action; single-use for this exact target.',
+    )
+  })
+
+  test('truncates long targets in the displayed question only', () => {
+    const longTarget = `git restore ${'a'.repeat(250)}`
+    const prompt = buildHarnessApprovalPrompt({
+      action: 'workspace-delete',
+      target: longTarget,
+      reason: 'Restores worktree files.',
+      risk: 'high',
+    })
+
+    expect(prompt.question.includes(longTarget)).toBe(false)
+    expect(prompt.question).toContain('…')
+    expect(prompt.question.length).toBeLessThan(
+      `This may destroy data, deploy, or run eval code.\nAllow workspace-delete: ${longTarget}?`
+        .length,
+    )
+  })
+})
 
 describe('isSensitiveFile', () => {
   test.each([

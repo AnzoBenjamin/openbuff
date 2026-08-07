@@ -127,7 +127,9 @@ function normalizeCommand(command: string): string {
 }
 
 /**
- * Classifies command shapes that cross the local workspace trust boundary.
+ * Classifies only commands that cross trust boundaries or destroy data.
+ * Ordinary pipelines, command substitution in project scripts, background
+ * jobs, and staged-only `git restore --staged` are not high-impact.
  * This classifier never grants authority: the terminal permission profile is
  * evaluated first, then a matching snapshot-scoped approval must be consumed.
  */
@@ -165,11 +167,21 @@ export function classifyTerminalHarnessAction(
     return { action: 'commit', target: command }
   }
   if (
-    /^git\s+(?:reset\s+--hard|clean\b[\s\S]*-[^\s]*[fd]|checkout\s+--|restore\b)/i.test(
-      command,
-    )
+    /^git\s+reset\s+--hard\b/i.test(command) ||
+    /^git\s+clean\b[\s\S]*-[^\s]*[fd]/i.test(command) ||
+    /^git\s+checkout\s+--\b/i.test(command)
   ) {
     return { action: 'workspace-delete', target: command }
+  }
+  if (/^git\s+restore\b/i.test(command)) {
+    // Worktree-mutating restore is destructive; pure --staged unstage is not.
+    const mutatesWorktree =
+      /(?:--worktree\b|-W\b|--source\b|--overlay\b|--patch\b|(?:^|\s)-p(?:\s|$))/i.test(
+        command,
+      ) || !/--staged\b/i.test(command)
+    if (mutatesWorktree) {
+      return { action: 'workspace-delete', target: command }
+    }
   }
   if (
     /^gh\s+pr\s+(?:create|merge|close|reopen|ready|review)\b/i.test(command)
@@ -218,12 +230,13 @@ export function classifyTerminalHarnessAction(
   ) {
     return { action: 'external-network', target: command }
   }
+  // Interpreter one-liners and detached process wrappers only — not ordinary
+  // pipelines, $(...) / backticks, or trailing background `&`.
   if (
     /^(?:(?:node|bun|deno)\s+(?:-e|--eval)|python(?:3)?\s+-c|ruby\s+-e|perl\s+-e)\b/i.test(
       command,
     ) ||
-    /^(?:nohup|setsid)\b/i.test(command) ||
-    /(?:\$\(|`|&\s*$)/.test(command)
+    /^(?:nohup|setsid)\b/i.test(command)
   ) {
     return { action: 'arbitrary-code', target: command }
   }
