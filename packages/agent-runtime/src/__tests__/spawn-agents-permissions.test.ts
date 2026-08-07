@@ -767,8 +767,25 @@ describe('editor implementation brief validation', () => {
         {},
       ),
     ).toThrow(
-      'exact current snapshot fingerprint from get_change_review_bundle',
+      // Gate-assigned opaque v3 token — bare bundle hex is evidence-only.
+      'gate-assigned opaque v3:',
     )
+    try {
+      validateAgentInput(
+        compatibilityTemplate,
+        'compatibility-reviewer',
+        'Review compatibility.',
+        {},
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      expect(message).toContain('"snapshot_id": "v3:<64-hex>"')
+      expect(message).toContain('specialistCreditFingerprint')
+      expect(message).toContain('evidence-only')
+      expect(message).not.toMatch(
+        /exact current snapshot fingerprint from get_change_review_bundle/i,
+      )
+    }
   })
 
   it('accepts a concrete prose brief with actionable target files', () => {
