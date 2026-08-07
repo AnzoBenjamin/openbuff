@@ -797,9 +797,16 @@ const JOB_OUTPUT_CHAR_CAP = 50_000
 /**
  * Maps a job-registry lifecycle state to the tool block's lifecycle vocabulary
  * (`'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'`).
+ *
+ * Forward-compat: the `printModeJobUpdateSchema` JSDoc says consumers should
+ * treat unknown variants as no-ops. `handleJobUpdate` runs in the streaming
+ * UI render path, so the `default` branch fails safe by mapping any unknown
+ * state to `'running'` (the least-surprising non-terminal state) and logging
+ * a warning, instead of throwing and aborting the whole event handler.
  */
 const jobStateToToolLifecycle = (
   state: PrintModeJobUpdate['state'],
+  logger: Logger,
 ): ToolContentBlock['lifecycle'] => {
   switch (state) {
     case 'queued':
@@ -815,12 +822,17 @@ const jobStateToToolLifecycle = (
     case 'stopped':
     case 'cancelled':
       return 'cancelled'
+    // Exhaustiveness guard: if `state` is a declared enum value this branch is
+    // unreachable and `never` keeps the switch exhaustive at compile time. If a
+    // newer runtime ever emits an unlisted state, this branch fails safe
+    // (log + `'running'`) rather than throwing on the render path.
     default: {
-      // Compile-time exhaustiveness guard (`never`) plus a defensive runtime
-      // backstop. It changes no emitted event and accepts no new input; no
-      // declared state value can reach this branch at runtime.
       const exhaustive: never = state
-      throw new Error(`Unhandled job state for tool lifecycle: ${String(exhaustive)}`)
+      logger.warn(
+        { jobState: String(exhaustive) },
+        'Unknown job state for tool lifecycle; mapping to running (fail-safe)',
+      )
+      return 'running'
     }
   }
 }
@@ -828,9 +840,14 @@ const jobStateToToolLifecycle = (
 /**
  * Maps a job-registry lifecycle state to the agent block's status vocabulary
  * (`'running' | 'complete' | 'failed' | 'cancelled'`).
+ *
+ * Forward-compat: see {@link jobStateToToolLifecycle}. The `default` branch
+ * fails safe by mapping unknown states to `'running'` and logging a warning,
+ * instead of throwing on the streaming render path.
  */
 const jobStateToAgentStatus = (
   state: PrintModeJobUpdate['state'],
+  logger: Logger,
 ): AgentContentBlock['status'] => {
   switch (state) {
     case 'queued':
@@ -845,12 +862,14 @@ const jobStateToAgentStatus = (
     case 'stopped':
     case 'cancelled':
       return 'cancelled'
+    // Exhaustiveness guard: see {@link jobStateToToolLifecycle}.
     default: {
-      // Compile-time exhaustiveness guard (`never`) plus a defensive runtime
-      // backstop. It changes no emitted event and accepts no new input; no
-      // declared state value can reach this branch at runtime.
       const exhaustive: never = state
-      throw new Error(`Unhandled job state for agent status: ${String(exhaustive)}`)
+      logger.warn(
+        { jobState: String(exhaustive) },
+        'Unknown job state for agent status; mapping to running (fail-safe)',
+      )
+      return 'running'
     }
   }
 }
@@ -868,6 +887,15 @@ const handleJobUpdate = (
       : undefined
   const updateBlock = (block: ContentBlock): ContentBlock => {
     if (block.type === 'tool' && block.backgroundJobId === event.jobId) {
+      const nextLifecycle = jobStateToToolLifecycle(event.state, state.logger)
+      // A non-terminal transition (running/queued, e.g. a restart that
+      // recovers from an earlier error/lost) resets the append flag so a
+      // genuinely new error reported after recovery is still surfaced —
+      // otherwise the first error append would permanently suppress all
+      // later errors for the same job. Terminal error/lost appends keep the
+      // flag set so a repeated identical error is not duplicated.
+      const isRecovery =
+        nextLifecycle === 'queued' || nextLifecycle === 'running'
       const base = block.output ?? ''
       const withDelta =
         event.outputDelta !== undefined ? base + event.outputDelta : base
@@ -887,16 +915,18 @@ const handleJobUpdate = (
           : block.output
       return {
         ...block,
-        lifecycle: jobStateToToolLifecycle(event.state),
+        lifecycle: nextLifecycle,
         ...(nextOutput !== undefined ? { output: nextOutput } : {}),
-        ...(errorText !== undefined && !errorAlreadyAppended
-          ? { jobErrorAppended: true }
-          : {}),
+        ...(isRecovery
+          ? { jobErrorAppended: false }
+          : errorText !== undefined && !errorAlreadyAppended
+            ? { jobErrorAppended: true }
+            : {}),
       }
     }
     if (block.type === 'agent') {
       if (block.backgroundJobId === event.jobId) {
-        const status = jobStateToAgentStatus(event.state)
+        const status = jobStateToAgentStatus(event.state, state.logger)
         if (errorText !== undefined) {
           const truncatedError = errorText.split('\n').slice(0, 6).join('\n')
           const existingBlocks = block.blocks ?? []
@@ -921,7 +951,15 @@ const handleJobUpdate = (
             ...(alreadyAppended ? {} : { jobErrorAppended: true }),
           }
         }
-        return { ...block, status }
+        return {
+          ...block,
+          status,
+          // Mirror the tool-block recovery reset: a non-terminal transition
+          // (recovery back to running) clears the append flag so a genuinely
+          // new error reported after recovery is still surfaced. The terminal
+          // error/lost branch above keeps the flag set once it appends.
+          ...(status === 'running' ? { jobErrorAppended: false } : {}),
+        }
       }
       if (block.blocks) {
         return { ...block, blocks: block.blocks.map(updateBlock) }
@@ -1054,6 +1092,12 @@ const handleRuntimeError = (
   event: Extract<SDKEvent, { type: 'error' }>,
 ) => {
   state.logger.error({ event }, 'SDK runtime error event')
+  // Auto-recoverable model errors (e.g. a malformed tool call the model is
+  // already correcting) are agent-facing diagnostics, not user-facing errors:
+  // skip the visible error banner entirely.
+  if (event.autoRecovering === true) {
+    return
+  }
   const concise = event.userMessage?.trim()
   if (concise) {
     state.message.updater.setError(concise)

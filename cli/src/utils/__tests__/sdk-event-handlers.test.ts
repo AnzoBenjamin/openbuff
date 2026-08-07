@@ -8,7 +8,13 @@ import {
 
 import type { ChatMessage } from '../../types/chat'
 import type { EventHandlerState } from '../sdk-event-handlers'
+
+import { printModeEventSchema } from '@codebuff/common/types/print-mode'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type {
+  PrintModeEvent,
+  PrintModeJobUpdate,
+} from '@codebuff/common/types/print-mode'
 
 const createTestContext = () => {
   let messages: ChatMessage[] = [
@@ -85,6 +91,23 @@ const createTestContext = () => {
   }
 }
 
+// Typed event dispatch helper for the job_update/tool_call/tool_result event
+// family (RF-2). Validates the payload against `printModeEventSchema` before
+// forwarding, so a payload that stops satisfying the discriminated-union
+// contract (schema drift) fails the test loudly instead of passing via an
+// `as any` escape hatch. Returns the parser-narrowed `PrintModeEvent`. Only
+// events in scope for RF-2 go through this helper; the unknown-state forward-
+// compat test (RF-1) intentionally bypasses it, since an unlisted state is by
+// definition not a valid `PrintModeJobUpdate`.
+const dispatchValidEvent = (
+  handle: ReturnType<typeof createEventHandler>,
+  payload: unknown,
+): PrintModeEvent => {
+  const parsed = printModeEventSchema.parse(payload)
+  handle(parsed)
+  return parsed
+}
+
 describe('sdk-event-handlers', () => {
   test('renders provider retry/failover recovery as an ordered resilience timeline', () => {
     const { ctx, getMessages } = createTestContext()
@@ -150,10 +173,21 @@ describe('sdk-event-handlers', () => {
     expect(getMessages()[0].userError).toBe('Provider failed')
   })
 
+  test('does not render an error banner for auto-recovering errors', () => {
+    const { ctx, getMessages } = createTestContext()
+    createEventHandler(ctx)({
+      type: 'error',
+      message: 'malformed tool call detail\n    at x.ts:1:2',
+      userMessage: 'The model is correcting it automatically.',
+      autoRecovering: true,
+    })
+    expect(getMessages()[0].userError).toBeUndefined()
+  })
+
   test('background agent cards remain running until polling reports settlement', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'subagent_start',
       agentId: 'child-1',
       agentType: 'researcher-web',
@@ -163,8 +197,8 @@ describe('sdk-event-handlers', () => {
       spawnIndex: 0,
       prompt: 'research',
       onlyChild: true,
-    } as any)
-    handleEvent({
+    })
+    dispatchValidEvent(handleEvent, {
       type: 'tool_result',
       toolCallId: 'spawn-bg',
       toolName: 'spawn_agents',
@@ -185,14 +219,14 @@ describe('sdk-event-handlers', () => {
           ],
         },
       ],
-    } as any)
+    })
     expect(getMessages()[0].blocks?.[0]).toMatchObject({
       type: 'agent',
       status: 'running',
       backgroundJobId: 'bg-agent-1',
     })
 
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_result',
       toolCallId: 'check-bg',
       toolName: 'check_background_agent',
@@ -215,7 +249,7 @@ describe('sdk-event-handlers', () => {
           },
         },
       ],
-    } as any)
+    })
     expect(getMessages()[0].blocks?.[0]).toMatchObject({
       type: 'agent',
       status: 'complete',
@@ -226,12 +260,12 @@ describe('sdk-event-handlers', () => {
   test('[ERR-H01] terminal cancellation is immutable when a late result arrives', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_call',
       toolCallId: 'tool-1',
       toolName: 'read_files',
       input: { paths: ['a.ts'] },
-    } as any)
+    })
     ctx.message.updater.updateAiMessageBlocks((blocks) =>
       blocks.map((block) =>
         block.type === 'tool'
@@ -239,12 +273,12 @@ describe('sdk-event-handlers', () => {
           : block,
       ),
     )
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_result',
       toolCallId: 'tool-1',
       toolName: 'read_files',
       output: [{ type: 'json', value: { ok: true } }],
-    } as any)
+    })
     expect(getMessages()[0].blocks?.[0]).toMatchObject({
       type: 'tool',
       lifecycle: 'cancelled',
@@ -254,13 +288,13 @@ describe('sdk-event-handlers', () => {
   test('[COR-H03] any error part makes the terminal tool lifecycle failed', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_call',
       toolCallId: 'tool-2',
       toolName: 'apply_patch',
       input: {},
-    } as any)
-    handleEvent({
+    })
+    dispatchValidEvent(handleEvent, {
       type: 'tool_result',
       toolCallId: 'tool-2',
       toolName: 'apply_patch',
@@ -268,19 +302,19 @@ describe('sdk-event-handlers', () => {
         { type: 'json', value: { applied: true } },
         { type: 'json', value: { errorMessage: 'post-commit report failed' } },
       ],
-    } as any)
+    })
     expect(getMessages()[0].blocks?.[0]).toMatchObject({ lifecycle: 'failed' })
   })
 
   test('late canonical mutation result replaces cancellation with authoritative state', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_call',
       toolCallId: 'tool-late',
       toolName: 'write_file',
       input: { path: 'a.ts' },
-    } as any)
+    })
     ctx.message.updater.updateAiMessageBlocks((blocks) =>
       blocks.map((block) =>
         block.type === 'tool'
@@ -288,7 +322,7 @@ describe('sdk-event-handlers', () => {
           : block,
       ),
     )
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_result',
       toolCallId: 'tool-late',
       toolName: 'write_file',
@@ -317,7 +351,7 @@ describe('sdk-event-handlers', () => {
           },
         },
       ],
-    } as any)
+    })
     expect(getMessages()[0].blocks?.[0]).toMatchObject({
       lifecycle: 'succeeded',
       interrupted: true,
@@ -338,14 +372,14 @@ describe('sdk-event-handlers', () => {
       displayName: 'Editor',
       onlyChild: false,
     } as any)
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_call',
       toolCallId: 'nested-tool-1',
       toolName: 'edit_transaction',
       input: { edits: [] },
       agentId: 'agent-1',
       parentAgentId: 'agent-1',
-    } as any)
+    })
     expect(streaming.has('nested-tool-1')).toBe(true)
     handleEvent({
       type: 'subagent_finish',
@@ -385,12 +419,12 @@ describe('sdk-event-handlers', () => {
   test('root finish fails unresolved foreground tools but preserves live background tools', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_call',
       toolCallId: 'root-running-tool',
       toolName: 'read_files',
       input: { paths: ['a.ts'] },
-    } as any)
+    })
     handleEvent({
       type: 'subagent_start',
       agentId: 'background-agent',
@@ -479,12 +513,12 @@ describe('sdk-event-handlers', () => {
     const handleEvent = createEventHandler(ctx)
     // Production path: job id is only known after the SDK starts the process,
     // so it arrives on tool_result — not on tool_call. No manual mutation.
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_call',
       toolCallId: 'term-bg',
       toolName: 'run_terminal_command',
       input: { command: 'npm run dev', process_type: 'BACKGROUND' },
-    } as any)
+    })
 
     expect(getMessages()[0].blocks?.[0]).toMatchObject({
       type: 'tool',
@@ -494,7 +528,7 @@ describe('sdk-event-handlers', () => {
       (getMessages()[0].blocks?.[0] as any).backgroundJobId,
     ).toBeUndefined()
 
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_result',
       toolCallId: 'term-bg',
       toolName: 'run_terminal_command',
@@ -511,7 +545,7 @@ describe('sdk-event-handlers', () => {
           },
         },
       ],
-    } as any)
+    })
 
     // Successful BACKGROUND start keeps the card running (not succeeded).
     expect(getMessages()[0].blocks?.[0]).toMatchObject({
@@ -520,22 +554,22 @@ describe('sdk-event-handlers', () => {
       lifecycle: 'running',
     })
 
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'job_update',
       jobId: 'job-bg',
       kind: 'process',
       state: 'running',
       sequence: 1,
       outputDelta: 'listening\n',
-    } as any)
-    handleEvent({
+    })
+    dispatchValidEvent(handleEvent, {
       type: 'job_update',
       jobId: 'job-bg',
       kind: 'process',
       state: 'completed',
       sequence: 2,
       exitCode: 0,
-    } as any)
+    })
 
     expect(getMessages()[0].blocks?.[0]).toMatchObject({
       type: 'tool',
@@ -551,13 +585,13 @@ describe('sdk-event-handlers', () => {
     // A write queued behind a prior same-path write is emitted with queued:true
     // and lifecycle 'queued'; the runtime later emits tool_start once the
     // per-path barrier resolves, which flips the card to running.
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_call',
       toolCallId: 'write-queued',
       toolName: 'write_file',
       input: { path: 'src/a.ts' },
       queued: true,
-    } as any)
+    })
 
     expect(getMessages()[0].blocks?.[0]).toMatchObject({
       type: 'tool',
@@ -565,7 +599,99 @@ describe('sdk-event-handlers', () => {
       lifecycle: 'queued',
     })
 
-    handleEvent({ type: 'tool_start', toolCallId: 'write-queued' })
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_start',
+      toolCallId: 'write-queued',
+    })
+
+    expect(getMessages()[0].blocks?.[0]).toMatchObject({
+      type: 'tool',
+      queued: false,
+      lifecycle: 'running',
+    })
+  })
+
+  test('tool_start flips a queued tool block nested inside an agent block back to running', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    // Covers the recursive branch of handleToolStart.flipQueued: a queued
+    // tool_call that lands INSIDE a nested agent block (parentAgentId set) is
+    // only reachable by recursing into the agent's children. The matching
+    // tool_start must flip that nested tool back from 'queued' to 'running'
+    // without disturbing the sibling/root blocks.
+    dispatchValidEvent(handleEvent, {
+      type: 'subagent_start',
+      agentId: 'parent-agent',
+      agentType: 'editor',
+      displayName: 'Editor',
+      onlyChild: true,
+    })
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_call',
+      toolCallId: 'nested-write-queued',
+      toolName: 'write_file',
+      input: { path: 'src/b.ts' },
+      agentId: 'parent-agent',
+      parentAgentId: 'parent-agent',
+      queued: true,
+    })
+
+    // The queued tool is appended inside the agent block, not at the root.
+    const agentBlock = getMessages()[0].blocks?.[0] as any
+    expect(agentBlock).toMatchObject({ type: 'agent', agentId: 'parent-agent' })
+    const nestedTool = agentBlock.blocks?.find(
+      (b: any) => b.type === 'tool' && b.toolCallId === 'nested-write-queued',
+    )
+    expect(nestedTool).toMatchObject({
+      type: 'tool',
+      queued: true,
+      lifecycle: 'queued',
+    })
+
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_start',
+      toolCallId: 'nested-write-queued',
+    })
+
+    const settledAgent = getMessages()[0].blocks?.[0] as any
+    const settledNested = settledAgent.blocks?.find(
+      (b: any) => b.type === 'tool' && b.toolCallId === 'nested-write-queued',
+    )
+    expect(settledNested).toMatchObject({
+      type: 'tool',
+      queued: false,
+      lifecycle: 'running',
+    })
+  })
+
+  test('tool_start flips a queued custom/unknown-path tool block back to running', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    // Pins RF-1: the `queued === true` branch in `executeCustomToolCall` that
+    // emits `tool_start` for a custom/MCP tool is genuinely reachable, not dead
+    // defensive code. The CLI handler treats any queued tool_call identically
+    // regardless of whether it was produced by the native (`executeToolCall`) or
+    // custom (`executeCustomToolCall`) path, so a custom/unknown-path tool name
+    // that lands queued must flip from 'queued' to 'running' on tool_start
+    // exactly like a native write_file.
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_call',
+      toolCallId: 'custom-write-queued',
+      toolName: 'mcp_server__custom_write',
+      input: { target: 'custom-resource' },
+      queued: true,
+    })
+
+    expect(getMessages()[0].blocks?.[0]).toMatchObject({
+      type: 'tool',
+      queued: true,
+      lifecycle: 'queued',
+    })
+
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_start',
+      toolCallId: 'custom-write-queued',
+    })
 
     expect(getMessages()[0].blocks?.[0]).toMatchObject({
       type: 'tool',
@@ -577,12 +703,12 @@ describe('sdk-event-handlers', () => {
   test('job_update updates a correlated tool block lifecycle and appends bounded output', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_call',
       toolCallId: 'term-1',
       toolName: 'run_terminal_command',
       input: { command: 'npm test' },
-    } as any)
+    })
     // Correlate the run_terminal_command card with a background job id.
     ctx.message.updater.updateAiMessageBlocks((blocks) =>
       blocks.map((block) =>
@@ -592,22 +718,22 @@ describe('sdk-event-handlers', () => {
       ),
     )
 
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'job_update',
       jobId: 'job-1',
       kind: 'process',
       state: 'running',
       sequence: 1,
       outputDelta: 'first line\n',
-    } as any)
-    handleEvent({
+    })
+    dispatchValidEvent(handleEvent, {
       type: 'job_update',
       jobId: 'job-1',
       kind: 'process',
       state: 'running',
       sequence: 2,
       outputDelta: 'second line\n',
-    } as any)
+    })
 
     let block = getMessages()[0].blocks?.[0] as any
     expect(block).toMatchObject({
@@ -616,14 +742,14 @@ describe('sdk-event-handlers', () => {
       output: 'first line\nsecond line\n',
     })
 
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'job_update',
       jobId: 'job-1',
       kind: 'process',
       state: 'completed',
       sequence: 3,
       exitCode: 0,
-    } as any)
+    })
     block = getMessages()[0].blocks?.[0] as any
     expect(block).toMatchObject({ lifecycle: 'succeeded' })
   })
@@ -631,12 +757,12 @@ describe('sdk-event-handlers', () => {
   test('job_update caps the accumulated tool output at the tail ceiling', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_call',
       toolCallId: 'term-cap',
       toolName: 'run_terminal_command',
       input: { command: 'noisy' },
-    } as any)
+    })
     ctx.message.updater.updateAiMessageBlocks((blocks) =>
       blocks.map((block) =>
         block.type === 'tool' && block.toolCallId === 'term-cap'
@@ -645,22 +771,22 @@ describe('sdk-event-handlers', () => {
       ),
     )
 
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'job_update',
       jobId: 'job-cap',
       kind: 'process',
       state: 'running',
       sequence: 1,
       outputDelta: 'A'.repeat(60_000),
-    } as any)
-    handleEvent({
+    })
+    dispatchValidEvent(handleEvent, {
       type: 'job_update',
       jobId: 'job-cap',
       kind: 'process',
       state: 'running',
       sequence: 2,
       outputDelta: 'B'.repeat(5_000),
-    } as any)
+    })
 
     const block = getMessages()[0].blocks?.[0] as any
     expect(block.output.length).toBe(50_000)
@@ -671,13 +797,13 @@ describe('sdk-event-handlers', () => {
   test('job_update updates a correlated agent block status', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'subagent_start',
       agentId: 'agent-1',
       agentType: 'researcher-web',
       displayName: 'Researcher',
       onlyChild: true,
-    } as any)
+    })
     ctx.message.updater.updateAiMessageBlocks((blocks) =>
       blocks.map((block) =>
         block.type === 'agent' && block.agentId === 'agent-1'
@@ -686,13 +812,13 @@ describe('sdk-event-handlers', () => {
       ),
     )
 
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'job_update',
       jobId: 'job-agent',
       kind: 'agent',
       state: 'completed',
       sequence: 1,
-    } as any)
+    })
 
     expect(getMessages()[0].blocks?.[0]).toMatchObject({
       type: 'agent',
@@ -704,35 +830,85 @@ describe('sdk-event-handlers', () => {
   test('job_update is a no-op when no block correlates to the jobId', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_call',
       toolCallId: 'term-x',
       toolName: 'run_terminal_command',
       input: { command: 'ls' },
-    } as any)
+    })
     const before = JSON.stringify(getMessages())
 
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'job_update',
       jobId: 'unknown-job',
       kind: 'process',
       state: 'running',
       sequence: 1,
       outputDelta: 'foreign output',
-    } as any)
+    })
 
     expect(JSON.stringify(getMessages())).toBe(before)
+  })
+
+  test('job_update maps an unknown state to running (fail-safe) instead of throwing', () => {
+    // Pins the RF-1 forward-compat contract: the printModeJobUpdateSchema JSDoc
+    // says consumers should treat unknown variants as no-ops, and handleJobUpdate
+    // runs in the streaming UI render path. A newer runtime emitting an
+    // unlisted state must NOT throw and abort the event handler; it should map
+    // to the least-surprising non-terminal lifecycle ('running') and log a
+    // warning. An unknown state is by definition not a valid PrintModeJobUpdate,
+    // so this test bypasses the schema-validating dispatchValidEvent helper and
+    // casts only the `state` field (not the whole object) to model the scenario
+    // a future runtime would produce before the schema is widened.
+    const { ctx, getMessages } = createTestContext()
+    const warnCalls: Array<{ jobState?: unknown }> = []
+    ctx.logger = {
+      info: () => {},
+      warn: (fields?: { jobState?: unknown }) => warnCalls.push(fields ?? {}),
+      error: () => {},
+      debug: () => {},
+    } as Logger
+    const handleEvent = createEventHandler(ctx)
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_call',
+      toolCallId: 'term-unknown',
+      toolName: 'run_terminal_command',
+      input: { command: 'some-server' },
+    })
+    ctx.message.updater.updateAiMessageBlocks((blocks) =>
+      blocks.map((block) =>
+        block.type === 'tool' && block.toolCallId === 'term-unknown'
+          ? { ...block, backgroundJobId: 'job-unknown' }
+          : block,
+      ),
+    )
+
+    expect(() =>
+      handleEvent({
+        type: 'job_update',
+        jobId: 'job-unknown',
+        kind: 'process',
+        state: 'paused' as PrintModeJobUpdate['state'],
+        sequence: 1,
+      }),
+    ).not.toThrow()
+
+    expect(getMessages()[0].blocks?.[0]).toMatchObject({
+      type: 'tool',
+      lifecycle: 'running',
+    })
+    expect(warnCalls.some((c) => c.jobState === 'paused')).toBe(true)
   })
 
   test('job_update surfaces a failed tool job error in the card output', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_call',
       toolCallId: 'term-err',
       toolName: 'run_terminal_command',
       input: { command: 'boom' },
-    } as any)
+    })
     ctx.message.updater.updateAiMessageBlocks((blocks) =>
       blocks.map((block) =>
         block.type === 'tool' && block.toolCallId === 'term-err'
@@ -741,7 +917,7 @@ describe('sdk-event-handlers', () => {
       ),
     )
 
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'job_update',
       jobId: 'job-err',
       kind: 'process',
@@ -749,7 +925,7 @@ describe('sdk-event-handlers', () => {
       sequence: 1,
       outputDelta: 'partial output\n',
       error: 'command failed with exit code 1',
-    } as any)
+    })
 
     const block = getMessages()[0].blocks?.[0] as any
     expect(block).toMatchObject({ type: 'tool', lifecycle: 'failed' })
@@ -763,30 +939,30 @@ describe('sdk-event-handlers', () => {
     // Pins the tool-block error dedup that mirrors the agent-block path: an
     // error/lost job_update delivered more than once without new output must
     // not append the same error text repeatedly.
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_call',
       toolCallId: 'term-err-dup',
       toolName: 'run_terminal_command',
       input: { command: 'npm test' },
       backgroundJobId: 'job-err',
-    } as any)
+    })
 
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'job_update',
       jobId: 'job-err',
       kind: 'process',
       state: 'error',
       sequence: 1,
       error: 'boom',
-    } as any)
-    handleEvent({
+    })
+    dispatchValidEvent(handleEvent, {
       type: 'job_update',
       jobId: 'job-err',
       kind: 'process',
       state: 'error',
       sequence: 2,
       error: 'boom',
-    } as any)
+    })
 
     const block = getMessages()[0].blocks?.[0] as any
     expect(block).toMatchObject({ type: 'tool', lifecycle: 'failed' })
@@ -801,32 +977,32 @@ describe('sdk-event-handlers', () => {
     // genuinely new error append must NOT be suppressed. The explicit
     // jobErrorAppended flag (unset until the first error) distinguishes
     // "already appended this error" from "output coincidentally ends this way".
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'tool_call',
       toolCallId: 'term-coincidental',
       toolName: 'run_terminal_command',
       input: { command: 'npm test' },
       backgroundJobId: 'job-coincidental',
-    } as any)
+    })
 
     // Streamed output that coincidentally ends with the exact error text.
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'job_update',
       jobId: 'job-coincidental',
       kind: 'process',
       state: 'running',
       sequence: 1,
       outputDelta: 'boom',
-    } as any)
+    })
     // A genuinely new error carrying the same text; it must still be appended.
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'job_update',
       jobId: 'job-coincidental',
       kind: 'process',
       state: 'error',
       sequence: 2,
       error: 'boom',
-    } as any)
+    })
 
     const block = getMessages()[0].blocks?.[0] as any
     expect(block).toMatchObject({ type: 'tool', lifecycle: 'failed' })
@@ -834,16 +1010,155 @@ describe('sdk-event-handlers', () => {
     expect((block.output.match(/boom/g) ?? []).length).toBe(2)
   })
 
+  test('job_update appends a tool job error wired via tool_result output without duplicating', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    // Pins error-path parity with the BACKGROUND happy-path test (RF-2): in
+    // production the runtime emits tool_call WITHOUT backgroundJobId and the
+    // job id arrives only on tool_result via
+    // getBackgroundShellJobIdFromToolOutput, then a job_update lands. This
+    // mirrors that realistic flow (no manual backgroundJobId mutation) with a
+    // coincidental trailing output equal to the error text, so the
+    // flag-based dedup still appends a genuinely new error rather than
+    // suppressing it as a duplicate.
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_call',
+      toolCallId: 'term-bg-err',
+      toolName: 'run_terminal_command',
+      input: { command: 'npm test', process_type: 'BACKGROUND' },
+    })
+
+    expect(
+      (getMessages()[0].blocks?.[0] as any).backgroundJobId,
+    ).toBeUndefined()
+
+    // tool_result wires backgroundJobId from the BACKGROUND start output; the
+    // card stays running (a successful BACKGROUND start is not terminal).
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_result',
+      toolCallId: 'term-bg-err',
+      toolName: 'run_terminal_command',
+      output: [
+        {
+          type: 'json',
+          value: {
+            command: 'npm test',
+            processId: 4321,
+            backgroundProcessStatus: 'running',
+            jobId: 'job-bg-err',
+            logFile: '/tmp/job-bg-err.log',
+            startingCwd: '/project',
+          },
+        },
+      ],
+    })
+
+    expect(getMessages()[0].blocks?.[0]).toMatchObject({
+      type: 'tool',
+      backgroundJobId: 'job-bg-err',
+      lifecycle: 'running',
+    })
+
+    // Live streamed output happens to end with the error text (coincidental).
+    dispatchValidEvent(handleEvent, {
+      type: 'job_update',
+      jobId: 'job-bg-err',
+      kind: 'process',
+      state: 'running',
+      sequence: 1,
+      outputDelta: 'boom',
+    })
+    // A genuinely new error carrying the same text must still be appended.
+    dispatchValidEvent(handleEvent, {
+      type: 'job_update',
+      jobId: 'job-bg-err',
+      kind: 'process',
+      state: 'error',
+      sequence: 2,
+      error: 'boom',
+    })
+
+    const block = getMessages()[0].blocks?.[0] as any
+    expect(block).toMatchObject({ type: 'tool', lifecycle: 'failed' })
+    // Once from the streamed output, once from the appended error.
+    expect((block.output.match(/boom/g) ?? []).length).toBe(2)
+  })
+
+  test('job_update re-appends a tool job error after a running recovery resets the append flag', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    // Pins RF-3: after an error append sets `jobErrorAppended`, a non-terminal
+    // `running` transition must reset the flag so a genuinely new error reported
+    // after recovery is still surfaced (rather than permanently suppressed by
+    // the first error). The realistic lifecycle is terminal-once for error/lost,
+    // but a restart that recovers and then fails again is the documented edge.
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_call',
+      toolCallId: 'term-recover',
+      toolName: 'run_terminal_command',
+      input: { command: 'flaky-server' },
+    })
+    ctx.message.updater.updateAiMessageBlocks((blocks) =>
+      blocks.map((block) =>
+        block.type === 'tool' && block.toolCallId === 'term-recover'
+          ? { ...block, backgroundJobId: 'job-recover' }
+          : block,
+      ),
+    )
+
+    // First failure: appends the error and sets jobErrorAppended.
+    dispatchValidEvent(handleEvent, {
+      type: 'job_update',
+      jobId: 'job-recover',
+      kind: 'process',
+      state: 'error',
+      sequence: 1,
+      error: 'first failure',
+    })
+    let block = getMessages()[0].blocks?.[0] as any
+    expect(block).toMatchObject({ type: 'tool', lifecycle: 'failed' })
+    expect(block.output).toContain('first failure')
+
+    // Recovery back to running (e.g. a restart) resets the append flag.
+    dispatchValidEvent(handleEvent, {
+      type: 'job_update',
+      jobId: 'job-recover',
+      kind: 'process',
+      state: 'running',
+      sequence: 2,
+      outputDelta: 'recovered\n',
+    })
+    block = getMessages()[0].blocks?.[0] as any
+    expect(block).toMatchObject({ type: 'tool', lifecycle: 'running' })
+
+    // A new genuine error after recovery must be appended again.
+    dispatchValidEvent(handleEvent, {
+      type: 'job_update',
+      jobId: 'job-recover',
+      kind: 'process',
+      state: 'error',
+      sequence: 3,
+      error: 'second failure',
+    })
+    block = getMessages()[0].blocks?.[0] as any
+    expect(block).toMatchObject({ type: 'tool', lifecycle: 'failed' })
+    expect(block.output).toContain('recovered')
+    expect(block.output).toContain('first failure')
+    expect(block.output).toContain('second failure')
+    // The second error text is appended exactly once.
+    expect((block.output.match(/second failure/g) ?? []).length).toBe(1)
+  })
+
   test('job_update appends a single error block to a failed agent job without duplicating', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'subagent_start',
       agentId: 'agent-err',
       agentType: 'researcher-web',
       displayName: 'Researcher',
       onlyChild: true,
-    } as any)
+    })
     ctx.message.updater.updateAiMessageBlocks((blocks) =>
       blocks.map((block) =>
         block.type === 'agent' && block.agentId === 'agent-err'
@@ -852,16 +1167,20 @@ describe('sdk-event-handlers', () => {
       ),
     )
 
-    const errorEvent = {
+    // RF-4: dispatch two fresh PrintModeEvent objects rather than reusing one
+    // reference, so the dedup test stays resilient if the handler ever mutates
+    // the event in place. Matches the tool-block dedup test, which dispatches
+    // two distinct events (here the two updates differ in `sequence`).
+    const errorJobUpdate = (sequence: number): PrintModeEvent => ({
       type: 'job_update',
       jobId: 'job-agent-err',
       kind: 'agent',
       state: 'error',
-      sequence: 1,
+      sequence,
       error: 'agent crashed',
-    }
-    handleEvent(errorEvent as any)
-    handleEvent(errorEvent as any)
+    })
+    dispatchValidEvent(handleEvent, errorJobUpdate(1))
+    dispatchValidEvent(handleEvent, errorJobUpdate(2))
 
     const agentBlock = getMessages()[0].blocks?.[0] as any
     expect(agentBlock).toMatchObject({ type: 'agent', status: 'failed' })
@@ -880,13 +1199,13 @@ describe('sdk-event-handlers', () => {
     // the error text, a genuinely new error must still be appended. The old
     // string comparison would see the trailing text block match the truncated
     // error and suppress the append.
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'subagent_start',
       agentId: 'agent-coincidental',
       agentType: 'researcher-web',
       displayName: 'Researcher',
       onlyChild: true,
-    } as any)
+    })
     ctx.message.updater.updateAiMessageBlocks((blocks) =>
       blocks.map((block) =>
         block.type === 'agent' && block.agentId === 'agent-coincidental'
@@ -903,14 +1222,14 @@ describe('sdk-event-handlers', () => {
       chunk: 'agent crashed',
     })
     // A genuinely new error carrying the same text; it must still be appended.
-    handleEvent({
+    dispatchValidEvent(handleEvent, {
       type: 'job_update',
       jobId: 'job-agent-coincidental',
       kind: 'agent',
       state: 'error',
       sequence: 1,
       error: 'agent crashed',
-    } as any)
+    })
 
     const agentBlock = getMessages()[0].blocks?.[0] as any
     expect(agentBlock).toMatchObject({ type: 'agent', status: 'failed' })

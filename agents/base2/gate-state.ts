@@ -112,7 +112,7 @@ export type Base2ActiveWorkState = Base2GateState & {
     id: string
     gateId: string
     text: string
-    status: 'open' | 'resolved'
+    status: 'open' | 'resolved' | 'condoned'
     taskId?: string
     files: string[]
     snapshotFingerprint: string
@@ -120,6 +120,16 @@ export type Base2ActiveWorkState = Base2GateState & {
     reviewer?: 'code-reviewer' | 'security-reviewer' | SpecialistReviewerAgent
     createdAt: string
   }>
+  /**
+   * Finding texts that a repair-editor has already reported as addressed via
+   * findingsAddressed, but a fresh reviewer re-returned with identical text.
+   * These are 'condoned' — no longer re-elevated as blockers — so the
+   * reviewer → repair → re-review loop converges instead of looping forever
+   * on the same NON_BLOCKING architectural commentary. Reset when the gate
+   * passes. Backward-compatible: older serialized state lacks this field
+   * (treated as empty). MUST stay a plain JSON-serializable array.
+   */
+  condonedFindingTexts?: string[]
   /**
    * Reviewer family that must re-attest after a runtime-attested repair changes
    * the workspace and validation passes. Missing legacy provenance fails closed
