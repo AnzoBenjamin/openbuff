@@ -1663,7 +1663,7 @@ export function validateAgentInput(
           ? '\n\nRecovery: spawn Basher with { "agent_type": "basher", "params": { "command": "<shell command>" } }. A command mentioned only in prompt prose is never executed.'
           : reviewerFamilyRequiredSnapshotIds.has(normalizedAgentType) &&
               issuePaths.has('snapshot_id')
-            ? `\n\nRecovery: set params.snapshot_id to the exact current snapshot fingerprint from get_change_review_bundle, for example { "agent_type": "${normalizedAgentType}", "params": { "snapshot_id": "<current fingerprint>" } }. Do not invent or reuse a stale fingerprint.`
+            ? `\n\nRecovery: set params.snapshot_id to the gate-assigned opaque v3:… token from the parent gate spawn (params.snapshot_id / specialistCreditFingerprint), for example { "agent_type": "${normalizedAgentType}", "params": { "snapshot_id": "v3:<64-hex>" } }. Bare hex from get_change_review_bundle.snapshotId is evidence-only and will fail attestation. Do not invent or reuse a stale fingerprint.`
             : normalizedAgentType === 'security-reviewer' &&
                 (issuePaths.has('snapshot_fingerprint') ||
                   Object.hasOwn(paramsRecord ?? {}, 'snapshot_id'))

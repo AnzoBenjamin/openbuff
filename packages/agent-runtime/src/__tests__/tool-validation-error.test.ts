@@ -675,7 +675,7 @@ describe('tool validation error handling', () => {
   })
 
   it('should recover an explicitly labelled specialist snapshot after compaction', () => {
-    const snapshot = 'e'.repeat(64)
+    const snapshot = 'v3:' + 'e'.repeat(64)
     const result = parseRawToolCall({
       rawToolCall: {
         toolName: 'spawn_agents',
@@ -697,6 +697,32 @@ describe('tool validation error handling', () => {
       expect(result.input.agents[0].params).toEqual({
         timeout_seconds: 300,
         snapshot_id: snapshot,
+      })
+    }
+  })
+
+  it('does not recover bare hex labelled Snapshot ID after compaction', () => {
+    const bareHex = 'e'.repeat(64)
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-agents-bare-hex-snapshot-tool-call-id',
+        input: {
+          agents: [
+            {
+              agent_type: 'compatibility-reviewer',
+              prompt: `Perform the routed review.\nSnapshot ID to verify: ${bareHex}`,
+              params: { timeout_seconds: 300 },
+            },
+          ],
+        },
+      },
+    })
+
+    expect('error' in result).toBe(false)
+    if (!('error' in result)) {
+      expect(result.input.agents[0].params).toEqual({
+        timeout_seconds: 300,
       })
     }
   })
@@ -2254,9 +2280,48 @@ describe('tool validation error handling', () => {
     expect(message).toContain('Missing required: snapshot_id')
     expect(message).toContain('params.snapshot_id')
     expect(message).toContain('"agent_type": "reliability-reviewer"')
-    expect(message).toContain('"snapshot_id": "<current fingerprint>"')
-    expect(message).toContain('exact current snapshot fingerprint')
-    expect(message).toContain('get_change_review_bundle')
+    expect(message).toContain('"snapshot_id": "v3:<64-hex>"')
+    expect(message).toContain('gate-assigned opaque v3:')
+    expect(message).toContain('specialistCreditFingerprint')
+    expect(message).toContain('evidence-only')
+    expect(message).toContain('will fail attestation')
+    // Must not tell the caller to source the attestation token from the bare
+    // bundle snapshotId (evidence-only).
+    expect(message).not.toMatch(
+      /fingerprint from get_change_review_bundle/i,
+    )
+  })
+
+  it('validateAgentInput accepts attestable v3 snapshot_id and rejects bare hex', async () => {
+    const { validateAgentInput } =
+      await import('../tools/handlers/tool/spawn-agent-utils')
+    const attestableSnapshotId = z
+      .string()
+      .regex(/^v3:[a-f0-9]{64}$/)
+    const v3Snapshot = 'v3:' + 'a'.repeat(64)
+    const bareHex = 'a'.repeat(64)
+
+    for (const id of ['reliability-reviewer', 'compatibility-reviewer'] as const) {
+      const agentTemplate = {
+        ...testAgentTemplate,
+        id,
+        inputSchema: {
+          params: z.object({ snapshot_id: attestableSnapshotId }),
+        },
+      }
+
+      expect(() =>
+        validateAgentInput(agentTemplate, id, undefined, {
+          snapshot_id: v3Snapshot,
+        }),
+      ).not.toThrow()
+
+      expect(() =>
+        validateAgentInput(agentTemplate, id, undefined, {
+          snapshot_id: bareHex,
+        }),
+      ).toThrow()
+    }
   })
 
   it('gives dependency-manager canonical manager and operation recovery', async () => {

@@ -456,7 +456,7 @@ describe('normalizeSpawnAgentList', () => {
   })
 
   it('recovers an explicitly labelled specialist snapshot into params', () => {
-    const snapshot = 'a'.repeat(64)
+    const snapshot = 'v3:' + 'a'.repeat(64)
     expect(
       normalizeSpawnAgentList([
         {
@@ -474,16 +474,18 @@ describe('normalizeSpawnAgentList', () => {
     ])
   })
 
-  it('recovers short and dotted explicitly labelled snapshot fingerprints', () => {
+  it('does not recover non-attestable labelled snapshot fingerprints', () => {
     for (const snapshot of ['v2', 'cap.v2.1.463.d6zLuTEuk7zcau68MhYD84qL']) {
-      const normalized = normalizeSpawnAgentList([
-        {
-          agent_type: 'compatibility-reviewer',
-          prompt: `Snapshot fingerprint (echo exactly): ${snapshot}`,
-          params: {},
-        },
-      ]) as Array<{ params: { snapshot_id: string } }>
-      expect(normalized[0].params.snapshot_id).toBe(snapshot)
+      const entry = {
+        agent_type: 'compatibility-reviewer',
+        prompt: `Snapshot fingerprint (echo exactly): ${snapshot}`,
+        params: {},
+      }
+      const normalized = normalizeSpawnAgentList([entry]) as Array<{
+        params: Record<string, unknown>
+      }>
+      expect(normalized[0].params.snapshot_id).toBeUndefined()
+      expect(normalized[0].params).toEqual({})
     }
   })
 

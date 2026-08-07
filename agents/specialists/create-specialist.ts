@@ -101,8 +101,15 @@ export function createSpecialist(
           snapshot_id: {
             type: 'string',
             maxLength: 512,
-            description:
-              'Required assigned gate snapshot fingerprint for this spawn — gate-assigned opaque snapshot token (v3:… from the parent gate, not get_change_review_bundle.snapshotId). Echo it exactly as snapshotFingerprint; do not invent a different value.',
+            // Non-advisory spawns require a gate-assigned v3 token. Advisory
+            // may omit the field; do not apply the pattern when optional so an
+            // empty advisory value is not forced into a hard schema reject.
+            ...(config.advisory
+              ? {}
+              : { pattern: '^v3:[a-f0-9]{64}$' }),
+            description: config.advisory
+              ? 'Optional assigned gate snapshot fingerprint for this spawn — when present, the gate-assigned opaque v3:… token from the parent gate (not bare hex from get_change_review_bundle.snapshotId). Echo it exactly as snapshotFingerprint.'
+              : 'Required assigned gate snapshot fingerprint for this spawn — gate-assigned opaque v3:<64-hex> token from the parent gate (params.snapshot_id / specialistCreditFingerprint), not bare hex from get_change_review_bundle.snapshotId. Echo it exactly as snapshotFingerprint; do not invent a different value.',
           },
           command: {
             type: 'string',
