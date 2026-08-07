@@ -7,6 +7,11 @@ const workflow = readFileSync(
   'utf8',
 )
 
+const buildWorkflow = readFileSync(
+  resolve(import.meta.dir, '../../.github/workflows/cli-release-build.yml'),
+  'utf8',
+)
+
 describe('production release workflow', () => {
   test('builds the committed release source before creating its tag', () => {
     const prepareStart = workflow.indexOf('  prepare-and-commit-prod:')
@@ -40,5 +45,34 @@ describe('production release workflow', () => {
       'existing_commit=$(git ls-remote --tags origin "refs/tags/${tag}"',
     )
     expect(workflow).toContain('test "$existing_commit" = "$RELEASE_COMMIT"')
+  })
+})
+
+describe('CLI release build workflow', () => {
+  test('selects a usable Xcode before macOS cargo builds that need a C linker', () => {
+    const legacyStep = 'Prepare macOS 11 legacy toolchain'
+    const intelRipgrepStep = 'Rebuild Intel ripgrep for macOS 13'
+    const legacyStart = buildWorkflow.indexOf(legacyStep)
+    const intelStart = buildWorkflow.indexOf(intelRipgrepStep)
+    const legacyCargo = buildWorkflow.indexOf(
+      'MACOSX_DEPLOYMENT_TARGET=11.0 cargo build --release --locked',
+    )
+    const intelCargo = buildWorkflow.indexOf(
+      'MACOSX_DEPLOYMENT_TARGET=13.0 cargo build --release --locked',
+    )
+
+    expect(legacyStart).toBeGreaterThan(-1)
+    expect(intelStart).toBeGreaterThan(-1)
+    expect(legacyCargo).toBeGreaterThan(legacyStart)
+    expect(intelCargo).toBeGreaterThan(intelStart)
+
+    const legacyBlock = buildWorkflow.slice(legacyStart, legacyCargo)
+    const intelBlock = buildWorkflow.slice(intelStart, intelCargo)
+
+    for (const block of [legacyBlock, intelBlock]) {
+      expect(block).toContain('xcode-select -s')
+      expect(block).toContain('export DEVELOPER_DIR')
+      expect(block).toContain('/Contents/Developer/usr/bin/clang')
+    }
   })
 })
