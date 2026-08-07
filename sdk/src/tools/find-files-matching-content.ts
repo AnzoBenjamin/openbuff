@@ -77,24 +77,33 @@ export function findFilesMatchingContent({
       ? path.resolve(requestedCwd)
       : path.resolve(projectRoot, requestedCwd)
     let searchCwd: string
+    let searchPaths: string[]
     try {
-      searchCwd = fs.realpathSync.native(resolvedCwd)
-      if (!fs.statSync(searchCwd).isDirectory()) {
-        return resolve([
-          {
-            type: 'json',
-            value: {
-              errorMessage: `Invalid cwd: Path '${requestedCwd}' is a file, but find_files_matching_content requires a directory. Use flags such as -g to restrict the search to a file.`,
-            },
-          },
-        ])
+      const realCwd = fs.realpathSync.native(resolvedCwd)
+      if (fs.statSync(realCwd).isDirectory()) {
+        searchCwd = realCwd
+        const existingHiddenDirs = INCLUDED_HIDDEN_DIRS.filter((dir) => {
+          try {
+            return fs.statSync(path.join(searchCwd, dir)).isDirectory()
+          } catch {
+            return false
+          }
+        })
+        searchPaths = ['.', ...existingHiddenDirs]
+      } else {
+        // File-as-cwd: search only that file; process cwd = project root when
+        // the file is under the project, else the file's parent directory.
+        searchCwd = isPathInside(projectRoot, realCwd)
+          ? projectRoot
+          : path.dirname(realCwd)
+        searchPaths = [toRgPathArg(searchCwd, realCwd)]
       }
     } catch {
       return resolve([
         {
           type: 'json',
           value: {
-            errorMessage: `Invalid cwd: Path '${requestedCwd}' does not exist or cannot be read. find_files_matching_content requires an existing directory.`,
+            errorMessage: `Invalid cwd: Path '${requestedCwd}' does not exist or cannot be read. find_files_matching_content requires an existing directory or file.`,
           },
         },
       ])
@@ -112,15 +121,6 @@ export function findFilesMatchingContent({
       ])
     }
     const flagsArray = parsedFlags.flags
-
-    const existingHiddenDirs = INCLUDED_HIDDEN_DIRS.filter((dir) => {
-      try {
-        return fs.statSync(path.join(searchCwd, dir)).isDirectory()
-      } catch {
-        return false
-      }
-    })
-    const searchPaths = ['.', ...existingHiddenDirs]
 
     // When groupBySymbol is requested, we need line numbers, so we stream JSON
     // matches and aggregate ourselves. Otherwise we can use ripgrep's much
@@ -576,6 +576,24 @@ function toProjectRelativeFile(
     .join('/')
 }
 
+/** True when `child` is `parent` or a path under it (after both are resolved). */
+function isPathInside(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child)
+  return (
+    relative === '' ||
+    (!relative.startsWith('..') && !path.isAbsolute(relative))
+  )
+}
+
+/** Prefer a path relative to searchCwd when under it; otherwise absolute. */
+function toRgPathArg(searchCwd: string, realPath: string): string {
+  if (isPathInside(searchCwd, realPath)) {
+    const relative = path.relative(searchCwd, realPath)
+    return relative === '' ? '.' : relative
+  }
+  return realPath
+}
+
 export function parseSafeRipgrepFlags(
   flags: string | string[],
   options?: {
@@ -641,6 +659,11 @@ export function parseSafeRipgrepFlags(
   })
 
   const result: string[] = []
+  // Keep the shared base allowlist free of output-shape changers such as
+  // -v/--invert-match and -c/--count/--count-matches. Those break code_search
+  // docs (which reject them) and can poison FFC's -l path parsing when count
+  // lines replace bare paths. Callers may still opt in via
+  // extraSwitchesWithoutValue if a tool intentionally supports them.
   const switchesWithoutValue = new Set([
     '-i',
     '--ignore-case',
@@ -655,11 +678,6 @@ export function parseSafeRipgrepFlags(
     '-U',
     '--multiline',
     '--multiline-dotall',
-    '-v',
-    '--invert-match',
-    '-c',
-    '--count',
-    '--count-matches',
     ...(options?.extraSwitchesWithoutValue ?? []),
   ])
   const switchesWithValue = new Set([
@@ -730,7 +748,7 @@ function unsupportedFlag(
       ? 'Use code_search only when you need its documented context flags.'
       : 'Use only the documented safe flags; line numbers are already enabled automatically.'
   return {
-    errorMessage: `Unsupported ripgrep flag '${token}'. Allowed flags: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -v/--invert-match, -c/--count, --count-matches, -g/--glob, -t/--type, -T/--type-not. ${recovery}`,
+    errorMessage: `Unsupported ripgrep flag '${token}'. Allowed flags: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not. ${recovery}`,
   }
 }
 

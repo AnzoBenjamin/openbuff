@@ -7,6 +7,7 @@ interface SearchQuery {
   pattern: string
   flags?: string | string[]
   cwd?: string
+  paths?: string[]
   maxResults?: number
 }
 
@@ -27,12 +28,18 @@ const paramsSchema = {
               { type: 'string' as const },
               { type: 'array' as const, items: { type: 'string' as const } },
             ],
-            description: `Optional safe ripgrep flags as a string or argv token array. Examples: "-g *.ts -A 3" or ["-g", "*.ts", "-A", "3"]. Line numbers are automatic; redundant -n/--line-number inputs are ignored. Do not quote the entire expression inside a JSON string. Dangerous flags (e.g. --exec, -r/--replace, -z/--null) are rejected.`,
+            description: `Optional safe ripgrep flags as a string or argv token array. Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not, plus context -A/-B/-C. Examples: "-g *.ts -A 3" or ["-g", "*.ts", "-A", "3"]. Line numbers are automatic; redundant -n/--line-number inputs are ignored. Do not quote the entire expression inside a JSON string. Output-shape or dangerous flags (e.g. -c/--count, --count-matches, -l, -v/--invert-match, --exec, -r/--replace, -z/--null) are rejected.`,
           },
           cwd: {
             type: 'string' as const,
             description:
-              'Optional working directory to search within, relative to the project root. Defaults to searching the entire project',
+              'Optional working directory or single file to search within, relative to the project root or absolute (absolute may be outside the project). A directory scopes the search under that path; a file scopes the search to that file only. Defaults to searching the entire project',
+          },
+          paths: {
+            type: 'array' as const,
+            items: { type: 'string' as const },
+            description:
+              'Optional list of file and/or directory paths to search (relative to project root or absolute). When set, searches only these targets instead of the whole tree (no automatic hidden-dir expansion)',
           },
           maxResults: {
             type: 'number' as const,
@@ -157,6 +164,7 @@ const codeSearcher: SecretAgentDefinition = {
           pattern: query.pattern,
           flags: query.flags,
           cwd: query.cwd,
+          paths: query.paths,
           maxResults: query.maxResults,
         },
       }

@@ -218,10 +218,12 @@ export interface CheckJobParams {
 export interface CodeSearchParams {
   /** The pattern to search for. */
   pattern: string
-  /** Optional ripgrep flags as one string or argv tokens (e.g., "-i -g *.ts -g *.js" or ["-i", "-g", "*.ts"]). JSON quotes delimit the string; do not embed another quote pair around the entire expression. Line numbers are automatic. */
+  /** Optional safe ripgrep flags as one string or argv tokens (e.g., "-i -g *.ts -A 2" or ["-i", "-g", "*.ts", "-A", "2"]). Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not, plus context -A/-B/-C (and long forms). JSON quotes delimit the string; do not embed another quote pair around the entire expression. Line numbers are automatic; -n/--line-number are ignored. Output-shape flags such as -c/--count, --count-matches, -l, -v/--invert-match, -r/--replace, --exec, and -z/--null are rejected. */
   flags?: string | string[]
-  /** Optional working directory to search within, relative to the project root. Defaults to searching the entire project. */
+  /** Optional working directory or single file to search within, relative to the project root or absolute. Absolute paths may be outside the project. A directory becomes ripgrep's cwd and scopes the search under that path (plus existing blessed hidden dirs when no paths are given); a file scopes the search to that file only (process cwd = project root when the file is under the project, else the file's parent). Defaults to searching the entire project root. */
   cwd?: string
+  /** Optional list of file and/or directory paths to search (relative to the project root, or absolute). When non-empty, ripgrep searches only these targets instead of the whole cwd tree (and does not auto-expand hidden dirs). Can be combined with a file cwd. */
+  paths?: string[]
   /** Maximum number of results to return per file. Defaults to 15. There is also a global limit of 250 results across all files. */
   maxResults?: number
 }
@@ -410,9 +412,9 @@ export interface FindFilesParams {
 export interface FindFilesMatchingContentParams {
   /** Regex pattern (ripgrep syntax) to match file content against. */
   pattern: string
-  /** Optional safe ripgrep flags as one string or argv tokens. Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not. Examples: "-g *.ts -g *.tsx" or ["-g", "*.ts", "-g", "*.tsx"]. Do not quote the entire expression inside the JSON string. */
+  /** Optional safe ripgrep flags as one string or argv tokens. Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not. Examples: "-g *.ts -g *.tsx" or ["-g", "*.ts", "-g", "*.tsx"]. Do not quote the entire expression inside the JSON string. Output-shape flags such as -c/--count, --count-matches, -l, -v/--invert-match, context -A/-B/-C, -r/--replace, --exec, and -z/--null are rejected (this tool forces -l or --json itself). Redundant -n/--line-number inputs are ignored. */
   flags?: string | string[]
-  /** Optional working directory to search within, relative to the project root. Defaults to the project root. */
+  /** Optional working directory or single file to search within, relative to the project root or absolute. Absolute paths may be outside the project. A directory becomes ripgrep's cwd and scopes the search under that path (plus existing blessed hidden dirs); a file scopes the search to that file only (process cwd = project root when the file is under the project, else the file's parent). Defaults to the project root. */
   cwd?: string
   /** Maximum number of unique files to return. Defaults to 100. */
   maxFiles?: number
@@ -560,7 +562,7 @@ export interface EvaluateAuditCoverageParams {
 export interface GlobParams {
   /** Glob pattern to match files against (e.g., *.js, src/glob/*.ts, glob/test/glob/*.go). */
   pattern: string
-  /** Optional working directory to search within, relative to project root. If provided, the glob pattern is matched against paths relative to this cwd, while returned files remain project-relative. If not provided, searches from project root. */
+  /** Optional working directory or file path, relative to project root. If a directory, the glob pattern is matched against paths relative to this cwd, while returned files remain project-relative. If a file path, the pattern is matched against that file only (full path or basename). If not provided, searches from project root. */
   cwd?: string
 }
 

@@ -40,6 +40,7 @@ export function codeSearch({
   pattern,
   flags,
   cwd,
+  paths,
   maxResults = 30,
   globalMaxResults = 250,
   maxOutputStringLength = 20_000,
@@ -52,6 +53,8 @@ export function codeSearch({
   pattern: string
   flags?: string | string[]
   cwd?: string
+  /** Optional file and/or directory paths to search (relative to project root or absolute). */
+  paths?: string[]
   maxResults?: number
   globalMaxResults?: number
   maxOutputStringLength?: number
@@ -71,32 +74,70 @@ export function codeSearch({
 
     const projectRoot = path.resolve(projectPath)
     let searchCwd = projectRoot
+    const explicitSearchPaths: string[] = []
+    let cwdWasFile = false
+
     if (cwd !== undefined) {
       const requested = cwd
       const resolvedCwd = path.isAbsolute(requested)
         ? path.resolve(requested)
         : path.resolve(projectRoot, requested)
       try {
-        searchCwd = fs.realpathSync.native(resolvedCwd)
-        if (!fs.statSync(searchCwd).isDirectory()) {
-          return resolve([
-            {
-              type: 'json',
-              value: {
-                errorMessage: `Invalid cwd: Path '${cwd}' is a file, but code_search requires a directory. Use the file path as a search filter instead of cwd.`,
-              },
-            },
-          ])
+        const realCwd = fs.realpathSync.native(resolvedCwd)
+        if (fs.statSync(realCwd).isDirectory()) {
+          searchCwd = realCwd
+        } else {
+          // File-as-cwd: search only that file; process cwd = project root when
+          // the file is under the project, else the file's parent directory.
+          cwdWasFile = true
+          searchCwd = isPathInside(projectRoot, realCwd)
+            ? projectRoot
+            : path.dirname(realCwd)
+          explicitSearchPaths.push(toRgPathArg(searchCwd, realCwd))
         }
       } catch {
         return resolve([
           {
             type: 'json',
             value: {
-              errorMessage: `Invalid cwd: Path '${cwd}' does not exist or cannot be read. code_search requires an existing directory.`,
+              errorMessage: `Invalid cwd: Path '${cwd}' does not exist or cannot be read. code_search requires an existing directory or file.`,
             },
           },
         ])
+      }
+    }
+
+    if (paths && paths.length > 0) {
+      for (const requestedPath of paths) {
+        if (!requestedPath) {
+          return resolve([
+            {
+              type: 'json',
+              value: {
+                errorMessage:
+                  'Invalid paths: path entries must be non-empty strings.',
+              },
+            },
+          ])
+        }
+        const resolvedPath = path.isAbsolute(requestedPath)
+          ? path.resolve(requestedPath)
+          : path.resolve(projectRoot, requestedPath)
+        try {
+          const realPath = fs.realpathSync.native(resolvedPath)
+          // Confirm the path is readable (file or directory).
+          fs.statSync(realPath)
+          explicitSearchPaths.push(toRgPathArg(searchCwd, realPath))
+        } catch {
+          return resolve([
+            {
+              type: 'json',
+              value: {
+                errorMessage: `Invalid paths: Path '${requestedPath}' does not exist or cannot be read.`,
+              },
+            },
+          ])
+        }
       }
     }
 
@@ -132,16 +173,22 @@ export function codeSearch({
     // -n shows line numbers
     // --json outputs in JSON format, which streams in and allows us to cut off the output if it grows too long
     // "--"" prevents pattern from being misparsed as a flag (e.g., pattern starting with '-')
-    // Search paths: '.' plus blessed hidden directories that actually exist
-    // Filter out non-existent directories to avoid ripgrep stderr errors
-    const existingHiddenDirs = INCLUDED_HIDDEN_DIRS.filter((dir) => {
-      try {
-        return fs.statSync(path.join(searchCwd, dir)).isDirectory()
-      } catch {
-        return false
-      }
-    })
-    const searchPaths = ['.', ...existingHiddenDirs]
+    // Search paths: explicit file/dir targets when provided; otherwise '.' plus
+    // blessed hidden directories that actually exist (skip non-existent dirs to
+    // avoid ripgrep stderr errors).
+    let searchPaths: string[]
+    if (explicitSearchPaths.length > 0) {
+      searchPaths = [...new Set(explicitSearchPaths)]
+    } else {
+      const existingHiddenDirs = INCLUDED_HIDDEN_DIRS.filter((dir) => {
+        try {
+          return fs.statSync(path.join(searchCwd, dir)).isDirectory()
+        } catch {
+          return false
+        }
+      })
+      searchPaths = ['.', ...existingHiddenDirs]
+    }
     const args = [
       '--no-config',
       '-n',
@@ -461,6 +508,12 @@ export function codeSearch({
               if (evt?.type === 'match' || evt?.type === 'context') {
                 const filePath =
                   evt.data.path?.text ?? evt.data.path?.bytes ?? ''
+                // Same read-policy filter as the streaming path so a final
+                // JSON chunk without a trailing newline cannot leak sensitive
+                // match/context lines via the close-handler remainder flush.
+                if (isReadPathBlocked(filePath, fileFilter)) {
+                  continue
+                }
                 const lineNumber = evt.data.line_number ?? 0
                 const rawText = evt.data.lines?.text ?? ''
                 const lineText = truncateMatchLine(
@@ -549,13 +602,16 @@ export function codeSearch({
             : '')
         : ''
 
+      const exitMessage =
+        code !== null
+          ? `Exit code: ${code}${killedForLimit ? ' (early stop)' : ''}`
+          : ''
       settle({
         stdout: truncatedStdout,
         ...(truncatedStderr && { stderr: truncatedStderr }),
-        message:
-          code !== null
-            ? `Exit code: ${code}${killedForLimit ? ' (early stop)' : ''}`
-            : '',
+        message: cwdWasFile
+          ? `${exitMessage}${exitMessage ? ' ' : ''}(cwd was a file; searched that file only)`
+          : exitMessage,
       })
     })
 
@@ -566,4 +622,22 @@ export function codeSearch({
       })
     })
   })
+}
+
+/** True when `child` is `parent` or a path under it (after both are resolved). */
+function isPathInside(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child)
+  return (
+    relative === '' ||
+    (!relative.startsWith('..') && !path.isAbsolute(relative))
+  )
+}
+
+/** Prefer a path relative to searchCwd when under it; otherwise absolute. */
+function toRgPathArg(searchCwd: string, realPath: string): string {
+  if (isPathInside(searchCwd, realPath)) {
+    const relative = path.relative(searchCwd, realPath)
+    return relative === '' ? '.' : relative
+  }
+  return realPath
 }

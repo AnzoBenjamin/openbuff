@@ -115,19 +115,28 @@ describe('findFilesMatchingContent', () => {
     }
   })
 
-  it('rejects a file passed as cwd before spawning ripgrep', async () => {
+  it('coerces a file passed as cwd into a single-file search path', async () => {
     fs.writeFileSync(path.join(projectPath, 'package.json'), '{}')
 
-    const result = await findFilesMatchingContent({
+    const searchPromise = findFilesMatchingContent({
       projectPath,
       pattern: 'needle',
       cwd: 'package.json',
     })
 
-    const value = result[0].value as { errorMessage: string }
-    expect(value.errorMessage).toContain('is a file')
-    expect(value.errorMessage).toContain('requires a directory')
-    expect(mockSpawn).not.toHaveBeenCalled()
+    mockProcess.stdout.emit('data', Buffer.from('package.json\n'))
+    mockProcess.emit('close', 0)
+
+    const result = await searchPromise
+    const value = result[0].value as { errorMessage?: string; files?: string[] }
+    expect(value.errorMessage).toBeUndefined()
+    expect(mockSpawn).toHaveBeenCalled()
+    const spawnArgs = mockSpawn.mock.calls[0]![1] as string[]
+    const spawnOptions = mockSpawn.mock.calls[0]![2] as { cwd: string }
+    expect(spawnOptions.cwd).toBe(fs.realpathSync.native(projectPath))
+    const pathArgs = spawnArgs.slice(spawnArgs.indexOf('--') + 2)
+    expect(pathArgs).toContain('package.json')
+    expect(pathArgs).not.toContain('.')
   })
 
   it('follows cwd symlinks that escape the project root', async () => {
@@ -250,27 +259,62 @@ describe('findFilesMatchingContent', () => {
     }
   })
 
-  it('accepts invert-match and count output flags', async () => {
+  it('rejects invert-match and count output flags that change line shape', async () => {
+    // -c/--count-matches would turn -l path lines into "path:N" and poison
+    // path parsing; -v is also an output-shape changer rejected for both tools.
     for (const flags of ['-v', ['-v'], '-c', ['--count-matches']]) {
-      const searchPromise = findFilesMatchingContent({
+      const result = await findFilesMatchingContent({
         projectPath,
         pattern: 'needle',
         flags,
       })
 
-      mockProcess.stdout.emit('data', Buffer.from('src/a.ts\n'))
-      mockProcess.emit('close', 0)
-
-      await searchPromise
-      const args = mockSpawn.mock.calls.at(-1)![1] as string[]
-      if (flags === '-v' || (Array.isArray(flags) && flags[0] === '-v')) {
-        expect(args).toContain('-v')
-      } else if (flags === '-c') {
-        expect(args).toContain('-c')
-      } else {
-        expect(args).toContain('--count-matches')
-      }
+      const value = result[0].value as { errorMessage: string }
+      expect(value.errorMessage).toContain('Unsupported ripgrep flag')
+      expect(mockSpawn).not.toHaveBeenCalled()
     }
+  })
+
+  it('applies host fileFilter to files-only and groupBySymbol match paths', async () => {
+    const fileFilter = (filePath: string) => ({
+      status: filePath.includes('blocked') ? ('blocked' as const) : ('allow' as const),
+    })
+
+    const filesOnlyPromise = findFilesMatchingContent({
+      projectPath,
+      pattern: 'needle',
+      fileFilter,
+    })
+    mockProcess.stdout.emit(
+      'data',
+      Buffer.from('src/blocked.ts\nsrc/allowed.ts\n'),
+    )
+    mockProcess.emit('close', 0)
+    expect(getValue(await filesOnlyPromise).files).toEqual(['src/allowed.ts'])
+
+    mockProcess = createMockChildProcess()
+    mockSpawn = mock(() => mockProcess)
+    await mockModule('child_process', () => ({
+      spawn: mockSpawn,
+    }))
+
+    const groupedPromise = findFilesMatchingContent({
+      projectPath,
+      pattern: 'needle',
+      groupBySymbol: true,
+      fileFilter,
+    })
+    mockProcess.stdout.emit(
+      'data',
+      Buffer.from(
+        [
+          createRgJsonMatch('src/blocked.ts', 1, 'needle'),
+          createRgJsonMatch('src/allowed.ts', 1, 'needle'),
+        ].join('\n'),
+      ),
+    )
+    mockProcess.emit('close', 0)
+    expect(getValue(await groupedPromise).files).toEqual(['src/allowed.ts'])
   })
 
   it('still rejects dangerous flags after outer-quote repair', async () => {

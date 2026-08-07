@@ -18,13 +18,13 @@ const inputSchema = z
       .union([z.string(), z.array(z.string())])
       .optional()
       .describe(
-        `Optional safe ripgrep flags as one string or argv tokens. Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not. Examples: "-g *.ts -g *.tsx" or ["-g", "*.ts", "-g", "*.tsx"]. Do not quote the entire expression inside the JSON string.`,
+        `Optional safe ripgrep flags as one string or argv tokens. Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not. Examples: "-g *.ts -g *.tsx" or ["-g", "*.ts", "-g", "*.tsx"]. Do not quote the entire expression inside the JSON string. Output-shape flags such as -c/--count, --count-matches, -l, -v/--invert-match, context -A/-B/-C, -r/--replace, --exec, and -z/--null are rejected (this tool forces -l or --json itself). Redundant -n/--line-number inputs are ignored.`,
       ),
     cwd: z
       .string()
       .optional()
       .describe(
-        `Optional working directory to search within, relative to the project root. Defaults to the project root.`,
+        `Optional working directory or single file to search within, relative to the project root or absolute. Absolute paths may be outside the project. A directory becomes ripgrep's cwd and scopes the search under that path (plus existing blessed hidden dirs); a file scopes the search to that file only (process cwd = project root when the file is under the project, else the file's parent). Defaults to the project root.`,
       ),
     maxFiles: z
       .number()
@@ -71,6 +71,8 @@ When to use this vs. code_search:
 Supported flags:
 - Allowed no-value flags: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall.
 - Allowed value flags: -g/--glob, -t/--type, -T/--type-not.
+- Rejected (including output-shape changers that would break -l path parsing): -c/--count, --count-matches, -v/--invert-match, -l, context -A/-B/-C, -r/--replace, --exec, -z/--null. Use code_search for context flags.
+- cwd may be absolute and outside the project; file cwd searches that file only.
 
 Symbol grouping (groupBySymbol: true):
 - For each matching file, returns the names of the top-level symbols that contain at least one match, plus the total match count.

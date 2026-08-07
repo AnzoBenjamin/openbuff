@@ -225,4 +225,38 @@ describe('glob tool', () => {
 
     expect(value.files).toEqual(['src/a.ts', 'src/m.ts', 'src/z.ts'])
   })
+
+  test('file cwd matching basename returns that single file', async () => {
+    mockFileTree(['src/a.ts', 'src/b.ts', 'docs/readme.md'])
+
+    const value = getValue(
+      await glob({
+        pattern: '*.ts',
+        projectPath: PROJECT_PATH,
+        cwd: 'src/a.ts',
+        fs,
+      }),
+    )
+
+    expect(value.files).toEqual(['src/a.ts'])
+    expect(value.count).toBe(1)
+    expect(value.message).toContain('for file "src/a.ts"')
+  })
+
+  test('file cwd with non-matching pattern returns empty list without error', async () => {
+    mockFileTree(['src/a.ts', 'src/b.ts'])
+
+    const value = getValue(
+      await glob({
+        pattern: '*.md',
+        projectPath: PROJECT_PATH,
+        cwd: 'src/a.ts',
+        fs,
+      }),
+    )
+
+    expect(value.files).toEqual([])
+    expect(value.count).toBe(0)
+    expect(value.message).toContain('for file "src/a.ts"')
+  })
 })

@@ -162,6 +162,43 @@ describe('codeSearch', () => {
       expect(value.stdout).not.toContain('blocked.ts')
       expect(value.stdout).toContain('allowed.ts')
     })
+
+    it('filters sensitive and host-blocked paths from close-handler remainder flush', async () => {
+      // Final JSON chunk often lacks a trailing newline, so the close handler
+      // must apply the same isReadPathBlocked/fileFilter gate as streaming.
+      const searchPromise = codeSearch({
+        projectPath: '/test/project',
+        pattern: 'token',
+        fileFilter: (filePath) => ({
+          status: filePath === 'blocked.ts' ? 'blocked' : 'allow',
+        }),
+      })
+
+      const remainderWithoutTrailingNewline = [
+        createRgJsonMatch('.env', 1, 'TOKEN=super-secret'),
+        createRgJsonContext('.env', 2, 'NEXT=still-secret'),
+        createRgJsonMatch('blocked.ts', 1, 'secret token'),
+        createRgJsonContext('blocked.ts', 2, 'more secret'),
+        createRgJsonMatch('allowed.ts', 1, 'public token'),
+        createRgJsonContext('allowed.ts', 2, 'public context'),
+      ].join('\n')
+
+      mockProcess.stdout.emit(
+        'data',
+        Buffer.from(remainderWithoutTrailingNewline),
+      )
+      mockProcess.emit('close', 0)
+
+      const value = asCodeSearchResult((await searchPromise)[0])
+      expect(value.stdout).not.toContain('super-secret')
+      expect(value.stdout).not.toContain('still-secret')
+      expect(value.stdout).not.toContain('.env:')
+      expect(value.stdout).not.toContain('blocked.ts')
+      expect(value.stdout).not.toContain('secret token')
+      expect(value.stdout).toContain('allowed.ts')
+      expect(value.stdout).toContain('public token')
+      expect(value.stdout).toContain('public context')
+    })
   })
 
   describe('context flags handling', () => {
@@ -665,6 +702,26 @@ describe('codeSearch', () => {
       expect(value.stdout).toContain('file3.ts:')
     })
 
+    it('rejects output-shape flags like -v/-c for code_search', async () => {
+      for (const flags of ['-v', '-c', '--count-matches']) {
+        mockProcess = createMockChildProcess()
+        mockSpawn = mock(() => mockProcess)
+        await mockModule('child_process', () => ({
+          spawn: mockSpawn,
+        }))
+
+        const result = await codeSearch({
+          projectPath: '/test/project',
+          pattern: 'token',
+          flags,
+        })
+        const value = result[0].value as { errorMessage?: string }
+        expect(value.errorMessage).toContain('Unsupported ripgrep flag')
+        expect(value.errorMessage).toContain(flags)
+        expect(mockSpawn).not.toHaveBeenCalled()
+      }
+    })
+
     it('should enforce output size limit during streaming (regression test)', async () => {
       // Bug: Output size only checked at end, could exceed limit
       // Fix: Check estimatedOutputLen during streaming and stop early
@@ -1108,20 +1165,88 @@ describe('codeSearch', () => {
       expect(spawnOptions.cwd).toBe(fs.realpathSync.native(outsideDir))
     })
 
-    it('rejects a file passed as cwd before spawning ripgrep', async () => {
+    it('coerces a file passed as cwd into a single-file search path', async () => {
       const filePath = path.join(tmpDir, 'package.json')
       fs.writeFileSync(filePath, '{}')
 
-      const result = await codeSearch({
+      const searchPromise = codeSearch({
         projectPath: tmpDir,
         pattern: 'test',
         cwd: 'package.json',
       })
 
+      const output = createRgJsonMatch('package.json', 1, 'test content')
+      mockProcess.stdout.emit('data', Buffer.from(output))
+      mockProcess.emit('close', 0)
+
+      const result = await searchPromise
       const value = asCodeSearchResult(result[0])
-      expect(value.errorMessage).toContain('is a file')
-      expect(value.errorMessage).toContain('requires a directory')
-      expect(mockSpawn).not.toHaveBeenCalled()
+      expect(value.errorMessage).toBeUndefined()
+      expect(mockSpawn).toHaveBeenCalled()
+      const spawnArgs = mockSpawn.mock.calls[0]![1] as string[]
+      const spawnOptions = mockSpawn.mock.calls[0]![2] as { cwd: string }
+      // Process cwd is project root; search path is the file (not '.' + hidden).
+      expect(spawnOptions.cwd).toBe(fs.realpathSync.native(tmpDir))
+      expect(spawnArgs).toContain('package.json')
+      expect(spawnArgs.indexOf('package.json')).toBeGreaterThan(
+        spawnArgs.indexOf('--'),
+      )
+      // Must not fall back to whole-tree search via '.'
+      const pathArgs = spawnArgs.slice(spawnArgs.indexOf('--') + 2)
+      expect(pathArgs).not.toContain('.')
+      expect(pathArgs).toContain('package.json')
+    })
+
+    it('passes paths file targets to ripgrep instead of the whole tree', async () => {
+      fs.mkdirSync(path.join(tmpDir, 'subdir'), { recursive: true })
+      fs.writeFileSync(path.join(tmpDir, 'subdir', 'file.ts'), 'export const x = 1')
+
+      const searchPromise = codeSearch({
+        projectPath: tmpDir,
+        pattern: 'export',
+        paths: ['subdir/file.ts'],
+      })
+
+      const output = createRgJsonMatch('subdir/file.ts', 1, 'export const x = 1')
+      mockProcess.stdout.emit('data', Buffer.from(output))
+      mockProcess.emit('close', 0)
+
+      const result = await searchPromise
+      const value = asCodeSearchResult(result[0])
+      expect(value.errorMessage).toBeUndefined()
+      expect(mockSpawn).toHaveBeenCalled()
+      const spawnArgs = mockSpawn.mock.calls[0]![1] as string[]
+      const pathArgs = spawnArgs.slice(spawnArgs.indexOf('--') + 2)
+      expect(pathArgs.some((p) => p.replace(/\\/g, '/').endsWith('subdir/file.ts'))).toBe(
+        true,
+      )
+      expect(pathArgs).not.toContain('.')
+    })
+
+    it('accepts a directory in paths as a search root', async () => {
+      fs.mkdirSync(path.join(tmpDir, 'subdir'), { recursive: true })
+      fs.writeFileSync(path.join(tmpDir, 'subdir', 'file.ts'), 'const y = 2')
+
+      const searchPromise = codeSearch({
+        projectPath: tmpDir,
+        pattern: 'const',
+        paths: ['subdir'],
+      })
+
+      const output = createRgJsonMatch('subdir/file.ts', 1, 'const y = 2')
+      mockProcess.stdout.emit('data', Buffer.from(output))
+      mockProcess.emit('close', 0)
+
+      const result = await searchPromise
+      const value = asCodeSearchResult(result[0])
+      expect(value.errorMessage).toBeUndefined()
+      expect(mockSpawn).toHaveBeenCalled()
+      const spawnArgs = mockSpawn.mock.calls[0]![1] as string[]
+      const pathArgs = spawnArgs.slice(spawnArgs.indexOf('--') + 2)
+      expect(pathArgs.some((p) => p.replace(/\\/g, '/').endsWith('subdir'))).toBe(
+        true,
+      )
+      expect(pathArgs).not.toContain('.')
     })
 
     it('allows a cwd symlink that stays inside the project', async () => {

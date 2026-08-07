@@ -54,7 +54,20 @@ export async function glob(params: {
         normalizedCwd = resolvedCwd.relativePath
       }
     }
-    if (normalizedCwd) {
+    // Prefer tree membership for file detection (mock fs may lack isFile).
+    const cwdIsFile = Boolean(
+      normalizedCwd && allFilePaths.includes(normalizedCwd),
+    )
+
+    if (normalizedCwd && cwdIsFile) {
+      // File-as-cwd: match the pattern against that single file only (full
+      // project-relative path or basename). Do not use directory-prefix scoping.
+      const basename = path.posix.basename(normalizedCwd)
+      const matchesFile =
+        micromatch([normalizedCwd], pattern).length > 0 ||
+        micromatch([basename], pattern).length > 0
+      matchingFiles = matchesFile ? [normalizedCwd] : []
+    } else if (normalizedCwd) {
       // Scope to files under `cwd`, but match the pattern against paths
       // RELATIVE to `cwd` so that patterns like "*.ts" or "**/*.test.ts"
       // behave as the caller expects. We strip the cwd prefix before
@@ -109,7 +122,7 @@ export async function glob(params: {
         value: {
           files: matchingFiles,
           count: matchingFiles.length,
-          message: `Found ${matchingFiles.length} file(s) matching pattern "${pattern}"${cwd ? ` in directory "${cwd}"` : ''}`,
+          message: `Found ${matchingFiles.length} file(s) matching pattern "${pattern}"${cwd ? (cwdIsFile ? ` for file "${cwd}"` : ` in directory "${cwd}"`) : ''}`,
         },
       },
     ]
