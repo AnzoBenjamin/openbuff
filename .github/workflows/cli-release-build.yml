@@ -219,6 +219,35 @@ jobs:
           mkdir -p "$LEGACY_DIR/ripgrep"
           tar -xzf "$LEGACY_DIR/ripgrep.tar.gz" \
             -C "$LEGACY_DIR/ripgrep" --strip-components=1
+
+          # Select a usable Xcode with clang before cargo needs a C linker.
+          # Some runner images leave a broken default (e.g. Xcode_15.4 without clang).
+          DEVELOPER_DIR=""
+          CANDIDATES=()
+          while IFS= read -r app; do
+            CANDIDATES+=("$app")
+          done < <(ls -1d /Applications/Xcode_*.app 2>/dev/null | sort -V -r || true)
+          if [[ -d /Applications/Xcode.app ]]; then
+            CANDIDATES+=("/Applications/Xcode.app")
+          fi
+          for app in "${CANDIDATES[@]}"; do
+            if [[ -x "$app/Contents/Developer/usr/bin/clang" ]]; then
+              DEVELOPER_DIR="$app/Contents/Developer"
+              break
+            fi
+          done
+          if [[ -z "$DEVELOPER_DIR" ]]; then
+            echo "error: no Xcode app with an executable clang under /Applications" >&2
+            echo "Available apps:" >&2
+            ls -la /Applications/Xcode*.app 2>/dev/null || echo "(none)" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$DEVELOPER_DIR"
+          export DEVELOPER_DIR
+          echo "Selected DEVELOPER_DIR=$DEVELOPER_DIR"
+          xcodebuild -version
+          clang --version
+
           pushd "$LEGACY_DIR/ripgrep"
           MACOSX_DEPLOYMENT_TARGET=11.0 cargo build --release --locked
           popd
@@ -239,6 +268,35 @@ jobs:
             https://github.com/BurntSushi/ripgrep/archive/refs/tags/14.1.1.tar.gz
           tar -xzf "$RG_DIR/ripgrep.tar.gz" \
             -C "$RG_DIR/source" --strip-components=1
+
+          # Select a usable Xcode with clang before cargo needs a C linker.
+          # Some runner images leave a broken default (e.g. Xcode_15.4 without clang).
+          DEVELOPER_DIR=""
+          CANDIDATES=()
+          while IFS= read -r app; do
+            CANDIDATES+=("$app")
+          done < <(ls -1d /Applications/Xcode_*.app 2>/dev/null | sort -V -r || true)
+          if [[ -d /Applications/Xcode.app ]]; then
+            CANDIDATES+=("/Applications/Xcode.app")
+          fi
+          for app in "${CANDIDATES[@]}"; do
+            if [[ -x "$app/Contents/Developer/usr/bin/clang" ]]; then
+              DEVELOPER_DIR="$app/Contents/Developer"
+              break
+            fi
+          done
+          if [[ -z "$DEVELOPER_DIR" ]]; then
+            echo "error: no Xcode app with an executable clang under /Applications" >&2
+            echo "Available apps:" >&2
+            ls -la /Applications/Xcode*.app 2>/dev/null || echo "(none)" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$DEVELOPER_DIR"
+          export DEVELOPER_DIR
+          echo "Selected DEVELOPER_DIR=$DEVELOPER_DIR"
+          xcodebuild -version
+          clang --version
+
           pushd "$RG_DIR/source"
           MACOSX_DEPLOYMENT_TARGET=13.0 cargo build --release --locked
           popd
