@@ -2817,6 +2817,14 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                     ;(activeWorkState.specialistReviewGateFingerprints ??= {})[
                       agentType
                     ] = specialistCreditFingerprint
+                    if (
+                      activeWorkState.lastReviewerGateSkipReason ===
+                        'specialist-terminal-failure' ||
+                      activeWorkState.lastReviewerGateSkipReason ===
+                        'specialist-rate-limited'
+                    ) {
+                      activeWorkState.lastReviewerGateSkipReason = ''
+                    }
                     clearOwedReviewer(agentType)
                     markActiveWorkStateChanged()
                     yield {
@@ -3152,13 +3160,43 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                   }
                   if (crash) {
                     activeWorkState.currentPhase = 'blocked'
-                    activeWorkState.openReviewerBlockers = [
-                      `${agentType} crashed during specialist review: ${crash}`,
-                    ]
                     activeWorkState.openReviewerFindings = (
                       activeWorkState.openReviewerFindings ?? []
                     ).filter((finding) => finding.reviewer !== agentType)
-                    activeWorkState.latestWorkSummary = `${agentType} crashed during specialist review.`
+                    // Transient provider/rate-limit crashes fail closed for this
+                    // turn without repair-editor or bare-hex fingerprint thrash.
+                    if (
+                      isTransientReviewerCrash(crash) ||
+                      classifyReviewerCrash(crash) === 'transient'
+                    ) {
+                      activeWorkState.lastReviewerGateSkipReason =
+                        'specialist-rate-limited'
+                      activeWorkState.openReviewerBlockers = [
+                        `${agentType} hit a rate-limit or concurrency limit during specialist review: ${crash}`,
+                        'End this turn and retry later. Do not spawn repair-editor. Do not recompute bare-hex fingerprints from get_change_review_bundle.',
+                      ]
+                      activeWorkState.nextRequiredAction =
+                        'End turn / retry later after the provider rate-limit or concurrency limit clears. Do not spawn repair-editor or recompute bare-hex fingerprints.'
+                      activeWorkState.latestWorkSummary = `${agentType} was rate-limited or concurrency-limited during specialist review.`
+                      markActiveWorkStateChanged()
+                      specialistBlocked = true
+                      specialistTerminalFailure = true
+                      break
+                    }
+                    const crashClass = classifyReviewerCrash(crash)
+                    activeWorkState.openReviewerBlockers =
+                      crashClass === 'protocol'
+                        ? [
+                            `${agentType} failed specialist review protocol/attestation: ${crash}`,
+                            'This is a specialist reviewer protocol/configuration failure, not a source-code finding. Do not spawn repair-editor.',
+                          ]
+                        : [
+                            `${agentType} crashed during specialist review: ${crash}`,
+                          ]
+                    activeWorkState.latestWorkSummary =
+                      crashClass === 'protocol'
+                        ? `${agentType} protocol/attestation failure during specialist review.`
+                        : `${agentType} crashed during specialist review.`
                     markActiveWorkStateChanged()
                     specialistBlocked = true
                     specialistTerminalFailure = true
@@ -3215,6 +3253,14 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                   ;(activeWorkState.specialistReviewGateFingerprints ??= {})[
                     agentType
                   ] = specialistCreditFingerprint
+                  if (
+                    activeWorkState.lastReviewerGateSkipReason ===
+                      'specialist-terminal-failure' ||
+                    activeWorkState.lastReviewerGateSkipReason ===
+                      'specialist-rate-limited'
+                  ) {
+                    activeWorkState.lastReviewerGateSkipReason = ''
+                  }
                   // The specialist aux block owns specialist-family
                   // revalidation; clear its owed entry once it passes. This
                   // never clobbers a code/security owed entry.
@@ -3228,18 +3274,23 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 // exit the OUTER while loop; everything else re-enters it.
                 if (specialistRepairExit) break
                 if (specialistTerminalFailure) {
-                  // A specialist that cannot attest to either the original or
-                  // refreshed bundle is a terminal protocol failure. Preserve
-                  // the pending gate state so it cannot bypass finalization.
+                  // Preserve pending gate state so finalization cannot bypass.
+                  // Rate-limit crashes keep a distinct skip reason and messaging;
+                  // do not collapse them into specialist-terminal-failure.
+                  const rateLimited =
+                    activeWorkState.lastReviewerGateSkipReason ===
+                    'specialist-rate-limited'
                   if (!activeWorkState.lastReviewerGateSkipReason) {
                     activeWorkState.lastReviewerGateSkipReason =
                       'specialist-terminal-failure'
                   }
                   activeWorkState.currentPhase = 'blocked'
-                  activeWorkState.nextRequiredAction =
-                    'Obtain a fresh matching specialist review against a stable review bundle before finalization can continue.'
-                  activeWorkState.latestWorkSummary =
-                    'Specialist review protocol failed after one automatic refresh; finalization remains blocked.'
+                  if (!rateLimited) {
+                    activeWorkState.nextRequiredAction =
+                      'Obtain a fresh matching specialist review against a stable review bundle before finalization can continue.'
+                    activeWorkState.latestWorkSummary =
+                      'Specialist review protocol failed after one automatic refresh; finalization remains blocked.'
+                  }
                   mutableAgentState.canSuggestFollowups = false
                   finalResponseGateOpen = false
                   markActiveWorkStateChanged()
@@ -3247,13 +3298,21 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                     toolName: 'add_message',
                     input: {
                       role: 'user',
-                      content: [
-                        'Specialist review gate failed snapshot/file attestation after one automatic refresh.',
-                        '',
-                        ...activeWorkState.openReviewerBlockers,
-                        '',
-                        'This is a specialist reviewer protocol/configuration failure, not a source-code finding. The harness did not spawn repair-editor or finalize. Stop retrying automatically; obtain a fresh matching specialist review against a stable review bundle.',
-                      ].join('\n'),
+                      content: rateLimited
+                        ? [
+                            'Specialist review gate hit a rate-limit or concurrency limit.',
+                            '',
+                            ...activeWorkState.openReviewerBlockers,
+                            '',
+                            'This is a transient provider limit, not a source-code finding. The harness did not spawn repair-editor or recompute bare-hex fingerprints. End turn and retry later.',
+                          ].join('\n')
+                        : [
+                            'Specialist review gate failed snapshot/file attestation after one automatic refresh.',
+                            '',
+                            ...activeWorkState.openReviewerBlockers,
+                            '',
+                            'This is a specialist reviewer protocol/configuration failure, not a source-code finding. The harness did not spawn repair-editor or finalize. Stop retrying automatically; obtain a fresh matching specialist review against a stable review bundle.',
+                          ].join('\n'),
                     },
                     includeToolCall: false,
                   } as any
@@ -5864,6 +5923,60 @@ function findReviewerCrash(value: unknown, depth: number = 0): string | null {
             return found;
     }
     return null;
+}
+
+/**
+ * True when a reviewer crash message is a transient provider/rate-limit style
+ * failure rather than a content or hard protocol crash. Used so the gate can
+ * fail closed for the turn without thrashing repair-editor or bare-hex retries.
+ *
+ * Patterns are inlined (not a module-level const) so generate-gate-helpers can
+ * emit a self-contained function into base2's handleSteps region.
+ */
+function isTransientReviewerCrash(message: string): boolean {
+    if (typeof message !== 'string' || !message.trim())
+        return false;
+    const lower = message.toLowerCase();
+    // Provider / rate-limit / concurrency crash strings (case-insensitive).
+    const patterns = [
+        'rate_limit',
+        'rate limit',
+        'concurrency limit',
+        'concurrency limit exceeded',
+        'please retry later',
+        'overloaded',
+        '429',
+        'resource_exhausted',
+        'too many requests',
+    ];
+    return patterns.some((pattern) => lower.includes(pattern));
+}
+
+/**
+ * Coarse crash taxonomy for specialist/reviewer failures.
+ * null/empty → none; rate-limit patterns → transient; optional protocol-ish
+ * bare-hex / non-attestable / snapshot-attestation wording → protocol; else fatal.
+ */
+function classifyReviewerCrash(message: string | null): 'none' | 'transient' | 'protocol' | 'fatal' {
+    if (message == null)
+        return 'none';
+    if (typeof message !== 'string' || !message.trim())
+        return 'none';
+    if (isTransientReviewerCrash(message))
+        return 'transient';
+    const lower = message.toLowerCase();
+    const hasBareHex = /(?:^|[^:])\b[a-f0-9]{64}\b/i.test(message) &&
+        !/\bv3:[a-f0-9]{64}\b/i.test(message);
+    if (hasBareHex ||
+        lower.includes('non-attestable') ||
+        lower.includes('snapshot attestation') ||
+        (lower.includes('fingerprint') &&
+            (lower.includes('attest') ||
+                lower.includes('bare') ||
+                lower.includes('did not match')))) {
+        return 'protocol';
+    }
+    return 'fatal';
 }
 
 function getReviewerFinalizationVerdict(toolResult: unknown): ReviewerFinalizationVerdict {

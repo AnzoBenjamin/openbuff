@@ -406,6 +406,61 @@ function findReviewerCrash(value: unknown, depth: number = 0): string | null {
   return null
 }
 
+/**
+ * True when a reviewer crash message is a transient provider/rate-limit style
+ * failure rather than a content or hard protocol crash. Used so the gate can
+ * fail closed for the turn without thrashing repair-editor or bare-hex retries.
+ *
+ * Patterns are inlined (not a module-level const) so generate-gate-helpers can
+ * emit a self-contained function into base2's handleSteps region.
+ */
+export function isTransientReviewerCrash(message: string): boolean {
+  if (typeof message !== 'string' || !message.trim()) return false
+  const lower = message.toLowerCase()
+  // Provider / rate-limit / concurrency crash strings (case-insensitive).
+  const patterns = [
+    'rate_limit',
+    'rate limit',
+    'concurrency limit',
+    'concurrency limit exceeded',
+    'please retry later',
+    'overloaded',
+    '429',
+    'resource_exhausted',
+    'too many requests',
+  ]
+  return patterns.some((pattern) => lower.includes(pattern))
+}
+
+/**
+ * Coarse crash taxonomy for specialist/reviewer failures.
+ * null/empty → none; rate-limit patterns → transient; optional protocol-ish
+ * bare-hex / non-attestable / snapshot-attestation wording → protocol; else fatal.
+ */
+export function classifyReviewerCrash(
+  message: string | null,
+): 'none' | 'transient' | 'protocol' | 'fatal' {
+  if (message == null) return 'none'
+  if (typeof message !== 'string' || !message.trim()) return 'none'
+  if (isTransientReviewerCrash(message)) return 'transient'
+  const lower = message.toLowerCase()
+  const hasBareHex =
+    /(?:^|[^:])\b[a-f0-9]{64}\b/i.test(message) &&
+    !/\bv3:[a-f0-9]{64}\b/i.test(message)
+  if (
+    hasBareHex ||
+    lower.includes('non-attestable') ||
+    lower.includes('snapshot attestation') ||
+    (lower.includes('fingerprint') &&
+      (lower.includes('attest') ||
+        lower.includes('bare') ||
+        lower.includes('did not match')))
+  ) {
+    return 'protocol'
+  }
+  return 'fatal'
+}
+
 export function getReviewerFinalizationVerdict(
   toolResult: unknown,
 ): ReviewerFinalizationVerdict {
