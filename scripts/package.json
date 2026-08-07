@@ -21,7 +21,8 @@
     "typecheck-all": "bun run typecheck-all.ts",
     "harness:lsp": "bun run harness-language-server.ts",
     "harness:repro": "bun run generate-minimal-repro.ts",
-    "harness:mutation": "bun run run-mutation-gate.ts"
+    "harness:mutation": "bun run run-mutation-gate.ts",
+    "harness:classifier-smoke": "bun harness-smoke.mjs"
   },
   "sideEffects": false,
   "engines": {

@@ -180,6 +180,24 @@ patterns because it is governed by its own stricter no-shell-write guard
 described above. When a command is denied, `reason` names the specific rule
 that blocked it.
 
+### Harness classification and basher (`workspace-write`) pitfalls
+
+- Harness high-impact classification (`classifyTerminalHarnessAction`) no longer
+  treats ordinary pipes, `$(...)` / backticks, or trailing `&` as
+  `arbitrary-code`; interpreter `-e`/`-c` and `nohup`/`setsid` still do.
+- `git restore --staged` is not high-impact; bare/worktree/patch restore is
+  `workspace-delete`.
+- **Basher (`workspace-write`) operational pitfalls:**
+  - Prefer a project file + `bun path/to/script` over `bun -e` / `node -e`
+    (those are classified as `arbitrary-code` and need approval in balanced
+    mode).
+  - Do not embed multi-KB heredocs or live `$()` that dump env in the basher
+    `params.command` string — env dumps (`env`/`printenv`/bare `set`) and some
+    substitution forms are still denied by terminal policy even when not
+    high-impact harness actions. Author files with edit tools; run short
+    commands.
+  - Durable local check: `bun run smoke:harness`.
+
 ## Search tool working directory
 
 `code_search` and `find_files_matching_content` accept a `cwd` that sets the

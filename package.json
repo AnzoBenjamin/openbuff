@@ -24,6 +24,7 @@
     "release:cli": "bun run --cwd=cli release",
     "release:sdk": "bun run --cwd=sdk release",
     "smoke:openbuff": "OPENBUFF_LOCAL_MODE=true bun scripts/openbuff-smoke.ts",
+    "smoke:harness": "bun scripts/harness-smoke.mjs",
     "clean-ts": "find . -name '*.tsbuildinfo' -type f -delete && find . -name '.next' -type d -exec rm -rf {} + 2>/dev/null || true && find . -name 'node_modules' -type d -exec rm -rf {} + 2>/dev/null || true && bun install",
     "typecheck": "bun scripts/check-env-architecture.ts && bun --filter='*' run typecheck && echo '✅ All type checks passed!'",
     "test": "bun --filter='{@codebuff/common,@codebuff/agents,@codebuff/agent-runtime,@codebuff/indexer,@openbuff/sdk,@codebuff/cli,@codebuff/evals,@codebuff/scripts}' run test",
