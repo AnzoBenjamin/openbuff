@@ -141,8 +141,10 @@ export function buildSpawnAgentsHandlerFailureOutput(
   input: unknown,
   // Retained for call-site symmetry with the generic failure-output builder
   // and for logging at the call site; deliberately NOT interpolated into the
-  // agent-visible errorMessage (see the migration note above).
-  error: unknown,
+  // agent-visible errorMessage (see the migration note above). Prefixed with
+  // `_` so it is explicitly intentionally-unused and lint-safe under
+  // `noUnusedParameters`.
+  _error: unknown,
 ): CodebuffToolOutput<'spawn_agents'> {
   const inputRecord =
     input && typeof input === 'object'
@@ -1821,6 +1823,7 @@ export async function executeToolCall<T extends ToolName>(
 
       message: `${toolCall.error}\n\n${inputLabel}:\n${formattedInput}`,
       userMessage: `The model sent a malformed \`${toolName}\` tool call and is correcting it automatically. No action is needed.`,
+      autoRecovering: true,
     })
     logger.debug(
       { toolCall, error: toolCall.error },
@@ -2573,6 +2576,13 @@ export async function executeToolCall<T extends ToolName>(
     }),
   )
 
+  // NOTE (spawn-failure MIGRATION NOTE sync, RF-5): the underlying handler
+  // error MUST be logged here via logger.warn. `buildSpawnAgentsHandlerFailureOutput`
+  // intentionally does NOT interpolate the raw error into agent-visible output
+  // (see its MIGRATION NOTE), so this call site is the single logging point for
+  // that error. If this `.catch` is ever refactored, preserve the
+  // `logger.warn({ error, toolName, toolCallId }, ...)` contract or the error
+  // becomes silently lost for spawned agents.
   const recoverableToolResultPromise = toolResultPromise.catch((error) => {
     if (isAbortError(error)) throw error
     logger.warn(
@@ -2866,6 +2876,7 @@ export async function executeCustomToolCall(
       type: 'error',
       message: `${toolCall.error}\n\n${inputLabel}:\n${formattedInput}`,
       userMessage: `The model sent a malformed \`${toolName}\` tool call and is correcting it automatically. No action is needed.`,
+      autoRecovering: true,
     })
     logger.debug(
       { toolCall, error: toolCall.error },
@@ -2919,8 +2930,16 @@ export async function executeCustomToolCall(
   // `tool_start` transition once the barrier resolves so the CLI can flip the
   // block from "queued" to "pending". Non-blocking: do NOT await
   // `previousToolCallFinished` here (the handler still awaits it internally).
-  // For custom/unknown-path writes `queued` is typically undefined, so this
-  // is a no-op in practice — guarded for consistency with native writes.
+  //
+  // Reachability (RF-1): `queued` is threaded through `ExecuteToolCallParams`
+  // for any serialized same-path write, and custom/MCP tool paths can be
+  // queued when a per-path write barrier applies to a custom/unknown-path
+  // input — so this branch is genuinely reachable, not dead defensive code.
+  // It is rarer than the native write_file/edit_transaction path because most
+  // custom tools do not touch the project filesystem and therefore never hit
+  // the write barrier, but the runtime does not restrict `queued` to native
+  // tools. The downstream CLI flip is covered by the queued-block tool_start
+  // tests in sdk-event-handlers.test.ts (including the nested-agent case).
   if (queued === true) {
     abortablePreviousToolCallFinished.then(
       () => {

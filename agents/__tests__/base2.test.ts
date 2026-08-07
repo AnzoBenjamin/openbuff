@@ -6349,6 +6349,314 @@ describe('base2 verification and reviewer gates', () => {
     })
   })
 
+  // Drives the base2 handleSteps generator through one full reviewer cycle:
+  // edit -> validation -> code-reviewer -> (first) reviewer result. Returns the
+  // generator plus the reviewer spawn call so tests can feed follow-up results.
+  // Uses a real project-scoped scratch file whose bytes genuinely change across
+  // the simulated repair: the reviewer-repair no-progress guard compares the
+  // pre- and post-repair gate snapshot fingerprints, both derived from on-disk
+  // bytes of the pending gate files (a virtual path hashes to the same
+  // unreadable sentinel twice and the guard would fire).
+  function driveToFirstReview() {
+    const tmpDir = makeProjectTempDir('base2-condoned-review-')
+    const tmpFile = join(tmpDir, 'a.ts')
+    const gateFile = normalizeGateFilePath(tmpFile)
+    writeFileSync(tmpFile, 'export const value = 1\n')
+    const base2 = createBase2('default')
+    const agentState = { agentId: 'base2-custom' }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Make the requested change now please',
+      params: {},
+    } as any)
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+        .value,
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    expect(gen.next().value).toBe('STEP')
+    expect(
+      gen.next({
+        stepsComplete: true,
+        toolResult: [{ type: 'json', value: editReceipt(gateFile) }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: [] }] } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    const reviewCall = gen.next({
+      toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+    } as any).value as any
+    expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+    return { gen, agentState, reviewCall, tmpDir, tmpFile, gateFile }
+  }
+
+  // Feeds the first NON_BLOCKING reviewer result and the repair-editor
+  // completion receipt, landing on the second (re-review) spawn_agents call.
+  // Mirrors the yield sequence of the BLOCKING repair/re-review test above:
+  // after the repair receipt the generator yields git_status ->
+  // run_file_change_hooks -> spawn_agent_inline (the re-review code-reviewer)
+  // -> add_message (pinned active-work, phase awaiting_review) -> STEP, then
+  // the next loop iteration drives git_status -> list_jobs ->
+  // run_file_change_hooks -> git_status -> spawn_agents (the second review).
+  function driveThroughRepairToSecondReview(
+    gen: any,
+    agentState: any,
+    reviewCall: any,
+    tmpFile: string,
+    gateFile: string,
+    findingSummary: string,
+  ) {
+    const firstReview = attestedReviewerResult(reviewCall, 'NON_BLOCKING', [
+      findingSummary,
+    ])
+    const afterFirst = gen.next(firstReview as any)
+    expect(afterFirst.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    const repairSpawn = gen.next().value as any
+    expect(repairSpawn).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'repair-editor' }] },
+    })
+    // The gate mints RF-<n>-<hash> finding ids via buildReviewerFindingId; read
+    // them from state (do NOT reuse the reviewer-output id) and make the
+    // repair's byte change real so the no-progress fingerprint guard passes.
+    const findingIds = (agentState as any).base2ActiveWork.openReviewerFindings.map(
+      (finding: any) => finding.id,
+    )
+    writeFileSync(tmpFile, 'export const value = 2 // repaired\n')
+    expect(
+      gen.next(completedRepairReceipt(findingIds, [gateFile]) as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    // Re-validation passes (a real hook summary, not an empty result).
+    expect(
+      gen.next({
+        toolResult: [
+          {
+            type: 'json',
+            value: [{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }],
+          },
+        ],
+      } as any).value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    // The re-validation continuation pins the awaiting_review active-work state.
+    const pinned = gen.next().value as any
+    expect(pinned).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    expect(gen.next().value).toBe('STEP')
+    // Next loop iteration: no new edits this round -> drive the gate again until
+    // the second code-reviewer spawn_agents call.
+    expect(
+      gen.next({ stepsComplete: true, toolResult: [] } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'list_jobs' })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: [] }] } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    const secondReviewCall = gen.next({
+      toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+    } as any).value as any
+    expect(secondReviewCall).toMatchObject({ toolName: 'spawn_agents' })
+    return secondReviewCall
+  }
+
+  test('same NON_BLOCKING finding text after repair-editor addressed it finalizes instead of looping', () => {
+    const findingText = 'Minor style suggestion.'
+    const { gen, agentState, reviewCall, tmpDir, tmpFile, gateFile } =
+      driveToFirstReview()
+    try {
+      const secondReviewCall = driveThroughRepairToSecondReview(
+        gen,
+        agentState,
+        reviewCall,
+        tmpFile,
+        gateFile,
+        findingText,
+      )
+      // After the repair receipt, the finding text is recorded as condoned.
+      expect(
+        (agentState as any).base2ActiveWork.condonedFindingTexts,
+      ).toContain(findingText)
+      // Second reviewer pass returns the SAME finding text (stale re-derivation).
+      const secondReview = attestedReviewerResult(
+        secondReviewCall,
+        'NON_BLOCKING',
+        [findingText],
+      )
+      const afterSecond = gen.next(secondReview as any)
+      // The condoned filter suppressed every blocker, so the gate must NOT
+      // re-enter the repair loop; the condoned pass credits the review as
+      // LOOKS_GOOD and finalization proceeds.
+      const active = (agentState as any).base2ActiveWork
+      expect(active.currentPhase).not.toBe('repair_loop')
+      expect(active.currentPhase).not.toBe('blocked')
+      expect(active.openReviewerBlockers ?? []).not.toContain(
+        `NON_BLOCKING: ${findingText}`,
+      )
+      // Drive the finalization: git_status -> gate-passed add_message. No
+      // repair-editor spawn may appear.
+      expect(afterSecond.value).toMatchObject({ toolName: 'git_status' })
+      const gatePassed = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any)
+      expect(gatePassed.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      expect((gatePassed.value as any).input.content).toMatch(
+        /reviewer gate passed with LOOKS_GOOD/i,
+      )
+      expect(
+        (agentState as any).base2ActiveWork.currentPhase,
+      ).toBe('final_response_allowed')
+      expect(
+        (agentState as any).base2ActiveWork.openReviewerBlockers,
+      ).toEqual([])
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('genuinely NEW finding on re-review still blocks and spawns repair-editor', () => {
+    const findingText = 'Minor style suggestion.'
+    const newFindingText = 'Missing auth check.'
+    const { gen, agentState, reviewCall, tmpDir, tmpFile, gateFile } =
+      driveToFirstReview()
+    try {
+      const secondReviewCall = driveThroughRepairToSecondReview(
+        gen,
+        agentState,
+        reviewCall,
+        tmpFile,
+        gateFile,
+        findingText,
+      )
+      // Second reviewer pass returns a DIFFERENT finding (not condoned).
+      const secondReview = attestedReviewerResult(
+        secondReviewCall,
+        'NON_BLOCKING',
+        [newFindingText],
+      )
+      const afterSecond = gen.next(secondReview as any)
+      expect(afterSecond.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      expect((afterSecond.value as any).input.content).toContain(
+        `NON_BLOCKING: ${newFindingText}`,
+      )
+      const active = (agentState as any).base2ActiveWork
+      expect(active.openReviewerBlockers).toContain(
+        `NON_BLOCKING: ${newFindingText}`,
+      )
+      const repairSpawn = gen.next().value as any
+      expect(repairSpawn).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('parent-owned requirementCoverage gap is still filtered alongside condoned texts', () => {
+    const { gen, agentState, reviewCall, tmpDir, gateFile } =
+      driveToFirstReview()
+    try {
+      // Reviewer returns only a parent-owned requirementCoverage gap (commit
+      // and push), which must be filtered out by isParentOwnedRequirementBlocker
+      // and must NOT produce a blocker or a repair spawn.
+      const prompt = String(reviewCall?.input?.agents?.[0]?.prompt ?? '')
+      const fingerprint =
+        prompt.match(/Snapshot fingerprint \(echo exactly\): ([^\n]+)/)?.[1] ??
+        ''
+      const review = {
+        toolResult: [
+          {
+            type: 'json',
+            value: [
+              {
+                schemaVersion: 1,
+                verdict: 'NON_BLOCKING',
+                snapshotFingerprint: fingerprint,
+                reviewedFiles: [gateFile],
+                findings: [],
+                coverage: 'covered',
+                dimensions: { correctness: 'pass' },
+                requirementCoverage: [
+                  {
+                    requirement: 'commit and push',
+                    status: 'missing',
+                    evidence: [],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }
+      const afterReview = gen.next(review as any)
+      const active = (agentState as any).base2ActiveWork
+      // The parent-owned requirementCoverage gap (commit and push) is filtered
+      // out by isParentOwnedRequirementBlocker, so it is NOT elevated as a
+      // blocker. The only blocker present is the synthetic NON_BLOCKING
+      // empty-findings placeholder from collectReviewerBlockers, which is
+      // expected because the reviewer returned NON_BLOCKING with zero findings.
+      const blockers = (active.openReviewerBlockers ?? []) as string[]
+      // The parent-owned requirementCoverage gap (commit and push) is filtered
+      // out by isParentOwnedRequirementBlocker, and because the reviewer
+      // returned NON_BLOCKING with zero findings, no synthetic placeholder is
+      // elevated either. The blockers list is empty.
+      expect(
+        blockers.some((blocker: string) =>
+          /BLOCKING:\s*requirement\s+missing:\s*commit and push/i.test(blocker),
+        ),
+      ).toBe(false)
+      expect(blockers).toHaveLength(0)
+      // The parent-owned filter removed the only gap, so no repair-editor
+      // spawn follows. The NON_BLOCKING verdict itself is not a finalization
+      // credit (LOOKS_GOOD only), so the gate continues the reviewer loop
+      // rather than finalizing; this test only asserts the parent-owned
+      // requirement gap never became a blocker or a repair spawn.
+      const nextYield = afterReview.value as any
+      const isRepairSpawn =
+        nextYield &&
+        typeof nextYield === 'object' &&
+        nextYield.toolName === 'spawn_agents' &&
+        nextYield.input?.agents?.[0]?.agent_type === 'repair-editor'
+      expect(isRepairSpawn).toBe(false)
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
   test('bounds durable review receipts by total serialized size', () => {
     const base2 = createBase2('default')
     const agentState = { agentId: 'base2-custom' }

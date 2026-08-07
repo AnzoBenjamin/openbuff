@@ -154,6 +154,7 @@ NOTE: You cannot make any changes directly! The only tool you may call is read_f
 - Make sure that no new dead code is introduced.
 - Make sure there are no missing imports.
 - Make sure no sections were deleted that weren't supposed to be deleted.
+- Deleting mocks, fixtures, test doubles, stubs, or other test-only scaffolding is intended cleanup, not a defect. Do not emit any finding (BLOCKING or NON_BLOCKING) solely because a mock/fixture/test-double file was deleted. Only flag a deletion when production source code or a genuine public contract was removed and its callers/references were not cleaned up.
 - Make sure the new code matches the style of the existing code.
 - Apply the active language profile when checking ownership/resource lifetime, error propagation, concurrency/async behavior, package/module boundaries, public API compatibility, and ecosystem-native test conventions. Do not transplant TypeScript-specific style rules into other languages.
 - Make sure there are no unnecessary try/catch blocks. Prefer to remove those.

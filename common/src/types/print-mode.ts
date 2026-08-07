@@ -17,6 +17,10 @@ export const printModeErrorSchema = z.object({
   // the user instead of the full `message`, which carries detailed recovery
   // context intended for the agent's message history.
   userMessage: z.string().optional(),
+  // True when the runtime is already auto-correcting this error (e.g. a
+  // malformed tool call the model is retrying). UIs should not surface these
+  // as user-visible errors; the full `message` still flows to the agent.
+  autoRecovering: z.boolean().optional(),
 })
 export type PrintModeError = z.infer<typeof printModeErrorSchema>
 

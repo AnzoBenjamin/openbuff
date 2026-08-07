@@ -783,6 +783,13 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
       activeWorkState.specialistNoVerdictCounts ??= {}
       activeWorkState.reviewReceipts ??= []
       activeWorkState.auxGatesLastPendingFiles ??= []
+      // Condoned finding texts: finding texts that a repair-editor has already
+      // reported as addressed via findingsAddressed. When a fresh reviewer
+      // re-returns identical text, the finding is 'condoned' — no longer
+      // re-elevated as a blocker — so the reviewer → repair → re-review loop
+      // converges instead of looping forever on the same NON_BLOCKING
+      // architectural commentary. Reset when the gate passes.
+      activeWorkState.condonedFindingTexts ??= []
       if (activeWorkState.openReviewerFindings.length > 0) {
         // Rehydrate the owed set from EVERY open finding, not just findings[0]:
         // serialized state can carry open findings from several reviewers and
@@ -4168,10 +4175,74 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           // Parent-owned process RF strings are not repair targets; filter at
           // the consumer so raw collectReviewerBlockers can still surface them.
           // Pass toolResult so evidence-only parent ownership matches finalization.
-          const blockers = collectReviewerBlockers(reviewerToolResult).filter(
+          const collectedBlockers = collectReviewerBlockers(reviewerToolResult).filter(
             (blocker: string) =>
               !isParentOwnedRequirementBlocker(blocker, reviewerToolResult),
           )
+          // Stale-finding suppression: filter out any blocker whose text
+          // matches a previously-condoned finding text (a finding the
+          // repair-editor already reported as addressed in a prior round).
+          // The reviewer re-derives findings from scratch and may return the
+          // same NON_BLOCKING architectural commentary; without this filter
+          // the loop never converges. Condoned texts are cleared on gate pass.
+          const condonedTexts: Set<string> = new Set<string>(
+            activeWorkState.condonedFindingTexts ?? [],
+          )
+          const blockers: string[] = collectedBlockers.filter(
+            (blocker: string) => {
+              // Strip the NON_BLOCKING/BLOCKING prefix for text comparison since
+              // the condoned text is the raw finding text without the prefix.
+              const rawText = blocker.replace(
+                /^(?:NON_BLOCKING|BLOCKING):\s*/,
+                '',
+              )
+              return !condonedTexts.has(rawText) && !condonedTexts.has(blocker)
+            },
+          )
+          // Record any newly-condoned texts (collected but filtered out) so
+          // they persist across rounds and in the pinned state display.
+          if (blockers.length < collectedBlockers.length) {
+            const newlyCondoned: string[] = collectedBlockers
+              .filter((b: string) => !blockers.includes(b))
+              .map((b: string) => b.replace(/^(?:NON_BLOCKING|BLOCKING):\s*/, ''))
+            activeWorkState.condonedFindingTexts = Array.from(
+              new Set([...(activeWorkState.condonedFindingTexts ?? []), ...newlyCondoned]),
+            )
+            markActiveWorkStateChanged()
+          }
+          // Condoned pass: the condoned filter suppressed every collected
+          // blocker, so the reviewer only re-returned findings a prior repair
+          // round already reported as addressed. Credit the review as
+          // LOOKS_GOOD and skip the repair-editor spawn entirely so the
+          // reviewer -> repair -> re-review loop converges. The existing
+          // finalization branch below still fires on this verdict.
+          if (collectedBlockers.length > 0 && blockers.length === 0) {
+            reviewerFinalizationVerdict = 'LOOKS_GOOD'
+            recordSuccessfulReviewReceipt(
+              reviewerToolResult,
+              requiredReviewerAgentType,
+              reviewSnapshotFingerprint,
+            )
+            // Clear the now-condoned blocker strings so the pinned state and
+            // finalization no longer surface them as open. mergeReviewerFindings
+            // is not invoked on this path (no surviving blockers), so without
+            // this the first review's blocker strings would persist and the
+            // gate would look like it still has open feedback even though the
+            // findings were condoned. Only blockers whose stripped text is in
+            // condonedFindingTexts are removed; any unrelated blocker is kept.
+            const condonedSet: Set<string> = new Set<string>(
+              activeWorkState.condonedFindingTexts ?? [],
+            )
+            activeWorkState.openReviewerBlockers = (
+              activeWorkState.openReviewerBlockers ?? []
+            ).filter(
+              (blocker: string) =>
+                !condonedSet.has(
+                  blocker.replace(/^(?:NON_BLOCKING|BLOCKING):\s*/, ''),
+                ),
+            )
+            markActiveWorkStateChanged()
+          }
           if (blockers.length > 0) {
             // Coverage-style findings (a missing/uncertain test-coverage gap)
             // are not code-diagnostic repairs: repair-editor cannot author the
@@ -4545,6 +4616,26 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               markActiveWorkStateChanged()
               break
             }
+            // Stale-finding capture: record the finding texts that the
+            // repair-editor reported as addressed. If the fresh re-review
+            // returns identical text, the blocker-elevation filter above
+            // will suppress it as condoned, breaking the infinite loop.
+            const addressedFindings = (activeWorkState.openReviewerFindings ?? [])
+              .filter((finding) =>
+                reviewerRepairReceipt!.findingsAddressed.includes(finding.id),
+              )
+            if (addressedFindings.length > 0) {
+              const addressedTexts = addressedFindings.map(
+                (finding) => finding.text.replace(/^(?:NON_BLOCKING|BLOCKING):\s*/, ''),
+              )
+              activeWorkState.condonedFindingTexts = Array.from(
+                new Set([
+                  ...(activeWorkState.condonedFindingTexts ?? []),
+                  ...addressedTexts,
+                ]),
+              )
+              markActiveWorkStateChanged()
+            }
             const reviewerRepairStatus = yield {
               toolName: 'git_status',
               input: {},
@@ -4654,8 +4745,12 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               continue
             }
           }
-          reviewerFinalizationVerdict =
-            getReviewerFinalizationVerdict(reviewerToolResult)
+          // Keep the verdict already set by the condoned pass above;
+          // otherwise derive it from the reviewer output as before.
+          if (!reviewerFinalizationVerdict) {
+            reviewerFinalizationVerdict =
+              getReviewerFinalizationVerdict(reviewerToolResult)
+          }
           if (reviewerFinalizationVerdict) {
             setGateProgress(
               `gate: reviewer verdict ${reviewerFinalizationVerdict}; finalizing`,
@@ -4825,6 +4920,10 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             activeWorkState.gateProgressLine = ''
             activeWorkState.openReviewerBlockers = []
             activeWorkState.openReviewerFindings = []
+            // Clear condoned finding texts as well so they cannot leak into
+            // the next edit cycle; they only suppress re-elevation within the
+            // reviewer repair loop that produced them.
+            activeWorkState.condonedFindingTexts = []
             // Clear the owed SET, not just the legacy scalar: a leftover entry
             // would survive the pass and force a phantom re-attestation (or
             // resurrect the scalar via addOwedReviewer/clearOwedReviewer) on the
@@ -5257,6 +5356,21 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         records: NonNullable<Base2ActiveWorkState['openReviewerFindings']>,
         blockers: string[],
       ): void {
+        // Condoned-status override: an incoming record whose stripped finding
+        // text was already reported as addressed by a prior repair round is
+        // recorded as 'condoned' instead of 'open' so it neither blocks
+        // finalization nor re-triggers a repair spawn. Applies uniformly to
+        // every caller since it reads the path-agnostic condonedFindingTexts.
+        const condonedTexts: Set<string> = new Set<string>(
+          activeWorkState.condonedFindingTexts ?? [],
+        )
+        const mergedRecords = records.map((record) =>
+          condonedTexts.has(
+            record.text.replace(/^(?:NON_BLOCKING|BLOCKING):\s*/, ''),
+          )
+            ? { ...record, status: 'condoned' as const }
+            : record,
+        )
         const existingFindings = activeWorkState.openReviewerFindings ?? []
         const previousOwnFindings = existingFindings.filter(
           (finding) => finding.reviewer === reviewer,
@@ -5272,7 +5386,10 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               (finding) => finding.text && blocker.includes(finding.text),
             ),
         )
-        activeWorkState.openReviewerFindings = [...retainedFindings, ...records]
+        activeWorkState.openReviewerFindings = [
+          ...retainedFindings,
+          ...mergedRecords,
+        ]
         activeWorkState.openReviewerBlockers = Array.from(
           new Set([...retainedBlockers, ...blockers]),
         )
