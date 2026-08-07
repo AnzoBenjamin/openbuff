@@ -29,6 +29,13 @@ export function getAgentStatusInfo(
         color: theme.foreground,
         text: 'completed ✓',
       }
+    case 'partial':
+      return {
+        indicator: '◐',
+        label: 'partial',
+        color: theme.muted,
+        text: '◐ partial',
+      }
     case 'cancelled':
       return {
         indicator: '⊘',

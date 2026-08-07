@@ -12,6 +12,7 @@ import type {
 } from './types'
 import type { RetrievalFlowMetrics } from './retrieval-flow-metrics'
 import type { IdiomTraceabilityEvaluation } from './idiom-traceability-signals'
+import type { ThinkerHarvestEvaluation } from './thinker-harvest-signals'
 import type { AgentDefinition, OpenbuffClient } from '@openbuff/sdk'
 
 export interface AgentTraceData {
@@ -29,6 +30,7 @@ export interface AgentTraceData {
   cacheRecallEval?: CacheRecallEvalResult
   retrievalFlow?: RetrievalFlowMetrics
   idiomTraceability?: IdiomTraceabilityEvaluation
+  thinkerHarvest?: ThinkerHarvestEvaluation
   proposalDryRun?: ProposalDryRunReport
 }
 

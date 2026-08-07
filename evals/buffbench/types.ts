@@ -1,6 +1,7 @@
 import type { JudgingResult, ScoringStatus } from './judge'
 import type { IdiomTraceabilityEvaluation } from './idiom-traceability-signals'
 import type { ApplyProposalsResult, Proposal } from './proposals'
+import type { ThinkerHarvestEvaluation } from './thinker-harvest-signals'
 
 export interface FileState {
   path: string
@@ -184,6 +185,7 @@ export interface EvalRun {
   cacheRecallEval?: CacheRecallEvalResult
   retrievalFlow?: import('./retrieval-flow-metrics').RetrievalFlowMetrics
   idiomTraceability?: IdiomTraceabilityEvaluation
+  thinkerHarvest?: ThinkerHarvestEvaluation
   proposalDryRun?: ProposalDryRunReport
 }
 

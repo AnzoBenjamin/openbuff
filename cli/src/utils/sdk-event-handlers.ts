@@ -494,21 +494,83 @@ const getSpawnResultForBlock = (
   )
 }
 
+/** Narrow spawn_agents result.agentReceipt without using any. */
+const readSpawnAgentReceipt = (
+  result: unknown,
+): { status?: string; errorMessage?: string } => {
+  if (!result || typeof result !== 'object') return {}
+  const receipt = (result as { agentReceipt?: unknown }).agentReceipt
+  if (!receipt || typeof receipt !== 'object') return {}
+  const status =
+    typeof (receipt as { status?: unknown }).status === 'string'
+      ? (receipt as { status: string }).status
+      : undefined
+  const errors = (receipt as { errors?: unknown }).errors
+  let errorMessage: string | undefined
+  if (Array.isArray(errors) && errors.length > 0) {
+    const first = errors[0]
+    if (
+      first &&
+      typeof first === 'object' &&
+      typeof (first as { message?: unknown }).message === 'string'
+    ) {
+      errorMessage = (first as { message: string }).message
+    }
+  }
+  return { status, errorMessage }
+}
+
+const mapReceiptStatusToAgentStatus = (
+  receiptStatus: string | undefined,
+  hasError: boolean,
+  backgroundJobId: string | undefined,
+): AgentContentBlock['status'] => {
+  // Prefer value-level errors over receipt status.
+  if (hasError) return 'failed'
+  if (backgroundJobId) return 'running'
+
+  switch (receiptStatus) {
+    case 'failed':
+      return 'failed'
+    case 'cancelled':
+      return 'cancelled'
+    case 'partial':
+    case 'blocked':
+      return 'partial'
+    case 'completed':
+    case undefined:
+      return 'complete'
+    default:
+      // Unknown receipt statuses fall through to complete (existing path).
+      return 'complete'
+  }
+}
+
 const applySpawnAgentResultToBlock = (
   block: AgentContentBlock,
   result: any,
 ): ContentBlock => {
-  if (!result?.value) {
+  const receipt = readSpawnAgentReceipt(result)
+  const hasValue = result?.value != null
+  const hasReceipt =
+    result?.agentReceipt != null && typeof result.agentReceipt === 'object'
+
+  // Receipt-only results still need status applied (e.g. partial with empty value).
+  if (!hasValue && !hasReceipt) {
     return block
   }
 
   const backgroundJobId =
-    result.value?.background === true && typeof result.value?.jobId === 'string'
+    hasValue &&
+    result.value?.background === true &&
+    typeof result.value?.jobId === 'string'
       ? result.value.jobId
       : undefined
 
   const existingBlocks = block.blocks ?? []
-  const { content, hasError } = extractSpawnAgentResultContent(result.value)
+  const { content, hasError } = hasValue
+    ? extractSpawnAgentResultContent(result.value)
+    : { content: '', hasError: false }
   // Check if the agent already streamed text content (e.g., basher).
   // Agents like thinker return all output at the end via lastMessage,
   // so we should add final content even if they have tool blocks.
@@ -520,16 +582,43 @@ const applySpawnAgentResultToBlock = (
       ? [...existingBlocks, { type: 'text', content } as ContentBlock]
       : existingBlocks
 
-  if (hasError || finalBlocks.length > 0) {
+  const nextStatus = mapReceiptStatusToAgentStatus(
+    receipt.status,
+    hasError,
+    backgroundJobId,
+  )
+
+  // Append a brief receipt error when partial if that message is not already present.
+  if (nextStatus === 'partial' && receipt.errorMessage) {
+    const truncated = receipt.errorMessage.split('\n').slice(0, 6).join('\n')
+    const firstLine = truncated.split('\n')[0] ?? truncated
+    const alreadyHasErrorText = finalBlocks.some(
+      (b) =>
+        b.type === 'text' &&
+        b.textType === 'text' &&
+        b.content.includes(firstLine),
+    )
+    if (!alreadyHasErrorText) {
+      finalBlocks = [
+        ...finalBlocks,
+        {
+          type: 'text' as const,
+          textType: 'text' as const,
+          content: truncated,
+        },
+      ]
+    }
+  }
+
+  // Apply when we have content/error, a receipt status to honor, or a background job.
+  // This also allows downgrading complete → partial when receipt arrives after
+  // subagent_finish marked the block complete.
+  if (hasError || finalBlocks.length > 0 || hasReceipt || backgroundJobId) {
     return {
       ...block,
       blocks: finalBlocks,
       ...(backgroundJobId ? { backgroundJobId } : {}),
-      status: hasError
-        ? ('failed' as const)
-        : backgroundJobId
-          ? ('running' as const)
-          : ('complete' as const),
+      status: nextStatus,
     }
   }
 
@@ -619,6 +708,32 @@ const updateBackgroundAgentCard = (
         .filter(Boolean)
         .join('\n')
       const existingBlocks = block.blocks ?? []
+      const resultReceipt =
+        value.result &&
+        typeof value.result === 'object' &&
+        (value.result as { agentReceipt?: unknown }).agentReceipt &&
+        typeof (value.result as { agentReceipt?: unknown }).agentReceipt ===
+          'object'
+          ? ((value.result as { agentReceipt: { status?: unknown } })
+              .agentReceipt)
+          : undefined
+      const receiptStatus =
+        resultReceipt && typeof resultReceipt.status === 'string'
+          ? resultReceipt.status
+          : undefined
+      // Defensive: value.status or nested agentReceipt can surface partial.
+      const mappedStatus: AgentContentBlock['status'] =
+        status === 'partial' ||
+        receiptStatus === 'partial' ||
+        receiptStatus === 'blocked'
+          ? 'partial'
+          : status === 'completed'
+            ? 'complete'
+            : status === 'error'
+              ? 'failed'
+              : status === 'cancelled'
+                ? 'cancelled'
+                : 'running'
       return {
         ...block,
         blocks: appended
@@ -627,14 +742,7 @@ const updateBackgroundAgentCard = (
               { type: 'text', content: appended } as ContentBlock,
             ]
           : existingBlocks,
-        status:
-          status === 'completed'
-            ? 'complete'
-            : status === 'error'
-              ? 'failed'
-              : status === 'cancelled'
-                ? 'cancelled'
-                : 'running',
+        status: mappedStatus,
       }
     }
     return block.blocks
@@ -913,14 +1021,22 @@ const handleJobUpdate = (
         event.outputDelta !== undefined || errorText !== undefined
           ? combined.slice(-JOB_OUTPUT_CHAR_CAP)
           : block.output
+      // Prefer flag true when this update appends error text, even if the
+      // lifecycle is running/queued. Never clear the flag while event.error is
+      // still present: a running/queued+error ternary fallthrough would reset
+      // on each already-appended update and re-append on the next one.
+      // Mirrors the agent branch, which keeps jobErrorAppended while errorText
+      // is set and only resets on recovery transitions without error text.
       return {
         ...block,
         lifecycle: nextLifecycle,
         ...(nextOutput !== undefined ? { output: nextOutput } : {}),
-        ...(isRecovery
-          ? { jobErrorAppended: false }
-          : errorText !== undefined && !errorAlreadyAppended
-            ? { jobErrorAppended: true }
+        ...(errorText !== undefined
+          ? errorAlreadyAppended
+            ? {}
+            : { jobErrorAppended: true }
+          : isRecovery
+            ? { jobErrorAppended: false }
             : {}),
       }
     }

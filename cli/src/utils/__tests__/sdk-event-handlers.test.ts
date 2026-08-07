@@ -358,6 +358,132 @@ describe('sdk-event-handlers', () => {
     })
   })
 
+  test('spawn_agents tool_result with agentReceipt.status partial marks agent block partial', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    dispatchValidEvent(handleEvent, {
+      type: 'subagent_start',
+      agentId: 'general-1',
+      agentType: 'general-agent',
+      displayName: 'General',
+      parentAgentId: 'main-agent',
+      spawnToolCallId: 'spawn-partial',
+      spawnIndex: 0,
+      prompt: 'do work',
+      onlyChild: true,
+    })
+
+    // subagent_finish without error currently marks complete; receipt must be able to
+    // downgrade complete → partial when spawn_agents tool_result arrives.
+    handleEvent({
+      type: 'subagent_finish',
+      agentId: 'general-1',
+      agentType: 'general-agent',
+      displayName: 'General',
+      onlyChild: true,
+    } as any)
+    expect(getMessages()[0].blocks?.[0]).toMatchObject({
+      type: 'agent',
+      status: 'complete',
+    })
+
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_result',
+      toolCallId: 'spawn-partial',
+      toolName: 'spawn_agents',
+      output: [
+        {
+          type: 'json',
+          value: [
+            {
+              agentId: 'general-1',
+              agentName: 'General',
+              agentType: 'general-agent',
+              value: {
+                type: 'lastMessage',
+                value: [
+                  {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: 'partial work done' }],
+                  },
+                ],
+              },
+              agentReceipt: {
+                status: 'partial',
+                errors: [
+                  {
+                    message: 'ended without calling task_completed',
+                    retryable: true,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    const agentBlock = getMessages()[0].blocks?.[0] as any
+    expect(agentBlock).toMatchObject({
+      type: 'agent',
+      agentId: 'general-1',
+      status: 'partial',
+    })
+    const textContents = (agentBlock.blocks ?? [])
+      .filter((b: any) => b.type === 'text')
+      .map((b: any) => b.content)
+      .join('\n')
+    expect(textContents).toContain('ended without calling task_completed')
+  })
+
+  test('spawn_agents agentReceipt-only partial still updates status without value content', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    dispatchValidEvent(handleEvent, {
+      type: 'subagent_start',
+      agentId: 'general-2',
+      agentType: 'general-agent',
+      displayName: 'General',
+      spawnToolCallId: 'spawn-receipt-only',
+      spawnIndex: 0,
+      prompt: 'do work',
+      onlyChild: true,
+    })
+
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_result',
+      toolCallId: 'spawn-receipt-only',
+      toolName: 'spawn_agents',
+      output: [
+        {
+          type: 'json',
+          value: [
+            {
+              agentId: 'general-2',
+              agentName: 'General',
+              agentType: 'general-agent',
+              agentReceipt: {
+                status: 'partial',
+                errors: [
+                  {
+                    message: 'ended without calling task_completed',
+                    retryable: true,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(getMessages()[0].blocks?.[0]).toMatchObject({
+      type: 'agent',
+      agentId: 'general-2',
+      status: 'partial',
+    })
+  })
+
   test('[ERR-H01] subagent error finishes persist failed status', () => {
     const { ctx, getMessages } = createTestContext()
     let streaming = new Set<string>()
@@ -1147,6 +1273,135 @@ describe('sdk-event-handlers', () => {
     expect(block.output).toContain('second failure')
     // The second error text is appended exactly once.
     expect((block.output.match(/second failure/g) ?? []).length).toBe(1)
+  })
+
+  test('job_update does not clear tool jobErrorAppended on repeated running+error updates', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    // Pins RF-1: while event.error is present, a running/queued lifecycle must
+    // not clear jobErrorAppended. The old ternary fell through to isRecovery
+    // after the first append, which reset the flag and re-appended on the next
+    // identical running+error event. Agent path never clears while errorText is set.
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_call',
+      toolCallId: 'term-running-err',
+      toolName: 'run_terminal_command',
+      input: { command: 'flaky-server' },
+      backgroundJobId: 'job-running-err',
+    })
+
+    dispatchValidEvent(handleEvent, {
+      type: 'job_update',
+      jobId: 'job-running-err',
+      kind: 'process',
+      state: 'running',
+      sequence: 1,
+      error: 'still failing',
+    })
+    dispatchValidEvent(handleEvent, {
+      type: 'job_update',
+      jobId: 'job-running-err',
+      kind: 'process',
+      state: 'running',
+      sequence: 2,
+      error: 'still failing',
+    })
+    dispatchValidEvent(handleEvent, {
+      type: 'job_update',
+      jobId: 'job-running-err',
+      kind: 'process',
+      state: 'running',
+      sequence: 3,
+      error: 'still failing',
+    })
+
+    const block = getMessages()[0].blocks?.[0] as any
+    expect(block).toMatchObject({
+      type: 'tool',
+      lifecycle: 'running',
+      jobErrorAppended: true,
+    })
+    expect((block.output.match(/still failing/g) ?? []).length).toBe(1)
+  })
+
+  test('job_update re-appends an agent job error after a running recovery resets the append flag', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    // Agent-parity with the tool recovery re-append test (RF-3): error →
+    // running resets jobErrorAppended → second error appends once.
+    dispatchValidEvent(handleEvent, {
+      type: 'subagent_start',
+      agentId: 'agent-recover',
+      agentType: 'researcher-web',
+      displayName: 'Researcher',
+      onlyChild: true,
+    })
+    ctx.message.updater.updateAiMessageBlocks((blocks) =>
+      blocks.map((block) =>
+        block.type === 'agent' && block.agentId === 'agent-recover'
+          ? { ...block, backgroundJobId: 'job-agent-recover' }
+          : block,
+      ),
+    )
+
+    // First failure: appends the error and sets jobErrorAppended.
+    dispatchValidEvent(handleEvent, {
+      type: 'job_update',
+      jobId: 'job-agent-recover',
+      kind: 'agent',
+      state: 'error',
+      sequence: 1,
+      error: 'first agent failure',
+    })
+    let agentBlock = getMessages()[0].blocks?.[0] as any
+    expect(agentBlock).toMatchObject({ type: 'agent', status: 'failed' })
+    expect(
+      (agentBlock.blocks ?? []).filter(
+        (b: any) => b.type === 'text' && b.content === 'first agent failure',
+      ).length,
+    ).toBe(1)
+
+    // Recovery back to running resets the append flag.
+    dispatchValidEvent(handleEvent, {
+      type: 'job_update',
+      jobId: 'job-agent-recover',
+      kind: 'agent',
+      state: 'running',
+      sequence: 2,
+    })
+    agentBlock = getMessages()[0].blocks?.[0] as any
+    expect(agentBlock).toMatchObject({ type: 'agent', status: 'running' })
+
+    // A new genuine error after recovery must be appended again (once).
+    dispatchValidEvent(handleEvent, {
+      type: 'job_update',
+      jobId: 'job-agent-recover',
+      kind: 'agent',
+      state: 'error',
+      sequence: 3,
+      error: 'second agent failure',
+    })
+    // Identical second error must not duplicate.
+    dispatchValidEvent(handleEvent, {
+      type: 'job_update',
+      jobId: 'job-agent-recover',
+      kind: 'agent',
+      state: 'error',
+      sequence: 4,
+      error: 'second agent failure',
+    })
+    agentBlock = getMessages()[0].blocks?.[0] as any
+    expect(agentBlock).toMatchObject({ type: 'agent', status: 'failed' })
+    const textBlocks = (agentBlock.blocks ?? []).filter(
+      (b: any) => b.type === 'text',
+    )
+    expect(
+      textBlocks.filter((b: any) => b.content === 'first agent failure').length,
+    ).toBe(1)
+    expect(
+      textBlocks.filter((b: any) => b.content === 'second agent failure')
+        .length,
+    ).toBe(1)
   })
 
   test('job_update appends a single error block to a failed agent job without duplicating', () => {

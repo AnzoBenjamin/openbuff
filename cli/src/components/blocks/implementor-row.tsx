@@ -12,6 +12,7 @@ const MIN_INNER_WIDTH = 10
 const EMPTY_STATE_LABELS = {
   running: 'generating...',
   complete: 'no changes',
+  partial: 'partial',
   failed: 'failed',
   cancelled: 'cancelled',
 } as const

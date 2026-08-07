@@ -1,0 +1,30 @@
+[
+  {
+    "type": "subagent_start",
+    "agentId": "LsHOhL5cwBo",
+    "agentType": "thinker",
+    "displayName": "thinker",
+    "onlyChild": true
+  },
+  {
+    "type": "tool_call",
+    "toolCallId": "so-nonempty",
+    "toolName": "set_output",
+    "agentId": "LsHOhL5cwBo",
+    "input": {
+      "data": {
+        "message": "The root cause is harvest clobbering the prior set_output."
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "toolCallId": "so-empty-harvest",
+    "toolName": "set_output",
+    "agentId": "LsHOhL5cwBo",
+    "input": {
+      "message": ""
+    },
+    "includeToolCall": false
+  }
+]

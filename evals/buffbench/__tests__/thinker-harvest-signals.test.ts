@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import fs from 'fs'
+import path from 'path'
 
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 
@@ -95,6 +97,24 @@ describe('extractMessageFromSetOutputInput', () => {
 // ---------------------------------------------------------------------------
 
 describe('thinker harvest signals', () => {
+  test('fixture thinker-empty-harvest-clobber.json fails with anyEmptyHarvestClobber', () => {
+    const fixturePath = path.join(
+      __dirname,
+      'fixtures',
+      'thinker-empty-harvest-clobber.json',
+    )
+    const raw = JSON.parse(fs.readFileSync(fixturePath, 'utf8')) as
+      | PrintModeEvent[]
+      | { trace: PrintModeEvent[] }
+    const events = Array.isArray(raw) ? raw : raw.trace
+
+    const signals = computeThinkerHarvestSignals({ events })
+    expect(signals.anyEmptyHarvestClobber).toBe(true)
+
+    const evaluation = evaluateThinkerHarvest({ signals })
+    expect(evaluation.verdict).toBe('fail')
+  })
+
   test('LsHOhL5cwBo-style: non-empty data.message then empty harvest set_output fails', () => {
     const thinkerId = 'LsHOhL5cwBo'
     const events: PrintModeEvent[] = [

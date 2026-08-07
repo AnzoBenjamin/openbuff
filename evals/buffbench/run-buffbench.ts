@@ -31,6 +31,10 @@ import {
   detectIdiomPatternSignals,
   type IdiomPatternFinding,
 } from './idiom-pattern-signals'
+import {
+  computeThinkerHarvestSignals,
+  evaluateThinkerHarvest,
+} from './thinker-harvest-signals'
 
 function parseAgentId(agent: string): {
   agentId: string
@@ -248,6 +252,10 @@ export async function runTask(options: {
         computeIdiomTraceabilitySignals(agentResult.trace),
       )
 
+      const thinkerHarvest = evaluateThinkerHarvest({
+        signals: computeThinkerHarvestSignals({ events: agentResult.trace }),
+      })
+
       const evalRun: EvalRun = {
         commitSha: commit.sha,
         prompt: commit.prompt,
@@ -263,6 +271,7 @@ export async function runTask(options: {
         cacheRecallEval: agentResult.cacheRecallEval,
         retrievalFlow: agentResult.retrievalFlow,
         idiomTraceability,
+        thinkerHarvest,
         proposalDryRun,
       }
 
@@ -289,6 +298,7 @@ export async function runTask(options: {
         cacheRecallEval: agentResult.cacheRecallEval,
         retrievalFlow: agentResult.retrievalFlow,
         idiomTraceability,
+        thinkerHarvest,
         proposalDryRun,
       })
 
@@ -373,6 +383,7 @@ export async function runTask(options: {
       durationMs: t.durationMs,
       error: t.error,
       idiomTraceability: t.idiomTraceability,
+      thinkerHarvest: t.thinkerHarvest,
       proposalDryRun: t.proposalDryRun,
     })),
     prompt: commit.prompt,
@@ -402,6 +413,7 @@ export async function runTask(options: {
           `${index + 1}-${commit.id.replace(/[^a-zA-Z0-9-]/g, '_')}-${trace.agentId.replace(/[^a-zA-Z0-9-]/g, '_')}-${commit.sha.slice(0, 7)}.json`,
         ),
         idiomTraceability: trace.idiomTraceability,
+        thinkerHarvest: trace.thinkerHarvest,
       })),
       traceAnalysis,
     }),

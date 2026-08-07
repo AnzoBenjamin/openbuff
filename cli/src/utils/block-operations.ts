@@ -534,6 +534,32 @@ export const markAgentFailed = (
     }
   })
 
+export const markAgentPartial = (
+  blocks: ContentBlock[],
+  agentId: string,
+  error?: string,
+) =>
+  updateBlocksRecursively(blocks, agentId, (block) => {
+    if (block.type !== 'agent' || block.status === 'cancelled') return block
+    const closedBlocks = block.blocks
+      ? closeNativeReasoningBlock(block.blocks)
+      : []
+    return {
+      ...block,
+      status: 'partial' as const,
+      blocks: error
+        ? [
+            ...closedBlocks,
+            {
+              type: 'text' as const,
+              textType: 'text' as const,
+              content: error.split('\n').slice(0, 6).join('\n'),
+            },
+          ]
+        : closedBlocks,
+    }
+  })
+
 /** Mark every unresolved tool call failed without changing terminal calls. */
 export const markRunningToolsAsFailed = (
   blocks: ContentBlock[],

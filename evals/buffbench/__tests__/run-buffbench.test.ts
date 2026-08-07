@@ -318,6 +318,50 @@ describe('formatAgentResult', () => {
     expect(output).toContain('unnecessary clone')
   })
 
+  test('prints THINKER HARVEST when thinkerHarvest is set', () => {
+    const output = formatAgentResult({
+      agentId: 'agent-a',
+      commit: {
+        id: 'task',
+        sha: 'abc123',
+        parentSha: 'def456',
+        spec: '',
+        prompt: 'Do it.',
+        supplementalFiles: [],
+        fileDiffs: [],
+      },
+      judging: {
+        analysis: 'ok',
+        strengths: [],
+        weaknesses: [],
+        completionScore: 8,
+        codeQualityScore: 7,
+        overallScore: 7,
+      },
+      cost: 0.01,
+      durationMs: 1_000,
+      agentNumber: 1,
+      totalAgents: 1,
+      thinkerHarvest: {
+        verdict: 'fail',
+        reasons: [
+          'Thinker LsHOhL5cwBo: empty harvest set_output clobbered a prior non-empty set_output.',
+        ],
+        signals: {
+          thinkerAgentIds: ['LsHOhL5cwBo'],
+          agents: [],
+          anyEmptyHarvestClobber: true,
+          anyPreservedNonEmpty: false,
+          allPlainTextOnly: false,
+        },
+      },
+    })
+
+    expect(output).toContain('THINKER HARVEST:')
+    expect(output).toContain('Verdict: fail')
+    expect(output).toContain('LsHOhL5cwBo')
+  })
+
   test('prints deterministic idiom pattern findings merged into judging output', () => {
     const judging = mergeIdiomPatternFindings(
       {

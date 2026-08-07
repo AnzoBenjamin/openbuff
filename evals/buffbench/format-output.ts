@@ -1,5 +1,6 @@
 import type { JudgingResult } from './judge'
 import type { IdiomTraceabilityEvaluation } from './idiom-traceability-signals'
+import type { ThinkerHarvestEvaluation } from './thinker-harvest-signals'
 import type { EvalCommitV2 } from './types'
 
 interface AgentResultData {
@@ -10,6 +11,7 @@ interface AgentResultData {
   error?: string
   traceFilePath?: string
   idiomTraceability?: IdiomTraceabilityEvaluation
+  thinkerHarvest?: ThinkerHarvestEvaluation
 }
 
 interface TraceAnalysisData {
@@ -83,6 +85,7 @@ export function formatAgentResult(params: {
   error?: string
   traceFilePath?: string
   idiomTraceability?: IdiomTraceabilityEvaluation
+  thinkerHarvest?: ThinkerHarvestEvaluation
   agentNumber: number
   totalAgents: number
 }): string {
@@ -95,6 +98,7 @@ export function formatAgentResult(params: {
     error,
     traceFilePath,
     idiomTraceability,
+    thinkerHarvest,
     agentNumber,
     totalAgents,
   } = params
@@ -160,6 +164,16 @@ export function formatAgentResult(params: {
     lines.push(minorSeparator)
     lines.push(`  Verdict: ${idiomTraceability.verdict}`)
     for (const reason of idiomTraceability.reasons) {
+      lines.push(`  - ${reason}`)
+    }
+    lines.push('')
+  }
+
+  if (thinkerHarvest) {
+    lines.push('THINKER HARVEST:')
+    lines.push(minorSeparator)
+    lines.push(`  Verdict: ${thinkerHarvest.verdict}`)
+    for (const reason of thinkerHarvest.reasons) {
       lines.push(`  - ${reason}`)
     }
     lines.push('')
