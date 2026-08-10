@@ -71,7 +71,72 @@ If the caller passed params.outputSchemaHint, format your final message content 
     // are accepted (so the signature matches the input schema) but not
     // consumed here because the model reads them during generation.
     void params
-    const { agentState } = yield 'STEP'
+
+    // Shared local helper: extract assistant text (string or text parts) and
+    // remove text within <think> tags (including the tags themselves). Kept
+    // as a closure inside handleSteps so the generator stays serializable for
+    // sandbox execution.
+    const cleanedTextFromContent = (content: unknown): string => {
+      let text = ''
+      if (typeof content === 'string') {
+        text = content
+      } else if (Array.isArray(content)) {
+        text = content
+          .filter(
+            (part) =>
+              part && typeof part === 'object' && part.type === 'text',
+          )
+          .map((part) => part.text)
+          .join('')
+      }
+      return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim()
+    }
+
+    // A read_files call is endsAgentStep=true, so the step can end on a
+    // tool-call-only assistant message before a final answer exists. Keep
+    // yielding STEP until the last assistant message is a genuine final
+    // answer, but always break out on stepsComplete / hitStepCap so we never
+    // re-trigger a fixed step cap and loop forever.
+    let agentState
+    let stepsComplete = false
+    let hitStepCap = false
+    let lastAssistantMessage
+    while (true) {
+      const resumed = yield 'STEP'
+      agentState = resumed.agentState
+      stepsComplete = resumed.stepsComplete
+      // hitStepCap is passed at runtime but not declared on the agents
+      // package's local step-resume type; cast narrowly (base2 pattern).
+      hitStepCap = (resumed as { hitStepCap?: boolean }).hitStepCap === true
+
+      // Find the last assistant message
+      lastAssistantMessage = [...agentState.messageHistory]
+        .reverse()
+        .find((m) => m.role === 'assistant')
+
+      if (stepsComplete || hitStepCap) {
+        // Natural turn end or fixed step cap reached — run the harvest on the
+        // current state rather than re-yielding STEP.
+        break
+      }
+
+      const stepContent = lastAssistantMessage?.content
+      const stepCleanedText = cleanedTextFromContent(stepContent)
+      const hasPendingToolCall =
+        Array.isArray(stepContent) &&
+        stepContent.some(
+          (part) =>
+            part &&
+            typeof part === 'object' &&
+            part.type === 'tool-call' &&
+            part.toolName !== 'set_output',
+        )
+
+      if (stepCleanedText && !hasPendingToolCall) {
+        // Genuine final answer — proceed to the harvest below.
+        break
+      }
+    }
 
     // Prefer non-empty cleaned assistant text > set_output tool-call message >
     // existing agentState.output.message. Never clobber a successful prior
@@ -85,11 +150,6 @@ If the caller passed params.outputSchemaHint, format your final message content 
         ? existingOutput.message
         : undefined
 
-    // Find the last assistant message
-    const lastAssistantMessage = [...agentState.messageHistory]
-      .reverse()
-      .find((m) => m.role === 'assistant')
-
     if (!lastAssistantMessage) {
       if (existingMessage) {
         // Usable prior output already present — leave it intact.
@@ -100,15 +160,15 @@ If the caller passed params.outputSchemaHint, format your final message content 
       yield {
         toolName: 'set_output',
         input: { message: errorMsg },
+        includeToolCall: false,
       }
       return
     }
 
-    // Extract text content and optional set_output tool-call payload from the
-    // last assistant message. Helpers stay inside the generator so handleSteps
-    // remains serializable for sandbox execution.
+    // Extract optional set_output tool-call payload from the last assistant
+    // message. Helpers stay inside the generator so handleSteps remains
+    // serializable for sandbox execution.
     const content = lastAssistantMessage.content
-    let textContent = ''
     let toolCallMessage: string | undefined
 
     const messageFromSetOutputInput = (
@@ -127,14 +187,7 @@ If the caller passed params.outputSchemaHint, format your final message content 
       return undefined
     }
 
-    if (typeof content === 'string') {
-      textContent = content
-    } else if (Array.isArray(content)) {
-      textContent = content
-        .filter((part) => part.type === 'text')
-        .map((part) => part.text)
-        .join('')
-
+    if (Array.isArray(content)) {
       for (const part of content) {
         if (
           !part ||
@@ -159,9 +212,7 @@ If the caller passed params.outputSchemaHint, format your final message content 
     }
 
     // Remove text within <think> tags (including the tags themselves)
-    const cleanedText = textContent
-      .replace(/<think>[\s\S]*?<\/think>/g, '')
-      .trim()
+    const cleanedText = cleanedTextFromContent(content)
 
     if (cleanedText) {
       yield {

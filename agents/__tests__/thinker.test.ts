@@ -28,7 +28,7 @@ describe('thinker agent', () => {
       expect(thinker.displayName).toBe('Theo the Theorizer')
     })
 
-    test('uses opus model', () => {
+    test('does not pin a specific model', () => {
       expect(thinker.model).toBeUndefined()
     })
 
@@ -632,6 +632,176 @@ Actual response here`,
 
       expect(result.done).toBe(true)
       expect(result.value).toBeUndefined()
+    })
+
+    // Regression: a bare read_files tool-call step must not finish the
+    // thinker. handleSteps should re-yield STEP and wait for a final answer.
+    test('re-yields STEP when last assistant message is only a read_files tool call', () => {
+      const toolCallOnlyMessages: Message[] = [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: '1',
+              toolName: 'read_files',
+              input: { paths: ['src/index.ts'] },
+            },
+          ],
+        },
+      ]
+
+      const mockAgentState = createMockAgentState(toolCallOnlyMessages)
+      const mockLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      }
+
+      const generator = thinker.handleSteps!({
+        agentState: mockAgentState,
+        logger: mockLogger as any,
+        params: {},
+      })
+
+      generator.next()
+
+      const updatedState = createMockAgentState(toolCallOnlyMessages)
+      const result = generator.next({
+        agentState: updatedState,
+        toolResult: undefined,
+        stepsComplete: false,
+      })
+
+      // Must request another LLM step rather than harvesting/finishing.
+      expect(result.done).toBe(false)
+      expect(result.value).toBe('STEP')
+    })
+
+    test('harvests final text on the step after a read_files tool call', () => {
+      const toolCallOnlyMessages: Message[] = [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: '1',
+              toolName: 'read_files',
+              input: { paths: ['src/index.ts'] },
+            },
+          ],
+        },
+      ]
+
+      const mockAgentState = createMockAgentState(toolCallOnlyMessages)
+      const mockLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      }
+
+      const generator = thinker.handleSteps!({
+        agentState: mockAgentState,
+        logger: mockLogger as any,
+        params: {},
+      })
+
+      generator.next()
+
+      // First step ends on a bare read_files tool call -> re-yield STEP.
+      const stepResult = generator.next({
+        agentState: createMockAgentState(toolCallOnlyMessages),
+        toolResult: undefined,
+        stepsComplete: false,
+      })
+      expect(stepResult.value).toBe('STEP')
+
+      // Next step now has final plain text and no tool call -> harvest.
+      const finalMessages: Message[] = [
+        ...toolCallOnlyMessages,
+        {
+          role: 'user',
+          content: [{ type: 'text', text: 'read_files result here' }],
+        },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Final answer from thinker' }],
+        },
+      ]
+      const result = generator.next({
+        agentState: createMockAgentState(finalMessages),
+        toolResult: undefined,
+        stepsComplete: false,
+      })
+
+      expect(result.value).toEqual({
+        toolName: 'set_output',
+        input: { message: 'Final answer from thinker' },
+        includeToolCall: false,
+      })
+    })
+
+    test('breaks out on stepsComplete/hitStepCap instead of looping on a tool-call-only message', () => {
+      const toolCallOnlyMessages: Message[] = [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: '1',
+              toolName: 'read_files',
+              input: { paths: ['src/index.ts'] },
+            },
+          ],
+        },
+      ]
+
+      const mockLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      }
+
+      // Case 1: stepsComplete === true -> fall through to harvest/fallback.
+      const genComplete = thinker.handleSteps!({
+        agentState: createMockAgentState(toolCallOnlyMessages),
+        logger: mockLogger as any,
+        params: {},
+      })
+      genComplete.next()
+      const completeResult = genComplete.next({
+        agentState: createMockAgentState(toolCallOnlyMessages),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+      // Empty harvest path: yields set_output with empty message, not STEP.
+      expect(completeResult.value).toEqual({
+        toolName: 'set_output',
+        input: { message: '' },
+        includeToolCall: false,
+      })
+
+      // Case 2: hitStepCap === true -> fall through to harvest/fallback.
+      const genCap = thinker.handleSteps!({
+        agentState: createMockAgentState(toolCallOnlyMessages),
+        logger: mockLogger as any,
+        params: {},
+      })
+      genCap.next()
+      const capResult = genCap.next({
+        agentState: createMockAgentState(toolCallOnlyMessages),
+        toolResult: undefined,
+        stepsComplete: false,
+        hitStepCap: true,
+      } as Parameters<typeof genCap.next>[0] & { hitStepCap?: boolean })
+      expect(capResult.value).toEqual({
+        toolName: 'set_output',
+        input: { message: '' },
+        includeToolCall: false,
+      })
     })
 
     test('recovers message from set_output tool-call when assistant text is empty', () => {
