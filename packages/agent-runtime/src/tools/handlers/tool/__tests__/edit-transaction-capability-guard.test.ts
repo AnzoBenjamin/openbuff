@@ -67,10 +67,12 @@ describe('edit_transaction preflight truncation reclassification (F1/F3)', () =>
             replacements: [
               {
                 oldString: 'const x = rawValue',
-                // Content cut mid-IIFE: the dangling `})();` tail leaves the
-                // synthesized file with more closers than openers in the raw
-                // whole-file delimiter count => payload_truncated.
-                newString: 'const x = lookup(rawValue)}\n}\n);',
+                // Content cut mid-expression: the transport cut dropped the
+                // enclosing `(` opener after a balanced head; the synthesized
+                // file carries one more `)` than `(`, so Bun reports
+                // `Unexpected )` and both the payload-level and whole-file raw
+                // delimiter corroboration gates fire => payload_truncated.
+                newString: 'const x = lookup(rawValue)\n)\n',
               },
             ],
           },
@@ -101,10 +103,12 @@ describe('edit_transaction preflight truncation reclassification (F1/F3)', () =>
           {
             type: 'create',
             path: 'src/new-file.ts',
-            // Cut mid-function: unmatched closers relative to openers after the
-            // tail (`})();`) that was never fully written. Whole-file raw
-            // balance is negative => payload_truncated.
-            content: 'export const run = () => {\n  return close())}\n};',
+            // Cut mid-file: the tail below a balanced function carries a stray
+            // `)` whose opener never arrived. Bun reports `Unexpected )` over
+            // the whole file content, and the whole-file raw delimiter count
+            // is negative => payload_truncated on both failureKind and
+            // errorCode.
+            content: 'export function run() {\n  return compute(arg)\n}\n)\n',
           },
         ],
         fileProcessingState: freshState(),
