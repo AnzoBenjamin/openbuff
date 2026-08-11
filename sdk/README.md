@@ -196,7 +196,7 @@ that blocked it.
     substitution forms are still denied by terminal policy even when not
     high-impact harness actions. Author files with edit tools; run short
     commands.
-  - Durable local check: `bun run check:ci-local` (the early-gates bundle: tool defs + memory-drift + sync-agent-config).
+  - Durable local check (from monorepo root): `bun run check:ci-local` (the early-gates bundle: tool defs + memory-drift + sync-agent-config).
 
 ## Search tool working directory
 
