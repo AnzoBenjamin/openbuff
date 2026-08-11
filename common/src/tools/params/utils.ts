@@ -63,7 +63,7 @@ export function repairMalformedJsonSeparators(
   const trimmed = input.trim()
   if (
     trimmed.length === 0 ||
-    trimmed.length > MAX_REPAIRABLE_JSON_LENGTH ||
+    trimmed.length > MAX_TRUNCATION_SCAN_LENGTH ||
     !(
       (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
       (trimmed.startsWith('[') && trimmed.endsWith(']'))
@@ -105,6 +105,185 @@ export function repairMalformedJsonSeparators(
     output += char
   }
   return repaired ? output : undefined
+}
+
+/** Machine-readable code for arguments cut in transport; distinct from malformed. */
+export const PAYLOAD_TRUNCATED_ERROR_CODE = 'payload_truncated' as const
+
+/** Structural scan state for classification + boundary recovery (bounds CPU). */
+const MAX_TRUNCATION_SCAN_LENGTH = MAX_REPAIRABLE_JSON_LENGTH
+
+type TruncationScanState = {
+  depth: number
+  inString: boolean
+  escapedData: boolean
+}
+
+/** Single pass over the raw argument string tracking string/escape/brace depth. */
+function scanTruncationState(input: string): TruncationScanState | undefined {
+  if (typeof input !== 'string' || input.length === 0 || input.length > MAX_TRUNCATION_SCAN_LENGTH) {
+    return undefined
+  }
+  let depth = 0
+  let inString = false
+  let escapedData = false
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+    if (inString) {
+      if (escapedData) escapedData = false
+      else if (ch === '\\') escapedData = true
+      else if (ch === '"') inString = false
+    } else {
+      if (ch === '"') inString = true
+      else if (ch === '{' || ch === '[') depth++
+      else if (ch === '}' || ch === ']') depth--
+      if (depth < 0) return undefined
+    }
+  }
+  return { depth, inString, escapedData }
+}
+
+/** True only for transport-truncation signatures, never for complete payloads. */
+export function detectTransportTruncation(
+  input: string,
+  parseError?: string,
+): boolean {
+  if (typeof input !== 'string') return false
+  const state = scanTruncationState(input)
+  if (!state) return false
+  // A balanced, fully-closed, no-dangling-string payload is never truncated,
+  // regardless of what a fallback parse error claimed (malformed stays malformed).
+  const balancedClosed =
+    state.depth === 0 && !state.inString && !state.escapedData
+  if (balancedClosed) return false
+  if (parseError !== undefined && /unexpected end of json input/i.test(parseError)) {
+    return true
+  }
+  return state.inString || state.depth > 0 || state.escapedData
+}
+
+/**
+ * Attempts to recover a transport-truncated tool-call argument object ONLY when
+ * the cut dropped nothing but container closers. The sole eligible cut boundary
+ * is a position whose last non-whitespace character is `}` or `]` — i.e. the
+ * prefix ends at a fully closed container whose every member was completely
+ * written. Candidates are scanned latest-to-earliest; each prefix is closed with
+ * balanced closers and accepted only when JSON.parse yields a non-empty plain
+ * object. A payload cut mid-string or mid-member is NEVER recovered: no trailing
+ * comma is trimmed and no partially-written key or value is completed, so a
+ * guessed/truncated value can never be applied as an edit. Returns undefined
+ * when no clean container-close boundary recovers a complete object.
+ */
+export function tryRecoverTruncatedToolArguments(
+  rawInput: string,
+): Record<string, unknown> | undefined {
+  const state = scanTruncationState(rawInput)
+  if (!state || (state.depth === 0 && !state.inString && !state.escapedData)) {
+    // Non-strings, empty/oversized inputs, mismatched closers, and complete
+    // balanced payloads are never truncation-recovery candidates.
+    return undefined
+  }
+  // Scan `}`/`]` candidate cut positions from LATEST to EARLIEST. For each,
+  // build the prefix ending at that closer, append balanced closers for the
+  // residual open containers, and let JSON.parse be the final gate.
+  for (let pos = rawInput.length - 1; pos >= 0; pos--) {
+    const closingChar = rawInput[pos]
+    if (closingChar !== '}' && closingChar !== ']') {
+      continue
+    }
+    const prefix = rawInput.slice(0, pos + 1)
+    // Rescan the prefix with the string/escape state machine to compute the
+    // residual open-container stack. When the candidate character was consumed
+    // inside a string literal (inString at end of prefix) it is data, not a
+    // structural boundary — skip it.
+    const openStack: string[] = []
+    let inString = false
+    let escapedData = false
+    for (let i = 0; i < prefix.length; i++) {
+      const c = prefix[i]
+      if (inString) {
+        if (escapedData) escapedData = false
+        else if (c === '\\') escapedData = true
+        else if (c === '"') inString = false
+      } else if (c === '"') inString = true
+      else if (c === '{') openStack.push('{')
+      else if (c === '[') openStack.push('[')
+      else if (c === '}' || c === ']') openStack.pop()
+    }
+    if (inString) continue
+    let candidate = prefix
+    for (let i = openStack.length - 1; i >= 0; i--) {
+      candidate += openStack[i] === '{' ? '}' : ']'
+    }
+    try {
+      const recovered = JSON.parse(candidate)
+      if (
+        recovered !== null &&
+        typeof recovered === 'object' &&
+        !Array.isArray(recovered) &&
+        Object.keys(recovered).length > 0
+      ) {
+        return recovered
+      }
+    } catch {
+      continue
+    }
+  }
+  return undefined
+}
+
+/**
+ * Summarizes a recovered truncation candidate (from
+ * tryRecoverTruncatedToolArguments) as bounded evidence for the truncation
+ * error path: its serialized byte count plus a capped structural preview.
+ * Returns undefined when there is no recovery to describe. The summary is
+ * metadata only — the recovered object itself must NEVER be substituted for
+ * the tool-call input; it may only ever appear inside an error message.
+ *
+ * SECURITY: the preview is deliberately structural, not a raw substring of the
+ * serialized object. A raw `JSON.stringify(recovered).slice(0, N)` could carry
+ * secret content verbatim (an edit payload's path/oldString/newString) into a
+ * logged, model-visible error. This preview reports only top-level key names
+ * and edit path fields — never string contents — so no payload secret survives
+ * into the preview regardless of what the truncated payload carried.
+ */
+export function describeTruncationRecovery(
+  recovered: Record<string, unknown> | undefined,
+): { recoveredBytes: number; recoveredPreview: string } | undefined {
+  if (recovered === undefined) {
+    return undefined
+  }
+  const serialized = JSON.stringify(recovered)
+  return {
+    recoveredBytes: serialized.length,
+    recoveredPreview: structuralRecoveryPreview(recovered),
+  }
+}
+
+/**
+ * Builds a secret-free structural preview of a recovered truncation candidate.
+ * Reports only the top-level key names and, for an `edits` array, each edit's
+ * type and path. String values (oldString/newString/content) are never
+ * included, so the preview cannot leak payload secrets into an error message.
+ */
+function structuralRecoveryPreview(recovered: Record<string, unknown>): string {
+  const keys = Object.keys(recovered)
+  const parts: string[] = [`keys: [${keys.join(', ')}]`]
+  const edits = recovered.edits
+  if (Array.isArray(edits)) {
+    const editSummaries = edits.map((edit) => {
+      if (edit === null || typeof edit !== 'object' || Array.isArray(edit)) {
+        return '(non-object edit)'
+      }
+      const record = edit as Record<string, unknown>
+      const type = typeof record.type === 'string' ? record.type : 'unknown'
+      const path = typeof record.path === 'string' ? record.path : '<no path>'
+      return `${type} ${path}`
+    })
+    parts.push(`edits: [${editSummaries.join('; ')}]`)
+  }
+  const preview = `{ ${parts.join('; ')} }`
+  return preview.slice(0, 200)
 }
 
 /** Parse one JSON encoding, applying only the bounded separator repair. */

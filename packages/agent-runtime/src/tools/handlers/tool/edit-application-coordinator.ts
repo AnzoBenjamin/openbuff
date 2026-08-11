@@ -321,7 +321,9 @@ export function commitAppliedEditPaths(params: {
    * cleared by this commit. A confirmed apply normally clears the marker, but
    * a blind allowMultiple str_replace (replace-all) is not evidence the model
    * knows the file content, so the caller preserves the marker for those
-   * paths to keep a later write_file blocked.
+   * paths to keep a later write_file blocked. Independently of this set, a
+   * path whose reread reason is context_compacted is always treated as
+   * preserved: a confirmed apply never clears compaction state.
    */
   preserveRereadRequirementsForPaths?: ReadonlySet<string>
 }): ReadonlyMap<string, ConfirmedPostEditAnchor> {
@@ -339,7 +341,15 @@ export function commitAppliedEditPaths(params: {
   )
   for (const path of new Set(paths)) {
     if (!path) continue
-    if (!preserveRereadRequirementsForPaths?.has(path)) {
+    // context_compacted stays authoritative across a confirmed apply: the
+    // exact read content left the active model context, so a commit must
+    // never clear it — only a fresh whole-file read (or an explicit
+    // whole-file basedOnRead) may. Such paths count as preserved regardless
+    // of the passed-in set.
+    const contextCompacted =
+      fileProcessingState.editRereadRequirementsByPath?.[path]?.reason ===
+      'context_compacted'
+    if (!contextCompacted && !preserveRereadRequirementsForPaths?.has(path)) {
       clearEditRereadRequirement(fileProcessingState, path)
     }
     const wholeFileContent = wholeFileContentByPath?.get(path)

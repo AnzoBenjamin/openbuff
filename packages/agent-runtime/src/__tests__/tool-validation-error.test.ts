@@ -392,7 +392,7 @@ describe('tool validation error handling', () => {
     }
   })
 
-  it('still rejects truncated JSON containing duplicate separators', () => {
+  it('still rejects truncated JSON containing duplicate separators and classifies it payload_truncated', () => {
     const result = parseRawToolCall({
       rawToolCall: {
         toolName: 'read_files',
@@ -401,9 +401,17 @@ describe('tool validation error handling', () => {
       },
     })
 
+    // Fail-closed even though a clean container-close prefix ({paths:[...]})
+    // precedes the mid-`"ranges":[` cut: the recovered partial object is never
+    // substituted for the input, so the truncated string lands on the
+    // string-input error path and remains an error. The truncation classifier
+    // still tags it payload_truncated so transport truncation stays
+    // distinguishable from a genuine code-syntax abort (the recovery survives
+    // only as a resumable cursor summary in the error, never as tool input).
     expect('error' in result).toBe(true)
     if ('error' in result) {
       expect(result.error).toContain('Parsing as JSON failed:')
+      expect(result.error).toContain('payload_truncated')
     }
   })
 

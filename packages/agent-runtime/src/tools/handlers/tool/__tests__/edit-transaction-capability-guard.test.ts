@@ -7,6 +7,7 @@ import {
   getContentHash,
 } from '@codebuff/common/util/content-hash'
 
+import type { FileProcessingState } from '../write-file'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 
 const logger: Logger = {
@@ -24,6 +25,146 @@ function buildScopedReadCapability(path: string): string {
     scope: { projectId: '/project', path, runId: 'run' },
   })
 }
+
+describe('edit_transaction preflight truncation reclassification (F1/F3)', () => {
+  const baseHandlerParams = (params: {
+    edits: unknown[]
+    fileProcessingState: FileProcessingState
+    requestOptionalFile?: (args: {
+      filePath: string
+    }) => Promise<string | null>
+  }) => ({
+    previousToolCallFinished: Promise.resolve(),
+    toolCall: {
+      toolCallId: 'preflight-truncation-test',
+      toolName: 'edit_transaction',
+      input: { edits: params.edits },
+    },
+    fileProcessingState: params.fileProcessingState,
+    logger,
+    requestOptionalFile: params.requestOptionalFile ?? (async () => null),
+    requestClientToolCall: async () => [],
+    writeToClient: () => undefined,
+  })
+
+  const freshState = () =>
+    getFileProcessingValues({ strictReadBeforeEdit: false })
+
+  it('reclassifies a transport-truncated str_replace newString as payload_truncated on the preflight-syntax path', async () => {
+    // A str_replace whose newString was cut mid-body leaves the synthesized file
+    // with more closers than openers. The whole-file balance corroboration
+    // confirms the raw truncation signal, so the preflight syntax failure must be
+    // reclassified from preflight_failed to payload_truncated on BOTH the
+    // failureKind and the top-level errorCode. This is the direct
+    // looksLikeTruncatedEditContent reclassification on the preflight-syntax
+    // path (F3), exercised end-to-end through handleEditTransaction.
+    const result = await handleEditTransaction(
+      baseHandlerParams({
+        edits: [
+          {
+            type: 'str_replace',
+            path: 'src/a.ts',
+            replacements: [
+              {
+                oldString: 'const x = rawValue',
+                // Content cut mid-IIFE: the dangling `})();` tail leaves the
+                // synthesized file with more closers than openers in the raw
+                // whole-file delimiter count => payload_truncated.
+                newString: 'const x = lookup(rawValue)}\n}\n);',
+              },
+            ],
+          },
+        ],
+        fileProcessingState: freshState(),
+        requestOptionalFile: async () => 'const x = rawValue\n',
+      }) as any,
+    )
+
+    const value = result.output[0]?.value as {
+      errorCode?: string
+      errorMessage?: string
+      failures?: Array<{ failureKind?: string; path?: string }>
+    }
+    expect(value.errorCode).toBe('payload_truncated')
+    expect(value.failures?.[0]?.failureKind).toBe('payload_truncated')
+    expect(String(value.errorMessage)).toContain(
+      'the edit payload appears cut in transport',
+    )
+  })
+
+  it('reclassifies a transport-truncated create edit as payload_truncated', async () => {
+    // A create whose content was cut mid-body never enters processEditTransaction
+    // and is validated directly by preflight; the same reclassification applies.
+    const result = await handleEditTransaction(
+      baseHandlerParams({
+        edits: [
+          {
+            type: 'create',
+            path: 'src/new-file.ts',
+            // Cut mid-function: unmatched closers relative to openers after the
+            // tail (`})();`) that was never fully written. Whole-file raw
+            // balance is negative => payload_truncated.
+            content: 'export const run = () => {\n  return close())}\n};',
+          },
+        ],
+        fileProcessingState: freshState(),
+        requestOptionalFile: async () => null,
+      }) as any,
+    )
+
+    const value = result.output[0]?.value as {
+      errorCode?: string
+      failures?: Array<{ failureKind?: string }>
+    }
+    expect(value.errorCode).toBe('payload_truncated')
+    expect(value.failures?.[0]?.failureKind).toBe('payload_truncated')
+  })
+
+  it('keeps a genuine (whole-file-balanced) syntax error on preflight_failed, never payload_truncated', async () => {
+    // The payload itself has a closer-over-opener surplus (the regex has a
+    // trailing closer with no opener), yet the RAW delimiter count across the
+    // whole synthesized file is balanced (not truncation-shaped). The raw-signal
+    // corroboration in looksLikeTruncatedEditContent must refuse to
+    // reclassify this genuine preflight syntax failure as payload_truncated —
+    // it stays on preflight_failed (F1's mislabel risk is closed).
+    const result = await handleEditTransaction(
+      baseHandlerParams({
+        edits: [
+          {
+            type: 'str_replace',
+            path: 'src/a.ts',
+            replacements: [
+              {
+                oldString: 'const x = rawValue',
+                // Synthesized content: `const meta = /([{])([}\]])/;` — every
+                // opener and closer in the regex character class is matched, so
+                // the whole-file raw balance is zero. The runtime finds the
+                // first unmatched closer within a balanced file, which is a
+                // genuine syntax error, NOT a transport cut, so it must remain
+                // preflight_failed and never payload_truncated.
+                newString: 'const meta = /([{])([}\\]])/;',
+                allowMultiple: false,
+              },
+            ],
+          },
+        ],
+        fileProcessingState: freshState(),
+        requestOptionalFile: async () => 'const x = rawValue\n',
+      }) as any,
+    )
+
+    const value = result.output[0]?.value as {
+      errorCode?: string
+      errorMessage?: string
+      failures?: Array<{ failureKind?: string }>
+    }
+    expect(value.errorCode).not.toBe('payload_truncated')
+    expect(value.failures?.[0]?.failureKind).not.toBe('payload_truncated')
+    expect(String(value.errorMessage ?? '')).not.toContain(
+      'the edit payload appears cut in transport',
+    )
+  })
+})
 
 describe('edit_transaction capability-bearing edit guard', () => {
   it('does not throw or treat a str_replace edit with non-array replacements as capability-bearing', async () => {

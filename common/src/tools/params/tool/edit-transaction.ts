@@ -497,6 +497,7 @@ export const editTransactionResultSchema = z.union([
             'capability_invalid',
             'no_match',
             'preflight_failed',
+            'payload_truncated',
             'generic',
           ])
           .optional()
@@ -512,10 +513,15 @@ export const editTransactionResultSchema = z.union([
         'True when retrying this aborted transaction requires a fresh read of every recovery.paths target from one coherent snapshot.',
       ),
     errorCode: z
-      .enum(['no_match', 'stale_capability', 'preflight_failed'])
+      .enum([
+        'no_match',
+        'stale_capability',
+        'preflight_failed',
+        'payload_truncated',
+      ])
       .optional()
       .describe(
-        'Compact machine-readable abort code models can key off without parsing errorMessage.',
+        'Compact machine-readable abort code models can key off without parsing errorMessage. payload_truncated means the tool-call argument payload was cut in transport (distinct from a genuine syntax preflight failure).',
       ),
     recovery: z
       .object({
@@ -557,7 +563,7 @@ const inputSchema = z
         boundedTransactionEditListSchema,
       )
       .describe(
-        'All edits that must preflight together. Pass an actual array of edit objects; do not JSON.stringify the array or its entries. The runtime defensively decodes complete legacy JSON encodings, but malformed or truncated strings fail closed. An omitted type is inferred only when the payload shape identifies one unambiguous operation, such as replacements implying str_replace. If any edit fails during preflight, no files are changed.',
+        'All edits that must preflight together. Pass an actual array of edit objects; do not JSON.stringify the array or its entries. The runtime defensively decodes complete legacy JSON encodings, and payloads cut in transport are detected and may be recovered at a clean edit boundary when provably complete (otherwise they fail with a structured payload_truncated code rather than a misleading syntax error). An omitted type is inferred only when the payload shape identifies one unambiguous operation, such as replacements implying str_replace. If any edit fails during preflight, no files are changed.',
       ),
   })
   .describe(

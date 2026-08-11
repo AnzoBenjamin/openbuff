@@ -2,9 +2,13 @@ import { endsAgentStepParam, toolNames } from '@codebuff/common/tools/constants'
 import { toolParams } from '@codebuff/common/tools/list'
 import { decodeJsonObjectString } from '@codebuff/common/tools/params/tool/set-output'
 import {
+  detectTransportTruncation,
+  describeTruncationRecovery,
   parseJsonBounded,
   parseJsonStringWithRepair,
+  PAYLOAD_TRUNCATED_ERROR_CODE,
   TRANSACTION_EDIT_TYPES,
+  tryRecoverTruncatedToolArguments,
 } from '@codebuff/common/tools/params/utils'
 import {
   buildNativeToolResultErrorOutputV1,
@@ -482,34 +486,65 @@ function repairBareStringFieldObject(input: string, toolName: string): unknown {
   return { [field]: value }
 }
 
+// Bounded evidence about a truncated payload's recoverable prefix: byte count
+// plus a capped preview. Summary metadata only — the recovered object itself is
+// never used as tool-call input; it exists solely to enrich the error message.
+type TruncationRecoverySummary = {
+  recoveredBytes: number
+  recoveredPreview: string
+}
+
 function parseStringifiedToolInput(
   input: unknown,
   toolName: string,
-): { input: unknown; parseError?: string } {
+): {
+  input: unknown
+  parseError?: string
+  sawTransportTruncation?: boolean
+  truncationRecovery?: TruncationRecoverySummary
+} {
   let parsed = input
   let parseError: string | undefined
+  let truncationRecovery: TruncationRecoverySummary | undefined
 
   // Some providers/models double-encode tool arguments, for example an input
   // value like "\"{\\\"path\\\":\\\"file.ts\\\"}\"". Repeated JSON.parse
   // handles that before falling back to narrow, tool-specific repairs.
+  // Tracks truncation classification across the whole parse chain so the
+  // stringInputError below can distinguish transport truncation from malformed.
+  let sawTransportTruncation = false
   for (let i = 0; i < 3 && typeof parsed === 'string'; i++) {
     const stringInput = parsed
     try {
       parsed = parseJsonStringWithRepair(stringInput)
       parseError = undefined
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      if (detectTransportTruncation(stringInput, errorMessage)) {
+        sawTransportTruncation = true
+      }
+      // A truncated payload is NEVER silently converted into a partial tool
+      // call: the recovered object is not assigned to `parsed` (the retired
+      // behavior that silently dropped trailing selectors). The unparseable
+      // string and the real JSON parse error are preserved so the call fails
+      // closed on the stringInputError path; the recovery is EVIDENCE ONLY and
+      // threads a resumable cursor (byte count + bounded preview) into the error.
+      const recovery = sawTransportTruncation
+        ? tryRecoverTruncatedToolArguments(stringInput)
+        : undefined
+      truncationRecovery = describeTruncationRecovery(recovery)
       const repairedField = repairBareStringFieldObject(stringInput, toolName)
       if (repairedField !== undefined) {
         parsed = repairedField
         parseError = undefined
       } else {
-        parseError = error instanceof Error ? error.message : String(error)
+        parseError = errorMessage
       }
       break
     }
   }
 
-  return { input: parsed, parseError }
+  return { input: parsed, parseError, sawTransportTruncation, truncationRecovery }
 }
 
 function detectHeredocPayload(rawInput: unknown): string | undefined {
@@ -525,9 +560,22 @@ function stringInputError(
   toolCallId: string,
   parseError?: string,
   rawInput?: unknown,
+  transportTruncated = false,
+  truncationRecovery?: TruncationRecoverySummary,
 ): ToolCallError {
+  const truncationNote = transportTruncated
+    ? ` [${PAYLOAD_TRUNCATED_ERROR_CODE}] The argument payload was cut in transport — it ended mid-structure (unterminated string or unbalanced braces). This is a transport truncation, NOT a code syntax error: re-issue the same edit, ideally split so each edit's newString/content field stays well under the transport-safe band.`
+    : ''
+  // Resumable cursor: only ever present when truncation was detected AND a
+  // clean container-close prefix was recoverable. The recovered object is never
+  // applied as tool input and never echoed in full — the cursor reports only
+  // its serialized byte count and the capped preview, so the caller knows how
+  // much argument structure survived the cut and can continue from there.
+  const cursorNote = truncationRecovery
+    ? ` Resume cursor: ${truncationRecovery.recoveredBytes} bytes of leading argument structure survived the cut (capped preview, never applied: ${truncationRecovery.recoveredPreview}). Continue from where transmission cut off — re-issue the call with the arguments that follow that point, splitting them into a smaller follow-up call when needed.`
+    : ''
   const parseDetails = parseError
-    ? ` Parsing as JSON failed: ${parseError}. The arguments may be malformed or incomplete.`
+    ? ` Parsing as JSON failed: ${parseError}. The arguments may be malformed or incomplete.${truncationNote}${cursorNote}`
     : ' Parsing succeeded, but the parsed value was still a string.'
   const heredocHint =
     toolName === 'spawn_agents' || toolName === 'basher'
@@ -1621,6 +1669,8 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
       rawToolCall.toolCallId,
       processedParameters.parseError,
       rawToolCall.input,
+      processedParameters.sawTransportTruncation,
+      processedParameters.truncationRecovery,
     )
   }
 
@@ -2752,6 +2802,9 @@ export function parseRawCustomToolCall(params: {
       toolName,
       rawToolCall.toolCallId,
       parsedInput.parseError,
+      undefined,
+      parsedInput.sawTransportTruncation,
+      parsedInput.truncationRecovery,
     )
   }
 
