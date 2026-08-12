@@ -5,6 +5,7 @@ import {
   findLiteralOccurrences,
   nthLiteralOccurrenceIndex,
 } from './structural-read'
+import { getBunTranspilerLoader } from './util/preflight-syntax-validation'
 
 import {
   getContentHash,
@@ -1458,6 +1459,96 @@ function isResultDelimiterBalanced(
   return true
 }
 
+// Bun.Transpiler is only available in the Bun runtime. In Node.js it is
+// undefined, so `new Bun.Transpiler(...)` would throw a ReferenceError. The
+// symbol-identity boost below mirrors the guard pattern from
+// util/preflight-syntax-validation.ts (`typeof Bun === 'undefined' ||
+// !Bun?.Transpiler` -> skip) so that Node behavior is EXACTLY as before.
+declare const Bun: {
+  Transpiler: new (options: {
+    loader: 'js' | 'jsx' | 'ts' | 'tsx'
+  }) => {
+    transformSync: (content: string) => string
+  }
+}
+
+/**
+ * Extracts the name of the top-level symbol (function/class/const) that a
+ * code snippet declares, via a tolerant Bun.Transpiler pass (types are
+ * stripped first so the declaration line has a uniform shape). Only the FIRST
+ * top-level declaration — after any leading comments — identifies the
+ * snippet, so a mid-block fragment yields no signal. Returns null on any
+ * transpile error or when no declaration is found; this never throws.
+ */
+function getTranspiledTopLevelSymbolName(
+  code: string,
+  path: string,
+): string | null {
+  let transformed: string
+  try {
+    const loader = getBunTranspilerLoader(path) ?? 'ts'
+    transformed = new Bun.Transpiler({ loader }).transformSync(code)
+  } catch {
+    return null
+  }
+  // Skip leading comment lines/blocks so a JSDoc'd or commented symbol still
+  // resolves to its declaration rather than to the doc comment.
+  let rest = transformed.trimStart()
+  for (;;) {
+    if (rest.startsWith('//')) {
+      const lineEnd = rest.indexOf('\n')
+      if (lineEnd === -1) return null
+      rest = rest.slice(lineEnd + 1).trimStart()
+      continue
+    }
+    if (rest.startsWith('/*')) {
+      const commentEnd = rest.indexOf('*/')
+      if (commentEnd === -1) return null
+      rest = rest.slice(commentEnd + 2).trimStart()
+      continue
+    }
+    break
+  }
+  const declaration = rest.match(
+    /^(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function\s*\*?\s*|class\s+|const\s+)([A-Za-z_$][A-Za-z0-9_$]*)/,
+  )
+  return declaration?.[1] ?? null
+}
+
+/**
+ * Symbol-identity corroboration for a near-match candidate that narrowly
+ * missed the similarity/margin gate. Returns true ONLY when all of:
+ *  - Bun.Transpiler is available in this runtime (Node: always false, so
+ *    behavior there is unchanged),
+ *  - the oldString and the best candidate block BOTH transpile to snippets
+ *    whose first top-level declaration is the same function/class/const name,
+ *  - and that symbol name occurs exactly once in initialContent.
+ * Different symbols, a non-unique name, or an unparseable snippet all return
+ * false. The caller still refuses the boost whenever a distinct
+ * high-similarity runner-up exists, so this can only ever narrow a false
+ * negative — it never widens an ambiguous multi-winner situation.
+ */
+function getSymbolIdentityBoost(params: {
+  initialContent: string
+  oldStr: string
+  bestCandidateBlock: string
+  path: string
+}): boolean {
+  const { initialContent, oldStr, bestCandidateBlock, path } = params
+  if (typeof Bun === 'undefined' || !Bun?.Transpiler) return false
+  const oldStrSymbol = getTranspiledTopLevelSymbolName(oldStr, path)
+  const candidateSymbol = getTranspiledTopLevelSymbolName(
+    bestCandidateBlock,
+    path,
+  )
+  if (oldStrSymbol === null || oldStrSymbol !== candidateSymbol) return false
+  const escapedName = oldStrSymbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const occurrences = initialContent.match(
+    new RegExp(`\\b${escapedName}\\b`, 'g'),
+  )
+  return occurrences !== null && occurrences.length === 1
+}
+
 /**
  * After exact and indentation matching fail, decide whether the closest
  * candidate is a safe single-winner auto-correction. Returns the candidate's
@@ -1469,7 +1560,15 @@ function isResultDelimiterBalanced(
  *  - best similarity >= NEAR_MATCH_MIN_SIMILARITY (0.92); the earlier 0.80
  *    adaptive branch was removed because it auto-corrected with no margin or
  *    runner-up gate, which corrupted files by editing the wrong block (Fix A).
- *  - unambiguous winner vs any distinct non-overlapping runner-up
+ *  - unambiguous winner vs any distinct non-overlapping runner-up; when
+ *    this or the 0.92 similarity gate narrowly fails, a single leading
+ *    candidate may instead be promoted by symbol-identity corroboration
+ *    (getSymbolIdentityBoost): the oldString and candidate must both
+ *    transpile to the same top-level symbol whose name appears exactly once
+ *    in the file, with NO distinct high-similarity runner-up and
+ *    allowMultiple false. This can only narrow a false negative — an
+ *    ambiguous multi-winner situation never passes on symbol identity alone,
+ *    and Node (no Bun.Transpiler) behaves exactly as before.
  *  - not a strict subset of a wider high-similarity region
  *  - location-unique (occurs exactly once)
  *  - resulting content (after applying newStr at the match) has balanced
@@ -1480,13 +1579,16 @@ function tryNearMatchAutoCorrect(params: {
   initialContent: string
   oldStr: string
   newStr: string
+  allowMultiple: boolean
+  path: string
 }): {
   oldStr: string
   startLine: number
   endLine: number
   similarity: number
+  corroboratedBySymbolIdentity: boolean
 } | null {
-  const { initialContent, oldStr, newStr } = params
+  const { initialContent, oldStr, newStr, allowMultiple, path } = params
   // Fix E: require a substantive oldString before any auto-correction. The
   // diagnostic path (rich error with candidate ranges) still uses the lower
   // NEAR_MATCH_MIN_OLD_STR_LENGTH, but auto-correcting a very short oldString
@@ -1524,6 +1626,35 @@ function tryNearMatchAutoCorrect(params: {
       if (!ambiguous) {
         isUnambiguous = true
       }
+    }
+  }
+
+  // Symbol-identity corroboration (Bun-only, fail-closed): when the clear
+  // winner narrowly missed the 0.92 similarity gate (or had no decisive
+  // margin), a tolerant Bun.Transpiler parse of both snippets may still
+  // promote it — IF AND ONLY IF the oldString and candidate resolve to the
+  // same single top-level symbol that appears exactly once in the file. A
+  // distinct high-similarity runner-up is genuine ambiguity and must NEVER
+  // pass on symbol identity alone; allowMultiple edits are likewise excluded
+  // (the boost is a single-target signal). In Node the boost is always
+  // false, so behavior there is exactly as before. Every remaining gate
+  // below (subset safety, location-uniqueness, delimiter balance) still
+  // applies unchanged.
+  let corroboratedBySymbolIdentity = false
+  if (!isUnambiguous && !allowMultiple) {
+    const hasHighSimilarityRunnerUp =
+      second !== undefined && second.similarity >= NEAR_MATCH_AMBIGUOUS_SECOND
+    if (
+      !hasHighSimilarityRunnerUp &&
+      getSymbolIdentityBoost({
+        initialContent,
+        oldStr,
+        bestCandidateBlock: best.closestBlock,
+        path,
+      })
+    ) {
+      isUnambiguous = true
+      corroboratedBySymbolIdentity = true
     }
   }
 
@@ -1570,6 +1701,7 @@ function tryNearMatchAutoCorrect(params: {
     startLine: best.startLine,
     endLine: best.endLine,
     similarity: best.similarity,
+    corroboratedBySymbolIdentity,
   }
 }
 
@@ -1848,14 +1980,29 @@ const tryMatchOldStr = (params: {
   // the old all-whitespace-stripped fallback's risk of silently editing the
   // wrong line (e.g. a utility and its test sharing a similar line). Genuine
   // ambiguity falls through to the rich diagnostics below and fails cleanly.
-  const nearMatch = tryNearMatchAutoCorrect({ initialContent, oldStr, newStr })
+  const nearMatch = tryNearMatchAutoCorrect({
+    initialContent,
+    oldStr,
+    newStr,
+    allowMultiple,
+    path,
+  })
   if (nearMatch) {
-    logger.debug('Matched with near-match auto-correction')
+    logger.debug(
+      nearMatch.corroboratedBySymbolIdentity
+        ? 'Matched with near-match auto-correction (symbol-identity corroborated)'
+        : 'Matched with near-match auto-correction',
+    )
     return {
       success: true,
       oldStr: nearMatch.oldStr,
       message: [
         `⚠ WARNING: auto-corrected a near-match edit (${Math.round(nearMatch.similarity * 100)}% similar) at lines ${nearMatch.startLine}-${nearMatch.endLine}.`,
+        ...(nearMatch.corroboratedBySymbolIdentity
+          ? [
+              'Symbol-identity corroboration: the oldString and the corrected block both declare the same top-level symbol, whose name appears exactly once in the file, so this candidate was admitted despite falling just short of the normal similarity/margin gate. This is a corroborating signal only — it is NOT proof that the edit is correct.',
+            ]
+          : []),
         `Your oldString did not exactly match the file. The closest unique block at lines ${nearMatch.startLine}-${nearMatch.endLine} was edited as a best-effort recovery, but this is INHERENTLY RISKY — the edit may have landed in the wrong place, or written subtly-wrong content (whitespace, quote style, missing comments).`,
         `Required next step: VERIFY the result. Re-read lines ${nearMatch.startLine}-${nearMatch.endLine} with read_files.ranges to confirm the change is correct. If it is wrong, revert/fix it before continuing.`,
         'To avoid this in future edits: copy oldString verbatim from a fresh read_files output (including exact indentation, quotes, and comments), or pass a basedOnRead capability so the matcher can anchor to the exact range.',

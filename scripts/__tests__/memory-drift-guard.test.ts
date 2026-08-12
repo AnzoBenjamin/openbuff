@@ -716,6 +716,79 @@ test('command checker infers cwd from multi-line cd prefix in code block', () =>
   expect(findings.some((f) => f.message.includes('`build`'))).toBe(false)
 })
 
+test('command checker accepts root script documented bare in a package README', () => {
+  // Package docs often document monorepo-root scripts without --cwd.
+  // Nearest-package inference should fall back to root when the script is
+  // defined only there — not emit a false positive against sdk/package.json.
+  writeFileSync(
+    join(tmpRoot, 'package.json'),
+    JSON.stringify({ name: 'root', scripts: { 'check:ci-local': 'echo' } }),
+  )
+  mkdirSync(join(tmpRoot, 'sdk'), { recursive: true })
+  writeFileSync(
+    join(tmpRoot, 'sdk', 'package.json'),
+    JSON.stringify({ name: 'sdk', scripts: { test: 'echo' } }),
+  )
+  writeFileSync(
+    join(tmpRoot, 'sdk', 'README.md'),
+    'Run `bun run check:ci-local` from the monorepo root.\n',
+  )
+  const findings = checkCommand(tmpRoot)
+  expect(findings.some((f) => f.message.includes('check:ci-local'))).toBe(false)
+})
+
+test('command checker still flags when script is missing from nearest package and root', () => {
+  writeFileSync(
+    join(tmpRoot, 'package.json'),
+    JSON.stringify({ name: 'root', scripts: { present: 'echo' } }),
+  )
+  mkdirSync(join(tmpRoot, 'sdk'), { recursive: true })
+  writeFileSync(
+    join(tmpRoot, 'sdk', 'package.json'),
+    JSON.stringify({ name: 'sdk', scripts: { test: 'echo' } }),
+  )
+  writeFileSync(
+    join(tmpRoot, 'sdk', 'README.md'),
+    'Run `bun run totally-absent`.\n',
+  )
+  const findings = checkCommand(tmpRoot)
+  expect(findings.length).toBeGreaterThanOrEqual(1)
+  expect(
+    findings.some(
+      (f) =>
+        f.message.includes('totally-absent') &&
+        f.message.includes('sdk/package.json'),
+    ),
+  ).toBe(true)
+})
+
+test('command checker does not fall back to root when explicit --cwd package is missing the script', () => {
+  // Explicit package targeting must win: missing under --cwd=cli still flags
+  // even when the same script name exists at the monorepo root.
+  writeFileSync(
+    join(tmpRoot, 'package.json'),
+    JSON.stringify({ name: 'root', scripts: { missing: 'echo root' } }),
+  )
+  mkdirSync(join(tmpRoot, 'cli'), { recursive: true })
+  writeFileSync(
+    join(tmpRoot, 'cli', 'package.json'),
+    JSON.stringify({ name: 'cli', scripts: { present: 'echo' } }),
+  )
+  mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
+  writeFileSync(
+    join(tmpRoot, 'docs', 'cmd.md'),
+    'Run `bun --cwd=cli run missing`.\n',
+  )
+  const findings = checkCommand(tmpRoot)
+  expect(
+    findings.some(
+      (f) =>
+        f.message.includes('`missing`') &&
+        f.message.includes('cli/package.json'),
+    ),
+  ).toBe(true)
+})
+
 test('todo-fixme checker flags TODO and allows allowlisted line', () => {
   mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
   writeFileSync(

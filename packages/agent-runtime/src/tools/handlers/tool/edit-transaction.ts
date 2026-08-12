@@ -11,6 +11,7 @@ import {
   MAX_TRANSACTION_ROLLBACK_BYTES,
   MAX_TRANSACTION_UNIQUE_PATHS,
 } from '@codebuff/common/actions'
+import { PAYLOAD_TRUNCATED_ERROR_CODE } from '@codebuff/common/tools/params/utils'
 
 import {
   formatUnsafeToolPathError,
@@ -49,6 +50,95 @@ import type { ProjectFileContext } from '@codebuff/common/util/file'
 
 const TRANSACTION_SNAPSHOT_CONCURRENCY = 8
 
+/**
+ * Conservative signal that a preflight syntax message is a transport-truncation
+ * artifact (a payload cut in transit) rather than a genuine code-syntax error.
+ * Only fires on SMALL payloads carrying `Unexpected )` / `Unexpected ,`: a real
+ * file very rarely has more closers than openers, but a payload whose newString
+ * was cut mid-expression ends exactly there. Genuine syntax errors on real file
+ * content keep the normal preflight_failed path; this never overrides them.
+ *
+ * The closer-over-opener heuristic on the edit payload alone can mislabel a
+ * malformed-but-NOT-truncated edit whose newString legitimately has more
+ * closers than openers (e.g. a regex or `})();` fragment). To avoid that, the
+ * raw truncation signal is ALSO required: the post-edit file content itself
+ * must be unbalanced (more closers than openers) in the raw delimiter count.
+ * A genuinely truncated edit payload leaves the synthesized file unbalanced,
+ * whereas authored content that merely has extras inside a string/regex keeps
+ * the whole file delimiter-balanced and stays on preflight_failed.
+ */
+function looksLikeTruncatedEditContent(
+  edit: TransactionEdit,
+  syntaxMessage: string,
+  filePostEditContent: string,
+): boolean {
+  if (!/Unexpected [\),]/.test(syntaxMessage)) return false
+  const fragments: string[] = []
+  if (edit.type === 'str_replace') {
+    for (const replacement of edit.replacements) {
+      fragments.push(replacement.newString)
+    }
+  } else if (
+    edit.type === 'write_file' ||
+    edit.type === 'create' ||
+    edit.type === 'rewrite_symbol'
+  ) {
+    fragments.push(edit.content)
+  } else if (edit.type === 'replace_range') {
+    fragments.push(edit.newContent)
+  } else if (edit.type === 'patch') {
+    fragments.push(edit.diff)
+  } else {
+    return false
+  }
+  const text = fragments.join('\n')
+  // Truncation only makes sense for sub-slab payloads; large payloads fail at
+  // argument-parse instead and never reach preflight.
+  if (text.length > 64 * 1024) return false
+  const balance = (open: string, close: string): number => {
+    let delta = 0
+    for (const ch of text) {
+      if (ch === open) delta++
+      else if (ch === close) delta--
+    }
+    return delta
+  }
+  // More closers than openers across the replacement content is the signature of
+  // a mid-body cut (the extra closer belongs to enclosing structure that never
+  // arrived), not of authored code.
+  const payloadImbalance =
+    balance('(', ')') < 0 || balance('[', ']') < 0 || balance('{', '}') < 0
+  if (!payloadImbalance) return false
+  // Corroborate with the raw truncation signal on the whole post-edit file: a
+  // genuinely truncated edit leaves the synthesized file unbalanced; a
+  // malformed-but-complete edit keeps it balanced and must stay preflight_failed.
+  return isRawDelimiterUnbalanced(filePostEditContent)
+}
+
+/**
+ * True when the whole post-edit file content has more closing than opening
+ * delimiters in the raw character count. A genuinely truncated edit payload
+ * (cut mid-body) makes the synthesized file end with unmatched closers; an
+ * authored regex/`})();` fragment keeps the file balanced. String/comment/
+ * regex-aware counting is intentionally NOT used here: this is a deliberately
+ * cheap, conservative corroboration on top of the payload heuristic, and the
+ * whole-file raw count is what a transport cut actually perturbs.
+ */
+function isRawDelimiterUnbalanced(content: string): boolean {
+  let parens = 0
+  let brackets = 0
+  let braces = 0
+  for (const ch of content) {
+    if (ch === '(') parens++
+    else if (ch === ')') parens--
+    else if (ch === '[') brackets++
+    else if (ch === ']') brackets--
+    else if (ch === '{') braces++
+    else if (ch === '}') braces--
+  }
+  return parens < 0 || brackets < 0 || braces < 0
+}
+
 async function mapWithConcurrency<T, R>(
   values: readonly T[],
   concurrency: number,
@@ -81,6 +171,114 @@ function isCapabilityBearingEdit(edit: TransactionEdit): boolean {
       Array.isArray(edit.replacements) &&
       edit.replacements.some((replacement) => Boolean(replacement.basedOnRead)))
   )
+}
+
+/**
+ * Server-side post-edit authority substitution. Preflight-time edit reshaping
+ * only — never writes files, never partially applies, never touches reread
+ * markers.
+ *
+ * When a capability-bearing edit proves stale ONLY because an earlier edit in
+ * this same run already changed the file, the runtime provably knows the
+ * current bytes from the confirmed post-edit anchor minted by that prior
+ * confirmed apply. In that case, replace the provided capability with the
+ * server's confirmed anchor capability instead of forcing a re-read.
+ *
+ * Fail closed — substitute ONLY when ALL of these hold; otherwise return the
+ * edit unchanged so the existing strict capability path fires:
+ * 1. The provided token decodes to a well-formed cap.v3 (an undecodable token
+ *    is owned by the existing capability_invalid path).
+ * 2. A confirmed post-edit anchor exists for the path.
+ * 3. The anchor is whole-file (startLine === 1) — a scoped anchor never
+ *    substitutes, least of all for a whole-file overwrite.
+ * 4. The transaction snapshot content for the path is known.
+ * 5. The anchor hash is fresh against the current snapshot — a mismatch means
+ *    the file changed since the confirmed apply.
+ * 6. The anchor's own capability re-decodes and is scope-bound to this same
+ *    run + normalized path (cross-run / cross-path anti-replay).
+ *
+ * delete/move are never touched here (they are authorized separately via the
+ * confirmed-anchor branch), and context_compacted markers are never cleared
+ * by this substitution.
+ */
+function substituteConfirmedPostEditCapabilities(
+  edits: TransactionEdit[],
+  initialContentByPath: ReadonlyMap<string, string | null>,
+  fileProcessingState: FileProcessingState,
+  projectId: string,
+  runId: string,
+  logger: Logger,
+): TransactionEdit[] {
+  const confirmedCapabilityForPath = (
+    path: string,
+    providedToken: string,
+  ): string | null => {
+    if (typeof decodeReadCapabilityToken(providedToken) === 'string') {
+      return null
+    }
+    const anchor = fileProcessingState.confirmedPostEditAnchorsByPath?.[path]
+    if (!anchor) return null
+    if (anchor.startLine !== 1) return null
+    const snapshotContent = initialContentByPath.get(path)
+    if (typeof snapshotContent !== 'string') return null
+    if (anchor.contentHash !== getContentHash(snapshotContent)) return null
+    const decodedAnchor = decodeReadCapabilityToken(anchor.readCapability)
+    if (typeof decodedAnchor === 'string') return null
+    if (
+      !readCapabilityMatchesScope(decodedAnchor, { projectId, path, runId })
+    ) {
+      return null
+    }
+    return anchor.readCapability
+  }
+
+  return edits.map((edit, editIndex) => {
+    const logSubstitution = (): void => {
+      logger.info(
+        { path: edit.path, editIndex },
+        'Substituted stale read capability with confirmed post-edit anchor (server-known current content)',
+      )
+    }
+    if (edit.type === 'str_replace') {
+      if (!Array.isArray(edit.replacements)) return edit
+      let substitutedAny = false
+      const replacements = edit.replacements.map((replacement) => {
+        if (!replacement.basedOnRead) return replacement
+        const confirmed = confirmedCapabilityForPath(
+          edit.path,
+          replacement.basedOnRead,
+        )
+        if (confirmed === null || confirmed === replacement.basedOnRead) {
+          return replacement
+        }
+        substitutedAny = true
+        return { ...replacement, basedOnRead: confirmed }
+      })
+      if (!substitutedAny) return edit
+      logSubstitution()
+      return { ...edit, replacements }
+    }
+    if (edit.type === 'write_file') {
+      if (!edit.basedOnRead) return edit
+      const confirmed = confirmedCapabilityForPath(edit.path, edit.basedOnRead)
+      if (confirmed === null || confirmed === edit.basedOnRead) return edit
+      logSubstitution()
+      return { ...edit, basedOnRead: confirmed }
+    }
+    if (edit.type === 'replace_range' || edit.type === 'rewrite_symbol') {
+      if (!edit.readCapability) return edit
+      const confirmed = confirmedCapabilityForPath(
+        edit.path,
+        edit.readCapability,
+      )
+      if (confirmed === null || confirmed === edit.readCapability) return edit
+      logSubstitution()
+      return { ...edit, readCapability: confirmed }
+    }
+    // create/structured/patch carry no read capability; delete/move are
+    // authorized separately via the confirmed-anchor branch below.
+    return edit
+  })
 }
 
 export const handleEditTransaction = (async (
@@ -688,7 +886,24 @@ export const handleEditTransaction = (async (
     }
   }
 
-  const contentEdits = edits.filter(
+  // Server-side post-edit authority substitution: when an earlier confirmed
+  // edit in this same run already proved the post-edit bytes of a target file,
+  // replace any stale provided capability with the server's confirmed
+  // post-edit anchor so the follow-up edit is not rejected with
+  // stale_capability / forced re-read. The substituted edits feed ONLY
+  // processEditTransaction below — the strict gate, authorization grants, and
+  // all marker handling above still see the original edits, so substitution
+  // can never clear a context_compacted reread requirement or grant sticky
+  // authorization off a reshaped token.
+  const substitutedEdits = substituteConfirmedPostEditCapabilities(
+    edits,
+    initialContentByPath,
+    fileProcessingState,
+    projectId,
+    runId,
+    logger,
+  )
+  const contentEdits = substitutedEdits.filter(
     (edit) =>
       edit.type === 'str_replace' ||
       edit.type === 'structured' ||
@@ -828,6 +1043,11 @@ export const handleEditTransaction = (async (
       // identify which edit produced the broken content (multiple edits can
       // target the same path; the first is the most actionable starting point).
       const editIndex = edits.findIndex((edit) => edit.path === file.path)
+      const truncated = looksLikeTruncatedEditContent(
+        edits[editIndex] ?? ({ type: 'delete', path: file.path } as TransactionEdit),
+        syntaxValidation.message,
+        file.content,
+      )
       return {
         output: [
           {
@@ -836,15 +1056,23 @@ export const handleEditTransaction = (async (
               errorMessage: formatPreflightErrorMessage(
                 'edit_transaction',
                 file.path,
-                syntaxValidation.message,
+                truncated
+                  ? `${syntaxValidation.message} — the edit payload appears cut in transport (unbalanced delimiters). Re-send the edit; keep each edit's newString/content well under the transport-safe band.`
+                  : syntaxValidation.message,
               ),
               failures: [
                 {
                   editIndex,
                   path: file.path,
                   errorMessage: syntaxValidation.message,
+                  failureKind: truncated
+                    ? PAYLOAD_TRUNCATED_ERROR_CODE
+                    : 'preflight_failed',
                 },
               ],
+              errorCode: truncated
+                ? PAYLOAD_TRUNCATED_ERROR_CODE
+                : 'preflight_failed',
             },
           },
         ],
@@ -856,6 +1084,11 @@ export const handleEditTransaction = (async (
     if (edit.type !== 'create') continue
     const syntaxValidation = preflightValidateSyntax(edit.path, edit.content)
     if (!syntaxValidation.valid) {
+      const truncated = looksLikeTruncatedEditContent(
+        edit,
+        syntaxValidation.message,
+        edit.content,
+      )
       return {
         output: [
           {
@@ -864,15 +1097,23 @@ export const handleEditTransaction = (async (
               errorMessage: formatPreflightErrorMessage(
                 'edit_transaction',
                 edit.path,
-                syntaxValidation.message,
+                truncated
+                  ? `${syntaxValidation.message} — the edit payload appears cut in transport (unbalanced delimiters). Re-send the edit; keep each edit's newString/content well under the transport-safe band.`
+                  : syntaxValidation.message,
               ),
               failures: [
                 {
                   editIndex: edits.indexOf(edit),
                   path: edit.path,
                   errorMessage: syntaxValidation.message,
+                  failureKind: truncated
+                    ? PAYLOAD_TRUNCATED_ERROR_CODE
+                    : 'preflight_failed',
                 },
               ],
+              errorCode: truncated
+                ? PAYLOAD_TRUNCATED_ERROR_CODE
+                : 'preflight_failed',
             },
           },
         ],

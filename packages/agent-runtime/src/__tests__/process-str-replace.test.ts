@@ -1048,13 +1048,12 @@ function test3() {
     }
   })
 
-  it('should refuse to auto-correct a stale oldString at sub-0.92 similarity even with a single candidate and no runner-up (Fix A)', async () => {
-    // Regression test for Fix A: the adaptive 0.80 near-match branch was
-    // removed. A stale oldString that is ~0.84 similar to a single candidate
-    // (no distinct runner-up) used to auto-correct under the old 0.80 path with
-    // no margin check. It must now fall through to the rich diagnostic error so
-    // the model re-reads instead of guessing, mirroring the subset-safety test
-    // above.
+  it('auto-corrects a stale single-candidate oldString below 0.92 only when symbol identity corroborates (F4)', async () => {
+    // F4: a stale oldString ~0.84 similar to the ONLY candidate, both blocks
+    // declaring the same uniquely-occurring top-level symbol (processRefund),
+    // is auto-corrected when every other hard gate (min length, subset
+    // safety, location uniqueness, delimiter balance) passes. This documents
+    // the F4 symbol-identity corroboration path.
     const initialContent = [
       'export function processRefund(order: Order) {',
       '  const amount = order.totalCents',
@@ -1062,10 +1061,138 @@ function test3() {
       '  return issueRefund(amount, reason)',
       '}',
     ].join('\n')
-    // Stale oldString: several small diffs (renamed identifiers, dropped line)
-    // put similarity well below 0.92 but above 0.80, with exactly one candidate.
     const oldStr = [
       'export function processRefund(order: Order) {',
+      '  const amount = order.totalAmount',
+      '  const reason = order.returnReason',
+      '  return issueRefund(amount)',
+      '}',
+    ].join('\n')
+    const newStr = [
+      'export function processRefund(order: Order) {',
+      '  const amount = order.totalCents',
+      '  const reason = order.refundReason',
+      '  return issueRefund(amount, reason, true)',
+      '}',
+    ].join('\n')
+
+    const result = await processStrReplace({
+      path: 'test.ts',
+      replacements: [
+        { oldString: oldStr, newString: newStr, allowMultiple: false },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('content' in result).toBe(true)
+    if ('content' in result) {
+      expect(result.content).toBe(newStr)
+      expect(
+        result.messages.some((msg) =>
+          msg.includes('auto-corrected a near-match edit'),
+        ),
+      ).toBe(true)
+      expect(
+        result.messages.some((msg) =>
+          msg.includes('Symbol-identity corroboration'),
+        ),
+      ).toBe(true)
+      expect(
+        result.messages.some((msg) => msg.includes('VERIFY the result')),
+      ).toBe(true)
+    }
+  })
+
+  it('never auto-corrects the F4 same-symbol near match when Bun.Transpiler is unavailable (Node runtime)', async () => {
+    // Regression test for the Node runtime path: getSymbolIdentityBoost
+    // returns false early when `typeof Bun === 'undefined' ||
+    // !Bun?.Transpiler`, so the EXACT F4 fixture above (same-symbol drifted
+    // oldString at ~0.84 similarity) must NOT auto-correct without Bun — it
+    // must fall through to the rich diagnostic error, proving the
+    // deterministic near-match behavior is byte-identical to the pre-boost
+    // behavior on the Node path and that no other matcher silently
+    // compensates for the missing Bun.Transpiler evidence.
+    const initialContent = [
+      'export function processRefund(order: Order) {',
+      '  const amount = order.totalCents',
+      '  const reason = order.refundReason',
+      '  return issueRefund(amount, reason)',
+      '}',
+    ].join('\n')
+    const oldStr = [
+      'export function processRefund(order: Order) {',
+      '  const amount = order.totalAmount',
+      '  const reason = order.returnReason',
+      '  return issueRefund(amount)',
+      '}',
+    ].join('\n')
+    const newStr = [
+      'export function processRefund(order: Order) {',
+      '  const amount = order.totalCents',
+      '  const reason = order.refundReason',
+      '  return issueRefund(amount, reason, true)',
+      '}',
+    ].join('\n')
+
+    // Simulate the no-Transpiler runtime by swapping Bun.Transpiler for a
+    // constructor that throws. getTranspiledTopLevelSymbolName's try/catch
+    // turns that into null, so getSymbolIdentityBoost returns false — the
+    // exact production code path taken when Bun.Transpiler is unavailable.
+    // Blanking globalThis.Bun would NOT work: process-str-replace.ts has a
+    // module-local `declare const Bun` whose binding is resolved at import,
+    // independent of the global. Restored in finally so later Bun-dependent
+    // tests (including the F4 corroboration path above) are not poisoned.
+    const priorTranspiler = (
+      globalThis as unknown as { Bun: { Transpiler: unknown } }
+    ).Bun.Transpiler
+    ;(globalThis as unknown as { Bun: { Transpiler: unknown } }).Bun.Transpiler =
+      class {
+        constructor() {
+          throw new Error('Bun.Transpiler unavailable in this runtime')
+        }
+      }
+    try {
+      const result = await processStrReplace({
+        path: 'test.ts',
+        replacements: [
+          { oldString: oldStr, newString: newStr, allowMultiple: false },
+        ],
+        initialContentPromise: Promise.resolve(initialContent),
+        logger,
+      })
+
+      // Without Bun.Transpiler the boost cannot corroborate, so this must be
+      // the rich diagnostic error — never an auto-corrected `content` result.
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain('The old string')
+        expect(
+          result.error.includes('Closest candidate ranges') ||
+            result.error.includes('may refer to content that changed'),
+        ).toBe(true)
+      }
+    } finally {
+      ;(globalThis as unknown as { Bun: { Transpiler: unknown } }).Bun.Transpiler =
+        priorTranspiler
+    }
+  })
+
+  it('still refuses a sub-0.92 stale oldString when the declared symbol differs (Fix A preserved)', async () => {
+    // Fix A refusal preserved under F4: the symbol-identity boost must not
+    // widen beyond same-symbol evidence. The stale oldString declares a
+    // DIFFERENT top-level symbol (processRefundLegacy) than the only
+    // candidate (processRefund), so corroboration fails and the diagnostic
+    // error fires exactly as before the boost existed.
+    const initialContent = [
+      'export function processRefund(order: Order) {',
+      '  const amount = order.totalCents',
+      '  const reason = order.refundReason',
+      '  return issueRefund(amount, reason)',
+      '}',
+    ].join('\n')
+    const oldStr = [
+      'export function processRefundLegacy(order: Order) {',
       '  const amount = order.totalAmount',
       '  const reason = order.returnReason',
       '  return issueRefund(amount)',

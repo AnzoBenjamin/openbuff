@@ -1,2 +1,8 @@
 [test]
-preload = ["../../sdk/test/setup-env.ts"]
+preload = ["../../test/setup-scm-loader.ts", "../../sdk/test/setup-env.ts"]
+# test/setup-scm-loader.ts registers the .scm text loader required by
+# @codebuff/code-map tree-sitter queries. Running `bun test` from this package
+# directory uses THIS bunfig (not the repo-root one), so without the scm-loader
+# preload, structural-read falls back to its regex symbol path and
+# occurrence-based symbol selectors (e.g. the M2 five-selector read_files test)
+# fail when run package-locally. Root and package preloads are now aligned.

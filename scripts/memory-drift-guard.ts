@@ -495,6 +495,10 @@ export function checkCommand(root: string): Finding[] {
         }
         const cwdMatch = fullMatch.match(/--cwd[=\s]+([^\s]+)/)
         let subdir = cwdMatch ? cwdMatch[1] : ''
+        // Track whether subdir came from an author-explicit --cwd/cd target
+        // (vs nearest-package inference). Root script fallback applies only
+        // for inferred package docs documenting bare monorepo-root scripts.
+        let explicitCwd = Boolean(subdir)
         // If --cwd points outside the project root (absolute path not under
         // root), ignore it and fall back to cwd inference.
         if (
@@ -503,6 +507,7 @@ export function checkCommand(root: string): Finding[] {
           !subdir.startsWith(root + sep)
         ) {
           subdir = ''
+          explicitCwd = false
         }
         if (!subdir) {
           // Infer cwd from a `cd <dir> &&` prefix earlier on the same line.
@@ -516,6 +521,7 @@ export function checkCommand(root: string): Finding[] {
               candidate.startsWith(root + sep)
             ) {
               subdir = candidate
+              explicitCwd = true
             }
           }
         }
@@ -537,6 +543,7 @@ export function checkCommand(root: string): Finding[] {
                 candidate.startsWith(root + sep)
               ) {
                 subdir = candidate
+                explicitCwd = true
               }
               break
             }
@@ -553,8 +560,25 @@ export function checkCommand(root: string): Finding[] {
           // not the root.
           subdir = nearestPackageJsonSubdir(root, filePath)
         }
+        // Normalize root-relative cwd forms so root scripts resolve cleanly.
+        if (subdir === '.' || subdir === './') {
+          subdir = '.'
+        }
         const pkg = loadPackageJson(root, subdir)
         if (scriptMissingInPkg(pkg, scriptName)) {
+          // Package READMEs often document monorepo-root scripts as bare
+          // `bun run <script>` without --cwd. Accept root when the nearest
+          // package was only inferred — never when the author explicitly
+          // targeted another package via --cwd or cd.
+          const rootPkg =
+            subdir === '.' ? pkg : loadPackageJson(root, '.')
+          if (
+            !explicitCwd &&
+            subdir !== '.' &&
+            !scriptMissingInPkg(rootPkg, scriptName)
+          ) {
+            continue
+          }
           findings.push({
             path: projectPath,
             line: index + 1,
