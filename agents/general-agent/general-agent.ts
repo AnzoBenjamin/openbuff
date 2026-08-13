@@ -100,7 +100,11 @@ export const createGeneralAgent = (options: {
       `Do not stop after announcing a tool call or delegating discovery. In the same final response that contains the requested answer or compact audit receipt, call task_completed. Never call task_completed while required reads, synthesis, coverage, or audit artifact persistence remain unfinished.`,
     ).join('\n'),
 
-    handleSteps: function* ({ prompt, params }) {
+    handleSteps: function* ({
+      prompt,
+      params,
+      agentState: initialAgentState,
+    }: any) {
       const filePaths = params?.filePaths as string[] | undefined
       const directoryPaths = params?.directoryPaths as string[] | undefined
 
@@ -151,23 +155,52 @@ export const createGeneralAgent = (options: {
         }
       }
 
+      let latestAgentStateForPruner = initialAgentState as
+        | {
+            contextTokenCount?: number
+            contextWindowTokens?: number
+            messageHistory?: unknown[]
+          }
+        | undefined
       let auditCompletionRetries = 0
       while (true) {
-        // Run context-pruner before each step.
-        // `spawn_agent_inline` is a secret-only tool (AllToolNames) not in the
-        // public ToolName union that ToolCall<T> is keyed by, so a cast is
-        // required here. See agents/base2/base2.ts for the same convention.
-        yield {
-          toolName: 'spawn_agent_inline',
-          input: {
-            agent_type: 'context-pruner',
-            params: params ?? {},
-          },
-          includeToolCall: false,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- secret-only tool; see comment above
-        } as any
+        const tokenCount = latestAgentStateForPruner?.contextTokenCount ?? 0
+        const windowTokens = latestAgentStateForPruner?.contextWindowTokens
+        const msgLen = Array.isArray(latestAgentStateForPruner?.messageHistory)
+          ? latestAgentStateForPruner.messageHistory.length
+          : 0
+        const shouldRunPruner =
+          tokenCount > 100_000 ||
+          msgLen > 30 ||
+          (typeof windowTokens === 'number' &&
+            windowTokens > 0 &&
+            tokenCount > windowTokens * 0.65)
+        if (shouldRunPruner) {
+          yield {
+            toolName: 'spawn_agent_inline',
+            input: {
+              agent_type: 'context-pruner',
+              params: params ?? {},
+            },
+            includeToolCall: false,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- secret-only tool; see comment above
+          } as any
+        }
 
-        const stepResult = yield 'STEP'
+        const stepResult = yield 'STEP' as unknown as {
+          stepsComplete: boolean
+          hitStepCap?: boolean
+          agentState?: {
+            messageHistory?: unknown[]
+            contextTokenCount?: number
+            contextWindowTokens?: number
+          }
+        }
+        if (stepResult?.agentState) {
+          latestAgentStateForPruner =
+            stepResult.agentState as typeof latestAgentStateForPruner
+        }
+        if ((stepResult as { hitStepCap?: boolean }).hitStepCap) break
         if (!stepResult.stepsComplete) continue
 
         const sessionSlug =
@@ -176,18 +209,12 @@ export const createGeneralAgent = (options: {
             : ''
         const shardId =
           typeof params?.shardId === 'string' ? params.shardId.trim() : ''
-        // Fail closed on snapshot binding: containsStructuralAuditReceipt
-        // treats an empty/undefined expectedSnapshotId as a wildcard that
-        // matches any structural receipt (see
-        // common/src/util/audit-receipt.ts). When sessionSlug+shardId arrive
-        // without a snapshotId, substitute a sentinel that no real snapshot id
-        // can equal so the audit gate keeps rejecting instead of accepting an
-        // unbound-by-snapshot shard.
-        const expectedSnapshotId =
-          typeof params?.snapshotId === 'string' && params.snapshotId.trim()
+        const snapshotId =
+          typeof params?.snapshotId === 'string'
             ? params.snapshotId.trim()
-            : '__missing_audit_snapshot_id__'
-        const auditRequested = Boolean(sessionSlug && shardId)
+            : ''
+        const expectedSnapshotId = snapshotId
+        const auditRequested = Boolean(sessionSlug && shardId && snapshotId)
         if (
           auditRequested &&
           !containsStructuralAuditReceipt(

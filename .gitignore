@@ -40,3 +40,6 @@ docs/bot-detection.md
 
 # Local image/screenshot scratch
 󰎞_*.webp
+
+# CommandCode local state
+.commandcode/
