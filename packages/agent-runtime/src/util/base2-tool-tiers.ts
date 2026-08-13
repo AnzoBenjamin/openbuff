@@ -12,6 +12,8 @@
  * beyond the template's mode-appropriate ceiling.
  */
 
+import type { ToolName } from '@codebuff/common/tools/constants'
+
 /**
  * Base2 CORE tool names — always available when progressive disclosure is on.
  *
@@ -26,7 +28,7 @@
  * gates), or it could expose `ask_user`/`write_todos` in a mode that forbids
  * them.
  */
-export const BASE2_CORE_TOOL_NAMES: readonly string[] = [
+export const BASE2_CORE_TOOL_NAMES: readonly ToolName[] = [
   'spawn_agents',
   'query_index',
   'read_files',
@@ -45,8 +47,10 @@ export const BASE2_CORE_TOOL_NAMES: readonly string[] = [
   'read_logs',
 ]
 
+export type ToolTier = 'core' | 'implement' | 'audit' | 'media_3d' | 'job_extra'
+
 /** Tools unlocked by each non-core base2 tier. */
-export const BASE2_TIER_TOOL_NAMES: Record<string, readonly string[]> = {
+export const BASE2_TIER_TOOL_NAMES: Record<Exclude<ToolTier, 'core'>, readonly ToolName[]> = {
   implement: [
     'edit_transaction',
     'create_plan',
@@ -73,6 +77,11 @@ export const BASE2_TIER_TOOL_NAMES: Record<string, readonly string[]> = {
   ],
   job_extra: ['kill_job'],
 }
+
+/** Cached set of all tier-gated tool names — avoids rebuilding per call. */
+const TIER_GATED: ReadonlySet<string> = new Set(
+  Object.values(BASE2_TIER_TOOL_NAMES).flat(),
+)
 
 /**
  * Compute the effective base2 tool surface for progressive tool disclosure:
@@ -105,21 +114,29 @@ export function filterByUnlockedTiers(
   unlockedTiers: string[],
   templateAllows?: (name: string) => boolean,
 ): string[] {
+  // Narrow/bound unlockedTiers: ignore non-string, "core", unknown, duplicates.
+  const uniqueValidTiers: Exclude<ToolTier, 'core'>[] = []
+  const seenTier = new Set<string>()
+  for (const raw of unlockedTiers) {
+    if (typeof raw !== 'string') continue
+    if (raw === 'core') continue
+    if (seenTier.has(raw)) continue
+    if (!Object.hasOwn(BASE2_TIER_TOOL_NAMES, raw)) continue
+    seenTier.add(raw)
+    uniqueValidTiers.push(raw as Exclude<ToolTier, 'core'>)
+  }
   const allowed = new Set<string>(BASE2_CORE_TOOL_NAMES)
-  for (const tier of unlockedTiers) {
+  for (const tier of uniqueValidTiers) {
     for (const name of BASE2_TIER_TOOL_NAMES[tier] ?? []) {
       allowed.add(name)
     }
   }
-  const tierGated = new Set<string>(
-    Object.values(BASE2_TIER_TOOL_NAMES).flat(),
-  )
   const result: string[] = []
   const seen = new Set<string>()
   const keep = (name: string): boolean => {
     if (seen.has(name)) return false
     // Keep CORE and non-tier template names; drop still-locked tier tools.
-    if (!allowed.has(name) && tierGated.has(name)) return false
+    if (!allowed.has(name) && TIER_GATED.has(name)) return false
     seen.add(name)
     return true
   }
@@ -127,11 +144,15 @@ export function filterByUnlockedTiers(
     if (keep(name)) result.push(name)
   }
   // Add newly unlocked tier tools the core-only template did not already
-  // list, honoring the template's mode ceiling when one is provided.
-  for (const tier of unlockedTiers) {
+  // list. Caller MUST pass templateAllows when operating on a mode-resolved
+  // surface (fast/plan-only) — undefined defaults to allow-all only for
+  // non-mode-gated callers/tests; mode-gated callers that omit the ceiling
+  // risk widening beyond the template's mode-appropriate surface
+  // (e.g. exposing ask_user/write_todos in fast/plan-only via CORE ceiling).
+  for (const tier of uniqueValidTiers) {
     for (const name of BASE2_TIER_TOOL_NAMES[tier] ?? []) {
       if (seen.has(name)) continue
-      if (templateAllows && !templateAllows(name)) continue
+      if (templateAllows !== undefined && !templateAllows(name)) continue
       seen.add(name)
       result.push(name)
     }

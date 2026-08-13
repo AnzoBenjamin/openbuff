@@ -598,6 +598,21 @@ deterministic block into the marker region. Refresh with
 `--check` to fail when stale; `agents/__tests__/gate-helpers-freshness.test.ts`
 enforces the same freshness check in CI.
 
+The same pattern covers the context-pruner budget constants. `handleSteps` in
+`agents/context-pruner.ts` cannot import
+`packages/agent-runtime/src/util/context-pruning.ts` at runtime, so its
+`SEMANTIC_*` / `MODEL_CONTEXT_*` literals live in a generated
+`<pruner-budgets-generated>` marker region emitted by
+`scripts/generate-pruner-budgets.ts`. That script parses the canonical module
+with the TypeScript compiler API and copies each exported numeric literal under
+its pruner-local name, so the mirror is structural rather than hand-maintained:
+change the canonical constants, then run
+`bun run scripts/generate-pruner-budgets.ts --write agents/context-pruner.ts`
+(also wired into `prebuild:agents`) or `--check` to fail when stale.
+`agents/__tests__/pruner-budgets-freshness.test.ts` enforces both the stale-region
+check and per-constant parity against the canonical exports. `EXPLICIT_LIMIT_TARGET_FRACTION`
+is pruner-local and deliberately sits outside the region.
+
 A reviewer may emit its verdict in either text mode or structured (JSON) mode:
 
 - **Text mode** — the first visible token of the reply is a verdict label followed by `:` (the orchestrator strips any leading `` block first):

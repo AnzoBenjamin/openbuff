@@ -3303,16 +3303,20 @@ describe('context-pruner threshold behavior', () => {
     )
   })
 
+  // Trigger thresholds mirror the generated SEMANTIC_* budgets (0.70 trigger)
+  // emitted into context-pruner.ts by scripts/generate-pruner-budgets.ts from
+  // packages/agent-runtime/src/util/context-pruning.ts. Keep in sync with the
+  // pruner-budgets-freshness pointer if these change.
   test.each([
     [8_000, 2_000],
-    [16_000, 6_000],
-    [32_000, 18_000],
-    [64_000, 42_000],
-    [128_000, 96_000],
-    [200_000, 160_000],
-    [262_144, 209_715],
-    [500_000, 400_000],
-    [1_000_000, 800_000],
+    [16_000, 5_600],
+    [32_000, 16_800],
+    [64_000, 39_200],
+    [128_000, 89_600],
+    [200_000, 140_000],
+    [262_144, 183_500],
+    [500_000, 350_000],
+    [1_000_000, 700_000],
   ])(
     'scales the default semantic threshold for a %i-token context window',
     (contextWindowTokens, triggerBudgetTokens) => {

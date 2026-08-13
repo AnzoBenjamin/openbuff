@@ -22,8 +22,10 @@ import {
   specialistRoutingSection,
 } from './quality-prompt-section'
 import {
-  isProgressiveToolDisclosureEnvEnabled,
+  deriveIntentSignals,
+  isProgressiveToolDisclosureEnvEnabled as isEnvFlagEnabled,
   resolveModelToolNames,
+  resolveUnlockedTiersForPhase,
   type ToolTier,
 } from './tool-tiers'
 import { publisher } from '../constants'
@@ -39,6 +41,14 @@ import {
  * an explicit `progressivePromptDisclosure: false` still wins.
  */
 const DEFAULT_PROGRESSIVE_PROMPT_DISCLOSURE: boolean = true
+
+/**
+ * Default for progressive tool disclosure when the caller omits the
+ * `progressiveToolDisclosure` option. Post-flip: ON by default. The
+ * OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE canary can only force ON, never OFF;
+ * an explicit `progressiveToolDisclosure: false` still wins.
+ */
+const DEFAULT_PROGRESSIVE_TOOL_DISCLOSURE: boolean = true
 
 export {
   DEFAULT_MAX_REPAIR_ROUNDS,
@@ -87,23 +97,25 @@ export function createBase2(
   // force-on override consulted on this omitted-option path.
   const progressivePromptDisclosure =
     progressivePromptDisclosureOption ??
-    (isProgressiveToolDisclosureEnvEnabled(
+    (isEnvFlagEnabled(
       typeof process === 'object' && process !== null
         ? process.env?.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE
         : undefined,
     ) ||
       DEFAULT_PROGRESSIVE_PROMPT_DISCLOSURE)
-  // Explicit true/false wins over env. When omitted, resolve from the
-  // OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE canary (off unless 1/true/yes/on).
+  // Explicit true/false wins over env. When omitted, the DEFAULT is now ON
+  // (flipped default-on); the OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE canary
+  // (1/true/yes/on) remains a force-on override consulted on this omitted-option path.
   // Static toolNames start core-only when on (unlockedTiers: []). handleSteps
   // publishes live unlocks via publishUnlockedToolTiers before each STEP.
   const progressiveToolDisclosure =
     progressiveToolDisclosureOption ??
-    isProgressiveToolDisclosureEnvEnabled(
+    (isEnvFlagEnabled(
       typeof process === 'object' && process !== null
         ? process.env?.OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE
         : undefined,
-    )
+    ) ||
+      DEFAULT_PROGRESSIVE_TOOL_DISCLOSURE)
   // Explicit option wins over env. When omitted, resolve from
   // OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS (positive integer string).
   // Missing/invalid → null (unlimited, progress-gated). Positive int = optional cap.
@@ -134,7 +146,16 @@ export function createBase2(
   const isDefault = mode === 'default'
   const isFast = mode === 'fast'
 
-  const model = modelOverride ?? 'anthropic/claude-opus-4.7'
+  // All agents including the orchestrator (base2) are BYOK-routed via
+  // openbuff.json (defaultModel / modes / agents) with no hardcoded fallback.
+  // Cheaper subagents (file-picker/code-searcher) and the orchestrator itself
+  // can be overridden via openbuff.json routing (agents.*.model / modes /
+  // defaultModel) without code changes; when modelOverride is undefined the
+  // `model` field is omitted and
+  // sdk/src/impl/model-provider.ts:resolveConfiguredAgentModelConfig drives
+  // resolution and hard-errors if no route exists (priority: modes ->
+  // agents[agentId] -> defaultModel -> explicit model -> hard error; see
+  // docs/configuration.md and docs/local-mode.md).
 
   const progressiveDisclosure = progressivePromptDisclosure
   // M4 progressive prompt disclosure (default ON; opt out with an explicit
@@ -155,6 +176,7 @@ export function createBase2(
 
   return {
     publisher,
+    ...(modelOverride !== undefined ? { model: modelOverride } : {}),
     providerOptions,
     displayName: 'Buffy the Orchestrator',
     spawnerPrompt:
@@ -316,8 +338,8 @@ ${
 }
 ${
   progressiveToolDisclosure
-    ? '- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Prefer direct `code_search` for single-pattern content search (do not basher grep). Spawn `code-searcher` for multi-query batch search with `params.searchQueries`. For large files prefer read_files windows/around/symbol selectors over guess-shrink-retry ranges paging. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (`<<\'EOF\' ... EOF`) inside `basher.params.command`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. When edit tools unlock, author files with the dedicated edit surface and run them via a short basher command instead. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs `params.searchQueries` (an array of { pattern } objects) and basher needs `params.command` (a shell string); put these in `params`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).'
-    : '- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Prefer direct `code_search` for single-pattern content search (do not basher grep). Spawn `code-searcher` for multi-query batch search with `params.searchQueries`. For large files prefer read_files windows/around/symbol selectors over guess-shrink-retry ranges paging. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (`<<\'EOF\' ... EOF`) inside `basher.params.command`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with `write_file`/`edit_transaction` and run them via a short basher command instead. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs `params.searchQueries` (an array of { pattern } objects) and basher needs `params.command` (a shell string); put these in `params`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).'
+    ? '- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Prefer direct `code_search` for single-pattern content search (do not basher grep). Spawn `code-searcher` for multi-query batch search with `params.searchQueries`. Tiered read policy: small files (≤~400 lines) use read_files paths or ranges 1..totalLines for Tier1 whole-file auth (complete:true → reusable cap.v3); large/targeted blocks use read_files windows/around/symbol for Tier2 scoped caps (must be complete:true to mint). After successful edit_transaction, compress body to path/pointer but retain whole-file postEditCapabilities verbatim (confirmed anchor is always whole-file verified → whole-file sticky). Don\'t force windows for small files. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (`<<\'EOF\' ... EOF`) inside `basher.params.command`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. When edit tools unlock, author files with the dedicated edit surface and run them via a short basher command instead. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs `params.searchQueries` (an array of { pattern } objects) and basher needs `params.command` (a shell string); put these in `params`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).'
+    : '- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Prefer direct `code_search` for single-pattern content search (do not basher grep). Spawn `code-searcher` for multi-query batch search with `params.searchQueries`. Tiered read policy: small files (≤~400 lines) use read_files paths or ranges 1..totalLines for Tier1 whole-file auth (complete:true → reusable cap.v3); large/targeted blocks use read_files windows/around/symbol for Tier2 scoped caps (must be complete:true to mint). After successful edit_transaction, compress body to path/pointer but retain whole-file postEditCapabilities verbatim. Don\'t force windows for small files. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (`<<\'EOF\' ... EOF`) inside `basher.params.command`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with `write_file`/`edit_transaction` and run them via a short basher command instead. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs `params.searchQueries` (an array of { pattern } objects) and basher needs `params.command` (a shell string); put these in `params`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).'
 }
 
 # Code Editing Mandates
@@ -388,8 +410,8 @@ Use the spawn_agents tool to spawn specialized agents to help you complete the u
 - **Plan artifact maintenance:** In PLAN mode create and maintain durable artifacts; in EXECUTE_PLAN keep STATUS.md and LESSONS.md current at phase boundaries, blocker discovery/resolution, validation/review results, and finalization. Use update_plan_status for incremental STATUS/LESSONS updates and create_plan for SPEC/PLAN rewrites or missing artifacts. Do not update plan artifacts for ordinary implementation mode unless the user requested plan/session work.
 ${
   progressiveToolDisclosure
-    ? '- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use CORE read_files/read_outline/read_subtree/glob/list_directory/query_index for source inspection (large files: prefer read_files windows/around/symbol selectors), browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. Media, edit, validation, and kill_job tools appear only after their tiers unlock — continue with available tools until then. `run_targeted_validation` is scoped evidence only once unlocked — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.'
-    : '- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use read_files/read_outline/read_subtree/glob/list_directory/query_index for source inspection (large files: prefer read_files windows/around/symbol selectors), inspect_3d_asset/render_3d_preview for 3D assets, read_image for other screenshots/images, edit_3d_asset for guarded Blender changes, edit_transaction for text project mutations, browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. `run_targeted_validation` is scoped evidence only — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.'
+    ? '- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use CORE read_files/read_outline/read_subtree/glob/list_directory/query_index for source inspection — tiered policy: small files (≤~400 lines) use paths or full-file range 1..totalLines for Tier1 whole-file auth; large/targeted blocks use windows/around/symbol for Tier2 scoped caps (must be complete:true to mint). After successful edit_transaction, compress body to path/pointer but retain whole-file postEditCapabilities verbatim. Don\'t force windows for small files. Browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. Media, edit, validation, and kill_job tools appear only after their tiers unlock — continue with available tools until then. `run_targeted_validation` is scoped evidence only once unlocked — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.'
+    : '- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use read_files/read_outline/read_subtree/glob/list_directory/query_index for source inspection — tiered policy: small files (≤~400 lines) use paths or full-file range 1..totalLines for Tier1 whole-file auth; large/targeted blocks use windows/around/symbol for Tier2 scoped caps (must be complete:true to mint). After successful edit_transaction, compress body to path/pointer but retain whole-file postEditCapabilities verbatim. Don\'t force windows for small files. Inspect_3d_asset/render_3d_preview for 3D assets, read_image for other screenshots/images, edit_3d_asset for guarded Blender changes, edit_transaction for text project mutations, browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. `run_targeted_validation` is scoped evidence only — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.'
 }
 - **Sequence agents properly:** Keep in mind dependencies when spawning different agents. Don't spawn agents in parallel that depend on each other.
 - **Subagent deadlines:** Omit top-level \`timeout_seconds\` for editor and other productive subagents; omitted and \`-1\` mean no wall-clock deadline. Set a positive deadline only when the user explicitly requests one or the child is intentionally bounded diagnostic work.
@@ -421,7 +443,7 @@ ${
 ${isDefault ? gateAwarenessSection : ''}
 # Openbuff Meta-information
 
-You are running on the ${model} model.
+${modelOverride !== undefined ? `You are running on the ${modelOverride} model.` : 'You are running on the model configured via openbuff.json (defaultModel / modes / agents — see docs/local-mode.md) — the `model` field is not a fallback.'}
 
 Users send prompts to you in one of a few user-selected modes, like DEFAULT or PLAN.
 
@@ -1349,7 +1371,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           if (
             storedMarker === undefined ||
             storedMarker !== currentMarker ||
-            !isAttestableContentMarker(currentMarker)
+            !isCreditableContentMarker(currentMarker)
           ) {
             gatePassedFiles.delete(file)
             delete ledgerMarkers[file]
@@ -1465,15 +1487,44 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           pinnedStateMessage &&
           pinnedStateMessage !== activeWorkState.lastPinnedStateMessage
         ) {
-          activeWorkState.lastPinnedStateMessage = pinnedStateMessage
-          yield {
-            toolName: 'add_message',
-            input: {
-              role: 'user',
-              content: pinnedStateMessage,
-            },
-            includeToolCall: false,
-          } as any
+          const previousPinned = activeWorkState.lastPinnedStateMessage ?? ''
+          // Win 4a delta-only: emit full Harness pinned block once; subsequent STEPS when
+          // openReviewerBlockers/nextRequiredAction unchanged only emit Gate progress diff.
+          // Stripping Gate progress line lets us detect when only progress changed.
+          const stripGateProgress = (msg: string): string =>
+            msg.replace(/\nGate progress:[^\n]*/g, '').trim()
+          const prevStripped = stripGateProgress(previousPinned)
+          const nextStripped = stripGateProgress(pinnedStateMessage)
+          const isOnlyGateProgressChange =
+            previousPinned !== '' &&
+            prevStripped === nextStripped &&
+            pinnedStateMessage.includes('Gate progress:')
+          if (isOnlyGateProgressChange) {
+            const gateProgressLine = activeWorkState.gateProgressLine ?? ''
+            if (gateProgressLine) {
+              activeWorkState.lastPinnedStateMessage = pinnedStateMessage
+              yield {
+                toolName: 'add_message',
+                input: {
+                  role: 'user',
+                  content: `Gate progress: ${gateProgressLine}`,
+                },
+                includeToolCall: false,
+              } as any
+            } else {
+              activeWorkState.lastPinnedStateMessage = pinnedStateMessage
+            }
+          } else {
+            activeWorkState.lastPinnedStateMessage = pinnedStateMessage
+            yield {
+              toolName: 'add_message',
+              input: {
+                role: 'user',
+                content: pinnedStateMessage,
+              },
+              includeToolCall: false,
+            } as any
+          }
         }
 
         // Publish the current unlocked tool tiers before the LLM step so the
@@ -5157,14 +5208,11 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
       // .toString() + new Function(...): the deriveIntentSignals /
       // resolveUnlockedTiersForPhase helpers from tool-tiers.ts are inlined
       // here. The canary flag is read from programmaticConfig (plain JSON),
-      // never a module-scope closure.
+      // never a module-scope closure. RF-4: the pure helper
+      // `getPublishUnlockedToolTiers` exported above mirrors this logic for
+      // direct unit testing without readFileSync+Transpiler brittleness.
       function publishUnlockedToolTiers(): void {
         if (config?.progressiveToolDisclosure !== true) {
-          // Serialization hygiene: drop stale non-empty unlocks from a prior
-          // canary-on run so resume/canary-off checkpoints do not re-carry a
-          // progressive filter list. getEffectiveAgentToolNames also ignores
-          // tiers when progressiveToolDisclosure === false, but clearing here
-          // keeps persisted agentState honest for later resume consumers.
           if (
             Array.isArray(mutableAgentState.unlockedToolTiers) &&
             mutableAgentState.unlockedToolTiers.length > 0
@@ -5183,8 +5231,6 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         const hasOpenReviewerBlockers =
           Array.isArray(activeWorkState.openReviewerBlockers) &&
           activeWorkState.openReviewerBlockers.length > 0
-
-        // deriveIntentSignals (inlined).
         const implementIntent =
           phase === 'awaiting_validation' ||
           phase === 'repair_loop' ||
@@ -5199,17 +5245,10 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           ) || phase === 'awaiting_review'
         const mediaIntent =
           /\.(?:png|jpe?g|webp|gif|blend|obj|gltf|glb)\b/i.test(promptText)
-        // Keep job_extra rare: require job-management phrasing, not bare
-        // kill/server/logs/watch/tail tokens (mirrors tool-tiers JOB_KEYWORD_RE).
         const jobIntent =
           /\b(?:(?:background|bg)\s+(?:job|agent|process|task|basher)|kill(?:_|\s+)(?:the\s+)?(?:job|process)|(?:list|check|kill)_jobs?|job(?:Id|\s*id)|tail\s+-f|watch\s+(?:the\s+)?(?:build|logs?|job|process)|long[- ]running\s+(?:dev\s+)?server|dev\s+server)\b/i.test(
             promptText,
           )
-
-        // resolveUnlockedTiersForPhase (inlined). CORE is always on and is
-        // never emitted here. Tier decisions depend only on the four intent
-        // booleans above; `phase` is already folded into them by the inlined
-        // deriveIntentSignals logic, so it is not a separate input here.
         const tiers: ToolTier[] = []
         if (implementIntent) tiers.push('implement')
         if (auditIntent) tiers.push('audit')
@@ -7572,6 +7611,18 @@ function hashGateSnapshotDetails(details: string): string {
         return /^(?:symlink-)?sha256:[a-f0-9]{64}:\d+$/.test(value)
       }
 
+      // A content marker that can be safely credited into the durable gate-ledger.
+      // A `missing` marker (a file deleted in the changeset) is a stable,
+      // creditable state: the file is absent byte-identical, mirroring how the
+      // reviewer attests-by-absence. It is still evicted if the file reappears
+      // (the marker becomes a present sha256:... hash and no longer matches),
+      // so fail-closed re-review on a reappeared file is preserved. All other
+      // non-attestable markers (unreadable:<code>, missing-crypto, etc.) remain
+      // excluded so they can never grant durable gate credit.
+      function isCreditableContentMarker(value: string): boolean {
+        return isAttestableContentMarker(value) || value === 'missing'
+      }
+
       function hasFreshGateFingerprintForPendingFiles(
         files: string[],
         validationSummary: string,
@@ -8290,10 +8341,12 @@ function hashGateSnapshotDetails(details: string): string {
         const markers = (activeWorkState.gatePassedFileMarkers ??= {})
         for (const file of files) {
           const marker = readGateFileContentMarker(file)
-          // Only credit files with attestable content markers. External
+          // Only credit files with creditable content markers. A `missing`
+          // marker (a file deleted in the changeset) is credited as-is so the
+          // gate does not re-arm forever on a stable deletion; external
           // symlinks, unreadable files, and missing-crypto states produce
           // non-attestable markers that must never enter the durable ledger.
-          if (!isAttestableContentMarker(marker)) continue
+          if (!isCreditableContentMarker(marker)) continue
           gatePassedFiles.add(file)
           markers[file] = marker
         }
@@ -9256,6 +9309,55 @@ function buildPlanOnlyStepPrompt({}: {}) {
     `You are in plan mode. Do not make project source changes or call edit_transaction for implementation files. Do not use the write_todos tool in plan mode. Use bounded waves of analysis subagents until coverage is complete; there is no fixed total-agent limit. Basher and browser-use inherit runtime-enforced read-only authority in plan mode, and debugger is diagnosis-only. Preserve short-answer behavior for simple questions. For larger or otherwise non-trivial work, use create_plan to create or substantially rewrite the four durable plan artifacts under .agents/sessions/<slug>/ by default (SPEC.md, PLAN.md, STATUS.md, LESSONS.md); do not treat STATUS.md or LESSONS.md as optional/as-needed or wait for normal users to ask for them separately. Once those artifacts exist, prefer update_plan_status for incremental STATUS.md and LESSONS.md updates (progress, blockers, checkpoints, lessons) rather than rewriting them whole with create_plan; keep using create_plan for SPEC.md / PLAN.md edits and for creating any missing artifact. Wrap the visible markdown response in <PLAN>...</PLAN> unless answering a simple question directly.`,
   ).join('\n')
 }
+
+/**
+ * Pure helper mirroring the serialized `publishUnlockedToolTiers` intent logic
+ * inside `handleSteps`. Exported for direct unit testing (RF-4) so the test
+ * suite does not need to `readFileSync` + `Bun.Transpiler` + `new Function`
+ * the generator source — a brittle, formatting-sensitive extraction. The
+ * handleSteps inline copy and this helper must stay in sync; the RF-3/RF-4
+ * sync guard asserts `getPublishUnlockedToolTiers(...) ===
+ * resolveUnlockedTiersForPhase(deriveIntentSignals(...))` across a matrix.
+ */
+export function getPublishUnlockedToolTiers(params: {
+  phase: string
+  pendingGateFileCount: number
+  hasOpenReviewerBlockers: boolean
+  lastUserPrompt?: string
+}): ToolTier[] {
+  return resolveUnlockedTiersForPhase(deriveIntentSignals(params))
+}
+
+/**
+ * Canary-aware wrapper mirroring the full `publishUnlockedToolTiers` decision:
+ * when `progressiveToolDisclosure` is off, any stale non-empty unlock list is
+ * cleared (returns `undefined` to signal deletion). When on, delegates to
+ * `getPublishUnlockedToolTiers`. Pure and side-effect free for testing.
+ */
+export function getPublishUnlockedToolTiersWithCanary(params: {
+  phase: string
+  pendingGateFileCount: number
+  hasOpenReviewerBlockers: boolean
+  lastUserPrompt?: string
+  progressiveToolDisclosure?: boolean
+  initialUnlockedToolTiers?: ToolTier[]
+}): ToolTier[] | undefined {
+  if (params.progressiveToolDisclosure !== true) {
+    if (
+      Array.isArray(params.initialUnlockedToolTiers) &&
+      params.initialUnlockedToolTiers.length > 0
+    ) {
+      return undefined
+    }
+    return undefined
+  }
+  return getPublishUnlockedToolTiers(params)
+}
+
+// Backwards-compatible alias: previous name was tool-specific, now generic.
+// Re-exported from base2 for callers that imported via base2; the canonical
+// export remains `isEnvFlagEnabled` (aliased from tool-tiers).
+export { isEnvFlagEnabled }
 
 const definition = { ...createBase2('default'), id: 'base2' }
 export default definition

@@ -19,6 +19,7 @@ import {
 } from '../base2/base2'
 import { normalizeGateFilePath } from '../base2/gate-paths'
 import type { Base2ActiveWorkState } from '../base2/gate-state'
+import { resolveModelToolNames } from '../base2/tool-tiers'
 
 const TEST_TMP_ROOT = join(process.cwd(), '.base2-test-scratch')
 mkdirSync(TEST_TMP_ROOT, { recursive: true })
@@ -585,9 +586,11 @@ describe('base2 validation/reviewer coordination prompts', () => {
     expect(base2.systemPrompt).not.toContain('Initial Git Changes')
     expect(base2.spawnableAgentToolMode).toBe('generic')
     expect(base2.toolNames).not.toContain('git_status')
-    expect(base2.toolNames).toContain('get_change_review_bundle')
+    // get_change_review_bundle and inspect_codebase_structure are audit-tier,
+    // so both are absent from the CORE-only default surface.
+    expect(base2.toolNames).not.toContain('get_change_review_bundle')
     expect(base2.toolNames).not.toContain('run_file_change_hooks')
-    expect(base2.toolNames).toContain('inspect_codebase_structure')
+    expect(base2.toolNames).not.toContain('inspect_codebase_structure')
     expect(base2.programmaticToolNames).toEqual(
       expect.arrayContaining([
         'git_status',
@@ -651,11 +654,22 @@ describe('base2 validation/reviewer coordination prompts', () => {
 
   test('base2 exposes update_plan_status alongside create_plan', () => {
     const base2 = createBase2('default')
-    expect(base2.toolNames).toContain('create_plan')
-    expect(base2.toolNames).toContain('update_plan_status')
+    // create_plan/update_plan_status are implement-tier, so they are absent
+    // from the CORE-only default (progressive) surface.
+    expect(base2.toolNames).not.toContain('create_plan')
+    expect(base2.toolNames).not.toContain('update_plan_status')
 
     const planBase2 = createBase2('default', { planOnly: true })
-    expect(planBase2.toolNames).toContain('update_plan_status')
+    expect(planBase2.toolNames).not.toContain('update_plan_status')
+
+    // They become available only when the implement tier is unlocked.
+    const implementSurface = resolveModelToolNames({
+      mode: 'default',
+      progressiveToolDisclosure: true,
+      unlockedTiers: ['implement'],
+    })
+    expect(implementSurface).toContain('create_plan')
+    expect(implementSurface).toContain('update_plan_status')
   })
 
   test('plan mode exposes broad read-only analysis agents without mutation agents', () => {
@@ -682,7 +696,9 @@ describe('base2 validation/reviewer coordination prompts', () => {
       expect(spawnable).not.toContain(agent)
     }
     expect(planBase2.toolNames).toContain('check_background_agent')
-    expect(planBase2.toolNames).toContain('inspect_codebase_structure')
+    // inspect_codebase_structure is audit-tier, so it is absent from the
+    // CORE-only default plan surface.
+    expect(planBase2.toolNames).not.toContain('inspect_codebase_structure')
     expect(planBase2.toolNames).not.toContain('edit_transaction')
     expect(planBase2.toolNames).not.toContain('run_file_change_hooks')
     expect(planBase2.toolNames).not.toContain('git_status')
@@ -795,13 +811,11 @@ describe('base-deep prompt naming and tool guidance', () => {
     )
     expect(baseDeep.instructionsPrompt).toContain('before suggesting followups')
     expect(baseDeep.toolNames).toEqual(
-      expect.arrayContaining([
-        'read_outline',
-        'list_directory',
-        'glob',
-        'edit_transaction',
-      ]),
+      expect.arrayContaining(['read_outline', 'list_directory', 'glob']),
     )
+    // edit_transaction is implement-tier, so it is absent from the CORE-only
+    // default base-deep surface (unlocks only under the implement tier).
+    expect(baseDeep.toolNames).not.toContain('edit_transaction')
     expect(baseDeep.toolNames).not.toContain('str_replace')
     expect(baseDeep.toolNames).not.toContain('replace_range')
     expect(baseDeep.toolNames).not.toContain('rewrite_symbol')
@@ -825,15 +839,19 @@ describe('base-deep gate lifecycle parity with base2', () => {
     // bundle is also model-visible so the orchestrator can recover a fresh
     // snapshot after compaction without hitting a tool-availability error.
     expect(baseDeep.programmaticToolNames).toEqual(
-      expect.arrayContaining(['run_file_change_hooks', 'git_status']),
-    )
-    expect(baseDeep.toolNames).toEqual(
       expect.arrayContaining([
-        'create_plan',
-        'update_plan_status',
-        'get_change_review_bundle',
+        'spawn_agent_inline',
+        'git_status',
+        'run_file_change_hooks',
+        'inspect_codebase_structure',
       ]),
     )
+    // create_plan/update_plan_status are implement-tier and
+    // get_change_review_bundle is audit-tier, so none appear in the CORE-only
+    // default base-deep model surface.
+    expect(baseDeep.toolNames).not.toContain('create_plan')
+    expect(baseDeep.toolNames).not.toContain('update_plan_status')
+    expect(baseDeep.toolNames).not.toContain('get_change_review_bundle')
 
     // editor is required for the gate repair loop (spawned on validation
     // failure). code-reviewer runs the reviewer half of the gate.
@@ -6771,8 +6789,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(base2.stepPrompt).not.toContain(
       'Read STATUS.md and PLAN.md before acting',
     )
+    // edit_transaction and run_terminal_command are implement-tier, so they are
+    // absent from the CORE-only default surface (unlock only under implement).
     for (const tool of ['edit_transaction', 'run_terminal_command'] as const) {
-      expect(base2.toolNames).toContain(tool)
+      expect(base2.toolNames).not.toContain(tool)
     }
     for (const tool of [
       'str_replace',
@@ -7140,6 +7160,201 @@ describe('base2 gate-passed credit ledger (Option A)', () => {
       ])
       expect((agentState as any).base2ActiveWork.currentPhase).toBe(
         'final_response_allowed',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('retains a credited-as-deleted file whose stored marker is still missing (no gate loop)', () => {
+    // A file deleted in the changeset is credited with marker 'missing'. On a
+    // later turn the file is still deleted, so readGateFileContentMarker still
+    // returns 'missing' == the stored marker and isCreditableContentMarker
+    // accepts it. The credited deletion must NOT be evicted and re-armed on
+    // every loop, or the gate would reopen forever on a stable deletion.
+    const base2 = createBase2('default')
+    const tmpDir = makeProjectTempDir('base2-credit-deleted-')
+    const tmpFile = join(tmpDir, 'a.ts')
+    try {
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      // The file was deleted in the same changeset that was gate-passed, so it
+      // is absent from disk now.
+      rmSync(tmpFile, { force: true })
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2',
+        base2ActiveWork: {
+          changedFiles: [gateFile],
+          touchedFiles: [gateFile],
+          pendingGateFiles: [],
+          currentPhase: 'final_response_allowed',
+          latestWorkSummary: '',
+          openReviewerBlockers: [],
+          lastValidationSummary:
+            'Configured file-change hooks passed: typecheck.',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [gateFile],
+          // A deletion is credited with the stable 'missing' marker.
+          gatePassedFileMarkers: { [gateFile]: 'missing' },
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      // Working-tree deletion: ` D <path>`.
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` D ${tmpFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
+      // The retain path does not deterministically emit a pinned-state message.
+      const maybePinnedState = gen.next().value
+      if (maybePinnedState !== 'STEP') {
+        expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+
+      // Stored 'missing' === current 'missing', creditable, so no eviction:
+      // the gate is NOT reopened and nothing is republished as unvalidated.
+      expect((agentState as any).uncommittedUnvalidatedFiles).toEqual([])
+      expect((agentState as any).base2ActiveWork.gatePassedFiles).toEqual([
+        gateFile,
+      ])
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+        'final_response_allowed',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('evicts a credited-as-deleted file that reappears on disk (fail closed)', () => {
+    // A deletion that passes the gate is credited with marker 'missing'. If the
+    // same path reappears with content, readGateFileContentMarker returns a
+    // present sha256:... marker that no longer matches the stored 'missing', so
+    // the file is evicted and the gate reopened for re-review (fail closed).
+    const base2 = createBase2('default')
+    const tmpDir = makeProjectTempDir('base2-credit-reappear-')
+    const tmpFile = join(tmpDir, 'a.ts')
+    try {
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2',
+        base2ActiveWork: {
+          changedFiles: [gateFile],
+          touchedFiles: [gateFile],
+          pendingGateFiles: [],
+          currentPhase: 'final_response_allowed',
+          latestWorkSummary: '',
+          openReviewerBlockers: [],
+          lastValidationSummary:
+            'Configured file-change hooks passed: typecheck.',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [gateFile],
+          // Credited as deleted in a prior turn, but the file is present now.
+          gatePassedFileMarkers: { [gateFile]: 'missing' },
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
+      expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+
+      // Marker mismatch (present sha256 vs stored 'missing') -> evicted and
+      // republished as unvalidated; the gate reopens.
+      expect((agentState as any).uncommittedUnvalidatedFiles).toEqual([
+        gateFile,
+      ])
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+        'awaiting_validation',
+      )
+      expect((agentState as any).base2ActiveWork.gatePassedFiles).toEqual([])
+      expect((agentState as any).base2ActiveWork.pendingGateFiles).toEqual([
+        gateFile,
+      ])
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('evicts a credited-as-deleted file whose current marker becomes non-creditable (fail closed)', () => {
+    // 'missing' is creditable only for an actually-deleted file. If the current
+    // marker turns into a non-attestable error string (e.g. 'unreadable:...'
+    // for an unreadable/symlink-escape/size-0 state), the stored 'missing' no
+    // longer matches and the file must be evicted rather than retain credit.
+    const base2 = createBase2('default')
+    const tmpDir = makeProjectTempDir('base2-credit-noncred-')
+    const gateFile = normalizeGateFilePath(join(tmpDir, 'a.ts'))
+    try {
+      // A directory at the gate path makes readGateFileContentMarker return
+      // 'unreadable:not-a-file': a genuinely non-creditable marker that must
+      // evict even though 'missing' is now creditable.
+      mkdirSync(join(tmpDir, 'a.ts'), { recursive: true })
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2',
+        base2ActiveWork: {
+          changedFiles: [gateFile],
+          touchedFiles: [gateFile],
+          pendingGateFiles: [],
+          currentPhase: 'final_response_allowed',
+          latestWorkSummary: '',
+          openReviewerBlockers: [],
+          lastValidationSummary:
+            'Configured file-change hooks passed: typecheck.',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [gateFile],
+          gatePassedFileMarkers: { [gateFile]: 'missing' },
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` D ${gateFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
+      expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+
+      // Current marker is not 'missing' (the file reads as unreadable/error),
+      // so the stale stored-'missing' credit is evicted and republished.
+      expect(
+        (agentState as any).base2ActiveWork.gatePassedFiles,
+      ).toEqual([])
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+        'awaiting_validation',
       )
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
