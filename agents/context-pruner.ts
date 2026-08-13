@@ -105,35 +105,41 @@ const definition: AgentDefinition = {
      *
      * SINGLE SOURCE OF TRUTH: `packages/agent-runtime/src/util/context-pruning.ts`
      * (getSemanticCompactionBudget / getModelContextReservedTokens).
-     * This inline block is intentionally duplicated because `handleSteps` is
-     * serialized (new Function) and cannot import runtime helpers.
-     * @generated — literal copy from packages/agent-runtime/src/util/context-pruning.ts;
-     * update the source constants there and re-copy this block. Sync is guarded
-     * by RF-3 test (base2-progressive-tool-disclosure.test.ts budget mirror check)
-     * until codegen/shared literal source lands.
+     * The block below is GENERATED from that module by
+     * `scripts/generate-pruner-budgets.ts` — do not hand-edit it. Change the
+     * canonical constants there, then run
+     * `bun run scripts/generate-pruner-budgets.ts --write agents/context-pruner.ts`
+     * (or `bun --cwd cli run prebuild:agents`). Freshness is enforced
+     * structurally by `agents/__tests__/pruner-budgets-freshness.test.ts`, so a
+     * one-sided edit fails as a stale region instead of a value drift check.
      */
-    const DEFAULT_MAX_CONTEXT_LENGTH = 140_000
-    const DEFAULT_TARGET_CONTEXT_LENGTH = 100_000
-    // BEGIN GENERATED: SEMANTIC budget constants — source: packages/agent-runtime/src/util/context-pruning.ts
-    const SEMANTIC_TRIGGER_FRACTION = 0.70
-    const SEMANTIC_TARGET_FRACTION = 0.35
-    const SEMANTIC_HEADROOM_FRACTION = 0.15
-    const SEMANTIC_MIN_HEADROOM_TOKENS = 32_000
-    const SEMANTIC_MAX_HEADROOM_TOKENS = 160_000
-    const SEMANTIC_MIN_TARGET_TOKENS = 72_000
-    const SEMANTIC_MAX_TARGET_TOKENS = 420_000
-    const SEMANTIC_SMALL_WINDOW_THRESHOLD_TOKENS = 128_000
-    const SEMANTIC_SMALL_WINDOW_MIN_HEADROOM_TOKENS = 2_000
-    // --- MODEL reserve constants (mirror context-pruning.ts) ---
+    // <pruner-budgets-generated> DO NOT EDIT — regenerate via: bun run scripts/generate-pruner-budgets.ts
+    // Source of truth: packages/agent-runtime/src/util/context-pruning.ts
+    // handleSteps is serialized (new Function) and cannot import the
+    // canonical module, so these literals are generated, not hand-copied.
+    const DEFAULT_MAX_CONTEXT_LENGTH = 140_000 // DEFAULT_SEMANTIC_COMPACTION_TRIGGER_TOKENS
+    const DEFAULT_TARGET_CONTEXT_LENGTH = 100_000 // DEFAULT_SEMANTIC_COMPACTION_TARGET_TOKENS
+    const SEMANTIC_TRIGGER_FRACTION = 0.70 // SEMANTIC_COMPACTION_TRIGGER_FRACTION
+    const SEMANTIC_TARGET_FRACTION = 0.35 // SEMANTIC_COMPACTION_TARGET_FRACTION
+    const SEMANTIC_HEADROOM_FRACTION = 0.15 // SEMANTIC_COMPACTION_HEADROOM_FRACTION
+    const SEMANTIC_MIN_HEADROOM_TOKENS = 32_000 // SEMANTIC_COMPACTION_MIN_HEADROOM_TOKENS
+    const SEMANTIC_MAX_HEADROOM_TOKENS = 160_000 // SEMANTIC_COMPACTION_MAX_HEADROOM_TOKENS
+    const SEMANTIC_MIN_TARGET_TOKENS = 72_000 // SEMANTIC_COMPACTION_MIN_TARGET_TOKENS
+    const SEMANTIC_MAX_TARGET_TOKENS = 420_000 // SEMANTIC_COMPACTION_MAX_TARGET_TOKENS
+    const SEMANTIC_SMALL_WINDOW_THRESHOLD_TOKENS = 128_000 // SEMANTIC_COMPACTION_SMALL_WINDOW_THRESHOLD_TOKENS
+    const SEMANTIC_SMALL_WINDOW_MIN_HEADROOM_TOKENS = 2_000 // SEMANTIC_COMPACTION_SMALL_WINDOW_MIN_HEADROOM_TOKENS
     const MODEL_CONTEXT_MIN_RESERVED_TOKENS = 8_000
     const MODEL_CONTEXT_MAX_RESERVED_TOKENS = 128_000
     const MODEL_CONTEXT_RESERVED_FRACTION = 0.12
     const MODEL_CONTEXT_MAX_RESERVED_FRACTION = 0.5
-    const EXPLICIT_LIMIT_TARGET_FRACTION = 0.6
-    // END GENERATED: SEMANTIC/MODEL budget constants
+    // </pruner-budgets-generated>
 
-    /** Prompt cache expiry time (Anthropic caches for 5 minutes by default) */
-    const CACHE_EXPIRY_MS: number = params?.cacheExpiryMs ?? 5 * 60 * 1000
+    /**
+     * Pruner-local: share of an explicitly injected `maxContextLength` used as
+     * the summary target. Intentionally outside the generated region because it
+     * has no canonical counterpart in context-pruning.ts.
+     */
+    const EXPLICIT_LIMIT_TARGET_FRACTION = 0.6
 
     /** Header used in conversation summaries */
     const SUMMARY_HEADER =
@@ -656,29 +662,6 @@ const definition: AgentDefinition = {
       }
     }
 
-    // Check for prompt cache miss (>5 min gap before the USER_PROMPT message)
-    // The USER_PROMPT is the actual user message; INSTRUCTIONS_PROMPT comes after it
-    // We need to find the USER_PROMPT and check the gap between it and the last assistant message
-    let cacheWillMiss = false
-    const userPromptIndex = currentMessages.findLastIndex((message) =>
-      message.tags?.includes('USER_PROMPT'),
-    )
-    if (userPromptIndex > 0) {
-      const userPromptMsg = currentMessages[userPromptIndex]
-      // Find the last assistant message before USER_PROMPT (tool messages don't have sentAt)
-      let lastAssistantMsg: Message | undefined
-      for (let i = userPromptIndex - 1; i >= 0; i--) {
-        if (currentMessages[i].role === 'assistant') {
-          lastAssistantMsg = currentMessages[i]
-          break
-        }
-      }
-      if (userPromptMsg.sentAt && lastAssistantMsg?.sentAt) {
-        const gap = userPromptMsg.sentAt - lastAssistantMsg.sentAt
-        cacheWillMiss = gap > CACHE_EXPIRY_MS
-      }
-    }
-
     // Check if we need to prune at all.
     // Prune ONLY when context exceeds the token threshold.
     // Cache-TTL expiry (cacheWillMiss) no longer triggers summarization —
@@ -686,16 +669,10 @@ const definition: AgentDefinition = {
     // causes rapid cache refill (the "cache fills up fast" symptom).
     // The provider simply re-writes the cache, which is cheaper than
     // regenerating a summary blob.
-    // TODO(M2: stable-anchor re-stamping): cacheWillMiss is computed for
-    // the future cache-marker refresh path. Kept intentionally with a
-    // `void` reference until stable-anchor re-stamping lands; then replace
-    // this with explicit cache-marker re-stamping logic. Remove this TODO
-    // and the dead-code guard when M2 ships.
     if (
       agentState.contextTokenCount + TOKEN_COUNT_FUDGE_FACTOR <=
       maxContextLength
     ) {
-      void cacheWillMiss // eslint-disable-next-line @typescript-eslint/no-unused-expressions — retained for M2 stable-anchor (see TODO above)
       yield {
         toolName: 'set_messages',
         input: { messages: currentMessages },

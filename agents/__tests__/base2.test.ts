@@ -19,6 +19,7 @@ import {
 } from '../base2/base2'
 import { normalizeGateFilePath } from '../base2/gate-paths'
 import type { Base2ActiveWorkState } from '../base2/gate-state'
+import { resolveModelToolNames } from '../base2/tool-tiers'
 
 const TEST_TMP_ROOT = join(process.cwd(), '.base2-test-scratch')
 mkdirSync(TEST_TMP_ROOT, { recursive: true })
@@ -585,9 +586,11 @@ describe('base2 validation/reviewer coordination prompts', () => {
     expect(base2.systemPrompt).not.toContain('Initial Git Changes')
     expect(base2.spawnableAgentToolMode).toBe('generic')
     expect(base2.toolNames).not.toContain('git_status')
-    expect(base2.toolNames).toContain('get_change_review_bundle')
+    // get_change_review_bundle and inspect_codebase_structure are audit-tier,
+    // so both are absent from the CORE-only default surface.
+    expect(base2.toolNames).not.toContain('get_change_review_bundle')
     expect(base2.toolNames).not.toContain('run_file_change_hooks')
-    expect(base2.toolNames).toContain('inspect_codebase_structure')
+    expect(base2.toolNames).not.toContain('inspect_codebase_structure')
     expect(base2.programmaticToolNames).toEqual(
       expect.arrayContaining([
         'git_status',
@@ -651,11 +654,22 @@ describe('base2 validation/reviewer coordination prompts', () => {
 
   test('base2 exposes update_plan_status alongside create_plan', () => {
     const base2 = createBase2('default')
-    expect(base2.toolNames).toContain('create_plan')
-    expect(base2.toolNames).toContain('update_plan_status')
+    // create_plan/update_plan_status are implement-tier, so they are absent
+    // from the CORE-only default (progressive) surface.
+    expect(base2.toolNames).not.toContain('create_plan')
+    expect(base2.toolNames).not.toContain('update_plan_status')
 
     const planBase2 = createBase2('default', { planOnly: true })
-    expect(planBase2.toolNames).toContain('update_plan_status')
+    expect(planBase2.toolNames).not.toContain('update_plan_status')
+
+    // They become available only when the implement tier is unlocked.
+    const implementSurface = resolveModelToolNames({
+      mode: 'default',
+      progressiveToolDisclosure: true,
+      unlockedTiers: ['implement'],
+    })
+    expect(implementSurface).toContain('create_plan')
+    expect(implementSurface).toContain('update_plan_status')
   })
 
   test('plan mode exposes broad read-only analysis agents without mutation agents', () => {
@@ -682,7 +696,9 @@ describe('base2 validation/reviewer coordination prompts', () => {
       expect(spawnable).not.toContain(agent)
     }
     expect(planBase2.toolNames).toContain('check_background_agent')
-    expect(planBase2.toolNames).toContain('inspect_codebase_structure')
+    // inspect_codebase_structure is audit-tier, so it is absent from the
+    // CORE-only default plan surface.
+    expect(planBase2.toolNames).not.toContain('inspect_codebase_structure')
     expect(planBase2.toolNames).not.toContain('edit_transaction')
     expect(planBase2.toolNames).not.toContain('run_file_change_hooks')
     expect(planBase2.toolNames).not.toContain('git_status')
@@ -795,13 +811,11 @@ describe('base-deep prompt naming and tool guidance', () => {
     )
     expect(baseDeep.instructionsPrompt).toContain('before suggesting followups')
     expect(baseDeep.toolNames).toEqual(
-      expect.arrayContaining([
-        'read_outline',
-        'list_directory',
-        'glob',
-        'edit_transaction',
-      ]),
+      expect.arrayContaining(['read_outline', 'list_directory', 'glob']),
     )
+    // edit_transaction is implement-tier, so it is absent from the CORE-only
+    // default base-deep surface (unlocks only under the implement tier).
+    expect(baseDeep.toolNames).not.toContain('edit_transaction')
     expect(baseDeep.toolNames).not.toContain('str_replace')
     expect(baseDeep.toolNames).not.toContain('replace_range')
     expect(baseDeep.toolNames).not.toContain('rewrite_symbol')
@@ -825,15 +839,19 @@ describe('base-deep gate lifecycle parity with base2', () => {
     // bundle is also model-visible so the orchestrator can recover a fresh
     // snapshot after compaction without hitting a tool-availability error.
     expect(baseDeep.programmaticToolNames).toEqual(
-      expect.arrayContaining(['run_file_change_hooks', 'git_status']),
-    )
-    expect(baseDeep.toolNames).toEqual(
       expect.arrayContaining([
-        'create_plan',
-        'update_plan_status',
-        'get_change_review_bundle',
+        'spawn_agent_inline',
+        'git_status',
+        'run_file_change_hooks',
+        'inspect_codebase_structure',
       ]),
     )
+    // create_plan/update_plan_status are implement-tier and
+    // get_change_review_bundle is audit-tier, so none appear in the CORE-only
+    // default base-deep model surface.
+    expect(baseDeep.toolNames).not.toContain('create_plan')
+    expect(baseDeep.toolNames).not.toContain('update_plan_status')
+    expect(baseDeep.toolNames).not.toContain('get_change_review_bundle')
 
     // editor is required for the gate repair loop (spawned on validation
     // failure). code-reviewer runs the reviewer half of the gate.
@@ -6771,8 +6789,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(base2.stepPrompt).not.toContain(
       'Read STATUS.md and PLAN.md before acting',
     )
+    // edit_transaction and run_terminal_command are implement-tier, so they are
+    // absent from the CORE-only default surface (unlock only under implement).
     for (const tool of ['edit_transaction', 'run_terminal_command'] as const) {
-      expect(base2.toolNames).toContain(tool)
+      expect(base2.toolNames).not.toContain(tool)
     }
     for (const tool of [
       'str_replace',

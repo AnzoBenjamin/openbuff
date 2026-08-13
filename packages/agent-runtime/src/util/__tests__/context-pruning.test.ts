@@ -91,8 +91,12 @@ describe('maybePruneContext', () => {
   })
 
   it('returns pruned: true and trimmed messages when contextTokenCount exceeds threshold', () => {
-    // Create messages large enough to trigger pruning
-    const longContent = 'x'.repeat(200_000)
+    // Create messages large enough to trigger REAL trimming under the
+    // fixture (0.35 tokens/char). Each message is ~380k chars, so two
+    // messages serialize to > 189,900 message-token budget (190k window
+    // minus 100 system tokens), forcing trimMessagesToFitTokenLimit to
+    // actually shorten the array instead of early-returning unchanged.
+    const longContent = 'x'.repeat(400_000)
     const messages: Message[] = [
       userMessage(longContent),
       userMessage(longContent),
@@ -192,10 +196,10 @@ describe('getModelContextMessageLimit (M4 unified threshold convergence)', () =>
 
 describe('getSemanticCompactionBudget', () => {
   it.each([
-    [8_000, 2_000, 1_680, 2_000],
-    [16_000, 6_000, 3_360, 2_000],
-    [32_000, 18_000, 10_080, 6_000],
-    [64_000, 42_000, 23_520, 14_000],
+    [8_000, 2_000, 1_400, 2_000],
+    [16_000, 5_600, 2_800, 2_000],
+    [32_000, 16_800, 8_400, 6_000],
+    [64_000, 39_200, 19_600, 14_000],
   ])(
     'keeps a meaningful working set for a small %i-token window',
     (window, trigger, target, headroom) => {
@@ -212,11 +216,11 @@ describe('getSemanticCompactionBudget', () => {
   )
 
   it.each([
-    [128_000, 96_000, 72_000, 32_000],
-    [200_000, 160_000, 84_000, 32_000],
-    [262_144, 209_715, 110_100, 39_321],
-    [500_000, 400_000, 210_000, 75_000],
-    [1_000_000, 800_000, 420_000, 150_000],
+    [128_000, 89_600, 72_000, 32_000],
+    [200_000, 140_000, 72_000, 32_000],
+    [262_144, 183_500, 91_750, 39_321],
+    [500_000, 350_000, 175_000, 75_000],
+    [1_000_000, 700_000, 350_000, 150_000],
   ])(
     'scales trigger and target budgets for a %i-token window',
     (window, trigger, target, headroom) => {

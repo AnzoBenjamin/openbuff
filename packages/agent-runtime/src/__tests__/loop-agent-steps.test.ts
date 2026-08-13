@@ -399,8 +399,8 @@ describe('loopAgentSteps', () => {
         type: 'context_compaction',
         action: 'semantic_compaction',
         resolvedContextWindowTokens: 32_000,
-        triggerBudgetTokens: 18_000,
-        targetBudgetTokens: 10_080,
+        triggerBudgetTokens: 16_800,
+        targetBudgetTokens: 8_400,
         retainedKnowledgeMemory: true,
       }),
     )
