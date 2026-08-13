@@ -163,6 +163,7 @@ export const createGeneralAgent = (options: {
           }
         | undefined
       let auditCompletionRetries = 0
+      let didRunPrunerOnce = false
       while (true) {
         const tokenCount = latestAgentStateForPruner?.contextTokenCount ?? 0
         const windowTokens = latestAgentStateForPruner?.contextWindowTokens
@@ -170,12 +171,14 @@ export const createGeneralAgent = (options: {
           ? latestAgentStateForPruner.messageHistory.length
           : 0
         const shouldRunPruner =
+          !didRunPrunerOnce ||
           tokenCount > 100_000 ||
           msgLen > 30 ||
           (typeof windowTokens === 'number' &&
             windowTokens > 0 &&
             tokenCount > windowTokens * 0.65)
         if (shouldRunPruner) {
+          didRunPrunerOnce = true
           yield {
             toolName: 'spawn_agent_inline',
             input: {

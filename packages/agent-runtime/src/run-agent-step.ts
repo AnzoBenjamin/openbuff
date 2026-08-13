@@ -932,10 +932,20 @@ export const runAgentStep = async (
     shouldEndTurn = hasTaskCompleted || (hasNoToolResults && !isThinkOnly)
   }
 
+  const isThinkOnlyWithoutCompletion =
+    requiresExplicitCompletion &&
+    !hasTaskCompleted &&
+    hasNoToolResults &&
+    isThinkOnly
+  if (isThinkOnlyWithoutCompletion) {
+    agentState.consecutiveTextOnlyWithoutCompletion = 0
+  }
+
   // Bounded fallback for explicit-completion agents that produce a text-only
   // answer without calling task_completed (general-agent, last_message). Keep
   // task_completed semantics strict, but don't loop forever: first text-only
-  // gets a nudge, second consecutive text-only ends the turn.
+  // gets a nudge, second consecutive text-only ends the turn. Think-only
+  // turns never count (the model was just reasoning).
   const isExplicitTextOnlyWithoutCompletion =
     requiresExplicitCompletion &&
     !hasTaskCompleted &&
@@ -959,9 +969,17 @@ export const runAgentStep = async (
       injectedCompletionNudge = true
     } else {
       shouldEndTurn = true
+      if (
+        agentTemplate.outputMode === 'last_message' &&
+        agentState.output === undefined
+      ) {
+        agentState.output = { harvestedFromFallback: true }
+      }
     }
-  } else if (!hasNoToolResults || hasTaskCompleted) {
-    agentState.consecutiveTextOnlyWithoutCompletion = 0
+  } else if (!isThinkOnlyWithoutCompletion) {
+    if (!hasNoToolResults || hasTaskCompleted) {
+      agentState.consecutiveTextOnlyWithoutCompletion = 0
+    }
   }
 
   // For structured-output agents, once set_output successfully sets the
