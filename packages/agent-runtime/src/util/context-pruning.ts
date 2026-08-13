@@ -42,11 +42,16 @@ export const MODEL_CONTEXT_MAX_RESERVED_FRACTION = 0.5
  * request size: pinned control-plane memory and the fixed request baseline sit
  * outside it.
  *
- * Keep the mirrored constants inside `agents/context-pruner.ts` in sync. That
- * agent's `handleSteps` function is serialized and cannot import this module.
+ * SINGLE SOURCE OF TRUTH: the SEMANTIC_* / MODEL_CONTEXT_* literals below
+ * are canonical. `agents/context-pruner.ts` inlines a literal copy inside
+ * its serialized `handleSteps` (cannot import this module at runtime).
+ * @generated — inline block in agents/context-pruner.ts is derived from here;
+ * update constants here and re-copy to the pruner. Sync is guarded by RF-3
+ * test (agents/__tests__/base2-progressive-tool-disclosure.test.ts) until
+ * codegen/shared literal source is implemented.
  */
-export const SEMANTIC_COMPACTION_TRIGGER_FRACTION = 0.8
-export const SEMANTIC_COMPACTION_TARGET_FRACTION = 0.42
+export const SEMANTIC_COMPACTION_TRIGGER_FRACTION = 0.70
+export const SEMANTIC_COMPACTION_TARGET_FRACTION = 0.35
 export const SEMANTIC_COMPACTION_HEADROOM_FRACTION = 0.15
 export const SEMANTIC_COMPACTION_MIN_HEADROOM_TOKENS = 32_000
 export const SEMANTIC_COMPACTION_MAX_HEADROOM_TOKENS = 160_000
@@ -207,19 +212,22 @@ export function getModelContextReservedTokens(
   if (contextWindowTokens === undefined) {
     return undefined
   }
-  return Math.min(
-    Math.max(
-      1,
-      Math.floor(contextWindowTokens * MODEL_CONTEXT_MAX_RESERVED_FRACTION),
-    ),
-    Math.min(
-      MODEL_CONTEXT_MAX_RESERVED_TOKENS,
-      Math.max(
-        MODEL_CONTEXT_MIN_RESERVED_TOKENS,
-        Math.floor(contextWindowTokens * MODEL_CONTEXT_RESERVED_FRACTION),
-      ),
-    ),
+  const reservedByFraction = Math.floor(
+    contextWindowTokens * MODEL_CONTEXT_RESERVED_FRACTION,
   )
+  const clampedReserve = Math.max(
+    MODEL_CONTEXT_MIN_RESERVED_TOKENS,
+    reservedByFraction,
+  )
+  const cappedReserve = Math.min(
+    MODEL_CONTEXT_MAX_RESERVED_TOKENS,
+    clampedReserve,
+  )
+  const maxAllowedByFraction = Math.max(
+    1,
+    Math.floor(contextWindowTokens * MODEL_CONTEXT_MAX_RESERVED_FRACTION),
+  )
+  return Math.min(maxAllowedByFraction, cappedReserve)
 }
 
 /**

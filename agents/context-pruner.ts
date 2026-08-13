@@ -62,7 +62,7 @@ const definition: AgentDefinition = {
     /** Limits for truncating long messages in the summary (estimated tokens) */
     const USER_MESSAGE_LIMIT = 13_000
     const ASSISTANT_MESSAGE_LIMIT = 1_300
-    const TOOL_ENTRY_LIMIT = 5_000
+    const TOOL_ENTRY_LIMIT = 2_000 // Win2: reduced from 5000 (keep CHARS_PER_TOKEN=3 scale) for leaner lifecycle; postEditCapabilities preserved via knowledge_memory
     const SPAWN_PROMPT_LIMIT = 240
     const SPAWN_PARAMS_LIMIT = 240
     const AGENT_RESULT_LIMIT = 900
@@ -102,14 +102,21 @@ const definition: AgentDefinition = {
      * Unknown provider windows retain the conservative 140k/100k trigger and
      * target. Resolved windows scale with bounded ratios, leaving explicit
      * headroom for tools, system prompt, output, and provider accounting.
-     * These constants mirror `getSemanticCompactionBudget` in
-     * `packages/agent-runtime/src/util/context-pruning.ts`; they are inlined
-     * because `handleSteps` is serialized and cannot import runtime helpers.
+     *
+     * SINGLE SOURCE OF TRUTH: `packages/agent-runtime/src/util/context-pruning.ts`
+     * (getSemanticCompactionBudget / getModelContextReservedTokens).
+     * This inline block is intentionally duplicated because `handleSteps` is
+     * serialized (new Function) and cannot import runtime helpers.
+     * @generated — literal copy from packages/agent-runtime/src/util/context-pruning.ts;
+     * update the source constants there and re-copy this block. Sync is guarded
+     * by RF-3 test (base2-progressive-tool-disclosure.test.ts budget mirror check)
+     * until codegen/shared literal source lands.
      */
     const DEFAULT_MAX_CONTEXT_LENGTH = 140_000
     const DEFAULT_TARGET_CONTEXT_LENGTH = 100_000
-    const SEMANTIC_TRIGGER_FRACTION = 0.8
-    const SEMANTIC_TARGET_FRACTION = 0.42
+    // BEGIN GENERATED: SEMANTIC budget constants — source: packages/agent-runtime/src/util/context-pruning.ts
+    const SEMANTIC_TRIGGER_FRACTION = 0.70
+    const SEMANTIC_TARGET_FRACTION = 0.35
     const SEMANTIC_HEADROOM_FRACTION = 0.15
     const SEMANTIC_MIN_HEADROOM_TOKENS = 32_000
     const SEMANTIC_MAX_HEADROOM_TOKENS = 160_000
@@ -117,11 +124,13 @@ const definition: AgentDefinition = {
     const SEMANTIC_MAX_TARGET_TOKENS = 420_000
     const SEMANTIC_SMALL_WINDOW_THRESHOLD_TOKENS = 128_000
     const SEMANTIC_SMALL_WINDOW_MIN_HEADROOM_TOKENS = 2_000
+    // --- MODEL reserve constants (mirror context-pruning.ts) ---
     const MODEL_CONTEXT_MIN_RESERVED_TOKENS = 8_000
     const MODEL_CONTEXT_MAX_RESERVED_TOKENS = 128_000
     const MODEL_CONTEXT_RESERVED_FRACTION = 0.12
     const MODEL_CONTEXT_MAX_RESERVED_FRACTION = 0.5
     const EXPLICIT_LIMIT_TARGET_FRACTION = 0.6
+    // END GENERATED: SEMANTIC/MODEL budget constants
 
     /** Prompt cache expiry time (Anthropic caches for 5 minutes by default) */
     const CACHE_EXPIRY_MS: number = params?.cacheExpiryMs ?? 5 * 60 * 1000
@@ -676,15 +685,17 @@ const definition: AgentDefinition = {
     // summarizing on every 5-min gap destroys stable cache prefixes and
     // causes rapid cache refill (the "cache fills up fast" symptom).
     // The provider simply re-writes the cache, which is cheaper than
-    // regenerating a summary blob. M2 will add explicit cache-marker
-    // re-stamping here via the stable-anchor policy.
+    // regenerating a summary blob.
+    // TODO(M2: stable-anchor re-stamping): cacheWillMiss is computed for
+    // the future cache-marker refresh path. Kept intentionally with a
+    // `void` reference until stable-anchor re-stamping lands; then replace
+    // this with explicit cache-marker re-stamping logic. Remove this TODO
+    // and the dead-code guard when M2 ships.
     if (
       agentState.contextTokenCount + TOKEN_COUNT_FUDGE_FACTOR <=
       maxContextLength
     ) {
-      // cacheWillMiss is computed for M2's cache-marker refresh path;
-      // referenced here to avoid dead-code elimination until M2 lands.
-      void cacheWillMiss
+      void cacheWillMiss // eslint-disable-next-line @typescript-eslint/no-unused-expressions — retained for M2 stable-anchor (see TODO above)
       yield {
         toolName: 'set_messages',
         input: { messages: currentMessages },

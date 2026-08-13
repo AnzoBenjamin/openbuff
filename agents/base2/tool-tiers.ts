@@ -4,11 +4,11 @@ import {
   BASE2_CORE_TOOL_NAMES,
   BASE2_TIER_TOOL_NAMES,
 } from '@codebuff/agent-runtime/util/base2-tool-tiers'
+import type { ToolTier } from '@codebuff/agent-runtime/util/base2-tool-tiers'
 
 import type { AllToolNames } from '../types/secret-agent-definition'
 
-/** Progressive model-visible tool tiers for base2 (M1). */
-export type ToolTier = 'core' | 'implement' | 'audit' | 'media_3d' | 'job_extra'
+export type { ToolTier }
 
 /**
  * Tier tool membership is owned by the runtime mirror in
@@ -23,22 +23,31 @@ export type ToolTier = 'core' | 'implement' | 'audit' | 'media_3d' | 'job_extra'
  */
 
 /** Base CORE names without mode conditionals — gates live in resolveModelToolNames. */
-export const CORE_TOOLS: readonly string[] = BASE2_CORE_TOOL_NAMES
+export const CORE_TOOLS: readonly AllToolNames[] =
+  BASE2_CORE_TOOL_NAMES satisfies readonly AllToolNames[]
 
 /** Base IMPLEMENT names without mode conditionals. */
-export const IMPLEMENT_TOOLS: readonly string[] =
-  BASE2_TIER_TOOL_NAMES.implement
+export const IMPLEMENT_TOOLS: readonly AllToolNames[] =
+  BASE2_TIER_TOOL_NAMES.implement satisfies readonly AllToolNames[]
 
 /** Base AUDIT names without mode conditionals. */
-export const AUDIT_TOOLS: readonly string[] = BASE2_TIER_TOOL_NAMES.audit
+export const AUDIT_TOOLS: readonly AllToolNames[] =
+  BASE2_TIER_TOOL_NAMES.audit satisfies readonly AllToolNames[]
 
 /** Base MEDIA_3D names without mode conditionals. */
-export const MEDIA_3D_TOOLS: readonly string[] =
-  BASE2_TIER_TOOL_NAMES.media_3d
+export const MEDIA_3D_TOOLS: readonly AllToolNames[] =
+  BASE2_TIER_TOOL_NAMES.media_3d satisfies readonly AllToolNames[]
 
 /** Base JOB_EXTRA names without mode conditionals. */
-export const JOB_EXTRA_TOOLS: readonly string[] =
-  BASE2_TIER_TOOL_NAMES.job_extra
+export const JOB_EXTRA_TOOLS: readonly AllToolNames[] =
+  BASE2_TIER_TOOL_NAMES.job_extra satisfies readonly AllToolNames[]
+
+// Reflect runtime mirror tier-key safety: BASE2_TIER_TOOL_NAMES is Record<Exclude<ToolTier, 'core'>, readonly string[]>.
+const _base2TierKeySafetyCheck = BASE2_TIER_TOOL_NAMES satisfies Record<
+  Exclude<ToolTier, 'core'>,
+  readonly string[]
+>
+void _base2TierKeySafetyCheck
 
 /** Canary-on starts core-only until handleSteps unlocks further tiers. */
 export const DEFAULT_UNLOCKED_TIERS_WHEN_PROGRESSIVE: readonly ToolTier[] = []
@@ -83,15 +92,26 @@ const IMPLEMENT_PHASES = new Set([
   'blocked',
 ])
 const IMPLEMENT_KEYWORD_RE =
-  /\b(?:implement|fix|refactor|update|create|add)\b/i
+  /\b(?:implement|fix|refactor|update|create)\b/i
+const IMPLEMENT_ADD_RE = /\badd\s+\w+/i
 const AUDIT_KEYWORD_RE =
   /\b(?:audit|coverage|completeness|review[- ]across|systematic)\b/i
 const MEDIA_PATH_RE =
   /\.(?:png|jpe?g|webp|gif|blend|obj|gltf|glb)\b/i
 // Keep job_extra rare: require job-management phrasing, not bare
 // kill/server/logs/watch/tail tokens that appear in ordinary prompts.
-const JOB_KEYWORD_RE =
-  /\b(?:(?:background|bg)\s+(?:job|agent|process|task|basher)|kill(?:_|\s+)(?:the\s+)?(?:job|process)|(?:list|check|kill)_jobs?|job(?:Id|\s*id)|tail\s+-f|watch\s+(?:the\s+)?(?:build|logs?|job|process)|long[- ]running\s+(?:dev\s+)?server|dev\s+server)\b/i
+// Split large alternation into anchored parts to avoid backtracking and
+// false positives; each pattern is tested independently.
+const JOB_KEYWORD_RES = [
+  /\b(?:background|bg)\s+(?:job|agent|process|task)\b/i,
+  /\bkill(?:_|\s+)(?:the\s+)?(?:job|process)\b/i,
+  /\b(?:list|check|kill)_jobs?\b/i,
+  /\bjob\s*id\b/i,
+  /\btail\s+-f\b/i,
+  /\bwatch\s+(?:the\s+)?(?:build|logs?|job|process)\b/i,
+  /\blong[- ]running\s+(?:dev\s+)?server\b/i,
+  /\bdev\s+server\b/i,
+] as const
 
 /**
  * Derive the intent signals that drive tool-tier unlocks from the current
@@ -110,22 +130,30 @@ export function deriveIntentSignals(params: {
   lastUserPrompt?: string
 }): ToolTierIntentSignals {
   const prompt = params.lastUserPrompt ?? ''
+  const pendingGateFileCount = Math.max(
+    0,
+    Math.floor(
+      typeof params.pendingGateFileCount === 'number' &&
+        Number.isFinite(params.pendingGateFileCount)
+        ? params.pendingGateFileCount
+        : 0,
+    ),
+  )
   const implementIntent =
     IMPLEMENT_PHASES.has(params.phase) ||
-    params.pendingGateFileCount > 0 ||
+    pendingGateFileCount > 0 ||
     params.hasOpenReviewerBlockers ||
-    IMPLEMENT_KEYWORD_RE.test(prompt)
+    IMPLEMENT_KEYWORD_RE.test(prompt) ||
+    IMPLEMENT_ADD_RE.test(prompt)
   const auditIntent =
     AUDIT_KEYWORD_RE.test(prompt) || params.phase === 'awaiting_review'
   const mediaIntent = MEDIA_PATH_RE.test(prompt)
-  const jobIntent = JOB_KEYWORD_RE.test(prompt)
+  const jobIntent = JOB_KEYWORD_RES.some((re) => re.test(prompt))
   return { implementIntent, auditIntent, mediaIntent, jobIntent }
 }
 
-/** Env canary truthy set (mirrors progressive prompt disclosure). */
-export function isProgressiveToolDisclosureEnvEnabled(
-  raw: string | undefined,
-): boolean {
+/** Generic env flag truthy set (1/true/yes/on). Canonical name. */
+export function isEnvFlagEnabled(raw: string | undefined): boolean {
   if (typeof raw !== 'string') return false
   const normalized = raw.trim().toLowerCase()
   return (
@@ -135,6 +163,9 @@ export function isProgressiveToolDisclosureEnvEnabled(
     normalized === 'on'
   )
 }
+
+/** Backwards-compatible alias — previously tool-specific name. */
+export const isProgressiveToolDisclosureEnvEnabled = isEnvFlagEnabled
 
 type ResolveModelToolNamesParams = {
   mode: 'default' | 'fast'
