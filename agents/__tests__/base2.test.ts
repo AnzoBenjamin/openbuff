@@ -7166,6 +7166,201 @@ describe('base2 gate-passed credit ledger (Option A)', () => {
     }
   })
 
+  test('retains a credited-as-deleted file whose stored marker is still missing (no gate loop)', () => {
+    // A file deleted in the changeset is credited with marker 'missing'. On a
+    // later turn the file is still deleted, so readGateFileContentMarker still
+    // returns 'missing' == the stored marker and isCreditableContentMarker
+    // accepts it. The credited deletion must NOT be evicted and re-armed on
+    // every loop, or the gate would reopen forever on a stable deletion.
+    const base2 = createBase2('default')
+    const tmpDir = makeProjectTempDir('base2-credit-deleted-')
+    const tmpFile = join(tmpDir, 'a.ts')
+    try {
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      // The file was deleted in the same changeset that was gate-passed, so it
+      // is absent from disk now.
+      rmSync(tmpFile, { force: true })
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2',
+        base2ActiveWork: {
+          changedFiles: [gateFile],
+          touchedFiles: [gateFile],
+          pendingGateFiles: [],
+          currentPhase: 'final_response_allowed',
+          latestWorkSummary: '',
+          openReviewerBlockers: [],
+          lastValidationSummary:
+            'Configured file-change hooks passed: typecheck.',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [gateFile],
+          // A deletion is credited with the stable 'missing' marker.
+          gatePassedFileMarkers: { [gateFile]: 'missing' },
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      // Working-tree deletion: ` D <path>`.
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` D ${tmpFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
+      // The retain path does not deterministically emit a pinned-state message.
+      const maybePinnedState = gen.next().value
+      if (maybePinnedState !== 'STEP') {
+        expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+
+      // Stored 'missing' === current 'missing', creditable, so no eviction:
+      // the gate is NOT reopened and nothing is republished as unvalidated.
+      expect((agentState as any).uncommittedUnvalidatedFiles).toEqual([])
+      expect((agentState as any).base2ActiveWork.gatePassedFiles).toEqual([
+        gateFile,
+      ])
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+        'final_response_allowed',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('evicts a credited-as-deleted file that reappears on disk (fail closed)', () => {
+    // A deletion that passes the gate is credited with marker 'missing'. If the
+    // same path reappears with content, readGateFileContentMarker returns a
+    // present sha256:... marker that no longer matches the stored 'missing', so
+    // the file is evicted and the gate reopened for re-review (fail closed).
+    const base2 = createBase2('default')
+    const tmpDir = makeProjectTempDir('base2-credit-reappear-')
+    const tmpFile = join(tmpDir, 'a.ts')
+    try {
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2',
+        base2ActiveWork: {
+          changedFiles: [gateFile],
+          touchedFiles: [gateFile],
+          pendingGateFiles: [],
+          currentPhase: 'final_response_allowed',
+          latestWorkSummary: '',
+          openReviewerBlockers: [],
+          lastValidationSummary:
+            'Configured file-change hooks passed: typecheck.',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [gateFile],
+          // Credited as deleted in a prior turn, but the file is present now.
+          gatePassedFileMarkers: { [gateFile]: 'missing' },
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
+      expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+
+      // Marker mismatch (present sha256 vs stored 'missing') -> evicted and
+      // republished as unvalidated; the gate reopens.
+      expect((agentState as any).uncommittedUnvalidatedFiles).toEqual([
+        gateFile,
+      ])
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+        'awaiting_validation',
+      )
+      expect((agentState as any).base2ActiveWork.gatePassedFiles).toEqual([])
+      expect((agentState as any).base2ActiveWork.pendingGateFiles).toEqual([
+        gateFile,
+      ])
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('evicts a credited-as-deleted file whose current marker becomes non-creditable (fail closed)', () => {
+    // 'missing' is creditable only for an actually-deleted file. If the current
+    // marker turns into a non-attestable error string (e.g. 'unreadable:...'
+    // for an unreadable/symlink-escape/size-0 state), the stored 'missing' no
+    // longer matches and the file must be evicted rather than retain credit.
+    const base2 = createBase2('default')
+    const tmpDir = makeProjectTempDir('base2-credit-noncred-')
+    const gateFile = normalizeGateFilePath(join(tmpDir, 'a.ts'))
+    try {
+      // A directory at the gate path makes readGateFileContentMarker return
+      // 'unreadable:not-a-file': a genuinely non-creditable marker that must
+      // evict even though 'missing' is now creditable.
+      mkdirSync(join(tmpDir, 'a.ts'), { recursive: true })
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2',
+        base2ActiveWork: {
+          changedFiles: [gateFile],
+          touchedFiles: [gateFile],
+          pendingGateFiles: [],
+          currentPhase: 'final_response_allowed',
+          latestWorkSummary: '',
+          openReviewerBlockers: [],
+          lastValidationSummary:
+            'Configured file-change hooks passed: typecheck.',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [gateFile],
+          gatePassedFileMarkers: { [gateFile]: 'missing' },
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` D ${gateFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'list_jobs' })
+      expect(gen.next(feedListJobs()).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
+      expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+
+      // Current marker is not 'missing' (the file reads as unreadable/error),
+      // so the stale stored-'missing' credit is evicted and republished.
+      expect(
+        (agentState as any).base2ActiveWork.gatePassedFiles,
+      ).toEqual([])
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+        'awaiting_validation',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
   test('gate-state type round-trips gatePassedFileMarkers through JSON and is optional on older state', () => {
     const state: Base2ActiveWorkState = {
       pendingGateFiles: ['src/a.ts'],

@@ -1371,7 +1371,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           if (
             storedMarker === undefined ||
             storedMarker !== currentMarker ||
-            !isAttestableContentMarker(currentMarker)
+            !isCreditableContentMarker(currentMarker)
           ) {
             gatePassedFiles.delete(file)
             delete ledgerMarkers[file]
@@ -7611,6 +7611,18 @@ function hashGateSnapshotDetails(details: string): string {
         return /^(?:symlink-)?sha256:[a-f0-9]{64}:\d+$/.test(value)
       }
 
+      // A content marker that can be safely credited into the durable gate-ledger.
+      // A `missing` marker (a file deleted in the changeset) is a stable,
+      // creditable state: the file is absent byte-identical, mirroring how the
+      // reviewer attests-by-absence. It is still evicted if the file reappears
+      // (the marker becomes a present sha256:... hash and no longer matches),
+      // so fail-closed re-review on a reappeared file is preserved. All other
+      // non-attestable markers (unreadable:<code>, missing-crypto, etc.) remain
+      // excluded so they can never grant durable gate credit.
+      function isCreditableContentMarker(value: string): boolean {
+        return isAttestableContentMarker(value) || value === 'missing'
+      }
+
       function hasFreshGateFingerprintForPendingFiles(
         files: string[],
         validationSummary: string,
@@ -8329,10 +8341,12 @@ function hashGateSnapshotDetails(details: string): string {
         const markers = (activeWorkState.gatePassedFileMarkers ??= {})
         for (const file of files) {
           const marker = readGateFileContentMarker(file)
-          // Only credit files with attestable content markers. External
+          // Only credit files with creditable content markers. A `missing`
+          // marker (a file deleted in the changeset) is credited as-is so the
+          // gate does not re-arm forever on a stable deletion; external
           // symlinks, unreadable files, and missing-crypto states produce
           // non-attestable markers that must never enter the durable ledger.
-          if (!isAttestableContentMarker(marker)) continue
+          if (!isCreditableContentMarker(marker)) continue
           gatePassedFiles.add(file)
           markers[file] = marker
         }

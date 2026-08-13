@@ -237,8 +237,16 @@ exposes a stable structured contract to the user:
   reviewed snapshot and the live file.
 - Durable pass freshness is keyed on that same marker: a previously
   recorded pass is only honored if the current file's marker still matches.
-- Missing or unreadable files **fail closed**: the gate refuses to mark the
-  turn green rather than silently treating an absent file as passing.
+- A file **deleted in the changeset** is recorded with the stable marker
+  `missing`, which is creditable: the reviewer attests-by-absence, and a
+  stable `missing` marker stays credited instead of re-arming the gate on
+  every loop. The deletion is still evicted and re-reviewed if the file
+  reappears on disk (the marker becomes a present `sha256:...` hash that no
+  longer matches).
+- Genuinely **unreadable** files (`unreadable:<code>`, missing crypto, etc.)
+  still **fail closed**: the gate refuses to mark the turn green rather than
+  silently treating an absent or unreadable file as passing, and never
+  grants durable credit for a non-creditable marker.
 - The user-visible contract is a structured `<gate-state>` block. Tooling
   and downstream agents should parse that block rather than scraping
   surrounding prose.

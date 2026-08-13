@@ -79,6 +79,7 @@ const LIFECYCLE_FILE = `${SCRATCH_ROOT}/lifecycle.ts`
 const MULTI_BATCH_FILE_A = `${SCRATCH_ROOT}/multi-batch-a.ts`
 const MULTI_BATCH_FILE_B = `${SCRATCH_ROOT}/multi-batch-b.ts`
 const HAPPY_PATH_FILE = `${SCRATCH_ROOT}/happy-path.ts`
+const DELETED_FILE = `${SCRATCH_ROOT}/deleted.ts`
 
 afterEach(() => {
   rmSync(SCRATCH_ROOT, { recursive: true, force: true })
@@ -687,5 +688,158 @@ describe('base2 deterministic gate lifecycle e2e', () => {
         ),
     )
     expect(finalizationNotices).toHaveLength(1)
+  })
+
+  test('authorizes a deletion through review, credits it with missing, and does not re-arm the gate on the next turn', () => {
+    // The file is present for task-tracking then removed BEFORE the gate turn,
+    // so git status reports it as deleted (` D`) with no working-file content.
+    mkdirSync(path.dirname(DELETED_FILE), { recursive: true })
+    writeFileSync(DELETED_FILE, 'export const deleted = "gone"\n')
+    rmSync(DELETED_FILE, { force: true })
+
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2-custom',
+      base2ActiveWork: {
+        changedFiles: [DELETED_FILE],
+        touchedFiles: [DELETED_FILE],
+        pendingGateFiles: [],
+        gatePassedFiles: [],
+        gatePassedFileMarkers: {},
+        currentPhase: 'awaiting_validation',
+        latestWorkSummary: '',
+        openReviewerBlockers: [],
+        lastValidationSummary: '',
+        nextRequiredAction: '',
+        lastPinnedStateMessage: '',
+      },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Finish the previous lifecycle work.',
+      params: {},
+    } as any)
+
+    // Continuity prompt starts from an explicit working-tree snapshot.
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next(feedJson({ status: ` D ${DELETED_FILE}` })).value).toMatchObject({
+      toolName: 'list_jobs',
+      input: {},
+    })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    // The pinned active-work message is conditional (pendingGateFiles is empty),
+    // so tolerate its absence before the first model step.
+    const maybePinnedState = gen.next().value
+    if (maybePinnedState !== 'STEP') {
+      expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+    }
+
+    // The model turns the on-disk deletion into a tracked pending change.
+    expect(
+      gen.next(finishStepWithToolResult(editReceipt(DELETED_FILE))).value,
+    ).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(
+      gen.next(feedJson({ status: ` D ${DELETED_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    expect(gen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+      input: { files: [DELETED_FILE] },
+    })
+    const postValidationStatus = gen.next(
+      feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }]),
+    )
+    expect(postValidationStatus.value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    const reviewerSpawn = gen.next(feedJson({ status: ` D ${DELETED_FILE}` }))
+    expect(reviewerSpawn.value).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'code-reviewer' }] },
+    })
+
+    // The reviewer attests by absence; the deleted pending change is credited
+    // with the stable 'missing' marker.
+    const finalPreCreditStatus = gen.next(
+      reviewerResult({
+        snapshotFingerprint: reviewerFingerprintFromSpawn(reviewerSpawn.value),
+        reviewedFiles: [DELETED_FILE],
+        verdict: 'LOOKS_GOOD',
+      }),
+    )
+    expect(finalPreCreditStatus.value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    const gatePassed = gen.next(feedJson({ status: ` D ${DELETED_FILE}` }))
+    expect(gatePassed.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+
+    const activeWork = (agentState as any).base2ActiveWork
+    expect(activeWork.gatePassedFiles).toEqual([DELETED_FILE])
+    expect(activeWork.gatePassedFileMarkers[DELETED_FILE]).toBe('missing')
+    expect(activeWork).toMatchObject({
+      pendingGateFiles: [],
+      currentPhase: 'final_response_allowed',
+    })
+
+    // Invariant (regression): on the next turn the still-deleted file carries a
+    // stored 'missing' === current 'missing', so the gate must NOT re-arm — no
+    // run_file_change_hooks re-validation is issued for the deleted path.
+    const followupGen = base2.handleSteps!({
+      agentState,
+      prompt: 'Finish the previous lifecycle work.',
+      params: {},
+    } as any)
+    expect(followupGen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    expect(
+      followupGen.next(feedJson({ status: ` D ${DELETED_FILE}` })).value,
+    ).toMatchObject({ toolName: 'list_jobs', input: {} })
+    expect(followupGen.next(feedListJobs()).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    const followupPinnedState = followupGen.next().value
+    if (followupPinnedState !== 'STEP') {
+      expect(followupPinnedState).toMatchObject({ toolName: 'add_message' })
+      expect(followupGen.next().value).toBe('STEP')
+    }
+    // No new edits: the step completes with an empty tool result and the gate
+    // stays closed — uncommittedUnvalidatedFiles never re-adds the deleted path.
+    expect(
+      followupGen.next(finishStepWithToolResult({})).value,
+    ).toMatchObject({ toolName: 'git_status', input: {} })
+
+    const followupActiveWork = (agentState as any).base2ActiveWork
+    expect(followupActiveWork.gatePassedFiles).toEqual([DELETED_FILE])
+    expect(followupActiveWork.currentPhase).toBe('final_response_allowed')
+    expect((agentState as any).uncommittedUnvalidatedFiles).not.toContain(
+      DELETED_FILE,
+    )
+
+    // Drain the remaining generator to completion with a bounded guard.
+    let guard = 0
+    let drain = followupGen.next(feedJson({ status: ` D ${DELETED_FILE}` }))
+    while (!drain.done && guard < 50) {
+      guard++
+      const dv = drain.value as any
+      if (dv?.toolName === 'git_status') {
+        drain = followupGen.next(feedJson({ status: ` D ${DELETED_FILE}` }))
+      } else if (dv?.toolName === 'list_jobs') {
+        drain = followupGen.next(feedListJobs())
+      } else {
+        drain = followupGen.next()
+      }
+    }
+    expect(drain.done).toBe(true)
   })
 })

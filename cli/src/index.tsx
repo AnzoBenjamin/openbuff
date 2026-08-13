@@ -44,7 +44,6 @@ import { detectTerminalTheme } from './utils/terminal-color-detection'
 import { setOscDetectedTheme } from './utils/theme-system'
 
 import type { FileTreeNode } from '@codebuff/common/util/file'
-import { SmokeBootscreenMarker } from './components/smoke-bootscreen-marker'
 
 const require = createRequire(import.meta.url)
 
@@ -133,8 +132,6 @@ async function main(): Promise<void> {
     // Diagnostic dump so CI logs (and bug reports) show exactly what
     // the runtime saw when smoke fails. process.execPath, the
     // siblingPath we expect, and what's actually in that directory.
-    const fs = await import('fs')
-    const path = await import('path')
     const execDir = path.dirname(process.execPath)
     const siblingPath = path.join(execDir, 'tree-sitter.wasm')
     let dirListing: string[] = []
@@ -396,9 +393,20 @@ async function main(): Promise<void> {
   createRoot(renderer).render(
     <QueryClientProvider client={queryClient}>
       <AppWithAsyncAuth />
-      {smokeBootscreen ? <SmokeBootscreenMarker /> : null}
     </QueryClientProvider>,
   )
+
+  if (smokeBootscreen && !process.stdout.isTTY) {
+    // Release smoke gate — deterministic Windows boot marker. On Windows with
+    // non-TTY stdout OpenTUI paints nothing, so it never drives React's
+    // passive-effect flush and a useEffect-emitted marker would stay scheduled
+    // but never run, leaving the harness to SIGKILL a silent child. Emit from
+    // main() on a short grace timer instead. smoke-binary.ts still scans the
+    // full window for FATAL_PATTERNS, so any later async startup crash is caught.
+    setTimeout(() => {
+      console.log('openbuff bootscreen ok')
+    }, 1500)
+  }
 }
 
 void main()
