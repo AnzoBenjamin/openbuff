@@ -135,6 +135,11 @@ export function evaluateRepeatedStepLoop(params: {
         })
       : resultIsPolling
 
+  const normalizedResponseText = params.responseText
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+    .slice(0, 2000)
   const signaturePayload =
     params.toolCalls.length > 0
       ? {
@@ -153,8 +158,8 @@ export function evaluateRepeatedStepLoop(params: {
         }
       : params.isThinkOnly
         ? { thinkOnly: true }
-        : params.responseText.trim()
-          ? { responseText: params.responseText.trim() }
+        : normalizedResponseText
+          ? { responseText: normalizedResponseText }
           : undefined
 
   if (!signaturePayload) {

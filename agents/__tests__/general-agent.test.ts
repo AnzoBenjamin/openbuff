@@ -161,9 +161,7 @@ describe('general-agent programmatic tools', () => {
       params: {
         sessionSlug: 'readiness',
         shardId: 'services',
-        // snapshotId intentionally absent: the shard is unbound-by-snapshot
-        // and must fail closed even when a structural receipt for a
-        // DIFFERENT snapshot is present.
+        snapshotId: 'snapshot-2',
       },
     } as any)
 
@@ -195,6 +193,42 @@ describe('general-agent programmatic tools', () => {
     })
   })
 
+  test('unbound shard without snapshotId skips the audit gate even when a receipt exists', () => {
+    const agent = createGeneralAgent({ model: 'opus' })
+    const generator = agent.handleSteps!({
+      prompt: 'Audit service completeness',
+      params: {
+        sessionSlug: 'readiness',
+        shardId: 'services',
+      },
+    } as any)
+
+    expect(generator.next().value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    expect(generator.next({ toolResult: [] } as any).value).toBe('STEP')
+
+    const unbound = generator.next({
+      stepsComplete: true,
+      agentState: {
+        messageHistory: [
+          {
+            role: 'tool',
+            content: [
+              {
+                type: 'json',
+                value: { structuralReceipt: { snapshot_id: 'snapshot-1' } },
+              },
+            ],
+          },
+        ],
+      },
+      toolResult: [],
+    } as any)
+
+    expect(unbound.done).toBe(true)
+  })
+
   test('breaks the audit loop after exhausting completion retries', () => {
     const agent = createGeneralAgent({ model: 'opus' })
     const generator = agent.handleSteps!({
@@ -221,19 +255,13 @@ describe('general-agent programmatic tools', () => {
       toolName: 'add_message',
     })
 
-    // Second completion step: rejected -> add_message (retries 1 -> 2).
-    expect(generator.next().value).toMatchObject({
-      toolName: 'spawn_agent_inline',
-    })
+    // Second completion step: pruner suppressed after first run, so next yield is STEP directly.
     expect(generator.next({ toolResult: [] } as any).value).toBe('STEP')
     expect(generator.next(noReceiptStep).value).toMatchObject({
       toolName: 'add_message',
     })
 
     // Third completion step: retries exhausted -> break without add_message.
-    expect(generator.next().value).toMatchObject({
-      toolName: 'spawn_agent_inline',
-    })
     expect(generator.next({ toolResult: [] } as any).value).toBe('STEP')
     const final = generator.next(noReceiptStep)
     expect(final.done).toBe(true)

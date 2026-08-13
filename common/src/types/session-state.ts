@@ -117,6 +117,8 @@ export type AgentState = {
   lastStepProgressSignature?: string
   /** Consecutive count for the current repeated-step signature. */
   repeatedStepProgressCount?: number
+  /** Consecutive text-only turns without task_completed for explicit-completion agents (bounded fallback, resets on tool use). */
+  consecutiveTextOnlyWithoutCompletion?: number
   creditsUsed: number
   directCreditsUsed: number
   /**

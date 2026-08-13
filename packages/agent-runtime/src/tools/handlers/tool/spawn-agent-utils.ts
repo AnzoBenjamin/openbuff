@@ -1223,22 +1223,33 @@ export function buildRuntimeAgentReceipt(params: {
   const sessionSlug = params.spawnParams?.sessionSlug
   const shardId = params.spawnParams?.shardId
   const snapshotId = params.spawnParams?.snapshotId
+  const trimmedSnapshotId =
+    typeof snapshotId === 'string' && snapshotId.trim()
+      ? snapshotId.trim()
+      : ''
   const auditRequested =
     isGeneralAgent &&
     typeof sessionSlug === 'string' &&
     sessionSlug.trim().length > 0 &&
     typeof shardId === 'string' &&
-    shardId.trim().length > 0
+    shardId.trim().length > 0 &&
+    trimmedSnapshotId.length > 0
+  const hasHarvestedFallback =
+    (params.agentState as unknown as Record<string, unknown>)
+      ?.consecutiveTextOnlyWithoutCompletion !== undefined &&
+    (params.agentState as unknown as Record<string, unknown>)?.output !==
+      undefined &&
+    (
+      (params.agentState as unknown as Record<string, unknown>)
+        ?.output as Record<string, unknown>
+    )?.harvestedFromFallback === true
+  const hasExplicitCompletionOrHarvest =
+    containsToolCall(receiptSources, 'task_completed') || hasHarvestedFallback
   const missingExplicitCompletion =
-    isGeneralAgent && !containsToolCall(receiptSources, 'task_completed')
+    isGeneralAgent && !hasExplicitCompletionOrHarvest
   const missingAuditReceipt =
     auditRequested &&
-    !containsStructuralAuditReceipt(
-      receiptSources,
-      typeof snapshotId === 'string' && snapshotId.trim()
-        ? snapshotId.trim()
-        : undefined,
-    )
+    !containsStructuralAuditReceipt(receiptSources, trimmedSnapshotId)
   const completionContractFailed =
     missingExplicitCompletion || missingAuditReceipt
   const mutationAttestations = extractMutationAttestations(

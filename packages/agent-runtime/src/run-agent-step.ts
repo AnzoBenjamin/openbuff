@@ -932,6 +932,56 @@ export const runAgentStep = async (
     shouldEndTurn = hasTaskCompleted || (hasNoToolResults && !isThinkOnly)
   }
 
+  const isThinkOnlyWithoutCompletion =
+    requiresExplicitCompletion &&
+    !hasTaskCompleted &&
+    hasNoToolResults &&
+    isThinkOnly
+  if (isThinkOnlyWithoutCompletion) {
+    agentState.consecutiveTextOnlyWithoutCompletion = 0
+  }
+
+  // Bounded fallback for explicit-completion agents that produce a text-only
+  // answer without calling task_completed (general-agent, last_message). Keep
+  // task_completed semantics strict, but don't loop forever: first text-only
+  // gets a nudge, second consecutive text-only ends the turn. Think-only
+  // turns never count (the model was just reasoning).
+  const isExplicitTextOnlyWithoutCompletion =
+    requiresExplicitCompletion &&
+    !hasTaskCompleted &&
+    hasNoToolResults &&
+    !isThinkOnly &&
+    responseWithoutThinkTags.length > 0
+  let injectedCompletionNudge = false
+  if (isExplicitTextOnlyWithoutCompletion) {
+    const consecutive =
+      (agentState.consecutiveTextOnlyWithoutCompletion ?? 0) + 1
+    agentState.consecutiveTextOnlyWithoutCompletion = consecutive
+    if (consecutive === 1) {
+      const nudge = withSystemTags(
+        'You produced an answer without calling task_completed. If work is done, call task_completed now; otherwise continue with tool calls.',
+      )
+      agentState.messageHistory = [
+        ...agentState.messageHistory,
+        userMessage({ content: nudge, keepDuringTruncation: true }),
+      ]
+      onResponseChunk(`${nudge}\n\n`)
+      injectedCompletionNudge = true
+    } else {
+      shouldEndTurn = true
+      if (
+        agentTemplate.outputMode === 'last_message' &&
+        agentState.output === undefined
+      ) {
+        agentState.output = { harvestedFromFallback: true }
+      }
+    }
+  } else if (!isThinkOnlyWithoutCompletion) {
+    if (!hasNoToolResults || hasTaskCompleted) {
+      agentState.consecutiveTextOnlyWithoutCompletion = 0
+    }
+  }
+
   // For structured-output agents, once set_output successfully sets the
   // agent's output, the turn should end regardless of other heuristics.
   // This prevents reasoning models from getting stuck in think-only loops
@@ -945,6 +995,10 @@ export const runAgentStep = async (
     agentState.output !== undefined
   ) {
     shouldEndTurn = true
+  }
+
+  if (injectedCompletionNudge) {
+    shouldEndTurn = false
   }
 
   const repeatedStepLoop = evaluateRepeatedStepLoop({
