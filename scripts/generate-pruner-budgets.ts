@@ -44,33 +44,111 @@ export const CANONICAL_MODULE =
   'packages/agent-runtime/src/util/context-pruning.ts'
 
 /**
- * Mirrored constants in emit order: `[canonical export, pruner-local name]`.
- * The pruner uses shorter local names for the semantic-compaction fractions
- * and reuses the canonical names for the model-reserve constants.
+ * Canonical budget exports, in deterministic emit order, that MUST be mirrored
+ * into the pruner's generated region. Each is a numeric constant in
+ * `packages/agent-runtime/src/util/context-pruning.ts` whose name matches a
+ * budget pattern (see `isBudgetPatternName`). Keeping this as the single
+ * ordering list means a NEW canonical budget constant is never silently
+ * dropped: `deriveBudgetMirrors` asserts that exactly these (no more, no
+ * fewer) budget-pattern exports exist in the canonical module, throwing a
+ * loud error otherwise.
  */
-export const BUDGET_MIRRORS: ReadonlyArray<readonly [string, string]> = [
-  ['DEFAULT_SEMANTIC_COMPACTION_TRIGGER_TOKENS', 'DEFAULT_MAX_CONTEXT_LENGTH'],
-  ['DEFAULT_SEMANTIC_COMPACTION_TARGET_TOKENS', 'DEFAULT_TARGET_CONTEXT_LENGTH'],
-  ['SEMANTIC_COMPACTION_TRIGGER_FRACTION', 'SEMANTIC_TRIGGER_FRACTION'],
-  ['SEMANTIC_COMPACTION_TARGET_FRACTION', 'SEMANTIC_TARGET_FRACTION'],
-  ['SEMANTIC_COMPACTION_HEADROOM_FRACTION', 'SEMANTIC_HEADROOM_FRACTION'],
-  ['SEMANTIC_COMPACTION_MIN_HEADROOM_TOKENS', 'SEMANTIC_MIN_HEADROOM_TOKENS'],
-  ['SEMANTIC_COMPACTION_MAX_HEADROOM_TOKENS', 'SEMANTIC_MAX_HEADROOM_TOKENS'],
-  ['SEMANTIC_COMPACTION_MIN_TARGET_TOKENS', 'SEMANTIC_MIN_TARGET_TOKENS'],
-  ['SEMANTIC_COMPACTION_MAX_TARGET_TOKENS', 'SEMANTIC_MAX_TARGET_TOKENS'],
-  [
-    'SEMANTIC_COMPACTION_SMALL_WINDOW_THRESHOLD_TOKENS',
-    'SEMANTIC_SMALL_WINDOW_THRESHOLD_TOKENS',
-  ],
-  [
-    'SEMANTIC_COMPACTION_SMALL_WINDOW_MIN_HEADROOM_TOKENS',
-    'SEMANTIC_SMALL_WINDOW_MIN_HEADROOM_TOKENS',
-  ],
-  ['MODEL_CONTEXT_MIN_RESERVED_TOKENS', 'MODEL_CONTEXT_MIN_RESERVED_TOKENS'],
-  ['MODEL_CONTEXT_MAX_RESERVED_TOKENS', 'MODEL_CONTEXT_MAX_RESERVED_TOKENS'],
-  ['MODEL_CONTEXT_RESERVED_FRACTION', 'MODEL_CONTEXT_RESERVED_FRACTION'],
-  ['MODEL_CONTEXT_MAX_RESERVED_FRACTION', 'MODEL_CONTEXT_MAX_RESERVED_FRACTION'],
+export const BUDGET_CANONICAL_NAMES: readonly string[] = [
+  'DEFAULT_SEMANTIC_COMPACTION_TRIGGER_TOKENS',
+  'DEFAULT_SEMANTIC_COMPACTION_TARGET_TOKENS',
+  'SEMANTIC_COMPACTION_TRIGGER_FRACTION',
+  'SEMANTIC_COMPACTION_TARGET_FRACTION',
+  'SEMANTIC_COMPACTION_HEADROOM_FRACTION',
+  'SEMANTIC_COMPACTION_MIN_HEADROOM_TOKENS',
+  'SEMANTIC_COMPACTION_MAX_HEADROOM_TOKENS',
+  'SEMANTIC_COMPACTION_MIN_TARGET_TOKENS',
+  'SEMANTIC_COMPACTION_MAX_TARGET_TOKENS',
+  'SEMANTIC_COMPACTION_SMALL_WINDOW_THRESHOLD_TOKENS',
+  'SEMANTIC_COMPACTION_SMALL_WINDOW_MIN_HEADROOM_TOKENS',
+  'MODEL_CONTEXT_MIN_RESERVED_TOKENS',
+  'MODEL_CONTEXT_MAX_RESERVED_TOKENS',
+  'MODEL_CONTEXT_RESERVED_FRACTION',
+  'MODEL_CONTEXT_MAX_RESERVED_FRACTION',
 ]
+
+/**
+ * A canonical budget constant is any exported numeric constant whose name
+ * relates to the semantic-compaction or model-reserve budget. Non-budget
+ * exported numeric constants in the module are intentionally not mirrored.
+ */
+export function isBudgetPatternName(name: string): boolean {
+  return (
+    name.startsWith('DEFAULT_SEMANTIC_COMPACTION_') ||
+    name.startsWith('SEMANTIC_COMPACTION_') ||
+    name.startsWith('MODEL_CONTEXT_')
+  )
+}
+
+/**
+ * Deterministically derive the pruner-local name for a canonical budget
+ * constant. Fail-loud on an unrecognized budget name so a future irregular
+ * name surfaces a clear error instead of silently producing a broken alias.
+ *
+ * Conventions:
+ *   - `MODEL_CONTEXT_*` keeps its name (no change).
+ *   - `DEFAULT_SEMANTIC_COMPACTION_TRIGGER_TOKENS` -> `DEFAULT_MAX_CONTEXT_LENGTH`.
+ *   - `DEFAULT_SEMANTIC_COMPACTION_TARGET_TOKENS` -> `DEFAULT_TARGET_CONTEXT_LENGTH`.
+ *   - `SEMANTIC_COMPACTION_<REST>` -> `SEMANTIC_<REST>` (strip `COMPACTION_`).
+ */
+export function derivePrunerLocalName(canonicalName: string): string {
+  if (canonicalName.startsWith('MODEL_CONTEXT_')) {
+    return canonicalName
+  }
+  if (canonicalName === 'DEFAULT_SEMANTIC_COMPACTION_TRIGGER_TOKENS') {
+    return 'DEFAULT_MAX_CONTEXT_LENGTH'
+  }
+  if (canonicalName === 'DEFAULT_SEMANTIC_COMPACTION_TARGET_TOKENS') {
+    return 'DEFAULT_TARGET_CONTEXT_LENGTH'
+  }
+  if (canonicalName.startsWith('SEMANTIC_COMPACTION_')) {
+    return `SEMANTIC_${canonicalName.slice('SEMANTIC_COMPACTION_'.length)}`
+  }
+  throw new Error(
+    `Unable to derive pruner-local name for canonical budget constant ${canonicalName}`,
+  )
+}
+
+/**
+ * Derive the `[canonical, prunerLocal]` mirror pairs in emit order.
+ *
+ * Exhaustive and fail-loud: asserts that the set of budget-pattern exported
+ * numeric constants in the canonical module is EXACTLY `BUDGET_CANONICAL_NAMES`.
+ * A newly added budget constant (or a removed/renamed one) therefore throws,
+ * telling the developer to update `BUDGET_CANONICAL_NAMES` rather than letting
+ * the drift go silently.
+ */
+export function deriveBudgetMirrors(
+  literals: Map<string, string>,
+): ReadonlyArray<readonly [string, string]> {
+  const observedBudgetNames = Array.from(literals.keys()).filter(
+    isBudgetPatternName,
+  )
+  const observed = new Set(observedBudgetNames)
+  const expected = new Set(BUDGET_CANONICAL_NAMES)
+  for (const name of observedBudgetNames) {
+    if (!expected.has(name)) {
+      throw new Error(
+        `New mirrored budget constant ${name} found in ${CANONICAL_MODULE} but is not in BUDGET_CANONICAL_NAMES. Add it to BUDGET_CANONICAL_NAMES in scripts/generate-pruner-budgets.ts.`,
+      )
+    }
+  }
+  for (const name of BUDGET_CANONICAL_NAMES) {
+    if (!observed.has(name)) {
+      throw new Error(
+        `Expected mirrored budget constant ${name} is missing from ${CANONICAL_MODULE}. It may have been renamed; update BUDGET_CANONICAL_NAMES or the canonical module.`,
+      )
+    }
+  }
+  return BUDGET_CANONICAL_NAMES.map((canonicalName) => [
+    canonicalName,
+    derivePrunerLocalName(canonicalName),
+  ] as const)
+}
 
 export function projectRootFromMeta(metaUrl = import.meta.url): string {
   return path.resolve(path.dirname(new URL(metaUrl).pathname), '..')
@@ -116,6 +194,7 @@ export function readCanonicalLiterals(source: string): Map<string, string> {
  */
 export function generateBlock(canonicalSource: string): string {
   const literals = readCanonicalLiterals(canonicalSource)
+  const budgetMirrors = deriveBudgetMirrors(literals)
   const lines: string[] = [
     `${INDENT}${OPEN_MARKER}`,
     `${INDENT}// Source of truth: ${CANONICAL_MODULE}`,
@@ -123,7 +202,7 @@ export function generateBlock(canonicalSource: string): string {
     `${INDENT}// canonical module, so these literals are generated, not hand-copied.`,
   ]
 
-  for (const [canonicalName, prunerName] of BUDGET_MIRRORS) {
+  for (const [canonicalName, prunerName] of budgetMirrors) {
     const literal = literals.get(canonicalName)
     if (literal === undefined) {
       throw new Error(
@@ -167,6 +246,44 @@ export function normalizeTrailingWhitespace(value: string): string {
     .join('\n')
 }
 
+/**
+ * Whether the marker region in `text` equals `block`, ignoring trailing
+ * whitespace. Returns false when either marker is absent (matching runCheck's
+ * fail-closed behavior). This is the pure, side-effect-free core of runCheck.
+ */
+export function regionIsFresh(text: string, block: string): boolean {
+  const region = extractRegion(text)
+  if (region === null) return false
+  return (
+    normalizeTrailingWhitespace(region) === normalizeTrailingWhitespace(block)
+  )
+}
+
+/**
+ * Byte-preserving replacement of the marker region: returns `text` with the
+ * whole region (open marker line through close marker) replaced by `block`,
+ * leaving everything outside the markers unchanged. This is the exact splice
+ * runWrite performs inline. Throws when either marker is absent, matching
+ * runWrite's fail-closed policy.
+ */
+export function spliceRegion(text: string, block: string): string {
+  const markerIndex = text.indexOf(OPEN_MARKER)
+  if (markerIndex === -1) {
+    throw new Error(
+      'pruner-budgets open marker not found in text; refusing to guess an insertion point',
+    )
+  }
+  const closeIndex = text.indexOf(CLOSE_MARKER, markerIndex)
+  if (closeIndex === -1) {
+    throw new Error(
+      'pruner-budgets close marker not found in text; refusing to guess an insertion point',
+    )
+  }
+  const start = text.lastIndexOf('\n', markerIndex) + 1
+  const end = closeIndex + CLOSE_MARKER.length
+  return text.slice(0, start) + block + text.slice(end)
+}
+
 /** Print a compact line-level summary of the first differences. */
 function summarizeDiff(current: string, fresh: string): void {
   const currentLines = current.split('\n')
@@ -191,17 +308,15 @@ function runCheck(targetPath: string, block: string): void {
   const absolute = path.resolve(targetPath)
   const text = fs.readFileSync(absolute, 'utf8')
   const region = extractRegion(text)
+  if (regionIsFresh(text, block)) {
+    console.log('pruner-budgets region is fresh')
+    return
+  }
   if (region === null) {
     console.error(
       `pruner-budgets markers not found in ${targetPath} (expected ${OPEN_MARKER} ... ${CLOSE_MARKER})`,
     )
     process.exit(1)
-  }
-  if (
-    normalizeTrailingWhitespace(region) === normalizeTrailingWhitespace(block)
-  ) {
-    console.log('pruner-budgets region is fresh')
-    return
   }
   summarizeDiff(
     normalizeTrailingWhitespace(region),
@@ -230,10 +345,8 @@ function runWrite(targetPath: string, block: string): void {
     )
     process.exit(1)
   }
-  const start = text.lastIndexOf('\n', markerIndex) + 1
-  const end = closeIndex + CLOSE_MARKER.length
   // Preserve everything outside the markers byte-for-byte.
-  fs.writeFileSync(absolute, text.slice(0, start) + block + text.slice(end))
+  fs.writeFileSync(absolute, spliceRegion(text, block))
   console.log(`pruner-budgets region written to ${targetPath}`)
 }
 

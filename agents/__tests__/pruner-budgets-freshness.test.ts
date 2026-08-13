@@ -21,12 +21,17 @@ import {
 } from '@codebuff/agent-runtime/util/context-pruning'
 
 import {
+  BUDGET_CANONICAL_NAMES,
   CLOSE_MARKER,
   OPEN_MARKER,
+  deriveBudgetMirrors,
+  derivePrunerLocalName,
   extractRegion,
   generateBlock,
   normalizeTrailingWhitespace,
   readCanonicalSource,
+  regionIsFresh,
+  spliceRegion,
 } from '../../scripts/generate-pruner-budgets'
 
 // The test file lives at agents/__tests__/, so ../../ reaches the repo root.
@@ -153,5 +158,121 @@ describe('pruner-budgets freshness', () => {
     // otherwise regeneration would silently delete it.
     expect(region).not.toContain('EXPLICIT_LIMIT_TARGET_FRACTION')
     expect(source).toContain('const EXPLICIT_LIMIT_TARGET_FRACTION = 0.6')
+  })
+})
+
+describe('pruner-budgets derivation & splice', () => {
+  test('spliceRegion replaces the marker region byte-preservingly', () => {
+    const prefix = 'line-before\n'
+    const suffix = '\nline-after'
+    const block = '    const FRESH_ONE = 1\n    const FRESH_TWO = 2'
+    const text =
+      prefix + `${OPEN_MARKER}\nstale content\n${CLOSE_MARKER}` + suffix
+
+    const spliced = spliceRegion(text, block)
+
+    // Prefix and suffix bytes are preserved exactly; the region (markers and
+    // in-region content) is replaced verbatim by `block`.
+    expect(spliced).toBe(prefix + block + suffix)
+    expect(spliced.startsWith(prefix)).toBe(true)
+    expect(spliced.endsWith(suffix)).toBe(true)
+    expect(spliced).not.toContain(OPEN_MARKER)
+    expect(spliced).not.toContain(CLOSE_MARKER)
+    expect(spliced).not.toContain('stale content')
+  })
+
+  test('spliceRegion throws when a marker is absent', () => {
+    expect(() => spliceRegion('no markers here', 'block')).toThrow(
+      /open marker not found/,
+    )
+    const onlyOpen = `${OPEN_MARKER}\ncontent`
+    expect(() => spliceRegion(onlyOpen, 'block')).toThrow(
+      /close marker not found/,
+    )
+  })
+
+  test('regionIsFresh reflects region staleness and marker presence', () => {
+    const template =
+      `prefix-line\n${OPEN_MARKER}\nOLD\n${CLOSE_MARKER}\nsuffix-line`
+    const freshBlock = `${OPEN_MARKER}\n    const FRESH = 1\n${CLOSE_MARKER}`
+
+    const freshText = spliceRegion(template, freshBlock)
+    expect(regionIsFresh(freshText, freshBlock)).toBe(true)
+
+    const staleText = spliceRegion(
+      template,
+      `${OPEN_MARKER}\nchanged\n${CLOSE_MARKER}`,
+    )
+    expect(regionIsFresh(staleText, freshBlock)).toBe(false)
+
+    expect(regionIsFresh('no markers at all', freshBlock)).toBe(false)
+  })
+
+  test('deriveBudgetMirrors throws when a canonical constant is missing', () => {
+    const literals = new Map<string, string>(
+      BUDGET_CANONICAL_NAMES.map((name) => [name, '1']),
+    )
+    literals.delete('SEMANTIC_COMPACTION_TRIGGER_FRACTION')
+    expect(() => deriveBudgetMirrors(literals)).toThrow(
+      /SEMANTIC_COMPACTION_TRIGGER_FRACTION/,
+    )
+  })
+
+  test('deriveBudgetMirrors throws on an unexpected budget-pattern name', () => {
+    const literals = new Map<string, string>(
+      BUDGET_CANONICAL_NAMES.map((name) => [name, '1']),
+    )
+    literals.set('SEMANTIC_COMPACTION_NEW_FACTOR', '0.5')
+    expect(() => deriveBudgetMirrors(literals)).toThrow(
+      /SEMANTIC_COMPACTION_NEW_FACTOR/,
+    )
+  })
+
+  test('derivePrunerLocalName maps canonical names to pruner-local names', () => {
+    expect(
+      derivePrunerLocalName('MODEL_CONTEXT_MIN_RESERVED_TOKENS'),
+    ).toBe('MODEL_CONTEXT_MIN_RESERVED_TOKENS')
+    expect(derivePrunerLocalName('SEMANTIC_COMPACTION_TARGET_FRACTION')).toBe(
+      'SEMANTIC_TARGET_FRACTION',
+    )
+    expect(
+      derivePrunerLocalName('DEFAULT_SEMANTIC_COMPACTION_TARGET_TOKENS'),
+    ).toBe('DEFAULT_TARGET_CONTEXT_LENGTH')
+    expect(() => derivePrunerLocalName('UNRELATED_CONSTANT')).toThrow(
+      /UNRELATED_CONSTANT/,
+    )
+  })
+
+  test('deriveBudgetMirrors returns all canonical pairs in emit order', () => {
+    const literals = new Map<string, string>(
+      BUDGET_CANONICAL_NAMES.map((name) => [name, '1']),
+    )
+    const mirrors = deriveBudgetMirrors(literals)
+    expect(mirrors).toHaveLength(15)
+    // MODEL_CONTEXT pairs keep their canonical name as the pruner-local name.
+    expect(
+      mirrors.find(
+        ([canonical]) => canonical === 'MODEL_CONTEXT_MAX_RESERVED_TOKENS',
+      ),
+    ).toEqual([
+      'MODEL_CONTEXT_MAX_RESERVED_TOKENS',
+      'MODEL_CONTEXT_MAX_RESERVED_TOKENS',
+    ])
+    // SEMANTIC_COMPACTION strips the COMPACTION_ prefix.
+    expect(
+      mirrors.find(
+        ([canonical]) => canonical === 'SEMANTIC_COMPACTION_TRIGGER_FRACTION',
+      ),
+    ).toEqual(['SEMANTIC_COMPACTION_TRIGGER_FRACTION', 'SEMANTIC_TRIGGER_FRACTION'])
+    // DEFAULT_TRIGGER maps to DEFAULT_MAX_CONTEXT_LENGTH.
+    expect(
+      mirrors.find(
+        ([canonical]) =>
+          canonical === 'DEFAULT_SEMANTIC_COMPACTION_TRIGGER_TOKENS',
+      ),
+    ).toEqual([
+      'DEFAULT_SEMANTIC_COMPACTION_TRIGGER_TOKENS',
+      'DEFAULT_MAX_CONTEXT_LENGTH',
+    ])
   })
 })
