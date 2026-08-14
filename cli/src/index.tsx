@@ -132,6 +132,7 @@ async function main(): Promise<void> {
     // Diagnostic dump so CI logs (and bug reports) show exactly what
     // the runtime saw when smoke fails. process.execPath, the
     // siblingPath we expect, and what's actually in that directory.
+    // RF-6: truncation already applied (30 entries) and PII-redacted — full absolute paths are not dumped in CI logs.
     const execDir = path.dirname(process.execPath)
     const siblingPath = path.join(execDir, 'tree-sitter.wasm')
     let dirListing: string[] = []
@@ -142,13 +143,22 @@ async function main(): Promise<void> {
         `<readdir failed: ${err instanceof Error ? err.message : err}>`,
       ]
     }
+    // Redact PII (home dir) and bound output length before CI log emission.
+    const redactSmokePath = (p: string): string => {
+      const home = os.homedir()
+      let out = home && p.startsWith(home) ? `~${p.slice(home.length)}` : path.basename(p) || p
+      // Keep only last 80 chars; prevents long user-specific paths leaking in logs.
+      if (out.length > 80) out = `…${out.slice(-80)}`
+      return out
+    }
+    const redactedListing = dirListing.slice(0, 30).map((e) => redactSmokePath(e))
     console.error(
-      `[smoke diag] execPath=${process.execPath}\n` +
-        `[smoke diag] execDir=${execDir}\n` +
-        `[smoke diag] siblingPath=${siblingPath}\n` +
+      `[smoke diag] execPath=${redactSmokePath(process.execPath)}\n` +
+        `[smoke diag] execDir=${redactSmokePath(execDir)}\n` +
+        `[smoke diag] siblingPath=${redactSmokePath(siblingPath)}\n` +
         `[smoke diag] siblingExists=${fs.existsSync(siblingPath)}\n` +
-        `[smoke diag] dir contents (${dirListing.length}): ${dirListing.slice(0, 30).join(', ')}\n` +
-        `[smoke diag] globalThis wasmPath=${wasmPath ?? '<unset>'}\n` +
+        `[smoke diag] dir contents (${dirListing.length}): ${redactedListing.join(', ')}\n` +
+        `[smoke diag] globalThis wasmPath=${wasmPath ? redactSmokePath(wasmPath) : '<unset>'}\n` +
         `[smoke diag] globalThis wasmBinary bytes=${wasmBinary?.byteLength ?? 0}\n`,
     )
 
@@ -161,8 +171,24 @@ async function main(): Promise<void> {
       let effectiveBinary = wasmBinary
       let effectivePath = wasmPath
       if (!effectiveBinary && !effectivePath && fs.existsSync(siblingPath)) {
-        effectivePath = siblingPath
-        effectiveBinary = new Uint8Array(fs.readFileSync(siblingPath))
+        try {
+          const stat = fs.statSync(siblingPath)
+          // Guard unbounded read: cap sibling wasm to 8 MiB; corrupted/truncated
+          // files beyond cap are rejected with a diagnostic instead of OOM.
+          const WASM_MAX_BYTES = 8 * 1024 * 1024
+          if (stat.size > 0 && stat.size <= WASM_MAX_BYTES) {
+            effectivePath = siblingPath
+            effectiveBinary = new Uint8Array(fs.readFileSync(siblingPath))
+          } else {
+            console.error(
+              `[smoke diag] sibling wasm size out of bounds: ${stat.size} bytes (cap ${WASM_MAX_BYTES})`,
+            )
+          }
+        } catch (err) {
+          console.error(
+            `[smoke diag] sibling wasm fallback read failed: ${err instanceof Error ? err.message : err}`,
+          )
+        }
       }
 
       if (effectiveBinary) {
@@ -199,6 +225,21 @@ async function main(): Promise<void> {
   const cliArgv = process.argv.filter(
     (arg) => arg !== '--smoke-bootscreen',
   )
+
+  let smokeBootscreenTimer: ReturnType<typeof setTimeout> | null = null
+  if (smokeBootscreen && !process.stdout.isTTY) {
+    // On Windows with non-TTY stdout OpenTUI paints nothing, so it never drives React's
+    // passive-effect flush and a useEffect-emitted marker would stay scheduled
+    // but never run, leaving the harness to SIGKILL a silent child. Emit from
+    // main() on a short grace timer instead. smoke-binary.ts still scans the
+    // full window for FATAL_PATTERNS, so any later async startup crash is caught.
+    // Schedule BEFORE any awaits (renderer/app init may hang on Windows pipes
+    // and would otherwise prevent this timer from ever being registered).
+    smokeBootscreenTimer = setTimeout(() => {
+      console.log('openbuff bootscreen ok')
+    }, 1500)
+    smokeBootscreenTimer.unref()
+  }
 
   // Run OSC theme detection BEFORE anything else.
   // This MUST happen before OpenTUI starts because OSC responses come through stdin,
@@ -355,6 +396,7 @@ async function main(): Promise<void> {
   // If the renderer crashes during init, these ensure the error is visible
   // by exiting the alternate screen buffer before printing the error.
   const earlyFatalHandler = (error: unknown) => {
+    if (smokeBootscreenTimer) clearTimeout(smokeBootscreenTimer)
     try {
       if (process.stdin.isTTY && process.stdin.setRawMode) {
         process.stdin.setRawMode(false)
@@ -379,11 +421,18 @@ async function main(): Promise<void> {
   process.on('uncaughtException', earlyFatalHandler)
   process.on('unhandledRejection', earlyFatalHandler)
 
-  const renderer = await createCliRenderer({
+  let renderer: Awaited<ReturnType<typeof createCliRenderer>> | null = null
+  try {
+    renderer = await createCliRenderer({
     backgroundColor: 'transparent',
     exitOnCtrlC: false,
     screenMode: 'alternate-screen',
   })
+
+  } catch (error) {
+    if (smokeBootscreenTimer) clearTimeout(smokeBootscreenTimer)
+    throw error
+  }
 
   // Remove early handlers — proper cleanup handlers (with renderer access) take over
   process.removeListener('uncaughtException', earlyFatalHandler)
@@ -396,16 +445,9 @@ async function main(): Promise<void> {
     </QueryClientProvider>,
   )
 
-  if (smokeBootscreen && !process.stdout.isTTY) {
-    // Release smoke gate — deterministic Windows boot marker. On Windows with
-    // non-TTY stdout OpenTUI paints nothing, so it never drives React's
-    // passive-effect flush and a useEffect-emitted marker would stay scheduled
-    // but never run, leaving the harness to SIGKILL a silent child. Emit from
-    // main() on a short grace timer instead. smoke-binary.ts still scans the
-    // full window for FATAL_PATTERNS, so any later async startup crash is caught.
-    setTimeout(() => {
-      console.log('openbuff bootscreen ok')
-    }, 1500)
+  if (smokeBootscreenTimer) {
+    clearTimeout(smokeBootscreenTimer)
+    smokeBootscreenTimer = null
   }
 }
 

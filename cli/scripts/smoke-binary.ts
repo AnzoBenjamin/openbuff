@@ -54,7 +54,7 @@ const BOOT_SIGNAL_PATTERNS = [
   /Open this URL/,
   /Enter a coding task/,
   /\x1b\[\?1049h/,
-  /openbuff bootscreen ok/,
+  /openbuff bootscreen ok\r?/,
 ] as const
 
 // Fatal markers we already know about — kept for nicer error messages on
@@ -74,7 +74,7 @@ const FATAL_PATTERNS = [
   /Uncaught exception:/i,
   /Internal error: tree-sitter\.wasm not found/i,
   /UnhandledPromiseRejection/i,
-  /Cannot find module/i,
+  /Cannot find module.*(?:tree-sitter\.wasm|tree-sitter|@opentui\/core)/i,
 ] as const
 
 // Long enough that an unhandled rejection from the eager Parser.init has
@@ -89,12 +89,56 @@ const DEFAULT_RUN_SECONDS = 10
 // the whole smoke bounded by the same value (10s) a probe can reasonably take.
 const PROBE_TIMEOUT_SECONDS = DEFAULT_RUN_SECONDS
 
-// Only the first CAPTURED_OUTPUT_CAP bytes of a child's stdout/stderr are ever
-// reported (both requireProbe's error slice and the full-TUI fail() cap), so
-// the capture handlers short-circuit past this many bytes to keep memory
-// bounded over the whole run. Shared by the probe and full-TUI paths so they
-// can't drift.
+// Only the first CAPTURED_OUTPUT_CAP bytes of a child's stdout/stderr are
+// retained in memory (capture handlers short-circuit past this). The failure
+// reporter truncates further to 8 KB (half the cap) for readable diagnostics,
+// so the 16 KB cap bounds memory while the 8 KB slice keeps error logs concise.
+// Both values are intentionally aligned via CAPTURED_OUTPUT_CAP — keep them in sync.
 const CAPTURED_OUTPUT_CAP = 16 * 1024
+const CAPTURED_OUTPUT_FAIL_SLICE = 8 * 1024 // half of CAPTURED_OUTPUT_CAP for truncated error output
+// Overlap retained across chunk boundaries so a fatal/boot pattern split
+// across two data events is still detected by stream scanning.
+const SCAN_OVERLAP = 512
+
+// Hermetic smoke env: allowlist only the minimal vars needed for the binary
+// to run, rather than propagating the full parent process.env. This keeps the
+// smoke deterministic and avoids leaking unrelated host env into the child.
+function buildSmokeEnv(): Record<string, string> {
+  // Include locale vars (LANG/LC_ALL/LC_CTYPE/LANGUAGE) so smoke binary locale matches prod; omission would alter behavior vs prod (RF-7).
+  const allowlist = [
+    'PATH',
+    'HOME',
+    'USER',
+    'SHELL',
+    'TMPDIR',
+    'TEMP',
+    'TMP',
+    'SystemRoot',
+    'WINDIR',
+    'USERPROFILE',
+    'LOCALAPPDATA',
+    'PROGRAMFILES',
+    'PROGRAMFILES(X86)',
+    'COMSPEC',
+    'PATHEXT',
+    'BUN_INSTALL',
+    'TERM',
+    'NO_COLOR',
+    'SMOKE_VERBOSE',
+    'LANG',
+    'LC_ALL',
+    'LC_CTYPE',
+    'LANGUAGE',
+  ]
+  const env: Record<string, string> = {}
+  for (const key of allowlist) {
+    const val = process.env[key]
+    if (val !== undefined) env[key] = val
+  }
+  env.NO_COLOR = '1'
+  env.TERM = 'dumb'
+  return env
+}
 
 type ProcessResult = {
   captured: string
@@ -102,23 +146,69 @@ type ProcessResult = {
   signal: NodeJS.Signals | null
 }
 
+/** Shared bounded capture with stream-scanning so late output beyond the
+ * head cap is not missed (RF-6). Deduplicates append/cap logic between
+ * runProbe() and the full-TUI spawn (RF-5). */
+function createBoundedCapture() {
+  let head = ''
+  let tail = ''
+  let scanTail = ''
+  let fatalHit: RegExp | null = null
+  let bootHit: RegExp | null = null
+  const append = (chunk: Buffer): void => {
+    const text = chunk.toString('utf8')
+    const scanCandidate = scanTail + text
+    if (!fatalHit) {
+      for (const p of FATAL_PATTERNS) {
+        if (p.test(scanCandidate)) {
+          fatalHit = p
+          break
+        }
+      }
+    }
+    if (!bootHit) {
+      for (const p of BOOT_SIGNAL_PATTERNS) {
+        if (p.test(scanCandidate)) {
+          bootHit = p
+          break
+        }
+      }
+    }
+    scanTail = scanCandidate.slice(-SCAN_OVERLAP)
+    if (head.length < CAPTURED_OUTPUT_CAP) {
+      head += text
+      if (head.length > CAPTURED_OUTPUT_CAP) head = head.slice(0, CAPTURED_OUTPUT_CAP)
+    }
+    tail += text
+    if (tail.length > CAPTURED_OUTPUT_CAP) tail = tail.slice(-CAPTURED_OUTPUT_CAP)
+  }
+  return {
+    getCaptured: () => head,
+    getTail: () => tail,
+    fatalMatched: () => fatalHit,
+    bootMatched: () => bootHit,
+    append,
+    attach: (proc: { stdout?: NodeJS.ReadableStream | null; stderr?: NodeJS.ReadableStream | null }) => {
+      proc.stdout?.on('data', append)
+      proc.stderr?.on('data', append)
+    },
+    detach: (proc: { stdout?: NodeJS.ReadableStream | null; stderr?: NodeJS.ReadableStream | null }) => {
+      proc.stdout?.removeListener('data', append)
+      proc.stderr?.removeListener('data', append)
+    },
+  }
+}
+
 function runProbe(binary: string, flag: string): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const proc = spawn(binary, [flag], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, NO_COLOR: '1', TERM: 'dumb' },
+      env: buildSmokeEnv(),
     })
 
-    // Keep memory bounded: `requireProbe` only matches a marker anywhere in
-    // captured output and the error slice is capped, so a cap here just avoids
-    // unbounded growth if a probe ever prints a lot.
-    let captured = ''
-    const append = (chunk: Buffer): void => {
-      if (captured.length >= CAPTURED_OUTPUT_CAP) return
-      captured += chunk.toString('utf8')
-    }
-    proc.stdout?.on('data', append)
-    proc.stderr?.on('data', append)
+    const cap = createBoundedCapture()
+    cap.attach(proc)
+    const cleanup = () => cap.detach(proc)
 
     // Time out a hanging probe so a defective binary can't stall CI. Kill the
     // child and reject; `requireProbe`'s await throws and the harness fails.
@@ -128,6 +218,8 @@ function runProbe(binary: string, flag: string): Promise<ProcessResult> {
       } catch {
         // process already dead or not killable; reject is what matters
       }
+      cleanup()
+      proc.removeAllListeners()
       reject(
         new Error(
           `probe for flag ${flag} timed out after ${PROBE_TIMEOUT_SECONDS}s`,
@@ -145,11 +237,15 @@ function runProbe(binary: string, flag: string): Promise<ProcessResult> {
       } catch {
         // process already dead or not killable; reject is what matters
       }
+      cleanup()
+      proc.removeAllListeners()
       reject(err)
     })
     proc.once('exit', (code, signal) => {
       clearTimeout(timer)
-      resolve({ captured, code, signal })
+      cleanup()
+      proc.removeAllListeners()
+      resolve({ captured: cap.getCaptured(), code, signal })
     })
   })
 }
@@ -166,7 +262,7 @@ async function requireProbe(
   throw new Error(
     `${label} smoke failed (${formatExit(result.code, result.signal)})\n${result.captured.slice(
       0,
-      8 * 1024,
+      CAPTURED_OUTPUT_FAIL_SLICE,
     )}`,
   )
 }
@@ -200,7 +296,12 @@ async function main(): Promise<void> {
     process.exit(2)
   }
 
-  console.log(`smoke-binary: probing ${binary}…`)
+  // (quiet by default; set SMOKE_VERBOSE=1 for step logs to reduce CI noise)
+  const verbose = process.env.SMOKE_VERBOSE === '1'
+  const vLog = (...args: unknown[]) => {
+    if (verbose) console.log(...args)
+  }
+  vLog(`smoke-binary: probing ${binary}…`)
 
   await requireProbe(
     binary,
@@ -208,33 +309,25 @@ async function main(): Promise<void> {
     /tree-sitter smoke ok/,
     'tree-sitter',
   )
-  console.log('smoke-binary: tree-sitter init OK.')
+  vLog('smoke-binary: tree-sitter init OK.')
 
   await requireProbe(binary, '--smoke-opentui', /opentui smoke ok/, 'OpenTUI')
-  console.log('smoke-binary: OpenTUI native init OK.')
+  vLog('smoke-binary: OpenTUI native init OK.')
 
   if (probeOnly) {
-    console.log('smoke-binary: OK (deterministic probes passed).')
+    vLog('smoke-binary: OK (deterministic probes passed).')
     return
   }
 
-  console.log(`smoke-binary: spawning full TUI for ${runSeconds}s…`)
+  vLog(`smoke-binary: spawning full TUI for ${runSeconds}s…`)
 
   const proc = spawn(binary, ['--smoke-bootscreen'], {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, NO_COLOR: '1', TERM: 'dumb' },
+    env: buildSmokeEnv(),
   })
 
-  // Cap accumulation: only the first CAPTURED_OUTPUT_CAP bytes are ever
-  // reported (see fail()), so keep memory bounded across the whole run rather
-  // than letting TUI frames over the full window grow the string unboundedly.
-  let captured = ''
-  const append = (chunk: Buffer): void => {
-    if (captured.length >= CAPTURED_OUTPUT_CAP) return
-    captured += chunk.toString('utf8')
-  }
-  proc.stdout?.on('data', append)
-  proc.stderr?.on('data', append)
+  const cap = createBoundedCapture()
+  cap.attach(proc)
 
   let earlyExitCode: number | null = null
   let exitSignal: NodeJS.Signals | null = null
@@ -275,11 +368,17 @@ async function main(): Promise<void> {
   clearTimeout(killTimer)
 
   const fail = (reason: string): never => {
+    const head = cap.getCaptured()
+    const tail = cap.getTail()
     console.error(
       `smoke-binary: FAIL — ${reason} (${formatExit(earlyExitCode, exitSignal)}).`,
     )
-    console.error('--- captured output (truncated to 8KB) ---')
-    console.error(captured.slice(0, 8 * 1024))
+    console.error(`--- captured output head (truncated to ${CAPTURED_OUTPUT_FAIL_SLICE / 1024}KB) ---`)
+    console.error(head.slice(0, CAPTURED_OUTPUT_FAIL_SLICE))
+    if (tail && tail !== head) {
+      console.error(`--- captured output tail (last ${CAPTURED_OUTPUT_FAIL_SLICE / 1024}KB) ---`)
+      console.error(tail.slice(-CAPTURED_OUTPUT_FAIL_SLICE))
+    }
     process.exit(1)
   }
 
@@ -291,10 +390,15 @@ async function main(): Promise<void> {
   }
 
   // Negative gate first: a known fatal marker gives us a more specific error
-  // message than "no boot signal found" would. Both gates would fire on a
-  // crash; preferring the negative one just makes the failure log clearer.
+  // message than "no boot signal found" would. Stream-scanning via
+  // cap.fatalMatched() catches late wasm rejections beyond the 16KB head cap
+  // (RF-6); head/tail string checks provide a bounded fallback for diagnostics.
+  const streamFatal = cap.fatalMatched()
+  if (streamFatal) {
+    fail(`output matched ${streamFatal} (stream-scanned)`)
+  }
   for (const pattern of FATAL_PATTERNS) {
-    if (pattern.test(captured)) {
+    if (pattern.test(cap.getCaptured()) || pattern.test(cap.getTail())) {
       fail(`output matched ${pattern}`)
     }
   }
@@ -306,16 +410,18 @@ async function main(): Promise<void> {
   // Positive gate: the binary must have rendered a known boot screen. This
   // is the load-bearing assertion — it catches *any* startup failure (silent
   // crashes, hangs, novel error messages, segfaults), not just the listed
-  // fatals.
-  const matchedSignal = BOOT_SIGNAL_PATTERNS.find((p) => p.test(captured))
+  // fatals. Checked via stream-scanned bootHit plus bounded head/tail fallback.
+  const streamBoot = cap.bootMatched()
+  const matchedSignal =
+    streamBoot ?? BOOT_SIGNAL_PATTERNS.find((p) => p.test(cap.getCaptured()) || p.test(cap.getTail()))
   if (!matchedSignal) {
     fail(
       `binary never reached a known boot screen — checked ${BOOT_SIGNAL_PATTERNS.length} patterns`,
     )
   }
 
-  console.log(
-    `smoke-binary: OK (matched ${matchedSignal}, ${formatExit(earlyExitCode, exitSignal)}, ${captured.length} bytes captured).`,
+  vLog(
+    `smoke-binary: OK (matched ${matchedSignal}, ${formatExit(earlyExitCode, exitSignal)}, ${cap.getCaptured().length} bytes head, ${cap.getTail().length} bytes tail).`,
   )
 }
 
