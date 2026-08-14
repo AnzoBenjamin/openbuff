@@ -60,6 +60,15 @@ Each aux step uses `spawn_agent_inline` (or `spawn_agents` for specialist batche
 
 Done-flags (`testWriterGateDone`, `docWriterGateDone`, …) reset only when the **aux-relevant** pending subset changes — not when writer outputs (new tests/docs) join pending. That prevents infinite re-spawn loops.
 
+### Aux predicate truth table (when each aux gate fires)
+
+| Agent | Fires when (predicate) | Skips when | Example trigger file |
+| --- | --- | --- | --- |
+| `test-writer` | `selectTestWriterTargets` non-empty: non-test source with inferable `test_command` + prompt mentions `test`/`test coverage` | Prompt lacks test intent or no eligible source/command | `packages/foo/src/bar.ts` |
+| `doc-writer` | `selectDocWriterTargets` non-empty: public-API source + prompt mentions `docs`/`documentation`/`readme`/`guide` | Prompt lacks docs intent or no public-API source | `packages/foo/src/index.ts` |
+| `security-reviewer` | `matchesSecuritySensitiveGlob` matches pending path | No security-sensitive pending paths | `src/auth/login.ts` |
+| specialists | `selectSpecialistReviewers` routes ≥1 specialist | No specialist routing match | `apps/web/src/payments/checkout.ts` |
+
 ### When automated `test-writer` runs
 
 All of the following must hold:
@@ -117,6 +126,7 @@ Repair budgets may be unlimited by default or capped via createBase2 / env (`OPE
 | Static `code-reviewer` / specialists **with** validation still running | Only if review is explicitly validation-independent | Parallel approval is **not** final until validation completes. Prefer validation first for fragile harness/editor work, then review with the summary. |
 | Routed specialists in one `spawn_agents` batch | Yes (runtime-owned) | Gate batches selected specialists; attestation/retry is gate-owned. |
 | Aux `test-writer` then `doc-writer` then security | **No** (by design) | Sequential blocking yields so each sees a stable pending set. |
+| Aux + final `code-reviewer` | **No** (by design) | Final gate after aux; file-change hooks + `code-reviewer` run only after aux/specialists complete. |
 | `editor` and `test-writer` on the same change without a join | **No** | Implementation must land before coverage writers or coverage-repair can target real source. |
 | `editor` and `repair-editor` on the same findings | **No** | Repair owns open gate findings; do not race a second implementation editor over the same IDs. |
 | Root `edit_transaction` while repair-editor runs | Avoid | Fragile debug/fix loops should be read → one edit path → validation, sequential. |

@@ -62,6 +62,20 @@ import {
 } from '@codebuff/common/tools/results/filesystem'
 
 /**
+ * Module boundaries (RF-1 / RF-5):
+ * This file currently aggregates three independent concerns that are candidates
+ * for future extraction into narrower modules to reduce blast radius and import
+ * coupling:
+ *  1. Receipt / reconciliation — buildRuntimeAgentReceipt, reconcileAgentReceiptIntoParent, extractMutationAttestations, etc. → candidate: spawn-agent-receipt.ts
+ *  2. Librarian clone cleanup — finalizeOwnedLibrarianClone → candidate: spawn-agent-librarian-cleanup.ts
+ *  3. Output compaction — normalizeSpawnedAgentOutput, compactAgentOutputValue, boundAgentOutputForParent, etc. → candidate: spawn-agent-output-compaction.ts
+ * Splitting is deferred while the pending gate file set restricts writes to
+ * this single file (writablePaths: [spawn-agent-utils.ts]); sections below are grouped and annotated
+ * to make a future split mechanical. When the gate allows, extract to spawn-agent-receipt /
+ * librarian-cleanup / output-compaction modules as noted in RF-5.
+ */
+
+/**
  * Common context params needed for spawning subagents.
  * These are the params that don't change between different spawn calls
  * and are passed through from the parent agent runtime.
@@ -176,35 +190,14 @@ export function getMatchingSpawn(
       continue
     }
 
-    if (
-      spawnableAgentId === childAgentId &&
-      spawnablePublisherId === childPublisherId &&
-      spawnableVersion === childVersion
-    ) {
-      return spawnableAgent
-    }
-    if (!childVersion && childPublisherId) {
-      if (
-        spawnablePublisherId === childPublisherId &&
-        spawnableAgentId === childAgentId
-      ) {
-        return spawnableAgent
-      }
-    }
-    if (!childPublisherId && childVersion) {
-      if (
-        spawnableAgentId === childAgentId &&
-        spawnableVersion === childVersion
-      ) {
-        return spawnableAgent
-      }
-    }
-
-    if (!childVersion && !childPublisherId) {
-      if (spawnableAgentId === childAgentId) {
-        return spawnableAgent
-      }
-    }
+    // Single normalized comparison: agentId must always match; publisherId
+    // and version only constrain the match when the child explicitly specifies
+    // them. This collapses the previous 4-branch duplication while preserving
+    // the same semantics for all combinations of publisher/version presence.
+    if (spawnableAgentId !== childAgentId) continue
+    if (childPublisherId && spawnablePublisherId !== childPublisherId) continue
+    if (childVersion && spawnableVersion !== childVersion) continue
+    return spawnableAgent
   }
   return null
 }
@@ -225,13 +218,15 @@ export const BASE_AGENT_IDS = [
   'base-experimental',
 ] as const
 
+const BASE_AGENT_ID_SET = new Set<string>(BASE_AGENT_IDS as readonly string[])
+
 /**
  * Returns true if the given agent ID is a base agent with unrestricted
  * spawning permissions. Shared by `validateAndGetAgentTemplate` and the
  * `tool-executor.ts` spawn_agents pre-validation block.
  */
 export function isBaseAgent(agentId: string): boolean {
-  return (BASE_AGENT_IDS as readonly string[]).includes(agentId)
+  return BASE_AGENT_ID_SET.has(agentId)
 }
 
 /**
@@ -539,6 +534,11 @@ export function deriveSpawnTemplateCapabilities(params: {
     ...(filesystemScope !== undefined ? { filesystemScope } : {}),
   }
 }
+
+// ── Output compaction ──────────────────────────────────────────────────
+// Candidate module: spawn-agent-output-compaction.ts
+// Pure output-bounding helpers with no filesystem or receipt coupling.
+// ───────────────────────────────────────────────────────────────────────────
 
 const REVIEWER_EVIDENCE_ITEM_LIMIT = 3
 const REVIEWER_EVIDENCE_CHARS = 360
@@ -852,6 +852,11 @@ export function normalizeSpawnedAgentOutput(
  * from both the validated repository URL and the child output, so model output
  * alone cannot select an arbitrary /tmp path.
  */
+// ── Librarian clone cleanup ──────────────────────────────────────────────
+// Candidate module: spawn-agent-librarian-cleanup.ts
+// Isolated side-effect: validated /tmp clone removal.
+// ───────────────────────────────────────────────────────────────────────────
+
 export async function finalizeOwnedLibrarianClone(params: {
   agentType: string
   spawnParams?: Record<string, unknown>
@@ -878,21 +883,53 @@ export async function finalizeOwnedLibrarianClone(params: {
       : wrapper
   if (!value) return params.output
 
-  const trustedCloneDir = params.messageHistory
-    ?.flatMap((message) =>
-      Array.isArray(message.content)
-        ? message.content.flatMap((part) =>
-            part.type === 'text' && typeof part.text === 'string'
-              ? [part.text]
-              : [],
-          )
-        : [],
+  // RF-3: only trust clone path from tool or system-tagged messages, not
+  // arbitrary assistant text that could be model-injected. Primary source is
+  // role='tool' or explicitly system-tagged content (<system> wrapper or
+  // tags containing 'system'). For backwards compat with existing callers
+  // that record the clone banner as a user message (see librarian-cleanup
+  // tests), fall back to user messages when no tool/system entry exists —
+  // assistant content is never trusted via fallback.
+  const tagsContainSystem = (tags?: string[]) =>
+    Boolean(tags?.some((tag) => tag.toLowerCase().includes('system')))
+  const isSystemTagged = (message: Message & { tags?: string[] }) =>
+    Boolean(tagsContainSystem(message.tags)) ||
+    (Array.isArray(message.content) &&
+      message.content.some(
+        (part) =>
+          part.type === 'text' &&
+          typeof (part as { text?: unknown }).text === 'string' &&
+          (part as { text: string }).text.includes('<system>'),
+      ))
+  const extractCloneDir = (messages: Message[] | undefined) =>
+    messages
+      ?.flatMap((message) =>
+        Array.isArray(message.content)
+          ? message.content.flatMap((part) =>
+              part.type === 'text' && typeof part.text === 'string'
+                ? [part.text]
+                : [],
+            )
+          : [],
+      )
+      .map(
+        (text) =>
+          text.match(/The repository has been cloned to `([^`]+)`\./)?.[1],
+      )
+      .filter((path): path is string => typeof path === 'string')
+      .at(-1)
+  const systemTrustedMessages = params.messageHistory?.filter(
+    (m) =>
+      (m as Message & { tags?: string[] }).role === 'tool' ||
+      isSystemTagged(m as Message & { tags?: string[] }),
+  ) as Message[] | undefined
+  const trustedCloneDir =
+    extractCloneDir(systemTrustedMessages) ??
+    extractCloneDir(
+      params.messageHistory?.filter(
+        (m) => (m as Message).role === 'user',
+      ) as Message[] | undefined,
     )
-    .map(
-      (text) =>
-        text.match(/The repository has been cloned to `([^`]+)`\./)?.[1],
-    )
-    .find((path): path is string => typeof path === 'string')
   const retainClone = params.spawnParams?.retainClone === true
   if (retainClone) {
     const retainedValue = {
@@ -907,6 +944,17 @@ export async function finalizeOwnedLibrarianClone(params: {
 
   const repoUrl = params.spawnParams?.repoUrl
   if (typeof repoUrl !== 'string' || !trustedCloneDir) {
+    return params.output
+  }
+  // RF-1: validate repoUrl shape before deriving prefix to prevent crafted
+  // encoded slashes or other URL tricks from influencing the tmp prefix.
+  const GITHUB_REPO_URL_RE =
+    /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\/?$/
+  if (!GITHUB_REPO_URL_RE.test(repoUrl)) {
+    params.logger.warn(
+      { cloneDir: trustedCloneDir, repoUrl },
+      'Refusing Librarian clone cleanup for invalid repoUrl shape',
+    )
     return params.output
   }
   const cloneDir = trustedCloneDir
@@ -929,7 +977,16 @@ export async function finalizeOwnedLibrarianClone(params: {
     return params.output
   }
 
-  await rm(cloneDir, { recursive: true, force: true })
+  try {
+    await rm(cloneDir, { recursive: true, force: true })
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code
+    // Transient filesystem races (ENOENT already removed, ENOTEMPTY busy) must not fail the receipt.
+    params.logger.warn(
+      { cloneDir, code, error: String(error) },
+      'Transient Librarian clone cleanup failure — ignoring',
+    )
+  }
   const cleanedValue = { ...value, cloneDir: '', cloneRetained: false }
   return wrapper?.type === 'structuredOutput'
     ? { ...wrapper, value: cleanedValue }
@@ -985,6 +1042,11 @@ function extractReceiptStringArray(output: unknown, key: string): string[] {
   visit(output)
   return [...new Set(found)]
 }
+
+// ── Receipt / reconciliation ─────────────────────────────────────────────
+// Candidate module: spawn-agent-receipt.ts
+// Mutation attestation and parent reconciliation helpers.
+// ───────────────────────────────────────────────────────────────────────────
 
 function extractRuntimeMutationToolMessages(
   messageHistory: unknown,
@@ -1358,6 +1420,9 @@ export function buildRuntimeAgentReceipt(params: {
     params.output,
     params.agentType,
   )
+  // mutationsComplete requires errors.length === 0, so a mutationAgent blocked due to
+  // missing permission (which surfaces as a receipt error) cannot be coerced to completed
+  // here; this only reconciles stale blocked/null child output when runtime-attested mutations exist.
   const reconciledOutput = mutationsComplete
     ? normalizedOutput &&
       typeof normalizedOutput === 'object' &&
@@ -1669,12 +1734,20 @@ export function validateAgentInput(
         params && typeof params === 'object' && !Array.isArray(params)
           ? (params as Record<string, unknown>)
           : undefined
+      const rawSnapshotId =
+        typeof paramsRecord?.snapshot_id === 'string'
+          ? paramsRecord.snapshot_id.trim()
+          : ''
+      const isBareBundleHex = /^[a-f0-9]{64}$/i.test(rawSnapshotId)
+      const bareHexNote = isBareBundleHex
+        ? ` Received bare 64-hex bundle snapshotId "${rawSnapshotId.slice(0, 12)}…" (evidence-only, from get_change_review_bundle) — not gate attestation. Recompute the gate-owned v3 token via hashGateSnapshotDetails(pendingGateFiles) and pass that as params.snapshot_id.`
+        : ''
       const recoveryHint =
         normalizedAgentType === 'basher' && issuePaths.has('command')
           ? '\n\nRecovery: spawn Basher with { "agent_type": "basher", "params": { "command": "<shell command>" } }. A command mentioned only in prompt prose is never executed.'
           : reviewerFamilyRequiredSnapshotIds.has(normalizedAgentType) &&
               issuePaths.has('snapshot_id')
-            ? `\n\nRecovery: set params.snapshot_id to the gate-assigned opaque v3:… token from the parent gate spawn (params.snapshot_id / specialistCreditFingerprint), for example { "agent_type": "${normalizedAgentType}", "params": { "snapshot_id": "v3:<64-hex>" } }. Bare hex from get_change_review_bundle.snapshotId is evidence-only and will fail attestation. Do not invent or reuse a stale fingerprint.`
+            ? `\n\nRecovery: set params.snapshot_id to the gate-assigned opaque v3:… token from the parent gate (hashGateSnapshotDetails(pendingGateFiles) / specialistCreditFingerprint), for example { "agent_type": "${normalizedAgentType}", "params": { "snapshot_id": "v3:<64-hex>" } }. Bare hex from get_change_review_bundle.snapshotId is evidence-only and will fail attestation; never invent or reuse a stale fingerprint.${bareHexNote}`
             : normalizedAgentType === 'security-reviewer' &&
                 (issuePaths.has('snapshot_fingerprint') ||
                   Object.hasOwn(paramsRecord ?? {}, 'snapshot_id'))
@@ -1965,11 +2038,12 @@ export async function executeSubagent(
   const timeoutController =
     resolvedTimeoutMs > 0 ? new AbortController() : undefined
   const parentSignal = withDefaults.signal
+  let combinedSignal: (AbortSignal & { cleanup?: () => void }) | undefined
   const subagentSignal =
     timeoutController && parentSignal
       ? (AbortSignal as any).any
         ? (AbortSignal as any).any([parentSignal, timeoutController.signal])
-        : createCombinedAbortSignal(parentSignal, timeoutController.signal)
+        : (combinedSignal = createCombinedAbortSignal(parentSignal, timeoutController.signal))
       : timeoutController
         ? timeoutController.signal
         : parentSignal
@@ -2014,6 +2088,10 @@ export async function executeSubagent(
       error: error instanceof Error ? error.message : String(error),
     })
     throw error
+  } finally {
+    // RF-2: remove fallback listeners when neither signal fires to avoid
+    // retention on long-lived parentSignal.
+    combinedSignal?.cleanup?.()
   }
 
   if (!timedOut) {
@@ -2054,13 +2132,16 @@ export async function executeSubagent(
  * Bun). Returns an AbortSignal that fires as soon as EITHER input signal fires.
  * Aborts with the reason from whichever signal fired first. Used only when
  * AbortSignal.any is unavailable at runtime.
+ *
+ * RF-2: keeps handler refs and removes the sibling listener when one signal
+ * fires first to avoid lingering listeners on long-lived parent signals.
  */
 export function createCombinedAbortSignal(
   a: AbortSignal,
   b: AbortSignal,
-): AbortSignal {
+): AbortSignal & { cleanup: () => void } {
   const controller = new AbortController()
-  const abort = (reason?: any) => {
+  const doAbort = (reason?: unknown) => {
     if (!controller.signal.aborted) {
       try {
         controller.abort(reason)
@@ -2069,15 +2150,28 @@ export function createCombinedAbortSignal(
       }
     }
   }
-  if (a.aborted) {
-    abort(a.reason)
-  } else {
-    a.addEventListener('abort', () => abort(a.reason), { once: true })
+  // If either source is already aborted, abort immediately without installing
+  // lingering listeners on the other (potentially long-lived) parent signal.
+  if (a.aborted || b.aborted) {
+    doAbort(a.aborted ? a.reason : b.reason)
+    const early = controller.signal as AbortSignal & { cleanup: () => void }
+    early.cleanup = () => {}
+    return early
   }
-  if (b.aborted) {
-    abort(b.reason)
-  } else {
-    b.addEventListener('abort', () => abort(b.reason), { once: true })
+  const onAbortA = () => {
+    b.removeEventListener('abort', onAbortB)
+    doAbort(a.reason)
   }
-  return controller.signal
+  const onAbortB = () => {
+    a.removeEventListener('abort', onAbortA)
+    doAbort(b.reason)
+  }
+  a.addEventListener('abort', onAbortA, { once: true })
+  b.addEventListener('abort', onAbortB, { once: true })
+  const signal = controller.signal as AbortSignal & { cleanup: () => void }
+  signal.cleanup = () => {
+    a.removeEventListener('abort', onAbortA)
+    b.removeEventListener('abort', onAbortB)
+  }
+  return signal
 }

@@ -158,6 +158,15 @@ Some files carry elevated security risk — credentials, auth flows, crypto, pay
 
 export const specialistRoutingSection = `# Specialist Routing
 
+## Gate vs Specialists — ownership matrix
+
+| Dimension | Final Gate (runtime-owned) | Specialist Gates (domain-scoped aux) |
+|---|---|---|
+| Ownership | Runtime-owned: hooks + \`code-reviewer\` | Caller-spawned aux specialists (reviewer-family + \`security-reviewer\` when routed) |
+| When | After every turn that leaves reviewable \`pendingGateFiles\` — runs on turn end | Only when the scoped risk boundary is crossed (see routing list) — pre-edit advisory or explicit user request |
+| Verdict | Global gate: PASS unlocks \`final_response_allowed\` / \`git-committer\`; FAIL reopens with blockers | Scoped gate: blocks only its risk dimension; complements, does not replace, Final Gate |
+| Attestation | Gate-owned opaque token; re-arms on every new edit | Reviewer-family attests via gate token; \`security-reviewer\` attests via fingerprint (see Params Contract) |
+
 Use specialists when repository evidence or the requested outcome crosses one of these risk boundaries. This applies in DEFAULT, PLAN, and EXECUTE_PLAN modes; planning and resumed execution need the same expert access as implementation.
 
 - Architecture or public boundary decisions → \`architect\`; requirement/acceptance ambiguity or end-to-end reachability → \`product-reviewer\`.
@@ -170,7 +179,24 @@ Use specialists when repository evidence or the requested outcome crosses one of
 
 Gather the exact source and snapshot evidence before spawning. Advisory specialists inform the plan; reviewer specialists can block their scoped risk dimension. They complement rather than replace targeted validation and the final code-reviewer gate.
 
-Post-edit reviewer-family specialists are routed automatically by the orchestrator's gate. Do not manually re-spawn them after edits, after compaction, or merely because set_output is unavailable; wait for the runtime-owned gate result. Manual specialist calls are for pre-edit advisory work or an explicit user request. When you do spawn one, pass its exact params contract: reviewer-family specialists (product-reviewer, performance-specialist, reliability-reviewer, migration-reviewer, compatibility-reviewer, accessibility-reviewer, ux-visual-reviewer, dependency-reviewer, evaluator) require params.snapshot_id set to the gate-assigned opaque v3:… token from the parent gate (not the bare hex snapshotId from get_change_review_bundle). security-reviewer is the exception: it requires params.changed_files plus params.snapshot_fingerprint and does not accept snapshot_id. Spawning with the wrong or missing snapshot key fails the spawn.`
+## Params Contract
+
+| Agent family | Required \`params\` | Rejected | Notes |
+|---|---|---|---|
+| Reviewer-family (\`product-reviewer\`, \`performance-specialist\`, \`reliability-reviewer\`, \`migration-reviewer\`, \`compatibility-reviewer\`, \`accessibility-reviewer\`, \`ux-visual-reviewer\`, \`dependency-reviewer\`, \`evaluator\`) | \`params.snapshot_id = v3:<64-hex>\` gate-owned opaque token from the parent gate | bare hex or missing token | Spawning with the wrong or missing snapshot key fails the spawn |
+| \`security-reviewer\` (exception) | \`params.changed_files\` + \`params.snapshot_fingerprint\` | \`params.snapshot_id\` | Rejects \`snapshot_id\`; requires file list + fingerprint only |
+
+Bare hex \`snapshotId\` from \`get_change_review_bundle\` is evidence-only — do not use it as \`params.snapshot_id\`.
+
+## Compaction recovery
+
+If compaction drops GATE state, re-derive from the runtime's pinned GATE line / \`pendingGateFiles\` and do not manually re-spawn reviewer-family specialists — wait for the runtime-owned Final Gate result.
+
+## Sequential vs parallel
+
+Final Gate is sequential (hooks → \`code-reviewer\` → GATE decision). Specialist (aux) gates may run in parallel with each other and with advisory work, but never substitute for or race the Final Gate.
+
+Post-edit reviewer-family specialists are routed automatically by the orchestrator's gate. Do not manually re-spawn them after edits, after compaction, or merely because set_output is unavailable; wait for the runtime-owned gate result. Manual specialist calls are for pre-edit advisory work or an explicit user request.`
 
 /**
  * Git-discipline section: orchestrator-level guidance for git workflows.
