@@ -64,9 +64,9 @@ Done-flags (`testWriterGateDone`, `docWriterGateDone`, …) reset only when the 
 
 | Agent | Fires when (predicate) | Skips when | Example trigger file |
 | --- | --- | --- | --- |
-| `test-writer` | `selectTestWriterTargets` non-empty: non-test source with inferable `test_command` + prompt mentions `test`/`test coverage` | Prompt lacks test intent or no eligible source/command | `packages/foo/src/bar.ts` |
-| `doc-writer` | `selectDocWriterTargets` non-empty: public-API source + prompt mentions `docs`/`documentation`/`readme`/`guide` | Prompt lacks docs intent or no public-API source | `packages/foo/src/index.ts` |
-| `security-reviewer` | `matchesSecuritySensitiveGlob` matches pending path | No security-sensitive pending paths | `src/auth/login.ts` |
+| `test-writer` | `selectTestWriterTargets` non-empty: non-test source with inferable `test_command` + prompt mentions `test`/`test coverage` | Prompt lacks test intent or no eligible source/command | `packages/<pkg>/src/bar.ts` |
+| `doc-writer` | `selectDocWriterTargets` non-empty: public-API source + prompt mentions `docs`/`documentation`/`readme`/`guide` | Prompt lacks docs intent or no public-API source | `packages/<pkg>/src/index.ts` |
+| `security-reviewer` | `matchesSecuritySensitiveGlob` matches pending path | No security-sensitive pending paths | `src/auth/*` |
 | specialists | `selectSpecialistReviewers` routes ≥1 specialist | No specialist routing match | `apps/web/src/payments/checkout.ts` |
 
 ### When automated `test-writer` runs
