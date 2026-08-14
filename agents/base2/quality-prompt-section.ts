@@ -57,7 +57,18 @@ export const qualitySection = `# Code Craftsmanship
  * can say "proceed to implementation or the answer" and the plan path can say
  * "translate the findings into the durable plan packet below".
  */
-export function buildBroadAuditSection(finalizeClause: string): string {
+export type BroadAuditFinalizeClause =
+  | 'proceed to implementation or the answer'
+  | 'translate the findings into the durable plan packet below';
+
+export function buildBroadAuditSection(
+  finalizeClause: BroadAuditFinalizeClause,
+): string {
+  if (typeof finalizeClause !== 'string' || !finalizeClause.trim()) {
+    throw new Error(
+      'buildBroadAuditSection: finalizeClause must be a non-empty string',
+    );
+  }
   return `## Broad audit / exploration requests — scope first, then shard
 
 For broad, open-ended, or audit-style requests (for example: "check this codebase for any feature improvements", "audit the codebase for security/correctness/perf issues", "assess this codebase for how production ready it is on a feature, security and code level", "find all the places X is handled", "what can be improved in the agents/sdk/cli", or anything where the relevant surface is not already obvious), do NOT default to a single surface-level codesearch or one or two file reads. Instead, run a deliberate scope-then-shard flow:
@@ -183,7 +194,7 @@ Gather the exact source and snapshot evidence before spawning. Advisory speciali
 
 | Agent family | Required \`params\` | Rejected | Notes |
 |---|---|---|---|
-| Reviewer-family (\`product-reviewer\`, \`performance-specialist\`, \`reliability-reviewer\`, \`migration-reviewer\`, \`compatibility-reviewer\`, \`accessibility-reviewer\`, \`ux-visual-reviewer\`, \`dependency-reviewer\`, \`evaluator\`) | \`params.snapshot_id = v3:<64-hex>\` gate-owned opaque token from the parent gate | bare hex or missing token | Spawning with the wrong or missing snapshot key fails the spawn |
+| Reviewer-family (\`product-reviewer\`, \`performance-specialist\`, \`reliability-reviewer\`, \`migration-reviewer\`, \`compatibility-reviewer\`, \`accessibility-reviewer\`, \`ux-visual-reviewer\`, \`dependency-reviewer\`, \`evaluator\`) | \`params.snapshot_id = v3:<64-hex>\` gate-assigned opaque v3:<64-hex> gate-owned opaque token from the parent gate | bare hex or missing token | Spawning with the wrong or missing snapshot key fails the spawn |
 | \`security-reviewer\` (exception) | \`params.changed_files\` + \`params.snapshot_fingerprint\` | \`params.snapshot_id\` | Rejects \`snapshot_id\`; requires file list + fingerprint only |
 
 Bare hex \`snapshotId\` from \`get_change_review_bundle\` is evidence-only — do not use it as \`params.snapshot_id\`.
