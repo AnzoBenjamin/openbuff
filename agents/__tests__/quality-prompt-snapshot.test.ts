@@ -57,7 +57,9 @@ describe('shared craftsmanship prompt sections', () => {
 
   test('buildBroadAuditSection contains broad-audit production-readiness guidance (not byte-frozen)', () => {
     // Broad audit guidance is allowed to evolve; only assert topic coverage.
-    const broadAuditSection = buildBroadAuditSection('finalize')
+    const broadAuditSection = buildBroadAuditSection(
+      'proceed to implementation or the answer',
+    )
     expect(broadAuditSection).toContain('Broad audit / exploration requests')
     expect(broadAuditSection).toContain(
       'assess this codebase for how production ready it is on a feature, security and code level',
@@ -78,6 +80,33 @@ describe('shared craftsmanship prompt sections', () => {
     expect(broadAuditSection).toContain('coverageReceipt')
     expect(broadAuditSection).toContain('evidence_kind')
     expect(broadAuditSection).toContain('block a complete audit')
+  })
+
+  test('buildBroadAuditSection finalization variants interpolate verbatim', () => {
+    const implementationSection = buildBroadAuditSection(
+      'proceed to implementation or the answer',
+    )
+    expect(implementationSection).toContain(
+      'proceed to implementation or the answer',
+    )
+    const planSection = buildBroadAuditSection(
+      'translate the findings into the durable plan packet below',
+    )
+    expect(planSection).toContain(
+      'translate the findings into the durable plan packet below',
+    )
+  })
+
+  test('buildBroadAuditSection throws on empty or whitespace finalizeClause', () => {
+    expect(() =>
+      buildBroadAuditSection('' as unknown as never),
+    ).toThrow('finalizeClause must be a non-empty string')
+    expect(() =>
+      buildBroadAuditSection('   ' as unknown as never),
+    ).toThrow('finalizeClause must be a non-empty string')
+    expect(() =>
+      buildBroadAuditSection('\n\t' as unknown as never),
+    ).toThrow('finalizeClause must be a non-empty string')
   })
 
   test('gitDisciplineSection contains the required git-discipline topics (not byte-frozen)', () => {
