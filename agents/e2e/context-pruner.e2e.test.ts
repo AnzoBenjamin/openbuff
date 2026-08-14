@@ -7,42 +7,31 @@ import {
   type ToolMessage,
   type JSONValue,
 } from '@openbuff/sdk'
-import { describe, expect, it } from 'bun:test'
+import { beforeAll, describe, expect, it } from 'bun:test'
 
-import type { ToolCallPart } from '@codebuff/common/types/messages/content-part'
+import {
+  isTextPart,
+  makeLargeContent,
+  isToolCallPart,
+  isToolMessageWithId,
+} from './helpers/pruning-test-helpers'
+import { setupE2eMocks } from '../../sdk/e2e/utils/e2e-mocks'
 
-/**
- * Type guard to check if a content part is a tool-call part with toolCallId.
- */
-function isToolCallPart(part: unknown): part is ToolCallPart {
-  return (
-    typeof part === 'object' &&
-    part !== null &&
-    'type' in part &&
-    part.type === 'tool-call' &&
-    'toolCallId' in part &&
-    typeof (part as ToolCallPart).toolCallId === 'string'
-  )
-}
+import contextPruner from '../context-pruner'
 
-/**
- * Type guard to check if a message is a tool message with toolCallId.
- */
-function isToolMessageWithId(
-  msg: Message,
-): msg is ToolMessage & { toolCallId: string } {
-  return (
-    msg.role === 'tool' &&
-    'toolCallId' in msg &&
-    typeof msg.toolCallId === 'string'
-  )
-}
+// Typed wrapper preserves schema-drift detection via `satisfies` — avoids `as unknown` erasure (RF-3).
+const prunerAgent = contextPruner satisfies AgentDefinition
+
+
 /**
  * Integration tests for the context-pruner agent.
  * These tests verify that context-pruner correctly prunes message history
  * while maintaining tool-call/tool-result pair integrity for Anthropic API compliance.
  */
 describe('Context Pruner Agent Integration', () => {
+  beforeAll(() => {
+    setupE2eMocks()
+  })
   // Helper to create a text message
   const createMessage = (
     role: 'user' | 'assistant',
@@ -90,6 +79,7 @@ describe('Context Pruner Agent Integration', () => {
       const testAgent: AgentDefinition = {
         id: 'context-pruner-test-agent',
         displayName: 'Context Pruner Test Agent',
+        model: 'anthropic/claude-haiku-4.5',
         includeMessageHistory: true,
         toolNames: ['spawn_agents'],
         spawnableAgents: ['context-pruner'],
@@ -114,7 +104,7 @@ describe('Context Pruner Agent Integration', () => {
 
       // Create a large message history that exceeds the token limit
       // Include proper tool-call/tool-result pairs
-      const largeContent = 'x'.repeat(20000) // ~6.7k tokens each
+      const largeContent = makeLargeContent('', 20000)
       const initialMessages: Message[] = [
         createMessage('user', `First message: ${largeContent}`),
         createMessage('assistant', `Response 1: ${largeContent}`),
@@ -135,7 +125,7 @@ describe('Context Pruner Agent Integration', () => {
       ]
 
       const client = new OpenbuffClient({
-        agentDefinitions: [testAgent],
+        agentDefinitions: [testAgent, prunerAgent],
       })
 
       // Create initial session state with the large message history
@@ -150,11 +140,7 @@ describe('Context Pruner Agent Integration', () => {
         agent: 'context-pruner-test-agent',
         prompt: '', // Empty prompt since we pre-populated messages
         previousRun: runStateWithMessages,
-        handleEvent: (event) => {
-          if (event.type === 'text') {
-            console.log('Agent text:', event.text)
-          }
-        },
+        handleEvent: () => {},
       })
 
       // Verify no error
@@ -198,12 +184,19 @@ describe('Context Pruner Agent Integration', () => {
         expect(toolResultIds.has(callId)).toBe(true)
       }
 
-      console.log('Tool call IDs:', [...toolCallIds])
-      console.log('Tool result IDs:', [...toolResultIds])
-      console.log(
-        'All tool-call/tool-result pairs are intact:',
-        toolCallIds.size === toolResultIds.size,
-      )
+      // Verify pruning actually occurred — would pass if pruner no-oped otherwise
+      const hasSummary = finalMessages.some((msg) => {
+        if (msg.role !== 'user' || !Array.isArray(msg.content)) return false
+        return msg.content.some(
+          (part) =>
+            isTextPart(part) &&
+            (part.text.includes('<conversation_summary>') ||
+              part.text.includes('Previous context compacted')),
+        )
+      })
+      const wasPruned = hasSummary || finalMessages.length < initialMessages.length
+      expect(wasPruned).toBe(true)
+      expect(finalMessages.length).toBeLessThan(initialMessages.length)
     },
     { timeout: 120_000 },
   )
@@ -215,6 +208,7 @@ describe('Context Pruner Agent Integration', () => {
       const testAgent: AgentDefinition = {
         id: 'aggressive-prune-test-agent',
         displayName: 'Aggressive Prune Test Agent',
+        model: 'anthropic/claude-haiku-4.5',
         includeMessageHistory: true,
         toolNames: ['spawn_agents'],
         spawnableAgents: ['context-pruner'],
@@ -238,7 +232,7 @@ describe('Context Pruner Agent Integration', () => {
 
       // Create message history with multiple tool-call/tool-result pairs
       // These should be preserved as pairs even when pruning aggressively
-      const largeContent = 'y'.repeat(5000)
+      const largeContent = makeLargeContent('', 5000)
       const initialMessages: Message[] = [
         createMessage('user', `Start: ${largeContent}`),
         createMessage('assistant', `Response: ${largeContent}`),
@@ -257,7 +251,7 @@ describe('Context Pruner Agent Integration', () => {
       ]
 
       const client = new OpenbuffClient({
-        agentDefinitions: [testAgent],
+        agentDefinitions: [testAgent, prunerAgent],
       })
 
       const sessionState = await initialSessionState({})
@@ -270,11 +264,7 @@ describe('Context Pruner Agent Integration', () => {
         agent: 'aggressive-prune-test-agent',
         prompt: '',
         previousRun: runStateWithMessages,
-        handleEvent: (event) => {
-          if (event.type === 'text') {
-            console.log('Agent text:', event.text)
-          }
-        },
+        handleEvent: () => {},
       })
 
       // Should complete without error
@@ -304,9 +294,6 @@ describe('Context Pruner Agent Integration', () => {
         }
       }
 
-      console.log('Final tool call IDs:', [...toolCallIds])
-      console.log('Final tool result IDs:', [...toolResultIds])
-
       // Every tool result must have a matching tool call
       for (const resultId of toolResultIds) {
         expect(toolCallIds.has(resultId)).toBe(true)
@@ -316,6 +303,20 @@ describe('Context Pruner Agent Integration', () => {
       for (const callId of toolCallIds) {
         expect(toolResultIds.has(callId)).toBe(true)
       }
+
+      // Verify pruning actually occurred — would pass if pruner no-oped otherwise
+      const hasSummary = finalMessages.some((msg) => {
+        if (msg.role !== 'user' || !Array.isArray(msg.content)) return false
+        return msg.content.some(
+          (part) =>
+            isTextPart(part) &&
+            (part.text.includes('<conversation_summary>') ||
+              part.text.includes('Previous context compacted')),
+        )
+      })
+      const wasPruned = hasSummary || finalMessages.length < initialMessages.length
+      expect(wasPruned).toBe(true)
+      expect(finalMessages.length).toBeLessThan(initialMessages.length)
     },
     { timeout: 60_000 },
   )

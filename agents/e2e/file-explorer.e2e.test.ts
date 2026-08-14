@@ -8,6 +8,83 @@ import filePickerDefinition from '../file-explorer/file-picker'
 
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 
+function normalizeFileEntries(entries: unknown[]): string[] {
+  return entries
+    .map((f) => (typeof f === 'string' ? f : (f as { path?: unknown })?.path))
+    .filter((s): s is string => typeof s === 'string' && s.length > 0)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+}
+
+function extractFiles(obj: unknown): unknown[] | undefined {
+  if (!obj || typeof obj !== 'object') return undefined
+  const o = obj as Record<string, unknown>
+  if (Array.isArray(o.files)) return o.files as unknown[]
+  const candidates: unknown[] = [o.output, o.value]
+  for (const c of candidates) {
+    if (
+      c &&
+      typeof c === 'object' &&
+      Array.isArray((c as Record<string, unknown>).files)
+    ) {
+      return (c as Record<string, unknown>).files as unknown[]
+    }
+  }
+  if (
+    o.type === 'structuredOutput' &&
+    o.value &&
+    typeof o.value === 'object' &&
+    Array.isArray((o.value as Record<string, unknown>).files)
+  ) {
+    return (o.value as Record<string, unknown>).files as unknown[]
+  }
+  const inner = o.value as Record<string, unknown> | undefined
+  if (
+    inner?.type === 'structuredOutput' &&
+    inner.value &&
+    typeof inner.value === 'object' &&
+    Array.isArray((inner.value as Record<string, unknown>).files)
+  ) {
+    return (inner.value as Record<string, unknown>).files as unknown[]
+  }
+  return undefined
+}
+
+function parseListedPaths(outputStr: string): string[] {
+  try {
+    const parsed = JSON.parse(outputStr)
+    if (Array.isArray(parsed) && parsed.every((v) => typeof v === 'string')) {
+      return normalizeFileEntries(parsed)
+    }
+    const tryExtract = (obj: unknown): string[] | null => {
+      const files =
+        extractFiles(obj) ??
+        (obj &&
+        typeof obj === 'object' &&
+        'value' in (obj as Record<string, unknown>)
+          ? extractFiles((obj as Record<string, unknown>).value)
+          : undefined)
+      if (Array.isArray(files)) return normalizeFileEntries(files)
+      return null
+    }
+    if (Array.isArray(parsed)) {
+      for (const el of parsed) {
+        const res = tryExtract(el)
+        if (res) return res
+      }
+    }
+    const direct = tryExtract(parsed)
+    if (direct) return direct
+  } catch {
+    // fall through to line-based fallback
+  }
+  // Fallback: split only on newlines to avoid mis-splitting paths that contain commas.
+  return outputStr
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+}
+
 /**
  * Integration tests for agents that use the read_subtree tool.
  * These tests verify that the SDK properly initializes the session state
@@ -96,7 +173,7 @@ export interface User {
       const client = new OpenbuffClient({
         cwd: '/tmp/test-project',
         projectFiles,
-        agentDefinitions: [fileListerDefinition as unknown as AgentDefinition],
+        agentDefinitions: [{ ...fileListerDefinition, model: 'anthropic/claude-haiku-4.5' } as unknown as AgentDefinition],
       })
 
       const events: PrintModeEvent[] = []
@@ -117,23 +194,23 @@ export interface User {
       // Verify we got some output
       expect(run.output).toBeDefined()
 
-      // The file-lister should have found relevant files
+      // The file-lister should have found relevant files — assert structured output, not single-token hallucination
       const outputStr =
         typeof run.output === 'string' ? run.output : JSON.stringify(run.output)
 
-      // Verify that the file-lister found some relevant files
-      const relevantFiles = [
-        'user-service',
-        'auth-service',
-        'user',
-        'auth',
-        'services',
+      // Require multiple distinct expected files to appear as full paths (not just substring 'user'/'api')
+      const expectedFiles = [
+        'src/services/user-service.ts',
+        'src/services/auth-service.ts',
+        'src/types/user.ts',
       ]
-      const foundRelevantFile = relevantFiles.some((file) =>
-        outputStr.toLowerCase().includes(file.toLowerCase()),
+      const matchedFiles = expectedFiles.filter((file) => outputStr.includes(file))
+      expect(matchedFiles.length).toBeGreaterThanOrEqual(2)
+      // Also assert file-list structured output: try JSON first, then split fallback, and verify at least 2 project files listed
+      const listedPaths = parseListedPaths(outputStr).filter(
+        (s) => s.endsWith('.ts') || s.endsWith('.json') || s.endsWith('.md'),
       )
-
-      expect(foundRelevantFile).toBe(true)
+      expect(listedPaths.length).toBeGreaterThanOrEqual(2)
     },
     { timeout: 60_000 },
   )
@@ -157,7 +234,7 @@ export interface User {
       const client = new OpenbuffClient({
         cwd: '/tmp/test-project',
         projectFiles,
-        agentDefinitions: [fileListerDefinition as unknown as AgentDefinition],
+        agentDefinitions: [{ ...fileListerDefinition, model: 'anthropic/claude-haiku-4.5' } as unknown as AgentDefinition],
       })
 
       const events: PrintModeEvent[] = []
@@ -176,13 +253,18 @@ export interface User {
       const outputStr =
         typeof run.output === 'string' ? run.output : JSON.stringify(run.output)
 
-      // Should find API-related files
-      const apiRelatedTerms = ['server', 'routes', 'api', 'core']
-      const foundApiFile = apiRelatedTerms.some((term) =>
-        outputStr.toLowerCase().includes(term.toLowerCase()),
+      // Require multiple distinct expected files — prevents hallucinated substring matches
+      const expectedFiles = [
+        'packages/core/src/api/server.ts',
+        'packages/core/src/api/routes.ts',
+        'packages/core/src/index.ts',
+      ]
+      const matchedFiles = expectedFiles.filter((file) => outputStr.includes(file))
+      expect(matchedFiles.length).toBeGreaterThanOrEqual(2)
+      const listedPaths = parseListedPaths(outputStr).filter(
+        (s) => s.endsWith('.ts') || s.endsWith('.md'),
       )
-
-      expect(foundApiFile).toBe(true)
+      expect(listedPaths.length).toBeGreaterThanOrEqual(2)
     },
     { timeout: 60_000 },
   )
@@ -207,7 +289,7 @@ export interface User {
       const client = new OpenbuffClient({
         cwd: '/tmp/test-project',
         projectFiles,
-        agentDefinitions: [fileListerDefinition as unknown as AgentDefinition],
+        agentDefinitions: [{ ...fileListerDefinition, model: 'anthropic/claude-haiku-4.5' } as unknown as AgentDefinition],
       })
 
       // Run file-lister with directories parameter to limit to frontend only
@@ -225,13 +307,19 @@ export interface User {
       const outputStr =
         typeof run.output === 'string' ? run.output : JSON.stringify(run.output)
 
-      // Should find frontend files
-      const frontendTerms = ['app', 'button', 'component', 'frontend']
-      const foundFrontendFile = frontendTerms.some((term) =>
-        outputStr.toLowerCase().includes(term.toLowerCase()),
+      // Require multiple distinct expected files within the scoped directory
+      const expectedFiles = [
+        'frontend/src/App.tsx',
+        'frontend/src/components/Button.tsx',
+      ]
+      const matchedFiles = expectedFiles.filter((file) => outputStr.includes(file))
+      expect(matchedFiles.length).toBeGreaterThanOrEqual(1)
+      // Ensure no backend files leak through the directory filter
+      expect(outputStr).not.toContain('backend/src/server.ts')
+      const listedPaths = parseListedPaths(outputStr).filter(
+        (s) => s.endsWith('.tsx') || s.endsWith('.ts'),
       )
-
-      expect(foundFrontendFile).toBe(true)
+      expect(listedPaths.length).toBeGreaterThanOrEqual(1)
     },
     { timeout: 60_000 },
   )
@@ -241,13 +329,15 @@ export interface User {
  * Integration tests for the file-picker agent that spawns subagents.
  * The file-picker spawns file-lister as a subagent to find files.
  * This tests the spawn_agents tool functionality through the SDK.
+ *
+ * Wired to local subagent resolution via agentDefinitions passed to OpenbuffClient;
+ * the spawned file-lister resolves locally rather than via the server registry.
  */
 describe('File Picker Agent Integration - spawn_agents tool', () => {
-  // Note: This test requires the local agent definitions to be used for both
-  // file-picker AND its spawned file-lister subagent. Currently, the spawned
-  // agent may resolve to the server version which has the old parsing bug.
-  // Skip until we have a way to ensure spawned agents use local definitions.
-  it.skip(
+  beforeAll(() => {
+    setupE2eMocks()
+  })
+  it(
     'should spawn file-lister subagent and find relevant files',
     async () => {
       // Create mock project files
@@ -321,13 +411,18 @@ export class AuthService {
       const outputStr =
         typeof run.output === 'string' ? run.output : JSON.stringify(run.output)
 
-      // Verify that the file-picker found some relevant files
-      const relevantFiles = ['user', 'auth', 'service']
-      const foundRelevantFile = relevantFiles.some((file) =>
-        outputStr.toLowerCase().includes(file.toLowerCase()),
+      // Strengthened: require >=2 distinct full paths like file-lister cases — rejects weak substring `user|auth|service` hallucinations (RF-4).
+      const expectedFiles = [
+        'src/services/user-service.ts',
+        'src/services/auth-service.ts',
+        'src/index.ts',
+      ]
+      const matchedFiles = expectedFiles.filter((file) => outputStr.includes(file))
+      expect(matchedFiles.length).toBeGreaterThanOrEqual(2)
+      const listedPaths = parseListedPaths(outputStr).filter(
+        (s) => s.endsWith('.ts') || s.endsWith('.json') || s.endsWith('.md'),
       )
-
-      expect(foundRelevantFile).toBe(true)
+      expect(listedPaths.length).toBeGreaterThanOrEqual(2)
     },
     { timeout: 90_000 },
   )

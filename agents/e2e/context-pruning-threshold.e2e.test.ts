@@ -31,38 +31,27 @@ import {
   type ToolMessage,
   type JSONValue,
 } from '@openbuff/sdk'
-import { describe, expect, it } from 'bun:test'
+import { beforeAll, describe, expect, it } from 'bun:test'
+
+import {
+  isTextPart,
+  makeLargeContent,
+  isToolCallPart,
+  isToolMessageWithId,
+  verifyToolCallPairIntegrity,
+} from './helpers/pruning-test-helpers'
+
+type SpawnAgentInlineToolInput = {
+  agent_type: string
+  params?: Record<string, unknown>
+  prompt?: string
+}
+import { setupE2eMocks } from '../../sdk/e2e/utils/e2e-mocks'
 
 import contextPruner from '../context-pruner'
 
-import type { ToolCallPart } from '@codebuff/common/types/messages/content-part'
-
-/**
- * Type guard to check if a content part is a tool-call part with toolCallId.
- */
-function isToolCallPart(part: unknown): part is ToolCallPart {
-  return (
-    typeof part === 'object' &&
-    part !== null &&
-    'type' in part &&
-    part.type === 'tool-call' &&
-    'toolCallId' in part &&
-    typeof (part as ToolCallPart).toolCallId === 'string'
-  )
-}
-
-/**
- * Type guard to check if a message is a tool message with toolCallId.
- */
-function isToolMessageWithId(
-  msg: Message,
-): msg is ToolMessage & { toolCallId: string } {
-  return (
-    msg.role === 'tool' &&
-    'toolCallId' in msg &&
-    typeof msg.toolCallId === 'string'
-  )
-}
+// Typed wrapper preserves schema-drift detection via `satisfies` — avoids `as unknown` erasure (RF-3 companion).
+const prunerAgent = contextPruner satisfies AgentDefinition
 
 // Helper to create a text message
 const createMessage = (
@@ -118,19 +107,18 @@ const testAgent: AgentDefinition = {
   toolNames: ['spawn_agents'],
   spawnableAgents: ['context-pruner'],
   instructionsPrompt: `You are a test agent for verifying context pruning behavior. When the user asks you to do something, do it briefly and concisely. Just say "OK" or "DONE" as requested.`,
-  handleSteps: function* ({ params }) {
+  handleSteps: function* ({ params }: any) {
     while (true) {
-      // Run context-pruner before each step (same as base2 uses spawn_agent_inline)
       yield {
         toolName: 'spawn_agent_inline',
         input: {
           agent_type: 'context-pruner',
-          params: params ?? {},
+          params: (params as Record<string, unknown> | undefined) ?? {},
         },
         includeToolCall: false,
       } as any
 
-      const { stepsComplete } = yield 'STEP'
+      const { stepsComplete } = (yield 'STEP' as any) as { stepsComplete: boolean }
       if (stepsComplete) break
     }
   },
@@ -159,18 +147,7 @@ const TOKENS_PER_ROUND = Math.ceil(
   (2 * LARGE_CONTENT_SIZE) / CHARS_PER_TOKEN + TOOL_PAIR_TOKENS,
 )
 
-/**
- * Diverse word content that tokenizes predictably at ~4 chars/token.
- * Repeated 'x' characters compress to ~5-6 chars/token in Anthropic's BPE tokenizer,
- * making token estimates inaccurate. Using diverse words avoids this.
- */
-const WORD_FILLER =
-  'alpha bravo charlie delta echo foxtrot golf hotel india juliett kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu '
 
-function makeLargeContent(prefix: string, size: number): string {
-  const repeats = Math.ceil((size - prefix.length) / WORD_FILLER.length)
-  return prefix + WORD_FILLER.repeat(repeats).slice(0, size - prefix.length)
-}
 
 function buildMessageHistory(targetApproxTokens: number): Message[] {
   const messages: Message[] = []
@@ -180,10 +157,7 @@ function buildMessageHistory(targetApproxTokens: number): Message[] {
   )
   const now = Date.now()
 
-  console.log(
-    `  Building ${roundsNeeded} rounds for ~${targetApproxTokens} tokens ` +
-      `(est ${TOKENS_PER_ROUND} tokens/round)`,
-  )
+  // (quiet: removed console.log noise for CI diagnostics)
 
   for (let i = 0; i < roundsNeeded; i++) {
     // Add sentAt timestamps so context-pruner's cache-miss detection works correctly.
@@ -243,12 +217,7 @@ function detectPruning(
   const hasSummary = finalMessages.some((msg) => {
     if (msg.role !== 'user' || !Array.isArray(msg.content)) return false
     return msg.content.some(
-      (part) =>
-        typeof part === 'object' &&
-        'type' in part &&
-        part.type === 'text' &&
-        typeof (part as any).text === 'string' &&
-        (part as any).text.includes('<conversation_summary>'),
+      (part) => isTextPart(part) && part.text.includes('<conversation_summary>'),
     )
   })
 
@@ -256,11 +225,7 @@ function detectPruning(
     if (!Array.isArray(msg.content)) return false
     return msg.content.some(
       (part) =>
-        typeof part === 'object' &&
-        'type' in part &&
-        part.type === 'text' &&
-        typeof (part as any).text === 'string' &&
-        (part as any).text.includes('Previous context compacted'),
+        isTextPart(part) && part.text.includes('Previous context compacted'),
     )
   })
 
@@ -275,36 +240,7 @@ function detectPruning(
   return { wasPruned, hasSummary, hasTrimFallback, messageReduction }
 }
 
-/**
- * Verifies tool-call/tool-result pair integrity.
- * Anthropic API rejects requests with orphaned tool calls or results.
- */
-function verifyToolCallPairIntegrity(messages: Message[]) {
-  const toolCallIds = new Set<string>()
-  const toolResultIds = new Set<string>()
 
-  for (const msg of messages) {
-    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
-      for (const part of msg.content) {
-        if (isToolCallPart(part)) {
-          toolCallIds.add(part.toolCallId)
-        }
-      }
-    }
-    if (isToolMessageWithId(msg)) {
-      toolResultIds.add(msg.toolCallId)
-    }
-  }
-
-  // Every tool result must have a matching tool call
-  for (const resultId of toolResultIds) {
-    expect(toolCallIds.has(resultId)).toBe(true)
-  }
-  // Every tool call must have a matching tool result
-  for (const callId of toolCallIds) {
-    expect(toolResultIds.has(callId)).toBe(true)
-  }
-}
 
 function collectText(messages: Message[]): string {
   return messages
@@ -321,10 +257,14 @@ function collectText(messages: Message[]): string {
     .join('\n')
 }
 
-const runContextPruning = process.env.RUN_CONTEXT_PRUNING_E2E === 'true'
-const pruningIt = runContextPruning ? it : it.skip
+// Load-bearing pruning cases run unconditionally in default CI via deterministic e2e mocks.
+// RUN_CONTEXT_PRUNING_E2E was previously considered for isolated gating but is no longer
+// used; all pruning threshold cases run without env gating to ensure coverage.
 
 describe('Context Pruning Threshold E2E', () => {
+  beforeAll(() => {
+    setupE2eMocks()
+  })
   it(
     'should NOT prune when token count is well below the limit',
     async () => {
@@ -335,7 +275,7 @@ describe('Context Pruning Threshold E2E', () => {
       const client = new OpenbuffClient({
         agentDefinitions: [
           testAgent,
-          contextPruner as unknown as AgentDefinition,
+          prunerAgent,
         ],
       })
 
@@ -351,11 +291,7 @@ describe('Context Pruning Threshold E2E', () => {
         prompt: 'Say "OK" and nothing else.',
         previousRun: runStateWithMessages,
         params: { maxContextLength: 100_000 },
-        handleEvent: (event) => {
-          if (event.type === 'text') {
-            console.log('  [below-limit] Agent text:', event.text.slice(0, 100))
-          }
-        },
+        handleEvent: () => {},
       })
 
       // Should complete without error
@@ -373,15 +309,7 @@ describe('Context Pruning Threshold E2E', () => {
       const tokenCount = run.sessionState?.mainAgentState.contextTokenCount ?? 0
       const pruningResult = detectPruning(finalMessages, messages.length)
 
-      console.log('  [below-limit] Token count:', tokenCount)
-      console.log(
-        '  [below-limit] Message count:',
-        finalMessages.length,
-        '(original:',
-        messages.length,
-        ')',
-      )
-      console.log('  [below-limit] Pruning result:', pruningResult)
+      // (quiet: removed console.log noise for CI diagnostics)
 
       // Key assertion: pruning should NOT have happened
       expect(pruningResult.wasPruned).toBe(false)
@@ -398,7 +326,7 @@ describe('Context Pruning Threshold E2E', () => {
     { timeout: 120_000 },
   )
 
-  pruningIt(
+  it(
     'should prune when token count exceeds the limit',
     async () => {
       // Build message history targeting ~80k tokens of message content
@@ -407,6 +335,10 @@ describe('Context Pruning Threshold E2E', () => {
       const requiredPath = 'packages/agent-runtime/src/run-agent-step.ts'
       const requiredConstraint =
         'CONSTRAINT_CONTEXT_RECALL: preserve semantic compaction before mechanical trimming.'
+      // Synthetic history prepended out-of-order to seed recall-invariant — not meant to model natural turn order.
+      // Order-insensitivity: the pruner must preserve causality (user constraint → file-picker discovery → structured result)
+      // regardless of synthetic prepend position. The invariant below validates that compaction preserves
+      // file-picker discovery provenance and that the user constraint remains causally prior to its discovery (RF-5).
       messages.unshift(
         createMessage(
           'user',
@@ -442,7 +374,7 @@ describe('Context Pruning Threshold E2E', () => {
       const client = new OpenbuffClient({
         agentDefinitions: [
           testAgent,
-          contextPruner as unknown as AgentDefinition,
+          prunerAgent,
         ],
       })
 
@@ -458,11 +390,7 @@ describe('Context Pruning Threshold E2E', () => {
         prompt: 'Say "DONE" and nothing else.',
         previousRun: runStateWithMessages,
         params: { maxContextLength: 50_000 },
-        handleEvent: (event) => {
-          if (event.type === 'text') {
-            console.log('  [above-limit] Agent text:', event.text.slice(0, 100))
-          }
-        },
+        handleEvent: () => {},
       })
 
       // Should complete without error
@@ -480,15 +408,7 @@ describe('Context Pruning Threshold E2E', () => {
       const tokenCount = run.sessionState?.mainAgentState.contextTokenCount ?? 0
       const pruningResult = detectPruning(finalMessages, messages.length)
 
-      console.log('  [above-limit] Token count:', tokenCount)
-      console.log(
-        '  [above-limit] Message count:',
-        finalMessages.length,
-        '(original:',
-        messages.length,
-        ')',
-      )
-      console.log('  [above-limit] Pruning result:', pruningResult)
+      // (quiet: removed console.log noise for CI diagnostics)
 
       // Key assertion: pruning SHOULD have happened
       // We accept any form of pruning: conversation_summary, trimMessages fallback, or significant reduction
@@ -507,6 +427,8 @@ describe('Context Pruning Threshold E2E', () => {
       expect(retainedText).toContain(requiredPath)
       expect(retainedText).toContain(requiredConstraint)
       expect(retainedText).toContain('(discovered by file-picker)')
+      // Invariant: pruner preserves causality — constraint must remain causally prior to its discovery provenance.
+      expect(retainedText.indexOf(requiredConstraint)).toBeLessThan(retainedText.indexOf(requiredPath))
 
       // After pruning, the token count should be below the limit
       expect(tokenCount).toBeLessThan(50_000)
@@ -514,7 +436,7 @@ describe('Context Pruning Threshold E2E', () => {
     { timeout: 180_000 },
   )
 
-  pruningIt(
+  it(
     'should verify token counting accuracy: no premature 30% buffer for Anthropic models',
     async () => {
       // This test verifies that the token counting API returns accurate counts
@@ -534,14 +456,16 @@ describe('Context Pruning Threshold E2E', () => {
       // 30% buffer:         ~90k reported as ~117k → premature pruning in 100k run ✗
       // Local fallback:     ~90k reported as ~135k+ → premature pruning in 100k run ✗
 
-      // Create a large history targeting ~95k estimated tokens of message content
-      const TARGET_ESTIMATED_TOKENS = 95_000
+      // Tightened to ~70k to keep true tokens deterministically <100k even with 1.3x variance.
+      // Previously 95k *1.3 = 123k could exceed the 100k limit due to token variance, causing
+      // the no-premature-prune assertion to be conditionally skipped and hiding the 30% buffer bug.
+      const TARGET_ESTIMATED_TOKENS = 70_000
       const messages = buildMessageHistory(TARGET_ESTIMATED_TOKENS)
 
       const client = new OpenbuffClient({
         agentDefinitions: [
           testAgent,
-          contextPruner as unknown as AgentDefinition,
+          prunerAgent,
         ],
       })
 
@@ -557,20 +481,12 @@ describe('Context Pruning Threshold E2E', () => {
         messages,
       })
 
-      console.log('  [accuracy] Running calibration with 200k limit...')
       const calRun = await client.run({
         agent: testAgent.id,
         prompt: 'Say "CAL" and nothing else.',
         previousRun: runStateCal,
         params: { maxContextLength: 200_000 },
-        handleEvent: (event) => {
-          if (event.type === 'text') {
-            console.log(
-              '  [accuracy-cal] Agent text:',
-              event.text.slice(0, 100),
-            )
-          }
-        },
+        handleEvent: () => {},
       })
 
       const trueTokenCount =
@@ -579,21 +495,7 @@ describe('Context Pruning Threshold E2E', () => {
         calRun.sessionState?.mainAgentState.messageHistory ?? []
       const calPruning = detectPruning(calMessages, messages.length)
 
-      console.log('  [accuracy] ========== CALIBRATION RESULTS ==========')
-      console.log('  [accuracy] TRUE token count (200k limit):', trueTokenCount)
-      console.log(
-        '  [accuracy] Cal message count:',
-        calMessages.length,
-        '(original:',
-        messages.length,
-        ')',
-      )
-      console.log('  [accuracy] Cal pruning result:', calPruning)
-      console.log(
-        '  [accuracy] Ratio true/estimated:',
-        (trueTokenCount / TARGET_ESTIMATED_TOKENS).toFixed(2),
-      )
-      console.log('  [accuracy] =========================================')
+      // (quiet: removed console.log noise for CI diagnostics)
 
       // Calibration should not have pruned (200k limit is very high)
       expect(calPruning.wasPruned).toBe(false)
@@ -610,20 +512,12 @@ describe('Context Pruning Threshold E2E', () => {
 
       const MAX_CONTEXT_LENGTH = 100_000
 
-      console.log('  [accuracy] Running test with 100k limit...')
       const run = await client.run({
         agent: testAgent.id,
         prompt: 'Say "ACK" and nothing else.',
         previousRun: runStateWithMessages,
         params: { maxContextLength: MAX_CONTEXT_LENGTH },
-        handleEvent: (event) => {
-          if (event.type === 'text') {
-            console.log(
-              '  [accuracy-100k] Agent text:',
-              event.text.slice(0, 100),
-            )
-          }
-        },
+        handleEvent: () => {},
       })
 
       if (run.output.type === 'error') {
@@ -640,73 +534,21 @@ describe('Context Pruning Threshold E2E', () => {
         run.sessionState?.mainAgentState.messageHistory ?? []
       const pruningResult = detectPruning(finalMessages, messages.length)
 
-      console.log('  [accuracy] ========== 100K LIMIT TEST RESULTS ==========')
-      console.log('  [accuracy] Reported token count:', reportedTokenCount)
-      console.log(
-        '  [accuracy] Final message count:',
-        finalMessages.length,
-        '(original:',
-        messages.length,
-        ')',
-      )
-      console.log('  [accuracy] Pruning result:', pruningResult)
-      console.log(
-        '  [accuracy] Was pruned:',
-        pruningResult.wasPruned,
-        '(true tokens were:',
-        trueTokenCount,
-        ', limit:',
-        MAX_CONTEXT_LENGTH,
-        ')',
-      )
-      console.log(
-        '  [accuracy] ================================================',
-      )
-
-      // =========================================================================
-      // DIAGNOSIS: Compare true tokens vs limit
-      // =========================================================================
-      if (trueTokenCount < MAX_CONTEXT_LENGTH && pruningResult.wasPruned) {
-        console.error(
-          `  ❌ BUG DETECTED: True tokens (${trueTokenCount}) < limit (${MAX_CONTEXT_LENGTH}), ` +
-            `but pruning was triggered! The token counting API is over-reporting.`,
-        )
-      } else if (
-        trueTokenCount < MAX_CONTEXT_LENGTH &&
-        !pruningResult.wasPruned
-      ) {
-        console.log(
-          `  ✅ No bug: True tokens (${trueTokenCount}) < limit (${MAX_CONTEXT_LENGTH}), ` +
-            `no pruning occurred.`,
-        )
-      } else {
-        console.log(
-          `  ⚠️ Content too large: True tokens (${trueTokenCount}) >= limit (${MAX_CONTEXT_LENGTH}). ` +
-            `Pruning is expected. Adjust content size.`,
-        )
-      }
-
-      // The ratio of true token count to our estimated content tokens.
-      // Our estimate is for message content only; the actual count includes
-      // system prompt + tool definitions. So ratio 1.0-1.3 is expected.
-      // A 30% buffer on the full count would push the ratio above 1.3.
+      // Ratio of true token count to estimated content tokens.
+      // Estimate is for message content only; actual includes system prompt + tool definitions.
+      // So ratio 1.0-1.3 is expected. A 30% buffer on the full count pushes ratio above 1.3.
       const ratio = trueTokenCount / TARGET_ESTIMATED_TOKENS
-      console.log(
-        '  [accuracy] Ratio of true/estimated:',
-        ratio.toFixed(2),
-        '(expected: 1.0-1.3, 30% bug → 1.3+, fallback → 1.5+)',
-      )
+      // Deterministic ratio bounds — fail fast if token counting is over-reporting (30% buffer or fallback)
+      expect(ratio).toBeGreaterThan(0.8)
       expect(ratio).toBeLessThan(1.3)
 
-      // CRITICAL: If true tokens are under 100k, no pruning should have occurred.
-      // If true tokens >= 100k, pruning is expected and we skip this assertion.
-      if (trueTokenCount < MAX_CONTEXT_LENGTH) {
-        expect(pruningResult.wasPruned).toBe(false)
-      } else {
-        console.log(
-          `  [accuracy] Content too large: true tokens (${trueTokenCount}) >= limit (${MAX_CONTEXT_LENGTH}). Pruning is expected.`,
-        )
-      }
+      // Deterministic no-premature-prune assertion: with TARGET 70k, true tokens must be <100k
+      // when counting is accurate (70k*1.3=91k <100k). If true tokens exceed the limit, the
+      // test is mis-targeted and should fail rather than silently skip the critical assertion.
+      expect(trueTokenCount).toBeLessThan(MAX_CONTEXT_LENGTH)
+      expect(pruningResult.wasPruned).toBe(false)
+      // Also ensure reported count stays in expected band
+      expect(reportedTokenCount).toBeLessThan(MAX_CONTEXT_LENGTH)
     },
     { timeout: 300_000 },
   )
