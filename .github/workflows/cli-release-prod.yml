@@ -32,6 +32,9 @@ jobs:
 
       - name: Validate release source
         shell: bash
+        env:
+          CODEBUFF_GITHUB_ACTIONS: 'true'
+          NEXT_PUBLIC_CB_ENVIRONMENT: test
         run: |
           set -euo pipefail
           bun scripts/check-env-architecture.ts
