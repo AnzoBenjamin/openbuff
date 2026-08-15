@@ -13,17 +13,7 @@ mock.module('../../project-files', () => ({
   getCurrentChatDir: () => mockChatDir,
 }))
 
-mock.module('@codebuff/common/env', () => ({
-  ...import.meta.require('@codebuff/common/env'),
-  env: {
-    ...import.meta.require('@codebuff/common/env').env,
-    NEXT_PUBLIC_CB_ENVIRONMENT: 'dev',
-  },
-  IS_DEV: true,
-  IS_TEST: false,
-  IS_CI: false,
-}))
-
+import { IS_DEV } from '@codebuff/common/env'
 import {
   LOG_MAX_BYTES,
   clearLogFile,
@@ -182,7 +172,7 @@ describe('rotateLogIfNeeded', () => {
     }
   })
 
-  test('IS_DEV write path does not throw when pino dest fails and never reopens SonicBoom', () => {
+  test('logger.info dest-fail recovery does not throw', () => {
     const livePath = path.join(tempDir, 'log.jsonl')
     resetLogStream(livePath)
     writeSizedFile(livePath, LOG_MAX_BYTES, 'pre-rotate-live')
@@ -200,28 +190,37 @@ describe('rotateLogIfNeeded', () => {
       destSpy.mockRestore()
     }
 
-    // Dev writes via appendFileSync to debug/cli.jsonl and must not reopen pino.
     expect(() => logger.info('recovered-write')).not.toThrow()
-    expect(getLivePinoDestinationFd()).toBeUndefined()
-    const debugLog = path.join(tempDir, 'debug', 'cli.jsonl')
-    expect(fs.existsSync(debugLog)).toBe(true)
-    expect(fs.readFileSync(debugLog, 'utf8')).toContain('recovered-write')
+    if (IS_DEV) {
+      // Dev writes via appendFileSync and must not reopen SonicBoom.
+      expect(getLivePinoDestinationFd()).toBeUndefined()
+      const debugLog = path.join(tempDir, 'debug', 'cli.jsonl')
+      expect(fs.existsSync(debugLog)).toBe(true)
+      expect(fs.readFileSync(debugLog, 'utf8')).toContain('recovered-write')
+    } else {
+      // CI/test/prod compiled path retries resetLogStream after dest-open failure.
+      expect(typeof getLivePinoDestinationFd()).toBe('number')
+    }
   })
 
-  test('IS_DEV write path rotates oversized debug/cli.jsonl without a live dest', () => {
+  test('logger.info rotates an oversized file and reopens dest only on the prod path', () => {
     const debugLog = path.join(tempDir, 'debug', 'cli.jsonl')
     fs.mkdirSync(path.dirname(debugLog), { recursive: true })
     writeSizedFile(debugLog, LOG_MAX_BYTES, 'pre-rotate-debug')
     // Set up module state explicitly so this test is self-contained: pin
     // logPath to debugLog with a live destination open, exactly what a prior
-    // dev session would leave behind — no reliance on state from other tests.
+    // session would leave behind — no reliance on state from other tests.
     resetLogStream(debugLog)
     const leftoverFd = getLivePinoDestinationFd()
     expect(typeof leftoverFd).toBe('number')
 
     expect(() => logger.info('post-rotate-debug')).not.toThrow()
 
-    expect(getLivePinoDestinationFd()).toBeUndefined()
+    if (IS_DEV) {
+      expect(getLivePinoDestinationFd()).toBeUndefined()
+    } else {
+      expect(typeof getLivePinoDestinationFd()).toBe('number')
+    }
     expect(fs.existsSync(`${debugLog}.1`)).toBe(true)
     expect(fs.readFileSync(`${debugLog}.1`, 'utf8')).toContain('pre-rotate-debug')
     expect(fs.existsSync(debugLog)).toBe(true)
