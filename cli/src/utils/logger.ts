@@ -1,5 +1,6 @@
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
   renameSync,
@@ -41,13 +42,59 @@ export const loggerContext: LoggerContext = {}
 
 let logPath: string | undefined = undefined
 let pinoLogger: any = undefined
+let pinoDestination:
+  | { flushSync?: () => void; end?: (cb?: () => void) => void; fd?: number }
+  | undefined = undefined
+
+/** Live SonicBoom fd, if the dest is still open. Used by tests to prove close. */
+export function getLivePinoDestinationFd(): number | undefined {
+  const fd = pinoDestination?.fd
+  return typeof fd === 'number' && fd >= 0 ? fd : undefined
+}
+
+export function endPreviousPinoDestination(): void {
+  const previousLogger = pinoLogger
+  const previousDestination = pinoDestination
+  pinoLogger = undefined
+  pinoDestination = undefined
+  try {
+    previousLogger?.flush?.()
+  } catch {
+    // Ignore flush errors; destination close must still run
+  }
+  try {
+    previousDestination?.flushSync?.()
+  } catch {
+    // Ignore flush errors; still try to close the fd
+  }
+  // SonicBoom.end() does not close dest.fd before returning. Close the fd
+  // synchronously so Windows rename/unlink is not EBUSY, then make end() a
+  // no-op so a later call cannot double-close.
+  if (previousDestination) {
+    const destFd = previousDestination.fd
+    if (typeof destFd === 'number' && destFd >= 0) {
+      try {
+        closeSync(destFd)
+      } catch {
+        // Ignore close errors; logging must never throw
+      }
+      previousDestination.fd = -1
+    }
+    previousDestination.end = () => {}
+  }
+  try {
+    previousDestination?.end?.()
+  } catch {
+    // Ignore close errors; logging must never throw
+  }
+}
 
 const loggingLevels = ['info', 'debug', 'warn', 'error', 'fatal'] as const
 type LogLevel = (typeof loggingLevels)[number]
 
 // Cap log files at 10 MiB. When a log reaches this size we rotate it to a
 // `.1` sibling so `log.jsonl` (and dev `debug/cli.jsonl`) cannot grow unbounded.
-const LOG_MAX_BYTES = 10 * 1024 * 1024
+export const LOG_MAX_BYTES = 10 * 1024 * 1024
 const analyticsDispatcher = createAnalyticsDispatcher({
   envName: env.NEXT_PUBLIC_CB_ENVIRONMENT,
   bufferWhenNoUser: true,
@@ -79,31 +126,59 @@ function isEmptyObject(value: any): boolean {
   )
 }
 
-function setLogPath(p: string): void {
-  if (p === logPath) return // nothing to do
+function createPinoLoggerForPath(p: string): void {
+  // Close the previous SonicBoom fd before opening a new destination so
+  // rotation / path changes cannot leak file descriptors.
+  endPreviousPinoDestination()
+  try {
+    mkdirSync(dirname(p), { recursive: true })
 
-  logPath = p
-  mkdirSync(dirname(p), { recursive: true })
+    // ────────────────────────────────────────────────────────────
+    //  pino.destination(..) → SonicBoom stream, no worker thread
+    // ────────────────────────────────────────────────────────────
+    const fileStream = pino.destination({
+      dest: p, // absolute or relative file path
+      mkdir: true, // create parent dirs if they don’t exist
+      sync: true, // set true if you *must* block on every write
+    })
+    pinoDestination = fileStream
 
-  // ──────────────────────────────────────────────────────────────
-  //  pino.destination(..) → SonicBoom stream, no worker thread
-  // ──────────────────────────────────────────────────────────────
-  const fileStream = pino.destination({
-    dest: p, // absolute or relative file path
-    mkdir: true, // create parent dirs if they don’t exist
-    sync: true, // set true if you *must* block on every write
-  })
-
-  pinoLogger = pino(
-    {
-      level: 'debug',
-      formatters: {
-        level: (label) => ({ level: label.toUpperCase() }),
+    pinoLogger = pino(
+      {
+        level: 'debug',
+        formatters: {
+          level: (label) => ({ level: label.toUpperCase() }),
+        },
+        timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,
       },
-      timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,
-    },
-    fileStream, // <-- no worker thread involved
-  )
+      fileStream, // <-- no worker thread involved
+    )
+    // Only pin the path after dest+logger exist. A failed reopen must not make
+    // setLogPath(p) no-op (p === logPath) while pinoLogger is still missing.
+    logPath = p
+  } catch {
+    // mkdir / destination / pino() failed. The previous dest is already closed.
+    // If dest opened but pino() threw, close that fd so it cannot leak.
+    endPreviousPinoDestination()
+    // Do not set logPath: setLogPath must retry on the next write.
+  }
+}
+
+function setLogPath(p: string): void {
+  // A missing pinoLogger means the last open failed or the dest was closed;
+  // treat that path as stale even when p === logPath so the session can recover.
+  if (p === logPath && pinoLogger !== undefined) return
+  createPinoLoggerForPath(p)
+}
+
+/**
+ * Force-recreate the pino stream for `p`, even when `p === logPath`.
+ * Used only after rotation: the old SonicBoom stream holds an fd to the
+ * renamed-away file and must be abandoned so subsequent writes go to the
+ * fresh (post-rename) file at `logPath`.
+ */
+export function resetLogStream(p: string): void {
+  createPinoLoggerForPath(p)
 }
 
 /**
@@ -111,7 +186,7 @@ function setLogPath(p: string): void {
  * Keeps exactly one prior rotated file: unlink any existing `.1`, then rename.
  * All fs operations are swallowed so logging never throws.
  */
-function rotateLogIfNeeded(targetLogPath: string): void {
+export function rotateLogIfNeeded(targetLogPath: string): void {
   try {
     if (!existsSync(targetLogPath)) return
     if (statSync(targetLogPath).size < LOG_MAX_BYTES) return
@@ -130,20 +205,6 @@ function rotateLogIfNeeded(targetLogPath: string): void {
   }
 }
 
-/**
- * One-off cleanup on startup that reclaims an oversized production per-chat
- * `log.jsonl` by rotating it (not deleting it). Runs automatically after app
- * initialization, independent of the `--clear-logs` flag.
- */
-export function trimOversizedLogsOnStartup(): void {
-  try {
-    const productionLog = path.join(getCurrentChatDir(), 'log.jsonl')
-    rotateLogIfNeeded(productionLog)
-  } catch {
-    // Ignore errors resolving the chat dir; logging must never throw
-  }
-}
-
 export function clearLogFile(): void {
   const projectRoot = getProjectRoot()
   const defaultLog = path.join(projectRoot, 'debug', 'cli.jsonl')
@@ -154,6 +215,21 @@ export function clearLogFile(): void {
   }
   targets.add(defaultLog)
 
+  // Also reclaim the production per-chat log: always delete live log.jsonl
+  // (including under-cap files). Rotation-only would leave an under-cap chat
+  // log, contradicting --clear-logs.
+  try {
+    const productionLog = path.join(getCurrentChatDir(), 'log.jsonl')
+    targets.add(productionLog)
+  } catch {
+    // Ignore errors resolving the chat dir
+  }
+
+  // Release the live SonicBoom fd before unlink: an open dest fails
+  // closed-as-no-op on Windows (EBUSY) and would leave the active file.
+  endPreviousPinoDestination()
+  logPath = undefined
+
   for (const target of targets) {
     try {
       if (existsSync(target)) {
@@ -162,27 +238,15 @@ export function clearLogFile(): void {
     } catch {
       // Ignore errors when clearing logs
     }
-  }
-
-  // Also reclaim the production per-chat log: delete the `.1` sibling and,
-  // instead of always deleting the live file, only rotate it when oversized.
-  try {
-    const productionLog = path.join(getCurrentChatDir(), 'log.jsonl')
-    const rotatedLog = `${productionLog}.1`
     try {
-      if (existsSync(rotatedLog)) {
-        unlinkSync(rotatedLog)
+      const rotatedPath = `${target}.1`
+      if (existsSync(rotatedPath)) {
+        unlinkSync(rotatedPath)
       }
     } catch {
-      // Ignore unlink errors
+      // Ignore unlink errors for rotated siblings
     }
-    rotateLogIfNeeded(productionLog)
-  } catch {
-    // Ignore errors resolving the chat dir
   }
-
-  logPath = undefined
-  pinoLogger = undefined
 }
 
 function sendAnalyticsAndLog(
@@ -203,7 +267,17 @@ function sendAnalyticsAndLog(
         ? path.join(projectRoot, 'debug', 'cli.jsonl')
         : path.join(getCurrentChatDir(), 'log.jsonl')
 
-      setLogPath(logTarget)
+      if (IS_DEV) {
+        // Dev writes via appendFileSync (Bun has issues with pino sync).
+        // Do not open SonicBoom: an open dest makes Windows rename EBUSY
+        // so debug/cli.jsonl can grow past LOG_MAX_BYTES.
+        if (logPath !== logTarget) {
+          endPreviousPinoDestination()
+          logPath = logTarget
+        }
+      } else {
+        setLogPath(logTarget)
+      }
     }
   }
 
@@ -265,6 +339,11 @@ function sendAnalyticsAndLog(
     })
   }
 
+  // Skip file I/O in test/CI so other files cannot steal/rotate a pinned logPath.
+  if (IS_TEST || IS_CI) {
+    return
+  }
+
   // In dev mode, use appendFileSync for real-time logging (Bun has issues with pino sync)
   // In prod mode, use pino for better performance
   if (IS_DEV && logPath) {
@@ -275,16 +354,47 @@ function sendAnalyticsAndLog(
       ...(includeData ? { data: sanitizedData } : {}),
       msg: formattedMsg,
     })
+    // Close any leftover dest before rotate so Windows rename is not EBUSY.
+    endPreviousPinoDestination()
     rotateLogIfNeeded(logPath)
     try {
+      mkdirSync(dirname(logPath), { recursive: true })
       appendFileSync(logPath, logEntry + '\n')
     } catch {
       // Ignore write errors
     }
-  } else if (pinoLogger !== undefined) {
-    const base = { ...loggerContext }
-    const obj = includeData ? { ...base, data: sanitizedData } : base
-    pinoLogger[level](obj, formattedMsg as any)
+  } else if (pinoLogger !== undefined || logPath !== undefined) {
+    // Enforce the size cap on the production write path: when `log.jsonl`
+    // reaches LOG_MAX_BYTES, rotate it to `.1` and reopen a fresh stream at
+    // `logPath` so the live session stays bounded. Failures must not throw:
+    // endPreviousPinoDestination() clears pinoLogger before resetLogStream,
+    // so a mkdir/destination failure cannot fall through to pinoLogger[level].
+    if (logPath !== undefined) {
+      try {
+        if (existsSync(logPath) && statSync(logPath).size >= LOG_MAX_BYTES) {
+          // Close SonicBoom before rename: an open live fd makes
+          // rename/unlink fail closed-as-no-op on Windows (EBUSY).
+          endPreviousPinoDestination()
+          rotateLogIfNeeded(logPath)
+        }
+        // Reopen after rotate, and retry after a previous failed reset so a
+        // later write can restore a live dest (setLogPath is skipped in tests).
+        if (pinoLogger === undefined) {
+          resetLogStream(logPath)
+        }
+      } catch {
+        // Ignore rotation/reopen errors; logging must never throw
+      }
+    }
+    try {
+      if (pinoLogger !== undefined) {
+        const base = { ...loggerContext }
+        const obj = includeData ? { ...base, data: sanitizedData } : base
+        pinoLogger[level](obj, formattedMsg as any)
+      }
+    } catch {
+      // Ignore write errors after dest close/reopen, including reset failure
+    }
   }
 }
 
