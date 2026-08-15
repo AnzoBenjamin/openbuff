@@ -21,7 +21,7 @@ import {
   QueryClientProvider,
   focusManager,
 } from '@tanstack/react-query'
-import { green, red } from 'picocolors'
+import { red } from 'picocolors'
 import React from 'react'
 
 import { App } from './app'
@@ -46,6 +46,19 @@ import { setOscDetectedTheme } from './utils/theme-system'
 import type { FileTreeNode } from '@codebuff/common/util/file'
 
 const require = createRequire(import.meta.url)
+
+const WASM_MAX_BYTES = 8 * 1024 * 1024
+
+let cachedHomeDirValue: string | undefined
+function getCachedHomeDir(): string {
+  if (cachedHomeDirValue !== undefined) return cachedHomeDirValue
+  try {
+    cachedHomeDirValue = os.homedir()
+  } catch {
+    cachedHomeDirValue = ""
+  }
+  return cachedHomeDirValue
+}
 
 function loadPackageVersion(): string {
   const env = getCliEnv()
@@ -106,7 +119,7 @@ async function main(): Promise<void> {
         testing: true,
         useThread: process.platform !== 'linux',
       })
-      renderer.destroy()
+      await renderer.destroy()
       // Marker consumed by cli/scripts/smoke-binary.ts. Keep exact text.
       console.log('opentui smoke ok')
       process.exit(0)
@@ -136,28 +149,46 @@ async function main(): Promise<void> {
     const execDir = path.dirname(process.execPath)
     const siblingPath = path.join(execDir, 'tree-sitter.wasm')
     let dirListing: string[] = []
+    let dirEntryCount = 0
+    let dirTruncated = false
     try {
-      dirListing = fs.readdirSync(execDir)
+      const entries = await fs.promises.readdir(execDir)
+      dirEntryCount = entries.length
+      dirListing = entries.slice(0, 30)
+      dirTruncated = entries.length > 30
     } catch (err) {
       dirListing = [
         `<readdir failed: ${err instanceof Error ? err.message : err}>`,
       ]
     }
+    let siblingExists = false
+    try {
+      await fs.promises.access(siblingPath)
+      siblingExists = true
+    } catch {
+      siblingExists = false
+    }
     // Redact PII (home dir) and bound output length before CI log emission.
+    const cachedHomeDir = getCachedHomeDir()
     const redactSmokePath = (p: string): string => {
-      const home = os.homedir()
+      const home = cachedHomeDir
       let out = home && p.startsWith(home) ? `~${p.slice(home.length)}` : path.basename(p) || p
       // Keep only last 80 chars; prevents long user-specific paths leaking in logs.
       if (out.length > 80) out = `…${out.slice(-80)}`
       return out
     }
-    const redactedListing = dirListing.slice(0, 30).map((e) => redactSmokePath(e))
+    const redactedListing = dirListing.map((e) => {
+      // e is a bare dir entry name, not a full path — skip home/basename redaction
+      let out = e
+      if (out.length > 80) out = `…${out.slice(-80)}`
+      return out
+    })
     console.error(
       `[smoke diag] execPath=${redactSmokePath(process.execPath)}\n` +
         `[smoke diag] execDir=${redactSmokePath(execDir)}\n` +
         `[smoke diag] siblingPath=${redactSmokePath(siblingPath)}\n` +
-        `[smoke diag] siblingExists=${fs.existsSync(siblingPath)}\n` +
-        `[smoke diag] dir contents (${dirListing.length}): ${redactedListing.join(', ')}\n` +
+        `[smoke diag] siblingExists=${siblingExists}\n` +
+        `[smoke diag] dir contents (${dirTruncated ? `${dirEntryCount} total, showing 30` : String(dirEntryCount)}): ${redactedListing.join(', ')}${dirTruncated ? ' (truncated to 30)' : ''}\n` +
         `[smoke diag] globalThis wasmPath=${wasmPath ? redactSmokePath(wasmPath) : '<unset>'}\n` +
         `[smoke diag] globalThis wasmBinary bytes=${wasmBinary?.byteLength ?? 0}\n`,
     )
@@ -170,24 +201,26 @@ async function main(): Promise<void> {
       // even on Windows, where it was the bunfs path during pre-init.
       let effectiveBinary = wasmBinary
       let effectivePath = wasmPath
-      if (!effectiveBinary && !effectivePath && fs.existsSync(siblingPath)) {
+      if (!effectiveBinary && !effectivePath) {
         try {
-          const stat = fs.statSync(siblingPath)
-          // Guard unbounded read: cap sibling wasm to 8 MiB; corrupted/truncated
-          // files beyond cap are rejected with a diagnostic instead of OOM.
-          const WASM_MAX_BYTES = 8 * 1024 * 1024
-          if (stat.size > 0 && stat.size <= WASM_MAX_BYTES) {
+          const data = await fs.promises.readFile(siblingPath)
+          // Re-check byteLength after read to close stat+read TOCTOU (file could
+          // have grown between stat and read past 8MiB cap); bound even if raced.
+          if (data.byteLength > 0 && data.byteLength <= WASM_MAX_BYTES) {
             effectivePath = siblingPath
-            effectiveBinary = new Uint8Array(fs.readFileSync(siblingPath))
+            effectiveBinary = new Uint8Array(data)
           } else {
             console.error(
-              `[smoke diag] sibling wasm size out of bounds: ${stat.size} bytes (cap ${WASM_MAX_BYTES})`,
+              `[smoke diag] sibling wasm size out of bounds: ${data.byteLength} bytes (cap ${WASM_MAX_BYTES})`,
             )
           }
         } catch (err) {
-          console.error(
-            `[smoke diag] sibling wasm fallback read failed: ${err instanceof Error ? err.message : err}`,
-          )
+          const code = (err as NodeJS.ErrnoException)?.code
+          if (code !== 'ENOENT') {
+            console.error(
+              `[smoke diag] sibling wasm fallback read failed: ${err instanceof Error ? err.message : err}`,
+            )
+          }
         }
       }
 
@@ -227,6 +260,7 @@ async function main(): Promise<void> {
   )
 
   let smokeBootscreenTimer: ReturnType<typeof setTimeout> | null = null
+  let smokeBootscreenEmitted = false
   if (smokeBootscreen && !process.stdout.isTTY) {
     // On Windows with non-TTY stdout OpenTUI paints nothing, so it never drives React's
     // passive-effect flush and a useEffect-emitted marker would stay scheduled
@@ -235,10 +269,12 @@ async function main(): Promise<void> {
     // full window for FATAL_PATTERNS, so any later async startup crash is caught.
     // Schedule BEFORE any awaits (renderer/app init may hang on Windows pipes
     // and would otherwise prevent this timer from ever being registered).
+    // RF-3: intentionally ref'd (no .unref()) so the 1.5s grace window keeps the event loop alive until the marker can fire; cleared on earlyFatalHandler and after renderer creation so it never keeps the process alive after renderer.destroy() or successful boot.
     smokeBootscreenTimer = setTimeout(() => {
+      smokeBootscreenEmitted = true
       console.log('openbuff bootscreen ok')
+      smokeBootscreenTimer = null
     }, 1500)
-    smokeBootscreenTimer.unref()
   }
 
   // Run OSC theme detection BEFORE anything else.
@@ -266,14 +302,14 @@ async function main(): Promise<void> {
     trustProjectAgents,
   } = parseCliArgs(cliArgv, { version: loadPackageVersion() })
 
-  const isPublishCommand = process.argv[2] === 'publish'
+  const isPublishCommand = cliArgv[2] === 'publish'
   const hasAgentOverride = Boolean(agent?.trim())
 
   await initializeApp({ cwd })
 
   // Show project picker only when user starts at the home directory or an ancestor
   const projectRoot = getProjectRoot()
-  const homeDir = os.homedir()
+  const homeDir = getCachedHomeDir()
   const startCwd = process.cwd()
   const showProjectPicker = shouldShowProjectPicker(startCwd, homeDir)
 
@@ -361,7 +397,10 @@ async function main(): Promise<void> {
           trackEvent(AnalyticsEvent.CHANGE_DIRECTORY, {
             isGitRepo,
             pathDepth,
-            isHomeDir: newProjectPath === os.homedir(),
+            isHomeDir: (() => {
+              const h = getCachedHomeDir()
+              return h !== "" && newProjectPath === h
+            })(),
           })
           saveRecentProject(newProjectPath)
           setCurrentProjectRoot(getProjectRoot())
@@ -374,7 +413,7 @@ async function main(): Promise<void> {
           throw error
         }
       },
-      [],
+      [trustProjectAgents, hasAgentOverride, isPublishCommand],
     )
 
     return (
@@ -421,17 +460,18 @@ async function main(): Promise<void> {
   process.on('uncaughtException', earlyFatalHandler)
   process.on('unhandledRejection', earlyFatalHandler)
 
-  let renderer: Awaited<ReturnType<typeof createCliRenderer>> | null = null
-  try {
-    renderer = await createCliRenderer({
+  const renderer = await createCliRenderer({
     backgroundColor: 'transparent',
     exitOnCtrlC: false,
     screenMode: 'alternate-screen',
   })
 
-  } catch (error) {
-    if (smokeBootscreenTimer) clearTimeout(smokeBootscreenTimer)
-    throw error
+  if (smokeBootscreenTimer) {
+    clearTimeout(smokeBootscreenTimer)
+    smokeBootscreenTimer = null
+  }
+  if (smokeBootscreen && !smokeBootscreenEmitted) {
+    console.log('openbuff bootscreen ok')
   }
 
   // Remove early handlers — proper cleanup handlers (with renderer access) take over
@@ -444,11 +484,6 @@ async function main(): Promise<void> {
       <AppWithAsyncAuth />
     </QueryClientProvider>,
   )
-
-  if (smokeBootscreenTimer) {
-    clearTimeout(smokeBootscreenTimer)
-    smokeBootscreenTimer = null
-  }
 }
 
 void main()
