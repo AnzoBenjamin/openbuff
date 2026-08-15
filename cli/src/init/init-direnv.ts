@@ -12,6 +12,12 @@ import { logger } from '../utils/logger'
 const originalEnvValues = new Map<string, string | undefined>()
 let appliedDirenvKeys = new Set<string>()
 
+/** @internal Test-only: clear process-global direnv snapshots between tests. */
+export function resetDirenvStateForTests(): void {
+  originalEnvValues.clear()
+  appliedDirenvKeys = new Set()
+}
+
 function restorePreviousDirenvEnvironment(): void {
   for (const key of appliedDirenvKeys) {
     const originalValue = originalEnvValues.get(key)

@@ -4,7 +4,6 @@ import {
   expect,
   beforeEach,
   afterEach,
-  mock,
   spyOn,
 } from 'bun:test'
 import type { SpawnSyncReturns } from 'child_process'
@@ -12,21 +11,14 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
+import { logger } from '../../utils/logger'
 import {
   findEnvrcDirectory,
   isDirenvAvailable,
   getDirenvExport,
   initializeDirenv,
+  resetDirenvStateForTests,
 } from '../init-direnv'
-
-mock.module('../utils/logger', () => ({
-  logger: {
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-  },
-}))
 
 describe('init-direnv', () => {
   describe('findEnvrcDirectory', () => {
@@ -135,20 +127,21 @@ describe('init-direnv', () => {
       expect(result).toBeNull()
     })
 
-    test('handles unreadable directory gracefully', () => {
-      const restrictedDir = path.join(tempDir, 'restricted')
-      fs.mkdirSync(restrictedDir)
+    test.skipIf(os.platform() === 'win32' || process.getuid?.() === 0)(
+      'handles unreadable directory gracefully',
+      () => {
+        const restrictedDir = path.join(tempDir, 'restricted')
+        fs.mkdirSync(restrictedDir)
 
-      if (os.platform() === 'win32' || process.getuid?.() === 0) return
-
-      fs.chmodSync(restrictedDir, 0o000)
-      try {
-        const result = findEnvrcDirectory(restrictedDir)
-        expect(result).toBeNull()
-      } finally {
-        fs.chmodSync(restrictedDir, 0o755)
-      }
-    })
+        fs.chmodSync(restrictedDir, 0o000)
+        try {
+          const result = findEnvrcDirectory(restrictedDir)
+          expect(result).toBeNull()
+        } finally {
+          fs.chmodSync(restrictedDir, 0o755)
+        }
+      },
+    )
 
     test('resolves relative paths', () => {
       fs.writeFileSync(path.join(tempDir, '.envrc'), 'export FOO=bar')
@@ -177,20 +170,84 @@ describe('init-direnv', () => {
   })
 
   describe('isDirenvAvailable', () => {
+    let spawnSyncSpy: ReturnType<typeof spyOn>
+    let platformSpy: ReturnType<typeof spyOn>
+    let childProcess: typeof import('child_process')
+
+    beforeEach(async () => {
+      childProcess = await import('child_process')
+      spawnSyncSpy = spyOn(childProcess, 'spawnSync')
+      platformSpy = spyOn(os, 'platform')
+    })
+
+    afterEach(() => {
+      spawnSyncSpy.mockRestore()
+      platformSpy.mockRestore()
+    })
+
     test('returns boolean', () => {
+      platformSpy.mockReturnValue('linux')
+      spawnSyncSpy.mockReturnValue({
+        status: 0,
+        stdout: '/usr/local/bin/direnv',
+        stderr: '',
+        pid: 1234,
+        output: [],
+        signal: null,
+      } as SpawnSyncReturns<string>)
+
       const result = isDirenvAvailable()
       expect(typeof result).toBe('boolean')
     })
 
     test('returns false on Windows', () => {
+      platformSpy.mockReturnValue('win32')
+
       const result = isDirenvAvailable()
-      expect(typeof result).toBe('boolean')
-      if (os.platform() === 'win32') {
-        expect(result).toBe(false)
-      }
+
+      expect(result).toBe(false)
+      expect(spawnSyncSpy).not.toHaveBeenCalled()
+    })
+
+    test('returns true when direnv is on PATH', () => {
+      platformSpy.mockReturnValue('linux')
+      spawnSyncSpy.mockReturnValue({
+        status: 0,
+        stdout: '/usr/local/bin/direnv\n',
+        stderr: '',
+        pid: 1234,
+        output: [],
+        signal: null,
+      } as SpawnSyncReturns<string>)
+
+      expect(isDirenvAvailable()).toBe(true)
+    })
+
+    test('returns false when direnv is missing', () => {
+      platformSpy.mockReturnValue('linux')
+      spawnSyncSpy.mockReturnValue({
+        status: 1,
+        stdout: '',
+        stderr: '',
+        pid: 1234,
+        output: [],
+        signal: null,
+      } as SpawnSyncReturns<string>)
+
+      expect(isDirenvAvailable()).toBe(false)
     })
 
     test('returns consistent results on repeated calls', () => {
+      platformSpy.mockReturnValue('linux')
+      spawnSyncSpy.mockReturnValue({
+        status: 0,
+        stdout: '/usr/local/bin/direnv',
+        stderr: '',
+        pid: 1234,
+        output: [],
+        signal: null,
+      } as SpawnSyncReturns<string>)
+
       const result1 = isDirenvAvailable()
       const result2 = isDirenvAvailable()
       const result3 = isDirenvAvailable()
@@ -272,6 +329,7 @@ describe('init-direnv', () => {
     })
 
     test('returns null and warns when .envrc is blocked', () => {
+      const warnSpy = spyOn(logger, 'warn')
       spawnSyncSpy.mockReturnValue({
         status: 1,
         stdout: '',
@@ -282,9 +340,16 @@ describe('init-direnv', () => {
         signal: null,
       } as SpawnSyncReturns<string>)
 
-      const result = getDirenvExport(tempDir)
+      try {
+        const result = getDirenvExport(tempDir)
 
-      expect(result).toBeNull()
+        expect(result).toBeNull()
+        expect(warnSpy).toHaveBeenCalledWith(
+          'direnv: .envrc is blocked. Run `direnv allow` to enable.',
+        )
+      } finally {
+        warnSpy.mockRestore()
+      }
     })
 
     test('returns null when stdout is empty (no env changes)', () => {
@@ -305,7 +370,7 @@ describe('init-direnv', () => {
     test('returns null when stdout is only whitespace', () => {
       spawnSyncSpy.mockReturnValue({
         status: 0,
-        stdout: '   \n\t  ',
+        stdout: ['   ', '\n', '\t', '  '].join(''),
         stderr: '',
         pid: 1234,
         output: [],
@@ -369,16 +434,21 @@ describe('init-direnv', () => {
     let childProcess: typeof import('child_process')
     let originalEnv: NodeJS.ProcessEnv
     let originalCwd: string
+    let platformSpy: ReturnType<typeof spyOn>
 
     beforeEach(async () => {
+      resetDirenvStateForTests()
       tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'direnv-init-test-'))
       originalEnv = { ...process.env }
       originalCwd = process.cwd()
       childProcess = await import('child_process')
       spawnSyncSpy = spyOn(childProcess, 'spawnSync')
+      // initializeDirenv returns before spawn mocks if the host is Windows
+      platformSpy = spyOn(os, 'platform').mockReturnValue('linux')
     })
 
     afterEach(() => {
+      resetDirenvStateForTests()
       for (const key of Object.keys(process.env)) {
         if (!(key in originalEnv)) {
           delete process.env[key]
@@ -390,6 +460,7 @@ describe('init-direnv', () => {
       process.chdir(originalCwd)
       fs.rmSync(tempDir, { recursive: true, force: true })
       spawnSyncSpy.mockRestore()
+      platformSpy.mockRestore()
     })
 
     test('sets environment variables from direnv export', () => {

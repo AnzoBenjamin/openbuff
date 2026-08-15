@@ -1,30 +1,32 @@
+import { randomFillSync } from 'crypto'
 import { mkdirSync, rmSync } from 'fs'
+import os from 'os'
 import path from 'path'
 
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { Jimp } from 'jimp'
 
-import { setProjectRoot } from '../../project-files'
+import { getProjectRoot, setProjectRoot } from '../../project-files'
 import { calculateDisplaySize } from '../image-display'
 import { processImageFile } from '../image-handler'
 
-// Mock the logger to prevent analytics initialization errors in tests
-mock.module('../logger', () => ({
-  logger: {
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    fatal: () => {},
-  },
-}))
-
-const TEST_DIR = path.join(__dirname, 'temp-test-images')
+let TEST_DIR: string
+let previousProjectRoot: string | undefined
 
 beforeEach(async () => {
+  TEST_DIR = path.join(
+    os.tmpdir(),
+    `temp-test-images-${process.pid}-${Date.now()}`,
+  )
   mkdirSync(TEST_DIR, { recursive: true })
   // Create debug directory for logger
   mkdirSync(path.join(TEST_DIR, 'debug'), { recursive: true })
+
+  try {
+    previousProjectRoot = getProjectRoot()
+  } catch {
+    previousProjectRoot = undefined
+  }
 
   // Set project root so logger doesn't throw
   setProjectRoot(TEST_DIR)
@@ -50,6 +52,10 @@ beforeEach(async () => {
 })
 
 afterEach(() => {
+  // Always restore a live root before deleting TEST_DIR. If getProjectRoot()
+  // threw in beforeEach, previousProjectRoot is unset and leaving TEST_DIR
+  // installed would point the global root at a removed path.
+  setProjectRoot(previousProjectRoot ?? process.cwd())
   try {
     rmSync(TEST_DIR, { recursive: true, force: true })
   } catch {
@@ -88,25 +94,11 @@ describe('Image Dimensions', () => {
     })
 
     test('should return compressed dimensions when image is compressed', async () => {
-      // Create a large image that will be compressed
-      const largeImage = new Jimp({
-        width: 2000,
-        height: 1000,
-        color: 0xff00ffff,
-      })
-
-      // Fill with varied data to make it less compressible (using unsigned values)
-      for (let y = 0; y < 1000; y++) {
-        for (let x = 0; x < 2000; x++) {
-          const r = (x * y) % 256
-          const g = (x + y) % 256
-          const b = x % 256
-          const a = 255
-          // Jimp uses RGBA format as unsigned 32-bit: 0xRRGGBBAA
-          const color = ((r << 24) | (g << 16) | (b << 8) | a) >>> 0
-          largeImage.setPixelColor(color, x, y)
-        }
-      }
+      // Compression triggers on base64 size, not dimensions. A solid fill PNG
+      // stays under MAX_IMAGE_BASE64_SIZE. Fill the bitmap once (no 2e6
+      // setPixelColor loop) so the PNG exceeds the 1MB gate.
+      const largeImage = new Jimp({ width: 2000, height: 1000 })
+      randomFillSync(largeImage.bitmap.data)
       await largeImage.write(
         path.join(TEST_DIR, 'large-2000x1000.png') as `${string}.${string}`,
       )
@@ -114,15 +106,11 @@ describe('Image Dimensions', () => {
       const result = await processImageFile('large-2000x1000.png', TEST_DIR)
 
       expect(result.success).toBe(true)
+      expect(result.wasCompressed).toBe(true)
       expect(result.imagePart).toBeDefined()
-      // Dimensions should be defined even after compression
-      expect(result.imagePart!.width).toBeDefined()
-      expect(result.imagePart!.height).toBeDefined()
-      // After compression, dimensions should be reduced
-      if (result.wasCompressed) {
-        expect(result.imagePart!.width).toBeLessThanOrEqual(1500) // Max dimension limit
-        expect(result.imagePart!.height).toBeLessThanOrEqual(1500)
-      }
+      // First dimension limit is 1500; wide images scale width and keep 2:1
+      expect(result.imagePart!.width).toBe(1500)
+      expect(result.imagePart!.height).toBe(750)
     })
   })
 
@@ -136,12 +124,8 @@ describe('Image Dimensions', () => {
         availableWidth: 80,
       })
 
-      // With 200x100 image (2:1), scaling to fit 80 width
-      // Display width should be reasonable portion of available
-      expect(result.width).toBeLessThanOrEqual(80)
-      expect(result.width).toBeGreaterThan(0)
-      // Height adjusted for terminal cell aspect ratio
-      expect(result.height).toBeGreaterThan(0)
+      // 200x100 @ 80: ceil(200/15)=14 cells wide, floor(14/2/2)=3 tall
+      expect(result).toEqual({ width: 14, height: 3 })
     })
 
     test('should scale tall image appropriately', () => {
@@ -151,9 +135,7 @@ describe('Image Dimensions', () => {
         availableWidth: 80,
       })
 
-      expect(result.width).toBeLessThanOrEqual(80)
-      expect(result.width).toBeGreaterThan(0)
-      expect(result.height).toBeGreaterThan(0)
+      expect(result).toEqual({ width: 7, height: 7 })
       // Tall images should have larger height relative to width
       expect(result.height).toBeGreaterThanOrEqual(
         result.width / CELL_ASPECT_RATIO,
@@ -167,9 +149,7 @@ describe('Image Dimensions', () => {
         availableWidth: 80,
       })
 
-      expect(result.width).toBeLessThanOrEqual(80)
-      expect(result.width).toBeGreaterThan(0)
-      expect(result.height).toBeGreaterThan(0)
+      expect(result).toEqual({ width: 10, height: 5 })
     })
 
     test('should use fallback when dimensions are not provided', () => {

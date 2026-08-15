@@ -9,16 +9,6 @@ mock.module('../../project-files', () => ({
   getProjectDataDir: () => tempDataDir,
 }))
 
-mock.module('../logger', () => ({
-  logger: {
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    fatal: () => {},
-  },
-}))
-
 import { deleteChatSession, getAllChats } from '../chat-history'
 
 function writeChat(chatId: string, prompt: string) {
