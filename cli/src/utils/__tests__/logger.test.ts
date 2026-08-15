@@ -45,7 +45,6 @@ import {
   clearLogFile,
   endPreviousPinoDestination,
   getLivePinoDestinationFd,
-  logger,
   resetLogStream,
   rotateLogIfNeeded,
 } from '../logger'
@@ -197,10 +196,12 @@ describe('rotateLogIfNeeded', () => {
     }
   })
 
-  test('logger.info dest-fail recovery does not throw', () => {
+  test('resetLogStream dest-fail leaves fd undefined then reopens after path is restored', () => {
     // Force dest-open failure via the filesystem: parent path is a file so
     // mkdir / pino.destination cannot create the log. Do not spyOn destination;
     // that spy does not intercept on CI bun and leaks across the process.
+    // Under IS_TEST/IS_CI, sendAnalyticsAndLog returns before dest I/O, so
+    // logger.info cannot prove recovery — assert resetLogStream + fd only.
     const logDir = path.join(tempDir, 'dest-fail-dir')
     fs.mkdirSync(logDir, { recursive: true })
     const livePath = path.join(logDir, 'log.jsonl')
@@ -213,22 +214,20 @@ describe('rotateLogIfNeeded', () => {
 
     expect(() => resetLogStream(livePath)).not.toThrow()
     expect(getLivePinoDestinationFd()).toBeUndefined()
-    expect(() => logger.info('after-failed-reset')).not.toThrow()
-    expect(getLivePinoDestinationFd()).toBeUndefined()
 
     fs.unlinkSync(logDir)
     fs.mkdirSync(logDir, { recursive: true })
     expect(() => resetLogStream(livePath)).not.toThrow()
     expect(typeof getLivePinoDestinationFd()).toBe('number')
-    expect(() => logger.info('recovered-write')).not.toThrow()
-    expect(typeof getLivePinoDestinationFd()).toBe('number')
   })
 
-  test('logger.info rotates an oversized file and reopens dest only on the prod path', () => {
+  test('helper prod sequence on debug path: close dest, rotate oversized file, resetLogStream reopens dest', () => {
     const debugLog = path.join(tempDir, 'debug', 'cli.jsonl')
     fs.mkdirSync(path.dirname(debugLog), { recursive: true })
     // Pin dest first so resetLogStream cannot recreate/truncate a 0-byte file
     // and skip rotation. Size the live file after the dest is open.
+    // This is the helper prod sequence (debug path): close + rotate + reset.
+    // logger.info is a no-throw no-op under IS_TEST/IS_CI and is not used here.
     resetLogStream(debugLog)
     writeSizedFile(debugLog, LOG_MAX_BYTES, 'pre-rotate-debug')
     const leftoverFd = getLivePinoDestinationFd()
@@ -245,7 +244,6 @@ describe('rotateLogIfNeeded', () => {
     expect(fs.statSync(debugLog).size).toBeLessThan(LOG_MAX_BYTES)
     fs.appendFileSync(debugLog, 'post-rotate-debug\n')
     expect(fs.readFileSync(debugLog, 'utf8')).toContain('post-rotate-debug')
-    expect(() => logger.info('post-rotate-debug')).not.toThrow()
   })
 })
 
