@@ -32,11 +32,7 @@ import { trackEvent } from './utils/analytics'
 import { resetCodebuffClient } from './utils/codebuff-client'
 import { getCliEnv } from './utils/env'
 import { initializeAgentRegistry } from './utils/local-agent-registry'
-import {
-  clearLogFile,
-  logger,
-  trimOversizedLogsOnStartup,
-} from './utils/logger'
+import { clearLogFile, logger } from './utils/logger'
 import { shouldShowProjectPicker } from './utils/project-picker'
 import { saveRecentProject } from './utils/recent-projects'
 import {
@@ -207,16 +203,27 @@ async function main(): Promise<void> {
       let effectivePath = wasmPath
       if (!effectiveBinary && !effectivePath) {
         try {
-          const data = await fs.promises.readFile(siblingPath)
-          // Re-check byteLength after read to close stat+read TOCTOU (file could
-          // have grown between stat and read past 8MiB cap); bound even if raced.
-          if (data.byteLength > 0 && data.byteLength <= WASM_MAX_BYTES) {
-            effectivePath = siblingPath
-            effectiveBinary = new Uint8Array(data)
-          } else {
+          const siblingStat = await fs.promises.stat(siblingPath)
+          if (
+            !siblingStat.isFile() ||
+            siblingStat.size <= 0 ||
+            siblingStat.size > WASM_MAX_BYTES
+          ) {
             console.error(
-              `[smoke diag] sibling wasm size out of bounds: ${data.byteLength} bytes (cap ${WASM_MAX_BYTES})`,
+              `[smoke diag] sibling wasm size out of bounds: ${siblingStat.size} bytes (cap ${WASM_MAX_BYTES})`,
             )
+          } else {
+            const data = await fs.promises.readFile(siblingPath)
+            // Re-check byteLength after read to close stat+read TOCTOU (file could
+            // have grown between stat and read past 8MiB cap); bound even if raced.
+            if (data.byteLength > 0 && data.byteLength <= WASM_MAX_BYTES) {
+              effectivePath = siblingPath
+              effectiveBinary = new Uint8Array(data)
+            } else {
+              console.error(
+                `[smoke diag] sibling wasm size out of bounds: ${data.byteLength} bytes (cap ${WASM_MAX_BYTES})`,
+              )
+            }
           }
         } catch (err) {
           const code = (err as NodeJS.ErrnoException)?.code
@@ -239,7 +246,9 @@ async function main(): Promise<void> {
           locateFile: (name: string) =>
             name === 'tree-sitter.wasm' ? effectivePath! : name,
         })
-        console.log(`tree-sitter smoke ok (locateFile, path=${effectivePath})`)
+        console.log(
+          `tree-sitter smoke ok (locateFile, path=${redactSmokePath(effectivePath)})`,
+        )
       } else {
         console.error(
           'tree-sitter smoke FAIL: no wasm available — pre-init published ' +
@@ -310,9 +319,6 @@ async function main(): Promise<void> {
   const hasAgentOverride = Boolean(agent?.trim())
 
   await initializeApp({ cwd })
-
-  // Reclaim any oversized per-chat log left by a previous session.
-  trimOversizedLogsOnStartup()
 
   // Show project picker only when user starts at the home directory or an ancestor
   const projectRoot = getProjectRoot()
