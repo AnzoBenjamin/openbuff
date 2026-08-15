@@ -196,6 +196,7 @@ export const ProjectPickerScreen: React.FC<ProjectPickerScreenProps> = ({
     terminalWidth,
     sheenPosition,
     setSheenPosition,
+    enabled: canShowLogo,
   })
 
   const { component: logoComponent } = useLogo({

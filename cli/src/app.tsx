@@ -6,7 +6,6 @@ import { ChatHistoryScreen } from './components/chat-history-screen'
 import { ProjectPickerScreen } from './components/project-picker-screen'
 import { TerminalLink } from './components/terminal-link'
 import { useLogo } from './hooks/use-logo'
-import { useSheenAnimation } from './hooks/use-sheen-animation'
 import { useTerminalDimensions } from './hooks/use-terminal-dimensions'
 import { useTerminalFocus } from './hooks/use-terminal-focus'
 import { useTheme } from './hooks/use-theme'
@@ -45,27 +44,16 @@ export const App = ({
   showProjectPicker,
   onProjectChange,
 }: AppProps) => {
-  const { contentMaxWidth, terminalWidth } = useTerminalDimensions()
+  const { contentMaxWidth } = useTerminalDimensions()
   const theme = useTheme()
 
-  // Sheen animation state for the logo
-  const [sheenPosition, setSheenPosition] = useState(0)
   const blockColor = getLogoBlockColor(theme.name)
   const accentColor = getLogoAccentColor(theme.name)
-  const { applySheenToChar } = useSheenAnimation({
-    logoColor: theme.foreground,
-    accentColor,
-    blockColor,
-    terminalWidth,
-    sheenPosition,
-    setSheenPosition,
-  })
 
   const { component: logoComponent } = useLogo({
     availableWidth: contentMaxWidth,
     accentColor,
     blockColor,
-    applySheenToChar,
   })
 
   const inputRef = useRef<MultilineInputHandle | null>(null)

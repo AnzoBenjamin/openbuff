@@ -7,7 +7,11 @@ import {
   SUPPORTED_CODE_EXTENSIONS,
 } from '@codebuff/code-map'
 
-import { BINARY_EXTENSIONS, walkProjectDetailed } from './file-walker'
+import {
+  BINARY_EXTENSIONS,
+  statProjectFiles,
+  walkProjectDetailed,
+} from './file-walker'
 import {
   buildGuidToPathMap,
   extractAssetRefs,
@@ -27,7 +31,8 @@ import type {
   ParseDiagnostic,
 } from './types'
 import type { ParseCoverage, ParsedFileTokens } from '@codebuff/code-map'
-import type { WalkProjectResult } from './file-walker'
+import type { WalkedFile, WalkProjectResult } from './file-walker'
+
 
 const CODE_EXTENSIONS = new Set(SUPPORTED_CODE_EXTENSIONS)
 
@@ -179,14 +184,16 @@ export async function updateMetadataIndex(
   mutationDelta?: IndexMutationDelta,
 ): Promise<MetadataIndex> {
   tsAliasCacheByRoot.delete(projectRoot)
-  const walked = await walkProjectDetailed(
-    projectRoot,
-    getIndexExcludes(config),
-    config.maxFiles,
-  )
+  const preciseDelta = mutationDelta?.complete === true
+  const walked = preciseDelta
+    ? await collectPreciseWalk(existing, projectRoot, mutationDelta, config)
+    : await walkProjectDetailed(
+        projectRoot,
+        getIndexExcludes(config),
+        config.maxFiles,
+      )
   const files = walked.files
   const currentByPath = new Map(files.map((f) => [f.relativePath, f]))
-  const preciseDelta = mutationDelta?.complete === true
   const changedDeltaPaths = new Set(
     (mutationDelta?.changedPaths ?? []).map(normalizeMutationPath),
   )
@@ -544,6 +551,74 @@ function createIndexCoverage(
     skippedFiles: walked.skippedFiles,
     skippedPrefixes: walked.skippedPrefixes,
     parser,
+  }
+}
+
+async function collectPreciseWalk(
+  existing: MetadataIndex,
+  projectRoot: string,
+  mutationDelta: IndexMutationDelta,
+  config: IndexingConfig,
+): Promise<WalkProjectResult> {
+  const deletedPaths = new Set(
+    (mutationDelta.deletedPaths ?? []).map(normalizeMutationPath),
+  )
+  const changedPaths = (mutationDelta.changedPaths ?? []).map(
+    normalizeMutationPath,
+  )
+  const changedPathSet = new Set(changedPaths)
+  const stated = await statProjectFiles(
+    projectRoot,
+    changedPaths,
+    getIndexExcludes(config),
+  )
+  const statedByPath = new Map(
+    stated.map((file) => [file.relativePath, file]),
+  )
+
+  const files: WalkedFile[] = []
+  for (const [relativePath, indexed] of Object.entries(existing.files)) {
+    if (deletedPaths.has(relativePath)) continue
+    const overlay = statedByPath.get(relativePath)
+    if (overlay) {
+      files.push(overlay)
+      continue
+    }
+    // Invariant: changedPaths without a successful stat overlay must be omitted
+    // so updateMetadataIndex can add them to deletedPaths.
+    if (changedPathSet.has(relativePath)) continue
+    files.push(walkedFileFromIndexed(projectRoot, indexed))
+  }
+
+  for (const file of stated) {
+    if (!existing.files[file.relativePath] && !deletedPaths.has(file.relativePath)) {
+      files.push(file)
+    }
+  }
+
+  const coverage = existing.coverage
+  return {
+    files,
+    truncated: coverage?.truncated ?? false,
+    maxFiles: coverage?.maxFiles ?? config.maxFiles ?? 20_000,
+    skippedFiles: coverage?.skippedFiles ?? 0,
+    skippedPrefixes: coverage?.skippedPrefixes ?? [],
+  }
+}
+
+function walkedFileFromIndexed(
+  projectRoot: string,
+  indexed: IndexedFile,
+): WalkedFile {
+  return {
+    absolutePath: path.join(projectRoot, indexed.path),
+    relativePath: indexed.path,
+    ext: indexed.ext,
+    mtime: indexed.mtime,
+    size: indexed.size,
+    ...(indexed.asset
+      ? { asset: { kind: '3d' as const, format: indexed.asset.format } }
+      : {}),
   }
 }
 

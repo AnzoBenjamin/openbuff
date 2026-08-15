@@ -14,6 +14,7 @@ interface UseSheenAnimationParams {
   terminalWidth: number | undefined
   sheenPosition: number
   setSheenPosition: (value: number | ((prev: number) => number)) => void
+  enabled?: boolean
 }
 
 export function useSheenAnimation({
@@ -23,10 +24,13 @@ export function useSheenAnimation({
   terminalWidth,
   sheenPosition,
   setSheenPosition,
+  enabled = true,
 }: UseSheenAnimationParams) {
   const [isReversing, setIsReversing] = useState(false)
 
   useEffect(() => {
+    if (!enabled) return
+
     const maxPosition = Math.max(10, Math.min((terminalWidth || 80) - 4, 100))
     const step = SHEEN_STEP
 
@@ -44,7 +48,7 @@ export function useSheenAnimation({
     return () => {
       clearInterval(interval)
     }
-  }, [terminalWidth, setSheenPosition])
+  }, [enabled, terminalWidth, setSheenPosition])
 
   const applySheenToChar = useCallback(
     (char: string, charIndex: number) => {

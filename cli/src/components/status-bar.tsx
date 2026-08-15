@@ -7,6 +7,10 @@ import { ShimmerText } from './shimmer-text'
 
 import { useTheme } from '../hooks/use-theme'
 import { formatElapsedTime } from '../utils/format-elapsed-time'
+import {
+  formatIndexStatusChip,
+  type IndexStatusPeek,
+} from '../utils/index-status'
 import type { StatusIndicatorState } from '../utils/status-indicator-state'
 
 /** A small status-bar action button with hover-bold styling. */
@@ -62,6 +66,8 @@ interface StatusBarProps {
   modelName?: string | null
   /** Git working-tree diff stats (modified/added/deleted counts). */
   diffStats?: { modified: number; added: number; deleted: number } | null
+  /** Compact index readiness chip from the CLI IndexManager singleton. */
+  indexStatus?: IndexStatusPeek
   onStop?: () => void
 }
 
@@ -74,6 +80,7 @@ export const StatusBar = ({
   sessionCostCents,
   modelName,
   diffStats,
+  indexStatus,
   onStop,
 }: StatusBarProps) => {
   const theme = useTheme()
@@ -229,12 +236,27 @@ export const StatusBar = ({
     return <span fg={theme.secondary}>{`git ${parts.join(' ')}`}</span>
   }
 
+  const renderIndexStatus = () => {
+    const chip = formatIndexStatusChip(indexStatus ?? null)
+    if (!chip) {
+      return null
+    }
+    const fg =
+      chip.tone === 'error'
+        ? theme.error
+        : chip.tone === 'warning'
+          ? theme.warning
+          : theme.secondary
+    return <span fg={fg}>{chip.label}</span>
+  }
+
   const statusIndicatorContent = renderStatusIndicator()
   const elapsedTimeContent = renderElapsedTime()
   const contextWindowContent = renderContextWindowUsage()
   const sessionCostContent = renderSessionCost()
   const modelNameContent = renderModelName()
   const diffStatsContent = renderDiffStats()
+  const indexStatusContent = renderIndexStatus()
 
   const hasContent =
     statusIndicatorContent ||
@@ -242,7 +264,8 @@ export const StatusBar = ({
     contextWindowContent ||
     sessionCostContent ||
     modelNameContent ||
-    diffStatsContent
+    diffStatsContent ||
+    indexStatusContent
 
   return (
     <box
@@ -284,6 +307,7 @@ export const StatusBar = ({
         <text style={{ wrapMode: 'none' }}>{contextWindowContent}</text>
         <text style={{ wrapMode: 'none' }}>{sessionCostContent}</text>
         <text style={{ wrapMode: 'none' }}>{diffStatsContent}</text>
+        <text style={{ wrapMode: 'none' }}>{indexStatusContent}</text>
         <text style={{ wrapMode: 'none' }}>{modelNameContent}</text>
         <text style={{ wrapMode: 'none' }}>{elapsedTimeContent}</text>
         {onStop &&
