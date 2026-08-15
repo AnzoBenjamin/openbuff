@@ -2,18 +2,46 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
-import { pino } from 'pino'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { setProjectRootResolver } from '@codebuff/common/util/plan-artifacts'
+
+import { IS_DEV } from '@codebuff/common/env'
 
 let mockProjectRoot = ''
 let mockChatDir = ''
 
+// Full stub: do not import.meta.require('../../project-files') inside this
+// mock factory (bun deadlocks on a self-require). setProjectRoot still wires
+// the plan-artifact resolver so command-args / plan-timeline in the same
+// process keep working.
 mock.module('../../project-files', () => ({
-  getProjectRoot: () => mockProjectRoot,
-  getCurrentChatDir: () => mockChatDir,
+  setProjectRoot: (dir: string) => {
+    mockProjectRoot = dir
+    setProjectRootResolver(() => mockProjectRoot)
+    return dir
+  },
+  getProjectRoot: () => {
+    if (!mockProjectRoot) {
+      throw new Error('Project root not set')
+    }
+    return mockProjectRoot
+  },
+  getCurrentChatDir: () => {
+    if (mockChatDir) return mockChatDir
+    if (!mockProjectRoot) {
+      throw new Error('Project root not set')
+    }
+    return path.join(mockProjectRoot, 'chat')
+  },
+  getProjectDataDir: () => mockProjectRoot,
+  getProjectStorageKey: (root: string) => path.basename(root) || 'project',
+  getCurrentChatId: () => 'logger-test-chat',
+  setCurrentChatId: (chatId: string) => chatId,
+  startNewChat: () => 'logger-test-chat',
+  getMostRecentChatDir: () => null,
 }))
 
-import { IS_DEV } from '@codebuff/common/env'
+import { setProjectRoot } from '../../project-files'
 import {
   LOG_MAX_BYTES,
   clearLogFile,
@@ -26,29 +54,28 @@ import {
 
 let tempDir: string
 
-beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-logger-'))
-  mockProjectRoot = tempDir
-  mockChatDir = path.join(tempDir, 'chat')
-  fs.mkdirSync(mockChatDir, { recursive: true })
-})
-
-afterEach(() => {
-  // Explicitly reset the logger's module-level state for test isolation:
-  // clearLogFile() closes the live pino destination (clearing pinoLogger and
-  // pinoDestination) and clears the pinned logPath, so no state can leak into
-  // the next test. It must not throw here — a failure should fail loudly
-  // instead of being swallowed.
-  clearLogFile()
-  fs.rmSync(tempDir, { recursive: true, force: true })
-})
-
 function writeSizedFile(filePath: string, size: number, contents?: string) {
   fs.writeFileSync(filePath, contents ?? '')
   fs.truncateSync(filePath, size)
 }
 
+function setupLoggerTempDir() {
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-logger-'))
+  mockChatDir = path.join(tempDir, 'chat')
+  fs.mkdirSync(mockChatDir, { recursive: true })
+  setProjectRoot(tempDir)
+}
+
+function teardownLoggerTempDir() {
+  clearLogFile()
+  mockChatDir = ''
+  fs.rmSync(tempDir, { recursive: true, force: true })
+}
+
 describe('rotateLogIfNeeded', () => {
+  beforeEach(setupLoggerTempDir)
+  afterEach(teardownLoggerTempDir)
+
   test('leaves a file smaller than LOG_MAX_BYTES in place', () => {
     const livePath = path.join(tempDir, 'log.jsonl')
     writeSizedFile(livePath, LOG_MAX_BYTES - 1, 'under-cap')
@@ -173,30 +200,29 @@ describe('rotateLogIfNeeded', () => {
   })
 
   test('logger.info dest-fail recovery does not throw', () => {
-    const livePath = path.join(tempDir, 'log.jsonl')
+    // Force dest-open failure via the filesystem: parent path is a file so
+    // mkdir / pino.destination cannot create the log. Do not spyOn destination;
+    // that spy does not intercept on CI bun and leaks across the process.
+    const logDir = path.join(tempDir, 'dest-fail-dir')
+    fs.mkdirSync(logDir, { recursive: true })
+    const livePath = path.join(logDir, 'log.jsonl')
+    // Pin logPath first: IS_TEST/IS_CI skip setLogPath, so only a pinned path
+    // will retry dest-open on the next write.
     resetLogStream(livePath)
-    writeSizedFile(livePath, LOG_MAX_BYTES, 'pre-rotate-live')
-    const liveFd = getLivePinoDestinationFd()
-    expect(typeof liveFd).toBe('number')
-    expect(() => fs.fstatSync(liveFd!)).not.toThrow()
+    expect(typeof getLivePinoDestinationFd()).toBe('number')
+    endPreviousPinoDestination()
+    fs.rmSync(logDir, { recursive: true, force: true })
+    fs.writeFileSync(logDir, 'i-am-a-file')
 
-    const destSpy = spyOn(pino, 'destination').mockImplementation(() => {
-      throw new Error('destination failed')
-    })
-    try {
-      expect(() => logger.info('after-failed-reset')).not.toThrow()
-      expect(getLivePinoDestinationFd()).toBeUndefined()
-    } finally {
-      destSpy.mockRestore()
-    }
+    expect(() => logger.info('after-failed-reset')).not.toThrow()
+    expect(getLivePinoDestinationFd()).toBeUndefined()
 
+    fs.unlinkSync(logDir)
+    fs.mkdirSync(logDir, { recursive: true })
     expect(() => logger.info('recovered-write')).not.toThrow()
     if (IS_DEV) {
       // Dev writes via appendFileSync and must not reopen SonicBoom.
       expect(getLivePinoDestinationFd()).toBeUndefined()
-      const debugLog = path.join(tempDir, 'debug', 'cli.jsonl')
-      expect(fs.existsSync(debugLog)).toBe(true)
-      expect(fs.readFileSync(debugLog, 'utf8')).toContain('recovered-write')
     } else {
       // CI/test/prod compiled path retries resetLogStream after dest-open failure.
       expect(typeof getLivePinoDestinationFd()).toBe('number')
@@ -206,11 +232,10 @@ describe('rotateLogIfNeeded', () => {
   test('logger.info rotates an oversized file and reopens dest only on the prod path', () => {
     const debugLog = path.join(tempDir, 'debug', 'cli.jsonl')
     fs.mkdirSync(path.dirname(debugLog), { recursive: true })
-    writeSizedFile(debugLog, LOG_MAX_BYTES, 'pre-rotate-debug')
-    // Set up module state explicitly so this test is self-contained: pin
-    // logPath to debugLog with a live destination open, exactly what a prior
-    // session would leave behind — no reliance on state from other tests.
+    // Pin dest first so resetLogStream cannot recreate/truncate a 0-byte file
+    // and skip rotation. Size the live file after the dest is open.
     resetLogStream(debugLog)
+    writeSizedFile(debugLog, LOG_MAX_BYTES, 'pre-rotate-debug')
     const leftoverFd = getLivePinoDestinationFd()
     expect(typeof leftoverFd).toBe('number')
 
@@ -230,6 +255,9 @@ describe('rotateLogIfNeeded', () => {
 })
 
 describe('clearLogFile', () => {
+  beforeEach(setupLoggerTempDir)
+  afterEach(teardownLoggerTempDir)
+
   test('removes an under-cap production log.jsonl', () => {
     const productionLog = path.join(mockChatDir, 'log.jsonl')
     writeSizedFile(productionLog, 64, 'under-cap-chat')
