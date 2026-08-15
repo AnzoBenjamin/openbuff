@@ -33,7 +33,8 @@ const directoryLister: SecretAgentDefinition = {
   publisher,
   includeMessageHistory: false,
   outputMode: 'structured_output',
-  toolNames: ['list_directory', 'set_output'],
+  toolNames: ['list_directory'],
+  programmaticToolNames: ['set_output'],
   spawnableAgents: [],
   inputSchema: {
     params: paramsSchema,

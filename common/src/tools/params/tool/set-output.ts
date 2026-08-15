@@ -54,16 +54,11 @@ const REQUIRED_DIMENSION_KEYS = [
 
 const TRUNCATION_DIMENSION_PLACEHOLDER = 'recovered-from-truncated-receipt'
 
-// Safety assumption for the truncation placeholders below: when
-// requirementCoverage is truncated off entirely, recoverTruncatedJsonObject
-// falls back to `[]`, so a recovered LOOKS_GOOD receipt would finalize with
-// zero requirement evidence. That is only sound because the reviewer contract
-// (agents/reviewer/code-reviewer.ts) already forces `verdict: "BLOCKING"`
-// whenever any requirementCoverage[].status is non-satisfied, and the gate
-// finalizes only on LOOKS_GOOD — requirement evidence is enforced at review
-// time, not reconstructed here. If that contract ever relaxes or a
-// non-reviewer schema reuses these field names, synthesize an 'uncertain'
-// entry instead of `[]` so the receipt cannot finalize without evidence.
+// When requirementCoverage is truncated off entirely, do not synthesize
+// `[]` under the recovered verdict. The gate finalizes only on LOOKS_GOOD, so
+// an empty placeholder would finalize with zero requirement evidence. Inject
+// an explicit `uncertain` entry and force verdict BLOCKING so a mid-essay
+// truncate cannot pass as a complete review.
 
 const scanJsonStringEnd = (s: string, start: number): number | undefined => {
   if (s[start] !== '"') return undefined
@@ -232,7 +227,14 @@ export const recoverTruncatedJsonObject = (
       result.dimensions = dimObj
     }
     if (!Array.isArray(result.requirementCoverage)) {
-      result.requirementCoverage = []
+      result.requirementCoverage = [
+        {
+          requirement: 'requirementCoverage',
+          status: 'uncertain',
+          evidence: [TRUNCATION_DIMENSION_PLACEHOLDER],
+        },
+      ]
+      result.verdict = 'BLOCKING'
     }
   }
 
@@ -338,7 +340,7 @@ const inputSchema = z
     'JSON object to set as the agent output. The shape of the parameters are specified dynamically further down in the conversation. This completely replaces any previous output. If the agent was spawned, this value will be passed back to its parent. If the agent has an outputSchema defined, the output will be validated against it.',
   )
 const description = `
-Subagents must use this tool as it is the only way to report any findings. Nothing else you write will be visible to the user/parent agent.
+Use this tool to publish an explicit structured receipt when your instructions require it (for example reviewers). It is not the only possible channel: if your instructions say the parent harvests plain assistant text, do not call this tool just to publish the answer.
 
 Note that the output schema is provided dynamically in a user prompt further down in the conversation. Be sure to follow what the latest output schema is when using this tool.
 

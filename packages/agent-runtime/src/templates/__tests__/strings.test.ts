@@ -1,6 +1,7 @@
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
 import { frontendSection } from '@codebuff/common/constants/prompt-sections'
 import { describe, test, expect, mock } from 'bun:test'
+import { z } from 'zod/v4'
 
 import { PLACEHOLDER } from '../types'
 import { formatCurrentDate, getAgentPrompt } from '../strings'
@@ -615,5 +616,38 @@ describe('getAgentPrompt', () => {
       expect(stepResult).toBeDefined()
       expect(stepResult).not.toContain('You can spawn the following agents:')
     })
+  })
+
+  test('uses harvested-text addendum when set_output is programmatic-only', async () => {
+    const agentTemplate = createMockAgentTemplate({
+      id: 'structured-programmatic-output',
+      outputMode: 'structured_output',
+      outputSchema: z.object({
+        message: z.string(),
+      }),
+      programmaticToolNames: ['set_output'],
+      toolNames: ['read_files'],
+      instructionsPrompt: 'Structured output instructions.',
+    })
+    const agentTemplates: Record<string, AgentTemplate> = {
+      'structured-programmatic-output': agentTemplate,
+    }
+
+    const result = await getAgentPrompt({
+      agentTemplate,
+      promptType: { type: 'instructionsPrompt' },
+      fileContext: createMockFileContext(),
+      agentState: createMockAgentState('structured-programmatic-output'),
+      agentTemplates,
+      additionalToolDefinitions: async () => ({}),
+      logger: createMockLogger(),
+      apiKey: TEST_AGENT_RUNTIME_IMPL.apiKey,
+      databaseAgentCache: TEST_AGENT_RUNTIME_IMPL.databaseAgentCache,
+      fetchAgentFromDatabase: TEST_AGENT_RUNTIME_IMPL.fetchAgentFromDatabase,
+    })
+
+    expect(result).toBeDefined()
+    expect(result).toContain('Do not call set_output just to publish')
+    expect(result).not.toContain('When using the set_output tool')
   })
 })

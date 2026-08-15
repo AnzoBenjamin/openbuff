@@ -42,7 +42,7 @@ describe('set_output input schema', () => {
     const recovered = recoverTruncatedJsonObject(truncated)
     expect(recovered).toMatchObject({
       schemaVersion: 1,
-      verdict: 'LOOKS_GOOD',
+      verdict: 'BLOCKING',
       snapshotFingerprint:
         'v3:fe7bd6bf6e902bfa33e6b76622a1d61ca548ac0716b44cb6e8620ab0aa9cdca6',
       reviewedFiles: [
@@ -51,7 +51,13 @@ describe('set_output input schema', () => {
       ],
       findings: [],
       coverage: 'covered',
-      requirementCoverage: [],
+      requirementCoverage: [
+        {
+          requirement: 'requirementCoverage',
+          status: 'uncertain',
+          evidence: ['recovered-from-truncated-receipt'],
+        },
+      ],
     })
     expect(recovered?.dimensions).toEqual({
       correctness: 'recovered-from-truncated-receipt',
@@ -65,7 +71,7 @@ describe('set_output input schema', () => {
     expect(parsed.success).toBe(true)
     if (parsed.success) {
       expect(parsed.data.data).toMatchObject({
-        verdict: 'LOOKS_GOOD',
+        verdict: 'BLOCKING',
         snapshotFingerprint:
           'v3:fe7bd6bf6e902bfa33e6b76622a1d61ca548ac0716b44cb6e8620ab0aa9cdca6',
         reviewedFiles: [
@@ -118,4 +124,19 @@ describe('set_output input schema', () => {
       }
     },
   )
+})
+
+describe('set_output tool description', () => {
+  test('does not claim it is the only way to report findings', () => {
+    expect(setOutputParams.description).not.toContain('only way to report')
+  })
+
+  test('tells harvest agents not to call the tool just to publish', () => {
+    expect(setOutputParams.description).toContain(
+      'It is not the only possible channel',
+    )
+    expect(setOutputParams.description).toContain(
+      'if your instructions say the parent harvests plain assistant text, do not call this tool just to publish',
+    )
+  })
 })

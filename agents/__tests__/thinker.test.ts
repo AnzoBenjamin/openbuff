@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 
+import { createBase2 } from '../base2/base2'
 import thinker from '../thinker/thinker'
 
 import type { AgentState } from '../types/agent-definition'
@@ -38,14 +39,19 @@ describe('thinker agent', () => {
 
     test('uses an isolated decision packet', () => {
       expect(thinker.includeMessageHistory).toBe(false)
+      expect(thinker.spawnerPrompt).toContain('self-contained')
+      expect(thinker.spawnerPrompt).toContain(
+        'does not inherit conversation history',
+      )
     })
 
     test('does not inherit parent orchestration prompt', () => {
       expect(thinker.inheritParentSystemPrompt).toBe(false)
     })
 
-    test('exposes set_output for structured output', () => {
-      expect(thinker.toolNames).toEqual(['read_files', 'set_output'])
+    test('exposes read_files to the model and set_output programmatically', () => {
+      expect(thinker.toolNames).toEqual(['read_files'])
+      expect(thinker.programmaticToolNames).toEqual(['set_output'])
     })
 
     test('has empty spawnable agents', () => {
@@ -94,6 +100,25 @@ describe('thinker agent', () => {
     })
   })
 
+  describe('base2 thinker spawn guidance', () => {
+    test('does not tell spawners they can omit context for thinker', () => {
+      const base2 = createBase2('default')
+
+      expect(base2.systemPrompt).not.toContain('No need to include context')
+      expect(base2.systemPrompt).not.toContain(
+        'you can be brief in prompting them without needing to include context',
+      )
+      expect(base2.systemPrompt).toContain('includeMessageHistory:false')
+      expect(base2.systemPrompt).toContain('self-contained')
+      expect(base2.systemPrompt).toContain('params.depth')
+      expect(base2.systemPrompt).toContain('params.outputSchemaHint')
+      expect(base2.instructionsPrompt).toContain('includeMessageHistory:false')
+      expect(base2.instructionsPrompt).toContain('self-contained decision packet')
+      expect(base2.instructionsPrompt).toContain('params.depth')
+      expect(base2.instructionsPrompt).toContain('params.outputSchemaHint')
+    })
+  })
+
   describe('output schema', () => {
     test('has object type', () => {
       expect(thinker.outputSchema?.type).toBe('object')
@@ -121,16 +146,18 @@ describe('thinker agent', () => {
   })
 
   describe('instructions prompt', () => {
-    test('contains think tag instruction', () => {
-      expect(thinker.instructionsPrompt).toContain('<think>')
+    test('does not ask for XML think tags or mention set_output', () => {
+      expect(thinker.instructionsPrompt).not.toContain('<think>')
+      expect(thinker.instructionsPrompt).not.toContain('set_output')
     })
 
-    test('instructs not to call set_output', () => {
-      expect(thinker.instructionsPrompt).toContain('DO NOT call')
-      expect(thinker.instructionsPrompt).toContain('set_output')
+    test('instructs native reasoning or silent reasoning then ordinary assistant text', () => {
+      expect(thinker.instructionsPrompt).toContain('native reasoning')
+      expect(thinker.instructionsPrompt).toContain('reason silently')
+      expect(thinker.instructionsPrompt).toContain('ordinary assistant text')
     })
 
-    test('prefers plain assistant text over set_output for the final answer', () => {
+    test('prefers plain assistant text for the final answer', () => {
       expect(thinker.instructionsPrompt).toContain('prefer plain assistant text')
       expect(thinker.instructionsPrompt).toContain('ordinary response text')
       expect(thinker.instructionsPrompt).toContain(
@@ -295,6 +322,48 @@ Actual response here`,
 
       const toolCall = result.value as unknown as { input: { message: string } }
       expect(toolCall.input.message).toBe('Actual response here')
+    })
+
+    test('strips unclosed think tails so they are not harvested as the answer', () => {
+      const messages: Message[] = [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'text',
+              text: '<think>closed first</think>Final answer here\n<think>unclosed tail that must not be harvested',
+            },
+          ],
+        },
+      ]
+
+      const mockAgentState = createMockAgentState(messages)
+      const mockLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      }
+
+      const generator = thinker.handleSteps!({
+        agentState: mockAgentState,
+        logger: mockLogger as any,
+        params: {},
+      })
+
+      generator.next()
+
+      const updatedState = createMockAgentState(messages)
+      const result = generator.next({
+        agentState: updatedState,
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      const toolCall = result.value as unknown as { input: { message: string } }
+      expect(toolCall.input.message).toBe('Final answer here')
+      expect(toolCall.input.message).not.toContain('<think>')
+      expect(toolCall.input.message).not.toContain('unclosed tail')
     })
 
     test('returns error message when no assistant message found', () => {

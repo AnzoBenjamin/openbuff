@@ -1,6 +1,7 @@
 import { endsAgentStepParam } from '@codebuff/common/tools/constants'
 import { toolParams } from '@codebuff/common/tools/list'
 import { getToolMetadata } from '@codebuff/common/tools/metadata'
+import { buildSpawnAgentsProviderInputSchema } from '@codebuff/common/tools/params/tool/spawn-agents'
 import { AVAILABLE_SKILLS_PLACEHOLDER } from '@codebuff/common/tools/params/tool/skill'
 import { getToolCallString } from '@codebuff/common/tools/utils'
 import { buildArray } from '@codebuff/common/util/array'
@@ -459,8 +460,15 @@ export async function getToolSet(params: {
   additionalToolDefinitions: () => Promise<CustomToolDefinitions>
   agentTools: ToolSet
   skills: SkillsMap
+  spawnableAgentTypes?: string[]
 }): Promise<ToolSet> {
-  const { toolNames, additionalToolDefinitions, agentTools, skills } = params
+  const {
+    toolNames,
+    additionalToolDefinitions,
+    agentTools,
+    skills,
+    spawnableAgentTypes,
+  } = params
 
   // Generate available skills XML for the skill tool description
   const availableSkillsXml = formatAvailableSkillsXml(skills)
@@ -492,6 +500,15 @@ export async function getToolSet(params: {
             AVAILABLE_SKILLS_PLACEHOLDER,
             replacement,
           ),
+        }
+      } else if (
+        toolName === 'spawn_agents' &&
+        Array.isArray(spawnableAgentTypes) &&
+        spawnableAgentTypes.length > 0
+      ) {
+        resolvedToolDef = {
+          ...providerToolDef,
+          inputSchema: buildSpawnAgentsProviderInputSchema(spawnableAgentTypes),
         }
       }
       toolSet[toolName] = compactToolDefinitionForProvider(resolvedToolDef, {

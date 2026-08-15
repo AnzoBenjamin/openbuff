@@ -61,7 +61,8 @@ const codeSearcher: SecretAgentDefinition = {
   spawnerPrompt: `Mechanically runs multiple code search queries (using ripgrep line-oriented search) and returns up to 250 results across all source files, showing each line that matches the search pattern. Excludes git-ignored files. You MUST pass searchQueries in params. Example input: { "params": { "searchQueries": [{ "pattern": "createUser", "flags": "-g *.ts" }, { "pattern": "deleteUser", "flags": "-g *.ts" }, { "pattern": "UserSchema", "maxResults": 5 }] } }`,
   publisher,
   includeMessageHistory: false,
-  toolNames: ['code_search', 'set_output'],
+  toolNames: ['code_search'],
+  programmaticToolNames: ['set_output'],
   spawnableAgents: [],
   inputSchema: {
     params: paramsSchema,

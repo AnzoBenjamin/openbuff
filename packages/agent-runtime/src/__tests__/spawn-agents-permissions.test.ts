@@ -119,6 +119,10 @@ describe('Spawn Agents Permissions', () => {
     )
   })
 
+  it('normalizes underscored spawn agent types to hyphenated ids', () => {
+    expect(normalizeSpawnAgentType('file_picker')).toBe('file-picker')
+  })
+
   it('normalizes string handoff context to a structured object', () => {
     expect(
       buildSpawnParamsWithHandoff({

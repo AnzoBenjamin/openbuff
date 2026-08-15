@@ -87,6 +87,7 @@ export const createCodeEditor = (options: {
       ],
     },
     toolNames: ['read_files', 'read_outline', 'edit_transaction'],
+    programmaticToolNames: ['set_output'],
 
     includeMessageHistory: false,
     inheritParentSystemPrompt: false,

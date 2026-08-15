@@ -124,6 +124,7 @@ describe('editor agent', () => {
         'read_outline',
         'edit_transaction',
       ])
+      expect(editor.programmaticToolNames).toEqual(['set_output'])
       expect(editor.toolNames).not.toContain('set_output')
       expect(editor.toolNames).not.toContain('write_file')
       expect(editor.toolNames).not.toContain('str_replace')
@@ -626,6 +627,46 @@ describe('editor agent', () => {
       expect((result.value as any).input.output.status).toBe('blocked')
       expect((result.value as any).input.output.blockedReason).toContain(
         'edit_transaction was attempted but no edit committed',
+      )
+    })
+
+    test('includes Attempted paths from extractAttemptedEditFiles in blockedReason', () => {
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        params: {},
+      })
+      generator.next()
+
+      const result = generator.next({
+        agentState: createMockAgentState([
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool-call',
+                toolName: 'edit_transaction',
+                input: {
+                  edits: [{ type: 'str_replace', path: 'src/attempted.ts' }],
+                },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            content: [
+              { type: 'json', value: { kind: 'commit_receipt', actions: [] } },
+            ],
+          },
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect((result.value as any).input.output.status).toBe('blocked')
+      expect((result.value as any).input.output.blockedReason).toContain(
+        'Attempted paths: src/attempted.ts',
       )
     })
 

@@ -27,13 +27,14 @@ const definition: SecretAgentDefinition = {
     required: ['status', 'answer', 'source', 'version'],
   },
   includeMessageHistory: false,
-  toolNames: ['read_docs'],
+  toolNames: ['read_docs', 'set_output'],
   spawnableAgents: [],
 
   systemPrompt: `You are an expert researcher who can read documentation to find relevant information. Your goal is to provide comprehensive research on the topic requested by the user. Use read_docs to get detailed documentation.`,
   instructionsPrompt: `Instructions:
 1. Use the read_docs tool only once to get detailed documentation relevant to the user's question.
 2. Use the selected Context7 library metadata returned by read_docs for source and version/branch. If alternatives are present, mention ambiguity in failure or answer rather than guessing. Use "unknown" only when metadata is genuinely absent. Include failure when retrieval is incomplete or fails.
+3. Finish by calling set_output with the declared schema (status, answer, source, version).
   `.trim(),
 }
 

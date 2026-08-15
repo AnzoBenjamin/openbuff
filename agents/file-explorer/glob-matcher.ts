@@ -35,7 +35,8 @@ const globMatcher: SecretAgentDefinition = {
   publisher,
   outputMode: 'structured_output',
   includeMessageHistory: false,
-  toolNames: ['glob', 'set_output'],
+  toolNames: ['glob'],
+  programmaticToolNames: ['set_output'],
   spawnableAgents: [],
   inputSchema: {
     params: paramsSchema,

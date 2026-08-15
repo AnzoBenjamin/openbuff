@@ -50,12 +50,13 @@ const definition: SecretAgentDefinition = {
   inheritParentSystemPrompt: false,
   includeMessageHistory: false,
   spawnableAgents: [],
-  toolNames: ['read_files', 'set_output'],
+  toolNames: ['read_files'],
+  programmaticToolNames: ['set_output'],
 
   instructionsPrompt: `
-You are a thinker agent. Reason from the self-contained decision packet in the current prompt. Do not assume access to parent conversation history or operational state. You have read-only repository access: you may call read_files to verify evidence in the packet when helpful, but do not modify anything. Use the <think> tag to think deeply about the request.
+You are a thinker agent. Reason from the self-contained decision packet in the current prompt. Do not assume access to parent conversation history or operational state. You have read-only repository access: you may call read_files to verify evidence in the packet when helpful, but do not modify anything. Use native reasoning if available; otherwise reason silently. Then write the final answer as ordinary assistant text.
 
-When satisfied, prefer plain assistant text for the final answer: write it as ordinary response text after optional <think>...</think> tags so it is visible in the message itself (not only inside a tool call). The parent agent will see that response -- DO NOT call set_output or any tool just to publish the answer. Structured output is harvested automatically from that plain text for you.
+When satisfied, prefer plain assistant text for the final answer: write it as ordinary response text so it is visible in the message itself (not only inside a tool call). The parent agent will see that response. Structured output is harvested automatically from that plain text for you.
 
 If the caller passed params.depth === 'shallow', keep your thinking chain short and lead with the answer. If params.depth === 'deep' (or omitted), reason thoroughly before the final answer.
 If the caller passed params.outputSchemaHint, format your final message content to match that shape (e.g. valid JSON with the requested fields). The runtime still wraps your output as { message: string }, so serialize structured content into that string.
@@ -73,8 +74,10 @@ If the caller passed params.outputSchemaHint, format your final message content 
     void params
 
     // Shared local helper: extract assistant text (string or text parts) and
-    // remove text within <think> tags (including the tags themselves). Kept
-    // as a closure inside handleSteps so the generator stays serializable for
+    // remove text within <think> tags (including the tags themselves).
+    // Matches run-agent-step: strip closed pairs, then any unclosed <think>
+    // tail so truncated thinking is not harvested as the answer. Kept as a
+    // closure inside handleSteps so the generator stays serializable for
     // sandbox execution.
     const cleanedTextFromContent = (content: unknown): string => {
       let text = ''
@@ -89,7 +92,10 @@ If the caller passed params.outputSchemaHint, format your final message content 
           .map((part) => part.text)
           .join('')
       }
-      return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim()
+      return text
+        .replace(/<think>[\s\S]*?<\/think>/g, '')
+        .replace(/<think>[\s\S]*$/, '')
+        .trim()
     }
 
     // A read_files call is endsAgentStep=true, so the step can end on a

@@ -41,9 +41,11 @@ export function getEffectiveAgentToolNames(
   agentState?: { unlockedToolTiers?: string[] },
 ): string[] {
   let names = [...agentTemplate.toolNames]
+  const programmaticToolNames = agentTemplate.programmaticToolNames ?? []
   if (
     agentTemplate.outputMode === 'structured_output' &&
-    !names.includes('set_output')
+    !names.includes('set_output') &&
+    !programmaticToolNames.includes('set_output')
   ) {
     names.push('set_output')
   }

@@ -76,6 +76,7 @@ const definition: SecretAgentDefinition = {
   },
   includeMessageHistory: false,
   toolNames: ['web_search'],
+  programmaticToolNames: ['set_output'],
   spawnableAgents: [],
 
   systemPrompt: `You are an expert researcher who can search the web to find relevant information. Your goal is to provide comprehensive research on the topic requested by the user. Use web_search to find current information.`,
@@ -106,14 +107,41 @@ Then, write up a concise report that includes key findings for the user's prompt
       '::1',
       '::',
     ])
-    function isPrivateIpv4(ip: string): boolean {
-      const parts = ip.split('.').map(Number)
-      if (
-        parts.length !== 4 ||
-        parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)
-      ) {
-        return false
+    function expandShortIpv4(ip: string): string | null {
+      const parts = ip.split('.')
+      if (parts.length < 1 || parts.length > 4) return null
+      if (parts.some((part) => !/^\d+$/.test(part))) return null
+      const nums = parts.map(Number)
+      if (nums.some((n) => !Number.isInteger(n) || n < 0)) return null
+      if (parts.length === 4) {
+        if (nums.some((n) => n > 255)) return null
+        return nums.join('.')
       }
+      if (parts.length === 1) {
+        if (nums[0] > 0xffffffff) return null
+        const n = nums[0]
+        return [
+          (n >>> 24) & 255,
+          (n >>> 16) & 255,
+          (n >>> 8) & 255,
+          n & 255,
+        ].join('.')
+      }
+      if (parts.length === 2) {
+        if (nums[0] > 255 || nums[1] > 0xffffff) return null
+        const rest = nums[1]
+        return [nums[0], (rest >>> 16) & 255, (rest >>> 8) & 255, rest & 255].join(
+          '.',
+        )
+      }
+      if (nums[0] > 255 || nums[1] > 255 || nums[2] > 0xffff) return null
+      const rest = nums[2]
+      return [nums[0], nums[1], (rest >>> 8) & 255, rest & 255].join('.')
+    }
+    function isPrivateIpv4(ip: string): boolean {
+      const expanded = expandShortIpv4(ip)
+      if (!expanded) return false
+      const parts = expanded.split('.').map(Number)
       const [a, b] = parts
       return (
         a === 0 || // 0.0.0.0/8
@@ -135,6 +163,77 @@ Then, write up a concise report that includes key findings for the user's prompt
         lower.startsWith('fd') // ULA fc00::/7
       )
     }
+    // Expand compressed IPv6 and rewrite IPv4-mapped/compatible forms so
+    // 0:0:0:0:0:0:0:1, ::ffff:7f00:1, and ::127.0.0.1 hit the same checks as
+    // ::1 / 127.0.0.1 before the private-host blocklist runs.
+    function expandIpv6Hextets(ip: string): string[] | null {
+      const lower = ip.toLowerCase()
+      if (!lower.includes(':')) return null
+      const dotted = lower.match(/:(\d{1,3}(?:\.\d{1,3}){3})$/)
+      let ipv4Tail: number[] | null = null
+      let core = lower
+      if (dotted) {
+        const parts = dotted[1].split('.').map(Number)
+        if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+          return null
+        }
+        ipv4Tail = parts
+        core = lower.slice(0, -dotted[1].length)
+      }
+      if (core.includes(':::')) return null
+      const sides = core.split('::')
+      if (sides.length > 2) return null
+      const parseGroups = (s: string): string[] | null => {
+        if (s === '' || s === ':') return []
+        const groups = s.replace(/^:|:$/g, '').split(':')
+        if (groups.some((g) => g === '' || !/^[0-9a-f]{1,4}$/.test(g))) {
+          return null
+        }
+        return groups
+      }
+      let groups: string[]
+      if (sides.length === 2) {
+        const left = parseGroups(sides[0])
+        const right = parseGroups(sides[1])
+        if (!left || !right) return null
+        const needed = 8 - left.length - right.length - (ipv4Tail ? 2 : 0)
+        if (needed < 0) return null
+        groups = [...left, ...Array(needed).fill('0'), ...right]
+      } else {
+        const parsedGroups = parseGroups(sides[0])
+        if (!parsedGroups) return null
+        groups = parsedGroups
+      }
+      if (ipv4Tail) {
+        groups.push(((ipv4Tail[0] << 8) | ipv4Tail[1]).toString(16))
+        groups.push(((ipv4Tail[2] << 8) | ipv4Tail[3]).toString(16))
+      }
+      if (groups.length !== 8) return null
+      return groups.map((g) => g.replace(/^0+/, '') || '0')
+    }
+    function ipv4FromHextets(hi: string, lo: string): string | null {
+      const high = Number.parseInt(hi, 16)
+      const low = Number.parseInt(lo, 16)
+      if (!Number.isInteger(high) || !Number.isInteger(low)) return null
+      return `${(high >> 8) & 255}.${high & 255}.${(low >> 8) & 255}.${low & 255}`
+    }
+    function normalizeSsrfHost(host: string): string {
+      const hextets = expandIpv6Hextets(host)
+      if (!hextets) return host
+      const isZero = (h: string) => h === '0'
+      if (hextets.slice(0, 7).every(isZero) && hextets[7] === '1') return '::1'
+      if (hextets.every(isZero)) return '::'
+      if (hextets.slice(0, 5).every(isZero) && hextets[5] === 'ffff') {
+        const mapped = ipv4FromHextets(hextets[6], hextets[7])
+        if (mapped) return mapped
+      }
+      // Deprecated IPv4-compatible form, e.g. ::127.0.0.1
+      if (hextets.slice(0, 6).every(isZero)) {
+        const compatible = ipv4FromHextets(hextets[6], hextets[7])
+        if (compatible) return compatible
+      }
+      return hextets.join(':')
+    }
     function isSsrfUrl(rawUrl: string): boolean {
       let parsed: URL
       try {
@@ -145,8 +244,14 @@ Then, write up a concise report that includes key findings for the user's prompt
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
         return true
       }
-      const host = parsed.hostname.replace(/^\[|\]$/g, '') // strip IPv6 brackets
+      const host = normalizeSsrfHost(
+        parsed.hostname.replace(/^\[|\]$/g, ''), // strip IPv6 brackets
+      )
       if (PRIVATE_HOST_BLOCKLIST.has(host.toLowerCase())) {
+        return true
+      }
+      const ipv4Mapped = host.match(/^::ffff:([^:]+)$/i)?.[1]
+      if (ipv4Mapped && isPrivateIpv4(ipv4Mapped)) {
         return true
       }
       if (isPrivateIpv4(host)) {
@@ -282,20 +387,6 @@ Then, write up a concise report that includes key findings for the user's prompt
       return []
     }
 
-    // --- Helper: format a single search result into text + links ---
-    function formatSingleResult(resultObj: {
-      result?: string
-      errorMessage?: string
-      links?: Array<{ href: string; text: string }>
-    }): string {
-      const linkText =
-        resultObj.links && resultObj.links.length > 0
-          ? `\n\nLinks:\n${resultObj.links
-              .map((l) => `- ${l.text ? `${l.text}: ` : ''}${l.href}`)
-              .join('\n')}`
-          : ''
-      return (resultObj.result ?? resultObj.errorMessage ?? '') + linkText
-    }
     const searchDepth = params?.depth === 'deep' ? 'deep' : 'standard'
     const queryControls = [
       typeof params?.locale === 'string' ? params.locale : '',
@@ -311,8 +402,10 @@ Then, write up a concise report that includes key findings for the user's prompt
     const withControls = (query: string) =>
       queryControls ? `${query} ${queryControls}` : query
 
-    // Extract URL from prompt (unchanged from original)
-    const match = prompt?.match(/https?:\/\/[^\s)\]>"']+/)
+    // Extract URL from prompt, including IPv6 literals in brackets.
+    const match = prompt?.match(
+      /https?:\/\/(?:\[[^\]]+\][^\s)>"']*|[^\s)\]>"']+)/,
+    )
     const rawUrl = match?.[0].replace(/[.,;:!?]+$/, '')
     // Only use url mode when the URL is safe; otherwise fall back to query mode
     // so an internal-IP URL can't drive a web_search fetch.

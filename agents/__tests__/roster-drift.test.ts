@@ -158,7 +158,8 @@ describe('roster drift guard', () => {
 // the documented, intentional per-mode deltas coded in base2.ts. This freezes
 // those deltas so an accidental gate change (e.g. gating browser-use by mode,
 // or leaving thinker/editor in fast) is caught here rather than silently
-// drifting the fast roster away from default.
+// drifting the fast roster away from default. Execute-plan shares the default
+// roster (no extra spawnable gates); freeze that equality here too.
 describe('intentional per-mode spawnable deltas (M3.2)', () => {
   const defaultSet = new Set(
     (createBase2('default').spawnableAgents ?? []) as string[],
@@ -166,6 +167,9 @@ describe('intentional per-mode spawnable deltas (M3.2)', () => {
   const fastSet = new Set((createBase2('fast').spawnableAgents ?? []) as string[])
   const planSet = new Set(
     (createBase2('default', { planOnly: true }).spawnableAgents ?? []) as string[],
+  )
+  const executePlanSet = new Set(
+    (createBase2('default', { executePlan: true }).spawnableAgents ?? []) as string[],
   )
 
   // The ONLY agents default mode has that fast mode does not. Fast implements
@@ -188,6 +192,7 @@ describe('intentional per-mode spawnable deltas (M3.2)', () => {
     expect(defaultSet.has('browser-use')).toBe(true)
     expect(fastSet.has('browser-use')).toBe(true)
     expect(planSet.has('browser-use')).toBe(true)
+    expect(executePlanSet.has('browser-use')).toBe(true)
   })
 
   test('fast differs from default only by the documented default-only agents', () => {
@@ -204,5 +209,45 @@ describe('intentional per-mode spawnable deltas (M3.2)', () => {
     // plan never has an agent that default lacks.
     const planOnly = Array.from(planSet).filter((id) => !defaultSet.has(id))
     expect(planOnly).toEqual([])
+  })
+
+  test('execute-plan shares the default spawnable roster', () => {
+    expect(executePlanSet).toEqual(defaultSet)
+  })
+})
+
+function joinedModePrompts(
+  agent: ReturnType<typeof createBase2>,
+): string {
+  return [agent.systemPrompt, agent.instructionsPrompt, agent.stepPrompt].join(
+    '\n',
+  )
+}
+
+describe('prompt alignment with live spawnableAgents', () => {
+  test('fast prompts do not instruct thinker or editor delegation', () => {
+    const prompts = joinedModePrompts(createBase2('fast'))
+    expect(prompts).not.toContain('Thinker delegation')
+    expect(prompts).not.toContain('Spawn the thinker')
+    expect(prompts).not.toContain('Spawn the editor')
+  })
+
+  test('plan prompts omit writer and editor spawn instructions', () => {
+    const prompts = joinedModePrompts(
+      createBase2('default', { planOnly: true }),
+    )
+    expect(prompts).not.toContain('Spawn doc-writer/test-writer')
+    expect(prompts).not.toContain('Spawn the editor')
+    expect(prompts).not.toContain('# Automated Validation & Review Gate')
+    expect(prompts).not.toContain('Spawn `git-committer`')
+    expect(prompts).not.toContain('# Git Discipline')
+    expect(prompts).not.toContain('agents/guides/git-discipline.md')
+  })
+
+  test('default prompts still include thinker packet and editor spawn guidance', () => {
+    const prompts = joinedModePrompts(createBase2('default'))
+    expect(prompts).toContain('includeMessageHistory:false')
+    expect(prompts).toContain('Spawn the thinker')
+    expect(prompts).toContain('Spawn the editor')
   })
 })
