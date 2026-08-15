@@ -20,6 +20,7 @@ import { z } from 'zod/v4'
 import { getAgentTemplate } from './agent-registry'
 import {
   buildFullSpawnableAgentsSpec,
+  formatCompactAgentCatalogLine,
   getModelVisibleSpawnableAgents,
 } from './prompts'
 import { PLACEHOLDER, placeholderValues } from './types'
@@ -327,10 +328,7 @@ export async function getAgentPrompt<T extends StringField>(
             agentId: agentType,
             localAgentTemplates: agentTemplates,
           })
-          if (template?.spawnerPrompt) {
-            return `- ${agentType}: ${template.spawnerPrompt}`
-          }
-          return `- ${agentType}`
+          return formatCompactAgentCatalogLine(agentType, template)
         }),
       )
       addendum += `\n\nYou can spawn the following agents:\n\n${agentDescriptions.join('\n')}`

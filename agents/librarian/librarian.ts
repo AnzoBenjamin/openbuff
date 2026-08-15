@@ -11,7 +11,7 @@ const librarian: AgentDefinition = {
   displayName: 'Librarian',
 
   spawnerPrompt:
-    'Spawn the librarian agent to shallow-clone a GitHub repository into /tmp and answer questions about its code, structure, or documentation. The runtime deletes the owned clone after the answer by default. Set params.retainClone=true only when the caller explicitly needs to inspect returned files after completion; retained clones require caller cleanup.',
+    'Spawn the librarian agent to shallow-clone a GitHub repository into /tmp and answer questions about its code, structure, or documentation. The runtime deletes the owned clone after the answer by default. Requires params.repoUrl. Set params.retainClone=true only when the caller explicitly needs to inspect returned files after completion; retained clones require caller cleanup.',
 
   inputSchema: {
     prompt: {

@@ -3,6 +3,10 @@ import * as path from 'path'
 
 import { describe, expect, test, beforeAll } from 'bun:test'
 
+import {
+  formatCompactAgentCatalogLine,
+  getRequiredAgentParamKeys,
+} from '@codebuff/agent-runtime/templates/prompts'
 import { AGENT_PERSONAS } from '@codebuff/common/constants/agents'
 
 import baseDeep from '../base2/base-deep'
@@ -83,6 +87,16 @@ function getAllTsFiles(dir: string): string[] {
 // the prebuild uses. Populated in beforeAll because the collection is async.
 const shippedIds = new Set<string>()
 
+type ShippedCatalogDef = {
+  id: string
+  displayName: unknown
+  spawnerPrompt: unknown
+  inputSchema: unknown
+}
+
+// Default-exported shipped definitions used to freeze compact catalog visibility.
+const shippedCatalogDefs: ShippedCatalogDef[] = []
+
 // Union of every id spawnable via an orchestrator/pattern spawnable set.
 const reachableViaOrchestrator = new Set<string>()
 
@@ -93,6 +107,12 @@ beforeAll(async () => {
       const id = module.default?.id
       if (typeof id === 'string') {
         shippedIds.add(id)
+        shippedCatalogDefs.push({
+          id,
+          displayName: module.default.displayName,
+          spawnerPrompt: module.default.spawnerPrompt,
+          inputSchema: module.default.inputSchema,
+        })
       }
     } catch {
       // Match prebuild's tolerant behavior: an unrelated non-agent .ts file
@@ -150,6 +170,30 @@ describe('roster drift guard', () => {
         !NON_ORCHESTRATOR_SPAWN_EDGES.has(id) &&
         !INTENTIONALLY_NOT_SPAWNABLE.has(id),
     )
+    expect(offenders).toEqual([])
+  })
+
+  test('every shipped non-root catalog line names required spawn params', () => {
+    const offenders: Array<{ id: string; missing: string[] }> = []
+    for (const def of shippedCatalogDefs) {
+      if (ROOT_AGENT_IDS.has(def.id)) continue
+      const { id, displayName, spawnerPrompt, inputSchema } = def
+      const line = formatCompactAgentCatalogLine(id, {
+        id,
+        displayName,
+        spawnerPrompt,
+        inputSchema,
+      } as Parameters<typeof formatCompactAgentCatalogLine>[1])
+      const missing = getRequiredAgentParamKeys(
+        (inputSchema as { params?: unknown } | undefined)?.params,
+      ).filter((key) => !line.includes(key))
+      if (id === 'repair-editor' && !line.includes('handoff')) {
+        missing.push('handoff')
+      }
+      if (missing.length > 0) {
+        offenders.push({ id, missing })
+      }
+    }
     expect(offenders).toEqual([])
   })
 })

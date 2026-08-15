@@ -161,6 +161,76 @@ const spawnAgentEntryFields = {
             .string()
             .optional()
             .describe('Starting URL to navigate to (browser-use)'),
+          owned_paths: z
+            .array(z.string())
+            .optional()
+            .describe('Exact task-owned paths eligible for staging (git-committer)'),
+          branch_name: z
+            .string()
+            .optional()
+            .describe('Optional branch to create or switch to (git-committer)'),
+          branch_switch: z
+            .boolean()
+            .optional()
+            .describe('Create and switch to branch_name when true (git-committer)'),
+          allow_dirty_branch: z
+            .boolean()
+            .optional()
+            .describe(
+              'Allow branch create/switch on a dirty worktree (git-committer)',
+            ),
+          push: z
+            .boolean()
+            .optional()
+            .describe('Push the resulting feature branch when authorized (git-committer)'),
+          remote: z
+            .string()
+            .optional()
+            .describe('Remote used for fetch/push (git-committer)'),
+          snapshot_id: z
+            .string()
+            .optional()
+            .describe('Assigned gate snapshot fingerprint (reviewer specialists)'),
+          changed_files: z
+            .array(z.string())
+            .optional()
+            .describe('Changed file paths to review (security-reviewer)'),
+          snapshot_fingerprint: z
+            .string()
+            .optional()
+            .describe('Opaque snapshot token to echo (security-reviewer)'),
+          manager: z
+            .string()
+            .optional()
+            .describe('Package manager selected from repository manifests (dependency-manager)'),
+          operation: z
+            .string()
+            .optional()
+            .describe('Dependency operation: add, remove, sync, restore, or update (dependency-manager)'),
+          packages: z
+            .array(z.string())
+            .optional()
+            .describe('Exact package specifications (dependency-manager)'),
+          workspace: z
+            .string()
+            .optional()
+            .describe('Optional workspace selector (dependency-manager)'),
+          repoUrl: z
+            .string()
+            .optional()
+            .describe('GitHub repository URL to clone (librarian)'),
+          retainClone: z
+            .boolean()
+            .optional()
+            .describe('Retain the owned /tmp clone after completion (librarian)'),
+          patterns: z
+            .array(z.string())
+            .optional()
+            .describe('Optional search or path patterns'),
+          files: z
+            .array(z.string())
+            .optional()
+            .describe('Exact files in scope (reviewer specialists)'),
           prompts: z
             .array(z.string())
             .optional()
@@ -237,7 +307,7 @@ Spawn agents in parallel (up to batch max). Pass \`agents\` as a real array of o
 
 - **\`agent_type\` must be a name from the live "You can spawn the following agents" catalog** (hyphenated ids; underscores accepted). It is an agent name (e.g. basher, code-searcher, general-agent), **not a tool name** (read_files, str_replace, …). Call tools directly; do not wrap them in spawn_agents.
 - Prefer spawn_agents over single-agent tool aliases so multiple agents can run in parallel. Same nested \`prompt\` + \`params\` schema either way.
-- Include required agent params (e.g. basher \`command\`, code-searcher \`searchQueries\`). Agent-specific fields go in \`params\`, not only the prompt.
+- Include required agent params (e.g. basher \`command\`, code-searcher \`searchQueries\`, git-committer \`owned_paths\`, librarian \`repoUrl\`, dependency-manager \`manager\`+\`operation\`, security-reviewer \`changed_files\`+\`snapshot_fingerprint\`, reviewer specialists \`snapshot_id\`, repair-editor versioned \`handoff\`). Agent-specific fields go in \`params\`, not only the prompt.
 - \`background: true\` returns a jobId immediately; poll with check_background_agent.
 
 Example:
@@ -256,6 +326,11 @@ ${$getNativeToolCallExampleString({
         params: {
           searchQueries: [{ pattern: 'authenticate', flags: '-g *.ts' }],
         },
+      },
+      {
+        agent_type: 'git-committer',
+        prompt: 'Commit the task-owned changes',
+        params: { owned_paths: ['src/runtime.ts'] },
       },
     ],
   },

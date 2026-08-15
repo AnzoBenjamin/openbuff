@@ -893,7 +893,7 @@ export interface SkillParams {
  */
 export interface SpawnAgentsParams {
   agents: {
-    /** Agent to spawn */
+    /** Agent to spawn. Must be a name from the live "You can spawn the following agents" catalog (hyphenated ids; underscores accepted). */
     agent_type: string
     /** Prompt to send to the agent */
     prompt?: string
@@ -1003,6 +1003,40 @@ export interface SpawnAgentsParams {
       directories?: string[]
       /** Starting URL to navigate to (browser-use) */
       url?: string
+      /** Exact task-owned paths eligible for staging (git-committer) */
+      owned_paths?: string[]
+      /** Optional branch to create or switch to (git-committer) */
+      branch_name?: string
+      /** Create and switch to branch_name when true (git-committer) */
+      branch_switch?: boolean
+      /** Allow branch create/switch on a dirty worktree (git-committer) */
+      allow_dirty_branch?: boolean
+      /** Push the resulting feature branch when authorized (git-committer) */
+      push?: boolean
+      /** Remote used for fetch/push (git-committer) */
+      remote?: string
+      /** Assigned gate snapshot fingerprint (reviewer specialists) */
+      snapshot_id?: string
+      /** Changed file paths to review (security-reviewer) */
+      changed_files?: string[]
+      /** Opaque snapshot token to echo (security-reviewer) */
+      snapshot_fingerprint?: string
+      /** Package manager selected from repository manifests (dependency-manager) */
+      manager?: string
+      /** Dependency operation: add, remove, sync, restore, or update (dependency-manager) */
+      operation?: string
+      /** Exact package specifications (dependency-manager) */
+      packages?: string[]
+      /** Optional workspace selector (dependency-manager) */
+      workspace?: string
+      /** GitHub repository URL to clone (librarian) */
+      repoUrl?: string
+      /** Retain the owned /tmp clone after completion (librarian) */
+      retainClone?: boolean
+      /** Optional search or path patterns */
+      patterns?: string[]
+      /** Exact files in scope (reviewer specialists) */
+      files?: string[]
       /** Optional agent-specific prompts */
       prompts?: string[]
       [key: string]: any

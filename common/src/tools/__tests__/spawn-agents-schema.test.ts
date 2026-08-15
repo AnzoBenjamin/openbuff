@@ -114,6 +114,43 @@ describe('spawn_agents handoff schema', () => {
   })
 })
 
+describe('spawn_agents common params fields', () => {
+  it('accepts owned_paths, snapshot_id, changed_files+snapshot_fingerprint, manager+operation, and repoUrl', () => {
+    const result = spawnAgentsParams.inputSchema.safeParse({
+      agents: [
+        {
+          agent_type: 'git-committer',
+          params: { owned_paths: ['src/runtime.ts'] },
+        },
+        {
+          agent_type: 'accessibility-reviewer',
+          params: {
+            snapshot_id:
+              'v3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          },
+        },
+        {
+          agent_type: 'security-reviewer',
+          params: {
+            changed_files: ['src/runtime.ts'],
+            snapshot_fingerprint: 'opaque-token',
+          },
+        },
+        {
+          agent_type: 'dependency-manager',
+          params: { manager: 'bun', operation: 'add' },
+        },
+        {
+          agent_type: 'librarian',
+          params: { repoUrl: 'https://github.com/owner/repo' },
+        },
+      ],
+    })
+
+    expect(result.success).toBe(true)
+  })
+})
+
 describe('live-catalog spawn enum', () => {
   const catalogSchema = buildSpawnAgentsProviderInputSchema([
     'file-picker',
