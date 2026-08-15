@@ -211,6 +211,10 @@ export function createBase2(
       'git_status',
       'run_file_change_hooks',
       'inspect_codebase_structure',
+      'get_change_review_bundle',
+      'inspect_environment',
+      'get_affected_tests',
+      'get_build_targets',
     ],
     spawnableAgentToolMode: 'generic',
     programmaticConfig: {
