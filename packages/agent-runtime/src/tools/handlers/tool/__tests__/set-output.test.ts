@@ -57,7 +57,7 @@ describe('handleSetOutput', () => {
     ])
   })
 
-  test('accepts truncated stringified full reviewer receipt and sets output', async () => {
+  test('accepts truncated stringified full reviewer receipt and fail-closes to BLOCKING', async () => {
     const template: AgentTemplate = {
       id: 'code-reviewer',
       displayName: 'Code Reviewer',
@@ -118,7 +118,7 @@ describe('handleSetOutput', () => {
     expect(output).toEqual([{ type: 'json', value: { message: 'Output set' } }])
     expect(agentState.output).toMatchObject({
       schemaVersion: 1,
-      verdict: 'LOOKS_GOOD',
+      verdict: 'BLOCKING',
       snapshotFingerprint:
         'v3:fe7bd6bf6e902bfa33e6b76622a1d61ca548ac0716b44cb6e8620ab0aa9cdca6',
       reviewedFiles: [
@@ -127,7 +127,13 @@ describe('handleSetOutput', () => {
       ],
       findings: [],
       coverage: 'covered',
-      requirementCoverage: [],
+      requirementCoverage: [
+        {
+          requirement: 'requirementCoverage',
+          status: 'uncertain',
+          evidence: ['recovered-from-truncated-receipt'],
+        },
+      ],
     })
     expect(agentState.output?.dimensions).toEqual({
       correctness: 'recovered-from-truncated-receipt',
