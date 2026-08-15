@@ -9,7 +9,7 @@ const definition: SecretAgentDefinition = {
   publisher,
   displayName: 'Mitt the Git Committer',
   spawnerPrompt:
-    'Safely delivers task-owned changes through git: inspect repository/worktree state, stage only related paths, commit with a repository-style message, and optionally push a non-default feature branch when the user explicitly requested it.',
+    'Safely delivers task-owned changes through git: inspect repository/worktree state, stage only related paths, commit with a repository-style message, and optionally push a non-default feature branch when the user explicitly requested it. Requires params.owned_paths with the exact task-owned paths eligible for staging.',
   inputSchema: {
     prompt: {
       type: 'string',

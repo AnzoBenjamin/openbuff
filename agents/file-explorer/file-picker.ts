@@ -55,16 +55,16 @@ export const createFilePicker = (): Omit<SecretAgentDefinition, 'id'> => {
       required: ['files'],
     },
     includeMessageHistory: false,
-    toolNames: ['spawn_agents'],
+    toolNames: ['spawn_agents', 'set_output'],
     programmaticToolNames: ['read_files'],
     spawnableAgents: ['file-lister'],
 
     systemPrompt: `You are an expert at finding relevant files in a codebase. ${PLACEHOLDER.FILE_TREE_PROMPT}`,
     instructionsPrompt: `Instructions:
 Provide an extremely short report of the locations in the codebase that could be helpful. Focus on the files that are most relevant to the user prompt.
-Return structured output with a \`files\` array. Each entry must contain the exact full path relative to the project root in \`path\` and an extremely brief \`summary\` of why it is useful.
+Call set_output with a \`files\` array. Each entry must contain the exact full path relative to the project root in \`path\` and an extremely brief \`summary\` of why it is useful.
 
-Do not use any further tools or spawn any further agents.
+Do not use any other tools or spawn any further agents.
   `.trim(),
 
     handleSteps,
@@ -141,85 +141,6 @@ function extractErrorMessage(agentOutput: any): string | null {
 
 function isObject(value: any): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-/**
- * Process spawn_agents results from a file-lister agent into file paths.
- * Pure function — does not yield, so it survives .toString() serialization.
- */
-function processSpawnResults(spawnResults: any[]): {
-  paths: string[]
-  hasResults: boolean
-  errorText: string | null
-  debugMessage: string | null
-} {
-  const allPaths = new Set<string>()
-  let hasResults = false
-  let debugMessage: string | null = null
-
-  for (const result of spawnResults) {
-    const fileListText = extractAgentText(result)
-    if (fileListText) {
-      hasResults = true
-      const paths = fileListText
-        .split('\n')
-        .map(normalizeFileListerLine)
-        .filter((path): path is string => Boolean(path))
-      for (const path of paths) {
-        allPaths.add(path)
-      }
-    }
-  }
-
-  if (hasResults) {
-    return {
-      paths: Array.from(allPaths),
-      hasResults: true,
-      errorText: null,
-      debugMessage: null,
-    }
-  }
-
-  const errorText =
-    spawnResults.map(extractErrorMessage).filter(Boolean).join('; ') || null
-
-  if (spawnResults.length > 0) {
-    debugMessage = `failed to extract text from spawned results (types: ${spawnResults
-      .map((r: any) => r?.type)
-      .filter(Boolean)
-      .join(', ')})`
-  }
-
-  return { paths: [], hasResults: false, errorText, debugMessage }
-}
-
-function normalizeFileListerLine(line: string): string | null {
-  let value = line.trim()
-  if (!value) return null
-  value = value
-    .replace(/^[-*+]\s+/, '')
-    .replace(/^\d+[.)]\s+/, '')
-    .trim()
-  const quoted =
-    (/^`[^`]+`$/.test(value) || /^(['"])[\s\S]+\1$/.test(value)) &&
-    value.length >= 2
-  if (quoted) value = value.slice(1, -1).trim()
-  if (
-    !value ||
-    /^(files?|paths?|here(?:'s| are)|result|relevant)\b/i.test(value) ||
-    /^https?:\/\//i.test(value) ||
-    value.includes('\0') ||
-    (!quoted && /\s/.test(value)) ||
-    /[<>|;{}]/.test(value) ||
-    /[.!?,:]$/.test(value) ||
-    !/^(?:\.?\.?\/)?[A-Za-z0-9_@.+()\[\] -]+(?:\/[A-Za-z0-9_@.+()\[\] -]+)*$/.test(
-      value,
-    ) ||
-    !value.split('/').pop()?.includes('.')
-  ) {
-    return null
-  }
-  return value
 }
 
 const handleSteps: SecretAgentDefinition['handleSteps'] = function* ({
@@ -414,7 +335,7 @@ const handleSteps: SecretAgentDefinition['handleSteps'] = function* ({
         normalized === directory || normalized.startsWith(directory + '/'),
     )
   })
-  const droppedCount = rawPaths.length - scopedPaths.length
+  const droppedCount = rawPaths.length - paths.length
   if (droppedCount > 0) {
     logger?.debug?.(
       `file-picker: dropped ${droppedCount} path(s) outside project root or containing traversal`,

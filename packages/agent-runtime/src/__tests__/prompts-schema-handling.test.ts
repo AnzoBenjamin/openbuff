@@ -597,6 +597,34 @@ describe('Schema handling error recovery', () => {
       expect(description).not.toContain('Params: None')
     })
 
+    test('getToolSet binds spawn_agents provider schema to the live catalog', async () => {
+      const toolSet = await getToolSet({
+        toolNames: ['spawn_agents'],
+        additionalToolDefinitions: async () => ({}),
+        agentTools: {},
+        skills: {},
+        spawnableAgentTypes: ['file-picker', 'code-searcher'],
+      })
+
+      const jsonSchema = (
+        toolSet.spawn_agents.inputSchema as unknown as {
+          jsonSchema: Record<string, unknown>
+        }
+      ).jsonSchema
+      const schema = convertJsonSchemaToZod(jsonSchema)
+
+      const parseAgentType = (agentType: string) =>
+        schema.safeParse({
+          agents: [{ agent_type: agentType, prompt: 'Find relevant files' }],
+        })
+
+      expect(parseAgentType('file-picker').success).toBe(true)
+      expect(parseAgentType('file_picker').success).toBe(true)
+      expect(parseAgentType('code-searcher').success).toBe(true)
+      expect(parseAgentType('file-explorer').success).toBe(false)
+      expect(parseAgentType('read_files').success).toBe(false)
+    })
+
     test('getToolSet handles custom tools with problematic schemas', async () => {
       // Create a custom tool definition with a schema that can't be converted
       const customToolDefs = {

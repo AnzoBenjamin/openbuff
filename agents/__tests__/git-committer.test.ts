@@ -137,6 +137,10 @@ describe('git-committer (M5.2 resurrected)', () => {
     expect(gitCommitter.spawnerPrompt).toMatch(/branch/i)
   })
 
+  test('spawnerPrompt names required params.owned_paths', () => {
+    expect(gitCommitter.spawnerPrompt).toMatch(/params\.owned_paths/)
+  })
+
   test('handleSteps checks status before git_branch when branch_name is provided', () => {
     if (!gitCommitter.handleSteps) return
     const gen = gitCommitter.handleSteps({

@@ -17,7 +17,7 @@ const definition: AgentDefinition = {
     'edit_transaction',
   ],
   spawnerPrompt:
-    'Repairs exact validation diagnostics or stable reviewer finding IDs. May only make finding-scoped edits and must not perform unrelated cleanup.',
+    'Repairs exact validation diagnostics or stable reviewer finding IDs. May only make finding-scoped edits and must not perform unrelated cleanup. Requires a versioned `handoff` with schemaVersion 1, taskId, objective, at least one finding, and explicit permissions.',
   instructionsPrompt: `${base.instructionsPrompt}
 
 Repair specialization:

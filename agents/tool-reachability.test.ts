@@ -75,7 +75,11 @@ const HARNESS_STATE_TOOLS = ['git_status'] as const
 describe('agent tool reachability', () => {
   for (const mode of ['default', 'fast'] as const) {
     test(`base2 (${mode}) exposes its intended read/mutation surface`, () => {
-      const definition = createBase2(mode)
+      // Progressive disclosure is ON by default (CORE-only static list).
+      // Reachability asserts the intended full mutation surface.
+      const definition = createBase2(mode, {
+        progressiveToolDisclosure: false,
+      })
       const tools = definition.toolNames ?? []
       const programmaticTools = definition.programmaticToolNames ?? []
       for (const tool of STRUCTURAL_READ_TOOLS) {
@@ -95,7 +99,11 @@ describe('agent tool reachability', () => {
   }
 
   test('execute-plan exposes direct execution without proposal indirection', () => {
-    const tools = createBase2('default', { executePlan: true }).toolNames ?? []
+    const tools =
+      createBase2('default', {
+        executePlan: true,
+        progressiveToolDisclosure: false,
+      }).toolNames ?? []
     expect(tools).toContain('edit_transaction')
     for (const tool of LEGACY_DIRECT_EDIT_TOOLS)
       expect(tools).not.toContain(tool)
@@ -224,14 +232,27 @@ describe('agent prompt/tool availability alignment', () => {
         .filter(Boolean)
         .join('\n')
 
-      const hasSetOutput =
-        tools.includes('set_output') ||
-        def.outputMode === 'structured_output'
-      if (!hasSetOutput) {
+      const hasSetOutput = tools.includes('set_output')
+      const programmaticOnlySetOutput =
+        (def.programmaticToolNames ?? []).includes('set_output') &&
+        !hasSetOutput
+      const agentLabel =
+        ('id' in def ? def.id : undefined) ??
+        def.displayName ??
+        'unknown agent'
+      if (!hasSetOutput && !programmaticOnlySetOutput) {
         expect(
           modelVisiblePrompt,
-          `${('id' in def ? def.id : undefined) ?? def.displayName ?? 'unknown agent'} must not mention set_output unless it exposes the tool`,
+          `${agentLabel} must not mention set_output unless it exposes the tool`,
         ).not.toContain('set_output')
+      }
+      if (programmaticOnlySetOutput) {
+        expect(
+          modelVisiblePrompt,
+          `${agentLabel} must not require a model set_output call when the tool is programmatic-only`,
+        ).not.toMatch(
+          /You must call[`\s]*set_output|Finish with set_output|call set_output/i,
+        )
       }
     }
   })

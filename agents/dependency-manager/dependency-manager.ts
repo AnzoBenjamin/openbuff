@@ -8,7 +8,7 @@ const definition: SecretAgentDefinition = {
   publisher,
   displayName: 'Dependency Manager',
   spawnerPrompt:
-    'Performs a structured dependency add, remove, sync, restore, or update when the user explicitly requested dependency mutation. Select the manager from repository manifests; never pass arbitrary shell.',
+    'Performs a structured dependency add, remove, sync, restore, or update when the user explicitly requested dependency mutation. Select the manager from repository manifests; never pass arbitrary shell. Requires params.manager and params.operation.',
   inputSchema: {
     params: {
       type: 'object',

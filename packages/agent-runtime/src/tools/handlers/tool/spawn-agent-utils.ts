@@ -158,7 +158,9 @@ const SPAWN_AGENT_TYPE_ALIASES: Readonly<Record<string, string>> = {
  * lookup. Keep this list narrow so legitimate custom agent IDs are unaffected.
  */
 export function normalizeSpawnAgentType(agentTypeStr: string): string {
-  return SPAWN_AGENT_TYPE_ALIASES[agentTypeStr] ?? agentTypeStr
+  const typoCorrected =
+    SPAWN_AGENT_TYPE_ALIASES[agentTypeStr] ?? agentTypeStr
+  return normalizeAgentIdForLookup(typoCorrected)
 }
 
 /**

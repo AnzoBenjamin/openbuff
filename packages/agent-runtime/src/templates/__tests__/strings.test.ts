@@ -1,9 +1,24 @@
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
 import { frontendSection } from '@codebuff/common/constants/prompt-sections'
 import { describe, test, expect, mock } from 'bun:test'
+import { z } from 'zod/v4'
 
 import { PLACEHOLDER } from '../types'
 import { formatCurrentDate, getAgentPrompt } from '../strings'
+import {
+  formatCompactAgentCatalogLine,
+  getRequiredAgentParamKeys,
+} from '../prompts'
+import gitCommitter from '../../../../../agents/git-committer/git-committer'
+import librarian from '../../../../../agents/librarian/librarian'
+import dependencyManager from '../../../../../agents/dependency-manager/dependency-manager'
+import securityReviewer from '../../../../../agents/security-reviewer/security-reviewer'
+import codeSearcher from '../../../../../agents/file-explorer/code-searcher'
+import globMatcher from '../../../../../agents/file-explorer/glob-matcher'
+import directoryLister from '../../../../../agents/file-explorer/directory-lister'
+import basher from '../../../../../agents/basher'
+import repairEditor from '../../../../../agents/editor/repair-editor'
+import compatibilityReviewer from '../../../../../agents/specialists/compatibility-reviewer'
 
 import type { AgentTemplate } from '../types'
 import type { AgentState } from '@codebuff/common/types/session-state'
@@ -615,5 +630,281 @@ describe('getAgentPrompt', () => {
       expect(stepResult).toBeDefined()
       expect(stepResult).not.toContain('You can spawn the following agents:')
     })
+
+    test('appends required params from Zod inputSchema.params when spawnerPrompt omits them', async () => {
+      const gitCommitterTemplate = createMockAgentTemplate({
+        id: 'git-committer',
+        displayName: 'Git Committer',
+        spawnerPrompt: 'Safely delivers task-owned changes through git',
+        inputSchema: {
+          params: z.object({
+            owned_paths: z.array(z.string()),
+          }),
+        },
+      })
+
+      const mainAgentTemplate = createMockAgentTemplate({
+        id: 'main-agent',
+        displayName: 'Main Agent',
+        spawnableAgents: ['git-committer'],
+        instructionsPrompt: 'Main agent instructions.',
+      })
+
+      const agentTemplates: Record<string, AgentTemplate> = {
+        'main-agent': mainAgentTemplate,
+        'git-committer': gitCommitterTemplate,
+      }
+
+      const result = await getAgentPrompt({
+        agentTemplate: mainAgentTemplate,
+        promptType: { type: 'instructionsPrompt' },
+        fileContext: createMockFileContext(),
+        agentState: createMockAgentState('main-agent'),
+        agentTemplates,
+        additionalToolDefinitions: async () => ({}),
+        logger: createMockLogger(),
+        apiKey: TEST_AGENT_RUNTIME_IMPL.apiKey,
+        databaseAgentCache: TEST_AGENT_RUNTIME_IMPL.databaseAgentCache,
+        fetchAgentFromDatabase: TEST_AGENT_RUNTIME_IMPL.fetchAgentFromDatabase,
+      })
+
+      expect(result).toContain(
+        '- git-committer: Safely delivers task-owned changes through git Required params: `owned_paths`.',
+      )
+    })
+
+    test('does not duplicate a required key already named in spawnerPrompt', async () => {
+      const securityReviewerTemplate = createMockAgentTemplate({
+        id: 'security-reviewer',
+        displayName: 'Security Reviewer',
+        spawnerPrompt:
+          'Required params keys are exactly `changed_files` and `snapshot_fingerprint`; `snapshot_id` is not accepted.',
+        inputSchema: {
+          params: z.object({
+            changed_files: z.array(z.string()),
+            snapshot_fingerprint: z.string(),
+          }),
+        },
+      })
+
+      const mainAgentTemplate = createMockAgentTemplate({
+        id: 'main-agent',
+        displayName: 'Main Agent',
+        spawnableAgents: ['security-reviewer'],
+        instructionsPrompt: 'Main agent instructions.',
+      })
+
+      const agentTemplates: Record<string, AgentTemplate> = {
+        'main-agent': mainAgentTemplate,
+        'security-reviewer': securityReviewerTemplate,
+      }
+
+      const result = await getAgentPrompt({
+        agentTemplate: mainAgentTemplate,
+        promptType: { type: 'instructionsPrompt' },
+        fileContext: createMockFileContext(),
+        agentState: createMockAgentState('main-agent'),
+        agentTemplates,
+        additionalToolDefinitions: async () => ({}),
+        logger: createMockLogger(),
+        apiKey: TEST_AGENT_RUNTIME_IMPL.apiKey,
+        databaseAgentCache: TEST_AGENT_RUNTIME_IMPL.databaseAgentCache,
+        fetchAgentFromDatabase: TEST_AGENT_RUNTIME_IMPL.fetchAgentFromDatabase,
+      })
+
+      expect(result).toContain(
+        '- security-reviewer: Required params keys are exactly `changed_files` and `snapshot_fingerprint`; `snapshot_id` is not accepted.',
+      )
+      expect(result).not.toContain('Required params: `changed_files`')
+    })
+
+    test('repair-editor catalog mentions versioned handoff and findings', async () => {
+      const repairEditorTemplate = createMockAgentTemplate({
+        id: 'repair-editor',
+        displayName: 'Repair Editor',
+        spawnerPrompt:
+          'Repairs exact validation diagnostics or stable reviewer finding IDs.',
+      })
+
+      const mainAgentTemplate = createMockAgentTemplate({
+        id: 'main-agent',
+        displayName: 'Main Agent',
+        spawnableAgents: ['repair-editor'],
+        instructionsPrompt: 'Main agent instructions.',
+      })
+
+      const agentTemplates: Record<string, AgentTemplate> = {
+        'main-agent': mainAgentTemplate,
+        'repair-editor': repairEditorTemplate,
+      }
+
+      const result = await getAgentPrompt({
+        agentTemplate: mainAgentTemplate,
+        promptType: { type: 'instructionsPrompt' },
+        fileContext: createMockFileContext(),
+        agentState: createMockAgentState('main-agent'),
+        agentTemplates,
+        additionalToolDefinitions: async () => ({}),
+        logger: createMockLogger(),
+        apiKey: TEST_AGENT_RUNTIME_IMPL.apiKey,
+        databaseAgentCache: TEST_AGENT_RUNTIME_IMPL.databaseAgentCache,
+        fetchAgentFromDatabase: TEST_AGENT_RUNTIME_IMPL.fetchAgentFromDatabase,
+      })
+
+      expect(result).toContain('handoff')
+      expect(result).toContain('finding')
+      expect(result).toContain('schemaVersion 1')
+    })
+
+    test('appends required keys when the prompt only uses them as loose English', async () => {
+      const dependencyManagerTemplate = createMockAgentTemplate({
+        id: 'dependency-manager',
+        displayName: 'Dependency Manager',
+        spawnerPrompt: 'Select the manager from repository manifests',
+        inputSchema: {
+          params: z.object({
+            manager: z.string(),
+            operation: z.string(),
+          }),
+        },
+      })
+
+      const mainAgentTemplate = createMockAgentTemplate({
+        id: 'main-agent',
+        displayName: 'Main Agent',
+        spawnableAgents: ['dependency-manager'],
+        instructionsPrompt: 'Main agent instructions.',
+      })
+
+      const agentTemplates: Record<string, AgentTemplate> = {
+        'main-agent': mainAgentTemplate,
+        'dependency-manager': dependencyManagerTemplate,
+      }
+
+      const result = await getAgentPrompt({
+        agentTemplate: mainAgentTemplate,
+        promptType: { type: 'instructionsPrompt' },
+        fileContext: createMockFileContext(),
+        agentState: createMockAgentState('main-agent'),
+        agentTemplates,
+        additionalToolDefinitions: async () => ({}),
+        logger: createMockLogger(),
+        apiKey: TEST_AGENT_RUNTIME_IMPL.apiKey,
+        databaseAgentCache: TEST_AGENT_RUNTIME_IMPL.databaseAgentCache,
+        fetchAgentFromDatabase: TEST_AGENT_RUNTIME_IMPL.fetchAgentFromDatabase,
+      })
+
+      expect(result).toContain(
+        '- dependency-manager: Select the manager from repository manifests Required params: `manager`, `operation`.',
+      )
+    })
+
+    test('does not duplicate a required key already named as an object key', async () => {
+      const basherTemplate = createMockAgentTemplate({
+        id: 'basher',
+        displayName: 'Basher',
+        spawnerPrompt: 'params: { command: "<shell>" }',
+        inputSchema: {
+          params: z.object({
+            command: z.string(),
+          }),
+        },
+      })
+
+      const mainAgentTemplate = createMockAgentTemplate({
+        id: 'main-agent',
+        displayName: 'Main Agent',
+        spawnableAgents: ['basher'],
+        instructionsPrompt: 'Main agent instructions.',
+      })
+
+      const agentTemplates: Record<string, AgentTemplate> = {
+        'main-agent': mainAgentTemplate,
+        basher: basherTemplate,
+      }
+
+      const result = await getAgentPrompt({
+        agentTemplate: mainAgentTemplate,
+        promptType: { type: 'instructionsPrompt' },
+        fileContext: createMockFileContext(),
+        agentState: createMockAgentState('main-agent'),
+        agentTemplates,
+        additionalToolDefinitions: async () => ({}),
+        logger: createMockLogger(),
+        apiKey: TEST_AGENT_RUNTIME_IMPL.apiKey,
+        databaseAgentCache: TEST_AGENT_RUNTIME_IMPL.databaseAgentCache,
+        fetchAgentFromDatabase: TEST_AGENT_RUNTIME_IMPL.fetchAgentFromDatabase,
+      })
+
+      expect(result).toContain('- basher: params: { command: "<shell>" }')
+      expect(result).not.toContain('Required params: `command`')
+    })
+
+    test('compact catalog names required params for live roster agents', () => {
+      const roster = [
+        gitCommitter,
+        librarian,
+        dependencyManager,
+        securityReviewer,
+        codeSearcher,
+        globMatcher,
+        directoryLister,
+        basher,
+        repairEditor,
+        compatibilityReviewer,
+      ] as const
+
+      for (const definition of roster) {
+        const line = formatCompactAgentCatalogLine(
+          definition.id,
+          createMockAgentTemplate({
+            id: definition.id,
+            displayName: definition.displayName,
+            spawnerPrompt: definition.spawnerPrompt,
+            inputSchema: definition.inputSchema as AgentTemplate['inputSchema'],
+          }),
+        )
+        const required = getRequiredAgentParamKeys(definition.inputSchema?.params)
+        for (const key of required) {
+          expect(line).toContain(key)
+        }
+        if (definition.id === 'repair-editor') {
+          expect(line).toContain('handoff')
+        }
+      }
+    })
+  })
+
+  test('uses harvested-text addendum when set_output is programmatic-only', async () => {
+    const agentTemplate = createMockAgentTemplate({
+      id: 'structured-programmatic-output',
+      outputMode: 'structured_output',
+      outputSchema: z.object({
+        message: z.string(),
+      }),
+      programmaticToolNames: ['set_output'],
+      toolNames: ['read_files'],
+      instructionsPrompt: 'Structured output instructions.',
+    })
+    const agentTemplates: Record<string, AgentTemplate> = {
+      'structured-programmatic-output': agentTemplate,
+    }
+
+    const result = await getAgentPrompt({
+      agentTemplate,
+      promptType: { type: 'instructionsPrompt' },
+      fileContext: createMockFileContext(),
+      agentState: createMockAgentState('structured-programmatic-output'),
+      agentTemplates,
+      additionalToolDefinitions: async () => ({}),
+      logger: createMockLogger(),
+      apiKey: TEST_AGENT_RUNTIME_IMPL.apiKey,
+      databaseAgentCache: TEST_AGENT_RUNTIME_IMPL.databaseAgentCache,
+      fetchAgentFromDatabase: TEST_AGENT_RUNTIME_IMPL.fetchAgentFromDatabase,
+    })
+
+    expect(result).toBeDefined()
+    expect(result).toContain('Do not call set_output just to publish')
+    expect(result).not.toContain('When using the set_output tool')
   })
 })

@@ -139,6 +139,8 @@ describe('researcher-web agent', () => {
 
     test('has toolNames containing web_search', () => {
       expect(researcherWeb.toolNames).toContain('web_search')
+      expect(researcherWeb.toolNames).not.toContain('set_output')
+      expect(researcherWeb.programmaticToolNames).toEqual(['set_output'])
     })
 
     test('has structured research output', () => {
@@ -170,6 +172,7 @@ describe('researcher-web agent', () => {
       expect(serialized).toContain('decomposePrompt')
       expect(serialized).toContain('stripMetaInstructions')
       expect(serialized).toContain('trimQuery')
+      expect(serialized).not.toContain('formatSingleResult')
     })
   })
 
@@ -222,9 +225,9 @@ describe('researcher-web agent', () => {
         "2. What is Godot's scene tree optimization approach?\n" +
         "3. Compare Unreal's Blueprint vs C++ performance tradeoffs"
       const calls = collectToolCalls(broadPrompt)
-      // Should yield at least 2 (one per numbered item), bounded by MAX_TOTAL_CALLS=3
+      // Standard depth allows one call per subquery, up to MAX_SUBQUERIES=5.
       expect(calls.length).toBeGreaterThanOrEqual(2)
-      expect(calls.length).toBeLessThanOrEqual(3)
+      expect(calls.length).toBeLessThanOrEqual(5)
     })
 
     test('detects multi-question prompt with multiple question marks', () => {
@@ -298,12 +301,14 @@ describe('researcher-web agent', () => {
         '2. Scene system design differences\n' +
         '3. Which is better for 2D game development?'
       const calls = collectToolCalls(broadPrompt)
-      // The whole prompt should NOT appear as a single query
+      // The whole pasted prompt should NOT appear as a single query.
       const queriesHaveFullPrompt = calls.some(
         (c) =>
-          c.input.query &&
-          c.input.query.includes('Unity vs Godot architecture comparison'),
+          typeof c.input.query === 'string' &&
+          (c.input.query === broadPrompt ||
+            c.input.query.includes(broadPrompt.replace(/\n/g, ' '))),
       )
+      expect(queriesHaveFullPrompt).toBe(false)
       // At least one subquery should be shorter than the full prompt
       const shorterQueries = calls.filter(
         (c) => c.input.query && c.input.query.length < broadPrompt.length / 2,
@@ -328,7 +333,15 @@ describe('researcher-web agent', () => {
       const broadPrompt =
         '1. Unity DOTS overview\n' + '2. Unity ECS performance'
       const stepText = getStepText(broadPrompt)
-      expect(stepText).toContain('"sources"')
+      const sources = (JSON.parse(stepText).sources ?? []) as Array<{
+        url?: string
+      }>
+      const hrefs = sources
+        .map((source) => source.url)
+        .filter((href): href is string => typeof href === 'string')
+      expect(hrefs.length).toBeGreaterThan(0)
+      expect(new Set(hrefs).size).toBe(hrefs.length)
+      expect(hrefs).toEqual(['https://example.com/1', 'https://example.com/2'])
     })
   })
 
@@ -342,8 +355,10 @@ describe('researcher-web agent', () => {
         agentState: createMockAgentState(),
         logger: mockLogger as any,
         prompt:
-          '1. Unity DOTS architecture\n2. Godot rendering pipeline\n3. Bevy ECS scheduling',
-        params: {},
+          '1. How to use Unity DOTS architecture for large open world games\n' +
+          '2. Godot rendering pipeline\n' +
+          '3. Bevy ECS scheduling',
+        params: { depth: 'deep' },
       })
 
       // First call — URL extraction check + broad-prompt check
@@ -372,21 +387,32 @@ describe('researcher-web agent', () => {
             stepsComplete: false,
             agentState: createMockAgentState(),
           })
-          // The next yield should either be another web_search (retry) or a STEP_TEXT
+          // Deep mode retries with a shortened keyword query.
           const nextVal = next.value
-          if (
+          expect(nextVal).toBeDefined()
+          expect(
+            nextVal &&
+              typeof nextVal === 'object' &&
+              'toolName' in nextVal &&
+              nextVal.toolName,
+          ).toBe('web_search')
+          const queryInput =
             nextVal &&
             typeof nextVal === 'object' &&
-            'toolName' in nextVal &&
-            nextVal.toolName === 'web_search'
-          ) {
-            // Retry query should be shorter (core keywords only)
-            const queryInput = (nextVal as any).input?.query
-            expect(queryInput).toBeDefined()
-            // Retry query is keyword-based, likely shorter
-            const retryWords = queryInput.split(' ')
-            expect(retryWords.length).toBeLessThanOrEqual(6)
+            'input' in nextVal &&
+            nextVal.input &&
+            typeof nextVal.input === 'object' &&
+            'query' in nextVal.input
+              ? String(nextVal.input.query)
+              : undefined
+          expect(queryInput).toBeDefined()
+          if (queryInput === undefined) {
+            throw new Error('expected a retry query after empty deep-mode results')
           }
+          expect(queryInput.split(' ').length).toBeLessThanOrEqual(5)
+          expect(queryInput.length).toBeLessThan(
+            ((val as any).input.query as string).length,
+          )
           break
         }
         next = generator.next({
@@ -437,6 +463,39 @@ describe('researcher-web agent', () => {
       const calls = collectToolCalls(ssrfPrompt)
       const urlCalls = calls.filter((c) => c.input.url)
       expect(urlCalls).toHaveLength(0)
+    })
+
+    test('SSRF guard rejects IPv6-mapped loopback and metadata URLs', () => {
+      for (const ssrfPrompt of [
+        'https://[::ffff:127.0.0.1]/secret',
+        'https://[::ffff:169.254.169.254]/latest/meta-data',
+      ]) {
+        const calls = collectToolCalls(ssrfPrompt)
+        expect(calls.filter((c) => c.input.url)).toHaveLength(0)
+        expect(calls.filter((c) => c.input.query).length).toBeGreaterThanOrEqual(
+          1,
+        )
+      }
+    })
+
+    test('SSRF guard rejects short IPv4 loopback 127.1 before url-mode search', () => {
+      const calls = collectToolCalls('https://127.1/admin')
+      expect(calls.filter((c) => c.input.url)).toHaveLength(0)
+      expect(calls.filter((c) => c.input.query).length).toBeGreaterThanOrEqual(1)
+    })
+
+    test('SSRF guard rejects expanded IPv6 loopback and hex-mapped IPv4', () => {
+      for (const ssrfPrompt of [
+        'https://[0:0:0:0:0:0:0:1]/secret',
+        'https://[::ffff:7f00:1]/secret',
+        'https://[::127.0.0.1]/secret',
+      ]) {
+        const calls = collectToolCalls(ssrfPrompt)
+        expect(calls.filter((c) => c.input.url)).toHaveLength(0)
+        expect(calls.filter((c) => c.input.query).length).toBeGreaterThanOrEqual(
+          1,
+        )
+      }
     })
   })
 

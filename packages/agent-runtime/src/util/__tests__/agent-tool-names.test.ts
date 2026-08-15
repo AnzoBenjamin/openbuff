@@ -45,4 +45,16 @@ describe('getEffectiveAgentToolNames', () => {
       ),
     ).toEqual(['read_files'])
   })
+
+  it('does not inject programmatic-only set_output into the model-visible list', () => {
+    expect(
+      getEffectiveAgentToolNames(
+        template({
+          outputMode: 'structured_output',
+          toolNames: ['read_files'],
+          programmaticToolNames: ['set_output'],
+        }),
+      ),
+    ).toEqual(['read_files'])
+  })
 })

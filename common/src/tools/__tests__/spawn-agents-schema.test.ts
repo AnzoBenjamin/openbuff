@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'bun:test'
 
-import { spawnAgentsParams } from '../params/tool/spawn-agents'
+import {
+  buildSpawnAgentsProviderInputSchema,
+  spawnAgentsParams,
+} from '../params/tool/spawn-agents'
 
 describe('spawn_agents handoff schema', () => {
   it('accepts string context for model-generated handoffs', () => {
@@ -108,5 +111,74 @@ describe('spawn_agents handoff schema', () => {
     if (result.success) {
       expect(result.data.agents[0]?.params).toEqual({ command })
     }
+  })
+})
+
+describe('spawn_agents common params fields', () => {
+  it('accepts owned_paths, snapshot_id, changed_files+snapshot_fingerprint, manager+operation, and repoUrl', () => {
+    const result = spawnAgentsParams.inputSchema.safeParse({
+      agents: [
+        {
+          agent_type: 'git-committer',
+          params: { owned_paths: ['src/runtime.ts'] },
+        },
+        {
+          agent_type: 'accessibility-reviewer',
+          params: {
+            snapshot_id:
+              'v3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          },
+        },
+        {
+          agent_type: 'security-reviewer',
+          params: {
+            changed_files: ['src/runtime.ts'],
+            snapshot_fingerprint: 'opaque-token',
+          },
+        },
+        {
+          agent_type: 'dependency-manager',
+          params: { manager: 'bun', operation: 'add' },
+        },
+        {
+          agent_type: 'librarian',
+          params: { repoUrl: 'https://github.com/owner/repo' },
+        },
+      ],
+    })
+
+    expect(result.success).toBe(true)
+  })
+})
+
+describe('live-catalog spawn enum', () => {
+  const catalogSchema = buildSpawnAgentsProviderInputSchema([
+    'file-picker',
+    'code-searcher',
+  ])
+
+  it('accepts visible hyphenated types and the underscore alias', () => {
+    for (const agent_type of ['file-picker', 'code-searcher', 'file_picker']) {
+      expect(
+        catalogSchema.safeParse({ agents: [{ agent_type }] }).success,
+      ).toBe(true)
+    }
+  })
+
+  it('rejects a hallucinated agent that is not in the live catalog', () => {
+    for (const agent_type of ['researcher', 'file-explorer']) {
+      expect(
+        catalogSchema.safeParse({ agents: [{ agent_type }] }).success,
+      ).toBe(false)
+    }
+  })
+
+  it('falls back to a free-form agent_type string when the visible list is empty', () => {
+    const openSchema = buildSpawnAgentsProviderInputSchema([])
+    expect(
+      openSchema.safeParse({
+        agents: [{ agent_type: 'researcher' }],
+      }).success,
+    ).toBe(true)
   })
 })

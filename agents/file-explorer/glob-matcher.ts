@@ -31,11 +31,12 @@ const globMatcher: SecretAgentDefinition = {
   id: 'glob-matcher',
   displayName: 'Glob Matcher',
   spawnerPrompt:
-    'Mechanically runs multiple glob pattern matches and returns all matching files',
+    'Mechanically runs multiple glob pattern matches and returns all matching files. Requires params.patterns.',
   publisher,
   outputMode: 'structured_output',
   includeMessageHistory: false,
-  toolNames: ['glob', 'set_output'],
+  toolNames: ['glob'],
+  programmaticToolNames: ['set_output'],
   spawnableAgents: [],
   inputSchema: {
     params: paramsSchema,

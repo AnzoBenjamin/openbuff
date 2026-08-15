@@ -108,6 +108,11 @@ describe('code-searcher agent', () => {
     expect(codeSearcher.model).toBeUndefined()
   })
 
+  test('publishes set_output programmatically, not as a model-visible tool', () => {
+    expect(codeSearcher.toolNames).toEqual(['code_search'])
+    expect(codeSearcher.programmaticToolNames).toEqual(['set_output'])
+  })
+
   test('handleSteps can be serialized for sandbox execution', () => {
     const isolatedHandleSteps = new Function(
       `return (${codeSearcher.handleSteps!.toString()})`,

@@ -1511,6 +1511,9 @@ export async function loopAgentSteps(
               }),
             agentTools,
             skills: fileContext.skills ?? {},
+            spawnableAgentTypes: getModelVisibleSpawnableAgents(
+              agentTemplate.spawnableAgents,
+            ),
           })
 
     let tools: ToolSet = await buildTools(initialAgentState)

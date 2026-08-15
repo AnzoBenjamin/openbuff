@@ -3,6 +3,10 @@ import * as path from 'path'
 
 import { describe, expect, test, beforeAll } from 'bun:test'
 
+import {
+  formatCompactAgentCatalogLine,
+  getRequiredAgentParamKeys,
+} from '@codebuff/agent-runtime/templates/prompts'
 import { AGENT_PERSONAS } from '@codebuff/common/constants/agents'
 
 import baseDeep from '../base2/base-deep'
@@ -83,6 +87,16 @@ function getAllTsFiles(dir: string): string[] {
 // the prebuild uses. Populated in beforeAll because the collection is async.
 const shippedIds = new Set<string>()
 
+type ShippedCatalogDef = {
+  id: string
+  displayName: unknown
+  spawnerPrompt: unknown
+  inputSchema: unknown
+}
+
+// Default-exported shipped definitions used to freeze compact catalog visibility.
+const shippedCatalogDefs: ShippedCatalogDef[] = []
+
 // Union of every id spawnable via an orchestrator/pattern spawnable set.
 const reachableViaOrchestrator = new Set<string>()
 
@@ -93,6 +107,12 @@ beforeAll(async () => {
       const id = module.default?.id
       if (typeof id === 'string') {
         shippedIds.add(id)
+        shippedCatalogDefs.push({
+          id,
+          displayName: module.default.displayName,
+          spawnerPrompt: module.default.spawnerPrompt,
+          inputSchema: module.default.inputSchema,
+        })
       }
     } catch {
       // Match prebuild's tolerant behavior: an unrelated non-agent .ts file
@@ -152,13 +172,38 @@ describe('roster drift guard', () => {
     )
     expect(offenders).toEqual([])
   })
+
+  test('every shipped non-root catalog line names required spawn params', () => {
+    const offenders: Array<{ id: string; missing: string[] }> = []
+    for (const def of shippedCatalogDefs) {
+      if (ROOT_AGENT_IDS.has(def.id)) continue
+      const { id, displayName, spawnerPrompt, inputSchema } = def
+      const line = formatCompactAgentCatalogLine(id, {
+        id,
+        displayName,
+        spawnerPrompt,
+        inputSchema,
+      } as Parameters<typeof formatCompactAgentCatalogLine>[1])
+      const missing = getRequiredAgentParamKeys(
+        (inputSchema as { params?: unknown } | undefined)?.params,
+      ).filter((key) => !line.includes(key))
+      if (id === 'repair-editor' && !line.includes('handoff')) {
+        missing.push('handoff')
+      }
+      if (missing.length > 0) {
+        offenders.push({ id, missing })
+      }
+    }
+    expect(offenders).toEqual([])
+  })
 })
 
 // M3.2 — the base2-fast spawnable set must match the other modes except for
 // the documented, intentional per-mode deltas coded in base2.ts. This freezes
 // those deltas so an accidental gate change (e.g. gating browser-use by mode,
 // or leaving thinker/editor in fast) is caught here rather than silently
-// drifting the fast roster away from default.
+// drifting the fast roster away from default. Execute-plan shares the default
+// roster (no extra spawnable gates); freeze that equality here too.
 describe('intentional per-mode spawnable deltas (M3.2)', () => {
   const defaultSet = new Set(
     (createBase2('default').spawnableAgents ?? []) as string[],
@@ -166,6 +211,9 @@ describe('intentional per-mode spawnable deltas (M3.2)', () => {
   const fastSet = new Set((createBase2('fast').spawnableAgents ?? []) as string[])
   const planSet = new Set(
     (createBase2('default', { planOnly: true }).spawnableAgents ?? []) as string[],
+  )
+  const executePlanSet = new Set(
+    (createBase2('default', { executePlan: true }).spawnableAgents ?? []) as string[],
   )
 
   // The ONLY agents default mode has that fast mode does not. Fast implements
@@ -188,6 +236,7 @@ describe('intentional per-mode spawnable deltas (M3.2)', () => {
     expect(defaultSet.has('browser-use')).toBe(true)
     expect(fastSet.has('browser-use')).toBe(true)
     expect(planSet.has('browser-use')).toBe(true)
+    expect(executePlanSet.has('browser-use')).toBe(true)
   })
 
   test('fast differs from default only by the documented default-only agents', () => {
@@ -204,5 +253,45 @@ describe('intentional per-mode spawnable deltas (M3.2)', () => {
     // plan never has an agent that default lacks.
     const planOnly = Array.from(planSet).filter((id) => !defaultSet.has(id))
     expect(planOnly).toEqual([])
+  })
+
+  test('execute-plan shares the default spawnable roster', () => {
+    expect(executePlanSet).toEqual(defaultSet)
+  })
+})
+
+function joinedModePrompts(
+  agent: ReturnType<typeof createBase2>,
+): string {
+  return [agent.systemPrompt, agent.instructionsPrompt, agent.stepPrompt].join(
+    '\n',
+  )
+}
+
+describe('prompt alignment with live spawnableAgents', () => {
+  test('fast prompts do not instruct thinker or editor delegation', () => {
+    const prompts = joinedModePrompts(createBase2('fast'))
+    expect(prompts).not.toContain('Thinker delegation')
+    expect(prompts).not.toContain('Spawn the thinker')
+    expect(prompts).not.toContain('Spawn the editor')
+  })
+
+  test('plan prompts omit writer and editor spawn instructions', () => {
+    const prompts = joinedModePrompts(
+      createBase2('default', { planOnly: true }),
+    )
+    expect(prompts).not.toContain('Spawn doc-writer/test-writer')
+    expect(prompts).not.toContain('Spawn the editor')
+    expect(prompts).not.toContain('# Automated Validation & Review Gate')
+    expect(prompts).not.toContain('Spawn `git-committer`')
+    expect(prompts).not.toContain('# Git Discipline')
+    expect(prompts).not.toContain('agents/guides/git-discipline.md')
+  })
+
+  test('default prompts still include thinker packet and editor spawn guidance', () => {
+    const prompts = joinedModePrompts(createBase2('default'))
+    expect(prompts).toContain('includeMessageHistory:false')
+    expect(prompts).toContain('Spawn the thinker')
+    expect(prompts).toContain('Spawn the editor')
   })
 })

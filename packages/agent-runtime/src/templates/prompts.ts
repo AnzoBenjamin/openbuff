@@ -32,6 +32,90 @@ export function getAgentShortName(agentType: AgentTemplateType): string {
   return parts[parts.length - 1]
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function promptNamesParamKey(prompt: string, key: string): boolean {
+  if (!prompt || !key) return false
+  if (prompt.includes('`' + key + '`')) return true
+  if (prompt.includes('params.' + key)) return true
+  // Identifier form only: object/JSON key (`command:` or `"searchQueries":`),
+  // never a bare English word such as "manager" or "directories".
+  return new RegExp(
+    '\\b' + escapeRegExp(key) + '[\'"]?\\s*:',
+  ).test(prompt)
+}
+
+/**
+ * Required keys from a child's `inputSchema.params`.
+ * Runtime templates store Zod (`z.toJSONSchema(..., { io: 'input' })`);
+ * agent definitions use JSON Schema with a `required` array.
+ */
+export function getRequiredAgentParamKeys(paramsSchema: unknown): string[] {
+  if (!paramsSchema) return []
+
+  let jsonSchema: unknown = paramsSchema
+  if (paramsSchema instanceof z.ZodType) {
+    try {
+      jsonSchema = z.toJSONSchema(paramsSchema, { io: 'input' })
+    } catch {
+      return []
+    }
+  }
+
+  if (!jsonSchema || typeof jsonSchema !== 'object') return []
+  const required = (jsonSchema as { required?: unknown }).required
+  if (!Array.isArray(required)) return []
+  return required.filter((key): key is string => typeof key === 'string')
+}
+
+const REPAIR_EDITOR_HANDOFF_HINT =
+  'Requires a versioned `handoff` with schemaVersion 1, taskId, objective, at least one finding, and explicit permissions.'
+
+function formatRequiredSpawnContractHint(
+  agentType: AgentTemplateType,
+  agentTemplate: AgentTemplate,
+): string {
+  const shortName =
+    getAgentShortName(agentType) || getAgentShortName(agentTemplate.id)
+  const prompt = agentTemplate.spawnerPrompt ?? ''
+
+  if (shortName === 'repair-editor') {
+    return promptNamesParamKey(prompt, 'handoff')
+      ? ''
+      : REPAIR_EDITOR_HANDOFF_HINT
+  }
+
+  const missing = getRequiredAgentParamKeys(
+    agentTemplate.inputSchema?.params,
+  ).filter((key) => !promptNamesParamKey(prompt, key))
+  if (missing.length === 0) return ''
+  return `Required params: ${missing.map((key) => '`' + key + '`').join(', ')}.`
+}
+
+/**
+ * Compact catalog line for the "You can spawn the following agents" addendum.
+ * Appends a one-line required-params/handoff hint when the child's contract
+ * is not already named in `spawnerPrompt`.
+ */
+export function formatCompactAgentCatalogLine(
+  agentType: AgentTemplateType,
+  agentTemplate: AgentTemplate | null | undefined,
+): string {
+  if (!agentTemplate) return `- ${agentType}`
+
+  const prompt = agentTemplate.spawnerPrompt
+  const hint = formatRequiredSpawnContractHint(agentType, agentTemplate)
+  if (prompt) {
+    return hint
+      ? `- ${agentType}: ${prompt} ${hint}`
+      : `- ${agentType}: ${prompt}`
+  }
+  if (hint) return `- ${agentType}: ${hint}`
+  return `- ${agentType}`
+}
+
 /**
  * Converts an agent ID into the provider-facing tool name used for direct
  * subagent calls. Agent IDs remain hyphenated; tool names use underscores.
@@ -170,7 +254,7 @@ params: None`
     : ['prompt: None', 'params: None'].join('\n')
 
   return buildArray(
-    `- ${agentType}: ${agentTemplate.spawnerPrompt}`,
+    formatCompactAgentCatalogLine(agentType, agentTemplate),
     agentTemplate.includeMessageHistory &&
       'This agent can see the current message history.',
     agentTemplate.inheritParentSystemPrompt &&

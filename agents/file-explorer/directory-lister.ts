@@ -29,11 +29,12 @@ const directoryLister: SecretAgentDefinition = {
   id: 'directory-lister',
   displayName: 'Directory Lister',
   spawnerPrompt:
-    'Mechanically lists multiple directories and returns their contents',
+    'Mechanically lists multiple directories and returns their contents. Requires params.directories.',
   publisher,
   includeMessageHistory: false,
   outputMode: 'structured_output',
-  toolNames: ['list_directory', 'set_output'],
+  toolNames: ['list_directory'],
+  programmaticToolNames: ['set_output'],
   spawnableAgents: [],
   inputSchema: {
     params: paramsSchema,

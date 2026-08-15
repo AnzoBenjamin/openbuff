@@ -20,6 +20,7 @@ import { z } from 'zod/v4'
 import { getAgentTemplate } from './agent-registry'
 import {
   buildFullSpawnableAgentsSpec,
+  formatCompactAgentCatalogLine,
   getModelVisibleSpawnableAgents,
 } from './prompts'
 import { PLACEHOLDER, placeholderValues } from './types'
@@ -277,7 +278,7 @@ export async function getAgentPrompt<T extends StringField>(
     useParentTools,
   } = params
 
-  const { toolNames, outputSchema } = agentTemplate
+  const { toolNames, outputSchema, programmaticToolNames } = agentTemplate
   const spawnableAgents = getModelVisibleSpawnableAgents(
     agentTemplate.spawnableAgents,
   )
@@ -327,10 +328,7 @@ export async function getAgentPrompt<T extends StringField>(
             agentId: agentType,
             localAgentTemplates: agentTemplates,
           })
-          if (template?.spawnerPrompt) {
-            return `- ${agentType}: ${template.spawnerPrompt}`
-          }
-          return `- ${agentType}`
+          return formatCompactAgentCatalogLine(agentType, template)
         }),
       )
       addendum += `\n\nYou can spawn the following agents:\n\n${agentDescriptions.join('\n')}`
@@ -339,8 +337,12 @@ export async function getAgentPrompt<T extends StringField>(
     // Add output schema information if defined
     if (outputSchema) {
       addendum += '\n\n## Output Schema\n\n'
-      addendum +=
-        'When using the set_output tool, your output must conform to this schema. You may pass the fields either directly as top-level parameters or inside a `data` field — both are accepted. Pass native object values; never call JSON.stringify or put serialized JSON text inside `data`.\n\n'
+      const setOutputIsProgrammaticOnly =
+        (programmaticToolNames ?? []).includes('set_output') &&
+        !toolNames.includes('set_output')
+      addendum += setOutputIsProgrammaticOnly
+        ? 'The harvested plain-text result must match this schema. Do not call set_output just to publish. You may still pass fields either directly as top-level parameters or inside a `data` field if a tool is used — both are accepted. Pass native object values; never call JSON.stringify or put serialized JSON text inside `data`.\n\n'
+        : 'When using the set_output tool, your output must conform to this schema. You may pass the fields either directly as top-level parameters or inside a `data` field — both are accepted. Pass native object values; never call JSON.stringify or put serialized JSON text inside `data`.\n\n'
       addendum += '```json\n'
       try {
         // Convert Zod schema to JSON schema for display

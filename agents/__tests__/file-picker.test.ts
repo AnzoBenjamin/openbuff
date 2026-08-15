@@ -49,6 +49,8 @@ describe('file-picker agent', () => {
 
     test('has spawn_agents tool', () => {
       expect(filePicker.toolNames).toContain('spawn_agents')
+      expect(filePicker.toolNames).toContain('set_output')
+      expect(filePicker.programmaticToolNames).toEqual(['read_files'])
     })
 
     test('can spawn file-lister agent', () => {
@@ -496,6 +498,137 @@ describe('file-picker agent', () => {
       ])
     })
 
+    const spawnFileListResult = (text: string) => ({
+      agentState: createMockAgentState(),
+      toolResult: [
+        {
+          type: 'json' as const,
+          value: [
+            {
+              agentName: 'File Lister',
+              agentType: 'file-lister',
+              value: {
+                type: 'lastMessage',
+                value: [
+                  {
+                    role: 'assistant',
+                    content: [{ type: 'text', text }],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+      stepsComplete: true,
+    })
+
+    // C1.9: reject path traversal and absolute-outside-cwd before read_files.
+    test('rejects ../ traversal paths and keeps sibling project files', () => {
+      const generator = createFilePicker().handleSteps!({
+        agentState: createMockAgentState(),
+        logger: createMockLogger() as any,
+        params: {},
+      })
+      generator.next()
+      const result = generator.next(
+        spawnFileListResult('src/safe.ts\n../secret.ts\nsrc/also-safe.ts'),
+      )
+      const toolCall = result.value as ToolCall<'read_files'>
+      expect(toolCall.toolName).toBe('read_files')
+      expect(toolCall.input.paths).toEqual(['src/safe.ts', 'src/also-safe.ts'])
+      expect(toolCall.input.paths).not.toContain('../secret.ts')
+    })
+
+    test('rejects absolute paths outside the project cwd', () => {
+      const generator = createFilePicker().handleSteps!({
+        agentState: createMockAgentState(),
+        logger: createMockLogger() as any,
+        params: {},
+      })
+      generator.next()
+      const result = generator.next(
+        spawnFileListResult('src/ok.ts\n/tmp/outside-cwd.ts\n/etc/passwd.ts'),
+      )
+      const toolCall = result.value as ToolCall<'read_files'>
+      expect(toolCall.toolName).toBe('read_files')
+      expect(toolCall.input.paths).toEqual(['src/ok.ts'])
+      expect(toolCall.input.paths).not.toContain('/tmp/outside-cwd.ts')
+      expect(toolCall.input.paths).not.toContain('/etc/passwd.ts')
+    })
+
+    test('yields STEP_TEXT and skips read_files when every path is unsafe', () => {
+      const generator = createFilePicker().handleSteps!({
+        agentState: createMockAgentState(),
+        logger: createMockLogger() as any,
+        params: {},
+      })
+      generator.next()
+      const result = generator.next(
+        spawnFileListResult('../secret.ts\n/tmp/outside-cwd.ts\n../../etc/hosts.ts'),
+      )
+      const stepText = result.value as StepText
+      expect(stepText.type).toBe('STEP_TEXT')
+      expect(stepText.text).toContain('No safe project-relative file paths')
+      expect((result.value as { toolName?: string }).toolName).not.toBe(
+        'read_files',
+      )
+    })
+
+    test('traversal drop log counts only unsafe paths, not directory-scope drops', () => {
+      const debugMessages: string[] = []
+      const generator = createFilePicker().handleSteps!({
+        agentState: createMockAgentState(),
+        logger: {
+          debug: (message: string) => {
+            debugMessages.push(message)
+          },
+          info: () => {},
+          warn: () => {},
+          error: () => {},
+        } as any,
+        params: { directories: ['src'] },
+      })
+      generator.next()
+      const result = generator.next(
+        spawnFileListResult('src/in-scope.ts\nlib/out-of-scope.ts\n../escape.ts'),
+      )
+      expect((result.value as ToolCall<'read_files'>).input.paths).toEqual([
+        'src/in-scope.ts',
+      ])
+      const traversalLogs = debugMessages.filter((message) =>
+        message.includes('outside project root or containing traversal'),
+      )
+      expect(traversalLogs).toEqual([
+        'file-picker: dropped 1 path(s) outside project root or containing traversal',
+      ])
+    })
+
+    test('does not log traversal drops when only directory-scope paths are filtered', () => {
+      const debugMessages: string[] = []
+      const generator = createFilePicker().handleSteps!({
+        agentState: createMockAgentState(),
+        logger: {
+          debug: (message: string) => {
+            debugMessages.push(message)
+          },
+          info: () => {},
+          warn: () => {},
+          error: () => {},
+        } as any,
+        params: { directories: ['src'] },
+      })
+      generator.next()
+      generator.next(
+        spawnFileListResult('src/in-scope.ts\nlib/out-of-scope.ts'),
+      )
+      expect(
+        debugMessages.some((message) =>
+          message.includes('outside project root or containing traversal'),
+        ),
+      ).toBe(false)
+    })
+
     // M2.2: relevance scoring orders paths by prompt-keyword matches, and caps
     // to the top 8 (matching the spawner prompt's advertised limit).
     test('orders paths by prompt-keyword relevance', () => {
@@ -681,6 +814,8 @@ describe('file-picker agent', () => {
 
     test('instructs not to use tools', () => {
       expect(filePicker.instructionsPrompt).toContain('Do not use')
+      expect(filePicker.instructionsPrompt).toContain('set_output')
+      expect(filePicker.instructionsPrompt).toContain('files')
     })
   })
 
