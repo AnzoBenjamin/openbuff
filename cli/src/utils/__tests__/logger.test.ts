@@ -13,6 +13,17 @@ mock.module('../../project-files', () => ({
   getCurrentChatDir: () => mockChatDir,
 }))
 
+mock.module('@codebuff/common/env', () => ({
+  ...import.meta.require('@codebuff/common/env'),
+  env: {
+    ...import.meta.require('@codebuff/common/env').env,
+    NEXT_PUBLIC_CB_ENVIRONMENT: 'dev',
+  },
+  IS_DEV: true,
+  IS_TEST: false,
+  IS_CI: false,
+}))
+
 import {
   LOG_MAX_BYTES,
   clearLogFile,
@@ -23,30 +34,31 @@ import {
   rotateLogIfNeeded,
 } from '../logger'
 
+let tempDir: string
+
+beforeEach(() => {
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-logger-'))
+  mockProjectRoot = tempDir
+  mockChatDir = path.join(tempDir, 'chat')
+  fs.mkdirSync(mockChatDir, { recursive: true })
+})
+
+afterEach(() => {
+  // Explicitly reset the logger's module-level state for test isolation:
+  // clearLogFile() closes the live pino destination (clearing pinoLogger and
+  // pinoDestination) and clears the pinned logPath, so no state can leak into
+  // the next test. It must not throw here — a failure should fail loudly
+  // instead of being swallowed.
+  clearLogFile()
+  fs.rmSync(tempDir, { recursive: true, force: true })
+})
+
+function writeSizedFile(filePath: string, size: number, contents?: string) {
+  fs.writeFileSync(filePath, contents ?? '')
+  fs.truncateSync(filePath, size)
+}
+
 describe('rotateLogIfNeeded', () => {
-  let tempDir: string
-
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-logger-'))
-    mockProjectRoot = tempDir
-    mockChatDir = path.join(tempDir, 'chat')
-    fs.mkdirSync(mockChatDir, { recursive: true })
-  })
-
-  afterEach(() => {
-    try {
-      clearLogFile()
-    } catch {
-      // Isolation only; ignore teardown errors
-    }
-    fs.rmSync(tempDir, { recursive: true, force: true })
-  })
-
-  function writeSizedFile(filePath: string, size: number, contents?: string) {
-    fs.writeFileSync(filePath, contents ?? '')
-    fs.truncateSync(filePath, size)
-  }
-
   test('leaves a file smaller than LOG_MAX_BYTES in place', () => {
     const livePath = path.join(tempDir, 'log.jsonl')
     writeSizedFile(livePath, LOG_MAX_BYTES - 1, 'under-cap')
@@ -200,6 +212,9 @@ describe('rotateLogIfNeeded', () => {
     const debugLog = path.join(tempDir, 'debug', 'cli.jsonl')
     fs.mkdirSync(path.dirname(debugLog), { recursive: true })
     writeSizedFile(debugLog, LOG_MAX_BYTES, 'pre-rotate-debug')
+    // Set up module state explicitly so this test is self-contained: pin
+    // logPath to debugLog with a live destination open, exactly what a prior
+    // dev session would leave behind — no reliance on state from other tests.
     resetLogStream(debugLog)
     const leftoverFd = getLivePinoDestinationFd()
     expect(typeof leftoverFd).toBe('number')
@@ -216,29 +231,6 @@ describe('rotateLogIfNeeded', () => {
 })
 
 describe('clearLogFile', () => {
-  let tempDir: string
-
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-clear-logs-'))
-    mockProjectRoot = tempDir
-    mockChatDir = path.join(tempDir, 'chat')
-    fs.mkdirSync(mockChatDir, { recursive: true })
-  })
-
-  afterEach(() => {
-    try {
-      clearLogFile()
-    } catch {
-      // Isolation only; ignore teardown errors
-    }
-    fs.rmSync(tempDir, { recursive: true, force: true })
-  })
-
-  function writeSizedFile(filePath: string, size: number, contents?: string) {
-    fs.writeFileSync(filePath, contents ?? '')
-    fs.truncateSync(filePath, size)
-  }
-
   test('removes an under-cap production log.jsonl', () => {
     const productionLog = path.join(mockChatDir, 'log.jsonl')
     writeSizedFile(productionLog, 64, 'under-cap-chat')
