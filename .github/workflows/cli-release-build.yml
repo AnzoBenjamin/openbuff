@@ -592,6 +592,10 @@ jobs:
 
       - name: Smoke test binary
         shell: bash
+        # SMOKE_VERBOSE passthrough for Windows diagnostics — buildSmokeEnv spreads
+        # parent env so this reaches the smoke child; keep shell: bash for Git Bash.
+        env:
+          SMOKE_VERBOSE: "1"
         run: |
           set -euo pipefail
           SMOKE_DIR="$(mktemp -d)"
@@ -600,9 +604,18 @@ jobs:
           cp "cli/bin/$BINARY_FILE" "$SMOKE_DIR/$BINARY_FILE"
           cp cli/bin/tree-sitter*.wasm "$SMOKE_DIR/"
           cp cli/bin/tree-sitter-manifest.json "$SMOKE_DIR/"
-          SMOKE_SCRIPT="$PWD/cli/scripts/smoke-binary.ts"
+          # Git Bash on windows-latest (bash.EXE) uses MSYS path translation.
+          # Use cygpath -w when available so BIN and script paths are Windows-native
+          # for bun/node child_process.spawn (which does not understand /c/... MSYS paths).
+          # Fall back to POSIX paths on non-Windows runners.
+          if command -v cygpath >/dev/null 2>&1; then
+            SMOKE_SCRIPT="$(cygpath -w "$PWD/cli/scripts/smoke-binary.ts")"
+            BIN="$(cygpath -w "$SMOKE_DIR/$BINARY_FILE")"
+          else
+            SMOKE_SCRIPT="$PWD/cli/scripts/smoke-binary.ts"
+            BIN="$SMOKE_DIR/$BINARY_FILE"
+          fi
           cd "$SMOKE_DIR"
-          BIN="$SMOKE_DIR/$BINARY_FILE"
 
           # Sync check — exits via commander before async tasks fire.
           VERSION_OUTPUT=$("$BIN" --version | tail -n 1)
@@ -616,6 +629,10 @@ jobs:
           # bootscreen ok') when stdout is a pipe, so the full boot-screen gate
           # below resolves on native Windows now that OpenTUI itself paints
           # nothing to a non-TTY stdout.
+          # Smoke env spreads full parent env (APPDATA, USERNAME, HOMEDRIVE,
+          # SYSTEMROOT etc.) via buildSmokeEnv while overriding NO_COLOR/TERM
+          # deterministically — previous allowlist dropped critical Windows vars
+          # and caused 0-byte SIGKILL hangs with stdio pipe.
           bun "$SMOKE_SCRIPT" "$BIN"
 
       - name: Create tarball

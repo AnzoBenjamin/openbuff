@@ -56,6 +56,7 @@ const BOOT_SIGNAL_PATTERNS = [
   /\x1b\[\?1049h/,
   /openbuff bootscreen ok\r?/,
 ] as const
+// RF-4: patterns stay without /g so .test() has no lastIndex state across chunk scans.
 
 // Fatal markers we already know about — kept for nicer error messages on
 // regressions of bugs we've already seen. The boot-signal check above is
@@ -100,40 +101,15 @@ const CAPTURED_OUTPUT_FAIL_SLICE = 8 * 1024 // half of CAPTURED_OUTPUT_CAP for t
 // across two data events is still detected by stream scanning.
 const SCAN_OVERLAP = 512
 
-// Hermetic smoke env: allowlist only the minimal vars needed for the binary
-// to run, rather than propagating the full parent process.env. This keeps the
-// smoke deterministic and avoids leaking unrelated host env into the child.
+// Smoke env: spread parent env for Windows compatibility (APPDATA,
+// USERNAME, HOMEDRIVE, COMPUTERNAME etc.) while overriding only the
+// deterministic vars. Previous strict allowlisting dropped critical
+// Windows vars and caused 0-byte hangs; spreading avoids that while
+// keeping TERM=dumb/NO_COLOR=1 deterministic.
 function buildSmokeEnv(): Record<string, string> {
-  // Include locale vars (LANG/LC_ALL/LC_CTYPE/LANGUAGE) so smoke binary locale matches prod; omission would alter behavior vs prod (RF-7).
-  const allowlist = [
-    'PATH',
-    'HOME',
-    'USER',
-    'SHELL',
-    'TMPDIR',
-    'TEMP',
-    'TMP',
-    'SystemRoot',
-    'WINDIR',
-    'USERPROFILE',
-    'LOCALAPPDATA',
-    'PROGRAMFILES',
-    'PROGRAMFILES(X86)',
-    'COMSPEC',
-    'PATHEXT',
-    'BUN_INSTALL',
-    'TERM',
-    'NO_COLOR',
-    'SMOKE_VERBOSE',
-    'LANG',
-    'LC_ALL',
-    'LC_CTYPE',
-    'LANGUAGE',
-  ]
   const env: Record<string, string> = {}
-  for (const key of allowlist) {
-    const val = process.env[key]
-    if (val !== undefined) env[key] = val
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v !== undefined) env[k] = v
   }
   env.NO_COLOR = '1'
   env.TERM = 'dumb'
@@ -142,6 +118,10 @@ function buildSmokeEnv(): Record<string, string> {
 
 type ProcessResult = {
   captured: string
+  tail: string
+  fatalHit: RegExp | null
+  bootHit: RegExp | null
+  markerHit: RegExp | null
   code: number | null
   signal: NodeJS.Signals | null
 }
@@ -149,14 +129,18 @@ type ProcessResult = {
 /** Shared bounded capture with stream-scanning so late output beyond the
  * head cap is not missed (RF-6). Deduplicates append/cap logic between
  * runProbe() and the full-TUI spawn (RF-5). */
-function createBoundedCapture() {
+function createBoundedCapture(marker?: RegExp) {
   let head = ''
   let tail = ''
   let scanTail = ''
   let fatalHit: RegExp | null = null
   let bootHit: RegExp | null = null
+  let markerHit: RegExp | null = null
+  // Clone marker without /g so lastIndex never bleeds across chunk scans or re-tests.
+  const safeMarker = marker ? new RegExp(marker.source, marker.flags.replace('g', '')) : null
   const append = (chunk: Buffer): void => {
     const text = chunk.toString('utf8')
+    // RF-4: scanCandidate is scanTail+text per chunk (bounded to SCAN_OVERLAP + chunk length); patterns must stay without /g to avoid lastIndex bleed.
     const scanCandidate = scanTail + text
     if (!fatalHit) {
       for (const p of FATAL_PATTERNS) {
@@ -174,19 +158,28 @@ function createBoundedCapture() {
         }
       }
     }
+    if (safeMarker && !markerHit && safeMarker.test(scanCandidate)) {
+      markerHit = safeMarker
+    }
     scanTail = scanCandidate.slice(-SCAN_OVERLAP)
     if (head.length < CAPTURED_OUTPUT_CAP) {
-      head += text
-      if (head.length > CAPTURED_OUTPUT_CAP) head = head.slice(0, CAPTURED_OUTPUT_CAP)
+      const remaining = CAPTURED_OUTPUT_CAP - head.length
+      head += text.length > remaining ? text.slice(0, remaining) : text
     }
-    tail += text
-    if (tail.length > CAPTURED_OUTPUT_CAP) tail = tail.slice(-CAPTURED_OUTPUT_CAP)
+    if (text.length >= CAPTURED_OUTPUT_CAP) {
+      tail = text.slice(-CAPTURED_OUTPUT_CAP)
+    } else if (tail.length + text.length > CAPTURED_OUTPUT_CAP) {
+      tail = tail.slice(-(CAPTURED_OUTPUT_CAP - text.length)) + text
+    } else {
+      tail += text
+    }
   }
   return {
     getCaptured: () => head,
     getTail: () => tail,
     fatalMatched: () => fatalHit,
     bootMatched: () => bootHit,
+    markerMatched: () => markerHit,
     append,
     attach: (proc: { stdout?: NodeJS.ReadableStream | null; stderr?: NodeJS.ReadableStream | null }) => {
       proc.stdout?.on('data', append)
@@ -199,14 +192,14 @@ function createBoundedCapture() {
   }
 }
 
-function runProbe(binary: string, flag: string): Promise<ProcessResult> {
+function runProbe(binary: string, flag: string, marker?: RegExp): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const proc = spawn(binary, [flag], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: buildSmokeEnv(),
     })
 
-    const cap = createBoundedCapture()
+    const cap = createBoundedCapture(marker)
     cap.attach(proc)
     const cleanup = () => cap.detach(proc)
 
@@ -245,7 +238,7 @@ function runProbe(binary: string, flag: string): Promise<ProcessResult> {
       clearTimeout(timer)
       cleanup()
       proc.removeAllListeners()
-      resolve({ captured: cap.getCaptured(), code, signal })
+      resolve({ captured: cap.getCaptured(), tail: cap.getTail(), fatalHit: cap.fatalMatched(), bootHit: cap.bootMatched(), markerHit: cap.markerMatched(), code, signal })
     })
   })
 }
@@ -256,14 +249,16 @@ async function requireProbe(
   marker: RegExp,
   label: string,
 ): Promise<void> {
-  const result = await runProbe(binary, flag)
-  if (result.code === 0 && marker.test(result.captured)) return
+  const result = await runProbe(binary, flag, marker)
+  if (result.code === 0 && result.markerHit !== null) return
 
+  // RF-2: include stream-scanned fatalHit and bounded tail so late fatals beyond the head cap are not lost in diagnostics.
+  const headSlice = result.captured.slice(0, CAPTURED_OUTPUT_FAIL_SLICE)
+  const tailSlice = result.tail && result.tail !== result.captured ? result.tail.slice(-CAPTURED_OUTPUT_FAIL_SLICE) : ''
+  const fatalInfo = result.fatalHit ? ` stream fatal ${result.fatalHit} (stream-scanned)` : ''
+  const tailInfo = tailSlice ? `\n--- tail (last ${CAPTURED_OUTPUT_FAIL_SLICE / 1024}KB) ---\n${tailSlice}` : ''
   throw new Error(
-    `${label} smoke failed (${formatExit(result.code, result.signal)})\n${result.captured.slice(
-      0,
-      CAPTURED_OUTPUT_FAIL_SLICE,
-    )}`,
+    `${label} smoke failed (${formatExit(result.code, result.signal)})${fatalInfo}\n${headSlice}${tailInfo}`,
   )
 }
 
@@ -355,17 +350,23 @@ async function main(): Promise<void> {
     // try/catch so an ESRCH from the child exiting right at the timeout boundary
     // (between the exit event and clearTimeout below) can't escape into main's
     // catch and turn a clean timeout into an unexpected-exit(2) failure.
-    timedOut = true
+    // Only mark as timeout after confirming the kill was delivered; if the child
+    // already exited proc.kill throws ESRCH and timedOut stays false so the
+    // early-exit failure below is not masked (RF-1).
     try {
-      proc.kill('SIGKILL')
+      if (proc.kill('SIGKILL')) {
+        timedOut = true
+      }
     } catch {
-      // child already exited at the boundary; timedOut still marks the run a
-      // timeout for the boot-signal evaluation below.
+      // ESRCH – child already exited, leave timedOut false
     }
   }, runSeconds * 1_000)
 
   await exited
   clearTimeout(killTimer)
+  // RF-1: detach bounded-capture listeners after the child has exited so handlers don't leak if the proc object is reused or keeps emitting.
+  cap.detach(proc)
+  proc.removeAllListeners()
 
   const fail = (reason: string): never => {
     const head = cap.getCaptured()
