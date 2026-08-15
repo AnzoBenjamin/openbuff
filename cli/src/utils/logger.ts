@@ -339,6 +339,11 @@ function sendAnalyticsAndLog(
     })
   }
 
+  // Skip file I/O in test/CI so other files cannot steal/rotate a pinned logPath.
+  if (IS_TEST || IS_CI) {
+    return
+  }
+
   // In dev mode, use appendFileSync for real-time logging (Bun has issues with pino sync)
   // In prod mode, use pino for better performance
   if (IS_DEV && logPath) {

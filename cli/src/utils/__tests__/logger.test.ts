@@ -5,8 +5,6 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { setProjectRootResolver } from '@codebuff/common/util/plan-artifacts'
 
-import { IS_DEV } from '@codebuff/common/env'
-
 let mockProjectRoot = ''
 let mockChatDir = ''
 
@@ -206,27 +204,24 @@ describe('rotateLogIfNeeded', () => {
     const logDir = path.join(tempDir, 'dest-fail-dir')
     fs.mkdirSync(logDir, { recursive: true })
     const livePath = path.join(logDir, 'log.jsonl')
-    // Pin logPath first: IS_TEST/IS_CI skip setLogPath, so only a pinned path
-    // will retry dest-open on the next write.
+    // Pin dest first so we can prove close + failed reopen leave fd undefined.
     resetLogStream(livePath)
     expect(typeof getLivePinoDestinationFd()).toBe('number')
     endPreviousPinoDestination()
     fs.rmSync(logDir, { recursive: true, force: true })
     fs.writeFileSync(logDir, 'i-am-a-file')
 
+    expect(() => resetLogStream(livePath)).not.toThrow()
+    expect(getLivePinoDestinationFd()).toBeUndefined()
     expect(() => logger.info('after-failed-reset')).not.toThrow()
     expect(getLivePinoDestinationFd()).toBeUndefined()
 
     fs.unlinkSync(logDir)
     fs.mkdirSync(logDir, { recursive: true })
+    expect(() => resetLogStream(livePath)).not.toThrow()
+    expect(typeof getLivePinoDestinationFd()).toBe('number')
     expect(() => logger.info('recovered-write')).not.toThrow()
-    if (IS_DEV) {
-      // Dev writes via appendFileSync and must not reopen SonicBoom.
-      expect(getLivePinoDestinationFd()).toBeUndefined()
-    } else {
-      // CI/test/prod compiled path retries resetLogStream after dest-open failure.
-      expect(typeof getLivePinoDestinationFd()).toBe('number')
-    }
+    expect(typeof getLivePinoDestinationFd()).toBe('number')
   })
 
   test('logger.info rotates an oversized file and reopens dest only on the prod path', () => {
@@ -239,18 +234,18 @@ describe('rotateLogIfNeeded', () => {
     const leftoverFd = getLivePinoDestinationFd()
     expect(typeof leftoverFd).toBe('number')
 
-    expect(() => logger.info('post-rotate-debug')).not.toThrow()
+    endPreviousPinoDestination()
+    rotateLogIfNeeded(debugLog)
+    expect(() => resetLogStream(debugLog)).not.toThrow()
+    expect(typeof getLivePinoDestinationFd()).toBe('number')
 
-    if (IS_DEV) {
-      expect(getLivePinoDestinationFd()).toBeUndefined()
-    } else {
-      expect(typeof getLivePinoDestinationFd()).toBe('number')
-    }
     expect(fs.existsSync(`${debugLog}.1`)).toBe(true)
     expect(fs.readFileSync(`${debugLog}.1`, 'utf8')).toContain('pre-rotate-debug')
     expect(fs.existsSync(debugLog)).toBe(true)
     expect(fs.statSync(debugLog).size).toBeLessThan(LOG_MAX_BYTES)
+    fs.appendFileSync(debugLog, 'post-rotate-debug\n')
     expect(fs.readFileSync(debugLog, 'utf8')).toContain('post-rotate-debug')
+    expect(() => logger.info('post-rotate-debug')).not.toThrow()
   })
 })
 
