@@ -1,4 +1,11 @@
-import { appendFileSync, existsSync, mkdirSync, unlinkSync } from 'fs'
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+} from 'fs'
 import path, { dirname } from 'path'
 import { format as stringFormat } from 'util'
 
@@ -37,6 +44,10 @@ let pinoLogger: any = undefined
 
 const loggingLevels = ['info', 'debug', 'warn', 'error', 'fatal'] as const
 type LogLevel = (typeof loggingLevels)[number]
+
+// Cap log files at 10 MiB. When a log reaches this size we rotate it to a
+// `.1` sibling so `log.jsonl` (and dev `debug/cli.jsonl`) cannot grow unbounded.
+const LOG_MAX_BYTES = 10 * 1024 * 1024
 const analyticsDispatcher = createAnalyticsDispatcher({
   envName: env.NEXT_PUBLIC_CB_ENVIRONMENT,
   bufferWhenNoUser: true,
@@ -95,6 +106,44 @@ function setLogPath(p: string): void {
   )
 }
 
+/**
+ * Rotate a log file to a `.1` sibling once it reaches LOG_MAX_BYTES.
+ * Keeps exactly one prior rotated file: unlink any existing `.1`, then rename.
+ * All fs operations are swallowed so logging never throws.
+ */
+function rotateLogIfNeeded(targetLogPath: string): void {
+  try {
+    if (!existsSync(targetLogPath)) return
+    if (statSync(targetLogPath).size < LOG_MAX_BYTES) return
+
+    const rotatedPath = `${targetLogPath}.1`
+    try {
+      if (existsSync(rotatedPath)) {
+        unlinkSync(rotatedPath)
+      }
+    } catch {
+      // Ignore unlink errors; rename may still fail harmlessly below
+    }
+    renameSync(targetLogPath, rotatedPath)
+  } catch {
+    // Ignore rotation errors; logging must never throw
+  }
+}
+
+/**
+ * One-off cleanup on startup that reclaims an oversized production per-chat
+ * `log.jsonl` by rotating it (not deleting it). Runs automatically after app
+ * initialization, independent of the `--clear-logs` flag.
+ */
+export function trimOversizedLogsOnStartup(): void {
+  try {
+    const productionLog = path.join(getCurrentChatDir(), 'log.jsonl')
+    rotateLogIfNeeded(productionLog)
+  } catch {
+    // Ignore errors resolving the chat dir; logging must never throw
+  }
+}
+
 export function clearLogFile(): void {
   const projectRoot = getProjectRoot()
   const defaultLog = path.join(projectRoot, 'debug', 'cli.jsonl')
@@ -113,6 +162,23 @@ export function clearLogFile(): void {
     } catch {
       // Ignore errors when clearing logs
     }
+  }
+
+  // Also reclaim the production per-chat log: delete the `.1` sibling and,
+  // instead of always deleting the live file, only rotate it when oversized.
+  try {
+    const productionLog = path.join(getCurrentChatDir(), 'log.jsonl')
+    const rotatedLog = `${productionLog}.1`
+    try {
+      if (existsSync(rotatedLog)) {
+        unlinkSync(rotatedLog)
+      }
+    } catch {
+      // Ignore unlink errors
+    }
+    rotateLogIfNeeded(productionLog)
+  } catch {
+    // Ignore errors resolving the chat dir
   }
 
   logPath = undefined
@@ -209,6 +275,7 @@ function sendAnalyticsAndLog(
       ...(includeData ? { data: sanitizedData } : {}),
       msg: formattedMsg,
     })
+    rotateLogIfNeeded(logPath)
     try {
       appendFileSync(logPath, logEntry + '\n')
     } catch {

@@ -32,7 +32,11 @@ import { trackEvent } from './utils/analytics'
 import { resetCodebuffClient } from './utils/codebuff-client'
 import { getCliEnv } from './utils/env'
 import { initializeAgentRegistry } from './utils/local-agent-registry'
-import { clearLogFile, logger } from './utils/logger'
+import {
+  clearLogFile,
+  logger,
+  trimOversizedLogsOnStartup,
+} from './utils/logger'
 import { shouldShowProjectPicker } from './utils/project-picker'
 import { saveRecentProject } from './utils/recent-projects'
 import {
@@ -306,6 +310,9 @@ async function main(): Promise<void> {
   const hasAgentOverride = Boolean(agent?.trim())
 
   await initializeApp({ cwd })
+
+  // Reclaim any oversized per-chat log left by a previous session.
+  trimOversizedLogsOnStartup()
 
   // Show project picker only when user starts at the home directory or an ancestor
   const projectRoot = getProjectRoot()
