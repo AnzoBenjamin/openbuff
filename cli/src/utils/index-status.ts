@@ -49,9 +49,7 @@ export function formatIndexStatusChip(
   if (status.state === 'stale') {
     return { label: 'idx stale', tone: 'warning' }
   }
-  if (status.state === 'ready' || status.state === 'degraded') {
-    return { label: 'idx ready', tone: 'secondary' }
-  }
+  // Healthy snapshots are silent; only building / refreshing / stale / failed show.
   return null
 }
 

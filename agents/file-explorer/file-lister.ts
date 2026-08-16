@@ -26,7 +26,7 @@ export const createFileLister = (): Omit<SecretAgentDefinition, 'id'> => ({
           type: 'array' as const,
           items: { type: 'string' as const },
           description:
-            'Optional project-relative directories to search. Absolute paths, traversal, glob syntax, and more than 8 entries are rejected.',
+            'Optional project-relative directories to search. Absolute paths, traversal, and glob syntax are rejected. At most 8 valid directories are used; extra entries are ignored.',
         },
       },
       required: [],
@@ -47,18 +47,14 @@ export const createFileLister = (): Omit<SecretAgentDefinition, 'id'> => ({
 
 Here's an example response with made up file paths (these are not real file paths, just an example):
 <example_response>
-packages/core/src/index.ts
-packages/core/src/api/server.ts
-packages/core/src/api/routes/user.ts
-packages/core/src/utils/logger.ts
-packages/common/src/util/stringify.ts
-packages/common/src/types/user.ts
-packages/common/src/constants/index.ts
-packages/utils/src/cli/parseArgs.ts
-docs/routes/index.md
-docs/routes/user.md
-package.json
-README.md
+example/src/widget.ts
+example/src/gadget.ts
+example/lib/factory.ts
+example/lib/types/widget.ts
+example/tests/widget.test.ts
+docs/example/overview.md
+docs/example/api.md
+config/example.json
 </example_response>
 
 Again: Do not call any tools or write anything else other than the chosen file paths on new lines. Go.
@@ -67,57 +63,152 @@ Again: Do not call any tools or write anything else other than the chosen file p
   handleSteps: function* ({ prompt, params }) {
     // Keep helpers inside handleSteps: bundled programmatic agents serialize
     // this generator without its module-level closures.
+    const extractFilePathsFromPrintedTree = (printedTree: string): string[] => {
+      const lines = printedTree
+        .split('\n')
+        .filter((rawLine) => rawLine.trim().length > 0)
+      const indentSizes = lines
+        .map((rawLine) => rawLine.length - rawLine.trimStart().length)
+        .filter((indent) => indent > 0)
+      const indentWidth = Math.max(
+        1,
+        indentSizes.reduce((width, indent) => {
+          let a = width
+          let b = indent
+          while (b !== 0) {
+            const next = a % b
+            a = b
+            b = next
+          }
+          return a
+        }, indentSizes[0] ?? 1),
+      )
+
+      const paths: string[] = []
+      const directoryStack: string[] = []
+      let previousFileDepth: number | undefined
+
+      for (const rawLine of lines) {
+        const leading = rawLine.length - rawLine.trimStart().length
+        const depth = Math.floor(leading / indentWidth)
+        const name = rawLine.trim().replace(/\s+\d+\s*$/, '')
+
+        // Parsed symbols are printed one indentation level below their file.
+        if (previousFileDepth !== undefined && depth > previousFileDepth) {
+          continue
+        }
+        previousFileDepth = undefined
+
+        if (name.endsWith('/')) {
+          directoryStack.length = depth
+          directoryStack[depth] = name.slice(0, -1)
+          continue
+        }
+
+        const path = [...directoryStack.slice(0, depth), name]
+          .filter(Boolean)
+          .join('/')
+        if (path.length > 0) paths.push(path)
+        previousFileDepth = depth
+      }
+
+      if (paths.length > 0) {
+        return Array.from(new Set(paths))
+      }
+
+      const fallbackPaths: string[] = []
+      const filePathPattern =
+        /(?:^|[^A-Za-z0-9_./-])((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:ts|tsx|js|jsx|json|md))\b/g
+      let match: RegExpExecArray | null
+      while ((match = filePathPattern.exec(printedTree)) !== null) {
+        fallbackPaths.push(match[1])
+      }
+      return Array.from(new Set(fallbackPaths))
+    }
     const extractFilePathsFromSubtree = (
       toolResult: ToolResultOutput[] | undefined,
     ): string[] => {
-      const directoryResults = (toolResult ?? []).flatMap((part) => {
+      const subtreeEntries = (toolResult ?? []).flatMap((part) => {
         if (part.type !== 'json' || !Array.isArray(part.value)) return []
         return part.value.filter(
-          (value): value is {
-            path: string
-            type: 'directory'
-            printedTree: string
+          (
+            value,
+          ): value is {
+            path?: string
+            type?: string
+            printedTree?: string
           } =>
             typeof value === 'object' &&
             value !== null &&
-            !Array.isArray(value) &&
-            value.type === 'directory' &&
-            typeof value.path === 'string' &&
-            typeof value.printedTree === 'string',
+            !Array.isArray(value),
         )
       })
       const paths: string[] = []
 
-      for (const result of directoryResults) {
-        const directoryStack: string[] = []
-        let previousFileDepth: number | undefined
-
-        for (const rawLine of result.printedTree.split('\n')) {
-          if (rawLine.trim().length === 0) continue
-          const depth = rawLine.length - rawLine.trimStart().length
-          const name = rawLine.trim()
-
-          // Parsed symbols are printed one indentation level below their file.
-          if (previousFileDepth !== undefined && depth > previousFileDepth) {
-            continue
-          }
-          previousFileDepth = undefined
-
-          if (name.endsWith('/')) {
-            directoryStack.length = depth
-            directoryStack[depth] = name.slice(0, -1)
-            continue
-          }
-
-          const path = [...directoryStack.slice(0, depth), name]
-            .filter(Boolean)
-            .join('/')
-          if (path.length > 0) paths.push(path)
-          previousFileDepth = depth
+      for (const entry of subtreeEntries) {
+        if (
+          entry.type === 'file' &&
+          typeof entry.path === 'string' &&
+          entry.path.length > 0
+        ) {
+          paths.push(entry.path.replace(/\\/g, '/').replace(/^\.\//, ''))
+          continue
+        }
+        if (
+          entry.type === 'directory' &&
+          typeof entry.printedTree === 'string'
+        ) {
+          paths.push(...extractFilePathsFromPrintedTree(entry.printedTree))
         }
       }
 
       return Array.from(new Set(paths))
+    }
+    const extractFilePathsFromQueryIndex = (
+      toolResult: ToolResultOutput[] | undefined,
+    ): string[] => {
+      const paths: string[] = []
+
+      for (const part of toolResult ?? []) {
+        if (part.type !== 'json') continue
+        const value = part.value
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+          continue
+        }
+        if (!('results' in value) || !Array.isArray(value.results)) {
+          continue
+        }
+
+        for (const item of value.results) {
+          if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+            continue
+          }
+          if (
+            'path' in item &&
+            typeof item.path === 'string' &&
+            item.path.length > 0
+          ) {
+            paths.push(item.path)
+          }
+          if (!('relatedFiles' in item) || !Array.isArray(item.relatedFiles)) {
+            continue
+          }
+          for (const related of item.relatedFiles) {
+            if (
+              typeof related === 'object' &&
+              related !== null &&
+              !Array.isArray(related) &&
+              'path' in related &&
+              typeof related.path === 'string' &&
+              related.path.length > 0
+            ) {
+              paths.push(related.path)
+            }
+          }
+        }
+      }
+
+      return paths
     }
     const isWithinDirectory = (path: string): boolean =>
       directories.some(
@@ -173,8 +264,9 @@ Again: Do not call any tools or write anything else other than the chosen file p
       directories.length > 0
         ? `${prompt ?? ''}\nOnly return files within: ${directories.join(', ')}`
         : prompt
+    let indexResult: ToolResultOutput[] | undefined
     if (typeof prompt === 'string' && prompt.trim().length > 0) {
-      yield {
+      const { toolResult } = yield {
         toolName: 'query_index',
         input: {
           query: scopedPrompt,
@@ -182,6 +274,7 @@ Again: Do not call any tools or write anything else other than the chosen file p
           ...(directories.length > 0 ? { pathPrefixes: directories } : {}),
         },
       }
+      indexResult = toolResult
     }
     const { toolResult: subtreeResult } = yield {
       toolName: 'read_subtree',
@@ -191,18 +284,23 @@ Again: Do not call any tools or write anything else other than the chosen file p
       },
     }
 
-    if (directories.length > 0) {
-      const scopedPaths = extractFilePathsFromSubtree(subtreeResult).filter(
-        isWithinDirectory,
-      )
-      const rankedPaths = rankFilePaths(scopedPaths)
-      if (rankedPaths.length > 0) {
-        yield {
-          type: 'STEP_TEXT',
-          text: rankedPaths.join('\n'),
-        } satisfies StepText
-        return
-      }
+    const candidatePaths = Array.from(
+      new Set([
+        ...extractFilePathsFromQueryIndex(indexResult),
+        ...extractFilePathsFromSubtree(subtreeResult),
+      ]),
+    )
+    const scopedPaths =
+      directories.length > 0
+        ? candidatePaths.filter(isWithinDirectory)
+        : candidatePaths
+    const rankedPaths = rankFilePaths(scopedPaths)
+    if (rankedPaths.length > 0) {
+      yield {
+        type: 'STEP_TEXT',
+        text: rankedPaths.join('\n'),
+      } satisfies StepText
+      return
     }
 
     yield 'STEP'

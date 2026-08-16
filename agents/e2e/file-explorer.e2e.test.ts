@@ -1,4 +1,4 @@
-import { OpenbuffClient, type AgentDefinition } from '@openbuff/sdk'
+import { OpenbuffClient, type AgentDefinition, type Message } from '@openbuff/sdk'
 import { beforeAll, describe, expect, it } from 'bun:test'
 
 import { setupE2eMocks } from '../../sdk/e2e/utils/e2e-mocks'
@@ -50,6 +50,37 @@ function extractFiles(obj: unknown): unknown[] | undefined {
   return undefined
 }
 
+function isTextContentPart(
+  part: unknown,
+): part is { type: 'text'; text: string } {
+  return (
+    !!part &&
+    typeof part === 'object' &&
+    (part as { type?: unknown }).type === 'text' &&
+    typeof (part as { text?: unknown }).text === 'string'
+  )
+}
+
+function collectAssistantText(messages: Message[]): string {
+  const texts: string[] = []
+  for (const msg of messages) {
+    if (msg.role !== 'assistant' || !Array.isArray(msg.content)) continue
+    for (const part of msg.content) {
+      if (isTextContentPart(part)) {
+        texts.push(part.text)
+      }
+    }
+  }
+  return texts.join('\n')
+}
+
+function splitNewlinePaths(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+}
+
 function parseListedPaths(outputStr: string): string[] {
   try {
     const parsed = JSON.parse(outputStr)
@@ -75,14 +106,22 @@ function parseListedPaths(outputStr: string): string[] {
     }
     const direct = tryExtract(parsed)
     if (direct) return direct
+    // lastMessage/allMessages hide newline-separated paths as escaped \\n in JSON.
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const envelope = parsed as { type?: unknown; value?: unknown }
+      if (
+        (envelope.type === 'lastMessage' || envelope.type === 'allMessages') &&
+        Array.isArray(envelope.value)
+      ) {
+        const assistantText = collectAssistantText(envelope.value as Message[])
+        if (assistantText.length > 0) return splitNewlinePaths(assistantText)
+      }
+    }
   } catch {
     // fall through to line-based fallback
   }
   // Fallback: split only on newlines to avoid mis-splitting paths that contain commas.
-  return outputStr
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
+  return splitNewlinePaths(outputStr)
 }
 
 /**

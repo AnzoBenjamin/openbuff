@@ -250,6 +250,10 @@ describe('context-pruner handleSteps', () => {
       assistantToolBudget?: number
       userBudget?: number
       toolFactsBudget?: number
+      semanticBudget?: {
+        triggerBudgetTokens?: number
+        targetBudgetTokens?: number
+      }
     },
   ) => {
     mockAgentState.messageHistory = messages
@@ -2397,6 +2401,120 @@ describe('context-pruner spawn_agents with prompt and params', () => {
     expect(resumed).toContain('(discovered by file-picker)')
   })
 
+  test('keeps discovery-linked user constraint causally prior to file-picker facts when the live prompt is ephemeral', () => {
+    const constraint =
+      'CONSTRAINT_CONTEXT_RECALL: preserve semantic compaction before mechanical trimming.'
+    const discoveredPath =
+      'packages/agent-runtime/src/run-agent-step.ts'
+    const implementRequest =
+      `Implement the context lifecycle fix. ${constraint}`
+    const livePrompt: Message = {
+      ...createMessage('user', 'Say "DONE" and nothing else.'),
+      tags: ['USER_PROMPT'],
+    }
+    const messages = [
+      createMessage('user', implementRequest),
+      createToolCallMessage('call-picker', 'spawn_agents', {
+        agents: [
+          {
+            agent_type: 'file-picker',
+            prompt: 'Find context lifecycle implementation files',
+          },
+        ],
+      }),
+      createToolResultMessage('call-picker', 'spawn_agents', [
+        {
+          agentType: 'file-picker',
+          value: {
+            type: 'structuredOutput',
+            value: {
+              files: [
+                {
+                  path: discoveredPath,
+                  summary: 'Owns mid-turn compaction and live prompt handling.',
+                },
+              ],
+            },
+          },
+        },
+      ]),
+      livePrompt,
+    ]
+
+    const results = runHandleSteps(messages, 250000, 200000)
+    const content = results[0].input.messages[0].content[0].text
+
+    expect(content).toContain(constraint)
+    expect(content).toContain(discoveredPath)
+    expect(content).toContain('(discovered by file-picker)')
+    expect(content.indexOf(constraint)).toBeLessThan(
+      content.indexOf(discoveredPath),
+    )
+    expect(content).toContain(`Goal:\n  ${implementRequest}`)
+    expect(content).not.toContain('Goal:\n  Say "DONE"')
+  })
+
+  test('keeps discovery-linked constraint prior to file-picker facts when the live prompt is an SDK-wrapped ephemeral+params blob', () => {
+    const constraint =
+      'CONSTRAINT_CONTEXT_RECALL: preserve semantic compaction before mechanical trimming.'
+    const discoveredPath =
+      'packages/agent-runtime/src/run-agent-step.ts'
+    const implementRequest =
+      `Implement the context lifecycle fix. ${constraint}`
+    const livePrompt: Message = {
+      ...createMessage(
+        'user',
+        `<user_message>Say "DONE" and nothing else.
+
+{
+  "maxContextLength": 50000
+}</user_message>`,
+      ),
+      tags: ['USER_PROMPT'],
+    }
+    const messages = [
+      createMessage('user', implementRequest),
+      createToolCallMessage('call-picker', 'spawn_agents', {
+        agents: [
+          {
+            agent_type: 'file-picker',
+            prompt: 'Find context lifecycle implementation files',
+          },
+        ],
+      }),
+      createToolResultMessage('call-picker', 'spawn_agents', [
+        {
+          agentType: 'file-picker',
+          value: {
+            type: 'structuredOutput',
+            value: {
+              files: [
+                {
+                  path: discoveredPath,
+                  summary: 'Owns mid-turn compaction and live prompt handling.',
+                },
+              ],
+            },
+          },
+        },
+      ]),
+      createMessage('user', 'Round 1: ' + 'x'.repeat(2000)),
+      livePrompt,
+    ]
+
+    const results = runHandleSteps(messages, 250000, 200000)
+    const content = results[0].input.messages[0].content[0].text
+
+    expect(content).toContain(constraint)
+    expect(content).toContain(discoveredPath)
+    expect(content).toContain('(discovered by file-picker)')
+    expect(content.indexOf(constraint)).toBeLessThan(
+      content.indexOf(discoveredPath),
+    )
+    expect(content).toContain(`Goal:\n  ${implementRequest}`)
+    expect(content).not.toContain('Goal:\n  Say "DONE"')
+  })
+
   test('includes params in spawn_agents summary', () => {
     const messages = [
       createMessage('user', 'Run a command'),
@@ -3241,6 +3359,10 @@ describe('context-pruner threshold behavior', () => {
       assistantToolBudget?: number
       userBudget?: number
       toolFactsBudget?: number
+      semanticBudget?: {
+        triggerBudgetTokens?: number
+        targetBudgetTokens?: number
+      }
     },
   ) => {
     mockAgentState.messageHistory = messages
@@ -3380,6 +3502,31 @@ describe('context-pruner threshold behavior', () => {
     expect(under[0].input.messages).toHaveLength(2)
 
     const over = runHandleSteps(messages, 140_000)
+    expect(over[0].input.messages[0].content[0].text).toContain(
+      '<conversation_summary>',
+    )
+  })
+
+  test('params.semanticBudget overrides contextWindowTokens fallback trigger', () => {
+    // 1M-token fallback trigger is 700k; injected 50k must win under and over.
+    mockAgentState.contextWindowTokens = 1_000_000
+    const messages = [
+      createMessage('user', 'Hello'),
+      createMessage('assistant', 'Hi'),
+    ]
+    const semanticBudget = {
+      triggerBudgetTokens: 50_000,
+      targetBudgetTokens: 40_000,
+    }
+
+    const under = runHandleSteps(messages, 49_000, undefined, {
+      semanticBudget,
+    })
+    expect(under[0].input.messages).toHaveLength(2)
+
+    const over = runHandleSteps(messages, 50_000, undefined, {
+      semanticBudget,
+    })
     expect(over[0].input.messages[0].content[0].text).toContain(
       '<conversation_summary>',
     )
@@ -3806,10 +3953,10 @@ describe('context-pruner str_replace and write_file tool results', () => {
     expect(content).not.toContain(longDiff)
   })
 
-  test('truncates very large tool entries to 5k token limit', () => {
+  test('truncates very large tool entries to 2k token limit', () => {
     // spawn_agents with multiple non-blacklisted agents producing large outputs
     // Each agent output is capped before the overall TOOL_ENTRY_LIMIT cap.
-    // Use enough agents to exceed the 5k token (~15k char) entry limit after
+    // Use enough agents to exceed the 2k token (~6k char) entry limit after
     // per-agent compaction.
     const largeAgentResults = Array.from({ length: 7 }, (_, i) => ({
       agentType: `editor`,

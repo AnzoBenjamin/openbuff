@@ -81,23 +81,20 @@ describe('Context Pruner Agent Integration', () => {
         displayName: 'Context Pruner Test Agent',
         model: 'anthropic/claude-haiku-4.5',
         includeMessageHistory: true,
-        toolNames: ['spawn_agents'],
+        toolNames: ['spawn_agent_inline'],
         spawnableAgents: ['context-pruner'],
         handleSteps: function* () {
-          // Spawn context-pruner with a lower token limit to force pruning
+          // spawn_agent_inline copies pruned history back onto the parent.
           yield {
-            toolName: 'spawn_agents',
+            toolName: 'spawn_agent_inline',
             input: {
-              agents: [
-                {
-                  agent_type: 'context-pruner',
-                  params: {
-                    maxContextLength: 50000, // Low limit to force pruning
-                  },
-                },
-              ],
+              agent_type: 'context-pruner',
+              params: {
+                maxContextLength: 1_500, // Low limit to force pruning
+              },
             },
-          }
+            includeToolCall: false,
+          } as any
           yield { type: 'STEP_TEXT', text: 'PRUNING_COMPLETE' }
         },
       }
@@ -210,22 +207,19 @@ describe('Context Pruner Agent Integration', () => {
         displayName: 'Aggressive Prune Test Agent',
         model: 'anthropic/claude-haiku-4.5',
         includeMessageHistory: true,
-        toolNames: ['spawn_agents'],
+        toolNames: ['spawn_agent_inline'],
         spawnableAgents: ['context-pruner'],
         handleSteps: function* () {
           yield {
-            toolName: 'spawn_agents',
+            toolName: 'spawn_agent_inline',
             input: {
-              agents: [
-                {
-                  agent_type: 'context-pruner',
-                  params: {
-                    maxContextLength: 10000, // Very low limit to force aggressive pruning
-                  },
-                },
-              ],
+              agent_type: 'context-pruner',
+              params: {
+                maxContextLength: 400, // Very low limit to force aggressive pruning
+              },
             },
-          }
+            includeToolCall: false,
+          } as any
           yield { type: 'STEP_TEXT', text: 'DONE' }
         },
       }

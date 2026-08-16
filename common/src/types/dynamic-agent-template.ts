@@ -306,10 +306,12 @@ export const DynamicAgentTemplateSchema = DynamicAgentDefinitionSchema.extend({
   // )
   .refine(
     (data) => {
-      // If spawnableAgents array is non-empty, 'spawn_agents' tool must be included
+      // If spawnableAgents array is non-empty, a spawn tool must be included.
+      // Production parents often use spawn_agent_inline rather than spawn_agents.
       if (
         data.spawnableAgents.length > 0 &&
-        !data.toolNames.includes('spawn_agents')
+        !data.toolNames.includes('spawn_agents') &&
+        !data.toolNames.includes('spawn_agent_inline')
       ) {
         return false
       }
@@ -317,7 +319,7 @@ export const DynamicAgentTemplateSchema = DynamicAgentDefinitionSchema.extend({
     },
     {
       message:
-        "Non-empty spawnableAgents array requires the 'spawn_agents' tool. Add 'spawn_agents' to toolNames or remove spawnableAgents.",
+        "Non-empty spawnableAgents array requires a spawn tool. Add 'spawn_agents' or 'spawn_agent_inline' to toolNames or remove spawnableAgents.",
       path: ['toolNames'],
     },
   )

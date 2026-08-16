@@ -311,11 +311,11 @@ describe('DynamicAgentDefinitionSchema', () => {
       expect(result.success).toBe(true)
     })
 
-    it('should reject template with non-empty spawnableAgents but missing spawn_agents tool', () => {
+    it('should reject template with non-empty spawnableAgents but missing spawn tools', () => {
       const template = {
         ...validBaseTemplate,
         spawnableAgents: ['researcher', 'file-picker'], // Non-empty spawnableAgents
-        toolNames: ['end_turn', 'read_files'], // Missing spawn_agents
+        toolNames: ['end_turn', 'read_files'], // Missing spawn_agents and spawn_agent_inline
       }
 
       const result = DynamicAgentTemplateSchema.safeParse(template)
@@ -323,12 +323,12 @@ describe('DynamicAgentDefinitionSchema', () => {
       if (!result.success) {
         const spawnAgentsError = result.error.issues.find((issue) =>
           issue.message.includes(
-            "Non-empty spawnableAgents array requires the 'spawn_agents' tool",
+            'Non-empty spawnableAgents array requires a spawn tool',
           ),
         )
         expect(spawnAgentsError).toBeDefined()
         expect(spawnAgentsError?.message).toContain(
-          "Non-empty spawnableAgents array requires the 'spawn_agents' tool",
+          'Non-empty spawnableAgents array requires a spawn tool',
         )
       }
     })
@@ -345,6 +345,17 @@ describe('DynamicAgentDefinitionSchema', () => {
       if (result.success) {
         expect(result.data.spawnableAgentToolMode).toBe('direct')
       }
+    })
+
+    it('should accept template with non-empty spawnableAgents and spawn_agent_inline tool', () => {
+      const template = {
+        ...validBaseTemplate,
+        spawnableAgents: ['researcher', 'file-picker'],
+        toolNames: ['end_turn', 'spawn_agent_inline'],
+      }
+
+      const result = DynamicAgentTemplateSchema.safeParse(template)
+      expect(result.success).toBe(true)
     })
 
     it('should accept generic spawn mode while retaining spawn permissions', () => {
