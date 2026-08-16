@@ -250,6 +250,30 @@ plus read/outline tools. It does **not** run terminal commands itself. If
 `test_command` is provided, the agent reports that command back for the parent
 or `basher` to run during validation.
 
+Model-visible `edit_transaction` payload shape (tool name `edit_transaction`):
+
+```json
+{
+  "edits": [
+    {
+      "type": "str_replace",
+      "path": "packages/foo/__tests__/bar.test.ts",
+      "replacements": [
+        {
+          "oldString": "describe('bar', () => {",
+          "newString": "describe('bar', () => {\n  test('handles empty input', () => {\n    expect(bar('')).toBe(null)\n  })"
+        }
+      ]
+    },
+    {
+      "type": "create",
+      "path": "packages/foo/__tests__/baz.test.ts",
+      "content": "import { describe, expect, test } from 'bun:test'\n\ndescribe('baz', () => {\n  test('works', () => {\n    expect(true).toBe(true)\n  })\n})\n"
+    }
+  ]
+}
+```
+
 The agent's prompt contract is narrow: read the changed source, find an
 existing test in the same package, mimic that harness and assertion style,
 write focused behavior-oriented tests, and stop rather than modifying the
