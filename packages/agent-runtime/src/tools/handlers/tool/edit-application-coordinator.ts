@@ -20,13 +20,7 @@ import {
 import type { FileProcessingState } from './write-file'
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { ToolName } from '@codebuff/common/tools/constants'
-
-type ConfirmedPostEditAnchor = {
-  startLine: number
-  endLine: number
-  contentHash: string
-  readCapability: string
-}
+import type { ConfirmedPostEditAnchor } from '@codebuff/common/types/session-state'
 
 type CoordinatedApplication<T extends ToolName> =
   | {
@@ -151,6 +145,8 @@ function getPositiveApplicationEvidence(
           endLine: record.endLine,
           contentHash: record.contentHash,
           readCapability,
+          projectId,
+          runId,
         }
         const existing = mergedAnchors.get(targetPath)
         if (!existing) {
@@ -218,20 +214,44 @@ export function editOutputHasError<T extends ToolName>(
   return hasExplicitError(output)
 }
 
-function outputIndicatesStaleSnapshot(value: unknown, depth = 0): boolean {
-  if (depth > 6 || value === null || value === undefined) return false
+function collectStaleSnapshotPaths(
+  value: unknown,
+  depth = 0,
+  out: { paths: Set<string>; sawStructuredStale: boolean } = {
+    paths: new Set<string>(),
+    sawStructuredStale: false,
+  },
+): { paths: Set<string>; sawStructuredStale: boolean } {
+  if (depth > 6 || value === null || value === undefined) return out
   if (Array.isArray(value)) {
-    return value.some((item) => outputIndicatesStaleSnapshot(item, depth + 1))
+    for (const item of value) {
+      collectStaleSnapshotPaths(item, depth + 1, out)
+    }
+    return out
   }
-  if (typeof value === 'string') {
-    return /(?:stale\s+(?:snapshot|hash|range)|content\s+(?:changed|mismatch)|expected\s+hash)/i.test(
-      value,
-    )
+  if (typeof value !== 'object') return out
+
+  const record = value as Record<string, unknown>
+  if (record.errorCode === 'stale_snapshot') {
+    out.sawStructuredStale = true
+    if (typeof record.path === 'string' && record.path) {
+      out.paths.add(record.path)
+    } else if (typeof record.file === 'string' && record.file) {
+      out.paths.add(record.file)
+    }
   }
-  if (typeof value !== 'object') return false
-  return Object.values(value as Record<string, unknown>).some((nested) =>
-    outputIndicatesStaleSnapshot(nested, depth + 1),
-  )
+
+  if (Array.isArray(record.failures)) {
+    for (const failure of record.failures) {
+      collectStaleSnapshotPaths(failure, depth + 1, out)
+    }
+  }
+
+  for (const [key, nested] of Object.entries(record)) {
+    if (key === 'failures') continue
+    collectStaleSnapshotPaths(nested, depth + 1, out)
+  }
+  return out
 }
 
 function outputIndicatesUnconfirmedApplication(
@@ -306,6 +326,8 @@ function synthesizePostEditAnchor(params: {
       hash: contentHash,
       scope,
     }),
+    projectId,
+    runId,
   }
 }
 
@@ -357,22 +379,11 @@ export function commitAppliedEditPaths(params: {
       typeof wholeFileContent === 'string' &&
       fileProcessingState.strictReadBeforeEdit
     ) {
-      // A confirmed apply with runtime-known content (e.g. a `create`, whose
-      // bytes are exactly edit.content, already stored in
-      // wholeFileContentByPath) grants sticky whole-file authorization
-      // straight from those bytes — no client anchor evidence required. The
-      // confirmedAnchor 7-point check still governs whether a client-echoed
-      // anchor is trusted.
+      // Sticky-from-confirmed-apply is granted iff a whole-file post-edit
+      // anchor can be minted (client-verified 7-point anchor or
+      // synthesizePostEditAnchor). Empty/non-authoritative scope does not
+      // grant or overwrite sticky maps and does not store an anchor.
       const contentHash = getContentHash(wholeFileContent)
-      fileProcessingState.readAuthorizationsByPath ??= {}
-      fileProcessingState.readAuthorizationHashesByPath ??= {}
-      fileProcessingState.readAuthorizationsByPath[path] = true
-      fileProcessingState.readAuthorizationHashesByPath[path] = contentHash
-      // Prefer the verified client-echoed anchor; otherwise mint one from the
-      // known content so a follow-up delete can be authorized and the
-      // capability can be surfaced for reuse. Skip minting when no
-      // authoritative scope is available (the sticky grant above still
-      // stands).
       const anchor =
         confirmedAnchorsByPath?.get(path) ??
         synthesizePostEditAnchor({
@@ -382,6 +393,10 @@ export function commitAppliedEditPaths(params: {
           content: wholeFileContent,
         })
       if (anchor) {
+        fileProcessingState.readAuthorizationsByPath ??= {}
+        fileProcessingState.readAuthorizationHashesByPath ??= {}
+        fileProcessingState.readAuthorizationsByPath[path] = true
+        fileProcessingState.readAuthorizationHashesByPath[path] = contentHash
         fileProcessingState.confirmedPostEditAnchorsByPath ??= {}
         fileProcessingState.confirmedPostEditAnchorsByPath[path] = anchor
         grantedAnchorsByPath.set(path, anchor)
@@ -436,10 +451,23 @@ export async function coordinateEditApplication<T extends ToolName>(params: {
   }
 
   if (editOutputHasError(output)) {
-    if (outputIndicatesStaleSnapshot(output)) {
+    const staleSnapshot = collectStaleSnapshotPaths(output)
+    if (staleSnapshot.sawStructuredStale) {
+      // Coordinated batches are all-or-nothing: drop prepared state for every
+      // path even when only a subset of structured failures is stale.
       invalidatePreparedEditPaths({
         fileProcessingState: params.fileProcessingState,
         paths,
+        requiresFreshRead: false,
+      })
+      // Revoke only paths named by structured stale hits. A top-level
+      // stale_snapshot with no per-path file/path and no stale failures[]
+      // fails closed onto every coordinated path.
+      const stalePaths =
+        staleSnapshot.paths.size > 0 ? [...staleSnapshot.paths] : paths
+      invalidatePreparedEditPaths({
+        fileProcessingState: params.fileProcessingState,
+        paths: stalePaths,
         reason: 'stale_snapshot',
         sourceTool: params.toolName,
       })

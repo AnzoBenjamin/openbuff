@@ -200,8 +200,7 @@ export const handleStrReplace = (async (
     }
     if (typeof latestContent === 'string') {
       // In-process only: authorize this str_replace call; no durable sticky mint.
-      // Auto-reread runs only when there is no stored sticky, so clearing
-      // context_compacted here cannot open a hash-fresh write_file chain.
+      // The helper may drop failed-edit markers but keeps context_compacted.
       clearEditRereadRequirement(fileProcessingState, path)
       hadFreshWholeFileAuthorization = true
     } else {
@@ -243,9 +242,8 @@ export const handleStrReplace = (async (
   }
 
   // Hash-fresh authorization may clear prior reread markers for UX, but must
-  // preserve context_compacted until a successful unique apply (or a complete
-  // whole-file read_files grant). Otherwise a failed no-match attempt would
-  // drop the marker and let a later write_file overwrite on sticky alone.
+  // preserve context_compacted. Only a complete whole-file read_files grant
+  // or explicit whole-file basedOnRead may drop that marker.
   if (hadFreshWholeFileAuthorization) {
     const rereadReq = getEditRereadRequirement(fileProcessingState, path)
     if (rereadReq?.reason !== 'context_compacted') {
@@ -433,8 +431,9 @@ export const handleStrReplace = (async (
       ) {
         delete fileProcessingState.consecutiveStrReplaceFailuresByPath[path]
       }
-      // Clear context_compacted only after a successful unique apply. Unique
-      // oldString is the safety bound that authorizes dropping the marker.
+      // Unique apply may drop failed-edit markers via the helper, but must
+      // not clear context_compacted. Only a whole-file read_files grant or
+      // explicit whole-file basedOnRead may drop that reason.
       if (
         !hadAutoCorrect &&
         'content' in strReplaceResult &&

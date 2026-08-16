@@ -13,6 +13,7 @@ import {
   getModelContextMessageLimit,
   getSemanticCompactionBudget,
 } from './util/context-pruning'
+import { remintConfirmedPostEditAnchors } from './util/read-authorization'
 
 import type { FileProcessingState } from './tools/handlers/tool/write-file'
 import type { ExecuteToolCallParams } from './tools/tool-executor'
@@ -401,6 +402,13 @@ export async function runProgrammaticStep(
     readAuthorizationHashesByPath: {
       ...(agentState.readAuthorizationHashesByPath ?? {}),
     },
+    confirmedPostEditAnchorsByPath: remintConfirmedPostEditAnchors({
+      anchors: agentState.confirmedPostEditAnchorsByPath,
+      projectId:
+        (params as { fileContext?: { projectRoot?: string } }).fileContext
+          ?.projectRoot ?? '',
+      runId: agentState.runId ?? '',
+    }),
     editRereadRequirementsByPath: {
       ...(agentState.editRereadRequirementsByPath ?? {}),
     },
@@ -623,6 +631,9 @@ export async function runProgrammaticStep(
     }
     agentState.readAuthorizationHashesByPath = {
       ...(fileProcessingState.readAuthorizationHashesByPath ?? {}),
+    }
+    agentState.confirmedPostEditAnchorsByPath = {
+      ...(fileProcessingState.confirmedPostEditAnchorsByPath ?? {}),
     }
     agentState.editRereadRequirementsByPath = {
       ...(fileProcessingState.editRereadRequirementsByPath ?? {}),

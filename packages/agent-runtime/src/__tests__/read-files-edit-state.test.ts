@@ -2,7 +2,10 @@ import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-run
 import { editTransactionParams } from '@codebuff/common/tools/params/tool/edit-transaction'
 import { buildReadFilesResultV1 } from '@codebuff/common/tools/results/filesystem'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
-import { getExactContentHash } from '@codebuff/common/util/content-hash'
+import {
+  decodeReadCapabilityToken,
+  getExactContentHash,
+} from '@codebuff/common/util/content-hash'
 import { describe, expect, it } from 'bun:test'
 
 import { handleEditTransaction } from '../tools/handlers/tool/edit-transaction'
@@ -19,6 +22,10 @@ import {
   getContentHash,
 } from '../process-str-replace'
 import { processStream } from '../tools/stream-parser'
+import {
+  remintConfirmedPostEditAnchors,
+  revokeImplicitReadAuthorizationsAfterCompaction,
+} from '../util/read-authorization'
 import { createMockStreamWithToolCalls, mockFileContext } from './test-utils'
 
 import type { FileProcessingState } from '../tools/handlers/tool/write-file'
@@ -4861,6 +4868,7 @@ describe('read_files edit-state recovery', () => {
             type: 'json' as const,
             value: {
               file: toolCall.input.path,
+              errorCode: 'stale_snapshot',
               errorMessage: 'replace_range rejected: stale range',
             },
           },
@@ -5287,7 +5295,8 @@ describe('read_files edit-state recovery', () => {
         fileProcessingState.editRereadRequirementsByPath?.[path]?.reason,
       ).toBe('context_compacted')
 
-      // str_replace unique may still apply on hash-fresh and clear the marker.
+      // Unique str_replace may still apply on hash-fresh, but must NOT clear
+      // context_compacted — only a whole-file read or basedOnRead may.
       let replaceApplied = false
       const replaceResult = await handleStrReplace({ ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
@@ -5323,8 +5332,46 @@ describe('read_files edit-state recovery', () => {
         expect(replaceResult.output[0].value).not.toHaveProperty('errorMessage')
       }
       expect(
-        fileProcessingState.editRereadRequirementsByPath?.[path],
-      ).toBeUndefined()
+        fileProcessingState.editRereadRequirementsByPath?.[path]?.reason,
+      ).toBe('context_compacted')
+
+      // Hash-fresh write_file without basedOnRead stays blocked after unique apply.
+      const postReplaceContent = 'export const value = 3\n'
+      let followUpWriteApplied = false
+      const followUpWrite = await handleWriteFile({ ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'write-after-unique-replace-compaction',
+          toolName: 'write_file',
+          input: { path, content: 'export const value = 4\n' },
+        },
+        agentState: { messageHistory: [] },
+        clientSessionId: 'test-session',
+        fileProcessingState,
+        fingerprintId: 'test-fingerprint',
+        logger,
+        prompt: undefined,
+        userId: undefined,
+        userInputId: 'test-input',
+        requestOptionalFile: async () => postReplaceContent,
+        requestClientToolCall: async () => {
+          followUpWriteApplied = true
+          return []
+        },
+        writeToClient: () => {},
+      } as any)
+
+      expect(followUpWriteApplied).toBe(false)
+      expect(followUpWrite.output[0]?.type).toBe('json')
+      if (followUpWrite.output[0]?.type === 'json') {
+        const msg = String((followUpWrite.output[0].value as any).errorMessage)
+        expect(msg).toMatch(/context compaction|read_files/i)
+        expect(msg).not.toContain('cap.v3.')
+        expect(msg).not.toContain('basedOnRead=')
+      }
+      expect(
+        fileProcessingState.editRereadRequirementsByPath?.[path]?.reason,
+      ).toBe('context_compacted')
     })
 
     it('failed str_replace after compaction revokes authorization so write_file stays blocked', async () => {
@@ -5424,7 +5471,7 @@ describe('read_files edit-state recovery', () => {
       // COMPACTION-ALLOWMULTIPLE-NO-CLEAR: a blind replace-all apply is not
       // evidence the model knows the file content, so it must NOT clear the
       // context_compacted marker. A subsequent whole-file overwrite stays
-      // blocked (a unique str_replace apply WOULD have cleared it).
+      // blocked. A unique str_replace apply also must not clear it.
       const path = 'src/compacted.ts'
       const initialContent = 'const x = 1\nconst y = 2\n'
       const replacedContent = 'const x = 10\nconst y = 2\n'
@@ -5525,10 +5572,9 @@ describe('read_files edit-state recovery', () => {
       ).toBe('context_compacted')
     })
 
-    it('unique str_replace apply clears context_compacted so write_file can proceed', async () => {
-      // Contrast: a unique-anchor str_replace apply IS evidence the model knows
-      // the file content, so it clears the context_compacted marker and a later
-      // whole-file overwrite is authorized.
+    it('unique str_replace apply keeps context_compacted so write_file stays blocked', async () => {
+      // Unique-anchor apply may refresh sticky hashes but must not clear
+      // context_compacted. Hash-fresh write_file without basedOnRead stays blocked.
       const path = 'src/compacted.ts'
       const initialContent = 'const x = 1\nconst y = 2\n'
       const replacedContent = 'const x = 10\nconst y = 2\n'
@@ -5586,10 +5632,9 @@ describe('read_files edit-state recovery', () => {
       if (replaceResult.output[0]?.type === 'json') {
         expect(replaceResult.output[0].value).not.toHaveProperty('errorMessage')
       }
-      // The unique-anchor apply clears the marker.
       expect(
-        fileProcessingState.editRereadRequirementsByPath?.[path],
-      ).toBeUndefined()
+        fileProcessingState.editRereadRequirementsByPath?.[path]?.reason,
+      ).toBe('context_compacted')
 
       let writeApplied = false
       const writeResult = await handleWriteFile({ ...defaultTestHandlerAuthority,
@@ -5608,22 +5653,26 @@ describe('read_files edit-state recovery', () => {
         userId: undefined,
         userInputId: 'test-input',
         requestOptionalFile: async () => replacedContent,
-        requestClientToolCall: async (toolCall: any) => {
+        requestClientToolCall: async () => {
           writeApplied = true
-          return confirmedMutationOutput(
-            toolCall,
-            { [path]: 'const x = 100\nconst y = 2\n' },
-            { projectId: mockFileContext.projectRoot, runId },
-          )
+          return []
         },
         writeToClient: () => {},
       } as any)
 
-      expect(writeApplied).toBe(true)
+      expect(writeApplied).toBe(false)
       expect(writeResult.output[0]?.type).toBe('json')
       if (writeResult.output[0]?.type === 'json') {
-        expect(writeResult.output[0].value).not.toHaveProperty('errorMessage')
+        expect(
+          String((writeResult.output[0].value as any).errorMessage),
+        ).toMatch(/compaction|read_files/i)
+        expect(String((writeResult.output[0].value as any).errorMessage)).not.toContain(
+          'basedOnRead=',
+        )
       }
+      expect(
+        fileProcessingState.editRereadRequirementsByPath?.[path]?.reason,
+      ).toBe('context_compacted')
     })
 
     it('proper-subset range read after compaction does not clear context_compacted', async () => {
@@ -6817,7 +6866,7 @@ describe('read_files edit-state recovery', () => {
       ).toBe(getContentHash(createdContent))
     })
 
-    it('cross-turn hydration keeps sticky read authorization but not the confirmed post-edit anchor', async () => {
+    it('cross-turn hydration remints the confirmed post-edit anchor with sticky auth', async () => {
       const path = 'src/cross-turn.ts'
       const createdContent = 'export const c = 1\n'
       const runId = 'cross-turn-hydration-strict-run'
@@ -6857,22 +6906,14 @@ describe('read_files edit-state recovery', () => {
       if (createOutput.type === 'json') {
         expect(createOutput.value).not.toHaveProperty('errorMessage')
       }
-      // After the confirmed create, state holds BOTH a sticky authorization and
-      // a confirmed post-edit anchor for the path.
       expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
       expect(fileProcessingState.readAuthorizationHashesByPath?.[path]).toBe(
         getContentHash(createdContent),
       )
-      expect(
-        fileProcessingState.confirmedPostEditAnchorsByPath?.[path],
-      ).toBeDefined()
+      const storedAnchor =
+        fileProcessingState.confirmedPostEditAnchorsByPath?.[path]
+      expect(storedAnchor).toBeDefined()
 
-      // Simulate the per-turn hydration exactly as stream-parser.ts:222-250
-      // does: build a FRESH fileProcessingState copying ONLY the durable
-      // registry fields (readAuthorizationsByPath /
-      // readAuthorizationHashesByPath / editRereadRequirementsByPath). The
-      // confirmed post-edit anchor is turn-local and is intentionally NOT
-      // hydrated.
       const nextTurnState = createFileProcessingState()
       nextTurnState.strictReadBeforeEdit = true
       nextTurnState.readAuthorizationsByPath = {
@@ -6884,17 +6925,31 @@ describe('read_files edit-state recovery', () => {
       nextTurnState.editRereadRequirementsByPath = {
         ...(fileProcessingState.editRereadRequirementsByPath ?? {}),
       }
+      nextTurnState.confirmedPostEditAnchorsByPath =
+        remintConfirmedPostEditAnchors({
+          anchors: fileProcessingState.confirmedPostEditAnchorsByPath,
+          projectId: mockFileContext.projectRoot,
+          runId,
+        })
 
-      // Sticky auth + hash survive the turn boundary.
       expect(nextTurnState.readAuthorizationsByPath?.[path]).toBe(true)
       expect(nextTurnState.readAuthorizationHashesByPath?.[path]).toBe(
         getContentHash(createdContent),
       )
-      // The confirmed post-edit anchor does NOT survive: it is turn-local and
-      // the durable hydration set omits it.
-      expect(
-        nextTurnState.confirmedPostEditAnchorsByPath?.[path],
-      ).toBeUndefined()
+      const reminted = nextTurnState.confirmedPostEditAnchorsByPath?.[path]
+      expect(reminted).toBeDefined()
+      expect(storedAnchor).toBeDefined()
+      if (!reminted || !storedAnchor) return
+      expect(reminted.contentHash).toBe(storedAnchor.contentHash)
+      expect(reminted.startLine).toBe(storedAnchor.startLine)
+      expect(reminted.endLine).toBe(storedAnchor.endLine)
+      const decoded = decodeReadCapabilityToken(reminted.readCapability)
+      expect(typeof decoded).not.toBe('string')
+      if (typeof decoded !== 'string') {
+        expect(decoded.hash).toBe(storedAnchor.contentHash)
+        expect(decoded.startLine).toBe(storedAnchor.startLine)
+        expect(decoded.endLine).toBe(storedAnchor.endLine)
+      }
     })
 
     it('move on an externally-modified created file still fails closed', async () => {
@@ -7691,7 +7746,7 @@ describe('processStream cross-turn read-before-edit', () => {
     includeMessageHistory: true,
     inheritParentSystemPrompt: false,
     mcpServers: {},
-    toolNames: ['read_files', 'str_replace', 'end_turn'],
+    toolNames: ['read_files', 'str_replace', 'write_file', 'end_turn'],
     spawnableAgents: [],
     systemPrompt: 'Test system prompt',
     instructionsPrompt: 'Test instructions',
@@ -7878,5 +7933,110 @@ describe('processStream cross-turn read-before-edit', () => {
     expect(
       agentState.readAuthorizationHashesByPath?.[targetPath],
     ).toBeUndefined()
+  })
+
+  it('keeps context_compacted after unique str_replace so processStream write_file stays blocked', async () => {
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const targetPath = 'src/compacted-stream.ts'
+    const diskContent = 'export const value = 1\n'
+    const replacedContent = 'export const value = 2\n'
+    agentState.readAuthorizationsByPath = { [targetPath]: true }
+    agentState.readAuthorizationHashesByPath = {
+      [targetPath]: getContentHash(diskContent),
+    }
+    revokeImplicitReadAuthorizationsAfterCompaction(agentState)
+    expect(agentState.editRereadRequirementsByPath?.[targetPath]?.reason).toBe(
+      'context_compacted',
+    )
+
+    let writeFileInvoked = false
+    let currentContent = diskContent
+
+    const agentRuntimeImpl = {
+      ...TEST_AGENT_RUNTIME_IMPL,
+      sendAction: () => {},
+      requestFiles: async () =>
+        buildWholeFileReadResultV1([targetPath], () => currentContent),
+      requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+        filePath === targetPath ? currentContent : null,
+      requestToolCall: async (params: any) => {
+        if (params.toolName === 'str_replace') {
+          currentContent = replacedContent
+          const output = confirmedMutationOutput(
+            {
+              toolCallId: params.callId,
+              input: params.input,
+            },
+            { [targetPath]: replacedContent },
+            {
+              projectId: mockFileContext.projectRoot,
+              runId: 'test-run-id',
+            },
+          )
+          const canonicalReceipt: CommitReceiptV1 =
+            output[0].value.authorityReceipt
+          return { output, canonicalReceipt }
+        }
+        if (params.toolName === 'write_file') {
+          writeFileInvoked = true
+          return { output: [] }
+        }
+        return { output: [] }
+      },
+    } as AgentRuntimeDeps & AgentRuntimeScopedDeps
+
+    const stream = createMockStreamWithToolCalls([
+      {
+        toolName: 'str_replace',
+        input: {
+          path: targetPath,
+          replacements: [
+            {
+              oldString: 'export const value = 1',
+              newString: 'export const value = 2',
+              allowMultiple: false,
+            },
+          ],
+        },
+      },
+      {
+        toolName: 'write_file',
+        input: { path: targetPath, content: 'export const value = 3\n' },
+      },
+      { toolName: 'end_turn', input: {} },
+    ])
+
+    await processStream({
+      ...agentRuntimeImpl,
+      agentContext: {},
+      agentState,
+      agentStepId: 'compaction-turn',
+      agentTemplate: testAgentTemplate,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fileContext: mockFileContext,
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { 'test-agent': testAgentTemplate },
+      messages: [],
+      prompt: 'test prompt',
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      stream,
+      system: 'test system',
+      tools: {},
+      userId: 'test-user',
+      userInputId: 'test-input-id',
+      onCostCalculated: async () => {},
+      onResponseChunk: () => {},
+    })
+
+    expect(writeFileInvoked).toBe(false)
+    expect(agentState.editRereadRequirementsByPath?.[targetPath]?.reason).toBe(
+      'context_compacted',
+    )
   })
 })
