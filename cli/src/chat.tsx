@@ -67,6 +67,11 @@ import {
   setupOpenbuffProviderFromArgs,
 } from './utils/openbuff-provider'
 import { getDiffStats, type DiffStats } from './utils/git'
+import {
+  peekIndexStatus,
+  shouldForceStatusLineForIndex,
+  type IndexStatusPeek,
+} from './utils/index-status'
 
 import {
   type ChatKeyboardState,
@@ -390,6 +395,7 @@ export const Chat = ({
   // onTotalCost callbacks). Model name + git diff-stats for the status bar.
   const [sessionCostCents, setSessionCostCents] = useState<number>(0)
   const [diffStats, setDiffStats] = useState<DiffStats | null>(null)
+  const [indexStatus, setIndexStatus] = useState<IndexStatusPeek>(null)
 
   // Resolve the model name for the active agent mode from the provider config.
   const modelName = useMemo(() => {
@@ -413,6 +419,15 @@ export const Chat = ({
       setDiffStats(getDiffStats({ cwd }))
     }
   }, [isStreaming])
+
+  // Peek index status from the existing singleton (~2s). getStatus() may
+  // schedule an age-stale refresh; do not call ensureBuilt() from the UI.
+  useEffect(() => {
+    const refresh = () => setIndexStatus(peekIndexStatus())
+    refresh()
+    const interval = setInterval(refresh, 2_000)
+    return () => clearInterval(interval)
+  }, [])
 
   // When streaming completes, flush any pending bash commands into history (ghost mode only)
   // Non-ghost mode commands are already in history and will be cleared when user sends next message
@@ -1470,7 +1485,10 @@ export const Chat = ({
 
   const shouldShowStatusLine =
     !feedbackMode &&
-    (hasStatusIndicatorContent || shouldShowQueuePreview || !isAtBottom)
+    (hasStatusIndicatorContent ||
+      shouldShowQueuePreview ||
+      shouldForceStatusLineForIndex(indexStatus) ||
+      !isAtBottom)
 
   const handleCloseModelRoutePicker = useCallback(() => {
     setModelRoutePickerOpen(false)
@@ -1720,6 +1738,7 @@ export const Chat = ({
             sessionCostCents={sessionCostCents}
             modelName={modelName}
             diffStats={diffStats}
+            indexStatus={indexStatus}
             onStop={chatKeyboardHandlers.onInterruptStream}
           />
         )}

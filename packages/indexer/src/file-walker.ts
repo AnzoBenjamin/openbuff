@@ -178,6 +178,157 @@ export async function walkProject(
   return (await walkProjectDetailed(projectRoot, extraExclude)).files
 }
 
+type ScopedMatcher = { base: string; matcher: ReturnType<typeof ignore> }
+
+/**
+ * Stat specific relative paths without walking the project tree.
+ * Applies the same exclusion policy and per-file filters as
+ * {@link walkProjectDetailed}: ancestor `.gitignore` / `.openbuffignore` /
+ * `.codebuffignore` patterns, `ignore()`-style `extraExclude` globs,
+ * basename/prefix excludes, default exclude dirs, size/binary/3D, sensitive,
+ * and generated operational artifacts.
+ */
+export async function statProjectFiles(
+  projectRoot: string,
+  relativePaths: string[],
+  extraExclude: string[] = [],
+): Promise<WalkedFile[]> {
+  const normalizedExtraExclude = extraExclude.map((item) =>
+    normalizeRelativePath(item),
+  )
+  const extraExcludeSet = new Set(
+    normalizedExtraExclude.map((item) => item.replace(/\/$/, '')),
+  )
+  // Cache directory matchers across stated paths (O(depth) per unique dir).
+  const directoryMatcherCache = new Map<string, ScopedMatcher>()
+  const results: WalkedFile[] = []
+  for (const rawPath of relativePaths) {
+    const relativePath = normalizeRelativePath(rawPath).replace(/^\.\//, '')
+    if (!relativePath) continue
+    if (
+      path.isAbsolute(rawPath) ||
+      path.isAbsolute(relativePath) ||
+      relativePath.startsWith('/') ||
+      relativePath.split('/').includes('..')
+    ) {
+      continue
+    }
+    if (
+      isMandatorySensitiveReadPath(relativePath) ||
+      isGeneratedOperationalArtifact(relativePath) ||
+      isExtraExcludedPath(relativePath, extraExcludeSet) ||
+      isIgnoredLikeWalk(
+        projectRoot,
+        relativePath,
+        normalizedExtraExclude,
+        extraExcludeSet,
+        directoryMatcherCache,
+      )
+    ) {
+      continue
+    }
+    const absolutePath = path.join(projectRoot, relativePath)
+    let stat: fs.Stats
+    try {
+      stat = await fs.promises.stat(absolutePath)
+    } catch {
+      continue
+    }
+    if (!stat.isFile()) continue
+    const ext = path.extname(relativePath).toLowerCase()
+    const is3dAsset = THREE_D_ASSET_EXTENSIONS.has(ext)
+    if (stat.size > MAX_FILE_SIZE && !is3dAsset) continue
+    if (BINARY_EXTENSIONS.has(ext) && !is3dAsset) continue
+    results.push({
+      absolutePath,
+      relativePath,
+      ext,
+      mtime: stat.mtimeMs,
+      size: stat.size,
+      ...(is3dAsset
+        ? { asset: { kind: '3d' as const, format: ext.slice(1) } }
+        : {}),
+    })
+  }
+  return results
+}
+
+function isExtraExcludedPath(
+  relativePath: string,
+  extraExcludeSet: Set<string>,
+): boolean {
+  const segments = relativePath.split('/')
+  for (const exclude of extraExcludeSet) {
+    if (!exclude) continue
+    if (relativePath === exclude || relativePath.startsWith(`${exclude}/`)) {
+      return true
+    }
+    if (!exclude.includes('/') && segments.includes(exclude)) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Apply walkProjectDetailed ignore semantics for a single relative path:
+ * load ancestor ignore files from projectRoot (O(depth), no tree walk) and
+ * evaluate `ignore()` matchers the same way the recursive walk does.
+ */
+function isIgnoredLikeWalk(
+  projectRoot: string,
+  relativePath: string,
+  extraExclude: string[],
+  extraExcludeSet: Set<string>,
+  directoryMatcherCache: Map<string, ScopedMatcher>,
+): boolean {
+  const segments = relativePath.split('/').filter(Boolean)
+  if (segments.length === 0) return true
+
+  let currentAbs = projectRoot
+  const parents: ScopedMatcher[] = []
+
+  for (let i = 0; i < segments.length; i++) {
+    const name = segments[i]!
+    const isLast = i === segments.length - 1
+
+    if (!isLast) {
+      if (DEFAULT_EXCLUDE_DIRS.has(name) || extraExcludeSet.has(name)) {
+        return true
+      }
+    }
+
+    let directoryMatcher = directoryMatcherCache.get(currentAbs)
+    if (!directoryMatcher) {
+      directoryMatcher = {
+        base: currentAbs,
+        matcher: ignore().add([
+          ...loadIgnorePatterns(path.join(currentAbs, '.gitignore')),
+          ...loadIgnorePatterns(path.join(currentAbs, '.openbuffignore')),
+          ...loadIgnorePatterns(path.join(currentAbs, '.codebuffignore')),
+          ...(currentAbs === projectRoot ? extraExclude : []),
+        ]),
+      }
+      directoryMatcherCache.set(currentAbs, directoryMatcher)
+    }
+
+    const matchers = [...parents, directoryMatcher]
+    const abs = path.join(currentAbs, name)
+    const ignored = matchers.some(({ base, matcher }) => {
+      const scoped = normalizeRelativePath(path.relative(base, abs))
+      return scoped && matcher.ignores(isLast ? scoped : `${scoped}/`)
+    })
+    if (ignored) return true
+
+    if (!isLast) {
+      parents.push(directoryMatcher)
+      currentAbs = abs
+    }
+  }
+
+  return false
+}
+
 export async function walkProjectDetailed(
   projectRoot: string,
   extraExclude: string[] = [],

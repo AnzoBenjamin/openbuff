@@ -156,6 +156,146 @@ describe('metadata indexer', () => {
     )
   })
 
+  test('complete mutation delta does not walk the full project tree', async () => {
+    const root = await makeTempProject({
+      'docs/target.md': '# Target\n\nold target\n',
+      'docs/other.md': '# Other\n\nother\n',
+    })
+    const first = await buildMetadataIndex(root)
+    await fs.promises.writeFile(
+      path.join(root, 'docs/target.md'),
+      '# Target\n\nnew target\n',
+    )
+
+    const readdirSpy = spyOn(fs.promises, 'readdir')
+    try {
+      const precise = await updateMetadataIndex(
+        first,
+        root,
+        {},
+        {
+          changedPaths: ['docs/target.md'],
+          complete: true,
+        },
+      )
+      expect(readdirSpy).not.toHaveBeenCalled()
+      expect(precise.files['docs/target.md']?.hash).not.toBe(
+        first.files['docs/target.md']?.hash,
+      )
+      expect(precise.files['docs/other.md']?.hash).toBe(
+        first.files['docs/other.md']?.hash,
+      )
+      expect(precise.coverage?.truncated).toBe(first.coverage?.truncated)
+      expect(precise.coverage?.skippedFiles).toBe(first.coverage?.skippedFiles)
+      expect(precise.coverage?.skippedPrefixes).toEqual(
+        first.coverage?.skippedPrefixes,
+      )
+    } finally {
+      readdirSpy.mockRestore()
+    }
+  })
+
+  test('complete:true delta indexes a newly created path without readdir and does not absorb a sibling omitted from changedPaths', async () => {
+    const root = await makeTempProject({
+      'docs/existing.md': '# Existing\n\nkeep\n',
+    })
+    const first = await buildMetadataIndex(root)
+    expect(first.files['docs/existing.md']).toBeDefined()
+    expect(first.files['docs/created.md']).toBeUndefined()
+    expect(first.files['docs/sibling-new.md']).toBeUndefined()
+
+    await fs.promises.writeFile(
+      path.join(root, 'docs/created.md'),
+      '# Created\n\nnew file content\n',
+      'utf8',
+    )
+    await fs.promises.writeFile(
+      path.join(root, 'docs/sibling-new.md'),
+      '# Sibling\n\nomitted from delta\n',
+      'utf8',
+    )
+
+    const readdirSpy = spyOn(fs.promises, 'readdir')
+    try {
+      const precise = await updateMetadataIndex(
+        first,
+        root,
+        {},
+        {
+          changedPaths: ['docs/created.md'],
+          complete: true,
+        },
+      )
+      expect(readdirSpy).not.toHaveBeenCalled()
+      expect(precise.files['docs/created.md']).toBeDefined()
+      expect(precise.files['docs/created.md']?.hash).toHaveLength(64)
+      expect(precise.files['docs/created.md']?.headings).toContain('Created')
+      // Sibling created on disk but omitted from changedPaths must not be absorbed.
+      expect(precise.files['docs/sibling-new.md']).toBeUndefined()
+      expect(precise.files['docs/existing.md']?.hash).toBe(
+        first.files['docs/existing.md']?.hash,
+      )
+    } finally {
+      readdirSpy.mockRestore()
+    }
+  })
+
+  test('complete:true delta refuses to index a newly created gitignored path', async () => {
+    const root = await makeTempProject({
+      'docs/keep.md': '# Keep\n\nvisible\n',
+      '.gitignore': 'secrets/\n',
+    })
+    const first = await buildMetadataIndex(root)
+    expect(first.files['docs/keep.md']).toBeDefined()
+
+    await fs.promises.mkdir(path.join(root, 'secrets'), { recursive: true })
+    await fs.promises.writeFile(
+      path.join(root, 'secrets/token.md'),
+      '# Token\n\nuser-ignored secret\n',
+      'utf8',
+    )
+
+    const precise = await updateMetadataIndex(
+      first,
+      root,
+      {},
+      {
+        changedPaths: ['secrets/token.md'],
+        complete: true,
+      },
+    )
+    expect(precise.files['secrets/token.md']).toBeUndefined()
+    expect(precise.files['docs/keep.md']).toBeDefined()
+  })
+
+  test('complete mutation delta removes a previously indexed path that now fails walker filters', async () => {
+    const root = await makeTempProject({
+      'docs/keep.md': '# Keep\n\nkeep me\n',
+      'docs/grow.md': '# Grow\n\nsmall\n',
+    })
+    const first = await buildMetadataIndex(root)
+    expect(first.files['docs/grow.md']).toBeDefined()
+    expect(first.files['docs/keep.md']).toBeDefined()
+
+    await fs.promises.writeFile(
+      path.join(root, 'docs/grow.md'),
+      'x'.repeat(500_001),
+    )
+    const updated = await updateMetadataIndex(
+      first,
+      root,
+      {},
+      {
+        changedPaths: ['docs/grow.md'],
+        complete: true,
+      },
+    )
+    expect(updated.files['docs/grow.md']).toBeUndefined()
+    expect(updated.graph.nodes['file:docs/grow.md']).toBeUndefined()
+    expect(updated.files['docs/keep.md']).toBeDefined()
+    expect(updated.graph.nodes['file:docs/keep.md']).toBeDefined()
+  })
+
   test('drops stale metadata when a walked file cannot be read during incremental hashing', async () => {
     const root = await makeTempProject({
       'docs/a.md': '# Alpha\n\nalpha topic\n',

@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   BINARY_EXTENSIONS,
   normalizeRelativePath,
+  statProjectFiles,
   walkProject,
   walkProjectDetailed,
 } from './file-walker'
@@ -320,5 +321,115 @@ describe('file-walker walkProject', () => {
     )
     const files = await walkProject(root)
     expect(files).toEqual([])
+  })
+})
+
+describe('file-walker statProjectFiles', () => {
+  test('stats only the requested paths and applies walker filters', async () => {
+    const root = await makeTempProject({
+      'src/keep.ts': 'export const keep = true\n',
+      'src/missing-neighbor.ts': 'export const gone = true\n',
+      'assets/player.png': '\x89PNG fake binary\n',
+      'assets/model.fbx': 'binary fbx data\n',
+      '.env': 'TOKEN=secret\n',
+      '.agents/sessions/a/findings.md': 'stale audit\n',
+    })
+    await fs.promises.unlink(path.join(root, 'src/missing-neighbor.ts'))
+
+    const files = await statProjectFiles(root, [
+      'src/keep.ts',
+      'src/missing-neighbor.ts',
+      'assets/player.png',
+      'assets/model.fbx',
+      '.env',
+      '.agents/sessions/a/findings.md',
+      'src/does-not-exist.ts',
+    ])
+    const relPaths = files.map((file) => file.relativePath)
+    expect(relPaths).toEqual(['src/keep.ts', 'assets/model.fbx'])
+    expect(
+      files.find((file) => file.relativePath === 'assets/model.fbx')?.asset,
+    ).toEqual({
+      kind: '3d',
+      format: 'fbx',
+    })
+  })
+
+  test('rejects absolute paths and parent-directory segments', async () => {
+    const root = await makeTempProject({
+      'src/keep.ts': 'export const keep = true\n',
+    })
+    const files = await statProjectFiles(root, [
+      '/etc/passwd',
+      '../secret.ts',
+      'src/../../etc/passwd',
+      'src/keep.ts',
+    ])
+    const relPaths = files.map((file) => file.relativePath)
+    expect(relPaths).toEqual(['src/keep.ts'])
+    expect(relPaths).not.toContain('/etc/passwd')
+    expect(relPaths).not.toContain('../secret.ts')
+    expect(relPaths).not.toContain('src/../../etc/passwd')
+  })
+
+  test('honors extraExclude (basename, prefix, and ignore-style globs) and skips gitignored paths', async () => {
+    const root = await makeTempProject({
+      'src/keep.ts': 'export const keep = true\n',
+      'src/skip-me.ts': 'export const skip = true\n',
+      'vendor/lib/hidden.ts': 'export const vendor = true\n',
+      'logs/app.log': 'log line\n',
+      'tmp-data/cache.ts': 'export const cache = true\n',
+      '.gitignore': 'logs/\n',
+      'src/.gitignore': 'skip-me.ts\n',
+      'src/.openbuffignore': 'nested-secret.ts\n',
+      'src/nested-secret.ts': 'export const secret = true\n',
+      '.codebuffignore': '*.tmp.ts\n',
+      'scratch.tmp.ts': 'export const tmp = true\n',
+    })
+
+    const files = await statProjectFiles(
+      root,
+      [
+        'src/keep.ts',
+        'src/skip-me.ts',
+        'vendor/lib/hidden.ts',
+        'logs/app.log',
+        'tmp-data/cache.ts',
+        'src/nested-secret.ts',
+        'scratch.tmp.ts',
+      ],
+      ['vendor', 'tmp-data/', 'scratch.tmp.ts'],
+    )
+    const relPaths = files.map((file) => file.relativePath)
+
+    // Kept: not excluded by basename, prefix, ignore globs, or gitignore.
+    expect(relPaths).toEqual(['src/keep.ts'])
+
+    // Nested gitignore (basename pattern via .gitignore).
+    expect(relPaths).not.toContain('src/skip-me.ts')
+    // Root .gitignore directory pattern.
+    expect(relPaths).not.toContain('logs/app.log')
+    // Nested .openbuffignore.
+    expect(relPaths).not.toContain('src/nested-secret.ts')
+    // Root .codebuffignore glob (also listed in extraExclude).
+    expect(relPaths).not.toContain('scratch.tmp.ts')
+    // extraExclude basename / prefix (same policy as walkProjectDetailed).
+    expect(relPaths).not.toContain('vendor/lib/hidden.ts')
+    expect(relPaths).not.toContain('tmp-data/cache.ts')
+
+    // Walk agrees on the same exclusion set for these paths.
+    const walked = await walkProject(root, [
+      'vendor',
+      'tmp-data/',
+      'scratch.tmp.ts',
+    ])
+    const walkedPaths = walked.map((file) => file.relativePath)
+    expect(walkedPaths).toContain('src/keep.ts')
+    expect(walkedPaths).not.toContain('src/skip-me.ts')
+    expect(walkedPaths).not.toContain('logs/app.log')
+    expect(walkedPaths).not.toContain('src/nested-secret.ts')
+    expect(walkedPaths).not.toContain('scratch.tmp.ts')
+    expect(walkedPaths).not.toContain('vendor/lib/hidden.ts')
+    expect(walkedPaths).not.toContain('tmp-data/cache.ts')
   })
 })
