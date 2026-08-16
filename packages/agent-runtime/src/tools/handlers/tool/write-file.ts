@@ -30,6 +30,7 @@ import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type {
   AgentState,
+  ConfirmedPostEditAnchor,
   EditRereadRequirement,
 } from '@codebuff/common/types/session-state'
 
@@ -96,15 +97,7 @@ export type FileProcessingState = {
   // similar per-turn bounds.
   readAuthorizationsByPath?: Record<string, true>
   readAuthorizationHashesByPath?: Record<string, string>
-  confirmedPostEditAnchorsByPath?: Record<
-    string,
-    {
-      startLine: number
-      endLine: number
-      contentHash: string
-      readCapability: string
-    }
-  >
+  confirmedPostEditAnchorsByPath?: Record<string, ConfirmedPostEditAnchor>
   /**
    * Whole-file authorizations that were visible before the current model
    * generation started. When present, strict edit checks use this snapshot
@@ -124,18 +117,22 @@ function getUsableWholeFileAuthorizationHash(
   >,
   path: string,
 ): string | undefined {
+  const stickyHash =
+    state.readAuthorizationsByPath?.[path] === true
+      ? state.readAuthorizationHashesByPath?.[path]
+      : undefined
+  // Prefer a confirmed post-edit hash only when it agrees with the sticky hash
+  // map. An unsigned/injected confirmed hash must not override sticky authority.
   if (
-    state.readAuthorizationsByPath?.[path] === true &&
-    state.confirmedPostEditAnchorsByPath?.[path]
+    typeof stickyHash === 'string' &&
+    state.confirmedPostEditAnchorsByPath?.[path]?.contentHash === stickyHash
   ) {
-    return state.confirmedPostEditAnchorsByPath[path].contentHash
+    return stickyHash
   }
   if (state.modelVisibleReadAuthorizationHashesByPath !== undefined) {
     return state.modelVisibleReadAuthorizationHashesByPath[path]
   }
-  return state.readAuthorizationsByPath?.[path] === true
-    ? state.readAuthorizationHashesByPath?.[path]
-    : undefined
+  return stickyHash
 }
 
 export function hasWholeFileReadAuthorization(
@@ -413,7 +410,9 @@ export const handleWriteFile = (async (
       // Explicit whole-file capability is the real re-read substitute, including
       // clearing context_compacted without an exploratory auto-reread.
       grantWholeFileReadAuthorization(fileProcessingState, path, fileContent)
-      clearEditRereadRequirement(fileProcessingState, path)
+      clearEditRereadRequirement(fileProcessingState, path, {
+        clearContextCompacted: true,
+      })
       return { ok: true }
     }
 

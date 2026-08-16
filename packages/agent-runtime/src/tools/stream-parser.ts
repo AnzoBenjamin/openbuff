@@ -13,6 +13,7 @@ import {
   executeToolCall,
   tryTransformAgentToolCall,
 } from './tool-executor'
+import { remintConfirmedPostEditAnchors } from '../util/read-authorization'
 import { withSystemTags } from '../util/messages'
 import { normalizeToolPath } from './handlers/tool/write-file'
 
@@ -234,6 +235,11 @@ export async function processStream(
     readAuthorizationHashesByPath: {
       ...(agentState.readAuthorizationHashesByPath ?? {}),
     },
+    confirmedPostEditAnchorsByPath: remintConfirmedPostEditAnchors({
+      anchors: agentState.confirmedPostEditAnchorsByPath,
+      projectId: fileContext.projectRoot ?? '',
+      runId,
+    }),
     // Only authorizations already present before this provider generation are
     // epistemically usable by edit arguments authored in this response. A
     // read_files call emitted earlier in the same response still executes
@@ -628,6 +634,9 @@ export async function processStream(
     agentState.readAuthorizationHashesByPath = {
       ...(fileProcessingState.readAuthorizationHashesByPath ?? {}),
     }
+    agentState.confirmedPostEditAnchorsByPath = {
+      ...(fileProcessingState.confirmedPostEditAnchorsByPath ?? {}),
+    }
     agentState.editRereadRequirementsByPath = {
       ...(fileProcessingState.editRereadRequirementsByPath ?? {}),
     }
@@ -638,6 +647,7 @@ export async function processStream(
       // reads/index evidence as belonging to the current workspace state.
       agentState.readAuthorizationsByPath = {}
       agentState.readAuthorizationHashesByPath = {}
+      agentState.confirmedPostEditAnchorsByPath = {}
       agentState.workspaceState = advanceWorkspaceState(
         agentState.workspaceState,
         {

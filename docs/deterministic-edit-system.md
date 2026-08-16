@@ -97,6 +97,16 @@ common cause of "I already read this file, why is my edit blocked?":
   a follow-up edit, avoiding a redundant re-read. The part appears only when at
   least one anchor was granted; it is omitted when no anchor could be minted
   (for example, no runtime-known content or no authoritative scope).
+- `coordinateEditApplication` confirms only `confirmationPaths` (default: all
+  coordinated `paths`). `wholeFileContentByPath` may still include excluded
+  no-op snapshots for sticky/anchor minting, but the afterHash / covering-action
+  check is restricted to `confirmationPaths`. An extra snapshot with no applied
+  action must not undo confirmation of the applied subset.
+  Client-output inspection (`hasExplicitError`, envelope collection, structured
+  `stale_snapshot`/`stale_state` classification, and unconfirmed-application
+  detection) is an iterative heap walk with a depth bound of 6. Recursion is
+  not used, so deeply nested or cyclic tool outputs cannot overflow the stack;
+  nodes past the bound are ignored (fail closed).
 - The strict read-before-edit blocked-recovery message distinguishes a file
   that was created or edited earlier in the session (it has a confirmed
   post-edit anchor). Instead of the generic "no fresh read authorization
@@ -105,26 +115,39 @@ common cause of "I already read this file, why is my edit blocked?":
   confirmed post-edit anchor, and the structured `recovery.basedOnRead` echoes
   that token. The other blocked-recovery causes (`stale_snapshot`, a prior
   failed edit, stale-revoked, compacted, never-read) are unchanged.
+  `stale_snapshot` is classified from structured `errorCode` (on the output
+  object or `failures[]` entries) and from filesystem `code: 'stale_state'`
+  on mutation errors/actions (SDK CAS), not only `errorCode: 'stale_snapshot'`.
 - A confirmed `create` (or any confirmed whole-file write) grants sticky
-  whole-file authorization straight from the runtime-known post-edit bytes —
-  the bytes a `create` supplies are exact, so the runtime does not need the
-  client to echo a whole-file-covering anchor. When no usable client anchor is
-  present, the runtime mints its own `cap.v3` anchor from those known bytes
-  (scope-bound to project, path, and run) and records it as the confirmed
-  post-edit anchor. A follow-up `delete` (or `move`) on that path is then
-  authorized when the anchor's content hash still matches the transaction's
-  snapshotted current content; an external modification (hash mismatch) fails
-  closed and requires a fresh read. A `move`'s destination path needs no read
-  authorization — its safety is enforced by the lifecycle preflight, which
-  blocks `Move destination already exists`. The client-echoed anchor is
-  preferred when valid but is never itself trusted to authorize — it is only
-  reused after passing the 7-point verification.
+  whole-file authorization **iff** a whole-file post-edit cap can be minted
+  (client-verified 7-point anchor or a synthesized `cap.v3` from known bytes).
+  Empty or non-authoritative project/run scope does **not** grant sticky-from-
+  apply and does **not** store an anchor or surface `postEditCapabilities`.
+  When minting succeeds, the runtime records the confirmed post-edit anchor
+  (hash + bounds + issuer projectId/runId) on durable `agentState` and remints
+  `cap.v3` on hydrate only when the stored issuer matches the current
+  project+run (or the stored token still authenticates for that scope).
+  Cross-project/run restore drops anchors rather than rebinding them.
+  A follow-up `delete` (or `move`) on that path is then authorized when the
+  anchor's content hash still matches the transaction's snapshotted current
+  content; an external modification (hash mismatch) fails closed and requires
+  a fresh read. A `move`'s destination path needs no read authorization — its
+  safety is enforced by the lifecycle preflight, which blocks `Move destination
+  already exists`. The client-echoed anchor is preferred when valid but is
+  never itself trusted to authorize — it is only reused after passing the
+  7-point verification.
 - A `ConfirmedPostEditAnchor` (recorded in `confirmedPostEditAnchorsByPath`)
   is definitionally whole-file-verified: it is only minted when the 7-point
   check confirms whole-file coverage (`startLine === 1` and
   `endLine === totalLines`) with a hash matching the runtime-known post-edit
-  bytes. There is no scoped/partial confirmed post-edit anchor — a confirmed
-  apply re-anchors to whole-file because the full post-edit content is always
+  bytes. Confirmed post-edit anchors are durable on `agentState` across turns;
+  hash+bounds are the source of truth and `cap.v3` is reminted on hydrate only
+  when the stored issuer matches the current project+run (or the stored token
+  authenticates for that scope). Cross-project/run restore drops anchors.
+  Compaction keeps them (same as sticky hashes); revoke, journal revision
+  bump, and unknown-tool wipe clear them.
+  There is no scoped/partial confirmed post-edit anchor — a confirmed apply
+  re-anchors to whole-file because the full post-edit content is always
   runtime-known (`processEditTransaction` computes it from gate-verified
   initial bytes). This is why a confirmed apply may grant whole-file sticky
   authorization even for a localized edit: the granted hash pins the exact
@@ -152,9 +175,9 @@ common cause of "I already read this file, why is my edit blocked?":
 - Semantic compaction and emergency mechanical trimming **no longer wipe**
   sticky whole-file authorizations/hashes. They record a `context_compacted`
   reread reason. For `str_replace`, hash-fresh unique edits may still proceed
-  and clear the marker only after a successful unique apply (unique `oldString`
-  is the safety bound); failed/no-match `str_replace` and proper-subset/scoped
-  reads do **not** clear it. For **`write_file`**, `context_compacted` **blocks**
+  (unique `oldString` is the safety bound) but a successful unique apply does
+  **not** clear `context_compacted`; failed/no-match `str_replace` and
+  proper-subset/scoped reads also do **not** clear it. For **`write_file`**, `context_compacted` **blocks**
   a whole-file overwrite even when the sticky hash still matches disk — only a
   complete whole-file `read_files` grant (paths whole-file content, or full-file
   range `1..totalLines` with `sourceContent`) **or** an explicit whole-file-covering
@@ -194,9 +217,10 @@ common cause of "I already read this file, why is my edit blocked?":
   not an exploratory `read_files` first. The same preference applies to strict
   auth-miss and residual process-failure recovery messages: mint/`basedOnRead`
   first when content is known; `read_files` remains the fallback only when no
-  capability can be minted. Auto-reread for transaction `str_replace` does **not**
-  clear `context_compacted`/failed-edit markers pre-apply — only successful unique
-  apply (or a real whole-file basedOnRead/read) clears them.
+  capability can be minted. Auto-reread and a successful unique `str_replace`
+  apply do **not** clear `context_compacted` — only a complete whole-file
+  `read_files` grant or an explicit whole-file-covering `basedOnRead` does.
+  Other failed-edit markers may still clear after a confirmed unique apply.
 - Input-only and preflight failures that never reached the client preserve a
   still-current whole-file authorization. Failures that make filesystem state
   uncertain revoke it and persist a typed reread reason across turns; the next

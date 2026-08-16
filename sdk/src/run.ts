@@ -567,6 +567,7 @@ async function runOnce({
         sessionState.mainAgentState.workspaceState = persistedWorkspace
         sessionState.mainAgentState.readAuthorizationsByPath = {}
         sessionState.mainAgentState.readAuthorizationHashesByPath = {}
+        sessionState.mainAgentState.confirmedPostEditAnchorsByPath = {}
       }
     } catch (error) {
       logger?.warn(

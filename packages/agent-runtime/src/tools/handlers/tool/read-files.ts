@@ -354,7 +354,9 @@ export const handleReadFiles = (async (
       delete fileProcessingState.promisesByPath[path]
       continue
     }
-    clearEditRereadRequirement(fileProcessingState, path)
+    clearEditRereadRequirement(fileProcessingState, path, {
+      clearContextCompacted: true,
+    })
     delete fileProcessingState.promisesByPath[path]
   }
 
@@ -548,7 +550,9 @@ export const handleReadFiles = (async (
       delete fileProcessingState.promisesByPath[path]
       continue
     }
-    clearEditRereadRequirement(fileProcessingState, path)
+    clearEditRereadRequirement(fileProcessingState, path, {
+      clearContextCompacted: true,
+    })
     delete fileProcessingState.promisesByPath[path]
   }
 
@@ -648,7 +652,9 @@ export const handleReadFiles = (async (
       request.path,
     )
     if (symbolRereadReq?.reason !== 'context_compacted') {
-      clearEditRereadRequirement(fileProcessingState, request.path)
+      clearEditRereadRequirement(fileProcessingState, request.path, {
+        clearContextCompacted: true,
+      })
     }
     delete fileProcessingState.promisesByPath[request.path]
     const slicesTooLarge =

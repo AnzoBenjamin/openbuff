@@ -43,6 +43,24 @@ export type EditRereadRequirement = {
 }
 
 /**
+ * Whole-file post-edit anchor: hash+bounds are durable; cap.v3 is reminted only
+ * when the stored issuer matches the current project+run or the stored token
+ * still authenticates for that scope. Optional projectId/runId stamp the minting
+ * issuer so process restart can remint without a live HMAC (legacy anchors
+ * without these fields still parse).
+ */
+export type ConfirmedPostEditAnchor = {
+  startLine: number
+  endLine: number
+  contentHash: string
+  readCapability: string
+  /** Issuing project identity; optional for legacy session parse. */
+  projectId?: string
+  /** Issuing run identity; optional for legacy session parse. */
+  runId?: string
+}
+
+/**
  * One recorded injected-block measurement in the per-turn context budget.
  * Canonical declaration: `packages/agent-runtime/src/util/context-budget.ts`
  * imports and re-exports these types from here (common must not import from
@@ -199,6 +217,15 @@ export type AgentState = {
    * content the agent read or most recently wrote successfully.
    */
   readAuthorizationHashesByPath?: Record<string, string>
+  /**
+   * Durable confirmed whole-file post-edit anchors (hash + bounds + remintable
+   * cap.v3). Hydrated into per-turn FileProcessingState the same way sticky
+   * hashes are; tokens are reminted only when the stored issuer matches the
+   * current project+run or the stored token authenticates for that scope.
+   * Cross-project/run restore drops anchors. Optional so old sessions parse
+   * cleanly.
+   */
+  confirmedPostEditAnchorsByPath?: Record<string, ConfirmedPostEditAnchor>
   /** Why a path must be read again after a failed edit, persisted across turns. */
   editRereadRequirementsByPath?: Record<string, EditRereadRequirement>
   /** Runtime-owned orchestrator state that must survive message compaction. */
@@ -387,6 +414,7 @@ export function getInitialAgentState(): AgentState {
     contextWindowTokens: undefined,
     readAuthorizationsByPath: {},
     readAuthorizationHashesByPath: {},
+    confirmedPostEditAnchorsByPath: {},
     editRereadRequirementsByPath: {},
     taskMemory: undefined,
     workspaceState: createInitialWorkspaceState(),

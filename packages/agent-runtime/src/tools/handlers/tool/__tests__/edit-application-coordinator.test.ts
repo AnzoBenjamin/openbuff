@@ -8,6 +8,7 @@ import {
 } from '@codebuff/common/util/content-hash'
 
 import {
+  commitAppliedEditPaths,
   coordinateEditApplication,
   editOutputHasError,
 } from '../edit-application-coordinator'
@@ -102,6 +103,100 @@ describe('edit application coordinator', () => {
         { type: 'json', value: { message: 'applied', error: null } },
       ] as any),
     ).toBe(false)
+  })
+
+  it('walks deeply nested and cyclic tool output iteratively without overflowing', async () => {
+    const nest = (value: unknown, depth: number): unknown => {
+      let current = value
+      for (let i = 0; i < depth; i++) {
+        current = { wrap: current }
+      }
+      return current
+    }
+
+    // 200 object wrappers would blow a recursive walker; the iterative walk
+    // must return (and still honor the depth bound: a hit past depth 6 is
+    // ignored, same as the previous helpers).
+    expect(() =>
+      editOutputHasError([
+        { type: 'json', value: nest({ applied: false }, 200) },
+      ] as any),
+    ).not.toThrow()
+    expect(
+      editOutputHasError([
+        { type: 'json', value: nest({ applied: false }, 200) },
+      ] as any),
+    ).toBe(false)
+    expect(
+      editOutputHasError([
+        { type: 'json', value: nest({ applied: false }, 3) },
+      ] as any),
+    ).toBe(true)
+
+    const cyclic: { type: string; value: { self?: unknown } } = {
+      type: 'json',
+      value: {},
+    }
+    cyclic.value.self = cyclic
+    expect(() => editOutputHasError([cyclic] as any)).not.toThrow()
+    expect(editOutputHasError([cyclic] as any)).toBe(false)
+
+    const deepUnconfirmedState = getFileProcessingValues({
+      promisesByPath: { 'a.ts': [] },
+    })
+    const deepUnconfirmed = await coordinateEditApplication({
+      toolName: 'str_replace',
+      fileProcessingState: deepUnconfirmedState,
+      ...applicationScope,
+      paths: ['a.ts'],
+      apply: async () =>
+        [
+          {
+            type: 'json',
+            value: nest(
+              canonicalAppliedOutput('a.ts', 'new content')[0]!.value,
+              200,
+            ),
+          },
+        ] as any,
+    })
+    expect(deepUnconfirmed.status).toBe('rejected')
+    expect(deepUnconfirmedState.failedEditRequiresReadByPath['a.ts']).toBe(true)
+
+    const deepStaleState = getFileProcessingValues({
+      promisesByPath: { 'a.ts': [] },
+      readAuthorizationsByPath: { 'a.ts': true },
+      readAuthorizationHashesByPath: { 'a.ts': getContentHash('current') },
+    })
+    const deepStale = await coordinateEditApplication({
+      toolName: 'str_replace',
+      fileProcessingState: deepStaleState,
+      ...applicationScope,
+      paths: ['a.ts'],
+      rejectionRequiresRead: false,
+      apply: async () =>
+        [
+          {
+            type: 'json',
+            value: {
+              errorMessage: 'client rejected',
+              deep: nest(
+                {
+                  path: 'a.ts',
+                  errorCode: 'stale_snapshot',
+                  errorMessage: 'stale snapshot',
+                },
+                200,
+              ),
+            },
+          },
+        ] as any,
+    })
+    expect(deepStale.status).toBe('rejected')
+    // Structured stale past the walk bound is ignored; this is a generic
+    // rejection, so rejectionRequiresRead:false keeps authorization.
+    expect(deepStaleState.failedEditRequiresReadByPath['a.ts']).toBeUndefined()
+    expect(deepStaleState.readAuthorizationsByPath?.['a.ts']).toBe(true)
   })
 
   it('invalidates every path and authorization when client application rejects', async () => {
@@ -264,6 +359,36 @@ describe('edit application coordinator', () => {
     })
 
     expect(defaultResult.status).toBe('rejected')
+  })
+
+  it('confirms confirmationPaths when wholeFileContentByPath includes an excluded no-op snapshot', async () => {
+    // b.ts is a no-op excluded from confirmationPaths, but the runtime still
+    // snapshots it in wholeFileContentByPath. The afterHash / covering-action
+    // loop must skip that extra snapshot so a.ts's applied envelope can
+    // confirm the transaction.
+    const clientOutput = canonicalAppliedOutput('a.ts', 'new content') as any
+    const state = getFileProcessingValues({
+      promisesByPath: { 'a.ts': [], 'b.ts': [] },
+    })
+    let committed = false
+    const result = await coordinateEditApplication({
+      toolName: 'edit_transaction',
+      fileProcessingState: state,
+      ...applicationScope,
+      paths: ['a.ts', 'b.ts'],
+      confirmationPaths: ['a.ts'],
+      wholeFileContentByPath: new Map([
+        ['a.ts', 'new content'],
+        ['b.ts', 'unchanged no-op'],
+      ]),
+      apply: async () => clientOutput,
+      onApplied: () => {
+        committed = true
+      },
+    })
+
+    expect(result.status).toBe('applied')
+    expect(committed).toBe(true)
   })
 
   it('rejects forged applied evidence before invoking onApplied or granting state', async () => {
@@ -775,6 +900,242 @@ describe('edit application coordinator', () => {
     )
   })
 
+  it('does not classify unstructured expected-hash text as stale_snapshot when rejectionRequiresRead is false', async () => {
+    const state = getFileProcessingValues({
+      promisesByPath: { 'a.ts': [] },
+      readAuthorizationsByPath: { 'a.ts': true },
+      readAuthorizationHashesByPath: { 'a.ts': getContentHash('current') },
+    })
+
+    const result = await coordinateEditApplication({
+      toolName: 'str_replace',
+      fileProcessingState: state,
+      ...applicationScope,
+      paths: ['a.ts'],
+      rejectionRequiresRead: false,
+      apply: async () =>
+        [
+          {
+            type: 'json',
+            value: {
+              errorMessage:
+                'client rejected: expected hash / content changed',
+            },
+          },
+        ] as any,
+    })
+
+    expect(result.status).toBe('rejected')
+    expect(state.promisesByPath['a.ts']).toBeUndefined()
+    expect(state.failedEditRequiresReadByPath['a.ts']).toBeUndefined()
+    expect(state.editRereadRequirementsByPath?.['a.ts']).toBeUndefined()
+    expect(state.readAuthorizationsByPath?.['a.ts']).toBe(true)
+    expect(state.readAuthorizationHashesByPath?.['a.ts']).toBe(
+      getContentHash('current'),
+    )
+  })
+
+  it('revokes only the structured stale path in a two-path batch while clearing every promisesByPath entry', async () => {
+    const state = getFileProcessingValues({
+      promisesByPath: { 'a.ts': [], 'b.ts': [] },
+      readAuthorizationsByPath: { 'a.ts': true, 'b.ts': true },
+      readAuthorizationHashesByPath: {
+        'a.ts': getContentHash('old a'),
+        'b.ts': getContentHash('old b'),
+      },
+    })
+
+    const result = await coordinateEditApplication({
+      toolName: 'edit_transaction',
+      fileProcessingState: state,
+      ...applicationScope,
+      paths: ['a.ts', 'b.ts'],
+      rejectionRequiresRead: false,
+      apply: async () =>
+        [
+          {
+            type: 'json',
+            value: {
+              errorMessage: 'client rejected batch',
+              failures: [
+                {
+                  path: 'a.ts',
+                  errorCode: 'stale_snapshot',
+                  errorMessage: 'stale snapshot',
+                },
+              ],
+            },
+          },
+        ] as any,
+    })
+
+    expect(result.status).toBe('rejected')
+    expect(state.promisesByPath['a.ts']).toBeUndefined()
+    expect(state.promisesByPath['b.ts']).toBeUndefined()
+    expect(state.failedEditRequiresReadByPath['a.ts']).toBe(true)
+    expect(state.failedEditRequiresReadByPath['b.ts']).toBeUndefined()
+    expect(state.editRereadRequirementsByPath?.['a.ts']).toMatchObject({
+      reason: 'stale_snapshot',
+    })
+    expect(state.editRereadRequirementsByPath?.['b.ts']).toBeUndefined()
+    expect(state.readAuthorizationsByPath?.['a.ts']).toBeUndefined()
+    expect(state.readAuthorizationsByPath?.['b.ts']).toBe(true)
+    expect(state.readAuthorizationHashesByPath?.['b.ts']).toBe(
+      getContentHash('old b'),
+    )
+  })
+
+  it('still classifies structured stale hits inside failures[] after the iterative walk', async () => {
+    const state = getFileProcessingValues({
+      promisesByPath: { 'a.ts': [] },
+      readAuthorizationsByPath: { 'a.ts': true },
+      readAuthorizationHashesByPath: { 'a.ts': getContentHash('old a') },
+    })
+
+    const result = await coordinateEditApplication({
+      toolName: 'str_replace',
+      fileProcessingState: state,
+      ...applicationScope,
+      paths: ['a.ts'],
+      rejectionRequiresRead: false,
+      apply: async () =>
+        [
+          {
+            type: 'json',
+            value: {
+              errorMessage: 'client rejected',
+              failures: [
+                {
+                  path: 'a.ts',
+                  errorCode: 'stale_snapshot',
+                  errorMessage: 'stale snapshot',
+                },
+              ],
+            },
+          },
+        ] as any,
+    })
+
+    expect(result.status).toBe('rejected')
+    expect(state.failedEditRequiresReadByPath['a.ts']).toBe(true)
+    expect(state.editRereadRequirementsByPath?.['a.ts']).toMatchObject({
+      reason: 'stale_snapshot',
+    })
+    expect(state.readAuthorizationsByPath?.['a.ts']).toBeUndefined()
+  })
+
+  it('revokes every coordinated path when a nameless structured stale_snapshot has no path or file', async () => {
+    const state = getFileProcessingValues({
+      promisesByPath: { 'a.ts': [], 'b.ts': [] },
+      readAuthorizationsByPath: { 'a.ts': true, 'b.ts': true },
+      readAuthorizationHashesByPath: {
+        'a.ts': getContentHash('old a'),
+        'b.ts': getContentHash('old b'),
+      },
+    })
+
+    const result = await coordinateEditApplication({
+      toolName: 'edit_transaction',
+      fileProcessingState: state,
+      ...applicationScope,
+      paths: ['a.ts', 'b.ts'],
+      rejectionRequiresRead: false,
+      apply: async () =>
+        [
+          {
+            type: 'json',
+            value: {
+              errorCode: 'stale_snapshot',
+              errorMessage: 'stale snapshot',
+            },
+          },
+        ] as any,
+    })
+
+    expect(result.status).toBe('rejected')
+    expect(state.promisesByPath['a.ts']).toBeUndefined()
+    expect(state.promisesByPath['b.ts']).toBeUndefined()
+    expect(state.failedEditRequiresReadByPath).toEqual({
+      'a.ts': true,
+      'b.ts': true,
+    })
+    expect(state.editRereadRequirementsByPath?.['a.ts']).toMatchObject({
+      reason: 'stale_snapshot',
+    })
+    expect(state.editRereadRequirementsByPath?.['b.ts']).toMatchObject({
+      reason: 'stale_snapshot',
+    })
+    expect(state.readAuthorizationsByPath?.['a.ts']).toBeUndefined()
+    expect(state.readAuthorizationsByPath?.['b.ts']).toBeUndefined()
+    expect(state.readAuthorizationHashesByPath?.['a.ts']).toBeUndefined()
+    expect(state.readAuthorizationHashesByPath?.['b.ts']).toBeUndefined()
+  })
+
+  it('revokes only the named stale_state action in a file_mutation_result envelope', async () => {
+    const state = getFileProcessingValues({
+      promisesByPath: { 'a.ts': [], 'b.ts': [] },
+      readAuthorizationsByPath: { 'a.ts': true, 'b.ts': true },
+      readAuthorizationHashesByPath: {
+        'a.ts': getContentHash('old a'),
+        'b.ts': getContentHash('old b'),
+      },
+    })
+
+    const result = await coordinateEditApplication({
+      toolName: 'edit_transaction',
+      fileProcessingState: state,
+      ...applicationScope,
+      paths: ['a.ts', 'b.ts'],
+      rejectionRequiresRead: false,
+      apply: async () =>
+        [
+          {
+            type: 'json',
+            value: {
+              kind: 'file_mutation_result',
+              version: 1,
+              outcome: 'not_applied',
+              errors: [
+                {
+                  code: 'stale_state',
+                  message: 'file changed since last read',
+                },
+              ],
+              actions: [
+                {
+                  path: 'a.ts',
+                  outcome: 'not_applied',
+                  error: {
+                    code: 'stale_state',
+                    message: 'file changed since last read',
+                  },
+                },
+                {
+                  path: 'b.ts',
+                  outcome: 'not_applied',
+                },
+              ],
+            },
+          },
+        ] as any,
+    })
+
+    expect(result.status).toBe('rejected')
+    expect(state.promisesByPath['a.ts']).toBeUndefined()
+    expect(state.promisesByPath['b.ts']).toBeUndefined()
+    expect(state.failedEditRequiresReadByPath['a.ts']).toBe(true)
+    expect(state.failedEditRequiresReadByPath['b.ts']).toBeUndefined()
+    expect(state.editRereadRequirementsByPath?.['a.ts']).toMatchObject({
+      reason: 'stale_snapshot',
+    })
+    expect(state.editRereadRequirementsByPath?.['b.ts']).toBeUndefined()
+    expect(state.readAuthorizationsByPath?.['a.ts']).toBeUndefined()
+    expect(state.readAuthorizationsByPath?.['b.ts']).toBe(true)
+    expect(state.readAuthorizationHashesByPath?.['b.ts']).toBe(
+      getContentHash('old b'),
+    )
+  })
+
   it('threads confirmationPaths through handleEditTransaction so no-op content edits are excluded from positive-evidence confirmation', async () => {
     // b.ts was a no-op and is excluded from confirmationPaths, so the
     // transaction is confirmed by a.ts's positive evidence alone.
@@ -800,10 +1161,11 @@ describe('edit application coordinator', () => {
     expect(committed).toBe(true)
   })
 
-  it('keeps the context_compacted reread marker on a blind allowMultiple str_replace apply while a unique str_replace apply clears it and mints an anchor', async () => {
-    // allowMultiple (replace-all) str_replace must NOT clear the
-    // context_compacted reread requirement, so a subsequent write_file stays
-    // blocked. The reread marker is represented by failedEditRequiresReadByPath.
+  it('keeps a failed-edit reread marker on a blind allowMultiple apply while a unique apply may clear that marker and mint an anchor', async () => {
+    // allowMultiple (replace-all) str_replace must NOT clear a failed-edit
+    // reread marker (failedEditRequiresReadByPath), so a subsequent write_file
+    // stays blocked. This case does not set context_compacted; that reason is
+    // independently preserved even on unique apply (see the next test).
     const blindState = getFileProcessingValues({
       promisesByPath: { 'a.ts': [] },
       failedEditRequiresReadByPath: { 'a.ts': true },
@@ -829,8 +1191,9 @@ describe('edit application coordinator', () => {
       readCapability: expect.stringMatching(/^cap\.v3\./),
     })
 
-    // A unique str_replace apply clears the reread marker post-apply and mints
-    // an anchor into confirmedPostEditAnchorsByPath.
+    // A unique str_replace apply may clear a generic failed-edit marker and
+    // mint an anchor. context_compacted is not set here and must not be
+    // inferred from this case.
     const uniqueState = getFileProcessingValues({
       promisesByPath: { 'a.ts': [] },
       failedEditRequiresReadByPath: { 'a.ts': true },
@@ -854,26 +1217,79 @@ describe('edit application coordinator', () => {
     })
   })
 
-  it('rejects when two committed envelopes for the same path carry conflicting anchors', async () => {
-    // Two committed applied envelopes for the SAME path but DIFFERENT content,
-    // so their editAnchor contentHash/readCapability differ. wholeFileContent
-    // matches only the first envelope. Because wholeFileContentByPath pins the
-    // known content to 'content one', the second envelope's anchor cannot pass
-    // the content-pinned 7-point anchor check, so it never becomes a merged
-    // candidate — the fail-closed rejection here is driven by the union
-    // afterHash disagreement (the second covering action's afterHash !==
-    // getExactContentHash('content one')), which returns null and rejects.
+  it('commitAppliedEditPaths keeps context_compacted when preserveRereadRequirementsForPaths is omitted', async () => {
+    // Unlike the allowMultiple case (failedEditRequiresReadByPath + preserve set),
+    // context_compacted is authoritative on its own: a unique apply must keep it
+    // even when the caller does not pass preserveRereadRequirementsForPaths.
+    const path = 'a.ts'
+    const content = 'replaced once'
+    const state = getFileProcessingValues({
+      promisesByPath: { [path]: [] },
+      failedEditRequiresReadByPath: { [path]: true },
+      editRereadRequirementsByPath: {
+        [path]: {
+          reason: 'context_compacted',
+          sourceTool: 'context compaction',
+        },
+      },
+    })
+
+    const granted = commitAppliedEditPaths({
+      fileProcessingState: state,
+      paths: [path],
+      wholeFileContentByPath: new Map([[path, content]]),
+      projectId: applicationScope.projectId,
+      runId: applicationScope.runId,
+    })
+
+    expect(state.editRereadRequirementsByPath?.[path]?.reason).toBe(
+      'context_compacted',
+    )
+    expect(state.editRereadRequirementsByPath?.[path]?.sourceTool).toBe(
+      'context compaction',
+    )
+    expect(state.failedEditRequiresReadByPath[path]).toBe(true)
+    expect(granted.get(path)).toMatchObject({
+      contentHash: getContentHash(content),
+      readCapability: expect.stringMatching(/^cap\.v3\./),
+    })
+
+    const coordinated = await coordinateEditApplication({
+      toolName: 'str_replace',
+      fileProcessingState: state,
+      ...applicationScope,
+      paths: [path],
+      wholeFileContentByPath: new Map([[path, content]]),
+      apply: async () => canonicalAppliedOutput(path, content) as any,
+    })
+
+    expect(coordinated.status).toBe('applied')
+    expect(state.editRereadRequirementsByPath?.[path]?.reason).toBe(
+      'context_compacted',
+    )
+  })
+
+  it('rejects when two same-content committed envelopes for the same path carry differing readCapability tokens', async () => {
+    // Same afterContent/afterHash so both anchors pass the content-pinned
+    // 7-point check. The second token is a quoted copy of the first: decode
+    // strips the wrapper so both authenticate, then merge fails closed on
+    // existing.readCapability !== candidate.readCapability.
     const state = getFileProcessingValues({ promisesByPath: { 'a.ts': [] } })
     let committed = false
-    const envelopeA = canonicalAppliedOutput('a.ts', 'content one') as any
-    const envelopeB = canonicalAppliedOutput('a.ts', 'content two') as any
+    const envelopeA = canonicalAppliedOutput('a.ts', 'same content') as any
+    const envelopeB = canonicalAppliedOutput('a.ts', 'same content') as any
+    const token = envelopeB[0].value.actions[0].editAnchor.readCapability
+    const quotedToken = `"${token}"`
+    envelopeB[0].value.actions[0].editAnchor.readCapability = quotedToken
+    envelopeB[0].value.authorityReceipt.actions[0].editAnchor.readCapability =
+      quotedToken
 
     const result = await coordinateEditApplication({
       toolName: 'edit_transaction',
       fileProcessingState: state,
       ...applicationScope,
       paths: ['a.ts'],
-      wholeFileContentByPath: new Map([['a.ts', 'content one']]),
+      wholeFileContentByPath: new Map([['a.ts', 'same content']]),
       apply: async () => [...envelopeA, ...envelopeB] as any,
       onApplied: () => {
         committed = true
@@ -915,16 +1331,15 @@ describe('edit application coordinator', () => {
     expect(state.readAuthorizationsByPath?.['a.ts']).toBeUndefined()
   })
 
-  it('grants sticky authorization but mints no anchor when the authoritative scope is empty', async () => {
+  it('does not grant sticky or store an anchor when the authoritative scope is empty', async () => {
     // projectId '' and runId '' are NOT authoritative. canonicalAppliedOutput
     // builds its editAnchor with the default scope { '/project', path, 'run' },
     // which does NOT match the empty runtime scope, so the client anchor is
     // rejected by the 7-point scope check. synthesizePostEditAnchor also
     // returns null for an empty scope (hasAuthoritativeReadCapabilityScope
-    // fails), so NO anchor is minted. The apply still confirms (the union
-    // afterHash check passes since content matches), so sticky authorization
-    // IS granted straight from the runtime-known bytes — but no
-    // postEditCapabilities part is surfaced because no anchor was granted.
+    // fails), so NO whole-file cap can be minted. The apply still confirms
+    // (the union afterHash check passes since content matches), but sticky
+    // maps, stored anchors, and postEditCapabilities stay empty.
     const state = getFileProcessingValues({ promisesByPath: { 'a.ts': [] } })
 
     const result = await coordinateEditApplication({
@@ -937,16 +1352,10 @@ describe('edit application coordinator', () => {
       apply: async () => canonicalAppliedOutput('a.ts', 'new content') as any,
     })
 
-    // The confirmed apply succeeds (receipt committed) even with empty scope.
     expect(result.status).toBe('applied')
-    // Sticky authorization IS granted from the runtime-known content.
-    expect(state.readAuthorizationsByPath?.['a.ts']).toBe(true)
-    expect(state.readAuthorizationHashesByPath?.['a.ts']).toBe(
-      getContentHash('new content'),
-    )
-    // ...but NO anchor is minted without an authoritative scope.
+    expect(state.readAuthorizationsByPath?.['a.ts']).toBeUndefined()
+    expect(state.readAuthorizationHashesByPath?.['a.ts']).toBeUndefined()
     expect(state.confirmedPostEditAnchorsByPath?.['a.ts']).toBeUndefined()
-    // And no postEditCapabilities part is appended to the output.
     const output = (result.status === 'applied' ? result.output : []) as any[]
     for (const part of output) {
       expect(part.value).not.toHaveProperty('postEditCapabilities')

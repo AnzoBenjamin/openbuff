@@ -38,14 +38,20 @@ export function markEditRequiresFreshRead(params: {
     delete fileProcessingState.readAuthorizationsByPath?.[path]
     delete fileProcessingState.readAuthorizationHashesByPath?.[path]
     delete fileProcessingState.modelVisibleReadAuthorizationHashesByPath?.[path]
+    delete fileProcessingState.confirmedPostEditAnchorsByPath?.[path]
   }
 }
 
 export function clearEditRereadRequirement(
   fileProcessingState: FileProcessingState,
   path: string,
+  options?: { clearContextCompacted?: boolean },
 ): void {
+  const existing = fileProcessingState.editRereadRequirementsByPath?.[path]
   delete fileProcessingState.failedEditRequiresReadByPath[path]
+  if (existing?.reason === 'context_compacted' && !options?.clearContextCompacted) {
+    return
+  }
   delete fileProcessingState.editRereadRequirementsByPath?.[path]
 }
 
@@ -133,11 +139,15 @@ export function strictEditAuthorizationError(params: {
   const scopeNote = wholeFileRequired
     ? ' A prior range-anchored edit or scoped range capability cannot authorize a whole-file overwrite.'
     : ' A scoped edit may instead provide the fresh capability/hash returned by read_files.'
-  // Fall back to the confirmed post-edit anchor's capability (from a create
-  // or edit earlier this session) only when the caller did not supply one.
-  const effectiveFreshReadCapability =
-    freshReadCapability ??
-    fileProcessingState.confirmedPostEditAnchorsByPath?.[path]?.readCapability
+  // A post-edit cap minted under context_compacted must not be echoed as
+  // basedOnRead: that would let write_file clear compaction without a real
+  // whole-file read. Only a complete read_files grant (or an explicit
+  // basedOnRead the caller already holds from that grant) may clear it.
+  const echoPostEditCapability = prior?.reason !== 'context_compacted'
+  const effectiveFreshReadCapability = echoPostEditCapability
+    ? (freshReadCapability ??
+      fileProcessingState.confirmedPostEditAnchorsByPath?.[path]?.readCapability)
+    : undefined
   // Prefer capability-retry when a whole-file token is already available; keep
   // read_files only as the secondary path when no capability can be echoed.
   // recovery.preferredStrategy is the machine-readable primary signal so

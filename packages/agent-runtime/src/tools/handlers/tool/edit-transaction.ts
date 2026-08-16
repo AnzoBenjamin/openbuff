@@ -533,7 +533,9 @@ export const handleEditTransaction = (async (
     }
     freshWholeFileAuthorizationPaths.add(path)
     grantWholeFileReadAuthorization(fileProcessingState, path, content)
-    clearEditRereadRequirement(fileProcessingState, path)
+    clearEditRereadRequirement(fileProcessingState, path, {
+      clearContextCompacted: true,
+    })
     const result: { ok: true } = { ok: true }
     authorizeWholeFileFromCapabilityCache.set(cacheKey, result)
     return result
@@ -557,8 +559,8 @@ export const handleEditTransaction = (async (
     if (isFresh) {
       freshWholeFileAuthorizationPaths.add(path)
       // Do not clear context_compacted on mere hash-fresh: write_file must stay
-      // blocked until a real re-read or explicit whole-file basedOnRead. str_replace
-      // clears the marker when it proceeds below (unique oldString is the safety bound).
+      // blocked until a complete whole-file read_files grant or explicit
+      // whole-file basedOnRead. Unique str_replace apply also must not drop it.
       const rereadReq = getEditRereadRequirement(fileProcessingState, path)
       if (rereadReq?.reason !== 'context_compacted') {
         clearEditRereadRequirement(fileProcessingState, path)
@@ -645,10 +647,9 @@ export const handleEditTransaction = (async (
       // Transaction-local only: do not call grantWholeFileReadAuthorization and
       // do not add to freshWholeFileAuthorizationPaths (would authorize write_file).
       // Do not clear reread markers here — auto-reread only authorizes this
-      // transaction's str_replace preflight. Markers (context_compacted /
-      // failed-edit) remain until successful non-allowMultiple apply
-      // (onApplied) so a failed unique/no-match still keeps write_file
-      // blocked under context_compacted.
+      // transaction's str_replace preflight. Failed-edit markers may drop on
+      // successful unique apply; context_compacted stays until a whole-file
+      // read_files grant or explicit whole-file basedOnRead.
       autoRereadAuthorizedPaths.add(path)
     }
   }
@@ -741,9 +742,8 @@ export const handleEditTransaction = (async (
       }
       if (freshWholeFileAuthorizationPaths.has(edit.path)) {
         // Hash-fresh sticky authorizes this edit, but do not clear
-        // context_compacted here for str_replace — only after successful apply
-        // in onApplied. write_file stays blocked above while the marker remains
-        // unless basedOnRead already cleared it.
+        // context_compacted here. write_file stays blocked while the marker
+        // remains unless basedOnRead already cleared it.
         if (
           edit.type !== 'write_file' &&
           edit.type !== 'str_replace' &&
@@ -1232,13 +1232,10 @@ export const handleEditTransaction = (async (
         input: clientChanges.map(({ change }) => change),
       }),
     onApplied: () => {
-      // Paths that successfully applied a str_replace in this transaction may
-      // clear context_compacted (unique oldString safety bound, post-apply only).
-      // allowMultiple (replace-all) applies do NOT clear context_compacted: a
-      // blind global replace is not evidence the model knows the file content;
-      // only a unique-anchor apply or a fresh read clears the marker.
-      // write_file authorized via whole-file basedOnRead already cleared markers
-      // pre-apply and refreshes sticky from post-edit content below.
+      // Unique (non-allowMultiple) str_replace apply may drop failed-edit
+      // markers, but the helper preserves context_compacted. Only a complete
+      // whole-file read_files grant or explicit whole-file basedOnRead may
+      // clear that reason (write_file basedOnRead already did so pre-apply).
       const appliedNonAllowMultipleStrReplacePaths = new Set(
         edits
           .filter(
