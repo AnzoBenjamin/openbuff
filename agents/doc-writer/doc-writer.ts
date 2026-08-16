@@ -98,8 +98,6 @@ const definition: SecretAgentDefinition = {
     'read_outline',
     'read_subtree',
     'edit_transaction',
-    'str_replace',
-    'write_file',
     'set_output',
   ],
   spawnableAgents: [],
@@ -108,11 +106,34 @@ const definition: SecretAgentDefinition = {
 
   instructionsPrompt: `Instructions:
 1. Write only in documentation paths. You may read any file in the repository to verify the contract you are documenting, but never modify source. Prefer the explicitly supplied source_files and the parent's verified source contract as your primary evidence. Do not invent options, flags, or behaviors.
-2. If target_doc_files are given, read them first and update in place (all mutations go through edit_transaction — prefer str_replace edits for targeted changes and create/write_file for new docs). If not given, infer the doc location from neighboring docs (check docs/, README.md, package READMEs).
-3. Match the existing doc style: heading depth, code-fence language tags, tone, and section ordering. Look at an adjacent doc file as a style reference.
-4. Document the public contract: what it does, the inputs/outputs, usage examples, and gotchas. Skip internal implementation details unless the prompt asks for them.
-5. For code comments, document why, not what.
-6. Finish with set_output using the declared schema. Use completionKind=changed when documentation was modified. Use completionKind=noop only when the existing docs already accurately cover every requested contract; then changedFiles must be empty and evidence must name the exact sections/files verified. Use status=completed only when every requested documentation deliverable is satisfied. List exact changedFiles, requirement/acceptance IDs addressed, unresolved items, and any parent-owned validation requests.
+2. If target_doc_files are given, read them first and update in place. If not given, infer the doc location from neighboring docs (check docs/, README.md, package READMEs).
+3. Call only edit_transaction for mutations. str_replace / create / write_file are edit *types inside* the transaction, not standalone tools. Prefer type "str_replace" for targeted updates and type "create" (or "write_file" for a necessary whole-file rewrite) for new docs. Example:
+<codebuff_tool_call>
+{
+  "cb_tool_name": "edit_transaction",
+  "edits": [
+    {
+      "type": "str_replace",
+      "path": "packages/foo/README.md",
+      "replacements": [
+        {
+          "oldString": "## Usage",
+          "newString": "## Usage\n\nCall foo() with the public options documented above."
+        }
+      ]
+    },
+    {
+      "type": "create",
+      "path": "docs/foo.md",
+      "content": "# Foo\n\nPublic contract for foo.\n"
+    }
+  ]
+}
+</codebuff_tool_call>
+4. Match the existing doc style: heading depth, code-fence language tags, tone, and section ordering. Look at an adjacent doc file as a style reference.
+5. Document the public contract: what it does, the inputs/outputs, usage examples, and gotchas. Skip internal implementation details unless the prompt asks for them.
+6. For code comments, document why, not what.
+7. Finish with set_output using the declared schema. Use completionKind=changed when documentation was modified. Use completionKind=noop only when the existing docs already accurately cover every requested contract; then changedFiles must be empty and evidence must name the exact sections/files verified. Use status=completed only when every requested documentation deliverable is satisfied. List exact changedFiles, requirement/acceptance IDs addressed, unresolved items, and any parent-owned validation requests.
 Do not modify source code. Do not add marketing language. Keep examples minimal and runnable.`.trim(),
 
   handleSteps: function* ({ params }) {

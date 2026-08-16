@@ -78,10 +78,15 @@ describe('new bundled agents (M2.6)', () => {
       expect(testWriter.model).toBeUndefined()
     })
 
-    test('exposes read + write tools but not terminal', () => {
+    test('exposes read + edit_transaction tools but not terminal or standalone writes', () => {
       const tools = testWriter.toolNames ?? []
       expect(tools).toContain('read_files')
-      expect(tools).toContain('write_file')
+      expect(tools).toContain('edit_transaction')
+      expect(tools).toContain('set_output')
+      expect(tools).not.toContain('str_replace')
+      expect(tools).not.toContain('write_file')
+      expect(tools).not.toContain('replace_range')
+      expect(tools).not.toContain('rewrite_symbol')
       expect(tools).not.toContain('run_terminal_command')
     })
 
@@ -140,10 +145,15 @@ describe('new bundled agents (M2.6)', () => {
       expect(docWriter.model).toBeUndefined()
     })
 
-    test('exposes read + write tools but not terminal', () => {
+    test('exposes read + edit_transaction tools but not terminal or standalone writes', () => {
       const tools = docWriter.toolNames ?? []
       expect(tools).toContain('read_files')
-      expect(tools).toContain('str_replace')
+      expect(tools).toContain('edit_transaction')
+      expect(tools).toContain('set_output')
+      expect(tools).not.toContain('str_replace')
+      expect(tools).not.toContain('write_file')
+      expect(tools).not.toContain('replace_range')
+      expect(tools).not.toContain('rewrite_symbol')
       expect(tools).not.toContain('run_terminal_command')
     })
 

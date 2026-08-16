@@ -244,10 +244,11 @@ orchestrator and by explicit subagent calls. Its input schema accepts an
 optional `params.target_files` array and an optional `params.test_command`.
 When `target_files` is present, the agent reads those source files before
 writing tests so it can match the changed public surface and edge cases.
-It is intentionally read/write-only for files plus search/outline tools:
-it does **not** run terminal commands itself. If `test_command` is
-provided, the agent reports that command back for the parent or `basher`
-to run during validation.
+It mutates only through `edit_transaction` (with `str_replace` / `create` /
+`write_file` as edit *types* inside the transaction, not as standalone tools),
+plus read/outline tools. It does **not** run terminal commands itself. If
+`test_command` is provided, the agent reports that command back for the parent
+or `basher` to run during validation.
 
 The agent's prompt contract is narrow: read the changed source, find an
 existing test in the same package, mimic that harness and assertion style,
@@ -1022,14 +1023,15 @@ Example:
 
 ### `edit_transaction` and compatibility edit handlers
 
-Shipped root and editor agents receive `edit_transaction` as their single
-model-visible project mutation tool. Its discriminated edit variants cover
-targeted `str_replace`, `replace_range`, `rewrite_symbol`, unified `patch`,
-structured imports/insertion, create/delete/move, and whole-file `write_file`
-operations. The corresponding standalone handlers remain registered for
-persisted/external compatibility, but their overlapping schemas are not added
-to root/editor provider prompts. Under strict-mode edit flows all variants
-participate in staged read-before-edit enforcement:
+Shipped root, editor, test-writer, and doc-writer agents receive
+`edit_transaction` as their single model-visible project mutation tool. Its
+discriminated edit variants cover targeted `str_replace`, `replace_range`,
+`rewrite_symbol`, unified `patch`, structured imports/insertion,
+create/delete/move, and whole-file `write_file` operations. The corresponding
+standalone handlers remain registered for persisted/external compatibility, but
+their overlapping schemas are not added to those agents' provider prompts.
+Under strict-mode edit flows all variants participate in staged
+read-before-edit enforcement:
 
 - Every edit requires an explicit `type` discriminator. Valid values are
   `str_replace`, `replace_range`, `structured`, `create`, `delete`, `move`,
