@@ -142,17 +142,6 @@ export const createGeneralAgent = (options: {
           toolName: 'read_files',
           input: { paths: concreteFiles },
         }
-      } else if (
-        discoveredDirectories.length === 0 &&
-        shouldProactivelyQueryIndex(prompt)
-      ) {
-        yield {
-          toolName: 'query_index',
-          input: {
-            query: prompt,
-            limit: 20,
-          },
-        }
       }
 
       let latestAgentStateForPruner = initialAgentState as
@@ -239,17 +228,6 @@ export const createGeneralAgent = (options: {
           continue
         }
         break
-      }
-
-      function shouldProactivelyQueryIndex(value: unknown): value is string {
-        if (typeof value !== 'string') return false
-        const text = value.trim()
-        if (text.length < 12) return false
-        if (/^(hi|hello|hey|thanks|thank you|ok|okay)$/i.test(text))
-          return false
-        return /\b(code|file|files|repo|repository|project|codebase|workspace|module|package|function|class|component|hook|api|schema|config|test|tests|implement|fix|debug|refactor)\b/i.test(
-          text,
-        )
       }
     },
   }

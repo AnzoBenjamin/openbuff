@@ -48,19 +48,18 @@ describe('general-agent programmatic tools', () => {
     })
   })
 
-  test('fires query_index proactively on a qualifying prompt with no paths', () => {
+  test('does not fire query_index proactively on a qualifying prompt with no paths', () => {
     const agent = createGeneralAgent({ model: 'opus' })
     const generator = agent.handleSteps!({
       prompt: 'Audit and fix the codebase for test coverage gaps',
       params: {},
     } as any)
 
-    expect(generator.next().value).toEqual({
-      toolName: 'query_index',
-      input: {
-        query: 'Audit and fix the codebase for test coverage gaps',
-        limit: 20,
-      },
+    // Path-less prompts no longer auto-inject query_index; first yield is the
+    // pruner/STEP path as appropriate when no paths are provided.
+    expect(generator.next().value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
     })
   })
 

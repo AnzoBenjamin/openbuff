@@ -14,16 +14,6 @@ function feedJson(value: unknown) {
   return { toolResult: [{ type: 'json', value }] } as any
 }
 
-/** Minimal pushed background-job digest payload for the post-git_status list_jobs yield. */
-const LIST_JOBS_RESULT = {
-  jobs: [],
-  note: 'No action required unless you need this output.',
-}
-
-function feedListJobs() {
-  return feedJson(LIST_JOBS_RESULT)
-}
-
 function createCliContext() {
   let messages: ChatMessage[] = [
     {
@@ -142,17 +132,10 @@ describe('editor to orchestrator contract e2e', () => {
       prompt: 'Implement the lifecycle update.',
       params: {},
     } as any)
-    expect(generator.next().value).toMatchObject({ toolName: 'query_index' })
-    expect(generator.next(feedJson([])).value).toMatchObject({
-      toolName: 'add_message',
-    })
     expect(generator.next().value).toMatchObject({
       toolName: 'git_status',
     })
     expect(generator.next(feedJson({ status: '' })).value).toMatchObject({
-      toolName: 'list_jobs',
-    })
-    expect(generator.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
     })
     expect(generator.next().value).toBe('STEP')
@@ -165,8 +148,7 @@ describe('editor to orchestrator contract e2e', () => {
     ).toMatchObject({ toolName: 'git_status' })
     expect(
       generator.next(feedJson({ status: ' M src/lifecycle.ts' })).value,
-    ).toMatchObject({ toolName: 'list_jobs' })
-    expect(generator.next(feedListJobs()).value).toMatchObject({
+    ).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: ['src/lifecycle.ts'] },
     })

@@ -6,7 +6,7 @@ import { createBase2 } from '../base2/base2'
 import { isTestCoverageReviewerFinding } from '../base2/gate-reviewer'
 import { createReviewer } from '../reviewer/code-reviewer'
 import { createSpecialist } from '../specialists/create-specialist'
-import { editReceipt, feedListJobs } from './helpers/base2-step-fixtures'
+import { editReceipt } from './helpers/base2-step-fixtures'
 import {
   extractInlineFunctionSource,
   findMatchingDelimiterEnd,
@@ -199,8 +199,7 @@ function advanceToPostEditGitStatus(
   expect(
     gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
       .value,
-  ).toMatchObject({ toolName: 'list_jobs' })
-  expect(gen.next(feedListJobs()).value).toMatchObject({
+  ).toMatchObject({
     toolName: 'spawn_agent_inline',
   })
   expect(gen.next().value).toBe('STEP')
@@ -468,14 +467,11 @@ describe('base2 writer request predicates and sequential aux gates', () => {
     } as any)
 
     advanceToPostEditGitStatus(gen, 'src/a.ts')
-    expect(
-      gen.next({
-        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
-      } as any).value,
-    ).toMatchObject({ toolName: 'list_jobs' })
+    const next = gen.next({
+      toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+    } as any).value as any
     // No explicit test request -> skip inspect_environment writer path and go
     // straight to validation hooks / later gates.
-    const next = gen.next(feedListJobs()).value as any
     expect(next.toolName).not.toBe('inspect_environment')
     expect(next).toMatchObject({ toolName: 'run_file_change_hooks' })
   })
@@ -491,12 +487,9 @@ describe('base2 writer request predicates and sequential aux gates', () => {
     } as any)
 
     advanceToPostEditGitStatus(gen, 'src/a.ts')
-    expect(
-      gen.next({
-        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
-      } as any).value,
-    ).toMatchObject({ toolName: 'list_jobs' })
-    const next = gen.next(feedListJobs()).value as any
+    const next = gen.next({
+      toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+    } as any).value as any
     expect(next.toolName).not.toBe('inspect_environment')
     expect(next.toolName).not.toBe('spawn_agent_inline')
   })
@@ -521,8 +514,7 @@ describe('base2 writer request predicates and sequential aux gates', () => {
           },
         ],
       } as any).value,
-    ).toMatchObject({ toolName: 'list_jobs' })
-    expect(gen.next(feedListJobs()).value).toMatchObject({
+    ).toMatchObject({
       toolName: 'inspect_environment',
     })
     expect(
@@ -575,13 +567,12 @@ describe('base2 writer request predicates and sequential aux gates', () => {
           },
         ],
       } as any).value,
-    ).toMatchObject({ toolName: 'list_jobs' })
+    ).toMatchObject({
+      toolName: 'inspect_environment',
+    })
     // Docs-only request still inspects environment, but skips get_affected_tests
     // (tests gate is off). test-writer then skips silently because
     // requestRequiresTests is false, and doc-writer fires on the same iteration.
-    expect(gen.next(feedListJobs()).value).toMatchObject({
-      toolName: 'inspect_environment',
-    })
     const docWriterSpawn = gen.next({
       toolResult: [{ type: 'json', value: {} }],
     } as any).value as any
@@ -620,8 +611,7 @@ describe('base2 writer request predicates and sequential aux gates', () => {
           },
         ],
       } as any).value,
-    ).toMatchObject({ toolName: 'list_jobs' })
-    expect(gen.next(feedListJobs()).value).toMatchObject({
+    ).toMatchObject({
       toolName: 'inspect_environment',
     })
     expect(
@@ -666,8 +656,7 @@ describe('editor / repair-editor / test-writer cohesion', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'list_jobs' })
-    expect(gen.next(feedListJobs()).value).toMatchObject({
+    ).toMatchObject({
       toolName: 'run_file_change_hooks',
     })
     expect(
@@ -733,8 +722,7 @@ describe('editor / repair-editor / test-writer cohesion', () => {
       gen.next({
         toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
       } as any).value,
-    ).toMatchObject({ toolName: 'list_jobs' })
-    expect(gen.next(feedListJobs()).value).toMatchObject({
+    ).toMatchObject({
       toolName: 'run_file_change_hooks',
     })
     expect(
