@@ -31,31 +31,71 @@ type CoordinatedApplication<T extends ToolName> =
   | { status: 'rejected'; output: CodebuffToolOutput<T> }
   | { status: 'threw'; error: unknown }
 
-function hasExplicitError(value: unknown, depth = 0): boolean {
-  if (depth > 6 || value === null || value === undefined) return false
-  if (Array.isArray(value)) {
-    return value.some((item) => hasExplicitError(item, depth + 1))
-  }
-  if (typeof value !== 'object') return false
+const MAX_TOOL_OUTPUT_WALK_DEPTH = 6
 
-  const record = value as Record<string, unknown>
-  if (
-    // Only a non-empty errorMessage string signals an error; null/'' are
-    // benign diagnostic placeholders (symmetric with error: null).
-    (typeof record.errorMessage === 'string' &&
-      record.errorMessage.length > 0) ||
-    (record.error !== undefined && record.error !== null) ||
-    record.success === false ||
-    record.applied === false ||
-    record.status === 'failed' ||
-    record.status === 'error' ||
-    record.status === 'blocked'
-  ) {
-    return true
+/**
+ * Iterative walk of untrusted tool-output trees. Recursion is avoided so
+ * adversarial nesting cannot overflow the stack. The depth bound keeps
+ * cyclic or huge objects from running forever; nodes past the bound are
+ * ignored, matching the previous recursive helpers.
+ */
+function walkToolOutput(
+  root: unknown,
+  visit: (value: unknown, depth: number) => 'descend' | 'skip' | 'stop',
+  children?: (value: unknown) => unknown[] | undefined,
+): boolean {
+  const stack: Array<{ value: unknown; depth: number }> = [
+    { value: root, depth: 0 },
+  ]
+  while (stack.length > 0) {
+    const frame = stack.pop()
+    if (frame === undefined) return false
+    const { value, depth } = frame
+    if (
+      depth > MAX_TOOL_OUTPUT_WALK_DEPTH ||
+      value === null ||
+      value === undefined
+    ) {
+      continue
+    }
+    if (Array.isArray(value)) {
+      for (let i = value.length - 1; i >= 0; i--) {
+        stack.push({ value: value[i], depth: depth + 1 })
+      }
+      continue
+    }
+    const decision = visit(value, depth)
+    if (decision === 'stop') return true
+    if (decision === 'skip' || typeof value !== 'object') continue
+    const nested =
+      children?.(value) ?? Object.values(value as Record<string, unknown>)
+    for (let i = nested.length - 1; i >= 0; i--) {
+      stack.push({ value: nested[i], depth: depth + 1 })
+    }
   }
-  return Object.values(record).some((nested) =>
-    hasExplicitError(nested, depth + 1),
-  )
+  return false
+}
+
+function hasExplicitError(value: unknown): boolean {
+  return walkToolOutput(value, (node) => {
+    if (typeof node !== 'object') return 'skip'
+    const record = node as Record<string, unknown>
+    if (
+      // Only a non-empty errorMessage string signals an error; null/'' are
+      // benign diagnostic placeholders (symmetric with error: null).
+      (typeof record.errorMessage === 'string' &&
+        record.errorMessage.length > 0) ||
+      (record.error !== undefined && record.error !== null) ||
+      record.success === false ||
+      record.applied === false ||
+      record.status === 'failed' ||
+      record.status === 'error' ||
+      record.status === 'blocked'
+    ) {
+      return 'stop'
+    }
+    return 'descend'
+  })
 }
 
 type FileMutationResultV1 = Parameters<typeof getConfirmedAppliedActionsV1>[0]
@@ -66,33 +106,25 @@ type ConfirmedAppliedActionV1 = ReturnType<
 
 function collectEnvelopes(
   value: unknown,
-  depth: number,
   out: FileMutationResultV1[],
 ): void {
-  if (depth > 6 || value === null || value === undefined) return
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectEnvelopes(item, depth + 1, out)
+  walkToolOutput(value, (node) => {
+    if (typeof node !== 'object') return 'skip'
+    const parsed = fileMutationResultV1Schema.safeParse(node)
+    if (parsed.success) {
+      // Envelope nodes are atomic: never walk a parsed envelope's internals.
+      // A non-applied or non-committed envelope simply contributes nothing
+      // (explicit rejections are handled by hasExplicitError earlier).
+      if (
+        parsed.data.outcome === 'applied' &&
+        parsed.data.authorityReceipt?.status === 'committed'
+      ) {
+        out.push(parsed.data)
+      }
+      return 'skip'
     }
-    return
-  }
-  if (typeof value !== 'object') return
-  const parsed = fileMutationResultV1Schema.safeParse(value)
-  if (parsed.success) {
-    // Envelope nodes are atomic: never recurse into a parsed envelope's
-    // internals. A non-applied or non-committed envelope simply contributes
-    // nothing (explicit rejections are handled by hasExplicitError earlier).
-    if (
-      parsed.data.outcome === 'applied' &&
-      parsed.data.authorityReceipt?.status === 'committed'
-    ) {
-      out.push(parsed.data)
-    }
-    return
-  }
-  for (const nested of Object.values(value as Record<string, unknown>)) {
-    collectEnvelopes(nested, depth + 1, out)
-  }
+    return 'descend'
+  })
 }
 
 function getPositiveApplicationEvidence(
@@ -103,7 +135,7 @@ function getPositiveApplicationEvidence(
   wholeFileContentByPath?: ReadonlyMap<string, string>,
 ): ReadonlyMap<string, ConfirmedPostEditAnchor> | null {
   const envelopes: FileMutationResultV1[] = []
-  collectEnvelopes(value, 0, envelopes)
+  collectEnvelopes(value, envelopes)
   if (envelopes.length === 0) return null
 
   const confirmedPaths = new Set<string>()
@@ -168,6 +200,11 @@ function getPositiveApplicationEvidence(
     if (!confirmedPaths.has(path)) return null
   }
   for (const [path, content] of wholeFileContentByPath ?? []) {
+    // Snapshots outside confirmationPaths are excluded no-ops: they may be
+    // present for sticky/anchor minting but must not demand a covering
+    // applied action. Requiring one would return null and undo confirmed
+    // paths that already have evidence.
+    if (!paths.has(path)) continue
     const expected = getExactContentHash(content)
     const covering = confirmedActions.filter(
       (action) => (action.destinationPath ?? action.path) === path,
@@ -214,63 +251,76 @@ export function editOutputHasError<T extends ToolName>(
   return hasExplicitError(output)
 }
 
-function collectStaleSnapshotPaths(
-  value: unknown,
-  depth = 0,
-  out: { paths: Set<string>; sawStructuredStale: boolean } = {
+function isStructuredStaleCode(value: unknown): boolean {
+  return value === 'stale_snapshot' || value === 'stale_state'
+}
+
+function collectStaleSnapshotPaths(value: unknown): {
+  paths: Set<string>
+  sawStructuredStale: boolean
+} {
+  const out = {
     paths: new Set<string>(),
     sawStructuredStale: false,
-  },
-): { paths: Set<string>; sawStructuredStale: boolean } {
-  if (depth > 6 || value === null || value === undefined) return out
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectStaleSnapshotPaths(item, depth + 1, out)
-    }
-    return out
   }
-  if (typeof value !== 'object') return out
-
-  const record = value as Record<string, unknown>
-  if (record.errorCode === 'stale_snapshot') {
-    out.sawStructuredStale = true
-    if (typeof record.path === 'string' && record.path) {
-      out.paths.add(record.path)
-    } else if (typeof record.file === 'string' && record.file) {
-      out.paths.add(record.file)
-    }
-  }
-
-  if (Array.isArray(record.failures)) {
-    for (const failure of record.failures) {
-      collectStaleSnapshotPaths(failure, depth + 1, out)
-    }
-  }
-
-  for (const [key, nested] of Object.entries(record)) {
-    if (key === 'failures') continue
-    collectStaleSnapshotPaths(nested, depth + 1, out)
-  }
+  walkToolOutput(
+    value,
+    (node) => {
+      if (typeof node !== 'object') return 'skip'
+      const record = node as Record<string, unknown>
+      const nestedError =
+        record.error !== null &&
+        typeof record.error === 'object' &&
+        !Array.isArray(record.error)
+          ? (record.error as Record<string, unknown>)
+          : null
+      // Classify on this record when it carries a structured stale code, or when
+      // it owns `error: { code: 'stale_state' | 'stale_snapshot' }`, so a named
+      // action is never treated as nameless just because the nested error object
+      // has no path/file of its own.
+      if (
+        isStructuredStaleCode(record.errorCode) ||
+        isStructuredStaleCode(record.code) ||
+        (nestedError !== null && isStructuredStaleCode(nestedError.code))
+      ) {
+        out.sawStructuredStale = true
+        if (typeof record.path === 'string' && record.path) {
+          out.paths.add(record.path)
+        } else if (typeof record.file === 'string' && record.file) {
+          out.paths.add(record.file)
+        }
+      }
+      return 'descend'
+    },
+    (node) => {
+      if (typeof node !== 'object' || node === null || Array.isArray(node)) {
+        return undefined
+      }
+      const record = node as Record<string, unknown>
+      const next: unknown[] = []
+      // failures[] items stay at the same depth as sibling fields (not one
+      // level deeper via the array node) so a shallow failures wrapper cannot
+      // push a structured hit past the walk bound.
+      if (Array.isArray(record.failures)) {
+        next.push(...record.failures)
+      }
+      for (const [key, nested] of Object.entries(record)) {
+        if (key === 'failures') continue
+        next.push(nested)
+      }
+      return next
+    },
+  )
   return out
 }
 
-function outputIndicatesUnconfirmedApplication(
-  value: unknown,
-  depth = 0,
-): boolean {
-  if (depth > 6 || value === null || value === undefined) return false
-  if (Array.isArray(value)) {
-    return value.some((item) =>
-      outputIndicatesUnconfirmedApplication(item, depth + 1),
-    )
-  }
-  if (typeof value === 'string') {
-    return /could not confirm/i.test(value)
-  }
-  if (typeof value !== 'object') return false
-  return Object.values(value as Record<string, unknown>).some((nested) =>
-    outputIndicatesUnconfirmedApplication(nested, depth + 1),
-  )
+function outputIndicatesUnconfirmedApplication(value: unknown): boolean {
+  return walkToolOutput(value, (node) => {
+    if (typeof node === 'string' && /could not confirm/i.test(node)) {
+      return 'stop'
+    }
+    return typeof node === 'object' ? 'descend' : 'skip'
+  })
 }
 
 export function invalidatePreparedEditPaths(params: {

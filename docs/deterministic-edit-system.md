@@ -97,6 +97,16 @@ common cause of "I already read this file, why is my edit blocked?":
   a follow-up edit, avoiding a redundant re-read. The part appears only when at
   least one anchor was granted; it is omitted when no anchor could be minted
   (for example, no runtime-known content or no authoritative scope).
+- `coordinateEditApplication` confirms only `confirmationPaths` (default: all
+  coordinated `paths`). `wholeFileContentByPath` may still include excluded
+  no-op snapshots for sticky/anchor minting, but the afterHash / covering-action
+  check is restricted to `confirmationPaths`. An extra snapshot with no applied
+  action must not undo confirmation of the applied subset.
+  Client-output inspection (`hasExplicitError`, envelope collection, structured
+  `stale_snapshot`/`stale_state` classification, and unconfirmed-application
+  detection) is an iterative heap walk with a depth bound of 6. Recursion is
+  not used, so deeply nested or cyclic tool outputs cannot overflow the stack;
+  nodes past the bound are ignored (fail closed).
 - The strict read-before-edit blocked-recovery message distinguishes a file
   that was created or edited earlier in the session (it has a confirmed
   post-edit anchor). Instead of the generic "no fresh read authorization
@@ -106,7 +116,8 @@ common cause of "I already read this file, why is my edit blocked?":
   that token. The other blocked-recovery causes (`stale_snapshot`, a prior
   failed edit, stale-revoked, compacted, never-read) are unchanged.
   `stale_snapshot` is classified from structured `errorCode` (on the output
-  object or `failures[]` entries), not by regex-matching error strings.
+  object or `failures[]` entries) and from filesystem `code: 'stale_state'`
+  on mutation errors/actions (SDK CAS), not only `errorCode: 'stale_snapshot'`.
 - A confirmed `create` (or any confirmed whole-file write) grants sticky
   whole-file authorization **iff** a whole-file post-edit cap can be minted
   (client-verified 7-point anchor or a synthesized `cap.v3` from known bytes).
