@@ -320,6 +320,104 @@ describe('terminal command permission policy', () => {
     ).toBe(false)
   })
 
+  it('resolves relative traversal against cwd under workspace-write', () => {
+    expect(
+      evaluateTerminalCommandPolicy({
+        command: 'cd packages/sdk && bun test',
+        mode: 'assistant',
+        permissionProfile: 'workspace-write',
+        projectRoot,
+      }),
+    ).toEqual({ allowed: true })
+    expect(
+      evaluateTerminalCommandPolicy({
+        command: 'cd .. && bun test',
+        mode: 'assistant',
+        permissionProfile: 'workspace-write',
+        projectRoot,
+        cwd: '/workspace/project/packages/sdk',
+      }),
+    ).toEqual({ allowed: true })
+    expect(
+      evaluateTerminalCommandPolicy({
+        command: 'cd ..',
+        mode: 'assistant',
+        permissionProfile: 'workspace-write',
+        projectRoot,
+      }).allowed,
+    ).toBe(false)
+    expect(
+      evaluateTerminalCommandPolicy({
+        command: 'cd ..',
+        mode: 'assistant',
+        permissionProfile: 'workspace-write',
+        projectRoot,
+        cwd: projectRoot,
+      }).allowed,
+    ).toBe(false)
+    expect(
+      evaluateTerminalCommandPolicy({
+        command: 'cd ../../../etc',
+        mode: 'assistant',
+        permissionProfile: 'workspace-write',
+        projectRoot,
+        cwd: '/workspace/project/packages/sdk',
+      }).allowed,
+    ).toBe(false)
+  })
+
+  it('allows everyday workspace-write bash, non-dump substitutions, and gh pr', () => {
+    for (const command of [
+      'for f in src/*; do echo "$f"; done',
+      'if true; then git status --short; fi',
+      'while false; do echo x; done',
+      'case $x in a) echo a;; esac',
+      'echo $(date)',
+      'echo $(pwd)',
+      'git log --oneline $(git rev-parse HEAD)',
+      'gh pr create --title test --body ok',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'workspace-write',
+          projectRoot,
+        }),
+      ).toEqual({ allowed: true })
+    }
+    for (const command of [
+      'echo $(printenv)',
+      'echo "$(printenv)"',
+      'cat <(printenv)',
+      'echo $(echo $(printenv))',
+      'echo $(head | printenv)',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'workspace-write',
+          projectRoot,
+        }).allowed,
+      ).toBe(false)
+    }
+    for (const command of [
+      'gh pr create --title test',
+      'echo $(printenv)',
+      'rg TODO packages/../src',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'read-only',
+          projectRoot,
+        }).allowed,
+      ).toBe(false)
+    }
+  })
+
   it('allows the word source inside quoted arguments but blocks real shell indirection in workspace-write', () => {
     // "source" appearing only inside a quoted argument is not indirection.
     expect(
@@ -673,6 +771,27 @@ describe('terminal command permission policy', () => {
     }
   })
 
+  it('applies the git-commit allowedPaths allowlist to staged restore', () => {
+    expect(
+      evaluateTerminalCommandPolicy({
+        command: 'git restore --staged -- src/a.ts',
+        mode: 'assistant',
+        permissionProfile: 'git-commit',
+        projectRoot,
+        allowedPaths: ['src/a.ts'],
+      }).allowed,
+    ).toBe(true)
+    expect(
+      evaluateTerminalCommandPolicy({
+        command: 'git restore --staged other.ts',
+        mode: 'assistant',
+        permissionProfile: 'git-commit',
+        projectRoot,
+        allowedPaths: ['src/a.ts'],
+      }).allowed,
+    ).toBe(false)
+  })
+
   it('allows safe complex git operations for git-commit agents', () => {
     for (const command of [
       'git switch feature/x',
@@ -693,6 +812,7 @@ describe('terminal command permission policy', () => {
       'git tag v1.0.0',
       'git tag -a v1.0.0 -m rel',
       'git restore --staged src/a.ts',
+      'git restore --staged -- src/a.ts',
     ]) {
       expect(
         evaluateTerminalCommandPolicy({
