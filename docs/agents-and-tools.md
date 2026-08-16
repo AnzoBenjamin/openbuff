@@ -685,6 +685,20 @@ an agent that provides the capability (for example, spawn `code-searcher` for
 multi-query batch search). Do not retry the same unavailable name — the result
 will not change.
 
+### `suggest_followups` last-action contract
+
+For gate-active agents (`canSuggestFollowups` defined), `suggest_followups` is
+the absolute last actionable tool after the user-visible completion summary
+(and after optional `git-committer` if committing). Never call it mid-turn and
+never before remaining work. After followups, only terminal companions may run:
+`suggest_followups`, `end_turn`, `task_completed`.
+
+Native and custom/MCP paths share `getPostSuggestFollowupsBlockReason` in
+`packages/agent-runtime/src/tools/tool-executor.ts`. `suggestFollowupsEmitted`
+is set on the allow path and cleared at the start of each base2 user turn.
+`GATE: PENDING` still rejects `suggest_followups`. Non-gated agents
+(`canSuggestFollowups` undefined) are unchanged.
+
 ### Background shell jobs (`check_job` / `read_logs` / `kill_job` / `list_jobs`)
 
 Background jobs are unified behind a single `JobRegistry` (in the `common`

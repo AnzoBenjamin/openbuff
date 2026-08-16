@@ -45,7 +45,7 @@ const outputSchema = z.object({
 })
 
 const description = `
-Suggest ~3 clickable followup prompts (assistant-executable next steps). Write a brief user-visible summary first so the user is not left with only cards.
+Suggest ~3 clickable followup prompts (assistant-executable next steps). Absolute last actionable tool after a brief user-visible completion summary (and after git-committer if committing this turn); never mid-turn and never before remaining work. Write the summary first so the user is not left with only cards.
 
 Good: alternatives, related features, refactors, unit tests, "Continue with the next step". Avoid: bare commits, vague "test x", or manual user-only testing. Vary from prior suggestions.
 

@@ -615,9 +615,21 @@ describe('base2 validation/reviewer coordination prompts', () => {
       'if the suggest_followups tool is available',
     )
     expect(base2.instructionsPrompt).toContain(
+      'absolute last tool in the same final message after the single completion summary',
+    )
+    expect(base2.instructionsPrompt).toContain(
+      'if committing, spawn git-committer before suggest_followups',
+    )
+    expect(base2.instructionsPrompt).toContain(
+      'never mid-turn and never before remaining work',
+    )
+    expect(base2.instructionsPrompt).toContain(
       'If suggest_followups is unavailable, still provide the final summary/end normally',
     )
     expect(base2.stepPrompt).toContain('if that tool is available')
+    expect(base2.stepPrompt).toContain(
+      'absolute last tool in that same final message',
+    )
     expect(base2.stepPrompt).toContain(
       'If suggest_followups is unavailable, do not let that block the final summary/end',
     )

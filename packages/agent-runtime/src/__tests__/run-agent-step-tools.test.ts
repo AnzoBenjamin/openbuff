@@ -2186,8 +2186,8 @@ describe('runAgentStep - set_output tool', () => {
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'error',
-        message: expect.stringContaining(
-          'File-changing tools are not available after suggest_followups',
+        message: expect.stringMatching(
+          /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
         ),
       }),
     )
@@ -2244,8 +2244,8 @@ describe('runAgentStep - set_output tool', () => {
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'error',
-        message: expect.stringContaining(
-          'File-changing tools are not available after suggest_followups',
+        message: expect.stringMatching(
+          /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
         ),
       }),
     )
@@ -2255,6 +2255,345 @@ describe('runAgentStep - set_output tool', () => {
         toolName: 'rewrite_symbol',
       }),
     )
+  })
+
+  it('blocks non-file tools after same-step suggest_followups in gated final response steps', async () => {
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('suggest_followups', {
+        followups: [{ prompt: 'Add tests', label: 'Add tests' }],
+      })
+      yield createToolCallChunk('code_search', {
+        pattern: 'export const',
+      })
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState =
+      sessionState.mainAgentState as typeof sessionState.mainAgentState & {
+        canSuggestFollowups?: boolean
+      }
+    agentState.canSuggestFollowups = true
+    const followupAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'test-followup-agent',
+      toolNames: ['code_search', 'suggest_followups', 'end_turn'],
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'test-followup-agent',
+      localAgentTemplates: { 'test-followup-agent': followupAgent },
+      agentTemplate: followupAgent,
+      agentState,
+      prompt: 'Suggest followups and then try to search',
+    })
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'suggest_followups',
+      }),
+    )
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringMatching(
+          /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
+        ),
+      }),
+    )
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({ type: 'tool_call', toolName: 'code_search' }),
+    )
+  })
+
+  it('blocks non-terminal tools across batches after suggest_followups is emitted', async () => {
+    // Regression: toolCalls accumulates within a step, but the emitted flag is
+    // the safety net so a later batch cannot run spawn/search after followups.
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('suggest_followups', {
+        followups: [{ prompt: 'Add tests', label: 'Add tests' }],
+      })
+      // Force a second tool-call batch after suggest_followups has executed.
+      yield createToolCallChunk('spawn_agents', {
+        agents: [{ agent_type: 'code-searcher', prompt: 'Search more' }],
+      })
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState =
+      sessionState.mainAgentState as typeof sessionState.mainAgentState & {
+        canSuggestFollowups?: boolean
+        suggestFollowupsEmitted?: boolean
+      }
+    agentState.canSuggestFollowups = true
+    const followupAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'test-followup-agent',
+      toolNames: ['spawn_agents', 'suggest_followups', 'end_turn'],
+      spawnableAgents: ['code-searcher'],
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'test-followup-agent',
+      localAgentTemplates: { 'test-followup-agent': followupAgent },
+      agentTemplate: followupAgent,
+      agentState,
+      prompt: 'Suggest followups then spawn more work',
+    })
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'suggest_followups',
+      }),
+    )
+    expect(agentState.suggestFollowupsEmitted).toBe(true)
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringMatching(
+          /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
+        ),
+      }),
+    )
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({ type: 'tool_call', toolName: 'spawn_agents' }),
+    )
+  })
+
+  it('blocks custom/MCP tools after same-step suggest_followups while end_turn still succeeds', async () => {
+    // Regression RF-2: executeCustomToolCall must share the post-followups
+    // last-tool helper so a custom/MCP tool after same-step suggest_followups
+    // is rejected while terminal companions still run.
+    const customToolName = 'custom_search'
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+      fileContext: {
+        ...mockFileContext,
+        customToolDefinitions: {
+          [customToolName]: {
+            inputSchema: {
+              type: 'object',
+              properties: {
+                query: { type: 'string' },
+              },
+              required: ['query'],
+              additionalProperties: false,
+            },
+            endsAgentStep: false,
+            description: 'Custom tool for post-followups regression',
+          },
+        },
+      },
+      requestToolCall: async () => ({
+        output: [
+          {
+            type: 'json',
+            value: { ok: true },
+          },
+        ],
+      }),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('suggest_followups', {
+        followups: [{ prompt: 'Add tests', label: 'Add tests' }],
+      })
+      yield createToolCallChunk(customToolName, {
+        query: 'after followups',
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState({
+      ...mockFileContext,
+      customToolDefinitions: {
+        [customToolName]: {
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string' },
+            },
+            required: ['query'],
+            additionalProperties: false,
+          },
+          endsAgentStep: false,
+          description: 'Custom tool for post-followups regression',
+        },
+      },
+    })
+    const agentState =
+      sessionState.mainAgentState as typeof sessionState.mainAgentState & {
+        canSuggestFollowups?: boolean
+      }
+    agentState.canSuggestFollowups = true
+    const followupAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'test-followup-agent',
+      toolNames: [customToolName, 'suggest_followups', 'end_turn'],
+    }
+
+    const result = await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'test-followup-agent',
+      localAgentTemplates: { 'test-followup-agent': followupAgent },
+      agentTemplate: followupAgent,
+      agentState,
+      prompt: 'Suggest followups then call a custom tool',
+    })
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'suggest_followups',
+      }),
+    )
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringMatching(
+          /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
+        ),
+      }),
+    )
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: customToolName,
+      }),
+    )
+    expect(chunks).toContainEqual(
+      expect.objectContaining({ type: 'tool_call', toolName: 'end_turn' }),
+    )
+    expect(result.shouldEndTurn).toBe(true)
+  })
+
+  it('blocks custom/MCP tools after same-step suggest_followups while task_completed still succeeds', async () => {
+    // Companion to the end_turn custom/MCP case: executeCustomToolCall must
+    // still reject a custom/MCP tool after same-step suggest_followups while
+    // the task_completed terminal companion still runs.
+    const customToolName = 'custom_search'
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+      fileContext: {
+        ...mockFileContext,
+        customToolDefinitions: {
+          [customToolName]: {
+            inputSchema: {
+              type: 'object',
+              properties: {
+                query: { type: 'string' },
+              },
+              required: ['query'],
+              additionalProperties: false,
+            },
+            endsAgentStep: false,
+            description: 'Custom tool for post-followups regression',
+          },
+        },
+      },
+      requestToolCall: async () => ({
+        output: [
+          {
+            type: 'json',
+            value: { ok: true },
+          },
+        ],
+      }),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('suggest_followups', {
+        followups: [{ prompt: 'Add tests', label: 'Add tests' }],
+      })
+      yield createToolCallChunk(customToolName, {
+        query: 'after followups',
+      })
+      yield createToolCallChunk('task_completed', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState({
+      ...mockFileContext,
+      customToolDefinitions: {
+        [customToolName]: {
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string' },
+            },
+            required: ['query'],
+            additionalProperties: false,
+          },
+          endsAgentStep: false,
+          description: 'Custom tool for post-followups regression',
+        },
+      },
+    })
+    const agentState =
+      sessionState.mainAgentState as typeof sessionState.mainAgentState & {
+        canSuggestFollowups?: boolean
+      }
+    agentState.canSuggestFollowups = true
+    const followupAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'test-followup-agent',
+      toolNames: [customToolName, 'suggest_followups', 'task_completed'],
+    }
+
+    const result = await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'test-followup-agent',
+      localAgentTemplates: { 'test-followup-agent': followupAgent },
+      agentTemplate: followupAgent,
+      agentState,
+      prompt: 'Suggest followups then call a custom tool',
+    })
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'suggest_followups',
+      }),
+    )
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringMatching(
+          /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
+        ),
+      }),
+    )
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: customToolName,
+      }),
+    )
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'task_completed',
+      }),
+    )
+    expect(result.shouldEndTurn).toBe(true)
   })
 
   it('should handle handleSteps with one tool call and STEP_ALL', async () => {

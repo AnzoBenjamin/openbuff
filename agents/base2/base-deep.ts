@@ -300,7 +300,7 @@ Make sure to narrate to the user what you are doing and why you are doing it as 
     noAskUser
       ? ''
       : `
-After writing a user-visible completion summary, use suggest_followups to suggest ~3 next steps the user might want to take.`
+After writing a user-visible completion summary (and after git-committer if committing), use suggest_followups as the absolute last tool to suggest ~3 next steps; never mid-turn and never before remaining work.`
   }
 
 ## Followup Requests

@@ -134,7 +134,9 @@ Dirty working-tree files are not the same as pending: only task-related **review
 
 ## After GATE: PASSED
 
-- Spawn \`git-committer\` only with \`params.owned_paths\` for task-owned paths
+- Write the final user-visible completion summary first
+- Spawn optional \`git-committer\` (with \`params.owned_paths\` for task-owned paths) before followups if committing this turn
+- Call \`suggest_followups\` only as the absolute last tool after summary/commit; never mid-turn and never before remaining work
 - Any new edit re-arms on every new edit (back to GATE: PENDING); one more clear cycle is required. Treat early withhold as normal ordering; do not tight-loop committer spawns — wait for GATE: PASSED, then spawn once.`
 
 /**
