@@ -244,10 +244,35 @@ orchestrator and by explicit subagent calls. Its input schema accepts an
 optional `params.target_files` array and an optional `params.test_command`.
 When `target_files` is present, the agent reads those source files before
 writing tests so it can match the changed public surface and edge cases.
-It is intentionally read/write-only for files plus search/outline tools:
-it does **not** run terminal commands itself. If `test_command` is
-provided, the agent reports that command back for the parent or `basher`
-to run during validation.
+It mutates only through `edit_transaction` (with `str_replace` / `create` /
+`write_file` as edit *types* inside the transaction, not as standalone tools),
+plus read/outline tools. It does **not** run terminal commands itself. If
+`test_command` is provided, the agent reports that command back for the parent
+or `basher` to run during validation.
+
+Model-visible `edit_transaction` payload shape (tool name `edit_transaction`):
+
+```json
+{
+  "edits": [
+    {
+      "type": "str_replace",
+      "path": "packages/foo/__tests__/bar.test.ts",
+      "replacements": [
+        {
+          "oldString": "describe('bar', () => {",
+          "newString": "describe('bar', () => {\n  test('handles empty input', () => {\n    expect(bar('')).toBe(null)\n  })"
+        }
+      ]
+    },
+    {
+      "type": "create",
+      "path": "packages/foo/__tests__/baz.test.ts",
+      "content": "import { describe, expect, test } from 'bun:test'\n\ndescribe('baz', () => {\n  test('works', () => {\n    expect(true).toBe(true)\n  })\n})\n"
+    }
+  ]
+}
+```
 
 The agent's prompt contract is narrow: read the changed source, find an
 existing test in the same package, mimic that harness and assertion style,
@@ -685,6 +710,20 @@ an agent that provides the capability (for example, spawn `code-searcher` for
 multi-query batch search). Do not retry the same unavailable name — the result
 will not change.
 
+### `suggest_followups` last-action contract
+
+For gate-active agents (`canSuggestFollowups` defined), `suggest_followups` is
+the absolute last actionable tool after the user-visible completion summary
+(and after optional `git-committer` if committing). Never call it mid-turn and
+never before remaining work. After followups, only terminal companions may run:
+`suggest_followups`, `end_turn`, `task_completed`.
+
+Native and custom/MCP paths share `getPostSuggestFollowupsBlockReason` in
+`packages/agent-runtime/src/tools/tool-executor.ts`. `suggestFollowupsEmitted`
+is set on the allow path and cleared at the start of each base2 user turn.
+`GATE: PENDING` still rejects `suggest_followups`. Non-gated agents
+(`canSuggestFollowups` undefined) are unchanged.
+
 ### Background shell jobs (`check_job` / `read_logs` / `kill_job` / `list_jobs`)
 
 Background jobs are unified behind a single `JobRegistry` (in the `common`
@@ -1008,14 +1047,15 @@ Example:
 
 ### `edit_transaction` and compatibility edit handlers
 
-Shipped root and editor agents receive `edit_transaction` as their single
-model-visible project mutation tool. Its discriminated edit variants cover
-targeted `str_replace`, `replace_range`, `rewrite_symbol`, unified `patch`,
-structured imports/insertion, create/delete/move, and whole-file `write_file`
-operations. The corresponding standalone handlers remain registered for
-persisted/external compatibility, but their overlapping schemas are not added
-to root/editor provider prompts. Under strict-mode edit flows all variants
-participate in staged read-before-edit enforcement:
+Shipped root, editor, test-writer, and doc-writer agents receive
+`edit_transaction` as their single model-visible project mutation tool. Its
+discriminated edit variants cover targeted `str_replace`, `replace_range`,
+`rewrite_symbol`, unified `patch`, structured imports/insertion,
+create/delete/move, and whole-file `write_file` operations. The corresponding
+standalone handlers remain registered for persisted/external compatibility, but
+their overlapping schemas are not added to those agents' provider prompts.
+Under strict-mode edit flows all variants participate in staged
+read-before-edit enforcement:
 
 - Every edit requires an explicit `type` discriminator. Valid values are
   `str_replace`, `replace_range`, `structured`, `create`, `delete`, `move`,

@@ -617,6 +617,12 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
       type Base2AgentState = NonNullable<typeof agentState> & {
         base2ActiveWork?: Base2ActiveWorkState
         canSuggestFollowups?: boolean
+        /**
+         * Set by the tool executor after a successful same-step allow-path for
+         * suggest_followups while the gate system is active. Cleared once per
+         * user turn at handleSteps start so a new turn can suggest again.
+         */
+        suggestFollowupsEmitted?: boolean
         uncommittedUnvalidatedFiles?: string[]
         /**
          * Progressive tool-disclosure tiers beyond CORE currently unlocked
@@ -652,6 +658,9 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
       }
 
       const mutableAgentState = (agentState ?? {}) as Base2AgentState
+      // Reset once per user turn so a new turn can suggest followups again
+      // after a prior turn's suggest_followups set the executor emitted flag.
+      mutableAgentState.suggestFollowupsEmitted = false
       const agentId = mutableAgentState.agentId
       const configuredHasNoValidation = config?.hasNoValidation
       const configuredPlanOnly = config?.planOnly === true
@@ -727,7 +736,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
       // serialized via .toString() and reconstructed with new Function(...),
       // so a module-scope binding would be undefined at reconstruction time.
       const GATE_PASS_FINALIZATION_NOTICE =
-        'Provide your single user-visible completion summary now if you have not already written one this turn; if you already have, add only the follow-up suggestions instead of repeating it. Write at most one completion summary per turn. Do not make more edits unless absolutely necessary; any new edits will rerun the gate.'
+        'Provide your single user-visible completion summary now if you have not already written one this turn; if you already have, add only the follow-up suggestions instead of repeating it. Write at most one completion summary per turn. Call suggest_followups only as the absolute last tool after that summary (and after git-committer if committing this turn); never mid-turn and never before remaining work. Do not make more edits unless absolutely necessary; any new edits will rerun the gate.'
       const existingActiveWorkState = mutableAgentState.base2ActiveWork
       const hadPendingGateFiles =
         !!existingActiveWorkState &&
@@ -7420,7 +7429,7 @@ function hashGateSnapshotDetails(details: string): string {
             [
               'GATE: PASSED',
               `phase: ${state.currentPhase}`,
-              'allowed actions: final summary, suggest_followups, git-committer (with owned_paths)',
+              'allowed actions: final summary, optional git-committer (with owned_paths), then suggest_followups as absolute last tool',
             ].join('\n'),
           )
         }
@@ -8713,8 +8722,8 @@ ${buildArray(
     ? '- Write exactly ONE user-visible completion summary per turn. For edited code, that summary belongs in the final message after the automated validation/reviewer gate has passed — do not write a completion summary before the gate runs. Keep any pre-gate text to brief progress notes, not a summary of the finished work.'
     : '- Inform the user that you have completed the task in one sentence or a few short bullet points.',
   gateActive
-    ? '- After successfully completing an implementation, if the suggest_followups tool is available, use it to suggest ~3 next steps the user might want to take. For edited code, call it only after the automated validation/reviewer gate has passed, in the same final message as your single completion summary. If suggest_followups is unavailable, still provide the final summary/end normally.'
-    : '- After successfully completing an implementation, if the suggest_followups tool is available, use it to suggest ~3 next steps the user might want to take, in the same final message as your completion summary. If suggest_followups is unavailable, still provide the final summary/end normally.',
+    ? '- After successfully completing an implementation, if the suggest_followups tool is available, use it to suggest ~3 next steps the user might want to take. For edited code, call it only after the automated validation/reviewer gate has passed, as the absolute last tool in the same final message after the single completion summary; if committing, spawn git-committer before suggest_followups; never mid-turn and never before remaining work. If suggest_followups is unavailable, still provide the final summary/end normally.'
+    : '- After successfully completing an implementation, if the suggest_followups tool is available, use it to suggest ~3 next steps the user might want to take as the absolute last tool in the same final message after the completion summary; never mid-turn. If suggest_followups is unavailable, still provide the final summary/end normally.',
 ).join('\n')}`
 }
 
@@ -8762,7 +8771,7 @@ function buildImplementationStepPrompt({
     isDefault &&
       'Do not manually spawn code-reviewer for the same edited file set that the automated runtime gate will review. Manual review is only for user-requested extra review or pre-edit/advisory review. Spawn security-reviewer for auth, crypto, secrets, permissions, injection, sandboxing, supply-chain, or production-risk changes.',
     isDefault &&
-      'After the automated validation/reviewer gate has passed for edited code, write your single completion summary and call suggest_followups with around 3 useful next steps in that same final message, if that tool is available. If suggest_followups is unavailable, do not let that block the final summary/end.',
+      'After the automated validation/reviewer gate has passed for edited code, write your single completion summary and call suggest_followups with around 3 useful next steps as the absolute last tool in that same final message (after git-committer if committing), if that tool is available; never mid-turn and never before remaining work. If suggest_followups is unavailable, do not let that block the final summary/end.',
   ).join('\n')
 }
 

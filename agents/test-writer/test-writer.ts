@@ -92,8 +92,6 @@ const definition: SecretAgentDefinition = {
     'read_files',
     'read_outline',
     'edit_transaction',
-    'write_file',
-    'str_replace',
     'set_output',
   ],
   spawnableAgents: [],
@@ -107,8 +105,31 @@ Instructions:
 2. Read an existing in-scope test file in the same package to mimic its imports, harness, and assertion style. Do not invent a new test framework.
 3. Write focused tests covering: the happy path, key edge cases (empty/null/zero/boundary), and the specific behavior the prompt asked for. Prefer one assertion concept per test.
 3a. For bug fixes, prefer writing the reproducing failing test before implementation when the orchestrator invokes you in pre-implementation mode.
-4. Do not run terminal commands directly. If a test_command param is provided, include it as the validation command for the parent/basher to run after your changes.
-5. Finish with set_output using the declared schema. Use completionKind=changed when files were modified. Use completionKind=noop only when existing tests already cover every requested behavior; then changedFiles must be empty and evidence must name the exact existing tests/assertions you read. Use status=completed only when every requested test deliverable is satisfied. List exact changedFiles, requirement/acceptance IDs addressed, unresolved items, and the parent-owned requestedValidation commands.
+4. Call only edit_transaction for mutations. str_replace / create / write_file are edit *types inside* the transaction, not standalone tools. Prefer type "str_replace" for targeted updates and type "create" (or "write_file" for a necessary whole-file rewrite) for new test files. Example:
+<codebuff_tool_call>
+{
+  "cb_tool_name": "edit_transaction",
+  "edits": [
+    {
+      "type": "str_replace",
+      "path": "packages/foo/__tests__/bar.test.ts",
+      "replacements": [
+        {
+          "oldString": "describe('bar', () => {",
+          "newString": "describe('bar', () => {\n  test('handles empty input', () => {\n    expect(bar('')).toBe(null)\n  })"
+        }
+      ]
+    },
+    {
+      "type": "create",
+      "path": "packages/foo/__tests__/baz.test.ts",
+      "content": "import { describe, expect, test } from 'bun:test'\n\ndescribe('baz', () => {\n  test('works', () => {\n    expect(true).toBe(true)\n  })\n})\n"
+    }
+  ]
+}
+</codebuff_tool_call>
+5. Do not run terminal commands directly. If a test_command param is provided, include it as the validation command for the parent/basher to run after your changes.
+6. Finish with set_output using the declared schema. Use completionKind=changed when files were modified. Use completionKind=noop only when existing tests already cover every requested behavior; then changedFiles must be empty and evidence must name the exact existing tests/assertions you read. Use status=completed only when every requested test deliverable is satisfied. List exact changedFiles, requirement/acceptance IDs addressed, unresolved items, and the parent-owned requestedValidation commands.
 Do not refactor unrelated tests. Do not modify source code under test — if the source has a bug, report it and stop.`.trim(),
 
   handleSteps: function* () {

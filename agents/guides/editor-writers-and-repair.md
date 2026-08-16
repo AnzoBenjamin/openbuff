@@ -21,8 +21,8 @@ Implementation modes that still run the automated validation/reviewer gate use t
 | --- | --- | --- |
 | `editor` | Non-trivial **implementation** edits after discovery. Self-contained handoff only. Mutates via `edit_transaction`. | Validation, basher, review, git, todos, visual smoke, shell cleanup. Parent-only work stays with the orchestrator. |
 | `repair-editor` | **Finding-scoped** fixes: parseable validation diagnostics or stable reviewer finding IDs. Same edit surface as editor plus `read_subtree` for diagnosis. | Unrelated refactors, docs, feature work, or protocol/attestation failures (snapshot mismatch is not a source repair). |
-| `test-writer` | New/extended tests under existing test paths only (`*.test.*`, `*.spec.*`, `__tests__/`, `test/`, `tests/`). Reports `requestedValidation` for the parent/basher. | Production source (except when a test is unobservable without a minimal source change — still not the default). Running terminals itself. |
-| `doc-writer` | Documentation paths only (`docs/**`, `README*`, `**/*.md`, `**/*.mdx`). Verifies against source; never invents API behavior. | Production source edits. |
+| `test-writer` | New/extended tests under existing test paths only (`*.test.*`, `*.spec.*`, `__tests__/`, `test/`, `tests/`). Mutates via `edit_transaction` (use `str_replace` / `create` / `write_file` edit *types* inside the transaction; never as standalone tools). Reports `requestedValidation` for the parent/basher. | Production source (except when a test is unobservable without a minimal source change — still not the default). Running terminals itself. |
+| `doc-writer` | Documentation paths only (`docs/**`, `README*`, `**/*.md`, `**/*.mdx`). Mutates via `edit_transaction` (use `str_replace` / `create` / `write_file` edit *types* inside the transaction; never as standalone tools). Verifies against source; never invents API behavior. | Production source edits. |
 
 All four use structured `set_output` receipts. Writers expose `status`, `completionKind` (`changed` \| `noop`), `changedFiles`, and `evidence`. The runtime accepts writer receipts only when status is `completed` and either:
 

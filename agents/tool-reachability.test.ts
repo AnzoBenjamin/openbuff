@@ -136,6 +136,19 @@ describe('agent tool reachability', () => {
       expect(tools).not.toContain(tool)
   })
 
+  test('test-writer and doc-writer expose edit_transaction without legacy direct edits', () => {
+    for (const definition of [testWriter, docWriter]) {
+      const tools = definition.toolNames ?? []
+      expect(tools).toContain('edit_transaction')
+      for (const tool of LEGACY_DIRECT_EDIT_TOOLS) {
+        expect(
+          tools,
+          `${definition.id} must not expose legacy direct edit tool ${tool}`,
+        ).not.toContain(tool)
+      }
+    }
+  })
+
   test('audit shards receive only derived findings-artifact write authority', () => {
     const definition = createGeneralAgent({ model: 'opus' })
 

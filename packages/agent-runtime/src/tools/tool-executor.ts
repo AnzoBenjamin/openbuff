@@ -1470,6 +1470,52 @@ function isFileChangingTool(toolName: string): boolean {
   )
 }
 
+const POST_FOLLOWUPS_ERROR_MESSAGE =
+  'No tools are available after suggest_followups in the same step (except end_turn/task_completed). suggest_followups must be the absolute last actionable tool after the completion summary (and after git-committer if committing).'
+const ALREADY_EMITTED_FOLLOWUPS_ERROR_MESSAGE =
+  'suggest_followups already ended the actionable work for this turn. No more non-terminal tools are available after followups (except end_turn/task_completed).'
+
+function isTerminalFollowupCompanion(name: string): boolean {
+  return (
+    name === 'suggest_followups' ||
+    name === 'end_turn' ||
+    name === 'task_completed'
+  )
+}
+
+function getPostSuggestFollowupsBlockReason(params: {
+  // Accept AgentState and read the extra runtime flags via the same cast
+  // pattern used by executeToolCall; these fields are intentionally not on
+  // the public AgentState type.
+  agentState: AgentState
+  toolName: string
+  toolCalls: { toolName: string }[]
+}): string | null {
+  const followupFlags = params.agentState as AgentState & {
+    canSuggestFollowups?: boolean
+    suggestFollowupsEmitted?: boolean
+  }
+  const canSuggestFollowups = followupFlags.canSuggestFollowups
+  const suggestFollowupsEmitted = followupFlags.suggestFollowupsEmitted === true
+  // Gate system is active for base2-style agents that publish canSuggestFollowups
+  // (true or false). Non-base2/custom agents leave it undefined and keep prior
+  // followups behavior unchanged unless they already set the emitted flag.
+  const gateSystemActive = canSuggestFollowups !== undefined
+  if (!(gateSystemActive || suggestFollowupsEmitted)) {
+    return null
+  }
+  if (isTerminalFollowupCompanion(params.toolName)) {
+    return null
+  }
+  if (suggestFollowupsEmitted) {
+    return ALREADY_EMITTED_FOLLOWUPS_ERROR_MESSAGE
+  }
+  if (params.toolCalls.some((call) => call.toolName === 'suggest_followups')) {
+    return POST_FOLLOWUPS_ERROR_MESSAGE
+  }
+  return null
+}
+
 export function sanitizePathSegment(segment: string): string {
   // Strip path separators (forward/back slash, null byte) and parent-directory
   // traversal (..) so an agent-supplied identifier (e.g. write_audit_findings
@@ -1977,6 +2023,29 @@ export async function executeToolCall<T extends ToolName>(
 
   const canSuggestFollowups = (agentState as { canSuggestFollowups?: boolean })
     .canSuggestFollowups
+  // Gate system is active for base2-style agents that publish canSuggestFollowups
+  // (true or false). Non-base2/custom agents leave it undefined and keep prior
+  // followups behavior unchanged unless they already set the emitted flag.
+  const gateSystemActive = canSuggestFollowups !== undefined
+
+  // Last-tool enforcement: once followups have been emitted (or already appear
+  // earlier in this step's toolCalls), only terminal companions may run. This
+  // broadens the old file-edit-only block so spawn/search/validation cannot
+  // continue after followups mid-turn. Shared with executeCustomToolCall so
+  // custom/MCP tools cannot skip the same-step last-tool + emitted-flag check.
+  const postFollowupsBlockReason = getPostSuggestFollowupsBlockReason({
+    agentState,
+    toolName,
+    toolCalls,
+  })
+  if (postFollowupsBlockReason) {
+    onResponseChunk({
+      type: 'error',
+      message: postFollowupsBlockReason,
+    })
+    return abortablePreviousToolCallFinished
+  }
+
   if (toolName === 'suggest_followups') {
     if (
       canSuggestFollowups === false ||
@@ -1989,17 +2058,13 @@ export async function executeToolCall<T extends ToolName>(
       })
       return abortablePreviousToolCallFinished
     }
-  } else if (
-    canSuggestFollowups === true &&
-    isFileChangingTool(toolName) &&
-    toolCalls.some((call) => call.toolName === 'suggest_followups')
-  ) {
-    onResponseChunk({
-      type: 'error',
-      message:
-        'File-changing tools are not available after suggest_followups in the same step. If more edits are needed, make them before final follow-up suggestions so validation and review can rerun.',
-    })
-    return abortablePreviousToolCallFinished
+    // Mark followups as emitted only on the allow path (not early returns) so
+    // later tool-call batches in the same step cannot run non-terminal work.
+    // Only set when the gate system is active so custom agents stay free.
+    if (gateSystemActive) {
+      ;(agentState as { suggestFollowupsEmitted?: boolean })
+        .suggestFollowupsEmitted = true
+    }
   }
 
   // Retract suggest_followups permission for the remainder of this step as
@@ -2878,6 +2943,21 @@ export async function executeCustomToolCall(
     previousToolCallFinished,
     params.signal,
   )
+  // Same last-tool / emitted-flag enforcement as executeToolCall. Custom and
+  // MCP tools are never terminal companions, so they must not run after
+  // same-step suggest_followups (or after the emitted flag is already set).
+  const postFollowupsBlockReason = getPostSuggestFollowupsBlockReason({
+    agentState,
+    toolName,
+    toolCalls,
+  })
+  if (postFollowupsBlockReason) {
+    onResponseChunk({
+      type: 'error',
+      message: postFollowupsBlockReason,
+    })
+    return abortablePreviousToolCallFinished
+  }
   const toolCall: CustomToolCall | ToolCallError = parseRawCustomToolCall({
     customToolDefs: await getMCPToolData({
       ...params,
