@@ -5,20 +5,9 @@
  * these payloads instead of re-declaring near-identical copies.
  */
 
-/** Minimal pushed background-job digest payload for the post-git_status list_jobs yield. */
-export const LIST_JOBS_RESULT = {
-  jobs: [],
-  note: 'No action required unless you need this output.',
-}
-
 /** Wrap `value` as a JSON tool-result feed for a base2 step generator. */
 export function feedJson(value: unknown) {
   return { toolResult: [{ type: 'json', value }] } as any
-}
-
-/** Feed the canonical post-git_status list_jobs digest payload. */
-export function feedListJobs() {
-  return feedJson(LIST_JOBS_RESULT)
 }
 
 /**

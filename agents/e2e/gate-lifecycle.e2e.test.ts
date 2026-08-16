@@ -30,16 +30,6 @@ function finishStepWithToolResult(value: unknown) {
   } as any
 }
 
-/** Minimal pushed background-job digest payload for the post-git_status list_jobs yield. */
-const LIST_JOBS_RESULT = {
-  jobs: [],
-  note: 'No action required unless you need this output.',
-}
-
-function feedListJobs() {
-  return feedJson(LIST_JOBS_RESULT)
-}
-
 /**
  * Canonical file_mutation_result receipt (the real production edit-artifact
  * shape) for `path`. Feed this instead of a bare `{ file }` so the edited file
@@ -129,35 +119,14 @@ describe('base2 deterministic gate lifecycle e2e', () => {
       params: {},
     } as any)
 
-    // Invariant: codebase-oriented lifecycle prompts first gather indexed context.
+    // Invariant: every lifecycle starts from an explicit working-tree snapshot.
     expect(gen.next().value).toMatchObject({
-      toolName: 'query_index',
-      input: {
-        query: 'Implement the lifecycle change.',
-        limit: 14,
-        mode: 'search',
-      },
-    })
-
-    // Invariant: retrieval routing is explicit before the working-tree snapshot.
-    expect(gen.next(feedJson([])).value).toMatchObject({
-      toolName: 'add_message',
-      input: { role: 'user' },
-      includeToolCall: false,
-    })
-
-    // Invariant: every lifecycle then starts from an explicit working-tree snapshot.
-    expect(gen.next(feedJson([])).value).toMatchObject({
       toolName: 'git_status',
       input: {},
     })
 
     // Invariant: context pruning happens before the first model step.
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
-      toolName: 'list_jobs',
-      input: {},
-    })
-    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -169,8 +138,7 @@ describe('base2 deterministic gate lifecycle e2e', () => {
     ).toMatchObject({ toolName: 'git_status', input: {} })
     expect(
       gen.next(feedJson({ status: ` M ${LIFECYCLE_FILE}` })).value,
-    ).toMatchObject({ toolName: 'list_jobs', input: {} })
-    expect(gen.next(feedListJobs()).value).toMatchObject({
+    ).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: [LIFECYCLE_FILE] },
     })
@@ -228,12 +196,10 @@ describe('base2 deterministic gate lifecycle e2e', () => {
     expect(
       gen.next(finishStepWithToolResult(editReceipt(LIFECYCLE_FILE))).value,
     ).toMatchObject({ toolName: 'git_status' })
+    // Invariant 6: passing validation advances to reviewer instead of finalizing.
     expect(
       gen.next(feedJson({ status: ` M ${LIFECYCLE_FILE}` })).value,
-    ).toMatchObject({ toolName: 'list_jobs' })
-
-    // Invariant 6: passing validation advances to reviewer instead of finalizing.
-    expect(gen.next(feedListJobs()).value).toMatchObject({
+    ).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: [LIFECYCLE_FILE] },
     })
@@ -381,14 +347,12 @@ describe('base2 deterministic gate lifecycle e2e', () => {
     expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
       toolName: 'git_status',
     })
-    expect(
-      gen.next(feedJson({ status: ` M ${LIFECYCLE_FILE}` })).value,
-    ).toMatchObject({ toolName: 'list_jobs' })
-
     // Invariant 10: the re-entered loop runs validation hooks before the
     // fresh reviewer (the specialist terminal-failure continue changed the
     // flow so validation re-runs on re-entry).
-    const reValidation = gen.next(feedListJobs())
+    const reValidation = gen.next(
+      feedJson({ status: ` M ${LIFECYCLE_FILE}` }),
+    )
     expect(reValidation.value).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: [LIFECYCLE_FILE] },
@@ -485,10 +449,6 @@ describe('base2 deterministic gate lifecycle e2e', () => {
 
     expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
     expect(gen.next(feedJson({ status: dirtyStatus })).value).toMatchObject({
-      toolName: 'list_jobs',
-      input: {},
-    })
-    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -498,12 +458,7 @@ describe('base2 deterministic gate lifecycle e2e', () => {
       toolName: 'git_status',
       input: {},
     })
-    expect(gen.next(feedJson({ status: dirtyStatus })).value).toMatchObject({
-      toolName: 'list_jobs',
-      input: {},
-    })
-
-    const hooks = gen.next(feedListJobs())
+    const hooks = gen.next(feedJson({ status: dirtyStatus }))
     expect(hooks.value).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: [MULTI_BATCH_FILE_A, MULTI_BATCH_FILE_B] },
@@ -597,27 +552,10 @@ describe('base2 deterministic gate lifecycle e2e', () => {
     }
 
     expect(drive()).toMatchObject({
-      toolName: 'query_index',
-      input: {
-        query: 'Implement the happy path change.',
-        limit: 14,
-        mode: 'search',
-      },
-    })
-    expect(drive(feedJson([]))).toMatchObject({
-      toolName: 'add_message',
-      input: { role: 'user' },
-      includeToolCall: false,
-    })
-    expect(drive(feedJson([]))).toMatchObject({
       toolName: 'git_status',
       input: {},
     })
     expect(drive(feedJson({ status: '' }))).toMatchObject({
-      toolName: 'list_jobs',
-      input: {},
-    })
-    expect(drive(feedListJobs())).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -633,10 +571,6 @@ describe('base2 deterministic gate lifecycle e2e', () => {
       drive(finishStepWithToolResult(editReceipt(HAPPY_PATH_FILE))),
     ).toMatchObject({ toolName: 'git_status', input: {} })
     expect(drive(feedJson({ status: ` M ${HAPPY_PATH_FILE}` }))).toMatchObject({
-      toolName: 'list_jobs',
-      input: {},
-    })
-    expect(drive(feedListJobs())).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: [HAPPY_PATH_FILE] },
     })
@@ -723,10 +657,6 @@ describe('base2 deterministic gate lifecycle e2e', () => {
     // Continuity prompt starts from an explicit working-tree snapshot.
     expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
     expect(gen.next(feedJson({ status: ` D ${DELETED_FILE}` })).value).toMatchObject({
-      toolName: 'list_jobs',
-      input: {},
-    })
-    expect(gen.next(feedListJobs()).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -744,8 +674,7 @@ describe('base2 deterministic gate lifecycle e2e', () => {
     ).toMatchObject({ toolName: 'git_status', input: {} })
     expect(
       gen.next(feedJson({ status: ` D ${DELETED_FILE}` })).value,
-    ).toMatchObject({ toolName: 'list_jobs', input: {} })
-    expect(gen.next(feedListJobs()).value).toMatchObject({
+    ).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: [DELETED_FILE] },
     })
@@ -803,8 +732,7 @@ describe('base2 deterministic gate lifecycle e2e', () => {
     })
     expect(
       followupGen.next(feedJson({ status: ` D ${DELETED_FILE}` })).value,
-    ).toMatchObject({ toolName: 'list_jobs', input: {} })
-    expect(followupGen.next(feedListJobs()).value).toMatchObject({
+    ).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
     })
@@ -834,8 +762,6 @@ describe('base2 deterministic gate lifecycle e2e', () => {
       const dv = drain.value as any
       if (dv?.toolName === 'git_status') {
         drain = followupGen.next(feedJson({ status: ` D ${DELETED_FILE}` }))
-      } else if (dv?.toolName === 'list_jobs') {
-        drain = followupGen.next(feedListJobs())
       } else {
         drain = followupGen.next()
       }
