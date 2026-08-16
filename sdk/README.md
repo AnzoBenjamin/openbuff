@@ -114,8 +114,12 @@ Inputs:
   (direct user input is not gated here).
 - `permissionProfile` — one of the profiles below.
 - `projectRoot` — the workspace root used for path-containment checks.
+- `cwd` — optional in-project working directory. When provided, relative
+  `..` tokens under `workspace-write` and `validation-diagnosis` resolve
+  against this directory instead of `projectRoot`. The resolved path must
+  still stay inside `projectRoot`; `cd ..` from the repo root stays denied.
 - `allowedPaths` — optional owned-path allowlist, required for `git add`
-  staging under `git-commit`.
+  and `git restore --staged` under `git-commit`.
 
 Profiles:
 
@@ -131,8 +135,9 @@ Profiles:
   expansion-free paths that resolve inside the project.
 - `git-commit` — inspect/fetch Git state, stage explicit owned paths, create a
   non-`--amend` commit with `-m`/`--message`, and perform an explicit
-  non-force branch push. `git add` paths must be an exact subset of
-  `allowedPaths`; broad flags, dot staging, options, and globs are forbidden.
+  non-force branch push. `git add` and `git restore --staged` paths must be
+  an exact subset of `allowedPaths`; broad flags, dot staging, options, and
+  globs are forbidden.
   Whole-subject placeholder commit messages such as bare `probe`, `wip`,
   `test`, `tmp`, `update`, or `misc` are denied; real imperative subjects that
   merely contain those words stay allowed. Safe single-command branch/switch,
@@ -154,8 +159,15 @@ Profiles:
   Git commands are denied. Fixture creation is not authorized through the
   shell; use a dedicated terminal executor with private fixture creation.
   Outside-absolute-path containment and env-dump denial still apply.
-- `workspace-write` — general workspace writes; in-project `..` references are
-  allowed, escaping segments are rejected.
+- `workspace-write` — general workspace writes. Everyday bash (`for`/`if`/
+  `while`/`case`, pipelines, and normal control flow) is allowed. In-project
+  `..` references are allowed, including `cd ..` from a contained `cwd` that
+  still lands inside the project; escaping segments are rejected. Command and
+  process substitution (`$(...)`, backticks, `<(...)`) are inspected for env
+  dumps rather than denied wholesale, so `echo $(date)` is allowed while
+  `echo $(printenv)` is not. `gh pr create` and other GitHub PR mutation verbs
+  are allowed here (they remain denied on `read-only` and stay routine in
+  balanced harness approval).
 - `full-access` — bypasses the policy gates. Use only through an explicit
   full-access workflow.
 
@@ -173,7 +185,13 @@ substitution forms such as `command printenv`, `env printenv`, `nice env`, or
 `cat <(printenv)`; option-only `set -euo pipefail` and workspace-style
 `export NAME[=value]` / `env NAME=value <utility>` remain allowed where the
 profile permits) are denied for every non-`full-access` profile, including
-`tmux-test`. Under `read-only` / `librarian-read-only` / `validation-diagnosis`,
+`tmux-test`. Under `workspace-write` only, active `$()` / backticks /
+process substitution are not treated as dumps unless a substitution body or
+remaining segment actually dumps the environment; unextractable substitutions
+do not fail closed as env-dump. `read-only`, `librarian-read-only`,
+`validation-diagnosis`, `tmux-test`, `git-commit`, and `dependency-mutation`
+still fail closed on substitution and unparseable composition for env-dump.
+Under `read-only` / `librarian-read-only` / `validation-diagnosis`,
 env mutation forms such as `export NAME=value` and `env NAME=value cmd` are
 also denied. The `tmux-test` profile still skips the other workspace deny
 patterns because it is governed by its own stricter no-shell-write guard
@@ -192,10 +210,10 @@ that blocked it.
     (those are classified as `arbitrary-code` and need approval in balanced
     mode).
   - Do not embed multi-KB heredocs or live `$()` that dump env in the basher
-    `params.command` string — env dumps (`env`/`printenv`/bare `set`) and some
-    substitution forms are still denied by terminal policy even when not
-    high-impact harness actions. Author files with edit tools; run short
-    commands.
+    `params.command` string — env dumps (`env`/`printenv`/bare `set`) stay
+    denied even when ordinary `$(date)` / `$(pwd)` substitutions and `gh pr`
+    are allowed under `workspace-write` and are not high-impact harness
+    actions. Author files with edit tools; run short commands.
   - Durable local check (from monorepo root): `bun run check:ci-local` (the early-gates bundle: tool defs + memory-drift + sync-agent-config).
 
 ## Search tool working directory

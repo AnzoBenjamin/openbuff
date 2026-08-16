@@ -98,6 +98,26 @@ expectPolicy(
 )
 
 expectPolicy(
+  'policy: git restore --staged -- under git-commit allowlist',
+  {
+    command: 'git restore --staged -- src/a.ts',
+    permissionProfile: 'git-commit',
+    allowedPaths: ['src/a.ts'],
+  },
+  (decision) => decision.allowed === true,
+)
+
+expectPolicy(
+  'policy: git restore --staged other.ts denied by allowlist',
+  {
+    command: 'git restore --staged other.ts',
+    permissionProfile: 'git-commit',
+    allowedPaths: ['src/a.ts'],
+  },
+  (decision) => decision.allowed === false,
+)
+
+expectPolicy(
   'policy: bare git restore under git-commit denied',
   {
     command: 'git restore src/a.ts',
@@ -115,14 +135,44 @@ expectPolicy(
     command: basherPipe,
     permissionProfile: 'workspace-write',
   },
-  (decision) => {
-    // Allowed, or at least not denied solely as a high-impact harness action.
-    if (decision.allowed) return true
-    const reason = 'reason' in decision ? decision.reason : ''
-    const highImpactDenial =
-      /high-impact|arbitrary-code|workspace-delete|approval/i.test(reason)
-    return !highImpactDenial
+  (decision) => decision.allowed === true,
+)
+
+expectPolicy(
+  'policy: workspace-write echo $(date) allowed',
+  {
+    command: 'echo $(date)',
+    permissionProfile: 'workspace-write',
   },
+  (decision) => decision.allowed === true,
+)
+
+expectPolicy(
+  'policy: workspace-write echo $(printenv) denied',
+  {
+    command: 'echo $(printenv)',
+    permissionProfile: 'workspace-write',
+  },
+  (decision) => decision.allowed === false,
+)
+
+expectPolicy(
+  'policy: workspace-write gh pr create allowed',
+  {
+    command: 'gh pr create --title test --body ok',
+    permissionProfile: 'workspace-write',
+  },
+  (decision) => decision.allowed === true,
+)
+
+expectPolicy(
+  'policy: workspace-write cd .. from package cwd allowed',
+  {
+    command: 'cd .. && bun test',
+    permissionProfile: 'workspace-write',
+    cwd: path.join(projectRoot, 'packages', 'sdk'),
+  },
+  (decision) => decision.allowed === true,
 )
 
 if (failures > 0) {

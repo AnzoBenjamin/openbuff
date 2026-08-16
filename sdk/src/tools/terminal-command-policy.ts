@@ -431,12 +431,210 @@ function findProcessEnvironmentIssue(
 }
 
 
+/**
+ * Extract active `$(...)` / backtick / `<(...)` / `>(...)` bodies and the
+ * remainder with those spans replaced by spaces. Single-quoted openers are
+ * inert; double-quoted `$(` / backticks stay active. Nested parens are
+ * quote-aware. Returns undefined when an opener has no matching closer.
+ */
+function extractSubstitutionsAndRemainder(
+  command: string,
+): { bodies: string[]; remainder: string } | undefined {
+  const bodies: string[] = []
+  let remainder = ''
+  let quote: "'" | '"' | null = null
+  let escaped = false
+
+  const takeParenBody = (
+    openParenIndex: number,
+  ): { body: string; endIndex: number } | undefined => {
+    let depth = 1
+    let innerQuote: "'" | '"' | null = null
+    let innerEscaped = false
+    for (let index = openParenIndex + 1; index < command.length; index += 1) {
+      const char = command[index]
+      if (innerEscaped) {
+        innerEscaped = false
+        continue
+      }
+      if (char === '\\' && innerQuote !== "'") {
+        innerEscaped = true
+        continue
+      }
+      if (innerQuote) {
+        if (char === innerQuote) innerQuote = null
+        continue
+      }
+      if (char === "'" || char === '"') {
+        innerQuote = char
+        continue
+      }
+      if (char === '(') depth += 1
+      else if (char === ')') {
+        depth -= 1
+        if (depth === 0) {
+          return {
+            body: command.slice(openParenIndex + 1, index),
+            endIndex: index,
+          }
+        }
+      }
+    }
+    return undefined
+  }
+
+  const takeBacktickBody = (
+    openIndex: number,
+  ): { body: string; endIndex: number } | undefined => {
+    let innerEscaped = false
+    for (let index = openIndex + 1; index < command.length; index += 1) {
+      const char = command[index]
+      if (innerEscaped) {
+        innerEscaped = false
+        continue
+      }
+      if (char === '\\') {
+        innerEscaped = true
+        continue
+      }
+      if (char === '`') {
+        return {
+          body: command.slice(openIndex + 1, index),
+          endIndex: index,
+        }
+      }
+    }
+    return undefined
+  }
+
+  const takeSubstitution = (
+    index: number,
+    kind: 'command' | 'backtick' | 'process',
+  ): { body: string; endIndex: number } | undefined => {
+    if (kind === 'backtick') return takeBacktickBody(index)
+    return takeParenBody(index + 1)
+  }
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index]
+    if (escaped) {
+      escaped = false
+      remainder += char
+      continue
+    }
+    if (char === '\\' && quote !== "'") {
+      escaped = true
+      remainder += char
+      continue
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = null
+        remainder += char
+        continue
+      }
+      if (
+        quote === '"' &&
+        (char === '`' || (char === '$' && command[index + 1] === '('))
+      ) {
+        const extracted = takeSubstitution(
+          index,
+          char === '`' ? 'backtick' : 'command',
+        )
+        if (!extracted) return undefined
+        bodies.push(extracted.body)
+        remainder += ' '
+        index = extracted.endIndex
+        continue
+      }
+      remainder += char
+      continue
+    }
+    if (char === "'" || char === '"') {
+      quote = char
+      remainder += char
+      continue
+    }
+    if (char === '`' || (char === '$' && command[index + 1] === '(')) {
+      const extracted = takeSubstitution(
+        index,
+        char === '`' ? 'backtick' : 'command',
+      )
+      if (!extracted) return undefined
+      bodies.push(extracted.body)
+      remainder += ' '
+      index = extracted.endIndex
+      continue
+    }
+    if ((char === '<' || char === '>') && command[index + 1] === '(') {
+      const extracted = takeSubstitution(index, 'process')
+      if (!extracted) return undefined
+      bodies.push(extracted.body)
+      remainder += ' '
+      index = extracted.endIndex
+      continue
+    }
+    remainder += char
+  }
+  return { bodies, remainder }
+}
+
+/** Recursively collect remainder + substitution bodies for env-dump scans. */
+function collectEnvDumpScanPieces(command: string): string[] | undefined {
+  const extracted = extractSubstitutionsAndRemainder(command)
+  if (!extracted) return undefined
+  const pieces = [extracted.remainder]
+  for (const body of extracted.bodies) {
+    const nested = collectEnvDumpScanPieces(body)
+    if (nested === undefined) {
+      pieces.push(body)
+    } else {
+      pieces.push(...nested)
+    }
+  }
+  return pieces
+}
+
+function findProcessEnvironmentIssueInPieces(
+  pieces: string[],
+  style: 'workspace' | 'read-only',
+): string | undefined {
+  for (const piece of pieces) {
+    const trimmed = piece.trim()
+    if (!trimmed) continue
+    const segments = splitReadOnlyShellSegments(trimmed)
+    if (!segments) {
+      const issue = findProcessEnvironmentIssue(trimmed, style)
+      if (issue) return issue
+      continue
+    }
+    for (const segment of segments) {
+      const issue = findProcessEnvironmentIssue(segment, style)
+      if (issue) return issue
+    }
+  }
+  return undefined
+}
+
 function findProcessEnvironmentIssueInCommand(
   command: string,
   style: 'workspace' | 'read-only',
+  substitutionMode: 'fail-closed' | 'inspect-bodies' = 'fail-closed',
 ): string | undefined {
   const reason =
     style === 'workspace' ? WORKSPACE_ENV_DUMP_REASON : READ_ONLY_ENV_DUMP_REASON
+  if (substitutionMode === 'inspect-bodies') {
+    // Workspace-write: inspect substitution bodies and remaining segments
+    // instead of treating every `$()` / process substitution as a dump.
+    // Unextractable substitutions do not fail closed as env-dump.
+    const pieces = collectEnvDumpScanPieces(command)
+    if (!pieces) {
+      const segments = splitReadOnlyShellSegments(command)
+      if (!segments) return undefined
+      return findProcessEnvironmentIssueInPieces(segments, style)
+    }
+    return findProcessEnvironmentIssueInPieces(pieces, style)
+  }
   // Double-quoted `$(…)`/backticks stay active and can hide dumps, but
   // splitReadOnlyShellSegments only fails closed on unquoted substitution.
   // Process substitution `<(…)` / `>(…)` similarly conceals dump utilities.
@@ -451,11 +649,7 @@ function findProcessEnvironmentIssueInCommand(
   if (!segments) {
     return reason
   }
-  for (const segment of segments) {
-    const issue = findProcessEnvironmentIssue(segment, style)
-    if (issue) return issue
-  }
-  return undefined
+  return findProcessEnvironmentIssueInPieces(segments, style)
 }
 
 const DEPENDENCY_MUTATION_COMMANDS = [
@@ -1021,27 +1215,41 @@ function hasUnsafeTmuxFileMutation(command: string): boolean {
 }
 
 /**
- * Traversal guard for the validation-diagnosis profile: rejects only `..`
- * tokens whose path resolves outside the project root, so diagnostic repros
- * may reference in-project siblings such as `../src/languages` from a package
- * subdirectory. Absolute tokens are resolved directly; relative tokens are
- * resolved against the project root, which is conservative for in-project
- * working directories (a false rejection is possible for `../..` from a
- * deeply nested cwd that still lands inside the root). Absolute paths that
+ * Traversal guard for validation-diagnosis and workspace-write: rejects only
+ * `..` tokens whose path resolves outside the project root, so in-project
+ * siblings such as `../src/languages` or `cd ..` from a package subdirectory
+ * stay allowed. Absolute tokens are resolved directly. Relative tokens resolve
+ * against `cwd` when it is provided and itself contained in the project;
+ * otherwise they resolve against the project root (the previous conservative
+ * behavior). A `cwd` outside the project fail-closes relative `..` tokens.
+ * The final resolved path must stay inside projectRoot. Absolute paths that
  * escape the project are also rejected by findOutsideAbsolutePath.
  */
 function findEscapingTraversalPath(
   command: string,
   projectRoot: string,
+  cwd?: string,
 ): string | undefined {
   const root = path.resolve(projectRoot)
+  let resolveBase = root
+  let cwdOutsideProject = false
+  if (cwd !== undefined) {
+    const resolvedCwd = path.resolve(cwd)
+    const relativeCwd = path.relative(root, resolvedCwd)
+    if (relativeCwd.startsWith('..') || path.isAbsolute(relativeCwd)) {
+      cwdOutsideProject = true
+    } else {
+      resolveBase = resolvedCwd
+    }
+  }
   const tokens = command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
   for (const rawToken of tokens) {
     const token = rawToken.replace(/^["']|["',);]+$/g, '')
     if (!token.split(/[=\\/]+/).includes('..')) continue
+    if (!path.isAbsolute(token) && cwdOutsideProject) return rawToken
     const resolved = path.isAbsolute(token)
       ? path.resolve(token)
-      : path.resolve(root, token)
+      : path.resolve(resolveBase, token)
     const relative = path.relative(root, resolved)
     if (relative.startsWith('..') || path.isAbsolute(relative)) {
       return rawToken
@@ -1372,7 +1580,14 @@ function isAllowedComplexGitCommand(command: string): boolean {
   // Data-loss / history-rewrite guards - reject before the allow disjunction so
   // a too-loose pattern can never re-admit a destructive shape.
   if (/\s--hard\b/i.test(command)) return false // reset --hard destroys work
-  if (/\s--(?:\s|$)/.test(command)) return false // pathspec `--` (path checkout/reset overwrite)
+  // pathspec `--` overwrites the worktree for checkout/reset. Staged-only
+  // restore uses `--` as a harmless pathspec separator and is exempted.
+  if (
+    /\s--(?:\s|$)/.test(command) &&
+    !/^git\s+restore\s+--staged\b/i.test(command)
+  ) {
+    return false
+  }
   // restore worktree/patch/source/overlay overwrite (data loss): deny any
   // restore carrying --worktree/-W, --patch/-p, --source, or --overlay.
   if (/\brestore\b[\s\S]*(?:--worktree\b|-[A-Za-z]*W\b|--patch\b|-[A-Za-z]*p\b|--source\b|--overlay\b)/i.test(command)) return false
@@ -1437,10 +1652,13 @@ function isAllowedComplexGitCommand(command: string): boolean {
       /^git\s+tag\s+(?:-[aA]\s+)?(?:-m\s+\S+\s+)*[A-Za-z0-9._/][A-Za-z0-9._/-]*(?:\s+-m\s+\S+)?(?:\s+[A-Za-z0-9._/][A-Za-z0-9._/-]*)?\s*$/i.test(
         commandForAllow,
       )) ||
-    // restore --staged only: every path token must start with a non-dash
-    // (negative lookahead) so --worktree/-W/--patch/-p/--source/--overlay cannot
-    // be smuggled as a path; those shapes are also denied by the guard above.
-    /^git\s+restore\s+--staged(?:\s+(?!-)[A-Za-z0-9._/-]+)+\s*$/i.test(commandForAllow)
+    // restore --staged only: optional pathspec `--`, then every path token
+    // must start with a non-dash (negative lookahead) so --worktree/-W/
+    // --patch/-p/--source/--overlay cannot be smuggled as a path; those
+    // shapes are also denied by the guard above.
+    /^git\s+restore\s+--staged(?:\s+--)?(?:\s+(?!-)[A-Za-z0-9._/-]+)+\s*$/i.test(
+      commandForAllow,
+    )
   )
 }
 
@@ -1507,6 +1725,7 @@ export function evaluateTerminalCommandPolicy(params: {
   permissionProfile: TerminalPermissionProfile
   projectRoot: string
   allowedPaths?: string[]
+  cwd?: string
 }): TerminalPolicyDecision {
   if (params.mode === 'user') return { allowed: true }
   const heredocCommand =
@@ -1530,14 +1749,16 @@ export function evaluateTerminalCommandPolicy(params: {
   if (params.permissionProfile !== 'full-access') {
     // validation-diagnosis (the debugger profile) and workspace-write may
     // reference paths with `..` segments that still resolve inside the project
-    // (e.g. a repro pointing at `../src/languages` from a package subdirectory).
-    // They still reject segments that escape the project root, and absolute
-    // paths outside the project stay blocked by findOutsideAbsolutePath below.
-    // Base read-only and librarian-read-only keep the blanket `..` ban.
+    // (e.g. a repro pointing at `../src/languages` from a package subdirectory,
+    // or `cd ..` from an in-project cwd). Relative `..` tokens resolve against
+    // params.cwd when provided. They still reject segments that escape the
+    // project root, and absolute paths outside the project stay blocked by
+    // findOutsideAbsolutePath below. Base read-only and librarian-read-only
+    // keep the blanket `..` ban.
     const traversalPath =
       params.permissionProfile === 'validation-diagnosis' ||
       params.permissionProfile === 'workspace-write'
-        ? findEscapingTraversalPath(command, params.projectRoot)
+        ? findEscapingTraversalPath(command, params.projectRoot, params.cwd)
         : findTraversalPath(command)
     if (traversalPath) {
       return {
@@ -1612,10 +1833,16 @@ export function evaluateTerminalCommandPolicy(params: {
       }
     } else {
       const isGitAdd = /^git\s+add\b/i.test(command)
-      if (isGitAdd) {
+      const isGitRestoreStaged = /^git\s+restore\s+--staged\b/i.test(command)
+      if (isGitAdd || isGitRestoreStaged) {
         const rawPaths =
           command
-            .replace(/^git\s+add\s+/i, '')
+            .replace(
+              isGitAdd
+                ? /^git\s+add\s+/i
+                : /^git\s+restore\s+--staged\s+/i,
+              '',
+            )
             .match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
         const stagedPaths = rawPaths
           .map((value) =>
@@ -1653,7 +1880,7 @@ export function evaluateTerminalCommandPolicy(params: {
           return {
             allowed: false,
             reason:
-              'git add paths must be an exact subset of the spawn-bound owned_paths allowlist',
+              'git add and git restore --staged paths must be an exact subset of the spawn-bound owned_paths allowlist',
           }
         }
       }
@@ -1803,7 +2030,13 @@ export function evaluateTerminalCommandPolicy(params: {
         if (pattern.test(command)) return { allowed: false, reason }
       }
     }
-    const envIssue = findProcessEnvironmentIssueInCommand(command, 'workspace')
+    const envIssue = findProcessEnvironmentIssueInCommand(
+      command,
+      'workspace',
+      params.permissionProfile === 'workspace-write'
+        ? 'inspect-bodies'
+        : 'fail-closed',
+    )
     if (envIssue) return { allowed: false, reason: envIssue }
     const outsidePath = findOutsideAbsolutePath(command, params.projectRoot)
     if (outsidePath) {

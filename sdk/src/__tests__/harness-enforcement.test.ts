@@ -126,6 +126,13 @@ describe('harness enforcement services', () => {
         hasMatchingApproval: false,
       }),
     ).toMatchObject({ allowed: false, approvalRequired: true })
+    expect(
+      evaluateHarnessActionPolicy({
+        action: 'pull-request',
+        target: 'gh pr create --title test',
+        hasMatchingApproval: false,
+      }),
+    ).toEqual({ allowed: true, approvalRequired: false })
   })
 
   test('classifies only recognized high-impact command shapes', () => {
@@ -235,6 +242,12 @@ describe('harness enforcement services', () => {
     expect(
       classifyTerminalHarnessAction('echo "$(git rev-parse --short HEAD)"'),
     ).toBeUndefined()
+    expect(
+      classifyTerminalHarnessAction('gh pr create --title test'),
+    ).toEqual({
+      action: 'pull-request',
+      target: 'gh pr create --title test',
+    })
     expect(classifyTerminalHarnessAction('bun test')).toBeUndefined()
     expect(classifyTerminalHarnessAction('nohup bun test')).toMatchObject({
       action: 'arbitrary-code',
