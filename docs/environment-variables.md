@@ -41,23 +41,13 @@ Document only environment variables that are implemented in code. During the for
 `CODEBUFF_API_KEY` functions as a runtime fallback (`OPENBUFF_API_KEY ?? CODEBUFF_API_KEY` in `sdk/src/env.ts`, Openbuff primary). `CODEBUFF_CHATGPT_OAUTH_TOKEN` also has an `OPENBUFF_*` alias but with reversed precedence (legacy name primary). `OPENBUFF_GIT_BASH_PATH` takes precedence over the legacy `CODEBUFF_GIT_BASH_PATH` fallback.
 
 Context-budget and proactive-retrieval behaviors remain code-default (no new
-env vars). Progressive prompt/tool disclosure and gate repair budgets each have
-optional env canaries:
+env vars). Progressive prompt disclosure has no env var at all:
+`progressivePromptDisclosure` is a `createBase2` option (not a JSON config
+key), defaults to `true` when omitted, and an explicit `true`/`false` on the
+option is the only way to change it. The tool surface likewise has no env var:
+narrow it with the `createBase2` `unlockedTiers` option. Only the
+gate repair budgets have optional env canaries:
 
-- `OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE` — `progressivePromptDisclosure`
-  is ON by default: when the option is omitted, `createBase2` enables
-  progressive prompt disclosure even without any env var set. The canary
-  (`1`, `true`, `yes`, or `on`, case-insensitive) still forces it on when the
-  option is omitted. Explicit option values always win:
-  `progressivePromptDisclosure: false` turns disclosure off (the
-  pre-disclosure prompt surface), and explicit `true` wins over the env
-  canary.
-- `OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE` — when set to `1`, `true`, `yes`, or
-  `on` (case-insensitive), `createBase2` defaults `progressiveToolDisclosure`
-  to `true` if the option is omitted. Explicit `true`/`false` on the agent
-  option always wins over the env canary. When enabled with no unlocked tiers,
-  the model-visible tool surface is CORE-only (mode gates still apply).
-  Production stays off unless the canary or option is set.
 - `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS` — optional positive integer string that
   caps the reviewer→repair→re-review loop (max `20`). Unset or invalid →
   **unlimited** (progress-gated). Explicit

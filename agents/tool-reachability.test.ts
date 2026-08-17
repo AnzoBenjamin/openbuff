@@ -75,11 +75,10 @@ const HARNESS_STATE_TOOLS = ['git_status'] as const
 describe('agent tool reachability', () => {
   for (const mode of ['default', 'fast'] as const) {
     test(`base2 (${mode}) exposes its intended read/mutation surface`, () => {
-      // Progressive disclosure is ON by default (CORE-only static list).
-      // Reachability asserts the intended full mutation surface.
-      const definition = createBase2(mode, {
-        progressiveToolDisclosure: false,
-      })
+      // Every non-core tier is unlocked by default, so the static list already
+      // IS the full mode-resolved surface (see
+      // agents/__tests__/base2-progressive-tool-disclosure.test.ts).
+      const definition = createBase2(mode)
       const tools = definition.toolNames ?? []
       const programmaticTools = definition.programmaticToolNames ?? []
       for (const tool of STRUCTURAL_READ_TOOLS) {
@@ -99,11 +98,7 @@ describe('agent tool reachability', () => {
   }
 
   test('execute-plan exposes direct execution without proposal indirection', () => {
-    const tools =
-      createBase2('default', {
-        executePlan: true,
-        progressiveToolDisclosure: false,
-      }).toolNames ?? []
+    const tools = createBase2('default', { executePlan: true }).toolNames ?? []
     expect(tools).toContain('edit_transaction')
     for (const tool of LEGACY_DIRECT_EDIT_TOOLS)
       expect(tools).not.toContain(tool)
@@ -114,6 +109,8 @@ describe('agent tool reachability', () => {
   })
 
   test('plan-only excludes project execution and proposal actions', () => {
+    // Plan mode relies on MODE gates, not tier gates: every non-core tier is
+    // unlocked by default, so these tools stay absent purely because of planOnly.
     const tools = createBase2('default', { planOnly: true }).toolNames ?? []
     expect(tools).not.toContain('edit_transaction')
     for (const tool of LEGACY_DIRECT_EDIT_TOOLS)

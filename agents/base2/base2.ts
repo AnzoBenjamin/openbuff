@@ -21,13 +21,7 @@ import {
   securityReviewSection,
   specialistRoutingSection,
 } from './quality-prompt-section'
-import {
-  deriveIntentSignals,
-  isProgressiveToolDisclosureEnvEnabled as isEnvFlagEnabled,
-  resolveModelToolNames,
-  resolveUnlockedTiersForPhase,
-  type ToolTier,
-} from './tool-tiers'
+import { resolveModelToolNames, type UnlockedToolTier } from './tool-tiers'
 import { publisher } from '../constants'
 import {
   PLACEHOLDER,
@@ -36,19 +30,11 @@ import {
 
 /**
  * Default for progressive prompt disclosure when the caller omits the
- * `progressivePromptDisclosure` option. Post-flip (M2): ON by default. The
- * OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE canary can only force ON, never OFF;
- * an explicit `progressivePromptDisclosure: false` still wins.
+ * `progressivePromptDisclosure` option. Post-flip (M2): ON by default. There is
+ * no env canary; an explicit `progressivePromptDisclosure: false` is the only
+ * way to opt out.
  */
 const DEFAULT_PROGRESSIVE_PROMPT_DISCLOSURE: boolean = true
-
-/**
- * Default for progressive tool disclosure when the caller omits the
- * `progressiveToolDisclosure` option. Post-flip: ON by default. The
- * OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE canary can only force ON, never OFF;
- * an explicit `progressiveToolDisclosure: false` still wins.
- */
-const DEFAULT_PROGRESSIVE_TOOL_DISCLOSURE: boolean = true
 
 export {
   DEFAULT_MAX_REPAIR_ROUNDS,
@@ -70,7 +56,13 @@ export function createBase2(
     executePlan?: boolean
     noAskUser?: boolean
     progressivePromptDisclosure?: boolean
-    progressiveToolDisclosure?: boolean
+    /**
+     * Tiers beyond CORE to expose on the static template surface. Defaults to
+     * every non-core tier; pass `[]` for a CORE-only surface. Documented
+     * public option for embedders (docs/configuration.md); every bundled
+     * definition omits it.
+     */
+    unlockedTiers?: UnlockedToolTier[]
     maxReviewerRepairRounds?: number
     maxRepairRounds?: number
     maxSpecialistRepairRounds?: number
@@ -84,38 +76,23 @@ export function createBase2(
     executePlan = false,
     noAskUser = false,
     progressivePromptDisclosure: progressivePromptDisclosureOption,
-    progressiveToolDisclosure: progressiveToolDisclosureOption,
+    unlockedTiers,
     maxReviewerRepairRounds: maxReviewerRepairRoundsOption,
     maxRepairRounds: maxRepairRoundsOption,
     maxSpecialistRepairRounds: maxSpecialistRepairRoundsOption,
     model: modelOverride,
     providerOptions,
   } = options ?? {}
-  // Explicit true/false wins over env. When omitted, the DEFAULT is now ON
-  // (M2 prompt disclosure flipped default-on); the
-  // OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE canary (1/true/yes/on) remains a
-  // force-on override consulted on this omitted-option path.
+  // Explicit true/false wins; when omitted the DEFAULT is ON (M2 prompt
+  // disclosure flipped default-on). No env canary is read: with the default ON,
+  // an `envFlag || DEFAULT` check could never depend on the env var, so
+  // OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE had no effect.
+  //
+  // DOC STATUS: no env var is read for prompt disclosure, and
+  // docs/environment-variables.md and docs/configuration.md now match that —
+  // both describe it as a createBase2 option with no env canary.
   const progressivePromptDisclosure =
-    progressivePromptDisclosureOption ??
-    (isEnvFlagEnabled(
-      typeof process === 'object' && process !== null
-        ? process.env?.OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE
-        : undefined,
-    ) ||
-      DEFAULT_PROGRESSIVE_PROMPT_DISCLOSURE)
-  // Explicit true/false wins over env. When omitted, the DEFAULT is now ON
-  // (flipped default-on); the OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE canary
-  // (1/true/yes/on) remains a force-on override consulted on this omitted-option path.
-  // Static toolNames start core-only when on (unlockedTiers: []). handleSteps
-  // publishes live unlocks via publishUnlockedToolTiers before each STEP.
-  const progressiveToolDisclosure =
-    progressiveToolDisclosureOption ??
-    (isEnvFlagEnabled(
-      typeof process === 'object' && process !== null
-        ? process.env?.OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE
-        : undefined,
-    ) ||
-      DEFAULT_PROGRESSIVE_TOOL_DISCLOSURE)
+    progressivePromptDisclosureOption ?? DEFAULT_PROGRESSIVE_PROMPT_DISCLOSURE
   // Explicit option wins over env. When omitted, resolve from
   // OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS (positive integer string).
   // Missing/invalid → null (unlimited, progress-gated). Positive int = optional cap.
@@ -174,6 +151,25 @@ export function createBase2(
   const qualitySectionPointer =
     'Code craftsmanship standards (conventions, minimal-change, reuse, no-any, hygiene) → read_files `agents/guides/code-craftsmanship.md` before editing code.'
 
+  // Model-visible surface, narrowed when the caller passes `unlockedTiers`.
+  const modelToolNames = resolveModelToolNames({
+    mode,
+    planOnly,
+    executePlan,
+    noAskUser,
+    unlockedTiers,
+  })
+  // Dormant runtime ceiling published as programmaticConfig.fullToolSurface
+  // below. Derived from the DEFAULT (all non-core tiers) mode-resolved surface
+  // rather than the caller-narrowed list, so flipping progressiveToolDisclosure
+  // on could still unlock a tier instead of inheriting a CORE-only ceiling.
+  const fullToolSurface = resolveModelToolNames({
+    mode,
+    planOnly,
+    executePlan,
+    noAskUser,
+  })
+
   return {
     publisher,
     ...(modelOverride !== undefined ? { model: modelOverride } : {}),
@@ -198,14 +194,7 @@ export function createBase2(
     },
     outputMode: 'last_message',
     includeMessageHistory: true,
-    toolNames: resolveModelToolNames({
-      mode,
-      planOnly,
-      executePlan,
-      noAskUser,
-      progressiveToolDisclosure,
-      unlockedTiers: [],
-    }),
+    toolNames: modelToolNames,
     programmaticToolNames: [
       'spawn_agent_inline',
       'git_status',
@@ -223,21 +212,13 @@ export function createBase2(
       maxReviewerRepairRounds,
       maxRepairRounds,
       maxSpecialistRepairRounds,
-      // Threaded through programmaticConfig (plain JSON) so the serialized
-      // handleSteps generator can read it via config?.progressiveToolDisclosure
-      // without relying on a module-scope closure that .toString() drops.
-      progressiveToolDisclosure,
-      // Mode-resolved FULL tool surface (progressive off ordering). The runtime
-      // uses this as the additive ceiling when re-adding unlocked tier tools
-      // onto the core-only static template, so plan-only / no-ask-user / fast
-      // mode gates are never widened by progressive unlock.
-      fullToolSurface: resolveModelToolNames({
-        mode,
-        planOnly,
-        executePlan,
-        noAskUser,
-        progressiveToolDisclosure: false,
-      }),
+      // Contract for both keys:
+      // packages/agent-runtime/src/util/base2-tool-tiers.ts.
+      progressiveToolDisclosure: false,
+      // KEEP: dormant while the flag above is false, but it is the fail-closed
+      // mode ceiling if that flag is ever flipped. Its own array, so neither
+      // consumer's in-place mutation moves the other.
+      fullToolSurface,
     },
     // Spawnable roster with documented, intentional per-mode deltas (M3.2).
     // The deltas are ONLY the coded gates below; everything else is shared
@@ -328,23 +309,13 @@ ${
 }
 - **Validation is dependency-neutral:** A test, typecheck, lint, or build request authorizes only that validation command. Never prepend or append install/add/remove/update/sync/restore commands. If validation cannot start because dependencies are missing, report that exact blocker; use dependency-manager only after separate explicit user authorization.
 - **Don't use set_output:** The set_output tool is for spawned subagents to report results. Its absence from the root toolset is expected. Do not delegate work merely to gain access to set_output; the root returns ordinary final-response text.
-${
-  progressiveToolDisclosure
-    ? '- **Images and screenshots:** Prefer dedicated image inspection tools once they unlock for media work. Until then, do not invent binary image viewers or claim you can open image formats with read_files; continue with available discovery tools or spawn browser-use for live pages when appropriate.'
-    : '- **Images and screenshots:** If the user asks you to read or inspect local screenshot/image paths, use the read_image tool. Do not use read_files for image formats and do not claim you cannot view binary images when read_image is available.'
-}
+- **Images and screenshots:** If the user asks you to read or inspect local screenshot/image paths, use the read_image tool. Do not use read_files for image formats and do not claim you cannot view binary images when read_image is available.
 ${
   planOnly
     ? '- **Live visual analysis:** Use browser-use only for read-only inspection of an already available URL. Do not start dev servers or request browser interactions in plan mode.'
-    : progressiveToolDisclosure
-      ? '- **Live visual verification:** Visual verification extends beyond web apps. Prefer CORE job tools (check_job/check_background_agent/read_logs/list_jobs) for agent-side readiness/exitCode — live job_update already covers user progress. Then use image/3D inspection and kill_job only after those tools unlock for media or job-management work. Do not re-poll a finished or unchanging job indefinitely. After 2-3 unmatched polls that produce no new actionable artifact or progress, proceed with independent work, cancel/retry with a targeted edit once edit tools unlock, or ask the user. For web app visual checks specifically, start any long-running dev server through a BACKGROUND basher (finite commands stay SYNC), keep its returned jobId, use check_job to wait for readiness, then spawn browser-use for screenshots/navigation/interaction.'
-      : '- **Live visual verification:** Visual verification extends beyond web apps. Image artifacts from 3D renders (e.g. Blender frames), image/video exports, generated diagrams, and charts must be inspected with read_image, not inferred from text logs alone. The workflow is: render/export -> wait for the background job (check_job for agent readiness/exit; live job_update for users) -> read_image the emitted artifacts -> assess the result -> make a targeted edit -> re-render. check_job/check_background_agent/read_logs are only the agent-side bridge to artifact inspection — do not poll solely for user progress, and do not re-poll a finished or unchanging job indefinitely. After 2-3 unmatched polls that produce no new actionable artifact or progress, proceed with independent work, cancel/retry with a targeted edit, or ask the user. For web app visual checks specifically, start any long-running dev server through a BACKGROUND basher (finite commands stay SYNC), keep its returned jobId, use check_job to wait for readiness, then spawn browser-use for screenshots/navigation/interaction.'
+    : '- **Live visual verification:** Visual verification extends beyond web apps. Image artifacts from 3D renders (e.g. Blender frames), image/video exports, generated diagrams, and charts must be inspected with read_image, not inferred from text logs alone. The workflow is: render/export -> wait for the background job (check_job for agent readiness/exit; live job_update for users) -> read_image the emitted artifacts -> assess the result -> make a targeted edit -> re-render. check_job/check_background_agent/read_logs are only the agent-side bridge to artifact inspection — do not poll solely for user progress, and do not re-poll a finished or unchanging job indefinitely. After 2-3 unmatched polls that produce no new actionable artifact or progress, proceed with independent work, cancel/retry with a targeted edit, or ask the user. For web app visual checks specifically, start any long-running dev server through a BACKGROUND basher (finite commands stay SYNC), keep its returned jobId, use check_job to wait for readiness, then spawn browser-use for screenshots/navigation/interaction.'
 }
-${
-  progressiveToolDisclosure
-    ? '- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Prefer direct `code_search` for single-pattern content search (do not basher grep). Spawn `code-searcher` for multi-query batch search with `params.searchQueries`. Tiered read policy: small files (≤~400 lines) use read_files paths or ranges 1..totalLines for Tier1 whole-file auth (complete:true → reusable cap.v3); large/targeted blocks use read_files windows/around/symbol for Tier2 scoped caps (must be complete:true to mint). After successful edit_transaction, compress body to path/pointer but retain whole-file postEditCapabilities verbatim (confirmed anchor is always whole-file verified → whole-file sticky). Don\'t force windows for small files. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (`<<\'EOF\' ... EOF`) inside `basher.params.command`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. When edit tools unlock, author files with the dedicated edit surface and run them via a short basher command instead. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs `params.searchQueries` (an array of { pattern } objects) and basher needs `params.command` (a shell string); put these in `params`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).'
-    : '- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Prefer direct `code_search` for single-pattern content search (do not basher grep). Spawn `code-searcher` for multi-query batch search with `params.searchQueries`. Tiered read policy: small files (≤~400 lines) use read_files paths or ranges 1..totalLines for Tier1 whole-file auth (complete:true → reusable cap.v3); large/targeted blocks use read_files windows/around/symbol for Tier2 scoped caps (must be complete:true to mint). After successful edit_transaction, compress body to path/pointer but retain whole-file postEditCapabilities verbatim. Don\'t force windows for small files. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (`<<\'EOF\' ... EOF`) inside `basher.params.command`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with `write_file`/`edit_transaction` and run them via a short basher command instead. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs `params.searchQueries` (an array of { pattern } objects) and basher needs `params.command` (a shell string); put these in `params`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).'
-}
+- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Prefer direct \`code_search\` for single-pattern content search (do not basher grep). Spawn \`code-searcher\` for multi-query batch search with \`params.searchQueries\`. Tiered read policy: small files (≤~400 lines) use read_files paths or ranges 1..totalLines for Tier1 whole-file auth (complete:true → reusable cap.v3); large/targeted blocks use read_files windows/around/symbol for Tier2 scoped caps (must be complete:true to mint). After successful edit_transaction, compress body to path/pointer but retain whole-file postEditCapabilities verbatim. Don't force windows for small files. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead. When you spawn an agent, pass its required params or the spawn fails: code-searcher needs \`params.searchQueries\` (an array of { pattern } objects) and basher needs \`params.command\` (a shell string); put these in \`params\`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "code-searcher", "prompt": "...", "params": { "searchQueries": [{ "pattern": "..." }] } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).
 
 # Code Editing Mandates
 
@@ -362,16 +333,8 @@ ${
     - Remove unused variables, functions, and files as a result of your changes.
     - If you added files or functions meant to replace existing code, then you should also remove the previous code.
 - **Don't type cast as "any" type:** Don't cast variables as "any" (or similar for other languages). This is a bad practice as it leads to bugs. Exception: when the value can truly be any type.
-${
-  progressiveToolDisclosure
-    ? `- **Use the canonical edit surface once it unlocks:** When implement-tier tools are available, call \`edit_transaction\` for project mutations. Choose its edit \`type\` deliberately: \`str_replace\` for targeted text, \`rewrite_symbol\` for whole symbols, \`replace_range\` with a fresh read capability for formatting-sensitive blocks, \`patch\` for a complete unified diff, \`create\` for new files, and \`write_file\` only for a necessary whole-file rewrite. Until then, gather context with CORE tools${isDefault && !planOnly ? ' and spawn editor when appropriate' : ''}.`
-    : '- **Use the canonical edit surface:** Call `edit_transaction` for project mutations. Choose its edit `type` deliberately: `str_replace` for targeted text, `rewrite_symbol` for whole symbols, `replace_range` with a fresh read capability for formatting-sensitive blocks, `patch` for a complete unified diff, `create` for new files, and `write_file` only for a necessary whole-file rewrite.'
-}
-${
-  progressiveToolDisclosure
-    ? '- **Preflight coherent changes together:** Once edit tools unlock, put related edits across one or more files in the same `edit_transaction` so the runtime can preflight them as one coordinated batch. For TypeScript import-only changes, use structured `insert_import`/`remove_import` operations.'
-    : '- **Preflight coherent changes together:** Put related edits across one or more files in the same `edit_transaction` so the runtime can preflight them as one coordinated batch. For TypeScript import-only changes, use structured `insert_import`/`remove_import` operations.'
-}
+- **Use the canonical edit surface:** Call \`edit_transaction\` for project mutations. Choose its edit \`type\` deliberately: \`str_replace\` for targeted text, \`rewrite_symbol\` for whole symbols, \`replace_range\` with a fresh read capability for formatting-sensitive blocks, \`patch\` for a complete unified diff, \`create\` for new files, and \`write_file\` only for a necessary whole-file rewrite.
+- **Preflight coherent changes together:** Put related edits across one or more files in the same \`edit_transaction\` so the runtime can preflight them as one coordinated batch. For TypeScript import-only changes, use structured \`insert_import\`/\`remove_import\` operations.
 - **Edit contract:** Copy exact contiguous oldString from a live read/sourceContent. Multi-file is all-or-nothing; on abort re-read ALL recovery.paths from one snapshot and rebuild the whole txn. Prefer small unique anchors; large blocks use replace_range + readCapability. Obey structured recovery / requiresFreshRead / preferredStrategy when present.
 - **Avoid broad scripted cleanups for refactors/renames:** For rename and overhaul tasks, prefer explicit targeted edits based on freshly read file content. Do not run one-off cleanup scripts across many files unless the user explicitly asks for that approach.
 
@@ -422,11 +385,7 @@ ${
     : ''
 }- **Release/deployment flow:** Treat releases, deployments, publishing, migrations against shared environments, production-affecting scripts, git commits, and git pushes as high-impact actions. Do not run or ask subagents to run them unless the user explicitly requested that action in this task or confirms after you explain the exact command, target environment, and rollback/verification plan. When requested, follow the deterministic sequence: inspect worktree, fetch remote state/tags, decide rebase/merge with the user when non-fast-forward or conflicts appear, push, wait for CI/CD, trigger the release, verify artifact/tag/package publication, then sync and report local branch state.
 - **Plan artifact maintenance:** In PLAN mode create and maintain durable artifacts; in EXECUTE_PLAN keep STATUS.md and LESSONS.md current at phase boundaries, blocker discovery/resolution, validation/review results, and finalization. Use update_plan_status for incremental STATUS/LESSONS updates and create_plan for SPEC/PLAN rewrites or missing artifacts. Do not update plan artifacts for ordinary implementation mode unless the user requested plan/session work.
-${
-  progressiveToolDisclosure
-    ? '- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use CORE read_files/read_outline/read_subtree/glob/list_directory/query_index for source inspection — tiered policy: small files (≤~400 lines) use paths or full-file range 1..totalLines for Tier1 whole-file auth; large/targeted blocks use windows/around/symbol for Tier2 scoped caps (must be complete:true to mint). After successful edit_transaction, compress body to path/pointer but retain whole-file postEditCapabilities verbatim. Don\'t force windows for small files. Browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. Media, edit, validation, and kill_job tools appear only after their tiers unlock — continue with available tools until then. `run_targeted_validation` is scoped evidence only once unlocked — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.'
-    : '- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use read_files/read_outline/read_subtree/glob/list_directory/query_index for source inspection — tiered policy: small files (≤~400 lines) use paths or full-file range 1..totalLines for Tier1 whole-file auth; large/targeted blocks use windows/around/symbol for Tier2 scoped caps (must be complete:true to mint). After successful edit_transaction, compress body to path/pointer but retain whole-file postEditCapabilities verbatim. Don\'t force windows for small files. Inspect_3d_asset/render_3d_preview for 3D assets, read_image for other screenshots/images, edit_3d_asset for guarded Blender changes, edit_transaction for text project mutations, browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. `run_targeted_validation` is scoped evidence only — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.'
-}
+- **Tool choice:** Prefer dedicated tools over shell fallbacks: repository status and configured file-change hooks are runtime-owned and injected automatically; use read_files/read_outline/read_subtree/glob/list_directory/query_index for source inspection — tiered policy: small files (≤~400 lines) use paths or full-file range 1..totalLines for Tier1 whole-file auth; large/targeted blocks use windows/around/symbol for Tier2 scoped caps (must be complete:true to mint). After successful edit_transaction, compress body to path/pointer but retain whole-file postEditCapabilities verbatim. Don't force windows for small files. Inspect_3d_asset/render_3d_preview for 3D assets, read_image for other screenshots/images, edit_3d_asset for guarded Blender changes, edit_transaction for text project mutations, browser_use/codebuff_local_cli for visual smoke tests, and basher only for commands without a dedicated tool. \`run_targeted_validation\` is scoped evidence only — it never unlocks the gate/commit path; hooks + automated reviewer remain runtime-owned.
 - **Sequence agents properly:** Keep in mind dependencies when spawning different agents. Don't spawn agents in parallel that depend on each other.
 - **Subagent deadlines:** Omit top-level \`timeout_seconds\` for editor and other productive subagents; omitted and \`-1\` mean no wall-clock deadline. Set a positive deadline only when the user explicitly requests one or the child is intentionally bounded diagnostic work.
 - **Parallel join discipline:** When spawning agents in parallel, wait for every required result before moving to the next dependent phase. A timeout, failed validation, or \`BLOCKING:\` reviewer/security finding blocks completion until repaired or explicitly scoped out.
@@ -448,12 +407,8 @@ ${
     !planOnly &&
       '- Spawn doc-writer/test-writer when documentation or test coverage is required or directly implied by acceptance criteria.',
     '- Spawn bashers sequentially if the second command depends on the the first.',
-    progressiveToolDisclosure
-      ? '- Use SYNC basher for finite commands that exit. For a long-running or never-exiting process (dev server, build watcher, log tail), spawn a basher with params.process_type set to BACKGROUND: fire-and-forget start that returns a jobId immediately instead of blocking. Live job_update already drives the user-facing card, so do not poll solely for user progress. Call check_job only for agent-side readiness/exitCode/join (pass wait_for to block until a readiness/error pattern appears, with a timeout_seconds bound). Use kill_job only after job-management tools unlock when a background job is no longer needed. To watch an existing log file, start a BACKGROUND `tail -f <file>` and check_job it when you need agent-side follow. If you lose a jobId (for example after context compaction), list_jobs rediscovers it across BOTH shell jobs and background agents.'
-      : '- Use SYNC basher for finite commands that exit. For a long-running or never-exiting process (dev server, build watcher, log tail), spawn a basher with params.process_type set to BACKGROUND: fire-and-forget start that returns a jobId immediately instead of blocking. Live job_update already drives the user-facing card, so do not poll solely for user progress. Call check_job only for agent-side readiness/exitCode/join (pass wait_for to block until a readiness/error pattern appears, with a timeout_seconds bound). Use kill_job when a background job is no longer needed. To watch an existing log file, start a BACKGROUND `tail -f <file>` and check_job it when you need agent-side follow. If you lose a jobId (for example after context compaction), list_jobs rediscovers it across BOTH shell jobs and background agents.',
-    progressiveToolDisclosure
-      ? '- For local screenshots or other image files, use dedicated image inspection once media tools unlock. Do not call read_files on image formats. Treat image artifacts emitted by 3D/render/export jobs as media-tier inputs once unlocked: finishing a background job is not visual verification until those artifacts are inspected with the unlocked image tools.'
-      : '- For local screenshots or other image files, call read_image with the image paths. Do not call read_files on image formats. Treat image artifacts emitted by 3D/render/export jobs (Blender frames, exported PNG/frames, generated diagrams, charts) as read_image inputs as well: finishing a background job is not visual verification until you have inspected its emitted image output with read_image.',
+    '- Use SYNC basher for finite commands that exit. For a long-running or never-exiting process (dev server, build watcher, log tail), spawn a basher with params.process_type set to BACKGROUND: fire-and-forget start that returns a jobId immediately instead of blocking. Live job_update already drives the user-facing card, so do not poll solely for user progress. Call check_job only for agent-side readiness/exitCode/join (pass wait_for to block until a readiness/error pattern appears, with a timeout_seconds bound). Use kill_job when a background job is no longer needed. To watch an existing log file, start a BACKGROUND `tail -f <file>` and check_job it when you need agent-side follow. If you lose a jobId (for example after context compaction), list_jobs rediscovers it across BOTH shell jobs and background agents.',
+    '- For local screenshots or other image files, call read_image with the image paths. Do not call read_files on image formats. Treat image artifacts emitted by 3D/render/export jobs (Blender frames, exported PNG/frames, generated diagrams, charts) as read_image inputs as well: finishing a background job is not visual verification until you have inspected its emitted image output with read_image.',
   ).join('\n  ')}
 ${
   isDefault && !planOnly
@@ -554,15 +509,7 @@ ${PLACEHOLDER.SYSTEM_INFO_PROMPT}
 
 The runtime injects a fresh, compact Git-status observation before coding work and after model steps. Use that path list to preserve unrelated dirty work, then read only task-relevant files instead of loading the full initial diff into every request.
 
-${
-  progressiveToolDisclosure
-    ? `# Tool surface
-
-Core discovery and orchestration tools are always available. Edit, validation, audit, 3D, and job-management tools unlock automatically when implementation, review, or media work begins. If a tool you need is unavailable, it will appear once the relevant phase starts — continue with the tools you have.
-
-`
-    : ''
-}${disclose(qualitySection, qualitySectionPointer)}
+${disclose(qualitySection, qualitySectionPointer)}
 
 ${PLACEHOLDER.FRONTEND_SECTION}
 
@@ -624,19 +571,6 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
          */
         suggestFollowupsEmitted?: boolean
         uncommittedUnvalidatedFiles?: string[]
-        /**
-         * Progressive tool-disclosure tiers beyond CORE currently unlocked
-         * for this step. Published below before each `yield 'STEP'` when the
-         * progressiveToolDisclosure canary is on.
-         *
-         * Contract matches AgentState.unlockedToolTiers:
-         *   - absent or `[]` → no progressive filtering; template.toolNames
-         *     is the effective surface (CORE-only static template when the
-         *     canary is on; full surface when off).
-         *   - non-empty → runtime expands to CORE + these tiers (capped by
-         *     programmaticConfig.fullToolSurface).
-         */
-        unlockedToolTiers?: ToolTier[]
         /**
          * Process-owned mutation paths published by the runtime as JSON-safe
          * string[] (AgentState.selfMutatedPaths). Declared on this local
@@ -917,7 +851,6 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           includeToolCall: false,
         } as any
         mutableAgentState.canSuggestFollowups = false
-        publishUnlockedToolTiers()
         yield 'STEP'
         return
       }
@@ -1231,9 +1164,9 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           }
         }
 
-        // Publish the current unlocked tool tiers before the LLM step so the
-        // runtime surfaces CORE + the tiers relevant to the active phase.
-        publishUnlockedToolTiers()
+        // No per-step tier bookkeeping: progressiveToolDisclosure is pinned
+        // false (see packages/agent-runtime/src/util/base2-tool-tiers.ts), so
+        // the runtime always offers the full mode-resolved surface.
         const stepResult = yield 'STEP'
         const { stepsComplete, hitStepCap } = stepResult as {
           stepsComplete: boolean
@@ -4894,63 +4827,6 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
       }
       function markActiveWorkStateChanged(): void {
         activeWorkState.lastPinnedStateMessage = ''
-      }
-
-      // Progressive tool disclosure (M1-T3/T4/T5): publish the tool tiers
-      // unlocked for the upcoming LLM step onto mutableAgentState so the
-      // runtime can narrow the effective tool surface to CORE + these tiers.
-      // Called live before each STEP. Self-contained inline logic (no
-      // module-scope imports) because handleSteps is serialized via
-      // .toString() + new Function(...): the deriveIntentSignals /
-      // resolveUnlockedTiersForPhase helpers from tool-tiers.ts are inlined
-      // here. The canary flag is read from programmaticConfig (plain JSON),
-      // never a module-scope closure. RF-4: the pure helper
-      // `getPublishUnlockedToolTiers` exported above mirrors this logic for
-      // direct unit testing without readFileSync+Transpiler brittleness.
-      function publishUnlockedToolTiers(): void {
-        if (config?.progressiveToolDisclosure !== true) {
-          if (
-            Array.isArray(mutableAgentState.unlockedToolTiers) &&
-            mutableAgentState.unlockedToolTiers.length > 0
-          ) {
-            delete mutableAgentState.unlockedToolTiers
-          }
-          return
-        }
-        const phase = String(activeWorkState.currentPhase ?? 'idle')
-        const promptText = typeof prompt === 'string' ? prompt : ''
-        const pendingGateFileCount = Array.isArray(
-          activeWorkState.pendingGateFiles,
-        )
-          ? activeWorkState.pendingGateFiles.length
-          : 0
-        const hasOpenReviewerBlockers =
-          Array.isArray(activeWorkState.openReviewerBlockers) &&
-          activeWorkState.openReviewerBlockers.length > 0
-        const implementIntent =
-          phase === 'awaiting_validation' ||
-          phase === 'repair_loop' ||
-          phase === 'awaiting_review' ||
-          phase === 'blocked' ||
-          pendingGateFileCount > 0 ||
-          hasOpenReviewerBlockers ||
-          /\b(?:implement|fix|refactor|update|create|add)\b/i.test(promptText)
-        const auditIntent =
-          /\b(?:audit|coverage|completeness|review[- ]across|systematic)\b/i.test(
-            promptText,
-          ) || phase === 'awaiting_review'
-        const mediaIntent =
-          /\.(?:png|jpe?g|webp|gif|blend|obj|gltf|glb)\b/i.test(promptText)
-        const jobIntent =
-          /\b(?:(?:background|bg)\s+(?:job|agent|process|task|basher)|kill(?:_|\s+)(?:the\s+)?(?:job|process)|(?:list|check|kill)_jobs?|job(?:Id|\s*id)|tail\s+-f|watch\s+(?:the\s+)?(?:build|logs?|job|process)|long[- ]running\s+(?:dev\s+)?server|dev\s+server)\b/i.test(
-            promptText,
-          )
-        const tiers: ToolTier[] = []
-        if (implementIntent) tiers.push('implement')
-        if (auditIntent) tiers.push('audit')
-        if (mediaIntent) tiers.push('media_3d')
-        if (jobIntent) tiers.push('job_extra')
-        mutableAgentState.unlockedToolTiers = tiers
       }
 
       // Durable one-line mid-turn gate-progress note. Rendered by
@@ -8876,55 +8752,6 @@ function buildPlanOnlyStepPrompt({}: {}) {
     `You are in plan mode. Do not make project source changes or call edit_transaction for implementation files. Do not use the write_todos tool in plan mode. Use bounded waves of analysis subagents until coverage is complete; there is no fixed total-agent limit. Basher and browser-use inherit runtime-enforced read-only authority in plan mode, and debugger is diagnosis-only. Preserve short-answer behavior for simple questions. For larger or otherwise non-trivial work, use create_plan to create or substantially rewrite the four durable plan artifacts under .agents/sessions/<slug>/ by default (SPEC.md, PLAN.md, STATUS.md, LESSONS.md); do not treat STATUS.md or LESSONS.md as optional/as-needed or wait for normal users to ask for them separately. Once those artifacts exist, prefer update_plan_status for incremental STATUS.md and LESSONS.md updates (progress, blockers, checkpoints, lessons) rather than rewriting them whole with create_plan; keep using create_plan for SPEC.md / PLAN.md edits and for creating any missing artifact. Wrap the visible markdown response in <PLAN>...</PLAN> unless answering a simple question directly.`,
   ).join('\n')
 }
-
-/**
- * Pure helper mirroring the serialized `publishUnlockedToolTiers` intent logic
- * inside `handleSteps`. Exported for direct unit testing (RF-4) so the test
- * suite does not need to `readFileSync` + `Bun.Transpiler` + `new Function`
- * the generator source — a brittle, formatting-sensitive extraction. The
- * handleSteps inline copy and this helper must stay in sync; the RF-3/RF-4
- * sync guard asserts `getPublishUnlockedToolTiers(...) ===
- * resolveUnlockedTiersForPhase(deriveIntentSignals(...))` across a matrix.
- */
-export function getPublishUnlockedToolTiers(params: {
-  phase: string
-  pendingGateFileCount: number
-  hasOpenReviewerBlockers: boolean
-  lastUserPrompt?: string
-}): ToolTier[] {
-  return resolveUnlockedTiersForPhase(deriveIntentSignals(params))
-}
-
-/**
- * Canary-aware wrapper mirroring the full `publishUnlockedToolTiers` decision:
- * when `progressiveToolDisclosure` is off, any stale non-empty unlock list is
- * cleared (returns `undefined` to signal deletion). When on, delegates to
- * `getPublishUnlockedToolTiers`. Pure and side-effect free for testing.
- */
-export function getPublishUnlockedToolTiersWithCanary(params: {
-  phase: string
-  pendingGateFileCount: number
-  hasOpenReviewerBlockers: boolean
-  lastUserPrompt?: string
-  progressiveToolDisclosure?: boolean
-  initialUnlockedToolTiers?: ToolTier[]
-}): ToolTier[] | undefined {
-  if (params.progressiveToolDisclosure !== true) {
-    if (
-      Array.isArray(params.initialUnlockedToolTiers) &&
-      params.initialUnlockedToolTiers.length > 0
-    ) {
-      return undefined
-    }
-    return undefined
-  }
-  return getPublishUnlockedToolTiers(params)
-}
-
-// Backwards-compatible alias: previous name was tool-specific, now generic.
-// Re-exported from base2 for callers that imported via base2; the canonical
-// export remains `isEnvFlagEnabled` (aliased from tool-tiers).
-export { isEnvFlagEnabled }
 
 const definition = { ...createBase2('default'), id: 'base2' }
 export default definition

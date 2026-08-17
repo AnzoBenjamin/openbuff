@@ -1,32 +1,31 @@
 /**
- * Runtime-side mirror of the base2 progressive tool-tier constants in
- * `agents/base2/tool-tiers.ts`. Kept local to `agent-runtime` because this
- * package must not import from `agents/` (wrong dependency direction). The
- * two lists must stay in sync: CORE is always available, and each tier maps
- * to the extra tools it unlocks.
+ * Single owner of the base2 progressive tool-tier constants. Defined here
+ * (rather than in `agents/base2/tool-tiers.ts`) because this package must not
+ * import from `agents/` (wrong dependency direction); the base2 template
+ * consumes these constants, so there is no second list to keep in sync. CORE
+ * is always available, and each tier maps to the extra tools it unlocks.
  *
- * Mode-gated tools (e.g. `run_terminal_command` is execute-plan only,
- * `ask_user`/`write_todos` are mode/flag gated) are still governed by the
- * template's own mode resolution — `filterByUnlockedTiers` only adds a tier
- * tool when the template could legitimately expose it, so it cannot widen
- * beyond the template's mode-appropriate ceiling.
+ * Canonical contract for progressive tool disclosure (other modules point here
+ * instead of restating it):
+ *   - CORE is listed unconditionally and is deliberately broader than any one
+ *     mode's surface: `ask_user`/`write_todos` appear here even though
+ *     fast/plan-only base2 withholds them. The template's own mode resolution
+ *     (`modeAllowsTool` in agents/base2/tool-tiers.ts) is what gates those.
+ *   - `filterByUnlockedTiers` only KEEPS names already present in its input and
+ *     only APPENDS tier tools its required `templateAllows` ceiling admits, so
+ *     it cannot widen beyond the template's mode-appropriate surface. The
+ *     permissive branch is never implicit: allow-all requires the explicit
+ *     `ALLOW_ALL_TIER_TOOLS` sentinel.
+ *   - base2 pins `programmaticConfig.progressiveToolDisclosure: false`, so
+ *     `getEffectiveAgentToolNames` returns early and base2 never reaches
+ *     `filterByUnlockedTiers`. This runtime ceiling is therefore dormant for
+ *     base2 and binds only a caller that does enable tier filtering.
  */
 
 import type { ToolName } from '@codebuff/common/tools/constants'
 
 /**
  * Base2 CORE tool names — always available when progressive disclosure is on.
- *
- * Semantically broader than the template's CORE surface: `ask_user` and
- * `write_todos` are listed unconditionally here, but fast/plan-only
- * progressive base2 never exposes them (they are mode-gated in the template's
- * buildArray). `filterByUnlockedTiers` only *keeps* names already present in
- * its input, and `base2` always passes the template's full surface as
- * `templateAllows` to cap tier adds, so this never widens the surfaced set.
- * The unconditional list is a deliberate ceiling: a runtime-side CORE-only
- * path MUST still pass `templateAllows` (or otherwise apply the same mode
- * gates), or it could expose `ask_user`/`write_todos` in a mode that forbids
- * them.
  */
 export const BASE2_CORE_TOOL_NAMES: readonly ToolName[] = [
   'spawn_agents',
@@ -49,8 +48,19 @@ export const BASE2_CORE_TOOL_NAMES: readonly ToolName[] = [
 
 export type ToolTier = 'core' | 'implement' | 'audit' | 'media_3d' | 'job_extra'
 
+/**
+ * The single name for "a tier that can actually be unlocked". CORE is
+ * unconditional, so it is deliberately not expressible here. Consumers —
+ * including the base2 template's `unlockedTiers` option — alias this type
+ * instead of re-deriving an equivalent one.
+ */
+export type UnlockedToolTier = Exclude<ToolTier, 'core'>
+
 /** Tools unlocked by each non-core base2 tier. */
-export const BASE2_TIER_TOOL_NAMES: Record<Exclude<ToolTier, 'core'>, readonly ToolName[]> = {
+export const BASE2_TIER_TOOL_NAMES: Record<
+  UnlockedToolTier,
+  readonly ToolName[]
+> = {
   implement: [
     'edit_transaction',
     'create_plan',
@@ -78,6 +88,24 @@ export const BASE2_TIER_TOOL_NAMES: Record<Exclude<ToolTier, 'core'>, readonly T
   job_extra: ['kill_job'],
 }
 
+/**
+ * Explicit opt-out sentinel for the `templateAllows` ceiling: pass this to
+ * admit every unlocked tier tool. The permissive branch must be chosen
+ * deliberately — a caller that simply has no ceiling to pass (e.g. a
+ * progressive template omitting `programmaticConfig.fullToolSurface`) must not
+ * fail open into allow-all, or it would unlock every tier tool
+ * (`run_terminal_command` included) with no mode ceiling.
+ */
+export const ALLOW_ALL_TIER_TOOLS = 'allow-all' as const
+
+/**
+ * Mode ceiling for the tier-tool append path: a membership predicate over the
+ * template's mode-resolved full surface, or the explicit allow-all sentinel.
+ */
+export type TierToolCeiling =
+  | ((name: string) => boolean)
+  | typeof ALLOW_ALL_TIER_TOOLS
+
 /** Cached set of all tier-gated tool names — avoids rebuilding per call. */
 const TIER_GATED: ReadonlySet<string> = new Set(
   Object.values(BASE2_TIER_TOOL_NAMES).flat(),
@@ -87,35 +115,40 @@ const TIER_GATED: ReadonlySet<string> = new Set(
  * Compute the effective base2 tool surface for progressive tool disclosure:
  * the template's CORE-only list plus the tools for each unlocked tier.
  *
- * The template's `toolNames` is the static, mode-resolved list (CORE-only
- * when the canary built it). This helper:
+ * The template's `toolNames` is the static, mode-resolved list (CORE-only when
+ * the canary built it). This helper:
  *   - keeps every template name that is CORE, non-tier, or belongs to an
  *     unlocked tier (preserving template order), and
- *   - appends any newly unlocked tier tool not already present (in canonical
- *     tier order), so tiers unlock onto a core-only static template.
+ *   - appends any newly unlocked tier tool `templateAllows` admits and the
+ *     input list did not already contain (in canonical tier order), so tiers
+ *     unlock onto a core-only static template.
  *
- * A tier tool that the template could not expose in this mode (e.g.
- * `edit_transaction` in plan-only mode) is NOT added: it only appears when
- * the template's mode resolution would have included it in the full surface.
- * Callers pass the template's full-surface membership via `templateAllows`
- * when they need that ceiling; by default every tier tool is allowed.
+ * `unlockedTiers` is `readonly unknown[]` because it carries persisted
+ * `AgentState.unlockedToolTiers` state: non-string, `'core'`, unknown, and
+ * duplicate entries are ignored.
+ *
+ * `templateAllows` is the mode ceiling and is REQUIRED so a new caller cannot
+ * silently widen past its mode gates. Pass the `ALLOW_ALL_TIER_TOOLS` sentinel
+ * to deliberately opt out (allow every tier tool), which is safe just for
+ * callers whose input list carries no mode gates to preserve; there is no
+ * implicit allow-all for a missing/unknown ceiling.
  *
  * Note: an *empty* `unlockedTiers` array here means CORE-only filtering of the
  * input list. Higher-level callers (`getEffectiveAgentToolNames`) must NOT
  * invoke this helper for absent/empty `agentState.unlockedToolTiers` — that
- * persisted-state contract means "leave the template surface unchanged".
- * Callers must also skip this helper when progressive disclosure is explicitly
- * off on the template, even if a non-empty unlock list was persisted from a
- * prior canary-on run (resume/canary-off must not permanently shrink the
+ * persisted-state contract means "leave the template surface unchanged" — and
+ * must also skip it when progressive disclosure is explicitly off on the
+ * template, even if a non-empty unlock list was persisted from a prior
+ * canary-on run (resume/canary-off must not permanently shrink the
  * full-surface template).
  */
 export function filterByUnlockedTiers(
   toolNames: string[],
-  unlockedTiers: string[],
-  templateAllows?: (name: string) => boolean,
+  unlockedTiers: readonly unknown[],
+  templateAllows: TierToolCeiling,
 ): string[] {
-  // Narrow/bound unlockedTiers: ignore non-string, "core", unknown, duplicates.
-  const uniqueValidTiers: Exclude<ToolTier, 'core'>[] = []
+  // Bound the persisted tier list: ignore non-string, "core", unknown, dupes.
+  const uniqueValidTiers: UnlockedToolTier[] = []
   const seenTier = new Set<string>()
   for (const raw of unlockedTiers) {
     if (typeof raw !== 'string') continue
@@ -123,11 +156,11 @@ export function filterByUnlockedTiers(
     if (seenTier.has(raw)) continue
     if (!Object.hasOwn(BASE2_TIER_TOOL_NAMES, raw)) continue
     seenTier.add(raw)
-    uniqueValidTiers.push(raw as Exclude<ToolTier, 'core'>)
+    uniqueValidTiers.push(raw as UnlockedToolTier)
   }
   const allowed = new Set<string>(BASE2_CORE_TOOL_NAMES)
   for (const tier of uniqueValidTiers) {
-    for (const name of BASE2_TIER_TOOL_NAMES[tier] ?? []) {
+    for (const name of BASE2_TIER_TOOL_NAMES[tier]) {
       allowed.add(name)
     }
   }
@@ -143,16 +176,17 @@ export function filterByUnlockedTiers(
   for (const name of toolNames) {
     if (keep(name)) result.push(name)
   }
-  // Add newly unlocked tier tools the core-only template did not already
-  // list. Caller MUST pass templateAllows when operating on a mode-resolved
-  // surface (fast/plan-only) — undefined defaults to allow-all only for
-  // non-mode-gated callers/tests; mode-gated callers that omit the ceiling
-  // risk widening beyond the template's mode-appropriate surface
-  // (e.g. exposing ask_user/write_todos in fast/plan-only via CORE ceiling).
+  // Add newly unlocked tier tools the core-only template did not already list.
+  // The templateAllows ceiling is what keeps this from re-adding a tier tool
+  // the current mode forbids (e.g. edit_transaction / run_targeted_validation
+  // in plan-only mode, or run_terminal_command outside execute-plan); only the
+  // explicit ALLOW_ALL_TIER_TOOLS sentinel admits every unlocked tier tool.
   for (const tier of uniqueValidTiers) {
-    for (const name of BASE2_TIER_TOOL_NAMES[tier] ?? []) {
+    for (const name of BASE2_TIER_TOOL_NAMES[tier]) {
       if (seen.has(name)) continue
-      if (templateAllows !== undefined && !templateAllows(name)) continue
+      if (templateAllows !== ALLOW_ALL_TIER_TOOLS && !templateAllows(name)) {
+        continue
+      }
       seen.add(name)
       result.push(name)
     }

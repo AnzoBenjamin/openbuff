@@ -341,20 +341,16 @@ gating, and tool-result lifecycle trimming). There is **no new JSON config
 field** for these systems yet — the behavior is code-default and always on.
 
 - **`progressivePromptDisclosure`** is an SDK/agent option on `createBase2`,
-  not a JSON config key. It is ON by default when the option is omitted. The
-  `OPENBUFF_PROGRESSIVE_PROMPT_DISCLOSURE` env canary (`1`/`true`/`yes`/`on`
-  → true) still forces it on when the option is omitted, and explicit
-  `true`/`false` on the option always wins over both the default and the
-  canary — pass `progressivePromptDisclosure: false` to restore the
-  pre-disclosure prompt assembly. When enabled, verbose advisory prompt
-  sections are replaced by `read_files` pointers to `agents/guides/*.md`.
-- **`progressiveToolDisclosure`** is an SDK/agent option on `createBase2`, not
-  a JSON config key. When the option is omitted, it defaults from the
-  `OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE` env canary (`1`/`true`/`yes`/`on` →
-  true; otherwise false). Explicit `true`/`false` always wins over the env.
-  When enabled with no unlocked tiers, model-visible tools are CORE only
-  (mode gates still apply); full surface remains the default when off. Opt-in
-  only; production stays off without the option or canary.
+  not a JSON config key. It defaults to `true` when the option is omitted, and
+  an explicit `true`/`false` on the option always wins over that default.
+  There is no env var for it — pass `progressivePromptDisclosure: false` to
+  restore the pre-disclosure prompt assembly. When enabled, verbose advisory
+  prompt sections are replaced by `read_files` pointers to
+  `agents/guides/*.md`.
+- **`unlockedTiers`** is an SDK/agent option on `createBase2`, not a JSON
+  config key. It is the only control that narrows the model-visible tool
+  surface: every non-core tier is unlocked by default, and passing `[]` ships a
+  CORE-only surface (mode gates still apply). There is no env var for it.
 - **`maxReviewerRepairRounds`** is an SDK/agent option on `createBase2` (also
   not a JSON config key). Default **unlimited** (progress-gated: no-progress
   fingerprint and incomplete-receipt exits). Optional positive integer cap,
@@ -388,10 +384,11 @@ field** for these systems yet — the behavior is code-default and always on.
   [Indexing and retrieval](#indexing-and-retrieval) above.
 
 All reductions and gates are on by default, including progressive prompt
-disclosure (opt out with an explicit `progressivePromptDisclosure: false`);
-progressive tool disclosure remains the opt-in (via the agent option / env
-canary above). Gate repair loops default to unlimited/progress-gated; optional
-env or createBase2 caps remain available.
+disclosure; opt out of it with an explicit
+`progressivePromptDisclosure: false` option, since that flag has no env var.
+The full tool surface is likewise on by default; narrow it with
+`unlockedTiers`. Gate repair loops default to unlimited/progress-gated;
+optional env or createBase2 caps remain available.
 
 ## Merge semantics
 
