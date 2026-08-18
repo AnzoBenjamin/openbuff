@@ -43,15 +43,16 @@ function normalizeBasedOnRead(
 // tool-call hygiene (e.g. an editor emitting basedOnRead: "dummy") look fine on
 // small files, then fail confusingly on the first large file. We reject them up
 // front everywhere so the mistake surfaces immediately and consistently.
+// Generic literals like 'null'/'undefined'/'none' are intentionally excluded
+// to avoid false positives on legitimate narrow oldString anchors; only
+// explicit placeholder tokens (and their cap.-prefixed variants) are
+// considered bogus. Malformed cap tokens are still caught via decode failure.
 const BOGUS_READ_CAPABILITY_VALUES = new Set([
   'dummy',
   'todo',
   'tbd',
   'fixme',
   'placeholder',
-  'none',
-  'null',
-  'undefined',
   'cap.dummy',
   'cap.todo',
   'cap.placeholder',
@@ -88,18 +89,125 @@ const FAILED_EDIT_RECOVERY_GUIDANCE = [
   'Base the next edit on the fresh read, not on the failed oldString.',
 ].join('\n')
 
-function addFailedEditRecoveryGuidance(error: string): string {
-  // Scope mismatches are authenticity failures, not evidence that file content
-  // changed or disappeared. Keep their recovery precise while preserving the
-  // cap.v3 project/path/run anti-replay boundary.
-  if (
-    error.includes(
-      'read capability belongs to a different project, path, or agent run',
-    )
-  ) {
+/**
+ * Structured classification for the str_replace failures whose recovery differs
+ * from the generic "re-read and copy the current text" path. This is plumbed as
+ * a real field (and re-exported through the transaction failure record) so no
+ * consumer has to sniff model-facing prose for a sentinel token — a failing
+ * oldString copied out of these very files must never be misclassified.
+ */
+export type StrReplaceFailureKind = 'anchor_scope_mismatch' | 'capability_scope'
+
+// Kinds whose targeted recovery is already complete. Appending the generic
+// guidance to an anchored scope mismatch is wrong: it already proves the
+// oldString still EXISTS in the current file, just outside the supplied
+// basedOnRead window — so "re-read and copy the current text into oldString"
+// would return the identical string and loop forever.
+const RECOVERY_GUIDANCE_SUPPRESSING_KINDS = new Set<StrReplaceFailureKind>([
+  'anchor_scope_mismatch',
+])
+
+function addFailedEditRecoveryGuidance(
+  error: string,
+  failureKind?: StrReplaceFailureKind,
+): string {
+  if (failureKind && RECOVERY_GUIDANCE_SUPPRESSING_KINDS.has(failureKind)) {
     return error
   }
   return `${error}\n\n${FAILED_EDIT_RECOVERY_GUIDANCE}`
+}
+
+type RecordedFailure = { error: string; kind?: StrReplaceFailureKind }
+
+/**
+ * Classification (and therefore guidance suppression) is decided per failure,
+ * never from the joined batch text: a mixed atomic batch — one anchored scope
+ * mismatch plus a genuine no-match — must keep FAILED_EDIT_RECOVERY_GUIDANCE
+ * for the co-failing replacement and must NOT be reported as a scope mismatch,
+ * because that would also narrow invalidation for an unrelated failure.
+ */
+function aggregateFailureKind(
+  failures: RecordedFailure[],
+): StrReplaceFailureKind | undefined {
+  const firstKind = failures[0]?.kind
+  if (!firstKind) return undefined
+  return failures.every((failure) => failure.kind === firstKind)
+    ? firstKind
+    : undefined
+}
+
+/**
+ * Single source of truth for the idempotent-deletion skip. A `skipIfMissing`
+ * deletion whose oldString is absent from `searchContent` is an already-applied
+ * no-op and must never fail the batch. Returns the model-facing skip message
+ * when the skip applies, otherwise null. `anchored` only affects wording: it
+ * names the anchored window so a scoped skip is never mistaken for a whole-file
+ * absence claim. Both call sites (the occurrenceIndex path and the general
+ * path) go through this helper so the two copies cannot drift.
+ *
+ * When `occurrenceIndex` is supplied, a PARTIALLY-applied cleanup also skips:
+ * fewer remaining exact occurrences than the requested 1-indexed occurrence
+ * means that occurrence can no longer be targeted, so the deletion is treated
+ * as already applied instead of hard-failing the whole atomic batch.
+ *
+ * Both unanchored pre-gate call sites deliberately run BEFORE the stale-anchor
+ * and strict read-before-edit gates: an anchored window is always a SUBSET of
+ * the file, so whole-file absence (or a whole-file remaining count below
+ * occurrenceIndex) proves the same for any window without needing anchor
+ * freshness, and nothing is mutated on either outcome. Sound only in the SKIP
+ * direction — a whole-file count never authorizes APPLYING an edit under a
+ * stale anchor. Those callers pass `discloseRemainingCount: false` (strict mode,
+ * or a supplied stale anchor) so a caller that would otherwise be strict-blocked
+ * learns only that the occurrence is already applied, never the exact remaining
+ * count; the anchored/fresh path keeps the exact count.
+ */
+function tryIdempotentDeletionSkip(params: {
+  searchContent: string
+  oldStr: string
+  newStr: string
+  skipIfMissing: boolean | undefined
+  path: string
+  anchored: boolean
+  occurrenceIndex?: number
+  discloseRemainingCount?: boolean
+}): string | null {
+  const {
+    searchContent,
+    oldStr,
+    newStr,
+    skipIfMissing,
+    path,
+    anchored,
+    occurrenceIndex,
+    discloseRemainingCount = true,
+  } = params
+  if (skipIfMissing !== true || newStr !== '') return null
+  const scopeSuffix = anchored ? ' within the anchored range' : ''
+  if (occurrenceIndex !== undefined) {
+    // ONE bounded walk answers both questions on a module that targets 100KB+
+    // files: the shared occurrence walk stops after occurrenceIndex matches, so
+    // its length simultaneously proves absence (fewer than occurrenceIndex
+    // remain) and supplies the exact remaining count for the message. Nothing
+    // scans past occurrenceIndex and no substring array is materialized.
+    const remaining = findLiteralOccurrences(
+      searchContent,
+      oldStr,
+      occurrenceIndex,
+    ).length
+    if (remaining >= occurrenceIndex) return null
+    // A remaining count below occurrenceIndex only proves that fewer than N
+    // exact occurrences exist NOW; it cannot distinguish an occurrence that was
+    // already deleted from one that was never present N times. Word it as
+    // "treated as already applied" so the model is never told a false history.
+    // Callers with no fresh capability get the boolean form only: the exact
+    // count is reserved for the anchored/fresh path.
+    if (!discloseRemainingCount) {
+      return `Skipped already-applied str_replace deletion in ${path}: fewer than ${occurrenceIndex} exact occurrence(s) of the oldString remain${scopeSuffix}, so occurrenceIndex ${occurrenceIndex} is treated as already applied.`
+    }
+    return `Skipped already-applied str_replace deletion in ${path}: only ${remaining} exact occurrence(s) of the oldString remain${scopeSuffix}, i.e. fewer than ${occurrenceIndex}, so occurrenceIndex ${occurrenceIndex} is treated as already applied.`
+  }
+  if (searchContent.includes(oldStr)) return null
+  return `Skipped already-applied str_replace deletion in ${path}: oldString was not present${scopeSuffix}.`
 }
 
 export async function processStrReplace(params: {
@@ -133,8 +241,29 @@ export async function processStrReplace(params: {
       patch: string
       messages: string[]
       failedReplacementCount: number
+      /**
+       * True ONLY when EVERY replacement resolved to an already-applied
+       * skipIfMissing deletion, so `patch` is empty and no content changed.
+       * Consumers (edit_transaction, the str_replace handler's zero-change
+       * guard) short-circuit on this flag to report a successful idempotent
+       * cleanup retry instead of "produced no file changes", so a mixed batch —
+       * one already-applied skip plus a replacement that really applies —
+       * deliberately never sets it and its applied content is never discarded.
+       */
+      hadNoOpSkip?: boolean
+      /** Structured flag indicating a near-match autocorrect was applied. */
+      hadAutoCorrect?: boolean
     }
-  | { tool: 'str_replace'; path: string; error: string }
+  | {
+      tool: 'str_replace'
+      path: string
+      error: string
+      /**
+       * Structured failure classification. Consumers (process-edit-transaction,
+       * the edit_transaction handler) key off this instead of matching prose.
+       */
+      failureKind?: StrReplaceFailureKind
+    }
 > {
   const {
     path,
@@ -163,7 +292,7 @@ export async function processStrReplace(params: {
   // match, NONE are applied. Large files are always atomic to prevent confusing
   // partial-apply state that shifts line numbers and invalidates read anchors;
   // small files can opt in with atomic: true for logically grouped edits.
-  const failures: string[] = []
+  const failures: RecordedFailure[] = []
   const defaultLineEnding = getDominantLineEnding(currentContent)
   const initialContentLineCount =
     normalizeLineEndings(initialContent).split('\n').length
@@ -171,17 +300,21 @@ export async function processStrReplace(params: {
     initialContent.length > LARGE_FILE_CHAR_THRESHOLD ||
     initialContentLineCount > LARGE_FILE_LINE_THRESHOLD
   const useAtomicBatch = isLargeFile || atomic
-  // Large files require deterministic targeting. On every file size, an
-  // explicitly supplied basedOnRead is also an explicit scope request and must
-  // remain fresh; callers that want an unscoped unique-literal edit should omit
-  // the capability.
+  // Large files require deterministic targeting. A supplied basedOnRead is also
+  // an explicit scope request, so on large files (and whenever strict
+  // read-before-edit is required) it must remain fresh. Small files have one
+  // deliberate exception: the uniqueStaleStrip loop-breaker below ignores a
+  // stale anchor when oldString is uniquely matchable, applying the edit as a
+  // naked unique-literal edit with a warning message instead of hard-failing.
+  // Callers that never want scoping should simply omit the capability.
   const enforceReadCapability = isLargeFile || requireFreshReadCapability
   const normalizedInitialContent = normalizeLineEndings(initialContent)
   const validatedReadRanges = new Map<string, ValidatedReadRange>()
   const readCapabilityWarnings: string[] = []
   const preflightErrors: string[] = []
   const capabilityAuthorityErrors: string[] = []
-  let hadNoOpSkip = false
+  let noOpSkipCount = 0
+  let hadAutoCorrect = false
 
   // Decode any token-form basedOnRead up front so the rest of the pipeline only
   // ever sees concrete { startLine, endLine, hash } objects (or undefined).
@@ -231,6 +364,7 @@ export async function processStrReplace(params: {
       tool: 'str_replace' as const,
       path,
       error: capabilityAuthorityErrors.join('\n\n'),
+      failureKind: 'capability_scope' as const,
     }
   }
 
@@ -263,6 +397,12 @@ export async function processStrReplace(params: {
     if (uniquelyMatchable && !requireFreshReadCapability) {
       normalizedReplacements[i].basedOnRead = undefined
       autoStrippedBogusAnchor = true
+      messages.push(
+        [
+          `Note: an invalid basedOnRead anchor was ignored for ${path} because the oldString was uniquely matchable, so the edit applied as a naked edit.`,
+          'Stop passing placeholder/invalid basedOnRead values. Omit basedOnRead when oldString is unique, or copy the readCapability token from a fresh read_files header.',
+        ].join('\n'),
+      )
       continue
     }
 
@@ -291,11 +431,9 @@ export async function processStrReplace(params: {
   // Validate it so matching never silently expands to the whole file.
   if (enforceReadCapability || hasSuppliedReadCapability) {
     for (const { basedOnRead } of normalizedReplacements) {
-      if (!basedOnRead) continue
-      if (typeof basedOnRead === 'string') {
-        preflightErrors.push(basedOnRead)
-        continue
-      }
+      // String-form anchors never reach here: the bogus-anchor loop above either
+      // returned for an undecodable token or rewrote it to undefined.
+      if (!basedOnRead || typeof basedOnRead === 'string') continue
       const key = getReadCapabilityKey(basedOnRead)
       if (validatedReadRanges.has(key)) continue
       const validatedRange = validateReadCapability({
@@ -316,14 +454,6 @@ export async function processStrReplace(params: {
     }
   }
 
-  if (preflightErrors.length > 0) {
-    return {
-      tool: 'str_replace' as const,
-      path,
-      error: addFailedEditRecoveryGuidance(preflightErrors.join('\n\n')),
-    }
-  }
-
   for (const [
     replacementIndex,
     replacement,
@@ -336,10 +466,11 @@ export async function processStrReplace(params: {
       basedOnRead,
       skipIfMissing,
     } = replacement
-    const recordFailure = (error: string) => {
-      failures.push(
-        `Replacement ${replacementIndex + 1}/${normalizedReplacements.length} failed:\n${error}`,
-      )
+    const recordFailure = (error: string, kind?: StrReplaceFailureKind) => {
+      failures.push({
+        error: `Replacement ${replacementIndex + 1}/${normalizedReplacements.length} failed:\n${error}`,
+        ...(kind && { kind }),
+      })
     }
     const normalizedCurrentContent = normalizeLineEndings(currentContent)
     const normalizedOldStr = normalizeLineEndings(oldStr)
@@ -373,6 +504,35 @@ export async function processStrReplace(params: {
             validatedRange: freshValidatedRangeForIndex,
           })
         : null
+      // Tracks that the unanchored whole-file check below already ran, so the
+      // anchored call further down is not repeated with identical arguments
+      // (searchContent === normalizedCurrentContent) on a 100KB+ file.
+      let wholeFileSkipChecked = false
+      if (!validatedRangeForIndex) {
+        // Unanchored pre-gate: a whole-file remaining count below
+        // occurrenceIndex proves the anchored (subset) count is below it too, so
+        // this runs before the stale-anchor and strict read-before-edit gates
+        // and nothing is mutated. See tryIdempotentDeletionSkip for the full
+        // subset/disclosure argument; the exact remaining count is withheld here
+        // because this caller has no fresh capability.
+        wholeFileSkipChecked = true
+        const wholeFileOccurrenceSkip = tryIdempotentDeletionSkip({
+          searchContent: normalizedCurrentContent,
+          oldStr: normalizedOldStr,
+          newStr: normalizedNewStr,
+          skipIfMissing,
+          path,
+          anchored: false,
+          occurrenceIndex,
+          discloseRemainingCount:
+            !requireFreshReadCapability && basedOnRead === undefined,
+        })
+        if (wholeFileOccurrenceSkip) {
+          messages.push(wholeFileOccurrenceSkip)
+          noOpSkipCount++
+          continue
+        }
+      }
       if (requireFreshReadCapability && !validatedRangeForIndex) {
         const occurrenceFailure = [
           `Strict read-before-edit blocked replacement ${replacementIndex + 1}/${normalizedReplacements.length} for ${path}: basedOnRead did not match the current file content.`,
@@ -395,25 +555,41 @@ export async function processStrReplace(params: {
       }
       const searchContent =
         validatedRangeForIndex?.content ?? normalizedCurrentContent
-      if (
-        skipIfMissing === true &&
-        normalizedNewStr === '' &&
-        !searchContent.includes(normalizedOldStr)
-      ) {
-        messages.push(
-          `Skipped already-applied str_replace deletion in ${path}: oldString was not present${validatedRangeForIndex ? ' within the anchored range' : ''}.`,
-        )
-        hadNoOpSkip = true
+      // Only the anchored variant can still find work here: when no fresh
+      // validated range narrowed searchContent, the pre-gate above already ran
+      // this exact check against the whole file, so repeating it would be a
+      // guaranteed-null re-walk of every byte.
+      const occurrenceDeletionSkip = wholeFileSkipChecked
+        ? null
+        : tryIdempotentDeletionSkip({
+            searchContent,
+            oldStr: normalizedOldStr,
+            newStr: normalizedNewStr,
+            skipIfMissing,
+            path,
+            anchored: Boolean(validatedRangeForIndex),
+            occurrenceIndex,
+          })
+      if (occurrenceDeletionSkip) {
+        messages.push(occurrenceDeletionSkip)
+        noOpSkipCount++
         continue
       }
-      const at = getNthOccurrenceIndex(
+      const at = nthLiteralOccurrenceIndex(
         searchContent,
         normalizedOldStr,
         occurrenceIndex,
       )
       if (at === -1) {
-        const totalOccurrences =
-          searchContent.split(normalizedOldStr).length - 1
+        // Bounded occurrence walk instead of split(): at === -1 already proves
+        // fewer than occurrenceIndex occurrences exist, so a walk capped at
+        // occurrenceIndex counts all of them without materializing a full
+        // substring array of a 100KB+ file.
+        const totalOccurrences = findLiteralOccurrences(
+          searchContent,
+          normalizedOldStr,
+          occurrenceIndex,
+        ).length
         const occurrenceFailure = [
           `Could not apply occurrenceIndex ${occurrenceIndex} for ${path}: only ${totalOccurrences} exact occurrence(s) of the oldString exist${validatedRangeForIndex ? ' within the anchored range' : ''}.`,
           'Re-read the file/range to confirm how many occurrences exist, then pass a valid 1-indexed occurrenceIndex.',
@@ -490,6 +666,30 @@ export async function processStrReplace(params: {
     const hasStaleBasedOnRead =
       Boolean(basedOnRead && typeof basedOnRead === 'object') &&
       !hasFreshBasedOnRead
+
+    // Unanchored pre-gate FIRST, before both stale-anchor gates and the strict
+    // `requireFreshReadCapability` gate: a capability window is a SUBSET of the
+    // file, so whole-file absence proves window absence without anchor freshness
+    // and nothing is mutated. This is what lets an idempotent cleanup retry
+    // replaying its now-stale anchor skip instead of failing 'Scoped str_replace
+    // blocked' / 'Large-file edit blocked'. See tryIdempotentDeletionSkip for
+    // the full subset/disclosure argument. The cap.v3 authenticity/scope
+    // preflight still runs strictly earlier; only CONTENT staleness is ordered
+    // after this skip. The anchored variant stays below, after the validated
+    // range is resolved, so a window-scoped skip still reports its range.
+    const wholeFileDeletionSkip = tryIdempotentDeletionSkip({
+      searchContent: normalizedCurrentContent,
+      oldStr: normalizedOldStr,
+      newStr: normalizedNewStr,
+      skipIfMissing,
+      path,
+      anchored: false,
+    })
+    if (wholeFileDeletionSkip) {
+      messages.push(wholeFileDeletionSkip)
+      noOpSkipCount++
+      continue
+    }
 
     if (hasStaleBasedOnRead && !requireFreshReadCapability) {
       // Loop-breaker for small files only (mirrors autoStrippedBogusAnchor):
@@ -571,15 +771,62 @@ export async function processStrReplace(params: {
       : null
 
     const matchContent = validatedReadRange?.content ?? normalizedCurrentContent
+    // Deliberate ordering: this idempotent-deletion skip runs BEFORE the
+    // anchored scope-mismatch gate below. skipIfMissing on a deletion is an
+    // explicit "delete this only if it is still here", and the anchor scopes
+    // where "here" is, so an oldString missing from the anchored window is a
+    // no-op even when it still occurs elsewhere in the file. The message names
+    // the anchored range so the skip is never mistaken for a whole-file claim.
+    // Both behaviors are locked by the [ABI-M07] tests in
+    // __tests__/process-str-replace.test.ts; flipping the order would abort the
+    // whole atomic batch with anchor_scope_mismatch instead.
+    // Only the anchored variant can still find work here: without a fresh
+    // validated range matchContent IS normalizedCurrentContent, and the
+    // unconditional whole-file pre-gate above already ran this identical check,
+    // so repeating it would be a guaranteed-null re-walk of every byte. Mirrors
+    // the occurrenceIndex path's `wholeFileSkipChecked` guard.
+    const anchoredDeletionSkip = validatedReadRange
+      ? tryIdempotentDeletionSkip({
+          searchContent: matchContent,
+          oldStr: normalizedOldStr,
+          newStr: normalizedNewStr,
+          skipIfMissing,
+          path,
+          anchored: true,
+        })
+      : null
+    if (anchoredDeletionSkip) {
+      messages.push(anchoredDeletionSkip)
+      noOpSkipCount++
+      continue
+    }
+
+    // Anchored scope mismatch: the supplied capability was FRESH and hash-valid,
+    // but its window does not contain the oldString while the current file does.
+    // Reporting a whole-file "not an exact contiguous match" here would be a lie
+    // (nothing changed or was removed) and the similarity/candidate numbers would
+    // only describe the anchored window. Report the real outside locations instead.
     if (
-      skipIfMissing === true &&
-      normalizedNewStr === '' &&
-      !matchContent.includes(normalizedOldStr)
+      validatedReadRange &&
+      !matchContent.includes(normalizedOldStr) &&
+      normalizedCurrentContent.includes(normalizedOldStr)
     ) {
-      messages.push(
-        `Skipped already-applied str_replace deletion in ${path}: oldString was not present${validatedReadRange ? ' within the anchored range' : ''}.`,
-      )
-      hadNoOpSkip = true
+      const outsideRanges = getOccurrenceLineRanges({
+        initialContent: normalizedCurrentContent,
+        oldStr: normalizedOldStr,
+        limit: 3,
+      })
+      const scopeFailure = [
+        `Anchored str_replace scope mismatch for ${path}: the supplied basedOnRead covers lines ${validatedReadRange.startLine}-${validatedReadRange.endLine}, and oldString does not occur inside that window, but it DOES occur in the current file, so the text was NOT changed or removed.`,
+        `oldString currently occurs at line(s): ${outsideRanges
+          .map((range) => `${range.startLine}-${range.endLine}`)
+          .join(', ')}.`,
+        'Recovery: re-read the range that CONTAINS those lines with read_files and pass THAT capability as basedOnRead (or use replace_range with it); or, when oldString is unique in the file, omit basedOnRead entirely. Do not re-read the same window and resend the identical oldString.',
+      ].join('\n')
+      // Classification travels as a structured failureKind, never as a token in
+      // this prose: any text (e.g. a copied oldString) could otherwise forge it.
+      messages.push(scopeFailure)
+      recordFailure(scopeFailure, 'anchor_scope_mismatch')
       continue
     }
     const match = tryMatchOldStr({
@@ -589,6 +836,12 @@ export async function processStrReplace(params: {
       newStr: normalizedNewStr,
       allowMultiple,
       logger,
+      ...(validatedReadRange && {
+        anchoredRange: {
+          startLine: validatedReadRange.startLine,
+          endLine: validatedReadRange.endLine,
+        },
+      }),
     })
     let updatedOldStr: string | null
 
@@ -596,6 +849,9 @@ export async function processStrReplace(params: {
       updatedOldStr = match.oldStr
       if (match.message) {
         messages.push(match.message)
+      }
+      if (match.hadAutoCorrect) {
+        hadAutoCorrect = true
       }
     } else {
       const failureMessage = useAtomicBatch
@@ -657,6 +913,10 @@ export async function processStrReplace(params: {
   // the file is never left half-edited. Large files always use this path;
   // small files use it only when the caller opts in with atomic: true.
   if (useAtomicBatch && failures.length > 0) {
+    // Per-failure suppression: only a batch whose every failure suppresses the
+    // generic guidance may drop it. A mixed batch keeps the guidance its genuine
+    // no-match needs and reports no scope-mismatch kind.
+    const batchFailureKind = aggregateFailureKind(failures)
     return {
       tool: 'str_replace' as const,
       path,
@@ -668,9 +928,11 @@ export async function processStrReplace(params: {
             : transactionContext
               ? 'Use the recovery snapshot/capability when supplied; otherwise re-read the failed file/range, then retry the whole transaction. Partial success is unavailable inside edit_transaction.'
               : 'Use the recovery snapshot/capability when supplied; otherwise re-read the failed file/range, then retry the batch or omit atomic to allow partial success.',
-          ...failures,
+          ...failures.map((failure) => failure.error),
         ].join('\n\n'),
+        batchFailureKind,
       ),
+      ...(batchFailureKind && { failureKind: batchFailureKind }),
     }
   }
 
@@ -681,11 +943,14 @@ export async function processStrReplace(params: {
     defaultLineEnding,
   })
 
-  // If every requested change was an explicit idempotent no-op, report success
-  // so edit_transaction can continue applying later independent edits.
+  // If EVERY requested change was an explicit idempotent no-op, report success
+  // so edit_transaction can continue applying later independent edits. Only
+  // this branch sets hadNoOpSkip: a mixed batch (a skip co-present with a
+  // replacement that really applied) produces a real patch and must reach the
+  // client instead of being short-circuited as "no file changes".
   if (
     initialContent === currentContent &&
-    hadNoOpSkip &&
+    noOpSkipCount === normalizedReplacements.length &&
     failures.length === 0
   ) {
     return {
@@ -695,6 +960,8 @@ export async function processStrReplace(params: {
       patch: '',
       messages,
       failedReplacementCount: 0,
+      hadNoOpSkip: true,
+      hadAutoCorrect,
     }
   }
 
@@ -708,10 +975,12 @@ export async function processStrReplace(params: {
       `processStrReplace: No change to ${path}`,
     )
     messages.push('No change to the file')
+    const failureKind = aggregateFailureKind(failures)
     return {
       tool: 'str_replace' as const,
       path,
-      error: addFailedEditRecoveryGuidance(messages.join('\n\n')),
+      error: addFailedEditRecoveryGuidance(messages.join('\n\n'), failureKind),
+      ...(failureKind && { failureKind }),
     }
   }
 
@@ -722,15 +991,6 @@ export async function processStrReplace(params: {
     patch = lines.slice(hunkStartIndex).join('\n')
   }
   const finalPatch = patch
-
-  if (autoStrippedBogusAnchor) {
-    messages.push(
-      [
-        `Note: an invalid basedOnRead anchor was ignored for ${path} because the oldString was uniquely matchable, so the edit applied as a naked edit.`,
-        'Stop passing placeholder/invalid basedOnRead values. Omit basedOnRead when oldString is unique, or copy the readCapability token from a fresh read_files header.',
-      ].join('\n'),
-    )
-  }
 
   if (failures.length > 0) {
     messages.unshift(
@@ -748,6 +1008,9 @@ export async function processStrReplace(params: {
     `processStrReplace: Updated file ${path}`,
   )
 
+  // This batch DID change content, so hadNoOpSkip is deliberately absent here:
+  // the all-skip short-circuit must never swallow these applied changes. Any
+  // co-present skips are reported through `messages`.
   return {
     tool: 'str_replace' as const,
     path,
@@ -755,6 +1018,7 @@ export async function processStrReplace(params: {
     patch: finalPatch,
     messages,
     failedReplacementCount: failures.length,
+    hadAutoCorrect,
   }
 }
 
@@ -1300,6 +1564,13 @@ function formatClosestMatchDiagnostics(
     similarity: number
   }[],
   oldStr?: string,
+  /**
+   * Absolute-line offset applied when the candidate matches were computed over a
+   * window-scoped slice (an anchored basedOnRead range). findClosestMatches
+   * returns 1-indexed lines relative to the content it was given, so the offset
+   * is added exactly once here, at render time.
+   */
+  lineOffset: number = 0,
 ): string {
   const usefulMatches = matches.filter(
     (match) => match.similarity >= MIN_USEFUL_DIAGNOSTIC_SIMILARITY,
@@ -1327,15 +1598,17 @@ function formatClosestMatchDiagnostics(
   }
 
   const candidateBlock = usefulMatches
-    .map((match, index) =>
-      [
-        `Candidate ${index + 1}: lines ${match.startLine}-${match.endLine} (similarity ${Math.round(match.similarity * 100)}%)`,
-        `Recovery read: read_files ranges: [{ path: ${JSON.stringify(path)}, startLine: ${match.startLine}, endLine: ${match.endLine} }]`,
+    .map((match, index) => {
+      const startLine = match.startLine + lineOffset
+      const endLine = match.endLine + lineOffset
+      return [
+        `Candidate ${index + 1}: lines ${startLine}-${endLine} (similarity ${Math.round(match.similarity * 100)}%)`,
+        `Recovery read: read_files ranges: [{ path: ${JSON.stringify(path)}, startLine: ${startLine}, endLine: ${endLine} }]`,
         '```',
         match.closestBlock,
         '```',
-      ].join('\n'),
-    )
+      ].join('\n')
+    })
     .join('\n\n')
 
   return strategyNudge ? `${candidateBlock}\n\n${strategyNudge}` : candidateBlock
@@ -1365,17 +1638,6 @@ function formatOccurrenceDiagnostics(
       )
       .join('\n')
   )
-}
-
-// Returns the character index of the Nth (1-indexed) exact occurrence of oldStr
-// in content, or -1 if fewer than N occurrences exist. Used by occurrenceIndex
-// to target one specific repeated block without a fresh read anchor.
-function getNthOccurrenceIndex(
-  content: string,
-  oldStr: string,
-  n: number,
-): number {
-  return nthLiteralOccurrenceIndex(content, oldStr, n)
 }
 
 function getDeterministicLargeFileFallbackRange(params: {
@@ -1881,10 +2143,24 @@ const tryMatchOldStr = (params: {
   newStr: string
   allowMultiple: boolean
   logger: Logger
+  /**
+   * Absolute bounds of the anchored basedOnRead window when initialContent is a
+   * window-scoped slice. Present only for anchored edits, so unanchored
+   * diagnostics stay byte-identical.
+   */
+  anchoredRange?: { startLine: number; endLine: number }
 }):
-  | { success: true; oldStr: string; message?: string }
+  | { success: true; oldStr: string; message?: string; hadAutoCorrect?: boolean }
   | { success: false; error: string } => {
-  const { path, initialContent, oldStr, newStr, allowMultiple, logger } = params
+  const {
+    path,
+    initialContent,
+    oldStr,
+    newStr,
+    allowMultiple,
+    logger,
+    anchoredRange,
+  } = params
   // count the number of occurrences of oldStr in initialContent
   const count = initialContent.split(oldStr).length - 1
   if (count > 1 && oldStr.trim().length < TINY_ANCHOR_MULTI_MATCH_MIN_LENGTH) {
@@ -1996,6 +2272,7 @@ const tryMatchOldStr = (params: {
     return {
       success: true,
       oldStr: nearMatch.oldStr,
+      hadAutoCorrect: true,
       message: [
         `⚠ WARNING: auto-corrected a near-match edit (${Math.round(nearMatch.similarity * 100)}% similar) at lines ${nearMatch.startLine}-${nearMatch.endLine}.`,
         ...(nearMatch.corroboratedBySymbolIdentity
@@ -2011,11 +2288,24 @@ const tryMatchOldStr = (params: {
   }
 
   const closestMatches = findClosestMatches({ initialContent, oldStr })
+  // Candidate lines are relative to initialContent, which is the anchored window
+  // slice for scoped edits. Shift them once at render time so reported lines are
+  // absolute file lines instead of silently window-relative.
+  const lineOffset = anchoredRange ? anchoredRange.startLine - 1 : 0
   let errorMsg = [
-    `The old string ${JSON.stringify(oldStr)} is not an exact contiguous match of the current file, so it was not applied.`,
+    `The old string ${JSON.stringify(oldStr)} is not an exact contiguous match of ${
+      anchoredRange
+        ? `the anchored range lines ${anchoredRange.startLine}-${anchoredRange.endLine} of the current file`
+        : 'the current file'
+    }, so it was not applied.`,
     'It may be incomplete, may omit punctuation from the middle of a line, or may refer to content that changed or was removed.',
   ].join(' ')
-  const diagnostics = formatClosestMatchDiagnostics(path, closestMatches, oldStr)
+  const diagnostics = formatClosestMatchDiagnostics(
+    path,
+    closestMatches,
+    oldStr,
+    lineOffset,
+  )
   if (diagnostics) {
     errorMsg += `\n\nClosest candidate ranges for read_files.ranges recovery:\n${diagnostics}`
   } else if (isLargeOldString(oldStr)) {

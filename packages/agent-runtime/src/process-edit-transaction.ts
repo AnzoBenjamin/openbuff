@@ -93,6 +93,7 @@ type TransactionFailureKind =
   | 'capability_scope'
   | 'capability_invalid'
   | 'no_match'
+  | 'anchor_scope_mismatch'
   | 'preflight_failed'
   | 'generic'
 
@@ -126,8 +127,10 @@ type TransactionFailure = {
   basedOnRead?: string
   /**
    * Structured failure classification for capability, match, or preflight failures.
-   * Lets consumers classify without regex-matching errorMessage. Optional and
-   * additive; older consumers ignore it (the output schema strips unknown keys).
+   * Every failure this module reports carries one, so consumers must classify on
+   * this field instead of regex-matching errorMessage (which would duplicate the
+   * classification and let the copies drift). Still optional on the type so older
+   * consumers can ignore it (the output schema strips unknown keys).
    */
   failureKind?: TransactionFailureKind
 }
@@ -169,8 +172,23 @@ export async function processEditTransaction(params: {
   } = params
   const workingContentByPath = new Map(initialContentByPath)
   const messagesByPath = new Map<string, string[]>()
+  // Paths whose requested change resolved to an explicit already-applied
+  // skipIfMissing deletion. Such an edit produces no diff, so the zero-change
+  // branch below must report success (documented idempotent cleanup retry)
+  // instead of 'edit_transaction produced no file changes.'
+  const noOpSkipPaths = new Set<string>()
+  // Every edit processed in this loop is a content edit (delete/move are
+  // handled by the client-change builder in the handler). Counting them next to
+  // the no-op skips is what lets the zero-change branch below distinguish "every
+  // requested edit was an already-applied skipIfMissing deletion" from "a
+  // co-present content edit legitimately produced no diff".
+  let contentEditCount = 0
+  let noOpSkipEditCount = 0
   const failures: TransactionFailure[] = []
-  const transformationLedgerByPath = new Map<string, TransformationLedgerEntry[]>()
+  const transformationLedgerByPath = new Map<
+    string,
+    TransformationLedgerEntry[]
+  >()
   const unmappableOriginalPaths = new Set<string>()
   for (let editIndex = 0; editIndex < edits.length; editIndex++) {
     const edit = edits[editIndex]
@@ -180,11 +198,14 @@ export async function processEditTransaction(params: {
     const nextEditIndex = coalescedEdit?.nextEditIndex ?? editIndex + 1
 
     if (!workingContentByPath.has(effectiveEdit.path)) {
+      const errorMessage = `Cannot apply ${effectiveEdit.type} edit to ${effectiveEdit.path}: file was not preloaded for transaction preflight. Re-read the target file, then retry the whole transaction.`
+      const failureKind = classifyTransactionFailureKind(errorMessage)
       failures.push({
         editIndex,
         ...(effectiveEdit.id && { id: effectiveEdit.id }),
         path: effectiveEdit.path,
-        errorMessage: `Cannot apply ${effectiveEdit.type} edit to ${effectiveEdit.path}: file was not preloaded for transaction preflight. Re-read the target file, then retry the whole transaction.`,
+        errorMessage,
+        ...(failureKind && { failureKind }),
       })
       break
     }
@@ -194,12 +215,15 @@ export async function processEditTransaction(params: {
       initialContentByPath.get(effectiveEdit.path) ?? null,
     )
     if ('error' in resolvedEdit) {
+      const failureKind =
+        resolvedEdit.failureKind ??
+        classifyTransactionFailureKind(resolvedEdit.error)
       failures.push({
         editIndex,
         ...(effectiveEdit.id && { id: effectiveEdit.id }),
         path: effectiveEdit.path,
         errorMessage: resolvedEdit.error,
-        ...(resolvedEdit.failureKind && { failureKind: resolvedEdit.failureKind }),
+        ...(failureKind && { failureKind }),
       })
       break
     }
@@ -210,11 +234,13 @@ export async function processEditTransaction(params: {
       unmappableOriginalPaths.has(effectiveEdit.path),
     )
     if ('error' in rangeAdjustment) {
+      const failureKind = classifyTransactionFailureKind(rangeAdjustment.error)
       failures.push({
         editIndex,
         ...(effectiveEdit.id && { id: effectiveEdit.id }),
         path: effectiveEdit.path,
         errorMessage: rangeAdjustment.error,
+        ...(failureKind && { failureKind }),
       })
       break
     }
@@ -252,6 +278,11 @@ export async function processEditTransaction(params: {
       break
     }
 
+    contentEditCount++
+    if (result.hadNoOpSkip) {
+      noOpSkipEditCount++
+      noOpSkipPaths.add(effectiveEdit.path)
+    }
     const priorContent = currentContent ?? ''
     workingContentByPath.set(effectiveEdit.path, result.content)
     const ledgerResult = appendTransformationLedgerEntries(
@@ -323,6 +354,31 @@ export async function processEditTransaction(params: {
   }
 
   if (files.length === 0) {
+    // Documented contract: a transaction whose every requested change was an
+    // explicit already-applied skipIfMissing deletion is a SUCCESSFUL
+    // idempotent cleanup retry, not a failure. It reports zero file changes
+    // plus the per-path skip messages so the caller can see why nothing
+    // changed; the handler surfaces this without asking the client to apply an
+    // empty change list.
+    if (noOpSkipPaths.size > 0) {
+      const skippedPaths = [...noOpSkipPaths]
+      // Only assert the strong idempotent-cleanup claim when it is literally
+      // true for EVERY content edit. A co-present content edit that legitimately
+      // produced no diff (e.g. write_file with byte-identical content) also
+      // lands here, and it is not an already-applied skipIfMissing deletion, so
+      // that case reports the neutral wording instead.
+      const everyEditWasNoOpSkip = noOpSkipEditCount === contentEditCount
+      return {
+        tool: 'edit_transaction',
+        files: [],
+        message: [
+          everyEditWasNoOpSkip
+            ? `edit_transaction made no file changes: every requested edit was an already-applied skipIfMissing deletion (${skippedPaths.join(', ')}).`
+            : `edit_transaction made no file changes; skipped paths: ${skippedPaths.join(', ')}.`,
+          ...skippedPaths.flatMap((path) => messagesByPath.get(path) ?? []),
+        ].join('\n'),
+      }
+    }
     return {
       tool: 'edit_transaction',
       error:
@@ -331,10 +387,22 @@ export async function processEditTransaction(params: {
     }
   }
 
+  // Mixed transaction: a path whose every replacement resolved to an
+  // already-applied skipIfMissing deletion produces no files[] entry, so its
+  // skip messages would be lost whenever another path did change. Surface them
+  // on the success message instead of only through files[].
+  const skippedOnlyPaths = [...noOpSkipPaths].filter(
+    (skippedPath) => !files.some((file) => file.path === skippedPath),
+  )
   return {
     tool: 'edit_transaction',
     files,
-    message: `edit_transaction preflight prepared ${files.length} coordinated file change(s).`,
+    message: [
+      `edit_transaction preflight prepared ${files.length} coordinated file change(s).`,
+      ...skippedOnlyPaths.flatMap(
+        (skippedPath) => messagesByPath.get(skippedPath) ?? [],
+      ),
+    ].join('\n'),
   }
 }
 
@@ -416,6 +484,12 @@ function collectTransactionPaths(
   return [...paths]
 }
 
+/**
+ * Prose fallback for failures that do not already carry a structured kind. An
+ * anchored scope mismatch is deliberately NOT detected here: processStrReplace
+ * reports it as a real failureKind, so no marker token has to travel inside
+ * model-facing prose where a quoted oldString could forge it.
+ */
 function classifyTransactionFailureKind(
   errorMessage: string,
 ): TransactionFailureKind | undefined {
@@ -464,6 +538,9 @@ function recoveryErrorCode(
     return 'stale_capability'
   }
   if (failure.failureKind === 'no_match') return 'no_match'
+  // The public errorCode enum intentionally does not grow: an anchored scope
+  // mismatch is reported as no_match with the precise prose in the failure.
+  if (failure.failureKind === 'anchor_scope_mismatch') return 'no_match'
   if (failure.failureKind === 'preflight_failed') return 'preflight_failed'
   if (classifyTransactionFailureKind(failure.errorMessage) === 'no_match') {
     return 'no_match'
@@ -481,8 +558,14 @@ function buildTransactionRecovery(params: {
     failure.failureKind ?? classifyTransactionFailureKind(failure.errorMessage)
   const isCapability =
     typeof kind === 'string' && kind.startsWith('capability')
-  const isMatchFailure = kind === 'no_match'
+  // An anchored scope mismatch needs the same fresh-read handling as a match
+  // failure, but the correct fix is a capability that actually covers the target
+  // lines, so replace_range is the preferred strategy rather than a shorter
+  // oldString.
+  const isAnchorScopeMismatch = kind === 'anchor_scope_mismatch'
+  const isMatchFailure = kind === 'no_match' || isAnchorScopeMismatch
   const prefersReplaceRange =
+    isAnchorScopeMismatch ||
     /replace_range with its readCapability|Do not reconstruct huge blocks from memory|No useful candidate ranges found/i.test(
       failure.errorMessage,
     )
@@ -523,7 +606,11 @@ function originalLineSpan(
   const normalized = normalizeLineEndings(content)
   const lines = normalized.split('\n')
   const visibleLineCount =
-    normalized.length === 0 ? 0 : lines.at(-1) === '' ? lines.length - 1 : lines.length
+    normalized.length === 0
+      ? 0
+      : lines.at(-1) === ''
+        ? lines.length - 1
+        : lines.length
   if (startLine < 1 || endLine < startLine || endLine > visibleLineCount) {
     return null
   }
@@ -582,7 +669,7 @@ function resolveReplaceRangeEdit(
           ? decoded
           : 'readCapability requires an authenticated project/path/run-bound cap.v3 token.',
       // Only a decode failure carries the structured capability-invalid kind;
-      // a wrong-version token stays covered by the handler regex fallback.
+      // a wrong-version token is classified by classifyTransactionFailureKind.
       ...(typeof decoded === 'string'
         ? { failureKind: 'capability_invalid' as const }
         : {}),
@@ -802,6 +889,14 @@ async function processTransactionEdit(params: {
   | {
       content: string
       messages: string[]
+      /**
+       * True when EVERY replacement of this edit resolved to an already-applied
+       * skipIfMissing deletion, i.e. the whole edit is a deliberate no-op rather
+       * than a content change. A mixed batch (one already-applied skip plus a
+       * replacement that really applies) is a content change and never sets
+       * this, so its applied content is never discarded.
+       */
+      hadNoOpSkip?: boolean
     }
   | {
       error: string

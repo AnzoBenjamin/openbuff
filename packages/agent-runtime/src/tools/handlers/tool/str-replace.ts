@@ -1,5 +1,4 @@
 import { getContentHash } from '@codebuff/common/util/content-hash'
-
 import {
   formatUnsafeToolPathError,
   hasWholeFileReadAuthorization,
@@ -42,7 +41,34 @@ import type { ProjectFileContext } from '@codebuff/common/util/file'
 // mid-refactor lockout friction while still forcing tool switches.
 const STR_REPLACE_MAX_CONSECUTIVE_FAILURES = 5
 
-const NEAR_MATCH_AUTOCORRECT_MARKER = 'auto-corrected a near-match edit'
+const STR_REPLACE_CIRCUIT_BREAKER_TOOL_GUIDANCE =
+  'rewrite_symbol for a whole symbol, replace_range with a fresh readCapability for a known block, or write_file'
+
+// Fix C lifecycle: consecutiveStrReplaceFailuresByPath is turn-scoped. A fresh
+// FileProcessingState is created per turn via getFileProcessingValues() and
+// hydrated from the durable agent state at processStream/runProgrammaticStep
+// boundaries, so the budget resets at each turn boundary. The only intra-turn
+// eviction is the structuralRecovery path below (set only by rewrite_symbol
+// for whole-symbol recovery), which deletes the entry on any clean success
+// when the flag is set to allow recovery edits to proceed; all other paths
+// leave the budget non-draining on clean success to prevent fail↔success
+// oscillation from evading the breaker.
+
+// Centralized helper for the per-path failure budget. Deduplicates the
+// increment that previously appeared in both the hard-error and the
+// autocorrect/partial-success branches (RF-6).
+function incrementStrReplaceFailureBudget(
+  state: FileProcessingState,
+  path: string,
+): number {
+  const current = state.consecutiveStrReplaceFailuresByPath[path] ?? 0
+  // Stored value is capped at MAX+5 to prevent unbounded growth while
+  // diagnostic messages are capped at MAX to stay aligned with the breaker
+  // threshold (5). Callers should cap display counts to MAX.
+  const next = Math.min(current + 1, STR_REPLACE_MAX_CONSECUTIVE_FAILURES + 5)
+  state.consecutiveStrReplaceFailuresByPath[path] = next
+  return next
+}
 
 export const handleStrReplace = (async (
   params: {
@@ -114,6 +140,10 @@ export const handleStrReplace = (async (
     !structuralRecovery &&
     consecutiveFailures >= STR_REPLACE_MAX_CONSECUTIVE_FAILURES
   ) {
+    const displayFailures = Math.min(
+      consecutiveFailures,
+      STR_REPLACE_MAX_CONSECUTIVE_FAILURES,
+    )
     return {
       output: [
         {
@@ -121,10 +151,15 @@ export const handleStrReplace = (async (
           value: {
             file: path,
             errorMessage: [
-              `str_replace circuit breaker: ${consecutiveFailures} failed or auto-corrected attempts on \`${path}\` in this turn.`,
+              `str_replace circuit breaker: ${displayFailures} failed or auto-corrected attempts on \`${path}\` in this turn.`,
               'Continuing to retry str_replace on this path is likely to corrupt the file.',
-              'Next: use rewrite_symbol for an entire function/method/type, replace_range with a fresh readCapability for a known block, or write_file to reconstruct the whole file. Raw str_replace remains blocked for this path until the next turn.',
+              `Next: use ${STR_REPLACE_CIRCUIT_BREAKER_TOOL_GUIDANCE} to reconstruct the whole file. Raw str_replace remains blocked for this path until the next turn.`,
             ].join('\n'),
+            errorCode: 'str_replace_circuit_breaker',
+            recovery: {
+              tool: 'read_files',
+              input: { paths: [path] },
+            },
           },
         },
       ],
@@ -156,7 +191,7 @@ export const handleStrReplace = (async (
   // filesystem stub does not immediately reflect them. Across turns there is
   // no prior promise, so the disk read below is the external-change boundary.
   // Auto-reread-once for strict auth miss also uses this load (one attempt).
-  let latestContent = hasAnyReadCapability
+  let latestContent: string | null = hasAnyReadCapability
     ? await requestOptionalFile({ ...params, filePath: path })
     : previousEdit
       ? await previousEdit.then((maybeResult) =>
@@ -194,11 +229,45 @@ export const handleStrReplace = (async (
     !structuralRecovery
   if (needsAuthWithoutCapability && replacementsAreUniqueOnly) {
     autoRereadAttempted = true
-    if (typeof latestContent !== 'string') {
-      // Prefer a fresh disk load when previous-edit chain had no content.
-      latestContent = await requestOptionalFile({ ...params, filePath: path })
-    }
-    if (typeof latestContent === 'string') {
+    // Reuse already-fresh disk content when there was no prior edit to avoid
+    // duplicate I/O; otherwise re-fetch the current disk bytes and verify hash
+    // (non-empty string) before authorizing.
+    const freshDiskContent =
+      !previousEdit && typeof latestContent === 'string'
+        ? latestContent
+        : await requestOptionalFile({ ...params, filePath: path })
+    if (typeof freshDiskContent === 'string') {
+      // Hash verification: ensure content hash is computable (guards against
+      // empty/undefined edge cases and confirms we observed current disk bytes).
+      const freshDiskHash = getContentHash(freshDiskContent)
+      if (!freshDiskHash) {
+        const authorizationError = strictEditAuthorizationError({
+          fileProcessingState,
+          path,
+          toolName: 'str_replace',
+          hasFreshWholeFileAuthorization: false,
+          authorizationWasStale: hasStoredWholeFileAuthorization,
+        })
+        return {
+          output: [
+            {
+              type: 'json',
+              value: {
+                file: path,
+                errorMessage:
+                  authorizationError?.errorMessage ??
+                  `str_replace blocked for ${path}: read_files must authorize the file before editing.`,
+                errorCode: 'fresh_read_required',
+                recovery: authorizationError?.recovery ?? {
+                  tool: 'read_files',
+                  input: { paths: [path] },
+                },
+              },
+            },
+          ],
+        }
+      }
+      latestContent = freshDiskContent
       // In-process only: authorize this str_replace call; no durable sticky mint.
       // The helper may drop failed-edit markers but keeps context_compacted.
       clearEditRereadRequirement(fileProcessingState, path)
@@ -283,6 +352,11 @@ export const handleStrReplace = (async (
     }
   }
 
+  // Single-sourced idempotent-cleanup signal: processStrReplace sets hadNoOpSkip ONLY
+  // on the all-skip success branch (every replacement resolved to an
+  // already-applied skipIfMissing deletion, so the patch is empty) and
+  // edit_transaction keys off the same structured flag. Const-captured after await
+  // from strReplaceResult to avoid mutable closure state.
   const newPromise: Promise<FileProcessing<'str_replace'>> = processStrReplace({
     path,
     replacements,
@@ -336,7 +410,12 @@ export const handleStrReplace = (async (
   fileProcessingState.allPromises.push(newPromise)
 
   const strReplaceResult = await newPromise
-  let hadAutoCorrect = false
+  const everyReplacementWasNoOpSkip =
+    'content' in strReplaceResult &&
+    (strReplaceResult as { hadNoOpSkip?: boolean }).hadNoOpSkip === true
+  const hadAutoCorrect =
+    !('error' in strReplaceResult) &&
+    (strReplaceResult as { hadAutoCorrect?: boolean }).hadAutoCorrect === true
   if ('error' in strReplaceResult) {
     // A preflight syntax failure is semantically different from a stale-anchor
     // failure: the agent's oldString was fine, the new content just had a
@@ -344,10 +423,10 @@ export const handleStrReplace = (async (
     // the agent only needs to fix the syntax, not re-read the file or switch
     // tools. (Fix C circuit breaker only counts real processing failures.)
     if (!strReplaceResult.preflightSyntaxError) {
+      const failureKind = (strReplaceResult as { failureKind?: string }).failureKind
       const requiresFreshCapability =
-        /(?:readCapability|basedOnRead).*(?:stale|different project, path, or agent run)|(?:stale|different project, path, or agent run).*(?:readCapability|basedOnRead)/is.test(
-          strReplaceResult.error,
-        )
+        failureKind === 'capability_scope' ||
+        failureKind === 'anchor_scope_mismatch'
       if (requiresFreshCapability) {
         markEditRequiresFreshRead({
           fileProcessingState,
@@ -362,50 +441,85 @@ export const handleStrReplace = (async (
         strReplaceResult.error = [
           strReplaceResult.error,
           `Auto-re-read once failed to apply. Call read_files with paths: ["${path}"] for a complete read before retrying str_replace.`,
-          JSON.stringify({
-            recovery: {
-              tool: 'read_files',
-              input: { paths: [path] },
-            },
-          }),
         ].join('\n')
+        ;(strReplaceResult as unknown as { errorCode?: string }).errorCode =
+          'fresh_read_required'
+        ;(strReplaceResult as unknown as { recovery?: unknown }).recovery = {
+          tool: 'read_files',
+          input: { paths: [path] },
+        }
       }
       // Deterministic no-match/ambiguity preflight failures do not mutate the
       // client and therefore preserve any valid read authorization.
-      // Fix C: a hard error consumes the per-path failure budget.
-      fileProcessingState.consecutiveStrReplaceFailuresByPath[path] =
-        (fileProcessingState.consecutiveStrReplaceFailuresByPath[path] ?? 0) + 1
-      if (
-        fileProcessingState.consecutiveStrReplaceFailuresByPath[path] >=
-        STR_REPLACE_MAX_CONSECUTIVE_FAILURES
-      ) {
+      const consecutiveAfterError = incrementStrReplaceFailureBudget(
+        fileProcessingState,
+        path,
+      )
+      if (consecutiveAfterError >= STR_REPLACE_MAX_CONSECUTIVE_FAILURES) {
+        const displayCount = Math.min(
+          consecutiveAfterError,
+          STR_REPLACE_MAX_CONSECUTIVE_FAILURES,
+        )
         strReplaceResult.error = [
           strReplaceResult.error,
-          `str_replace retry limit reached for \`${path}\` after ${fileProcessingState.consecutiveStrReplaceFailuresByPath[path]} failed or auto-corrected attempts in this turn.`,
-          'Do not retry another remembered str_replace batch. Switch to rewrite_symbol for a whole symbol, replace_range with a fresh readCapability for a known block, or write_file when reconstructing the whole file is safer.',
+          `str_replace retry limit reached for \`${path}\` after ${displayCount} failed or auto-corrected attempts in this turn.`,
+          `Do not retry another remembered str_replace batch. Switch to ${STR_REPLACE_CIRCUIT_BREAKER_TOOL_GUIDANCE} when reconstructing the whole file is safer.`,
         ].join('\n\n')
       }
     }
   } else {
-    // Fix C: an auto-corrected near-match is a weak/suspect outcome and also
-    // counts toward the circuit breaker. Clean exact-match success leaves the
-    // budget intact (non-draining) rather than full-reset or drain-by-1 so
-    // fail↔success oscillation cannot evade the breaker. Full reset still only
-    // happens at the next turn (or structural recovery below).
-    hadAutoCorrect = strReplaceResult.messages.some((msg) =>
-      msg.includes(NEAR_MATCH_AUTOCORRECT_MARKER),
-    )
     if (hadAutoCorrect || (strReplaceResult.failedReplacementCount ?? 0) > 0) {
-      fileProcessingState.consecutiveStrReplaceFailuresByPath[path] =
-        (fileProcessingState.consecutiveStrReplaceFailuresByPath[path] ?? 0) + 1
+      const consecutiveAfterSuccess = incrementStrReplaceFailureBudget(
+        fileProcessingState,
+        path,
+      )
+      if (consecutiveAfterSuccess >= STR_REPLACE_MAX_CONSECUTIVE_FAILURES) {
+        const displayCount = Math.min(
+          consecutiveAfterSuccess,
+          STR_REPLACE_MAX_CONSECUTIVE_FAILURES,
+        )
+        const limitWarning = `str_replace retry limit reached for \`${path}\` after ${displayCount} failed or auto-corrected attempts in this turn. Do not retry another remembered str_replace batch. Switch to ${STR_REPLACE_CIRCUIT_BREAKER_TOOL_GUIDANCE} when reconstructing the whole file is safer.`
+        // Symmetric with error-path warning: surface limit reached on success
+        // autocorrect/partial path as well (RF-4).
+        strReplaceResult.messages.push(limitWarning)
+      }
     }
-    // else: clean exact-match success — leave consecutiveStrReplaceFailuresByPath
-    // unchanged so prior failures keep climbing toward the limit.
     // Strict read-before-edit: read authorization is sticky once granted by
     // read_files or write_file. Successful edits on the same path remain
     // authorized for subsequent edits; only a failed edit (which sets
     // failedEditRequiresReadByPath) or an externally-changed file (anchored
     // with a fresh basedOnRead capability) re-enables the strict gate.
+  }
+
+  // Zero-change guard, mirroring edit_transaction's `clientChanges.length === 0`
+  // branch. processStrReplace reports an all-skip idempotent cleanup as success
+  // with an empty patch; postStreamProcessing branches on `patch ? patch : file`
+  // and would turn that into a whole-file write of unchanged content. Key off the
+  // structured all-skip flag (the same contract edit_transaction uses) AND an
+  // empty patch, so an unrelated empty-patch success is never reported as an
+  // already-applied skipIfMissing deletion and a MIXED batch (a skip co-present
+  // with a replacement that really applied) still reaches the client with its
+  // applied content. Return the skip messages without calling the client, and
+  // leave read authorization state untouched because no file changed.
+  if (
+    everyReplacementWasNoOpSkip &&
+    'content' in strReplaceResult &&
+    !strReplaceResult.patch
+  ) {
+    return {
+      output: [
+        {
+          type: 'json',
+          value: {
+            file: path,
+            message: [
+              ...strReplaceResult.messages,
+              'No file changes were applied because every requested replacement was an already-applied skipIfMissing deletion.',
+            ].join('\n\n'),
+          },
+        },
+      ],
+    }
   }
 
   const application = await coordinateEditApplication<'str_replace'>({
@@ -504,6 +618,28 @@ export const handleStrReplace = (async (
       ...strReplaceResult.messages,
       firstResult.value.message,
     ].join('\n\n')
+  }
+
+  if ('error' in strReplaceResult) {
+    const maybeErrorCode = (
+      strReplaceResult as unknown as { errorCode?: string }
+    ).errorCode
+    const maybeRecovery = (
+      strReplaceResult as unknown as { recovery?: unknown }
+    ).recovery
+    if (
+      maybeErrorCode &&
+      firstResult.type === 'json' &&
+      firstResult.value &&
+      typeof firstResult.value === 'object'
+    ) {
+      ;(firstResult.value as Record<string, unknown>).errorCode =
+        maybeErrorCode
+      if (maybeRecovery !== undefined) {
+        ;(firstResult.value as Record<string, unknown>).recovery =
+          maybeRecovery
+      }
+    }
   }
 
   return { output: clientToolResult }

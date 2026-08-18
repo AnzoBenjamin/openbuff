@@ -17,7 +17,12 @@ import {
   MAX_TRANSACTION_UNIQUE_PATHS,
 } from '../../../actions'
 
-import { updateFileResultSchema } from './str-replace'
+import {
+  refineSkipIfMissingDeletionOnly,
+  skipIfMissingCanonicalDescription,
+  skipIfMissingDescription,
+  updateFileResultSchema,
+} from './str-replace'
 
 import type { $ToolParams } from '../../constants'
 
@@ -50,12 +55,7 @@ const replacementSchema = z.preprocess(
           'Optional 1-indexed exact occurrence to replace when oldString appears multiple times. Matches str_replace occurrenceIndex semantics and may be combined with basedOnRead to count only within an anchored range.',
         ),
       basedOnRead: basedOnReadSchema,
-      skipIfMissing: z
-        .boolean()
-        .optional()
-        .describe(
-          'For deletion replacements only (newString is empty): treat a missing oldString as an already-applied no-op. Use only for explicit idempotent cleanup retries, never for ordinary edits.',
-        ),
+      skipIfMissing: z.boolean().optional().describe(skipIfMissingDescription),
     })
     .strict()
     .superRefine((replacement, ctx) => {
@@ -75,14 +75,7 @@ const replacementSchema = z.preprocess(
             'newString is an explicit placeholder, not replacement content. Provide the complete intended text.',
         })
       }
-      if (replacement.skipIfMissing && replacement.newString !== '') {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['skipIfMissing'],
-          message:
-            'skipIfMissing is only valid for deletion replacements with an empty newString.',
-        })
-      }
+      refineSkipIfMissingDeletionOnly(replacement, ctx)
     }),
 )
 const editBaseSchema = z.object({
@@ -309,9 +302,19 @@ const canonicalReplacementSchema = z
     allowMultiple: z.boolean().optional().default(false),
     occurrenceIndex: z.number().int().min(1).optional(),
     basedOnRead: canonicalBasedOnReadSchema,
-    skipIfMissing: z.boolean().optional(),
+    // The input schema enforces `newString === ''` for skipIfMissing via
+    // superRefine. This provider-declared surface documents AND enforces that
+    // same constraint so it never advertises a combination the input schema
+    // rejects.
+    skipIfMissing: z
+      .boolean()
+      .optional()
+      .describe(skipIfMissingCanonicalDescription),
   })
   .strict()
+  .superRefine((replacement, ctx) =>
+    refineSkipIfMissingDeletionOnly(replacement, ctx),
+  )
 const canonicalStrReplaceEditSchema = editBaseSchema.extend({
   type: z.literal('str_replace'),
   replacements: z.array(canonicalReplacementSchema).min(1),
@@ -496,6 +499,7 @@ export const editTransactionResultSchema = z.union([
             'capability_scope',
             'capability_invalid',
             'no_match',
+            'anchor_scope_mismatch',
             'preflight_failed',
             'payload_truncated',
             'generic',
@@ -584,6 +588,7 @@ Important:
 - Never use prose placeholders such as "[see patch above]" in any edit. Each oldString must contain exact current file content and each newString/content/diff field must contain the complete intended bytes. Placeholder calls are rejected before they can consume a valid read authorization.
 - The transaction preflights every edit against in-memory file contents first.
 - If ANY edit fails during preflight, NO files are changed.
+- A str_replace replacement may set skipIfMissing on a deletion (empty newString) to make an already-applied cleanup a no-op; a transaction consisting only of such no-ops succeeds with zero file changes.
 - Every per-file edit is atomic during preflight, including small files.
 - Structured edits are dispatched deterministically by operation kind; supported operations include insert_text, insert_import, and remove_import.
 - Select an edit type per operation: str_replace, replace_range, rewrite_symbol, patch, structured, create, delete, move, or write_file.

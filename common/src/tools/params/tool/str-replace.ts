@@ -34,6 +34,40 @@ export const updateFileResultSchema = z.union([
 
 const toolName = 'str_replace'
 const endsAgentStep = false
+
+/**
+ * Single source of truth for the model-facing `skipIfMissing` contract. Both
+ * model-facing surfaces (str_replace and edit_transaction's str_replace edit)
+ * import this so the two descriptions cannot drift.
+ */
+export const skipIfMissingDescription =
+  'For deletion replacements only (newString is empty): treat a missing oldString as an already-applied no-op. Use only for explicit idempotent cleanup retries, never for ordinary edits. When every requested change resolves to such a no-op - every replacement of a standalone str_replace call, or every edit of an edit_transaction - the call succeeds with zero file changes and the skip messages rather than failing. When combined with occurrenceIndex, a partially-applied cleanup also skips: fewer remaining exact occurrences than the requested index means that occurrence is treated as already applied.'
+
+/** Provider-surface note: both schemas reject a non-empty newString. */
+export const skipIfMissingCanonicalDescription = `${skipIfMissingDescription} Only valid when newString is empty; both the input and provider schemas reject any other combination.`
+
+/**
+ * Single source of truth for the `skipIfMissing` deletion-only CHECK, mirroring
+ * `skipIfMissingDescription` for the text. All four model-facing surfaces
+ * (str_replace's input + provider schemas, edit_transaction's replacement +
+ * canonical replacement schemas) call this from their superRefine so neither the
+ * condition nor its message can drift.
+ */
+export function refineSkipIfMissingDeletionOnly(
+  replacement: { newString: string; skipIfMissing?: boolean | undefined },
+  ctx: {
+    addIssue(issue: { code: 'custom'; path: string[]; message: string }): void
+  },
+): void {
+  if (replacement.skipIfMissing && replacement.newString !== '') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['skipIfMissing'],
+      message:
+        'skipIfMissing is only valid for deletion replacements with an empty newString.',
+    })
+  }
+}
 const inputSchema = z
   .object({
     path: z
@@ -87,9 +121,7 @@ const inputSchema = z
                     skipIfMissing: z
                       .boolean()
                       .optional()
-                      .describe(
-                        'For deletion replacements only: treat an already-missing oldString as a successful idempotent no-op.',
-                      ),
+                      .describe(skipIfMissingDescription),
                   })
                   .superRefine((replacement, ctx) => {
                     if (isObviousEditPlaceholder(replacement.oldString)) {
@@ -108,17 +140,7 @@ const inputSchema = z
                           'newString is an explicit placeholder, not replacement content. Provide the complete intended text.',
                       })
                     }
-                    if (
-                      replacement.skipIfMissing &&
-                      replacement.newString !== ''
-                    ) {
-                      ctx.addIssue({
-                        code: 'custom',
-                        path: ['skipIfMissing'],
-                        message:
-                          'skipIfMissing is only valid for deletion replacements with an empty newString.',
-                      })
-                    }
+                    refineSkipIfMissingDeletionOnly(replacement, ctx)
                   }),
               )
               .describe('Pair of oldString and newString values.'),
@@ -139,8 +161,18 @@ const providerInputSchema = z.object({
         allowMultiple: z.boolean().optional().default(false),
         occurrenceIndex: z.number().int().min(1).optional(),
         basedOnRead: canonicalBasedOnReadSchema,
-        skipIfMissing: z.boolean().optional(),
-      }),
+        skipIfMissing: z
+          .boolean()
+          .optional()
+          .describe(skipIfMissingCanonicalDescription),
+      })
+        // The declared provider surface must reject exactly what the input
+        // schema rejects, so it never advertises skipIfMissing with a non-empty
+        // newString as a valid combination. Both go through the same shared
+        // refinement.
+        .superRefine((replacement, ctx) =>
+          refineSkipIfMissingDeletionOnly(replacement, ctx),
+        ),
     )
     .min(1),
 })
