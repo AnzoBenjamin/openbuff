@@ -10,6 +10,8 @@ import { join } from 'node:path'
 
 import { afterAll, describe, expect, test } from 'bun:test'
 
+import { getEffectiveAgentToolNames } from '@codebuff/agent-runtime/util/agent-tool-names'
+
 import { createBaseDeep } from '../base2/base-deep'
 import {
   createBase2,
@@ -19,7 +21,8 @@ import {
 } from '../base2/base2'
 import { normalizeGateFilePath } from '../base2/gate-paths'
 import type { Base2ActiveWorkState } from '../base2/gate-state'
-import { resolveModelToolNames } from '../base2/tool-tiers'
+
+import type { AgentTemplate } from '@codebuff/agent-runtime/templates/types'
 
 const TEST_TMP_ROOT = join(process.cwd(), '.base2-test-scratch')
 mkdirSync(TEST_TMP_ROOT, { recursive: true })
@@ -578,10 +581,11 @@ describe('base2 validation/reviewer coordination prompts', () => {
     expect(base2.spawnableAgentToolMode).toBe('generic')
     expect(base2.toolNames).not.toContain('git_status')
     // get_change_review_bundle and inspect_codebase_structure are audit-tier,
-    // so both are absent from the CORE-only default surface.
-    expect(base2.toolNames).not.toContain('get_change_review_bundle')
+    // and every non-core tier is unlocked by default, so both are on the
+    // model-visible surface. They stay declared programmatically as well.
+    expect(base2.toolNames).toContain('get_change_review_bundle')
     expect(base2.toolNames).not.toContain('run_file_change_hooks')
-    expect(base2.toolNames).not.toContain('inspect_codebase_structure')
+    expect(base2.toolNames).toContain('inspect_codebase_structure')
     expect(base2.programmaticToolNames).toEqual(
       expect.arrayContaining([
         'git_status',
@@ -657,22 +661,19 @@ describe('base2 validation/reviewer coordination prompts', () => {
 
   test('base2 exposes update_plan_status alongside create_plan', () => {
     const base2 = createBase2('default')
-    // create_plan/update_plan_status are implement-tier, so they are absent
-    // from the CORE-only default (progressive) surface.
-    expect(base2.toolNames).not.toContain('create_plan')
-    expect(base2.toolNames).not.toContain('update_plan_status')
+    // create_plan/update_plan_status are implement-tier, and every non-core
+    // tier is unlocked by default now, so both are on the default surface.
+    expect(base2.toolNames).toContain('create_plan')
+    expect(base2.toolNames).toContain('update_plan_status')
 
+    // Plan artifact tools are not mode-gated, so plan mode keeps both
+    // create_plan and update_plan_status (it is the mode that creates and
+    // maintains plan artifacts). What plan mode still withholds are the
+    // mutation/execution tools (edit_transaction, run_terminal_command,
+    // run_targeted_validation, write_todos).
     const planBase2 = createBase2('default', { planOnly: true })
-    expect(planBase2.toolNames).not.toContain('update_plan_status')
-
-    // They become available only when the implement tier is unlocked.
-    const implementSurface = resolveModelToolNames({
-      mode: 'default',
-      progressiveToolDisclosure: true,
-      unlockedTiers: ['implement'],
-    })
-    expect(implementSurface).toContain('create_plan')
-    expect(implementSurface).toContain('update_plan_status')
+    expect(planBase2.toolNames).toContain('create_plan')
+    expect(planBase2.toolNames).toContain('update_plan_status')
   })
 
   test('plan mode exposes broad read-only analysis agents without mutation agents', () => {
@@ -699,9 +700,10 @@ describe('base2 validation/reviewer coordination prompts', () => {
       expect(spawnable).not.toContain(agent)
     }
     expect(planBase2.toolNames).toContain('check_background_agent')
-    // inspect_codebase_structure is audit-tier, so it is absent from the
-    // CORE-only default plan surface.
-    expect(planBase2.toolNames).not.toContain('inspect_codebase_structure')
+    // inspect_codebase_structure is audit-tier, and every non-core tier is
+    // unlocked by default, so it is present in the plan surface too (it is a
+    // read-only analysis tool, so plan mode does not gate it).
+    expect(planBase2.toolNames).toContain('inspect_codebase_structure')
     expect(planBase2.toolNames).not.toContain('edit_transaction')
     expect(planBase2.toolNames).not.toContain('run_file_change_hooks')
     expect(planBase2.toolNames).not.toContain('git_status')
@@ -816,9 +818,9 @@ describe('base-deep prompt naming and tool guidance', () => {
     expect(baseDeep.toolNames).toEqual(
       expect.arrayContaining(['read_outline', 'list_directory', 'glob']),
     )
-    // edit_transaction is implement-tier, so it is absent from the CORE-only
-    // default base-deep surface (unlocks only under the implement tier).
-    expect(baseDeep.toolNames).not.toContain('edit_transaction')
+    // edit_transaction is implement-tier and every non-core tier is unlocked
+    // by default, so base-deep exposes it (it inherits createBase2's surface).
+    expect(baseDeep.toolNames).toContain('edit_transaction')
     expect(baseDeep.toolNames).not.toContain('str_replace')
     expect(baseDeep.toolNames).not.toContain('replace_range')
     expect(baseDeep.toolNames).not.toContain('rewrite_symbol')
@@ -850,11 +852,11 @@ describe('base-deep gate lifecycle parity with base2', () => {
       ]),
     )
     // create_plan/update_plan_status are implement-tier and
-    // get_change_review_bundle is audit-tier, so none appear in the CORE-only
-    // default base-deep model surface.
-    expect(baseDeep.toolNames).not.toContain('create_plan')
-    expect(baseDeep.toolNames).not.toContain('update_plan_status')
-    expect(baseDeep.toolNames).not.toContain('get_change_review_bundle')
+    // get_change_review_bundle is audit-tier; every non-core tier is unlocked
+    // by default, so all three appear on the base-deep model surface.
+    expect(baseDeep.toolNames).toContain('create_plan')
+    expect(baseDeep.toolNames).toContain('update_plan_status')
+    expect(baseDeep.toolNames).toContain('get_change_review_bundle')
 
     // editor is required for the gate repair loop (spawned on validation
     // failure). code-reviewer runs the reviewer half of the gate.
@@ -905,6 +907,139 @@ describe('base-deep gate lifecycle parity with base2', () => {
       touchedFiles: ['src/a.ts'],
       pendingGateFiles: ['src/a.ts'],
     })
+  })
+})
+
+describe('base2 resume safety: persisted unlockedToolTiers cannot narrow the surface', () => {
+  // progressiveToolDisclosure is pinned false, so getEffectiveAgentToolNames
+  // returns template.toolNames unchanged even when an older session persisted a
+  // NON-EMPTY agentState.unlockedToolTiers — fail-closed by construction, with
+  // no per-step clearer to forget. Contract:
+  // packages/agent-runtime/src/util/base2-tool-tiers.ts.
+  // createBase2 returns the authoring-time SecretAgentDefinition shape
+  // (JSON-schema inputSchema, no id), so the structural conversion to the
+  // runtime AgentTemplate goes through `unknown`. The annotated return type is
+  // what matters: getEffectiveAgentToolNames stays typechecked against
+  // AgentTemplate instead of silently accepting a drifted shape via `any`.
+  const asTemplate = (base2: ReturnType<typeof createBase2>): AgentTemplate =>
+    ({ ...base2, id: 'base2' }) as unknown as AgentTemplate
+
+  test('every mode publishes progressiveToolDisclosure: false (runtime tier filtering off)', () => {
+    const agents = [
+      createBase2('default'),
+      createBase2('fast'),
+      createBase2('default', { planOnly: true }),
+      createBase2('default', { executePlan: true }),
+      // The published runtime-filtering key is false for every mode, and also
+      // when the caller narrows the static surface with `unlockedTiers`.
+      createBase2('default', { unlockedTiers: [] }),
+      createBase2('default', { unlockedTiers: ['implement'] }),
+    ]
+    for (const base2 of agents) {
+      expect(base2.programmaticConfig).toMatchObject({
+        progressiveToolDisclosure: false,
+      })
+    }
+  })
+
+  test('a stale non-empty unlockedToolTiers leaves the full surface intact', () => {
+    const base2 = createBase2('default')
+    for (const staleTiers of [
+      ['implement'],
+      ['audit'],
+      ['implement', 'audit'],
+    ]) {
+      const effective = getEffectiveAgentToolNames(asTemplate(base2), {
+        unlockedToolTiers: staleTiers,
+      } as any)
+      expect(effective).toEqual(base2.toolNames ?? [])
+      expect(effective).toContain('edit_transaction')
+      expect(effective).toContain('kill_job')
+      expect(effective).toContain('read_image')
+    }
+  })
+
+  test('handleSteps does not depend on clearing tiers at each yielded step', () => {
+    const base2 = createBase2('default')
+    const staleTiers = ['implement']
+    const agentState: Record<string, unknown> = {
+      agentId: 'base2',
+      unlockedToolTiers: staleTiers,
+    }
+    const generator = base2.handleSteps!({
+      agentState,
+      prompt: 'Make the requested change now please',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(generator.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      generator.next({
+        toolResult: [{ type: 'json', value: { status: '' } }],
+      } as any).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    expect(generator.next({ toolResult: [] } as any).value).toBe('STEP')
+
+    // No per-step mutation of the persisted list is performed or needed...
+    expect(agentState.unlockedToolTiers).toBe(staleTiers)
+    // ...because the surface offered to the model is unaffected by it.
+    const effective = getEffectiveAgentToolNames(
+      asTemplate(base2),
+      agentState as any,
+    )
+    expect(effective).toEqual(base2.toolNames ?? [])
+    expect(effective).toContain('edit_transaction')
+    expect(effective).toContain('kill_job')
+    expect(effective).toContain('read_image')
+  })
+
+  test('conversational fast path also leaves persisted tiers untouched', () => {
+    const base2 = createBase2('default')
+    const staleTiers = ['audit']
+    const agentState: Record<string, unknown> = {
+      agentId: 'base2',
+      unlockedToolTiers: staleTiers,
+    }
+    const generator = base2.handleSteps!({
+      agentState,
+      prompt: 'Hello.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(generator.next().value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    expect(generator.next({ toolResult: [] } as any).value).toBe('STEP')
+    expect(agentState.unlockedToolTiers).toBe(staleTiers)
+    expect(
+      getEffectiveAgentToolNames(asTemplate(base2), agentState as any),
+    ).toEqual(base2.toolNames ?? [])
+  })
+
+  test('an absent unlockedToolTiers is never introduced by handleSteps', () => {
+    const base2 = createBase2('default')
+    const absentState: Record<string, unknown> = { agentId: 'base2' }
+    const absentGenerator = base2.handleSteps!({
+      agentState: absentState,
+      prompt: 'Hello.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(absentGenerator.next().value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    expect(absentGenerator.next({ toolResult: [] } as any).value).toBe('STEP')
+    // Never introduced — not even as undefined or [].
+    expect(
+      Object.prototype.hasOwnProperty.call(absentState, 'unlockedToolTiers'),
+    ).toBe(false)
   })
 })
 
@@ -6152,10 +6287,11 @@ describe('base2 verification and reviewer gates', () => {
     expect(base2.stepPrompt).not.toContain(
       'Read STATUS.md and PLAN.md before acting',
     )
-    // edit_transaction and run_terminal_command are implement-tier, so they are
-    // absent from the CORE-only default surface (unlock only under implement).
+    // edit_transaction and run_terminal_command are implement-tier; every
+    // non-core tier is unlocked by default and executePlan opens the terminal
+    // mode gate, so both are on the execute-plan surface.
     for (const tool of ['edit_transaction', 'run_terminal_command'] as const) {
-      expect(base2.toolNames).not.toContain(tool)
+      expect(base2.toolNames).toContain(tool)
     }
     for (const tool of [
       'str_replace',

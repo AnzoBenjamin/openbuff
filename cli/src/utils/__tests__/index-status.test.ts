@@ -46,7 +46,7 @@ describe('formatIndexStatusChip', () => {
     })
   })
 
-  test('shows stale, failed, and ready chips', () => {
+  test('shows stale and failed chips, hides ready and degraded', () => {
     expect(
       formatIndexStatusChip({ state: 'stale', refreshing: false }),
     ).toEqual({
@@ -61,16 +61,10 @@ describe('formatIndexStatusChip', () => {
     })
     expect(
       formatIndexStatusChip({ state: 'ready', refreshing: false }),
-    ).toEqual({
-      label: 'idx ready',
-      tone: 'secondary',
-    })
+    ).toBeNull()
     expect(
       formatIndexStatusChip({ state: 'degraded', refreshing: false }),
-    ).toEqual({
-      label: 'idx ready',
-      tone: 'secondary',
-    })
+    ).toBeNull()
   })
 })
 

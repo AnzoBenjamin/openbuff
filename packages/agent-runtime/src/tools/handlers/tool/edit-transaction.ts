@@ -931,27 +931,45 @@ export const handleEditTransaction = (async (
         }
 
   if ('error' in transactionResult) {
-    const failureText = transactionResult.failures
-      .map((failure) => failure.errorMessage)
-      .join('\n')
-    const requiresFreshCapability =
-      transactionResult.failures.some(
-        (failure) =>
-          typeof failure.failureKind === 'string' &&
-          failure.failureKind.startsWith('capability'),
-      ) ||
-      /different project, path, or agent run|Invalid basedOnRead|readCapability-covered (?:symbol )?content is stale|normalized capability metadata does not match|readCapability does not cover the exact original symbol replacement span/i.test(
-        failureText,
-      )
-    const isMatchOrAtomicAbort =
-      transactionResult.failures.some(
-        (failure) =>
-          failure.failureKind === 'no_match' ||
-          failure.failureKind === 'preflight_failed',
-      ) ||
-      /not an exact contiguous match|Atomic str_replace batch aborted|Found \d+ occurrences of|only \d+ exact occurrence\(s\) of the oldString exist/i.test(
-        failureText,
-      )
+    // Single source of truth: processEditTransaction classifies every failure it
+    // reports, so the handler keys off failureKind only. Re-deriving these flags
+    // from failure prose would be a second copy of that classification (free to
+    // drift), and any error text that merely quotes a marker would be
+    // misclassified.
+    const failureKinds = transactionResult.failures.map(
+      (failure) => failure.failureKind,
+    )
+    const requiresFreshCapability = failureKinds.some(
+      (kind) => typeof kind === 'string' && kind.startsWith('capability'),
+    )
+    // An anchored scope mismatch is a per-path targeting mistake: the supplied
+    // capability was fresh, no file changed, and only the offending path's read
+    // scope is wrong. Narrow the invalidation blast radius so the other
+    // transaction targets keep their read authorization.
+    const isAnchorScopeMismatch = failureKinds.some(
+      (kind) => kind === 'anchor_scope_mismatch',
+    )
+    const isMatchOrAtomicAbort = failureKinds.some(
+      (kind) =>
+        kind === 'no_match' ||
+        kind === 'preflight_failed' ||
+        kind === 'anchor_scope_mismatch',
+    )
+    // Only the paths that actually failed with an anchored scope mismatch may
+    // keep the narrowed invalidation; a co-failing unrelated path must never be
+    // pulled in, even if a future result reports more than one failure.
+    const anchorScopeMismatchPaths = Array.from(
+      new Set(
+        transactionResult.failures
+          .filter((failure) => failure.failureKind === 'anchor_scope_mismatch')
+          .map((failure) => failure.path)
+          .filter((path) => Boolean(path)),
+      ),
+    )
+    const narrowInvalidationToFailingPaths =
+      isAnchorScopeMismatch &&
+      !requiresFreshCapability &&
+      anchorScopeMismatchPaths.length > 0
     // Match / atomic-batch aborts and capability failures both require one new
     // snapshot for every transaction target so multi-file retries cannot reuse
     // other paths from memory. Pure syntax failures never reach this branch.
@@ -971,15 +989,25 @@ export const handleEditTransaction = (async (
             input: { paths: uniquePaths },
             ...(isMatchOrAtomicAbort && !requiresFreshCapability
               ? {
-                  preferredStrategy: /replace_range with its readCapability|Do not reconstruct huge blocks from memory|No useful candidate ranges found/i.test(
-                    failureText,
-                  )
+                  // An anchored scope mismatch needs a capability that actually
+                  // covers the target lines, so replace_range beats a shorter
+                  // oldString. Same rule as buildTransactionRecovery, keyed off
+                  // the shared failureKind rather than a second prose regex.
+                  preferredStrategy: isAnchorScopeMismatch
                     ? ('replace_range' as const)
                     : ('smaller_oldString' as const),
                 }
               : {}),
           }
         : undefined)
+    const scopedRecovery =
+      recovery && narrowInvalidationToFailingPaths
+        ? {
+            ...recovery,
+            paths: anchorScopeMismatchPaths,
+            input: { paths: anchorScopeMismatchPaths },
+          }
+        : recovery
     const errorCode =
       transactionResult.errorCode ??
       (requiresFreshCapability
@@ -991,7 +1019,9 @@ export const handleEditTransaction = (async (
             : undefined)
     invalidatePreparedEditPaths({
       fileProcessingState,
-      paths: uniquePaths,
+      paths: narrowInvalidationToFailingPaths
+        ? anchorScopeMismatchPaths
+        : uniquePaths,
       revokeReadAuthorization: requiresFreshRead,
       requiresFreshRead,
       ...(requiresFreshRead
@@ -1004,11 +1034,15 @@ export const handleEditTransaction = (async (
         : {}),
     })
 
-    const multiTargetRecoveryProse = requiresFreshRead
+    const multiTargetRecoveryProse = narrowInvalidationToFailingPaths
       ? [
-          `Atomic recovery requires fresh read state for every transaction target in this run: ${uniquePaths.join(', ')}. Re-read all targets and rebuild the complete transaction from one coherent snapshot; do not refresh only the first failed path or replay any other stale token/oldString from memory.`,
+          `Only ${anchorScopeMismatchPaths.join(', ')} lost read authorization; every other transaction target retains valid read state. Re-read a range that contains the target lines for that path only, then resend the whole transaction because no files were changed.`,
         ]
-      : []
+      : requiresFreshRead
+        ? [
+            `Atomic recovery requires fresh read state for every transaction target in this run: ${uniquePaths.join(', ')}. Re-read all targets and rebuild the complete transaction from one coherent snapshot; do not refresh only the first failed path or replay any other stale token/oldString from memory.`,
+          ]
+        : []
 
     return {
       output: [
@@ -1021,7 +1055,7 @@ export const handleEditTransaction = (async (
             failures: transactionResult.failures,
             ...(requiresFreshRead && { requiresFreshRead: true }),
             ...(errorCode && { errorCode }),
-            ...(recovery && { recovery }),
+            ...(scopedRecovery && { recovery: scopedRecovery }),
           },
         },
       ],
@@ -1186,6 +1220,29 @@ export const handleEditTransaction = (async (
     }
   })
   clientChanges.sort((a, b) => a.index - b.index)
+
+  // Idempotent-cleanup contract: when every content edit resolved to an
+  // already-applied skipIfMissing deletion there is nothing for the client to
+  // apply. Report the preflight success and its skip messages instead of
+  // sending an empty change list, and leave read authorization state untouched
+  // because no file changed.
+  if (clientChanges.length === 0) {
+    return {
+      output: [
+        {
+          type: 'json',
+          value: {
+            message: transactionResult.message,
+            files: transactionResult.files.map((file) => ({
+              path: file.path,
+              patch: file.patch,
+              messages: file.messages,
+            })),
+          },
+        },
+      ],
+    }
+  }
 
   // Only paths that produced an actual client change can emit an `applied`
   // action, so scope the positive-evidence confirmation set to those paths.

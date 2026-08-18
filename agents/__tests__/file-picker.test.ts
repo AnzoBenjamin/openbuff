@@ -2,10 +2,7 @@ import { describe, test, expect } from 'bun:test'
 
 import filePicker, {
   createFilePicker,
-  extractSpawnResults,
-  extractAgentText,
   extractErrorMessage,
-  isObject,
 } from '../file-explorer/file-picker'
 
 import type { AgentState, ToolCall, StepText } from '../types/agent-definition'
@@ -50,7 +47,7 @@ describe('file-picker agent', () => {
     test('has spawn_agents tool', () => {
       expect(filePicker.toolNames).toContain('spawn_agents')
       expect(filePicker.toolNames).toContain('set_output')
-      expect(filePicker.programmaticToolNames).toEqual(['read_files'])
+      expect(filePicker.programmaticToolNames ?? []).not.toContain('read_files')
     })
 
     test('can spawn file-lister agent', () => {
@@ -186,7 +183,7 @@ describe('file-picker agent', () => {
       expect(stepText.text).toContain('Error')
     })
 
-    test('yields read_files with extracted paths from lastMessage format', () => {
+    test('yields set_output with extracted paths from lastMessage format', () => {
       const defaultPicker = createFilePicker()
       const mockAgentState = createMockAgentState()
       const mockLogger = createMockLogger()
@@ -230,13 +227,65 @@ describe('file-picker agent', () => {
 
       const result = generator.next(mockToolResult)
 
-      const toolCall = result.value as ToolCall<'read_files'>
-      expect(toolCall.toolName).toBe('read_files')
-      expect(toolCall.input.paths).toContain('src/auth.ts')
-      expect(toolCall.input.paths).toContain('src/login.ts')
+      const toolCall = result.value as ToolCall<'set_output'>
+      expect(toolCall.toolName).toBe('set_output')
+      const paths = toolCall.input.files.map((file: { path: string }) => file.path)
+      expect(paths).toContain('src/auth.ts')
+      expect(paths).toContain('src/login.ts')
     })
 
-    test('yields read_files with extracted paths from structuredOutput format', () => {
+    test('yields set_output with extracted paths from allMessages format', () => {
+      const defaultPicker = createFilePicker()
+      const mockAgentState = createMockAgentState()
+      const mockLogger = createMockLogger()
+
+      const generator = defaultPicker.handleSteps!({
+        agentState: mockAgentState,
+        logger: mockLogger as any,
+        params: {},
+      })
+
+      generator.next()
+
+      const mockToolResult = {
+        agentState: createMockAgentState(),
+        toolResult: [
+          {
+            type: 'json' as const,
+            value: [
+              {
+                agentName: 'File Lister',
+                agentType: 'file-lister',
+                value: {
+                  type: 'allMessages',
+                  value: [
+                    {
+                      role: 'user',
+                      content: [{ type: 'text', text: 'find files' }],
+                    },
+                    {
+                      role: 'assistant',
+                      content: [{ type: 'text', text: 'src/user.ts\nsrc/config.ts' }],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+        stepsComplete: true,
+      }
+
+      const result = generator.next(mockToolResult)
+
+      const toolCall = result.value as ToolCall<'set_output'>
+      expect(toolCall.toolName).toBe('set_output')
+      const paths = toolCall.input.files.map((file: { path: string }) => file.path)
+      expect(paths).toContain('src/user.ts')
+      expect(paths).toContain('src/config.ts')
+    })
+
+    test('yields set_output with extracted paths from structuredOutput format', () => {
       const defaultPicker = createFilePicker()
       const mockAgentState = createMockAgentState()
       const mockLogger = createMockLogger()
@@ -271,10 +320,11 @@ describe('file-picker agent', () => {
 
       const result = generator.next(mockToolResult)
 
-      const toolCall = result.value as ToolCall<'read_files'>
-      expect(toolCall.toolName).toBe('read_files')
-      expect(toolCall.input.paths).toContain('src/foo.ts')
-      expect(toolCall.input.paths).toContain('src/bar.ts')
+      const toolCall = result.value as ToolCall<'set_output'>
+      expect(toolCall.toolName).toBe('set_output')
+      const paths = toolCall.input.files.map((file: { path: string }) => file.path)
+      expect(paths).toContain('src/foo.ts')
+      expect(paths).toContain('src/bar.ts')
     })
 
     test('deduplicates paths from results', () => {
@@ -324,14 +374,14 @@ describe('file-picker agent', () => {
       const result = generator.next(mockToolResult)
 
       // Should deduplicate
-      const toolCall = result.value as ToolCall<'read_files'>
-      const paths = toolCall.input.paths
+      const toolCall = result.value as ToolCall<'set_output'>
+      const paths = toolCall.input.files.map((file: { path: string }) => file.path)
       expect(paths).toHaveLength(2)
       expect(paths).toContain('src/file.ts')
       expect(paths).toContain('src/other.ts')
     })
 
-    test('yields STEP after read_files', () => {
+    test('yields set_output without read_files', () => {
       const defaultPicker = createFilePicker()
       const mockAgentState = createMockAgentState()
       const mockLogger = createMockLogger()
@@ -369,12 +419,15 @@ describe('file-picker agent', () => {
         stepsComplete: true,
       }
 
-      // read_files yield
-      generator.next(mockToolResult)
-
-      // Next should be STEP
-      const result = generator.next()
-      expect(result.value).toBe('STEP')
+      const result = generator.next(mockToolResult)
+      const toolCall = result.value as ToolCall<'set_output'>
+      expect(toolCall.toolName).toBe('set_output')
+      expect(toolCall.includeToolCall).toBe(false)
+      expect(toolCall.input.files).toEqual([
+        { path: 'src/file.ts', summary: 'file.ts' },
+      ])
+      expect(result.done).toBe(false)
+      expect(generator.next().done).toBe(true)
     })
 
     test('handles error results from spawned agents', () => {
@@ -453,10 +506,52 @@ describe('file-picker agent', () => {
         ],
         stepsComplete: true,
       })
-      expect((result.value as ToolCall<'read_files'>).input.paths).toEqual([
-        'src/a.ts',
-        'src/b.ts',
-      ])
+      expect(
+        (result.value as ToolCall<'set_output'>).input.files.map(
+          (file: { path: string }) => file.path,
+        ),
+      ).toEqual(['src/a.ts', 'src/b.ts'])
+    })
+
+    test('rejects unsafe directory prefixes instead of rewriting them to project-relative scope', () => {
+      const generator = createFilePicker().handleSteps!({
+        agentState: createMockAgentState(),
+        logger: createMockLogger() as any,
+        params: { directories: ['src', '/etc'] },
+      })
+      generator.next()
+      const result = generator.next({
+        agentState: createMockAgentState(),
+        toolResult: [
+          {
+            type: 'json' as const,
+            value: [
+              {
+                value: {
+                  type: 'lastMessage',
+                  value: [
+                    {
+                      role: 'assistant',
+                      content: [
+                        {
+                          type: 'text',
+                          text: 'src/a.ts\netc/passwd.ts',
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+        stepsComplete: true,
+      })
+      expect(
+        (result.value as ToolCall<'set_output'>).input.files.map(
+          (file: { path: string }) => file.path,
+        ),
+      ).toEqual(['src/a.ts'])
     })
 
     test('enforces requested directory scope on returned candidates', () => {
@@ -493,9 +588,53 @@ describe('file-picker agent', () => {
         ],
         stepsComplete: true,
       })
-      expect((result.value as ToolCall<'read_files'>).input.paths).toEqual([
-        'packages/sdk/a.ts',
-      ])
+      expect(
+        (result.value as ToolCall<'set_output'>).input.files.map(
+          (file: { path: string }) => file.path,
+        ),
+      ).toEqual(['packages/sdk/a.ts'])
+    })
+
+    test('uses a scope-specific message when every safe path is outside requested directories', () => {
+      const generator = createFilePicker().handleSteps!({
+        agentState: createMockAgentState(),
+        logger: createMockLogger() as any,
+        params: { directories: ['packages/sdk'] },
+      })
+      generator.next()
+      const result = generator.next({
+        agentState: createMockAgentState(),
+        toolResult: [
+          {
+            type: 'json' as const,
+            value: [
+              {
+                value: {
+                  type: 'lastMessage',
+                  value: [
+                    {
+                      role: 'assistant',
+                      content: [
+                        {
+                          type: 'text',
+                          text: 'cli/src/outside.ts\nweb/app.ts',
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+        stepsComplete: true,
+      })
+      const stepText = result.value as StepText
+      expect(stepText.type).toBe('STEP_TEXT')
+      expect(stepText.text).toBe(
+        'No file paths were found within the requested directories.',
+      )
+      expect(stepText.text).not.toContain('No safe project-relative file paths')
     })
 
     const spawnFileListResult = (text: string) => ({
@@ -523,7 +662,24 @@ describe('file-picker agent', () => {
       stepsComplete: true,
     })
 
-    // C1.9: reject path traversal and absolute-outside-cwd before read_files.
+    // C1.9: reject path traversal and absolute-outside-cwd before set_output.
+    test('keeps filenames that contain adjacent dots but not a .. path segment', () => {
+      const generator = createFilePicker().handleSteps!({
+        agentState: createMockAgentState(),
+        logger: createMockLogger() as any,
+        params: {},
+      })
+      generator.next()
+      const result = generator.next(
+        spawnFileListResult('src/foo..bar.ts\nsrc/ok.ts'),
+      )
+      expect(
+        (result.value as ToolCall<'set_output'>).input.files.map(
+          (file: { path: string }) => file.path,
+        ),
+      ).toEqual(['src/foo..bar.ts', 'src/ok.ts'])
+    })
+
     test('rejects ../ traversal paths and keeps sibling project files', () => {
       const generator = createFilePicker().handleSteps!({
         agentState: createMockAgentState(),
@@ -534,10 +690,11 @@ describe('file-picker agent', () => {
       const result = generator.next(
         spawnFileListResult('src/safe.ts\n../secret.ts\nsrc/also-safe.ts'),
       )
-      const toolCall = result.value as ToolCall<'read_files'>
-      expect(toolCall.toolName).toBe('read_files')
-      expect(toolCall.input.paths).toEqual(['src/safe.ts', 'src/also-safe.ts'])
-      expect(toolCall.input.paths).not.toContain('../secret.ts')
+      const toolCall = result.value as ToolCall<'set_output'>
+      expect(toolCall.toolName).toBe('set_output')
+      const paths = toolCall.input.files.map((file: { path: string }) => file.path)
+      expect(paths).toEqual(['src/safe.ts', 'src/also-safe.ts'])
+      expect(paths).not.toContain('../secret.ts')
     })
 
     test('rejects absolute paths outside the project cwd', () => {
@@ -550,14 +707,15 @@ describe('file-picker agent', () => {
       const result = generator.next(
         spawnFileListResult('src/ok.ts\n/tmp/outside-cwd.ts\n/etc/passwd.ts'),
       )
-      const toolCall = result.value as ToolCall<'read_files'>
-      expect(toolCall.toolName).toBe('read_files')
-      expect(toolCall.input.paths).toEqual(['src/ok.ts'])
-      expect(toolCall.input.paths).not.toContain('/tmp/outside-cwd.ts')
-      expect(toolCall.input.paths).not.toContain('/etc/passwd.ts')
+      const toolCall = result.value as ToolCall<'set_output'>
+      expect(toolCall.toolName).toBe('set_output')
+      const paths = toolCall.input.files.map((file: { path: string }) => file.path)
+      expect(paths).toEqual(['src/ok.ts'])
+      expect(paths).not.toContain('/tmp/outside-cwd.ts')
+      expect(paths).not.toContain('/etc/passwd.ts')
     })
 
-    test('yields STEP_TEXT and skips read_files when every path is unsafe', () => {
+    test('yields STEP_TEXT and skips set_output when every path is unsafe', () => {
       const generator = createFilePicker().handleSteps!({
         agentState: createMockAgentState(),
         logger: createMockLogger() as any,
@@ -571,7 +729,7 @@ describe('file-picker agent', () => {
       expect(stepText.type).toBe('STEP_TEXT')
       expect(stepText.text).toContain('No safe project-relative file paths')
       expect((result.value as { toolName?: string }).toolName).not.toBe(
-        'read_files',
+        'set_output',
       )
     })
 
@@ -593,9 +751,11 @@ describe('file-picker agent', () => {
       const result = generator.next(
         spawnFileListResult('src/in-scope.ts\nlib/out-of-scope.ts\n../escape.ts'),
       )
-      expect((result.value as ToolCall<'read_files'>).input.paths).toEqual([
-        'src/in-scope.ts',
-      ])
+      expect(
+        (result.value as ToolCall<'set_output'>).input.files.map(
+          (file: { path: string }) => file.path,
+        ),
+      ).toEqual(['src/in-scope.ts'])
       const traversalLogs = debugMessages.filter((message) =>
         message.includes('outside project root or containing traversal'),
       )
@@ -677,9 +837,9 @@ describe('file-picker agent', () => {
 
       const result = generator.next(mockToolResult)
 
-      const toolCall = result.value as ToolCall<'read_files'>
-      expect(toolCall.toolName).toBe('read_files')
-      const paths = toolCall.input.paths
+      const toolCall = result.value as ToolCall<'set_output'>
+      expect(toolCall.toolName).toBe('set_output')
+      const paths = toolCall.input.files.map((file: { path: string }) => file.path)
       // auth-bearing paths score higher than unrelated/utils paths.
       expect(paths[0]).toBe('src/auth/login.ts')
       expect(paths[1]).toBe('src/auth/session.ts')
@@ -735,9 +895,9 @@ describe('file-picker agent', () => {
 
       const result = generator.next(mockToolResult)
 
-      const toolCall = result.value as ToolCall<'read_files'>
-      expect(toolCall.toolName).toBe('read_files')
-      expect(toolCall.input.paths).toHaveLength(8)
+      const toolCall = result.value as ToolCall<'set_output'>
+      expect(toolCall.toolName).toBe('set_output')
+      expect(toolCall.input.files).toHaveLength(8)
     })
   })
 
@@ -787,9 +947,11 @@ describe('file-picker agent', () => {
         stepsComplete: true,
       })
 
-      const toolCall = result.value as ToolCall<'read_files'>
-      expect(toolCall.toolName).toBe('read_files')
-      expect(toolCall.input.paths).toEqual(['src/isolated.ts'])
+      const toolCall = result.value as ToolCall<'set_output'>
+      expect(toolCall.toolName).toBe('set_output')
+      expect(
+        toolCall.input.files.map((file: { path: string }) => file.path),
+      ).toEqual(['src/isolated.ts'])
     })
   })
 
@@ -833,146 +995,6 @@ describe('file-picker agent', () => {
     })
   })
 
-  describe('extractAgentText', () => {
-    test('extracts text from lastMessage format', () => {
-      const result = extractAgentText({
-        type: 'lastMessage',
-        value: [
-          {
-            role: 'assistant',
-            content: [{ type: 'text', text: 'src/auth.ts\nsrc/login.ts' }],
-          },
-        ],
-      })
-      expect(result).toBe('src/auth.ts\nsrc/login.ts')
-    })
-
-    test('extracts text from allMessages format', () => {
-      const result = extractAgentText({
-        type: 'allMessages',
-        value: [
-          { role: 'user', content: [{ type: 'text', text: 'find files' }] },
-          {
-            role: 'assistant',
-            content: [{ type: 'text', text: 'src/user.ts\nsrc/config.ts' }],
-          },
-        ],
-      })
-      expect(result).toBe('src/user.ts\nsrc/config.ts')
-    })
-
-    test('extracts text from structuredOutput with string value', () => {
-      const result = extractAgentText({
-        type: 'structuredOutput',
-        value: 'src/foo.ts\nsrc/bar.ts',
-      })
-      expect(result).toBe('src/foo.ts\nsrc/bar.ts')
-    })
-
-    test('extracts text from structuredOutput with message field', () => {
-      const result = extractAgentText({
-        type: 'structuredOutput',
-        value: { message: 'src/baz.ts\nsrc/qux.ts' },
-      })
-      expect(result).toBe('src/baz.ts\nsrc/qux.ts')
-    })
-
-    test('extracts text from structuredOutput with text field', () => {
-      const result = extractAgentText({
-        type: 'structuredOutput',
-        value: { text: 'src/a.ts\nsrc/b.ts' },
-      })
-      expect(result).toBe('src/a.ts\nsrc/b.ts')
-    })
-
-    test('extracts text from structuredOutput with content field', () => {
-      const result = extractAgentText({
-        type: 'structuredOutput',
-        value: { content: 'src/c.ts\nsrc/d.ts' },
-      })
-      expect(result).toBe('src/c.ts\nsrc/d.ts')
-    })
-
-    test('extracts text from structuredOutput with output field', () => {
-      const result = extractAgentText({
-        type: 'structuredOutput',
-        value: { output: 'src/e.ts\nsrc/f.ts' },
-      })
-      expect(result).toBe('src/e.ts\nsrc/f.ts')
-    })
-
-    test('extracts text from structuredOutput with response field', () => {
-      const result = extractAgentText({
-        type: 'structuredOutput',
-        value: { response: 'src/g.ts\nsrc/h.ts' },
-      })
-      expect(result).toBe('src/g.ts\nsrc/h.ts')
-    })
-
-    test('extracts text from direct string', () => {
-      const result = extractAgentText('src/direct.ts\nsrc/string.ts')
-      expect(result).toBe('src/direct.ts\nsrc/string.ts')
-    })
-
-    test('returns null for null input', () => {
-      expect(extractAgentText(null)).toBeNull()
-    })
-
-    test('returns null for undefined input', () => {
-      expect(extractAgentText(undefined)).toBeNull()
-    })
-
-    test('returns null for unknown type', () => {
-      const result = extractAgentText({
-        type: 'unknown',
-        value: 'some value',
-      })
-      expect(result).toBeNull()
-    })
-
-    test('returns null for structuredOutput with no text fields', () => {
-      const result = extractAgentText({
-        type: 'structuredOutput',
-        value: { unrelated: true, count: 42 },
-      })
-      expect(result).toBeNull()
-    })
-  })
-
-  describe('extractSpawnResults', () => {
-    test('extracts agent values from json tool result', () => {
-      const results = extractSpawnResults([
-        {
-          type: 'json',
-          value: [
-            {
-              agentName: 'Test',
-              agentType: 'file-lister',
-              value: { type: 'lastMessage', value: [] },
-            },
-          ],
-        },
-      ])
-
-      expect(results).toHaveLength(1)
-      expect(results[0]).toEqual({ type: 'lastMessage', value: [] })
-    })
-
-    test('returns empty array for empty input', () => {
-      expect(extractSpawnResults([])).toEqual([])
-    })
-
-    test('returns empty array for undefined input', () => {
-      expect(extractSpawnResults(undefined)).toEqual([])
-    })
-
-    test('returns empty array when no json result found', () => {
-      expect(extractSpawnResults([{ type: 'string', value: 'hello' }])).toEqual(
-        [],
-      )
-    })
-  })
-
   describe('extractErrorMessage', () => {
     test('extracts message from error result', () => {
       expect(
@@ -995,25 +1017,4 @@ describe('file-picker agent', () => {
     })
   })
 
-  describe('isObject', () => {
-    test('returns true for plain objects', () => {
-      expect(isObject({ a: 1 })).toBe(true)
-    })
-
-    test('returns false for arrays', () => {
-      expect(isObject([1, 2, 3])).toBe(false)
-    })
-
-    test('returns false for null', () => {
-      expect(isObject(null)).toBe(false)
-    })
-
-    test('returns false for strings', () => {
-      expect(isObject('hello')).toBe(false)
-    })
-
-    test('returns false for numbers', () => {
-      expect(isObject(42)).toBe(false)
-    })
-  })
 })

@@ -17,6 +17,7 @@ import {
   handleWriteFile,
   normalizeToolPath,
 } from '../tools/handlers/tool/write-file'
+import { processEditTransaction } from '../process-edit-transaction'
 import {
   encodeReadCapabilityToken,
   getContentHash,
@@ -36,6 +37,7 @@ import type {
 } from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { AgentTemplate } from '../templates/types'
+import { strReplaceParams } from '@codebuff/common/tools/params/tool/str-replace'
 
 const logger: Logger = {
   debug: () => {},
@@ -1154,6 +1156,124 @@ describe('read_files edit-state recovery', () => {
     }
     expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
     expect(fileProcessingState.promisesByPath[path]).toBeUndefined()
+  })
+
+  it('returns skip messages without calling the client when every str_replace replacement is an already-applied deletion', async () => {
+    const path = 'src/idempotent.ts'
+    const diskContent = 'export const value = 1\n'
+    const fileProcessingState = createFileProcessingState()
+    const clientToolCalls: any[] = []
+
+    const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'all-skip-replace',
+        toolName: 'str_replace',
+        input: {
+          path,
+          replacements: [
+            {
+              oldString: 'console.log("debug")\n',
+              newString: '',
+              allowMultiple: false,
+              skipIfMissing: true,
+            },
+          ],
+        },
+      },
+      fileProcessingState,
+      logger,
+      requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+        filePath === path ? diskContent : null,
+      requestClientToolCall: async (toolCall: any) => {
+        clientToolCalls.push(toolCall)
+        return []
+      },
+      writeToClient: () => {},
+    } as any)
+
+    // A pure no-op must never issue a client write (an empty patch would be
+    // sent as a whole-file write of the unchanged content).
+    expect(clientToolCalls).toHaveLength(0)
+    expect(result.output[0]?.type).toBe('json')
+    if (result.output[0]?.type === 'json') {
+      const value = result.output[0].value as {
+        file?: string
+        message?: string
+        errorMessage?: string
+        patch?: string
+      }
+      expect(value.file).toBe(path)
+      expect(value.errorMessage).toBeUndefined()
+      expect(value.patch).toBeUndefined()
+      expect(value.message).toContain(
+        'Skipped already-applied str_replace deletion',
+      )
+    }
+    expect(
+      fileProcessingState.failedEditRequiresReadByPath[path],
+    ).toBeUndefined()
+  })
+
+  it('calls the client with the applied content when a str_replace batch mixes an already-applied deletion with a real replacement', async () => {
+    const path = 'src/mixed-idempotent.ts'
+    const diskContent = 'export const value = 1\n'
+    const appliedContent = 'export const value = 2\n'
+    const fileProcessingState = createFileProcessingState()
+    const clientToolCalls: any[] = []
+
+    const result = await handleStrReplace({ ...defaultTestHandlerAuthority,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'mixed-skip-replace',
+        toolName: 'str_replace',
+        input: {
+          path,
+          replacements: [
+            {
+              // Already applied: the oldString is absent, so this is a no-op.
+              oldString: 'console.log("debug")\n',
+              newString: '',
+              allowMultiple: false,
+              skipIfMissing: true,
+            },
+            {
+              // Really applies: the co-present skip must not discard it.
+              oldString: 'export const value = 1',
+              newString: 'export const value = 2',
+              allowMultiple: false,
+            },
+          ],
+        },
+      },
+      fileProcessingState,
+      logger,
+      requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+        filePath === path ? diskContent : null,
+      requestClientToolCall: async (toolCall: any) => {
+        clientToolCalls.push(toolCall)
+        return confirmedMutationOutput(toolCall, {
+          [path]: appliedContent,
+        })
+      },
+      writeToClient: () => {},
+    } as any)
+
+    // The co-present real change must reach the client with its applied content.
+    expect(clientToolCalls).toHaveLength(1)
+    expect(clientToolCalls[0].input.path).toBe(path)
+    expect(clientToolCalls[0].input.content).toContain(
+      '+export const value = 2',
+    )
+    expect(result.output[0]?.type).toBe('json')
+    if (result.output[0]?.type === 'json') {
+      const value = result.output[0].value as {
+        errorMessage?: string
+        message?: string
+      }
+      expect(value.errorMessage).toBeUndefined()
+      expect(value.message ?? '').not.toContain('No file changes were applied')
+    }
   })
 
   it('preserves authorization when the client explicitly rejects str_replace without applying', async () => {
@@ -7332,6 +7452,126 @@ describe('read_files edit-state recovery', () => {
         expect(String(value.errorMessage)).toContain(pathB)
       }
     })
+
+    it('anchored scope mismatch narrows invalidation to the failing path only', async () => {
+      // A fresh-but-wrong-window basedOnRead is a per-path targeting mistake:
+      // no file changed and only the offending path's read scope is wrong, so
+      // the peer target must keep its read authorization and the prose must not
+      // demand fresh reads for every transaction target.
+      const pathA = 'src/anchor-scope-a.ts'
+      const pathB = 'src/anchor-scope-b.ts'
+      const contentA =
+        ['export const first = 1', 'export const second = 2', 'export const target = 3'].join(
+          '\n',
+        ) + '\n'
+      const contentB = 'export const peer = 1\n'
+      const runId = 'anchor-scope-mismatch-narrow-run'
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.strictReadBeforeEdit = true
+      fileProcessingState.readAuthorizationsByPath = {
+        [pathA]: true,
+        [pathB]: true,
+      }
+      fileProcessingState.readAuthorizationHashesByPath = {
+        [pathA]: getContentHash(contentA),
+        [pathB]: getContentHash(contentB),
+      }
+      // Fresh capability covering ONLY line 1 of pathA, while the oldString
+      // lives on line 3.
+      const wrongWindowCapability = encodeReadCapabilityToken({
+        startLine: 1,
+        endLine: 1,
+        hash: getContentHash('export const first = 1'),
+        scope: { projectId: mockFileContext.projectRoot, path: pathA, runId },
+      })
+      const wholeFileCapabilityB = encodeReadCapabilityToken({
+        startLine: 1,
+        endLine: contentB.split('\n').length,
+        hash: getContentHash(contentB),
+        scope: { projectId: mockFileContext.projectRoot, path: pathB, runId },
+      })
+
+      let clientCalls = 0
+      const result = await handleEditTransaction({
+        ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'anchor-scope-mismatch-narrow-tx',
+          toolName: 'edit_transaction',
+          input: {
+            edits: [
+              {
+                type: 'str_replace',
+                path: pathA,
+                replacements: [
+                  {
+                    oldString: 'export const target = 3',
+                    newString: 'export const target = 4',
+                    allowMultiple: false,
+                    basedOnRead: wrongWindowCapability,
+                  },
+                ],
+              },
+              {
+                type: 'str_replace',
+                path: pathB,
+                replacements: [
+                  {
+                    oldString: 'export const peer = 1',
+                    newString: 'export const peer = 2',
+                    allowMultiple: false,
+                    basedOnRead: wholeFileCapabilityB,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        fileProcessingState,
+        fileContext: mockFileContext,
+        runId,
+        logger,
+        requestOptionalFile: async ({ filePath }: { filePath: string }) => {
+          if (filePath === pathA) return contentA
+          if (filePath === pathB) return contentB
+          return null
+        },
+        requestClientToolCall: async () => {
+          clientCalls += 1
+          throw new Error('must not apply an anchored scope mismatch')
+        },
+      } as any)
+
+      expect(clientCalls).toBe(0)
+      expect(fileProcessingState.failedEditRequiresReadByPath[pathA]).toBe(true)
+      // The peer target keeps valid read state: no blast-radius revocation.
+      expect(
+        fileProcessingState.failedEditRequiresReadByPath[pathB],
+      ).toBeFalsy()
+      expect(fileProcessingState.readAuthorizationsByPath?.[pathB]).toBeDefined()
+
+      const output = result.output[0]
+      expect(output.type).toBe('json')
+      if (output.type === 'json') {
+        const value = output.value as {
+          errorMessage?: string
+          errorCode?: string
+          recovery?: { paths?: string[]; preferredStrategy?: string }
+          failures?: Array<{ failureKind?: string }>
+        }
+        expect(String(value.errorMessage)).toContain('lost read authorization')
+        expect(String(value.errorMessage)).toContain(
+          'every other transaction target retains valid read state',
+        )
+        expect(String(value.errorMessage)).not.toContain(
+          'Atomic recovery requires fresh read state for every transaction target',
+        )
+        expect(value.errorCode).toBe('no_match')
+        expect(value.recovery?.preferredStrategy).toBe('replace_range')
+        expect(value.recovery?.paths).toEqual([pathA])
+        expect(value.failures?.[0]?.failureKind).toBe('anchor_scope_mismatch')
+      }
+    })
   })
 })
 
@@ -8038,5 +8278,338 @@ describe('processStream cross-turn read-before-edit', () => {
     expect(agentState.editRereadRequirementsByPath?.[targetPath]?.reason).toBe(
       'context_compacted',
     )
+  })
+})
+
+describe('edit_transaction idempotent skipIfMissing deletions', () => {
+  it('reports a single-edit all-skip transaction as a successful no-op instead of an error', async () => {
+    const path = 'src/idempotent-cleanup.ts'
+    const diskContent = 'export const value = 1\n'
+
+    const result = await processEditTransaction({
+      edits: [
+        {
+          type: 'str_replace',
+          path,
+          replacements: [
+            {
+              oldString: 'console.log("already removed")\n',
+              newString: '',
+              allowMultiple: false,
+              skipIfMissing: true,
+            },
+          ],
+        },
+      ],
+      initialContentByPath: new Map([[path, diskContent]]),
+      logger,
+    })
+
+    expect('error' in result).toBe(false)
+    if ('files' in result) {
+      expect(result.files).toEqual([])
+      expect(result.message).toContain('already-applied skipIfMissing deletion')
+      expect(result.message).toContain(path)
+    }
+  })
+
+  it('rejects skipIfMissing with a non-empty newString in the edit_transaction schema', () => {
+    const parsed = editTransactionParams.inputSchema.safeParse({
+      edits: [
+        {
+          type: 'str_replace',
+          path: 'src/idempotent-cleanup.ts',
+          replacements: [
+            {
+              oldString: 'export const value = 1',
+              newString: 'export const value = 2',
+              skipIfMissing: true,
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) {
+      expect(
+        parsed.error.issues.some((issue) =>
+          issue.message.includes(
+            'skipIfMissing is only valid for deletion replacements with an empty newString',
+          ),
+        ),
+      ).toBe(true)
+    }
+  })
+
+  it('accepts skipIfMissing on a deletion replacement in the edit_transaction schema', () => {
+    const parsed = editTransactionParams.inputSchema.safeParse({
+      edits: [
+        {
+          type: 'str_replace',
+          path: 'src/idempotent-cleanup.ts',
+          replacements: [
+            {
+              oldString: 'console.log("already removed")\n',
+              newString: '',
+              skipIfMissing: true,
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(parsed.success).toBe(true)
+  })
+
+  it('drives handleEditTransaction through the zero-change guard without calling the client or touching read state', async () => {
+    const path = 'src/idempotent-cleanup.ts'
+    const diskContent = 'export const value = 1\n'
+    const fileProcessingState = createFileProcessingState()
+    fileProcessingState.strictReadBeforeEdit = true
+    fileProcessingState.readAuthorizationsByPath = { [path]: true }
+    fileProcessingState.readAuthorizationHashesByPath = {
+      [path]: getContentHash(diskContent),
+    }
+    let clientCalls = 0
+
+    const transactionResult = await handleEditTransaction({
+      ...defaultTestHandlerAuthority,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'transaction-all-skip',
+        toolName: 'edit_transaction',
+        input: {
+          edits: [
+            {
+              type: 'str_replace',
+              path,
+              replacements: [
+                {
+                  oldString: 'console.log("already removed")\n',
+                  newString: '',
+                  allowMultiple: false,
+                  skipIfMissing: true,
+                },
+              ],
+            },
+          ],
+        },
+      },
+      fileProcessingState,
+      logger,
+      requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+        filePath === path ? diskContent : null,
+      requestClientToolCall: async () => {
+        clientCalls += 1
+        throw new Error('an all-skip transaction must not reach the client')
+      },
+    } as any)
+
+    expect(clientCalls).toBe(0)
+    const output = transactionResult.output[0]
+    expect(output.type).toBe('json')
+    if (output.type === 'json') {
+      const value = output.value as { message?: string; files?: unknown[] }
+      expect(value).not.toHaveProperty('errorMessage')
+      expect(value.message).toContain('already-applied skipIfMissing deletion')
+      expect(value.message).toContain(path)
+      expect(value.files).toEqual([])
+    }
+    // Nothing changed on disk, so neither reread markers nor the seeded
+    // read authorization may be disturbed by the zero-change guard.
+    expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBeFalsy()
+    expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
+    expect(
+      fileProcessingState.editRereadRequirementsByPath?.[path],
+    ).toBeUndefined()
+  })
+
+  it('skips already-applied deletion edits inside a transaction while another path still changes', async () => {
+    const skippedPath = 'src/idempotent-cleanup.ts'
+    const changedPath = 'src/helper.ts'
+
+    const result = await processEditTransaction({
+      edits: [
+        {
+          type: 'str_replace',
+          path: skippedPath,
+          replacements: [
+            {
+              oldString: 'console.log("already removed")\n',
+              newString: '',
+              allowMultiple: false,
+              skipIfMissing: true,
+            },
+          ],
+        },
+        {
+          type: 'str_replace',
+          path: changedPath,
+          replacements: [
+            {
+              oldString: 'export const value = 1',
+              newString: 'export const value = 2',
+              allowMultiple: false,
+            },
+          ],
+        },
+      ],
+      initialContentByPath: new Map([
+        [skippedPath, 'export const value = 1\n'],
+        [changedPath, 'export const value = 1\n'],
+      ]),
+      logger,
+    })
+
+    expect('error' in result).toBe(false)
+    if ('files' in result) {
+      expect(result.files.map((file) => file.path)).toEqual([changedPath])
+      expect(result.files[0]?.patch).toContain('+export const value = 2')
+      // The skipped path produces no files[] entry, so its skip message must
+      // still be appended to the mixed-transaction success message.
+      expect(result.message).toContain(
+        'Skipped already-applied str_replace deletion',
+      )
+      expect(result.message).toContain(skippedPath)
+    }
+  })
+
+  it('does not claim every edit was a skipIfMissing deletion when a co-present content edit merely produced no diff', async () => {
+    const skippedPath = 'src/idempotent-cleanup.ts'
+    const identicalPath = 'src/unchanged.ts'
+    const identicalContent = 'export const value = 1\n'
+
+    const result = await processEditTransaction({
+      edits: [
+        {
+          type: 'str_replace',
+          path: skippedPath,
+          replacements: [
+            {
+              oldString: 'console.log("already removed")\n',
+              newString: '',
+              allowMultiple: false,
+              skipIfMissing: true,
+            },
+          ],
+        },
+        {
+          type: 'write_file',
+          path: identicalPath,
+          content: identicalContent,
+        },
+      ],
+      initialContentByPath: new Map([
+        [skippedPath, 'export const value = 1\n'],
+        [identicalPath, identicalContent],
+      ]),
+      logger,
+    })
+
+    expect('error' in result).toBe(false)
+    if ('files' in result) {
+      expect(result.files).toEqual([])
+      // A byte-identical write_file is not an already-applied skipIfMissing
+      // deletion, so the zero-change success message must not claim that every
+      // requested edit resolved to one.
+      expect(result.message).not.toContain(
+        'every requested edit was an already-applied skipIfMissing deletion',
+      )
+      expect(result.message).toContain('no file changes; skipped paths:')
+      expect(result.message).toContain(skippedPath)
+      expect(result.message).toContain(
+        'Skipped already-applied str_replace deletion',
+      )
+    }
+  })
+
+  it('rejects skipIfMissing with a non-empty newString identically on the str_replace surface', () => {
+    const parsed = strReplaceParams.inputSchema.safeParse({
+      path: 'src/idempotent-cleanup.ts',
+      replacements: [
+        {
+          oldString: 'export const value = 1',
+          newString: 'export const value = 2',
+          skipIfMissing: true,
+        },
+      ],
+    })
+
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) {
+      expect(
+        parsed.error.issues.some((issue) =>
+          issue.message.includes(
+            'skipIfMissing is only valid for deletion replacements with an empty newString',
+          ),
+        ),
+      ).toBe(true)
+    }
+  })
+
+  it('rejects skipIfMissing with a non-empty newString on both declared provider surfaces', () => {
+    // The provider-declared shapes must never advertise a combination the input
+    // schemas reject, so they carry the same refinement.
+    const strReplaceParsed = strReplaceParams.providerInputSchema?.safeParse({
+      path: 'src/idempotent-cleanup.ts',
+      replacements: [
+        {
+          oldString: 'export const value = 1',
+          newString: 'export const value = 2',
+          skipIfMissing: true,
+        },
+      ],
+    })
+    expect(strReplaceParsed?.success).toBe(false)
+
+    const transactionParsed =
+      editTransactionParams.providerInputSchema?.safeParse({
+        edits: [
+          {
+            type: 'str_replace',
+            path: 'src/idempotent-cleanup.ts',
+            replacements: [
+              {
+                oldString: 'export const value = 1',
+                newString: 'export const value = 2',
+                skipIfMissing: true,
+              },
+            ],
+          },
+        ],
+      })
+    expect(transactionParsed?.success).toBe(false)
+
+    // A real deletion still parses on both provider surfaces.
+    expect(
+      strReplaceParams.providerInputSchema?.safeParse({
+        path: 'src/idempotent-cleanup.ts',
+        replacements: [
+          {
+            oldString: 'console.log("already removed")\n',
+            newString: '',
+            skipIfMissing: true,
+          },
+        ],
+      })?.success,
+    ).toBe(true)
+    expect(
+      editTransactionParams.providerInputSchema?.safeParse({
+        edits: [
+          {
+            type: 'str_replace',
+            path: 'src/idempotent-cleanup.ts',
+            replacements: [
+              {
+                oldString: 'console.log("already removed")\n',
+                newString: '',
+                skipIfMissing: true,
+              },
+            ],
+          },
+        ],
+      })?.success,
+    ).toBe(true)
   })
 })

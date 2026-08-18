@@ -1538,6 +1538,241 @@ function test3() {
     }
   })
 
+  it('reports an anchored scope mismatch when the fresh basedOnRead window does not contain oldString', async () => {
+    // Regression: a FRESH, hash-valid basedOnRead whose window does not contain
+    // oldString, while the oldString still EXISTS elsewhere in the file, must
+    // not be reported as a whole-file "not an exact contiguous match" (which
+    // wrongly claims the text changed/was removed and loops the model into
+    // re-reading the same window).
+    const lines = Array.from({ length: 1_001 }, (_, index) =>
+      index === 1_000 ? 'export const target = 1' : `const filler${index} = ${index};`,
+    )
+    const initialContent = lines.join('\n')
+    // Lines 1-10 are fresh, but the target lives at line 1001.
+    const windowContent = lines.slice(0, 10).join('\n')
+    const token = readCapability({
+      path: 'large.ts',
+      startLine: 1,
+      endLine: 10,
+      content: windowContent,
+    })
+
+    const result = await processStrReplace({
+      path: 'large.ts',
+      readCapabilityScope: readScope('large.ts'),
+      replacements: [
+        {
+          oldString: 'export const target = 1',
+          newString: 'export const target = 2',
+          allowMultiple: false,
+          basedOnRead: token,
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain(
+        'Anchored str_replace scope mismatch for large.ts',
+      )
+      expect(result.error).toContain('covers lines 1-10')
+      expect(result.error).toContain(
+        'oldString currently occurs at line(s): 1001-1001',
+      )
+      // The classification is a structured field; the sentinel token must never
+      // appear in model-facing prose (a copied oldString could contain it).
+      expect(result.failureKind).toBe('anchor_scope_mismatch')
+      expect(result.error).not.toContain('anchor_scope_mismatch')
+      expect(result.error).toContain(
+        'Do not re-read the same window and resend the identical oldString',
+      )
+      // The generic "text was changed/removed, re-read and copy it" guidance is
+      // suppressed: it would return the identical oldString forever.
+      expect(result.error).not.toContain(recoveryGuidance)
+      // The gate fires before tryMatchOldStr, so no fake no-match diagnostic.
+      expect(result.error).not.toContain('not an exact contiguous match')
+    }
+    expect('content' in result).toBe(false)
+  })
+
+  it('still reports the ordinary no-match diagnostic for a genuine anchored miss', async () => {
+    const lines = Array.from({ length: 1_001 }, (_, index) =>
+      index === 1_000 ? 'export const target = 1' : `const filler${index} = ${index};`,
+    )
+    const initialContent = lines.join('\n')
+    const windowContent = lines.slice(0, 10).join('\n')
+    const token = readCapability({
+      path: 'large.ts',
+      startLine: 1,
+      endLine: 10,
+      content: windowContent,
+    })
+
+    const result = await processStrReplace({
+      path: 'large.ts',
+      readCapabilityScope: readScope('large.ts'),
+      replacements: [
+        {
+          // Present nowhere in the file, so this is a real no-match.
+          oldString: 'export const absentEverywhere = 42',
+          newString: 'export const absentEverywhere = 43',
+          allowMultiple: false,
+          basedOnRead: token,
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('not an exact contiguous match')
+      expect(result.error).not.toContain('anchor_scope_mismatch')
+      expect(result.failureKind).toBeUndefined()
+    }
+  })
+
+  it('keeps the generic recovery guidance for a co-failing no-match in a mixed atomic batch', async () => {
+    // A single anchored scope mismatch must not suppress the recovery guidance
+    // that the genuine no-match beside it still needs, and a mixed batch must
+    // not be classified as a scope mismatch (which would narrow invalidation).
+    const lines = Array.from({ length: 1_001 }, (_, index) =>
+      index === 1_000 ? 'export const target = 1' : `const filler${index} = ${index};`,
+    )
+    const initialContent = lines.join('\n')
+    const windowContent = lines.slice(0, 10).join('\n')
+    const token = readCapability({
+      path: 'large.ts',
+      startLine: 1,
+      endLine: 10,
+      content: windowContent,
+    })
+
+    const result = await processStrReplace({
+      path: 'large.ts',
+      readCapabilityScope: readScope('large.ts'),
+      replacements: [
+        {
+          // Anchored scope mismatch: present in the file, outside the window.
+          oldString: 'export const target = 1',
+          newString: 'export const target = 2',
+          allowMultiple: false,
+          basedOnRead: token,
+        },
+        {
+          // Genuine no-match: present nowhere in the file.
+          oldString: 'export const absentEverywhere = 42',
+          newString: 'export const absentEverywhere = 43',
+          allowMultiple: false,
+          basedOnRead: token,
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('Anchored str_replace scope mismatch')
+      expect(result.error).toContain('not an exact contiguous match')
+      expect(result.error).toContain(recoveryGuidance)
+      expect(result.failureKind).toBeUndefined()
+    }
+  })
+
+  it('reports absolute candidate line numbers for an anchored no-match', async () => {
+    const lines = Array.from({ length: 1_001 }, (_, index) =>
+      index === 500
+        ? 'export function computeInvoiceTotal(order: Order) {'
+        : index === 501
+          ? '  const subtotal = order.subtotalCents'
+          : index === 502
+            ? '  const shipping = order.shippingCents'
+            : index === 503
+              ? '  return subtotal + shipping'
+              : index === 504
+                ? '}'
+                : `const filler${index} = ${index};`,
+    )
+    const initialContent = lines.join('\n')
+    const rangeContent = lines.slice(500, 505).join('\n')
+    const token = readCapability({
+      path: 'large.ts',
+      startLine: 501,
+      endLine: 505,
+      content: rangeContent,
+    })
+    // Drifted enough to stay well below the 0.92 auto-correct threshold and to
+    // declare a different top-level symbol, so no auto-correction can apply.
+    const oldStr = [
+      'export function computeInvoiceSum(order: Order) {',
+      '  const subtotal = order.subTotal',
+      '  const shipping = order.shipping',
+      '  return subTotal + shipping',
+      '}',
+    ].join('\n')
+
+    const result = await processStrReplace({
+      path: 'large.ts',
+      readCapabilityScope: readScope('large.ts'),
+      replacements: [
+        {
+          oldString: oldStr,
+          newString: 'export function computeInvoiceTotal(order: Order) {\n  return 0\n}',
+          allowMultiple: false,
+          basedOnRead: token,
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain(
+        'not an exact contiguous match of the anchored range lines 501-505 of the current file',
+      )
+      // Candidate lines are computed over the anchored window slice, so they
+      // must be shifted back to absolute file lines before being reported.
+      const candidates = [
+        ...result.error.matchAll(/Candidate \d+: lines (\d+)-(\d+)/g),
+      ]
+      if (candidates.length > 0) {
+        for (const candidate of candidates) {
+          expect(Number(candidate[1])).toBeGreaterThanOrEqual(501)
+        }
+      }
+    }
+  })
+
+  it('keeps unanchored no-match wording and generic recovery guidance unchanged', async () => {
+    const initialContent = 'const first = 1;\nconst second = 2;\n'
+
+    const result = await processStrReplace({
+      path: 'small.ts',
+      readCapabilityScope: readScope('small.ts'),
+      replacements: [
+        {
+          oldString: 'const missingEntirely = 3;',
+          newString: 'const missingEntirely = 4;',
+          allowMultiple: false,
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain(
+        'not an exact contiguous match of the current file',
+      )
+      expect(result.error).toContain(recoveryGuidance)
+    }
+  })
+
   it('accepts a strict cap.v3 token only for its bound project, path, and run', async () => {
     const initialContent = 'const target = 1;\n'
     const scope = {
@@ -1602,6 +1837,9 @@ function test3() {
 
     expect(result).toHaveProperty('error')
     if ('error' in result) {
+      // Structured field, not prose: the edit_transaction handler revokes read
+      // authorization off failureKind.startsWith('capability').
+      expect(result.failureKind).toBe('capability_scope')
       expect(result.error).toContain('different project, path, or agent run')
       expect(result.error).toContain('Cross-path and cross-run capability replay')
       expect(result.error).not.toContain('may refer to content that changed')
@@ -2136,6 +2374,449 @@ function test3() {
     }
   })
 
+  it('[ABI-M07] reports a skipIfMissing deletion missing from the anchored window as a no-op skip, not an anchored scope mismatch', async () => {
+    const lines = Array.from({ length: 1_001 }, (_, index) =>
+      index === 100
+        ? 'console.log("debug")'
+        : index === 500
+          ? 'const target = 1;'
+          : `const filler${index} = ${index};`,
+    )
+    const initialContent = lines.join('\n')
+    const targetRange = lines.slice(500, 501).join('\n')
+
+    const result = await processStrReplace({
+      path: 'large.ts',
+      readCapabilityScope: readScope('large.ts'),
+      replacements: [
+        {
+          // Present at line 101, i.e. outside the anchored window, so the
+          // scope-mismatch gate would fire if it ran before the no-op skip.
+          oldString: 'console.log("debug")',
+          newString: '',
+          allowMultiple: false,
+          skipIfMissing: true,
+          basedOnRead: readCapability({
+            path: 'large.ts',
+            startLine: 501,
+            endLine: 501,
+            content: targetRange,
+          }),
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('content' in result).toBe(true)
+    if ('content' in result) {
+      expect(result.content).toContain('console.log("debug")')
+      expect(result.failedReplacementCount).toBe(0)
+      const messageText = result.messages.join('\n')
+      expect(messageText).toContain('within the anchored range')
+      expect(messageText).not.toContain('scope mismatch')
+    }
+  })
+
+  it('[ABI-M07] skips an already-applied skipIfMissing deletion on a large file without basedOnRead', async () => {
+    const lines = Array.from({ length: 1_001 }, (_, index) =>
+      index === 500 ? 'const target = 1;' : `const filler${index} = ${index};`,
+    )
+    const initialContent = lines.join('\n')
+
+    const result = await processStrReplace({
+      path: 'large.ts',
+      readCapabilityScope: readScope('large.ts'),
+      replacements: [
+        {
+          // Already deleted: absent from the WHOLE file, which needs no anchor
+          // to prove, so this must skip rather than fall into the large-file
+          // deterministic-fallback block and abort the atomic batch.
+          oldString: 'console.log("already removed")\n',
+          newString: '',
+          allowMultiple: false,
+          skipIfMissing: true,
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(false)
+    expect('content' in result).toBe(true)
+    if ('content' in result) {
+      expect(result.content).toBe(initialContent)
+      expect(result.patch).toBe('')
+      expect(result.failedReplacementCount).toBe(0)
+      expect(result.hadNoOpSkip).toBe(true)
+      const messageText = result.messages.join('\n')
+      expect(messageText).toContain(
+        'Skipped already-applied str_replace deletion',
+      )
+      expect(messageText).not.toContain('Large-file edit blocked')
+      expect(messageText).not.toContain('within the anchored range')
+    }
+  })
+
+  it('[ABI-M07] treats a partially-applied skipIfMissing deletion with occurrenceIndex as a no-op skip', async () => {
+    const initialContent = [
+      'const keep = 1;',
+      'console.log("debug")',
+      'const keep = 2;',
+    ].join('\n')
+
+    const result = await processStrReplace({
+      path: 'small.ts',
+      readCapabilityScope: readScope('small.ts'),
+      atomic: true,
+      replacements: [
+        {
+          // Only one occurrence is left, so the earlier occurrences of this
+          // cleanup were already applied. That must skip instead of hard-failing
+          // the atomic batch with 'only N exact occurrence(s) ... exist'.
+          oldString: 'console.log("debug")',
+          newString: '',
+          allowMultiple: false,
+          occurrenceIndex: 3,
+          skipIfMissing: true,
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(false)
+    expect('content' in result).toBe(true)
+    if ('content' in result) {
+      expect(result.content).toBe(initialContent)
+      expect(result.patch).toBe('')
+      expect(result.failedReplacementCount).toBe(0)
+      expect(result.hadNoOpSkip).toBe(true)
+      const messageText = result.messages.join('\n')
+      expect(messageText).toContain(
+        'Skipped already-applied str_replace deletion',
+      )
+      expect(messageText).toContain('occurrenceIndex 3')
+      expect(messageText).not.toContain(
+        'only 1 exact occurrence(s) of the oldString exist',
+      )
+    }
+  })
+
+  it('[ABI-M07] does not suppress a co-present real change in a mixed skipIfMissing batch', async () => {
+    // A skip must never swallow a replacement that really applies: the batch
+    // reports a real patch, the skip message, and NO hadNoOpSkip (the all-skip
+    // short-circuit flag) so no consumer discards the applied content.
+    const initialContent = ['const keep = 1;', 'const target = 1;'].join('\n')
+
+    const result = await processStrReplace({
+      path: 'small.ts',
+      readCapabilityScope: readScope('small.ts'),
+      atomic: true,
+      replacements: [
+        {
+          oldString: 'console.log("already removed")\n',
+          newString: '',
+          allowMultiple: false,
+          skipIfMissing: true,
+        },
+        {
+          oldString: 'const target = 1;',
+          newString: 'const target = 2;',
+          allowMultiple: false,
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(false)
+    expect('content' in result).toBe(true)
+    if ('content' in result) {
+      expect(result.content).toContain('const target = 2;')
+      expect(result.patch).not.toBe('')
+      expect(result.failedReplacementCount).toBe(0)
+      expect(result.hadNoOpSkip).toBeUndefined()
+      expect(result.messages.join('\n')).toContain(
+        'Skipped already-applied str_replace deletion',
+      )
+    }
+  })
+
+  it('[ABI-M07] skips a skipIfMissing deletion replaying a stale basedOnRead when oldString is absent from the whole file', async () => {
+    const initialContent = ['const keep = 1;', 'const keep = 2;'].join('\n')
+
+    const result = await processStrReplace({
+      path: 'small.ts',
+      readCapabilityScope: readScope('small.ts'),
+      atomic: true,
+      replacements: [
+        {
+          // The idempotent cleanup retry replays its ORIGINAL anchor, which is
+          // necessarily stale now that the deletion already landed. A capability
+          // window is a subset of the file, so whole-file absence proves window
+          // absence: this must skip instead of failing the scoped-stale gate.
+          oldString: 'console.log("already removed")\n',
+          newString: '',
+          allowMultiple: false,
+          skipIfMissing: true,
+          basedOnRead: readCapability({
+            path: 'small.ts',
+            startLine: 1,
+            endLine: 1,
+            content: 'console.log("already removed")',
+          }),
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(false)
+    if ('error' in result) {
+      expect(result.error).not.toContain('Scoped str_replace blocked')
+    }
+    expect('content' in result).toBe(true)
+    if ('content' in result) {
+      expect(result.content).toBe(initialContent)
+      expect(result.patch).toBe('')
+      expect(result.failedReplacementCount).toBe(0)
+      expect(result.hadNoOpSkip).toBe(true)
+      const messageText = result.messages.join('\n')
+      expect(messageText).toContain(
+        'Skipped already-applied str_replace deletion',
+      )
+      expect(messageText).not.toContain('Scoped str_replace blocked')
+      expect(messageText).not.toContain('within the anchored range')
+    }
+  })
+
+  it('[ABI-M07] skips a stale-anchored skipIfMissing occurrenceIndex deletion when the whole file has fewer occurrences', async () => {
+    const initialContent = [
+      'const keep = 1;',
+      'console.log("debug")',
+      'const keep = 2;',
+    ].join('\n')
+
+    const result = await processStrReplace({
+      path: 'small.ts',
+      readCapabilityScope: readScope('small.ts'),
+      atomic: true,
+      replacements: [
+        {
+          // Stale anchor plus occurrenceIndex: the anchored window is a subset
+          // of the file, so a whole-file remaining count below occurrenceIndex
+          // proves the anchored count is below it too. Skip, do not report the
+          // stale/invalid-anchor failure.
+          oldString: 'console.log("debug")',
+          newString: '',
+          allowMultiple: false,
+          occurrenceIndex: 3,
+          skipIfMissing: true,
+          basedOnRead: readCapability({
+            path: 'small.ts',
+            startLine: 2,
+            endLine: 2,
+            content: 'console.log("debug") // stale window content',
+          }),
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(false)
+    expect('content' in result).toBe(true)
+    if ('content' in result) {
+      expect(result.content).toBe(initialContent)
+      expect(result.patch).toBe('')
+      expect(result.failedReplacementCount).toBe(0)
+      expect(result.hadNoOpSkip).toBe(true)
+      const messageText = result.messages.join('\n')
+      expect(messageText).toContain(
+        'occurrenceIndex 3 is treated as already applied',
+      )
+      // No fresh capability was proven for this path, so the skip degrades to
+      // the boolean 'fewer than N remain' phrasing instead of disclosing the
+      // exact remaining occurrence count.
+      expect(messageText).toContain(
+        'fewer than 3 exact occurrence(s) of the oldString remain',
+      )
+      expect(messageText).not.toContain('only 1 exact occurrence(s)')
+      expect(messageText).not.toContain(
+        'the supplied basedOnRead range is stale or invalid',
+      )
+      expect(messageText).not.toContain('within the anchored range')
+    }
+  })
+
+  it('[ABI-M07] still fails a stale-anchored skipIfMissing deletion whose oldString is still present', async () => {
+    // Inverse guard for the reorder: whole-file absence is the ONLY thing the
+    // unanchored skip may conclude. A still-present oldString keeps hitting the
+    // stale-anchor gate exactly as before.
+    const initialContent = [
+      'console.log("debug")',
+      'const keep = 1;',
+      'console.log("debug")',
+    ].join('\n')
+
+    const result = await processStrReplace({
+      path: 'small.ts',
+      readCapabilityScope: readScope('small.ts'),
+      atomic: true,
+      replacements: [
+        {
+          oldString: 'console.log("debug")',
+          newString: '',
+          allowMultiple: false,
+          skipIfMissing: true,
+          basedOnRead: readCapability({
+            path: 'small.ts',
+            startLine: 1,
+            endLine: 1,
+            content: 'console.log("debug") // stale window content',
+          }),
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('Scoped str_replace blocked')
+      expect(result.error).not.toContain(
+        'Skipped already-applied str_replace deletion',
+      )
+    }
+  })
+
+  it('[ABI-M07] still fails a stale-anchored skipIfMissing occurrenceIndex deletion when enough occurrences remain', async () => {
+    const initialContent = [
+      'console.log("debug")',
+      'const keep = 1;',
+      'console.log("debug")',
+    ].join('\n')
+
+    const result = await processStrReplace({
+      path: 'small.ts',
+      readCapabilityScope: readScope('small.ts'),
+      atomic: true,
+      replacements: [
+        {
+          oldString: 'console.log("debug")',
+          newString: '',
+          allowMultiple: false,
+          occurrenceIndex: 2,
+          skipIfMissing: true,
+          basedOnRead: readCapability({
+            path: 'small.ts',
+            startLine: 1,
+            endLine: 1,
+            content: 'console.log("debug") // stale window content',
+          }),
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain(
+        'the supplied basedOnRead range is stale or invalid',
+      )
+      expect(result.error).not.toContain(
+        'Skipped already-applied str_replace deletion',
+      )
+    }
+  })
+
+  it('[ABI-M07] resolves a strict-read all-skip deletion batch as a successful no-op', async () => {
+    // The no-op skips run BEFORE the requireFreshReadCapability gate, so a
+    // strict-mode cleanup retry whose work is already applied succeeds without
+    // mutating the file instead of being blocked for a missing fresh anchor.
+    const initialContent = [
+      'const keep = 1;',
+      'console.log("debug")',
+      'const keep = 2;',
+    ].join('\n')
+
+    const result = await processStrReplace({
+      path: 'small.ts',
+      readCapabilityScope: readScope('small.ts'),
+      requireFreshReadCapability: true,
+      atomic: true,
+      replacements: [
+        {
+          oldString: 'console.log("already removed")\n',
+          newString: '',
+          allowMultiple: false,
+          skipIfMissing: true,
+        },
+        {
+          oldString: 'console.log("debug")',
+          newString: '',
+          allowMultiple: false,
+          occurrenceIndex: 3,
+          skipIfMissing: true,
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(false)
+    expect('content' in result).toBe(true)
+    if ('content' in result) {
+      expect(result.content).toBe(initialContent)
+      expect(result.patch).toBe('')
+      expect(result.failedReplacementCount).toBe(0)
+      expect(result.hadNoOpSkip).toBe(true)
+      const messageText = result.messages.join('\n')
+      expect(messageText).toContain(
+        'Skipped already-applied str_replace deletion',
+      )
+      expect(messageText).toContain(
+        'occurrenceIndex 3 is treated as already applied',
+      )
+      expect(messageText).not.toContain('Strict read-before-edit blocked')
+    }
+  })
+
+  it('[ABI-M07] still blocks a strict-read skipIfMissing deletion whose oldString is still present', async () => {
+    // Inverse guard: the strict-read bypass only covers provable no-ops. A
+    // still-present oldString with no fresh capability must keep failing.
+    const initialContent = ['const keep = 1;', 'console.log("debug")'].join(
+      '\n',
+    )
+
+    const result = await processStrReplace({
+      path: 'small.ts',
+      readCapabilityScope: readScope('small.ts'),
+      requireFreshReadCapability: true,
+      atomic: true,
+      replacements: [
+        {
+          oldString: 'console.log("debug")',
+          newString: '',
+          allowMultiple: false,
+          skipIfMissing: true,
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('Strict read-before-edit blocked')
+      expect(result.error).not.toContain(
+        'Skipped already-applied str_replace deletion',
+      )
+    }
+  })
+
   it('should accept multi-line CRLF range hashes from read_files', async () => {
     const lines = Array.from({ length: 1_001 }, (_, index) =>
       index === 500
@@ -2319,11 +3000,23 @@ function test3() {
       logger,
     })
 
+    // The anchored window is still honored (the out-of-window match is NOT
+    // applied), but the failure is now reported as a scope mismatch instead of
+    // a false whole-file "not an exact contiguous match": the text exists, just
+    // outside the supplied capability range.
     expect('error' in result).toBe(true)
     if ('error' in result) {
-      expect(result.error).toContain('is not an exact contiguous match')
+      expect(result.error).toContain(
+        'Anchored str_replace scope mismatch for small.ts',
+      )
+      expect(result.error).toContain('covers lines 1-1')
+      expect(result.error).toContain('oldString currently occurs at line(s): 3-3')
+      expect(result.failureKind).toBe('anchor_scope_mismatch')
+      expect(result.error).not.toContain('anchor_scope_mismatch')
+      expect(result.error).not.toContain('is not an exact contiguous match')
     }
   })
+
 
   describe('successful edit authority', () => {
     it('does not mint pre-confirmation authority after a scoped large-file edit', async () => {

@@ -30,7 +30,7 @@ export const createFilePicker = (): Omit<SecretAgentDefinition, 'id'> => {
             type: 'array' as const,
             items: { type: 'string' as const },
             description:
-              'Optional list of paths to directories to look within. If omitted, the entire project tree is used.',
+              'Optional list of project-relative directories to look within. Absolute paths, traversal, and glob syntax are rejected rather than rewritten. If omitted, the entire project tree is used.',
           },
         },
         required: [],
@@ -56,7 +56,6 @@ export const createFilePicker = (): Omit<SecretAgentDefinition, 'id'> => {
     },
     includeMessageHistory: false,
     toolNames: ['spawn_agents', 'set_output'],
-    programmaticToolNames: ['read_files'],
     spawnableAgents: ['file-lister'],
 
     systemPrompt: `You are an expert at finding relevant files in a codebase. ${PLACEHOLDER.FILE_TREE_PROMPT}`,
@@ -71,76 +70,12 @@ Do not use any other tools or spawn any further agents.
   }
 }
 
-/**
- * Extract the raw spawn_agents results from the toolResult wrapper.
- * The spawn_agents tool returns results as [{type: 'json', value: [...]}].
- * This extracts the inner value from each spawned agent result.
- */
-function extractSpawnResults(results: any[] | undefined): any[] {
-  if (!results || results.length === 0) return []
-  const jsonResult = results.find((r) => r.type === 'json')
-  if (!jsonResult?.value) return []
-  const spawnedResults = Array.isArray(jsonResult.value)
-    ? jsonResult.value
-    : [jsonResult.value]
-  return spawnedResults.map((result: any) => result?.value).filter(Boolean)
-}
-
-/**
- * Extract text content from a spawned agent's output, handling multiple
- * output formats that the agent runtime may produce:
- * - lastMessage / allMessages: traverses message array for assistant text
- * - structuredOutput: extracts string value or text-containing fields
- * - Direct strings: raw string output
- */
-function extractAgentText(agentOutput: any): string | null {
-  if (!agentOutput) return null
-
-  // Direct string value
-  if (typeof agentOutput === 'string') return agentOutput
-
-  // lastMessage / allMessages format — traverse messages for assistant text
-  if (
-    (agentOutput.type === 'lastMessage' ||
-      agentOutput.type === 'allMessages') &&
-    Array.isArray(agentOutput.value)
-  ) {
-    for (let i = agentOutput.value.length - 1; i >= 0; i--) {
-      const message = agentOutput.value[i]
-      if (message.role === 'assistant' && Array.isArray(message.content)) {
-        for (const part of message.content) {
-          if (part.type === 'text' && typeof part.text === 'string') {
-            return part.text
-          }
-        }
-      }
-    }
-  }
-
-  // structuredOutput format — value may be a string or object with text fields
-  if (agentOutput.type === 'structuredOutput') {
-    if (typeof agentOutput.value === 'string') return agentOutput.value
-    if (isObject(agentOutput.value)) {
-      for (const key of ['message', 'text', 'content', 'output', 'response']) {
-        const val = agentOutput.value[key]
-        if (typeof val === 'string' && val) return val
-      }
-    }
-  }
-
-  return null
-}
-
 function extractErrorMessage(agentOutput: any): string | null {
   if (!agentOutput) return null
   if (agentOutput.type === 'error') {
     return agentOutput.message ?? agentOutput.value ?? null
   }
   return null
-}
-
-function isObject(value: any): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 const handleSteps: SecretAgentDefinition['handleSteps'] = function* ({
@@ -275,17 +210,16 @@ const handleSteps: SecretAgentDefinition['handleSteps'] = function* ({
   }
   // C1.9: Lexical project-root containment for paths returned by spawned
   // file-lister agents. Rejects path traversal (..) and absolute paths outside
-  // the project root before handing paths to read_files. Defense in depth on
-  // top of the SDK's read_files backend validation. Uses process.cwd() since
-  // handleSteps is serialized and cannot import helpers.
+  // the project root before emitting structured output. Defense in depth.
+  // Uses process.cwd() since handleSteps is serialized and cannot import helpers.
   const isSafeProjectPath = (rawPath: string): boolean => {
     if (typeof rawPath !== 'string' || rawPath.length === 0) return false
     const trimmed = rawPath.trim()
     if (trimmed.length === 0) return false
-    // Reject any path containing parent-directory traversal.
-    if (trimmed.includes('..')) return false
-    // Reject Windows-style traversal too.
-    if (trimmed.includes('\\..') || trimmed.includes('..\\')) return false
+    // Reject parent-directory segments after normalize/split, not substring `..`
+    // (so names like foo..bar.ts stay valid).
+    const normalizedSegments = trimmed.replace(/\\/g, '/').split('/')
+    if (normalizedSegments.some((segment) => segment === '..')) return false
     // Absolute paths are only allowed if they're inside the project root.
     if (trimmed.startsWith('/') || /^[A-Za-z]:[\\/]/.test(trimmed)) {
       const cwd = typeof process.cwd === 'function' ? process.cwd() : ''
@@ -318,23 +252,42 @@ const handleSteps: SecretAgentDefinition['handleSteps'] = function* ({
     errorText,
     debugMessage,
   } = processSpawnResults(spawnResults)
-  // Filter out unsafe paths before read_files (C1.9).
+  // Filter out unsafe paths before emitting output (C1.9).
   const paths = rawPaths.filter(isSafeProjectPath)
-  const requestedDirectories = Array.isArray(params?.directories)
+  const rawRequestedDirectories = Array.isArray(params?.directories)
     ? params.directories
+    : []
+  // Match file-lister: reject absolute, traversal, and glob entries. Do not
+  // strip leading slashes (“/etc” must not become in-scope “etc”).
+  const requestedDirectories = Array.from(
+    new Set(
+      rawRequestedDirectories
         .filter((value): value is string => typeof value === 'string')
         .map((value) => value.replace(/\\/g, '/').replace(/^\.\//, ''))
-        .map((value) => value.replace(/^\/+|\/+$/g, ''))
-        .filter(Boolean)
-    : []
-  const scopedPaths = paths.filter((candidate) => {
-    if (requestedDirectories.length === 0) return true
-    const normalized = candidate.replace(/\\/g, '/').replace(/^\.\//, '')
-    return requestedDirectories.some(
-      (directory) =>
-        normalized === directory || normalized.startsWith(directory + '/'),
-    )
-  })
+        .map((value) => value.replace(/\/+$/, ''))
+        .filter(
+          (value) =>
+            value.length > 0 &&
+            value !== '.' &&
+            !value.startsWith('/') &&
+            !/^[A-Za-z]:\//.test(value) &&
+            !value.split('/').includes('..') &&
+            !/[?*{}[\]]/.test(value),
+        ),
+    ),
+  )
+  const scopedPaths =
+    rawRequestedDirectories.length > 0 && requestedDirectories.length === 0
+      ? []
+      : paths.filter((candidate) => {
+          if (requestedDirectories.length === 0) return true
+          const normalized = candidate.replace(/\\/g, '/').replace(/^\.\//, '')
+          return requestedDirectories.some(
+            (directory) =>
+              normalized === directory ||
+              normalized.startsWith(directory + '/'),
+          )
+        })
   const droppedCount = rawPaths.length - paths.length
   if (droppedCount > 0) {
     logger?.debug?.(
@@ -388,19 +341,28 @@ const handleSteps: SecretAgentDefinition['handleSteps'] = function* ({
   }
 
   if (orderedPaths.length === 0) {
+    const outOfScopeOnly =
+      paths.length > 0 && rawRequestedDirectories.length > 0
     yield {
       type: 'STEP_TEXT',
-      text: 'No safe project-relative file paths were returned by file-lister.',
+      text: outOfScopeOnly
+        ? 'No file paths were found within the requested directories.'
+        : 'No safe project-relative file paths were returned by file-lister.',
     } satisfies StepText
     return
   }
 
   yield {
-    toolName: 'read_files',
-    input: { paths: orderedPaths },
+    toolName: 'set_output',
+    input: {
+      files: orderedPaths.map((path) => ({
+        path,
+        summary: path.split('/').pop() || path,
+      })),
+    },
+    includeToolCall: false,
   }
-
-  yield 'STEP'
+  return
 }
 
 const definition: SecretAgentDefinition = {
@@ -408,5 +370,5 @@ const definition: SecretAgentDefinition = {
   ...createFilePicker(),
 }
 
-export { extractSpawnResults, extractAgentText, extractErrorMessage, isObject }
+export { extractErrorMessage }
 export default definition

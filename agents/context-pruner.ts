@@ -36,6 +36,31 @@ const definition: AgentDefinition = {
         cacheExpiryMs: {
           type: 'number',
         },
+        semanticBudget: {
+          type: 'object',
+          properties: {
+            triggerBudgetTokens: {
+              type: 'number',
+            },
+            targetBudgetTokens: {
+              type: 'number',
+            },
+          },
+        },
+        taskMemory: {
+          type: 'object',
+        },
+        workspaceState: {
+          type: 'object',
+          properties: {
+            revision: {
+              type: 'number',
+            },
+            snapshotId: {
+              type: 'string',
+            },
+          },
+        },
       },
       required: [],
     },
@@ -669,8 +694,18 @@ const definition: AgentDefinition = {
     // causes rapid cache refill (the "cache fills up fast" symptom).
     // The provider simply re-writes the cache, which is cheaper than
     // regenerating a summary blob.
+    const estimatedContextTokens = Math.ceil(
+      currentMessages.reduce(
+        (total, message) => total + getTextContent(message).length,
+        0,
+      ) / CHARS_PER_TOKEN,
+    )
+    const contextTokenCount = Math.max(
+      agentState.contextTokenCount ?? 0,
+      estimatedContextTokens,
+    )
     if (
-      agentState.contextTokenCount + TOKEN_COUNT_FUDGE_FACTOR <=
+      contextTokenCount + TOKEN_COUNT_FUDGE_FACTOR <=
       maxContextLength
     ) {
       yield {
@@ -1515,9 +1550,7 @@ const definition: AgentDefinition = {
       if (km.editsMade.length > KNOWLEDGE_MEMORY_MAX_EDITS) {
         km.editsMade = km.editsMade.slice(-KNOWLEDGE_MEMORY_MAX_EDITS)
       }
-      if (
-        km.validationResults.length > KNOWLEDGE_MEMORY_MAX_VALIDATION_RESULTS
-      ) {
+      if (km.validationResults.length > KNOWLEDGE_MEMORY_MAX_VALIDATION_RESULTS) {
         km.validationResults = km.validationResults.slice(
           -KNOWLEDGE_MEMORY_MAX_VALIDATION_RESULTS,
         )
@@ -1527,9 +1560,7 @@ const definition: AgentDefinition = {
           -KNOWLEDGE_MEMORY_MAX_REVIEW_RECEIPTS,
         )
       }
-      if (
-        km.postEditAnchors.length > KNOWLEDGE_MEMORY_MAX_POST_EDIT_ANCHORS
-      ) {
+      if (km.postEditAnchors.length > KNOWLEDGE_MEMORY_MAX_POST_EDIT_ANCHORS) {
         km.postEditAnchors = km.postEditAnchors.slice(
           -KNOWLEDGE_MEMORY_MAX_POST_EDIT_ANCHORS,
         )
@@ -1537,10 +1568,10 @@ const definition: AgentDefinition = {
       if (km.blockers.length > KNOWLEDGE_MEMORY_MAX_BLOCKERS) {
         km.blockers = km.blockers.slice(-KNOWLEDGE_MEMORY_MAX_BLOCKERS)
       }
-      // Per-entry length caps
-      const capEntry = (entry: string, max: number): string => {
-        return capTextPreservingEnds(entry, max)
-      }
+
+      const capEntry = (entry: string, max: number): string =>
+        capTextPreservingEnds(entry, max)
+
       km.decisions = km.decisions.map((e) =>
         capEntry(e, KNOWLEDGE_MEMORY_ENTRY_CHARS),
       )
@@ -1563,37 +1594,138 @@ const definition: AgentDefinition = {
 
     /** Detect the latest substantive user request or override. */
     function extractGoalFromMessages(): string {
-      const candidates = [
+      function sanitizeUserGoalText(message: Message): string {
+        // Unwrap SDK <user_message> wrappers before any tag-based skip so
+        // combined live-prompt+params history is not treated as empty XML.
+        let text = sanitizeOperationalStateText(getTextContent(message))
+          .replace(/<user_message>([\s\S]*?)<\/user_message>/gi, '$1')
+          .trim()
+        if (!text) return ''
+
+        // SDK buildUserMessageContent concatenates the live prompt with
+        // pruner params JSON inside one user_message. Strip only a trailing
+        // object that contains known pruner param keys.
+        const trailingJson = text.match(/(\{[\s\S]*\})\s*$/)
+        if (trailingJson) {
+          try {
+            const parsed = JSON.parse(trailingJson[1])
+            const prunerParamKeys = [
+              'maxContextLength',
+              'assistantToolBudget',
+              'userBudget',
+              'toolFactsBudget',
+              'cacheExpiryMs',
+              'taskMemory',
+            ]
+            if (
+              parsed !== null &&
+              typeof parsed === 'object' &&
+              !Array.isArray(parsed) &&
+              Object.keys(parsed).some((key) => prunerParamKeys.includes(key))
+            ) {
+              text = text
+                .slice(0, text.length - trailingJson[0].length)
+                .trim()
+            }
+          } catch {
+            // Keep the original text when the trailing blob is not valid JSON.
+          }
+        }
+
+        if (!text) return ''
+        // Skip tool-result-style user messages and system tags
+        if (text.startsWith('[USER]')) return ''
+        if (text.startsWith('<')) return ''
+        if (text === CONTINUATION_PROMPT_TEXT) return ''
+        if (/^(?:Reviewer|Verification|Harness) gate:/i.test(text)) return ''
+        // Ephemeral live prompts must not replace the task goal.
+        if (/^Say\s+["'].+["']\s+and nothing else\.?$/i.test(text)) return ''
+        if (/^(OK|DONE|ACK|CAL|Continue\.?)$/i.test(text)) return ''
+        // e2e makeLargeContent rounds are filler, not the task goal.
+        if (/^Round\s+\d+:/i.test(text)) return ''
+        return truncateLongText(text, KNOWLEDGE_MEMORY_MAX_GOAL_CHARS)
+          .replace(/\[\.\.\.truncated \d+ chars\.\.\.\]\n*/g, ' ')
+          .trim()
+      }
+
+      function isFilePickerDiscovery(message: Message): boolean {
+        if (message.role === 'assistant' && Array.isArray(message.content)) {
+          for (const part of message.content) {
+            if (part.type !== 'tool-call') continue
+            if (String(part.toolName) !== 'spawn_agents') continue
+            const input =
+              part.input && typeof part.input === 'object'
+                ? (part.input as Record<string, unknown>)
+                : {}
+            const agents = input.agents
+            if (
+              Array.isArray(agents) &&
+              agents.some(
+                (agent) =>
+                  Boolean(agent) &&
+                  typeof agent === 'object' &&
+                  (agent as Record<string, unknown>).agent_type ===
+                    'file-picker',
+              )
+            ) {
+              return true
+            }
+          }
+        }
+        if (message.role !== 'tool') return false
+        const toolMessage = message as ToolMessage
+        if (toolMessage.toolName !== 'spawn_agents') return false
+        if (!Array.isArray(toolMessage.content)) return false
+        for (const part of toolMessage.content) {
+          if (part.type !== 'json' || !Array.isArray(part.value)) continue
+          if (
+            part.value.some(
+              (result) =>
+                Boolean(result) &&
+                typeof result === 'object' &&
+                (result as { agentType?: string }).agentType === 'file-picker',
+            )
+          ) {
+            return true
+          }
+        }
+        return false
+      }
+
+      const promptCandidates = [
         ...(latestLiveUserPromptMessage ? [latestLiveUserPromptMessage] : []),
         ...messagesToSummarize,
       ].filter((message) => message.role === 'user')
-      const taggedCandidates = candidates
-        .filter((message) => message.tags?.includes('USER_PROMPT'))
-        .reverse()
-      const taggedSet = new Set(taggedCandidates)
-      const ordered = [
-        ...taggedCandidates,
-        ...[...candidates]
-          .reverse()
-          .filter((message) => !taggedSet.has(message)),
-      ]
-      for (const message of ordered) {
-        const text = sanitizeOperationalStateText(getTextContent(message))
-          .replace(/^<user_message>([\s\S]*?)<\/user_message>$/i, '$1')
-          .trim()
-        if (!text) continue
-        // Skip tool-result-style user messages and system tags
-        if (text.startsWith('[USER]')) continue
-        if (text.startsWith('<')) continue
-        if (text === CONTINUATION_PROMPT_TEXT) continue
-        if (/^(?:Reviewer|Verification|Harness) gate:/i.test(text)) continue
-        const truncated = truncateLongText(
-          text,
-          KNOWLEDGE_MEMORY_MAX_GOAL_CHARS,
-        )
-        return truncated
-          .replace(/\[\.\.\.truncated \d+ chars\.\.\.\]\n*/g, ' ')
-          .trim()
+
+      // 1. Newest tagged USER_PROMPT that is not empty/ephemeral.
+      for (let index = promptCandidates.length - 1; index >= 0; index--) {
+        const message = promptCandidates[index]
+        if (!message.tags?.includes('USER_PROMPT')) continue
+        const goal = sanitizeUserGoalText(message)
+        if (goal) return goal
+      }
+
+      // 2. User request immediately preceding a file-picker discovery.
+      let lastSanitizedUserText = ''
+      let discoveryLinkedUserText = ''
+      for (const message of messagesToSummarize) {
+        if (message.role === 'user') {
+          const text = sanitizeUserGoalText(message)
+          if (text) lastSanitizedUserText = text
+          continue
+        }
+        if (isFilePickerDiscovery(message) && lastSanitizedUserText) {
+          discoveryLinkedUserText = lastSanitizedUserText
+        }
+      }
+      if (discoveryLinkedUserText) return discoveryLinkedUserText
+
+      // 3. Newest remaining untagged user message.
+      for (let index = promptCandidates.length - 1; index >= 0; index--) {
+        const message = promptCandidates[index]
+        if (message.tags?.includes('USER_PROMPT')) continue
+        const goal = sanitizeUserGoalText(message)
+        if (goal) return goal
       }
       return ''
     }

@@ -5,12 +5,13 @@ import { Button } from './button'
 import { ScrollToBottomButton } from './scroll-to-bottom-button'
 import { ShimmerText } from './shimmer-text'
 
+import { useTerminalLayout } from '../hooks/use-terminal-layout'
 import { useTheme } from '../hooks/use-theme'
-import { formatElapsedTime } from '../utils/format-elapsed-time'
+import { formatIndexStatusChip, type IndexStatusPeek } from '../utils/index-status'
 import {
-  formatIndexStatusChip,
-  type IndexStatusPeek,
-} from '../utils/index-status'
+  selectStatusBarChips,
+  type StatusBarChipTone,
+} from '../utils/status-bar-chips'
 import type { StatusIndicatorState } from '../utils/status-indicator-state'
 
 /** A small status-bar action button with hover-bold styling. */
@@ -45,13 +46,20 @@ const StatusActionButton = ({
 
 const SHIMMER_INTERVAL_MS = 160
 
-const formatTokenCount = (tokens: number): string => {
-  if (tokens < 1_000) return Math.round(tokens).toString()
-  if (tokens < 1_000_000) {
-    const value = tokens / 1_000
-    return `${value >= 100 ? Math.round(value) : value.toFixed(1).replace(/\.0$/, '')}k`
+const chipForeground = (
+  theme: ReturnType<typeof useTheme>,
+  tone: StatusBarChipTone,
+) => {
+  switch (tone) {
+    case 'muted':
+      return theme.muted
+    case 'secondary':
+      return theme.secondary
+    case 'warning':
+      return theme.warning
+    case 'error':
+      return theme.error
   }
-  return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, '')}m`
 }
 
 interface StatusBarProps {
@@ -84,14 +92,17 @@ export const StatusBar = ({
   onStop,
 }: StatusBarProps) => {
   const theme = useTheme()
+  const { width, terminalWidth } = useTerminalLayout()
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
+
+  const kind = statusIndicatorState.kind
+  const isActive = kind === 'waiting' || kind === 'streaming'
+  const showStop = Boolean(onStop && isActive)
 
   // Show timer when actively working (streaming or waiting for response) or paused (ask_user)
   // This uses statusIndicatorState as the single source of truth for "is the LLM working?"
   const shouldShowTimer =
-    statusIndicatorState?.kind === 'waiting' ||
-    statusIndicatorState?.kind === 'streaming' ||
-    statusIndicatorState?.kind === 'paused'
+    kind === 'waiting' || kind === 'streaming' || kind === 'paused'
 
   useEffect(() => {
     if (!timerStartTime || !shouldShowTimer) {
@@ -100,7 +111,7 @@ export const StatusBar = ({
     }
 
     // When paused, don't update the timer - just keep the frozen value
-    if (statusIndicatorState?.kind === 'paused') {
+    if (kind === 'paused') {
       // Calculate current elapsed time once and freeze it
       const now = Date.now()
       const elapsed = Math.floor((now - timerStartTime) / 1000)
@@ -118,7 +129,21 @@ export const StatusBar = ({
     const interval = setInterval(updateElapsed, 1000)
 
     return () => clearInterval(interval)
-  }, [timerStartTime, shouldShowTimer, statusIndicatorState?.kind])
+  }, [timerStartTime, shouldShowTimer, kind])
+
+  const { chips } = selectStatusBarChips({
+    widthSize: width.size,
+    terminalWidth,
+    contextWindowUsage,
+    sessionCostCents,
+    modelName,
+    diffStats,
+    indexChip: formatIndexStatusChip(indexStatus ?? null),
+    elapsedSeconds,
+    showTimer: shouldShowTimer,
+    showStop,
+    isActive,
+  })
 
   const renderStatusIndicator = () => {
     switch (statusIndicatorState.kind) {
@@ -147,7 +172,11 @@ export const StatusBar = ({
       case 'waiting':
         return (
           <ShimmerText
-            text={statusIndicatorState.phaseLabel || 'thinking...'}
+            text={
+              width.is('xs')
+                ? '…'
+                : statusIndicatorState.phaseLabel || 'thinking...'
+            }
             interval={SHIMMER_INTERVAL_MS}
             primaryColor={theme.secondary}
           />
@@ -156,7 +185,11 @@ export const StatusBar = ({
       case 'streaming':
         return (
           <ShimmerText
-            text={statusIndicatorState.phaseLabel || 'working...'}
+            text={
+              width.is('xs')
+                ? '…'
+                : statusIndicatorState.phaseLabel || 'working...'
+            }
             interval={SHIMMER_INTERVAL_MS}
             primaryColor={theme.secondary}
           />
@@ -170,102 +203,12 @@ export const StatusBar = ({
     }
   }
 
-  const renderElapsedTime = () => {
-    if (!shouldShowTimer || elapsedSeconds === 0) {
-      return null
-    }
-
-    return <span fg={theme.secondary}>{formatElapsedTime(elapsedSeconds)}</span>
-  }
-
-  const renderContextWindowUsage = () => {
-    if (!contextWindowUsage || contextWindowUsage.max <= 0) {
-      return null
-    }
-
-    const pct = Math.round(
-      (contextWindowUsage.used / contextWindowUsage.max) * 100,
-    )
-    const fg =
-      pct >= 90 ? theme.error : pct >= 70 ? theme.warning : theme.secondary
-
-    return (
-      <span fg={fg}>
-        {`ctx ${formatTokenCount(contextWindowUsage.used)}/${formatTokenCount(contextWindowUsage.max)} (${pct}%)`}
-      </span>
-    )
-  }
-
-  const renderSessionCost = () => {
-    if (sessionCostCents == null || sessionCostCents === 0) {
-      return null
-    }
-    const dollars = sessionCostCents / 100
-    const formatted =
-      dollars < 0.01
-        ? `$${(sessionCostCents / 100).toFixed(4)}`
-        : `$${dollars.toFixed(2)}`
-    return <span fg={theme.secondary}>{`cost ${formatted}`}</span>
-  }
-
-  const renderModelName = () => {
-    if (!modelName) {
-      return null
-    }
-    // Shorten common provider prefixes for compactness
-    const short = modelName.replace(
-      /^(openai|anthropic|google|openrouter)\//,
-      '',
-    )
-    return <span fg={theme.secondary}>{short}</span>
-  }
-
-  const renderDiffStats = () => {
-    if (!diffStats) {
-      return null
-    }
-    const { modified, added, deleted } = diffStats
-    const total = modified + added + deleted
-    if (total === 0) {
-      return null
-    }
-    const parts: string[] = []
-    if (modified > 0) parts.push(`~${modified}`)
-    if (added > 0) parts.push(`+${added}`)
-    if (deleted > 0) parts.push(`-${deleted}`)
-    return <span fg={theme.secondary}>{`git ${parts.join(' ')}`}</span>
-  }
-
-  const renderIndexStatus = () => {
-    const chip = formatIndexStatusChip(indexStatus ?? null)
-    if (!chip) {
-      return null
-    }
-    const fg =
-      chip.tone === 'error'
-        ? theme.error
-        : chip.tone === 'warning'
-          ? theme.warning
-          : theme.secondary
-    return <span fg={fg}>{chip.label}</span>
-  }
-
   const statusIndicatorContent = renderStatusIndicator()
-  const elapsedTimeContent = renderElapsedTime()
-  const contextWindowContent = renderContextWindowUsage()
-  const sessionCostContent = renderSessionCost()
-  const modelNameContent = renderModelName()
-  const diffStatsContent = renderDiffStats()
-  const indexStatusContent = renderIndexStatus()
-
   const hasContent =
-    statusIndicatorContent ||
-    elapsedTimeContent ||
-    contextWindowContent ||
-    sessionCostContent ||
-    modelNameContent ||
-    diffStatsContent ||
-    indexStatusContent
+    Boolean(statusIndicatorContent) ||
+    chips.length > 0 ||
+    !isAtBottom ||
+    showStop
 
   return (
     <box
@@ -289,10 +232,6 @@ export const StatusBar = ({
         <text style={{ wrapMode: 'none' }}>{statusIndicatorContent}</text>
       </box>
 
-      <box style={{ flexShrink: 0 }}>
-        {!isAtBottom && <ScrollToBottomButton onClick={scrollToLatest} />}
-      </box>
-
       <box
         style={{
           flexGrow: 1,
@@ -304,17 +243,29 @@ export const StatusBar = ({
           gap: 1,
         }}
       >
-        <text style={{ wrapMode: 'none' }}>{contextWindowContent}</text>
-        <text style={{ wrapMode: 'none' }}>{sessionCostContent}</text>
-        <text style={{ wrapMode: 'none' }}>{diffStatsContent}</text>
-        <text style={{ wrapMode: 'none' }}>{indexStatusContent}</text>
-        <text style={{ wrapMode: 'none' }}>{modelNameContent}</text>
-        <text style={{ wrapMode: 'none' }}>{elapsedTimeContent}</text>
-        {onStop &&
-          (statusIndicatorState.kind === 'waiting' ||
-            statusIndicatorState.kind === 'streaming') && (
-            <StatusActionButton onClick={onStop}>■ Esc</StatusActionButton>
-          )}
+        {!isAtBottom && (
+          <box style={{ flexShrink: 0 }}>
+            <ScrollToBottomButton onClick={scrollToLatest} />
+          </box>
+        )}
+        <text style={{ wrapMode: 'none' }}>
+          {chips.map((chip, index) => (
+            <React.Fragment key={chip.id}>
+              {index > 0 && <span fg={theme.muted}> · </span>}
+              <span
+                fg={chipForeground(theme, chip.tone)}
+                attributes={
+                  chip.tone === 'muted' ? TextAttributes.DIM : undefined
+                }
+              >
+                {chip.label}
+              </span>
+            </React.Fragment>
+          ))}
+        </text>
+        {showStop && onStop && (
+          <StatusActionButton onClick={onStop}>■ Esc</StatusActionButton>
+        )}
       </box>
     </box>
   )

@@ -251,6 +251,7 @@ export interface EditTransactionParams {
           occurrenceIndex?: number
           /** Optional authenticated cap.v3 readCapability copied verbatim from the matching fresh read_files editAnchor. */
           basedOnRead?: string
+          /** For deletion replacements only (newString is empty): treat a missing oldString as an already-applied no-op. Use only for explicit idempotent cleanup retries, never for ordinary edits. When every requested change resolves to such a no-op - every replacement of a standalone str_replace call, or every edit of an edit_transaction - the call succeeds with zero file changes and the skip messages rather than failing. When combined with occurrenceIndex, a partially-applied cleanup also skips: fewer remaining exact occurrences than the requested index means that occurrence is treated as already applied. Only valid when newString is empty; both the input and provider schemas reject any other combination. */
           skipIfMissing?: boolean
         }[]
       }
@@ -1058,6 +1059,7 @@ export interface StrReplaceParams {
     occurrenceIndex?: number
     /** Optional authenticated cap.v3 readCapability copied verbatim from the matching fresh read_files editAnchor. */
     basedOnRead?: string
+    /** For deletion replacements only (newString is empty): treat a missing oldString as an already-applied no-op. Use only for explicit idempotent cleanup retries, never for ordinary edits. When every requested change resolves to such a no-op - every replacement of a standalone str_replace call, or every edit of an edit_transaction - the call succeeds with zero file changes and the skip messages rather than failing. When combined with occurrenceIndex, a partially-applied cleanup also skips: fewer remaining exact occurrences than the requested index means that occurrence is treated as already applied. Only valid when newString is empty; both the input and provider schemas reject any other combination. */
     skipIfMissing?: boolean
   }[]
 }

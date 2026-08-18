@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'bun:test'
-import { getExactContentHash } from '@codebuff/common/util/content-hash'
+import {
+  encodeReadCapabilityToken,
+  getContentHash,
+  getExactContentHash,
+} from '@codebuff/common/util/content-hash'
 
 import { mockFileContext } from '../../../../__tests__/test-utils'
 import { handleStrReplace } from '../str-replace'
 import { getFileProcessingValues } from '../write-file'
-import {
-  encodeReadCapabilityToken,
-  getContentHash,
-} from '../../../../process-str-replace'
 
 import type { CodebuffToolCall } from '@codebuff/common/tools/list'
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
@@ -122,7 +122,12 @@ const confirmedRequestClientToolCall =
     ] as CodebuffToolOutput<'str_replace'>
   }
 
-const unreachableRequestClientToolCall = confirmedRequestClientToolCall({})
+// Deliberately throws instead of returning a successful receipt: these cases
+// assert the client is never reached, so an accidental call must fail the test
+// rather than silently "apply" empty content.
+const unreachableRequestClientToolCall = async (): Promise<never> => {
+  throw new Error('requestClientToolCall must not be reached')
+}
 
 describe('handleStrReplace circuit breaker (Fix C)', () => {
   it('does not mint reusable authority when strict internal auto-reread fails', async () => {
@@ -499,5 +504,272 @@ describe('handleStrReplace circuit breaker (Fix C)', () => {
     expect(fileProcessingState.consecutiveStrReplaceFailuresByPath[path]).toBe(
       1,
     )
+  })
+
+  it('charges failure budget for autocorrected near-match and surfaces symmetric limit warning', async () => {
+    const path = 'autocorrect-budget.ts'
+    const initialContent = [
+      'export function calculateTotal(items: Item[]) {',
+      '  const subtotal = items.reduce((sum, item) => sum + item.price, 0)',
+      '  return subtotal',
+      '}',
+    ].join('\n')
+    const driftedOldString = [
+      'export function calculateTotal(items: Item[]) {',
+      '  const subTotal = items.reduce((sum, item) => sum + item.price, 0)',
+      '  return subtotal',
+      '}',
+    ].join('\n')
+    const newString = [
+      'export function calculateTotal(items: Item[]) {',
+      '  const subtotal = items.reduce((sum, item) => sum + item.price, 0)',
+      '  return subtotal * 1.0825',
+      '}',
+    ].join('\n')
+    const fileProcessingState = getFileProcessingValues({
+      consecutiveStrReplaceFailuresByPath: { [path]: 4 },
+      strictReadBeforeEdit: false,
+    })
+    const result = await handleStrReplace({
+      previousToolCallFinished: Promise.resolve(),
+      ...handlerAuthority,
+      toolCall: makeStrReplaceCall({
+        path,
+        atomic: false,
+        replacements: [
+          { oldString: driftedOldString, newString, allowMultiple: false },
+        ],
+      }),
+      fileProcessingState,
+      logger: silentLogger,
+      requestClientToolCall: confirmedRequestClientToolCall({
+        [path]: newString,
+      }),
+      requestOptionalFile: async () => initialContent,
+      writeToClient: noopWriteToClient,
+    })
+    const value = result.output[0]?.value as
+      | { message?: string; errorMessage?: string }
+      | undefined
+    expect(value?.errorMessage).toBeUndefined()
+    expect(value?.message).toContain('auto-corrected a near-match edit')
+    expect(value?.message).toContain('str_replace retry limit reached')
+    expect(fileProcessingState.consecutiveStrReplaceFailuresByPath[path]).toBe(
+      5,
+    )
+  })
+
+  it('does not increment failure budget on preflight syntax error (bypass)', async () => {
+    const path = 'syntax-bypass.ts'
+    const fileContent = 'export const value = 1\n'
+    const fileProcessingState = getFileProcessingValues({
+      consecutiveStrReplaceFailuresByPath: { [path]: 2 },
+      strictReadBeforeEdit: false,
+    })
+    const result = await handleStrReplace({
+      previousToolCallFinished: Promise.resolve(),
+      ...handlerAuthority,
+      toolCall: makeStrReplaceCall({
+        path,
+        atomic: false,
+        replacements: [
+          {
+            oldString: 'export const value = 1',
+            newString: 'export const value = {',
+            allowMultiple: false,
+          },
+        ],
+      }),
+      fileProcessingState,
+      logger: silentLogger,
+      requestClientToolCall: unreachableRequestClientToolCall,
+      requestOptionalFile: async () => fileContent,
+      writeToClient: noopWriteToClient,
+    })
+    const value = result.output[0]?.value as
+      | { errorMessage?: string }
+      | undefined
+    expect(value?.errorMessage).toContain('Preflight')
+    expect(fileProcessingState.consecutiveStrReplaceFailuresByPath[path]).toBe(
+      2,
+    )
+  })
+
+  it('unique-only auto-reread: allowMultiple:true must fail closed under strictReadBeforeEdit', async () => {
+    const path = 'unique-only-autoreread.ts'
+    const fileContent = 'export const value = 1\nexport const value = 1\n'
+    const fileProcessingState = getFileProcessingValues({
+      strictReadBeforeEdit: true,
+    })
+    let applied = false
+    const result = await handleStrReplace({
+      previousToolCallFinished: Promise.resolve(),
+      ...handlerAuthority,
+      toolCall: makeStrReplaceCall({
+        path,
+        atomic: false,
+        replacements: [
+          {
+            oldString: 'export const value = 1',
+            newString: 'export const value = 2',
+            allowMultiple: true,
+          },
+        ],
+      }),
+      fileProcessingState,
+      logger: silentLogger,
+      requestClientToolCall: async () => {
+        applied = true
+        return [] as any
+      },
+      requestOptionalFile: async () => fileContent,
+      writeToClient: noopWriteToClient,
+    })
+    expect(applied).toBe(false)
+    const value = result.output[0]?.value as
+      | { errorMessage?: string; errorCode?: string }
+      | undefined
+    expect(value?.errorCode).toBe('fresh_read_required')
+    expect(String(value?.errorMessage)).toMatch(/read_files|basedOnRead|fresh/i)
+    expect(
+      fileProcessingState.consecutiveStrReplaceFailuresByPath[path],
+    ).toBeUndefined()
+  })
+
+  it('structuralRecovery bypasses circuit breaker on clean success and clears budget', async () => {
+    const path = 'recovery-bypass.ts'
+    const fileContent = 'export const value = 1\n'
+    const fileProcessingState = getFileProcessingValues({
+      consecutiveStrReplaceFailuresByPath: { [path]: 5 },
+      strictReadBeforeEdit: false,
+    })
+    const result = await handleStrReplace({
+      previousToolCallFinished: Promise.resolve(),
+      ...handlerAuthority,
+      toolCall: makeStrReplaceCall({
+        path,
+        atomic: false,
+        replacements: [
+          {
+            oldString: 'export const value = 1',
+            newString: 'export const value = 2',
+            allowMultiple: false,
+          },
+        ],
+      }),
+      fileProcessingState,
+      logger: silentLogger,
+      structuralRecovery: true,
+      requestClientToolCall: confirmedRequestClientToolCall({
+        [path]: 'export const value = 2\n',
+      }),
+      requestOptionalFile: async () => fileContent,
+      writeToClient: noopWriteToClient,
+    })
+    const value = result.output[0]?.value as
+      | { errorMessage?: string }
+      | undefined
+    expect(value?.errorMessage).toBeUndefined()
+    expect(
+      fileProcessingState.consecutiveStrReplaceFailuresByPath[path],
+    ).toBeUndefined()
+  })
+
+  it('structuralRecovery releases the failure budget even when the recovery edit fails', async () => {
+    // RF-4: the budget was only released on the successful apply path, so a
+    // FAILED recovery edit left the counter pinned at the limit and every
+    // subsequent recovery attempt was refused by the breaker despite
+    // structuralRecovery being an explicit bypass. A failed recovery edit must
+    // also release the budget so the recovery path is not self-blocking.
+    const path = 'recovery-failure-releases-budget.ts'
+    const fileContent = 'export const value = 1\n'
+    const fileProcessingState = getFileProcessingValues({
+      consecutiveStrReplaceFailuresByPath: { [path]: 5 },
+      strictReadBeforeEdit: false,
+    })
+
+    const result = await handleStrReplace({
+      previousToolCallFinished: Promise.resolve(),
+      ...handlerAuthority,
+      toolCall: makeStrReplaceCall({
+        path,
+        atomic: false,
+        replacements: [
+          {
+            oldString: 'export const absent = 999',
+            newString: 'export const absent = 1000',
+            allowMultiple: false,
+          },
+        ],
+      }),
+      fileProcessingState,
+      logger: silentLogger,
+      structuralRecovery: true,
+      requestClientToolCall: unreachableRequestClientToolCall,
+      requestOptionalFile: async () => fileContent,
+      writeToClient: noopWriteToClient,
+    })
+
+    const value = result.output[0]?.value as
+      | { errorMessage?: string }
+      | undefined
+    // structuralRecovery bypasses the entry breaker, so the call reaches
+    // processStrReplace and reports the real no-match failure.
+    expect(value?.errorMessage ?? '').not.toMatch(
+      /^str_replace circuit breaker:/,
+    )
+    expect(value?.errorMessage).toBeDefined()
+    // Budget released despite the failure: the next recovery attempt is not
+    // refused by the breaker.
+    expect(
+      fileProcessingState.consecutiveStrReplaceFailuresByPath[path],
+    ).toBeUndefined()
+  })
+
+  it('auto-reread authorizes a valid EMPTY file instead of blocking on fresh_read_required', async () => {
+    // RF-2: the auto-reread hash gate must not treat an empty file as "no
+    // observable content". getContentHash('') is a real hash string, so the
+    // gate keys off `=== undefined` rather than falsiness. An empty file is a
+    // legitimately readable file: auto-reread must authorize this attempt and
+    // let processStrReplace report the genuine no-match, NOT fail closed up
+    // front with the "read_files must authorize" block.
+    const path = 'empty-file-autoreread.ts'
+    const emptyFileContent = ''
+    const fileProcessingState = getFileProcessingValues({
+      strictReadBeforeEdit: true,
+    })
+
+    const result = await handleStrReplace({
+      previousToolCallFinished: Promise.resolve(),
+      ...handlerAuthority,
+      toolCall: makeStrReplaceCall({
+        path,
+        atomic: false,
+        replacements: [
+          {
+            oldString: 'export const value = 1',
+            newString: 'export const value = 2',
+            allowMultiple: false,
+          },
+        ],
+      }),
+      fileProcessingState,
+      logger: silentLogger,
+      requestClientToolCall: unreachableRequestClientToolCall,
+      requestOptionalFile: async () => emptyFileContent,
+      writeToClient: noopWriteToClient,
+    })
+
+    const value = result.output[0]?.value as
+      | { errorMessage?: string }
+      | undefined
+    const errorMessage = String(value?.errorMessage ?? '')
+    // Proof the empty file was authorized and processing actually ran: the
+    // auto-reread-failed recovery suffix is only appended after the gate
+    // authorized the attempt.
+    expect(errorMessage).toContain('Auto-re-read once failed to apply')
+    // The up-front "cannot authorize" block must NOT have fired for a valid
+    // (if empty) file.
+    expect(errorMessage).not.toContain('must authorize the file before editing')
   })
 })

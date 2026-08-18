@@ -4,6 +4,7 @@ import { loopAgentSteps } from '@codebuff/agent-runtime/run-agent-step'
 import { getToolSet } from '@codebuff/agent-runtime/tools/prompts'
 import { getEffectiveAgentToolNames } from '@codebuff/agent-runtime/util/agent-tool-names'
 import {
+  ALLOW_ALL_TIER_TOOLS,
   BASE2_CORE_TOOL_NAMES,
   BASE2_TIER_TOOL_NAMES,
   filterByUnlockedTiers,
@@ -18,23 +19,10 @@ import {
   userMessage,
 } from '@codebuff/common/util/messages'
 
+import { createBase2 } from '../base2/base2'
 import {
-  createBase2,
-  getPublishUnlockedToolTiers,
-  getPublishUnlockedToolTiersWithCanary,
-} from '../base2/base2'
-import {
-  AUDIT_TOOLS,
-  CORE_TOOLS,
-  deriveIntentSignals,
-  IMPLEMENT_TOOLS,
-  isEnvFlagEnabled,
-  isProgressiveToolDisclosureEnvEnabled,
-  JOB_EXTRA_TOOLS,
-  MEDIA_3D_TOOLS,
   resolveModelToolNames,
-  resolveUnlockedTiersForPhase,
-  type ToolTier,
+  type UnlockedToolTier,
 } from '../base2/tool-tiers'
 
 import type { AgentTemplate } from '@codebuff/agent-runtime/templates/types'
@@ -51,47 +39,6 @@ const PROGRAMMATIC_TOOL_NAMES = [
   'inspect_environment',
   'get_affected_tests',
   'get_build_targets',
-] as const
-
-const CORE_ALWAYS = [
-  'spawn_agents',
-  'query_index',
-  'read_files',
-  'read_outline',
-  'read_subtree',
-  'list_directory',
-  'glob',
-  'code_search',
-  'skill',
-  'suggest_followups',
-  'list_jobs',
-  'check_job',
-  'check_background_agent',
-  'read_logs',
-] as const
-
-const IMPLEMENT_SAMPLE = [
-  'edit_transaction',
-  'create_plan',
-  'update_plan_status',
-  'inspect_workspace',
-  'inspect_environment',
-  'get_affected_tests',
-  'get_build_targets',
-] as const
-
-const AUDIT_SAMPLE = [
-  'inspect_codebase_structure',
-  'inspect_feature_completeness',
-  'evaluate_audit_coverage',
-  'get_change_review_bundle',
-  'get_task',
-] as const
-
-const MEDIA_SAMPLE = [
-  'read_image',
-  'inspect_3d_asset',
-  'render_3d_preview',
 ] as const
 
 function buildRepresentativeSkills(count: number): SkillsMap {
@@ -130,100 +77,177 @@ async function toolSurfaceTokenCount(toolNames: string[]): Promise<number> {
 }
 
 describe('base2 progressive tool disclosure (M1)', () => {
-  test('flag default on / omit option equals explicit true core-only surface', () => {
-    const implicit = createBase2('default')
-    const explicitOn = createBase2('default', {
-      progressiveToolDisclosure: true,
-    })
-    const explicitOff = createBase2('default', {
-      progressiveToolDisclosure: false,
-    })
-    // Default flipped ON: implicit is core-only, explicit false is full surface
-    expect(implicit.toolNames).toEqual(explicitOn.toolNames)
-    expect(implicit.toolNames).not.toEqual(explicitOff.toolNames)
-    expect(implicit.toolNames).toEqual(
-      resolveModelToolNames({
-        mode: 'default',
-        progressiveToolDisclosure: true,
-      }),
-    )
+  test('the default surface is the full mode-resolved surface', () => {
+    const agent = createBase2('default')
+    // Explicit expected surface rather than a re-derivation via
+    // resolveModelToolNames (createBase2 calls that same function with these
+    // same defaults, so comparing against it could never fail). CORE order
+    // first, then implement/audit/media_3d/job_extra in canonical tier order,
+    // minus run_terminal_command (execute-plan only, and default mode is not
+    // executePlan). Any change to CORE, the tier map, or the mode gates must
+    // fail loudly here.
+    expect(agent.toolNames).toEqual([
+      'spawn_agents',
+      'query_index',
+      'read_files',
+      'read_outline',
+      'read_subtree',
+      'list_directory',
+      'glob',
+      'code_search',
+      'ask_user',
+      'skill',
+      'suggest_followups',
+      'write_todos',
+      'list_jobs',
+      'check_job',
+      'check_background_agent',
+      'read_logs',
+      'edit_transaction',
+      'create_plan',
+      'update_plan_status',
+      'inspect_workspace',
+      'inspect_environment',
+      'get_affected_tests',
+      'get_build_targets',
+      'run_targeted_validation',
+      'inspect_codebase_structure',
+      'inspect_feature_completeness',
+      'evaluate_audit_coverage',
+      'get_change_review_bundle',
+      'get_task',
+      'read_image',
+      'inspect_3d_asset',
+      'render_3d_preview',
+      'edit_3d_asset',
+      'kill_job',
+    ])
   })
 
-  test('flag off explicit: full surface contains implement/audit/media/job tools', () => {
-    const tools = createBase2('default', {
-      progressiveToolDisclosure: false,
-    }).toolNames ?? []
-    expect(tools).toContain('edit_transaction')
-    expect(tools).toContain('inspect_codebase_structure')
-    expect(tools).toContain('inspect_feature_completeness')
-    expect(tools).toContain('kill_job')
-    expect(tools).toContain('read_image')
-    expect(tools).toContain('edit_3d_asset')
-    expect(tools).toContain('create_plan')
-    expect(tools).toContain('run_targeted_validation')
-    expect(tools).toContain('code_search')
+  test('mode gates apply across every gate combination', () => {
+    // Exercise every mode-gate combination: each surface stays within the
+    // derived CORE + tier set, and the mode-gated tools appear exactly when
+    // their gate allows them.
+    const derived = new Set<string>([
+      ...BASE2_CORE_TOOL_NAMES,
+      ...Object.values(BASE2_TIER_TOOL_NAMES).flat(),
+    ])
+    for (const planOnly of [false, true]) {
+      for (const executePlan of [false, true]) {
+        for (const noAskUser of [false, true]) {
+          for (const mode of ['default', 'fast'] as const) {
+            const label = `${mode} planOnly=${planOnly} executePlan=${executePlan} noAskUser=${noAskUser}`
+            const surface = resolveModelToolNames({
+              mode,
+              planOnly,
+              executePlan,
+              noAskUser,
+            })
+            const names = new Set<string>(surface)
+            expect(surface.length, label).toBe(names.size)
+            for (const name of surface) {
+              expect(derived.has(name), `${label}:${name}`).toBe(true)
+            }
+            expect(names.has('ask_user'), label).toBe(!noAskUser)
+            expect(names.has('write_todos'), label).toBe(
+              mode !== 'fast' && !planOnly,
+            )
+            expect(names.has('edit_transaction'), label).toBe(!planOnly)
+            expect(names.has('run_targeted_validation'), label).toBe(!planOnly)
+            expect(names.has('run_terminal_command'), label).toBe(
+              !planOnly && executePlan,
+            )
+          }
+        }
+      }
+    }
   })
 
-  test('CORE_TOOLS includes root content-search tool', () => {
-    expect(CORE_TOOLS).toContain('code_search')
+  test('createBase2 unlockedTiers passthrough narrows the shipped surface', () => {
+    // `unlockedTiers` is the only control that narrows what createBase2 ships.
+    const coreOnly = createBase2('default', { unlockedTiers: [] })
+    // Explicit expected CORE-only surface (same reason as above: comparing
+    // against resolveModelToolNames with the identical arguments createBase2
+    // already used cannot fail). Default mode keeps both mode-gated CORE
+    // tools (ask_user, write_todos).
+    expect(coreOnly.toolNames).toEqual([
+      'spawn_agents',
+      'query_index',
+      'read_files',
+      'read_outline',
+      'read_subtree',
+      'list_directory',
+      'glob',
+      'code_search',
+      'ask_user',
+      'skill',
+      'suggest_followups',
+      'write_todos',
+      'list_jobs',
+      'check_job',
+      'check_background_agent',
+      'read_logs',
+    ])
+    // The dormant runtime ceiling is deliberately NOT narrowed with it: it is
+    // the default (all non-core tiers) mode-resolved surface, so flipping
+    // progressiveToolDisclosure on could still unlock a tier instead of being
+    // stuck CORE-only. The caller's narrowing lives in toolNames above, and
+    // progressiveToolDisclosure: false keeps the ceiling unused today.
+    expect(
+      coreOnly.programmaticConfig?.fullToolSurface as string[] | undefined,
+    ).toContain('edit_transaction')
+
+    const implementOnly =
+      createBase2('default', { unlockedTiers: ['implement'] }).toolNames ?? []
+    expect(implementOnly).toContain('edit_transaction')
+    expect(implementOnly).not.toContain('read_image')
+    expect(implementOnly).not.toContain('kill_job')
   })
 
-  test('flag on core-only: CORE present; IMPLEMENT/AUDIT/MEDIA/JOB_EXTRA absent', () => {
-    const tools = createBase2('default', {
-      progressiveToolDisclosure: true,
-    }).toolNames ?? []
-
-    for (const name of CORE_ALWAYS) {
-      expect(tools).toContain(name)
-    }
-    expect(tools).toContain('ask_user')
-    expect(tools).toContain('write_todos')
-
-    for (const name of IMPLEMENT_SAMPLE) {
-      expect(tools).not.toContain(name)
-    }
-    expect(tools).not.toContain('run_targeted_validation')
-    expect(tools).not.toContain('run_terminal_command')
-    for (const name of AUDIT_SAMPLE) {
-      expect(tools).not.toContain(name)
-    }
-    for (const name of MEDIA_SAMPLE) {
-      expect(tools).not.toContain(name)
-    }
-    expect(tools).not.toContain('edit_3d_asset')
-    expect(tools).not.toContain('kill_job')
-  })
-
-  test('flag on + all unlocked tiers exposes gated tools', () => {
-    const unlockedTiers: ToolTier[] = [
-      'implement',
-      'audit',
-      'media_3d',
-      'job_extra',
+  test('fullToolSurface publishes the default mode-resolved ceiling, not the narrowed surface', () => {
+    // The runtime ceiling is only ever membership-tested (agent-tool-names.ts
+    // builds a Set from it), and it is dormant while
+    // progressiveToolDisclosure is pinned false. It is derived from the
+    // DEFAULT (all non-core tiers) mode-resolved surface — the same list the
+    // identical mode options WITHOUT `unlockedTiers` ship as toolNames — so a
+    // caller-narrowed surface cannot leave behind a ceiling that can never
+    // unlock a tier. It is also its own array, so an in-place mutation by
+    // either consumer cannot silently move the other.
+    const cases: Array<{
+      label: string
+      options?: Parameters<typeof createBase2>[1]
+      // Same mode gates, no caller narrowing: its toolNames IS the ceiling.
+      ceilingOptions?: Parameters<typeof createBase2>[1]
+    }> = [
+      { label: 'defaults' },
+      { label: 'core-only narrowing', options: { unlockedTiers: [] } },
+      {
+        label: 'implement-only narrowing',
+        options: { unlockedTiers: ['implement'] },
+      },
+      {
+        label: 'plan-only',
+        options: { planOnly: true },
+        ceilingOptions: { planOnly: true },
+      },
+      {
+        label: 'execute-plan',
+        options: { executePlan: true },
+        ceilingOptions: { executePlan: true },
+      },
     ]
-    const tools = resolveModelToolNames({
-      mode: 'default',
-      executePlan: true,
-      progressiveToolDisclosure: true,
-      unlockedTiers,
-    })
-
-    expect(tools).toContain('edit_transaction')
-    expect(tools).toContain('create_plan')
-    expect(tools).toContain('run_targeted_validation')
-    expect(tools).toContain('run_terminal_command')
-    expect(tools).toContain('inspect_codebase_structure')
-    expect(tools).toContain('inspect_feature_completeness')
-    expect(tools).toContain('read_image')
-    expect(tools).toContain('edit_3d_asset')
-    expect(tools).toContain('kill_job')
+    for (const { label, options, ceilingOptions } of cases) {
+      const agent = createBase2('default', options)
+      const ceiling = agent.programmaticConfig?.fullToolSurface
+      const expectedCeiling = createBase2('default', ceilingOptions).toolNames
+      expect(ceiling, label).toEqual(expectedCeiling)
+      expect(ceiling, label).not.toBe(expectedCeiling)
+      expect(ceiling, label).not.toBe(agent.toolNames)
+    }
   })
 
-  test('planOnly + progressive off: still no edit_transaction', () => {
-    const tools = createBase2('default', {
-      planOnly: true,
-      progressiveToolDisclosure: false,
-    }).toolNames ?? []
+  test('planOnly withholds the mutation/execution tools', () => {
+    const tools = createBase2('default', { planOnly: true }).toolNames ?? []
     expect(tools).not.toContain('edit_transaction')
     expect(tools).not.toContain('edit_3d_asset')
     expect(tools).not.toContain('run_terminal_command')
@@ -231,11 +255,10 @@ describe('base2 progressive tool disclosure (M1)', () => {
     expect(tools).not.toContain('run_targeted_validation')
   })
 
-  test('planOnly + progressive on + unlock implement: still no edit_transaction', () => {
+  test('planOnly + unlock implement: still no edit_transaction', () => {
     const tools = resolveModelToolNames({
       mode: 'default',
       planOnly: true,
-      progressiveToolDisclosure: true,
       unlockedTiers: ['implement'],
     })
     expect(tools).toContain('create_plan')
@@ -246,281 +269,29 @@ describe('base2 progressive tool disclosure (M1)', () => {
     expect(tools).not.toContain('write_todos')
   })
 
-  test('env canary on when option omitted enables progressive (core-only)', () => {
-    const previous = process.env.OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE
-    try {
-      process.env.OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE = 'true'
-      const tools = createBase2('default').toolNames ?? []
-      expect(tools).toContain('spawn_agents')
-      expect(tools).not.toContain('edit_transaction')
-      expect(tools).not.toContain('kill_job')
-      expect(tools).not.toContain('read_image')
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE
-      } else {
-        process.env.OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE = previous
-      }
-    }
-  })
-
-  test('explicit false overrides env canary on', () => {
-    const previous = process.env.OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE
-    try {
-      process.env.OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE = '1'
-      const tools = createBase2('default', {
-        progressiveToolDisclosure: false,
-      }).toolNames ?? []
-      expect(tools).toContain('edit_transaction')
-      expect(tools).toContain('kill_job')
-      expect(tools).toContain('read_image')
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE
-      } else {
-        process.env.OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE = previous
-      }
-    }
-  })
-
-  test('token budget: progressive on core-only tool surface is under 12k', async () => {
-    const tools = createBase2('default', {
-      progressiveToolDisclosure: true,
-    }).toolNames ?? []
-    expect(await toolSurfaceTokenCount(tools)).toBeLessThan(12_000)
+  test('token budget: always-on full tool surface is under 22.5k', async () => {
+    // The deliberate new default is the full 34-tool surface (measured ~21.4k
+    // tokens). This is a regression ceiling for that decision, not a
+    // core-only budget. Kept tight (~5% headroom) so an accidental surface
+    // expansion trips it instead of growing silently.
+    const tools = createBase2('default').toolNames ?? []
+    expect(await toolSurfaceTokenCount(tools)).toBeLessThan(22_500)
   })
 
   test('programmaticToolNames unchanged vs today', () => {
-    const agent = createBase2('default')
-    expect(agent.programmaticToolNames).toEqual([...PROGRAMMATIC_TOOL_NAMES])
-    const progressive = createBase2('default', {
-      progressiveToolDisclosure: true,
-    })
-    expect(progressive.programmaticToolNames).toEqual([
-      ...PROGRAMMATIC_TOOL_NAMES,
-    ])
-    const explicitOff = createBase2('default', {
-      progressiveToolDisclosure: false,
-    })
-    expect(explicitOff.programmaticToolNames).toEqual([
-      ...PROGRAMMATIC_TOOL_NAMES,
-    ])
+    for (const options of [
+      undefined,
+      { unlockedTiers: [] as UnlockedToolTier[] },
+      { planOnly: true },
+    ]) {
+      expect(createBase2('default', options).programmaticToolNames).toEqual([
+        ...PROGRAMMATIC_TOOL_NAMES,
+      ])
+    }
   })
 })
 
 describe('tier resolution helpers (M1-T3)', () => {
-  describe('resolveUnlockedTiersForPhase', () => {
-    test('returns [] when all intents are false', () => {
-      expect(
-        resolveUnlockedTiersForPhase({
-          implementIntent: false,
-          auditIntent: false,
-          mediaIntent: false,
-          jobIntent: false,
-        }),
-      ).toEqual([])
-    })
-
-    test("returns ['implement'] when implementIntent is true", () => {
-      expect(
-        resolveUnlockedTiersForPhase({
-          implementIntent: true,
-          auditIntent: false,
-          mediaIntent: false,
-          jobIntent: false,
-        }),
-      ).toEqual(['implement'])
-    })
-
-    test("returns ['audit'] when auditIntent is true", () => {
-      expect(
-        resolveUnlockedTiersForPhase({
-          implementIntent: false,
-          auditIntent: true,
-          mediaIntent: false,
-          jobIntent: false,
-        }),
-      ).toEqual(['audit'])
-    })
-
-    test("returns ['media_3d'] when mediaIntent is true", () => {
-      expect(
-        resolveUnlockedTiersForPhase({
-          implementIntent: false,
-          auditIntent: false,
-          mediaIntent: true,
-          jobIntent: false,
-        }),
-      ).toEqual(['media_3d'])
-    })
-
-    test("returns ['job_extra'] when jobIntent is true", () => {
-      expect(
-        resolveUnlockedTiersForPhase({
-          implementIntent: false,
-          auditIntent: false,
-          mediaIntent: false,
-          jobIntent: true,
-        }),
-      ).toEqual(['job_extra'])
-    })
-
-    test('returns all four tiers when all intents are true', () => {
-      expect(
-        resolveUnlockedTiersForPhase({
-          implementIntent: true,
-          auditIntent: true,
-          mediaIntent: true,
-          jobIntent: true,
-        }),
-      ).toEqual(['implement', 'audit', 'media_3d', 'job_extra'])
-    })
-
-    test("never returns 'core' regardless of input", () => {
-      const tiers = resolveUnlockedTiersForPhase({
-        implementIntent: true,
-        auditIntent: true,
-        mediaIntent: true,
-        jobIntent: true,
-      })
-      expect(tiers).not.toContain('core')
-    })
-  })
-
-  describe('deriveIntentSignals', () => {
-    const idleBase = {
-      phase: 'idle',
-      pendingGateFileCount: 0,
-      hasOpenReviewerBlockers: false,
-    }
-
-    test('implementIntent is true for implement-gating phases', () => {
-      for (const phase of [
-        'awaiting_validation',
-        'repair_loop',
-        'awaiting_review',
-        'blocked',
-      ]) {
-        expect(
-          deriveIntentSignals({ ...idleBase, phase }).implementIntent,
-        ).toBe(true)
-      }
-    })
-
-    test('implementIntent is true when pendingGateFileCount > 0 even in idle phase', () => {
-      expect(
-        deriveIntentSignals({ ...idleBase, pendingGateFileCount: 2 })
-          .implementIntent,
-      ).toBe(true)
-    })
-
-    test('implementIntent is true when hasOpenReviewerBlockers even in idle phase', () => {
-      expect(
-        deriveIntentSignals({ ...idleBase, hasOpenReviewerBlockers: true })
-          .implementIntent,
-      ).toBe(true)
-    })
-
-    test('implementIntent is true when the prompt contains implement keywords', () => {
-      for (const lastUserPrompt of [
-        'please implement this feature',
-        'fix the failing test',
-        'refactor the parser',
-        'update the docs',
-        'create a new endpoint',
-        'add a retry loop',
-      ]) {
-        expect(
-          deriveIntentSignals({ ...idleBase, lastUserPrompt }).implementIntent,
-        ).toBe(true)
-      }
-    })
-
-    test('implementIntent is false when idle with no pending files, blockers, or implement keywords', () => {
-      expect(
-        deriveIntentSignals({
-          ...idleBase,
-          lastUserPrompt: 'what does this function do?',
-        }).implementIntent,
-      ).toBe(false)
-    })
-
-    test('auditIntent is true when the prompt contains audit keywords', () => {
-      for (const lastUserPrompt of [
-        'run a full audit',
-        'check the coverage',
-        'verify completeness',
-        'do a systematic pass',
-      ]) {
-        expect(
-          deriveIntentSignals({ ...idleBase, lastUserPrompt }).auditIntent,
-        ).toBe(true)
-      }
-    })
-
-    test('auditIntent is true when phase is awaiting_review', () => {
-      expect(
-        deriveIntentSignals({ ...idleBase, phase: 'awaiting_review' })
-          .auditIntent,
-      ).toBe(true)
-    })
-
-    test('mediaIntent is true when the prompt contains media file extensions', () => {
-      for (const lastUserPrompt of [
-        'look at diagram.png',
-        'check photo.jpg',
-        'the logo.webp asset',
-        'open scene.blend',
-        'inspect model.obj',
-        'view scene.gltf',
-        'load mesh.glb',
-      ]) {
-        expect(
-          deriveIntentSignals({ ...idleBase, lastUserPrompt }).mediaIntent,
-        ).toBe(true)
-      }
-    })
-
-    test('mediaIntent is false for prompts without media extensions', () => {
-      expect(
-        deriveIntentSignals({
-          ...idleBase,
-          lastUserPrompt: 'summarize the readme file',
-        }).mediaIntent,
-      ).toBe(false)
-    })
-
-    test('jobIntent is true when the prompt contains job-management phrasing', () => {
-      for (const lastUserPrompt of [
-        'run this as a background job',
-        'kill the job',
-        'start the dev server',
-        'watch the build',
-        'tail -f the output log',
-        'check_job for readiness',
-      ]) {
-        expect(
-          deriveIntentSignals({ ...idleBase, lastUserPrompt }).jobIntent,
-        ).toBe(true)
-      }
-    })
-
-    test('jobIntent is false for bare kill/server/logs/watch/tail tokens', () => {
-      for (const lastUserPrompt of [
-        'explain this function',
-        'please kill the zombie metaphor in the docs',
-        'is the server still up',
-        'check the logs',
-        'tail the output',
-        'watch carefully how this works',
-      ]) {
-        expect(
-          deriveIntentSignals({ ...idleBase, lastUserPrompt }).jobIntent,
-        ).toBe(false)
-      }
-    })
-  })
-
   describe('getEffectiveAgentToolNames — unlockedToolTiers empty semantics', () => {
     const fullSurfaceTemplate = {
       id: 'tiered',
@@ -607,8 +378,7 @@ describe('tier resolution helpers (M1-T3)', () => {
     test('canary-off ignores stale non-empty unlockedToolTiers (resume/canary-off contract)', () => {
       // Persisted unlocks from a prior canary-on run must NOT re-activate
       // progressive CORE+tiers filtering when the live template has
-      // progressiveToolDisclosure explicitly off — that would permanently
-      // shrink a full-surface template on resume.
+      // progressiveToolDisclosure explicitly off (would shrink the surface).
       const canaryOffTemplate = {
         ...fullSurfaceTemplate,
         programmaticConfig: {
@@ -622,24 +392,93 @@ describe('tier resolution helpers (M1-T3)', () => {
         }),
       ).toEqual(['spawn_agents', 'read_files', 'edit_transaction', 'kill_job'])
     })
+
+    test('a progressive template omitting fullToolSurface fails closed (no tier tool is appended)', () => {
+      // Fail-open-by-omission guard: without a published ceiling there is no
+      // mode gate to preserve, so no unlocked tier tool may be appended.
+      // Allow-all must be requested explicitly (see the next test).
+      const noCeilingTemplate = {
+        ...fullSurfaceTemplate,
+        toolNames: ['spawn_agents', 'read_files'],
+        programmaticConfig: {},
+      } as AgentTemplate
+      const result = getEffectiveAgentToolNames(noCeilingTemplate, {
+        unlockedToolTiers: ['implement'],
+      })
+      expect(result).toEqual(['spawn_agents', 'read_files'])
+      expect(result).not.toContain('edit_transaction')
+      expect(result).not.toContain('run_terminal_command')
+    })
+
+    test('fullToolSurface: ALLOW_ALL_TIER_TOOLS opts into appending every unlocked tier tool', () => {
+      const allowAllTemplate = {
+        ...fullSurfaceTemplate,
+        toolNames: ['spawn_agents', 'read_files'],
+        programmaticConfig: { fullToolSurface: ALLOW_ALL_TIER_TOOLS },
+      } as AgentTemplate
+      const result = getEffectiveAgentToolNames(allowAllTemplate, {
+        unlockedToolTiers: ['implement'],
+      })
+      expect(result).toContain('edit_transaction')
+      expect(result).toContain('run_terminal_command')
+    })
   })
 
   describe('filterByUnlockedTiers', () => {
     test('empty unlockedTiers returns CORE-only tools from the input list', () => {
       // Low-level helper: empty tiers mean CORE-only of the *input* list.
       // getEffectiveAgentToolNames deliberately does NOT call this for
-      // absent/empty agentState.unlockedToolTiers (persisted empty = template surface).
+      // absent/empty agentState.unlockedToolTiers (persisted empty = template
+      // surface); see packages/agent-runtime/src/util/base2-tool-tiers.ts.
       const result = filterByUnlockedTiers(
         ['spawn_agents', 'read_files', 'edit_transaction', 'kill_job'],
         [],
+        // The ceiling is a required parameter; these input lists carry no mode
+        // gates, so the tests opt into allow-all explicitly.
+        () => true,
       )
       expect(result).toEqual(['spawn_agents', 'read_files'])
+    })
+
+    test('ALLOW_ALL_TIER_TOOLS admits every unlocked tier tool (explicit allow-all opt-out)', () => {
+      // Pins the explicit-sentinel branch. Allow-all is only ever reachable by
+      // passing ALLOW_ALL_TIER_TOOLS: a caller with no ceiling to pass (e.g. a
+      // progressive template omitting programmaticConfig.fullToolSurface) must
+      // fail closed instead of unlocking run_terminal_command by omission.
+      const result = filterByUnlockedTiers(
+        ['spawn_agents', 'read_files'],
+        ['implement'],
+        ALLOW_ALL_TIER_TOOLS,
+      )
+      expect(result).toEqual([
+        'spawn_agents',
+        'read_files',
+        'edit_transaction',
+        'create_plan',
+        'update_plan_status',
+        'inspect_workspace',
+        'inspect_environment',
+        'get_affected_tests',
+        'get_build_targets',
+        'run_targeted_validation',
+        'run_terminal_command',
+      ])
+      // Same result as an explicit allow-all predicate: the sentinel does not
+      // narrow.
+      expect(result).toEqual(
+        filterByUnlockedTiers(
+          ['spawn_agents', 'read_files'],
+          ['implement'],
+          () => true,
+        ),
+      )
     })
 
     test("unlockedTiers ['implement'] keeps CORE tools plus implement tools", () => {
       const result = filterByUnlockedTiers(
         ['spawn_agents', 'read_files'],
         ['implement'],
+        () => true,
       )
       expect(result).toEqual([
         'spawn_agents',
@@ -660,6 +499,7 @@ describe('tier resolution helpers (M1-T3)', () => {
       const result = filterByUnlockedTiers(
         ['spawn_agents', 'read_files'],
         ['implement', 'audit'],
+        () => true,
       )
       expect(result).toEqual([
         'spawn_agents',
@@ -687,6 +527,7 @@ describe('tier resolution helpers (M1-T3)', () => {
       const result = filterByUnlockedTiers(
         ['spawn_agents', 'read_files', 'edit_transaction'],
         ['media_3d', 'job_extra'],
+        () => true,
       )
       expect(result).toEqual([
         'spawn_agents',
@@ -703,6 +544,7 @@ describe('tier resolution helpers (M1-T3)', () => {
       const result = filterByUnlockedTiers(
         ['spawn_agents', 'read_files'],
         ['implement', 'audit', 'media_3d', 'job_extra'],
+        () => true,
       )
       expect(result).toEqual([
         'spawn_agents',
@@ -745,6 +587,7 @@ describe('tier resolution helpers (M1-T3)', () => {
       const result = filterByUnlockedTiers(
         ['create_plan', 'read_files', 'edit_transaction'],
         ['implement'],
+        () => true,
       )
       expect(result).toEqual([
         'create_plan',
@@ -764,51 +607,91 @@ describe('tier resolution helpers (M1-T3)', () => {
       const result = filterByUnlockedTiers(
         ['spawn_agents', 'edit_transaction'],
         ['implement'],
+        () => true,
       )
       const occurrences = result.filter((name) => name === 'edit_transaction')
       expect(occurrences).toHaveLength(1)
     })
+
+    test('sanitizes persisted unlockedTiers: non-string, core, unknown, dupes', () => {
+      // unlockedTiers carries persisted AgentState.unlockedToolTiers, so it is
+      // untrusted: non-string entries, the unconditional 'core' pseudo-tier,
+      // unknown tier names, and repeated entries must all be ignored without
+      // widening or duplicating the surface.
+      const result = filterByUnlockedTiers(
+        ['spawn_agents', 'read_files'],
+        [null, 42, 'core', 'nope', 'implement', 'implement'],
+        () => true,
+      )
+      expect(result).toEqual([
+        'spawn_agents',
+        'read_files',
+        'edit_transaction',
+        'create_plan',
+        'update_plan_status',
+        'inspect_workspace',
+        'inspect_environment',
+        'get_affected_tests',
+        'get_build_targets',
+        'run_targeted_validation',
+        'run_terminal_command',
+      ])
+      // The bogus 'nope' tier contributed nothing, and the duplicated
+      // 'implement' entry unlocked its tools exactly once.
+      expect(new Set(result).size).toBe(result.length)
+    })
+
+    test('templateAllows gates only the append path, never the keep path', () => {
+      // Documented asymmetry: a tier tool the template already lists is KEPT
+      // even when the mode ceiling rejects it (the static toolNames list is
+      // already mode-resolved), while the same tool is never APPENDED.
+      const rejectsEdits = (name: string) => name !== 'edit_transaction'
+      const kept = filterByUnlockedTiers(
+        ['spawn_agents', 'edit_transaction'],
+        ['implement'],
+        rejectsEdits,
+      )
+      expect(kept).toContain('edit_transaction')
+      expect(kept.indexOf('edit_transaction')).toBe(1)
+
+      const notAppended = filterByUnlockedTiers(
+        ['spawn_agents'],
+        ['implement'],
+        rejectsEdits,
+      )
+      expect(notAppended).not.toContain('edit_transaction')
+    })
   })
 })
 
-// RF-2 sync guard: the tier membership is duplicated across
-// agents/base2/tool-tiers.ts (CORE/IMPLEMENT/AUDIT/MEDIA_3D/JOB_EXTRA) and
-// packages/agent-runtime/src/util/base2-tool-tiers.ts
-// (BASE2_CORE_TOOL_NAMES/BASE2_TIER_TOOL_NAMES). agent-runtime cannot import
-// from agents/ (wrong dependency direction), so the two lists are kept in sync
-// only by a prose comment. These assertions make a one-sided edit fail loudly
-// instead of silently narrowing the runtime tool surface.
-describe('base2 tier membership — runtime mirror stays in sync', () => {
-  test('BASE2_CORE_TOOL_NAMES equals CORE_TOOLS', () => {
-    // CORE_TOOLS re-exports BASE2_CORE_TOOL_NAMES by construction, so this is
-    // intentionally vacuous — it cannot catch a drift. The real progressive
-    // core-only surface lives in the hand-encoded CORE buildArray inside
-    // resolveModelToolNames; the tests below tie THAT copy (and the other
-    // mode-gated modes) to the runtime constant so a one-sided edit fails.
-    expect([...BASE2_CORE_TOOL_NAMES]).toEqual([...CORE_TOOLS])
-  })
-
+// Tier membership needs no list-equality tests: agents/base2/tool-tiers.ts
+// CONSUMES the runtime lists directly (BASE2_CORE_TOOL_NAMES /
+// BASE2_TIER_TOOL_NAMES from
+// packages/agent-runtime/src/util/base2-tool-tiers.ts), and
+// resolveModelToolNames DERIVES its surface from those constants, so a tier
+// added there flows into the surfaced set automatically. These tests pin the
+// derivation itself.
+describe('base2 tier membership — resolveModelToolNames stays in sync', () => {
   test('progressive core-only surface matches BASE2_CORE_TOOL_NAMES exactly', () => {
-    // resolveModelToolNames' progressive CORE buildArray is a SECOND copy of
-    // CORE membership that no test previously exercised. In the default mode
-    // (ask_user + write_todos both allowed) the surfaced set must equal the
-    // runtime constant byte-for-byte, so a tool added/removed on either side
-    // fails loudly instead of silently narrowing/widening the tool surface.
+    // In the default mode (ask_user + write_todos both allowed) the CORE-only
+    // surface must equal the runtime constant, so a tool added or removed on
+    // either side fails loudly instead of silently changing the surface.
     const coreOnly = resolveModelToolNames({
       mode: 'default',
-      progressiveToolDisclosure: true,
       unlockedTiers: [],
     })
     // Bidirectional membership over string sets — avoids the ToolName[] sort()
     // widening that would break the AllToolNames[] toEqual overload, while still
-    // making a one-sided edit to either list fail loudly.
+    // making a one-sided edit to either list fail loudly. Each direction is
+    // checked against the OTHER list's set so neither loop is vacuous.
     const coreSet = new Set<string>(BASE2_CORE_TOOL_NAMES)
+    const surfacedSet = new Set<string>(coreOnly)
     expect(coreOnly.length).toBe(coreSet.size)
     for (const name of coreOnly) {
       expect(coreSet.has(name)).toBe(true)
     }
     for (const name of BASE2_CORE_TOOL_NAMES) {
-      expect(coreSet.has(name)).toBe(true)
+      expect(surfacedSet.has(name)).toBe(true)
     }
   })
 
@@ -819,7 +702,6 @@ describe('base2 tier membership — runtime mirror stays in sync', () => {
     const gated = resolveModelToolNames({
       mode: 'fast',
       noAskUser: true,
-      progressiveToolDisclosure: true,
       unlockedTiers: [],
     })
     const coreSet = new Set(BASE2_CORE_TOOL_NAMES)
@@ -830,219 +712,70 @@ describe('base2 tier membership — runtime mirror stays in sync', () => {
     expect(gated).not.toContain('write_todos')
   })
 
-  test('BASE2_TIER_TOOL_NAMES.implement equals IMPLEMENT_TOOLS', () => {
-    expect([...BASE2_TIER_TOOL_NAMES.implement]).toEqual([...IMPLEMENT_TOOLS])
-  })
-
-  test('BASE2_TIER_TOOL_NAMES.audit equals AUDIT_TOOLS', () => {
-    expect([...BASE2_TIER_TOOL_NAMES.audit]).toEqual([...AUDIT_TOOLS])
-  })
-
-  test('BASE2_TIER_TOOL_NAMES.media_3d equals MEDIA_3D_TOOLS', () => {
-    expect([...BASE2_TIER_TOOL_NAMES.media_3d]).toEqual([...MEDIA_3D_TOOLS])
-  })
-
-  test('BASE2_TIER_TOOL_NAMES.job_extra equals JOB_EXTRA_TOOLS', () => {
-    expect([...BASE2_TIER_TOOL_NAMES.job_extra]).toEqual([...JOB_EXTRA_TOOLS])
-  })
-
-  test('BASE2_TIER_TOOL_NAMES covers exactly the four non-core tiers', () => {
-    expect(Object.keys(BASE2_TIER_TOOL_NAMES).sort()).toEqual([
-      'audit',
-      'implement',
-      'job_extra',
-      'media_3d',
-    ])
-  })
-})
-
-// RF-3 budget sync guard MOVED: the SEMANTIC_* / MODEL_CONTEXT_* mirror between
-// packages/agent-runtime/src/util/context-pruning.ts and the serialized
-// handleSteps block in agents/context-pruner.ts is no longer hand-copied, so the
-// numeric-literal drift comparison that used to live here is obsolete. The
-// inline block is generated by scripts/generate-pruner-budgets.ts and enforced
-// structurally (stale-region + canonical-value parity) by
-// agents/__tests__/pruner-budgets-freshness.test.ts.
-
-// RF-3/RF-4 sync guard: the exported pure helper `getPublishUnlockedToolTiers`
-// must stay in sync with the serialized `publishUnlockedToolTiers` inline copy
-// inside base2's handleSteps (which is inlined via .toString() + new Function).
-// Previously this test readFileSync + Bun.Transpiler + new Function'd the
-// inline source — brittle to formatting. Now it imports the pure helper directly
-// and keeps the serialized-copy drift check as a lightweight behavioral guard.
-describe('publishUnlockedToolTiers — inline copy matches canonical helpers', () => {
-
-  const MATRIX: Array<{
-    phase: string
-    pendingGateFileCount: number
-    hasOpenReviewerBlockers: boolean
-    lastUserPrompt?: string
-  }> = [
-    // Idle with no signals.
-    {
-      phase: 'idle',
-      pendingGateFileCount: 0,
-      hasOpenReviewerBlockers: false,
-      lastUserPrompt: 'what does this function do?',
-    },
-    // Idle with no prompt at all.
-    {
-      phase: 'idle',
-      pendingGateFileCount: 0,
-      hasOpenReviewerBlockers: false,
-    },
-    // Implement-gating phases.
-    {
-      phase: 'awaiting_validation',
-      pendingGateFileCount: 0,
-      hasOpenReviewerBlockers: false,
-      lastUserPrompt: '',
-    },
-    {
-      phase: 'repair_loop',
-      pendingGateFileCount: 0,
-      hasOpenReviewerBlockers: false,
-      lastUserPrompt: '',
-    },
-    // awaiting_review triggers both implement and audit intent.
-    {
-      phase: 'awaiting_review',
-      pendingGateFileCount: 0,
-      hasOpenReviewerBlockers: false,
-      lastUserPrompt: '',
-    },
-    {
-      phase: 'blocked',
-      pendingGateFileCount: 0,
-      hasOpenReviewerBlockers: false,
-      lastUserPrompt: '',
-    },
-    // Pending gate files force implement intent even in idle phase.
-    {
-      phase: 'idle',
-      pendingGateFileCount: 3,
-      hasOpenReviewerBlockers: false,
-      lastUserPrompt: '',
-    },
-    // Open reviewer blockers force implement intent.
-    {
-      phase: 'idle',
-      pendingGateFileCount: 0,
-      hasOpenReviewerBlockers: true,
-      lastUserPrompt: '',
-    },
-    // Implement keyword in the prompt.
-    {
-      phase: 'idle',
-      pendingGateFileCount: 0,
-      hasOpenReviewerBlockers: false,
-      lastUserPrompt: 'please implement and fix this feature',
-    },
-    // Audit keyword in the prompt.
-    {
-      phase: 'idle',
-      pendingGateFileCount: 0,
-      hasOpenReviewerBlockers: false,
-      lastUserPrompt: 'run a full audit of the coverage',
-    },
-    // Media path in the prompt.
-    {
-      phase: 'idle',
-      pendingGateFileCount: 0,
-      hasOpenReviewerBlockers: false,
-      lastUserPrompt: 'look at diagram.png and scene.gltf',
-    },
-    // Job-management phrasing in the prompt.
-    {
-      phase: 'idle',
-      pendingGateFileCount: 0,
-      hasOpenReviewerBlockers: false,
-      lastUserPrompt: 'kill the job and tail -f the logs',
-    },
-    // Combined signals: implement phase + audit/media/job prompt keywords.
-    {
-      phase: 'awaiting_review',
-      pendingGateFileCount: 2,
-      hasOpenReviewerBlockers: true,
-      lastUserPrompt: 'audit the coverage, check logo.webp, and kill the job',
-    },
-  ]
-
-  test('pure helper mirrors deriveIntentSignals+resolveUnlockedTiersForPhase across the matrix (no file read / transpiler)', () => {
-    for (const input of MATRIX) {
-      const expectedSignals = deriveIntentSignals({
-        phase: input.phase,
-        pendingGateFileCount: input.pendingGateFileCount,
-        hasOpenReviewerBlockers: input.hasOpenReviewerBlockers,
-        lastUserPrompt: input.lastUserPrompt,
-      })
-      const expectedTiers = resolveUnlockedTiersForPhase(expectedSignals)
-      expect(
-        getPublishUnlockedToolTiers(input),
-        `getPublishUnlockedToolTiers diverged from tool-tiers.ts helpers for input ${JSON.stringify(input)}`,
-      ).toEqual(expectedTiers)
-    }
-  })
-
-  test('canary-off wrapper clears stale non-empty unlockedToolTiers for resume hygiene (pure helper)', () => {
-    expect(
-      getPublishUnlockedToolTiersWithCanary({
-        phase: 'idle',
-        pendingGateFileCount: 0,
-        hasOpenReviewerBlockers: false,
-        lastUserPrompt: 'please implement this feature',
-        progressiveToolDisclosure: false,
-        initialUnlockedToolTiers: ['implement', 'audit'],
+  test('every runtime tier contributes its tools to the default surface', () => {
+    // Derivation guard: the default unlock set is Object.keys of the runtime
+    // tier map, so a newly added fifth tier must contribute tools here instead
+    // of silently contributing none.
+    const surface = new Set<string>(
+      resolveModelToolNames({
+        mode: 'default',
+        executePlan: true,
       }),
-    ).toBeUndefined()
-    // Canary on: same input delegates to the pure helper.
-    expect(
-      getPublishUnlockedToolTiersWithCanary({
-        phase: 'idle',
-        pendingGateFileCount: 0,
-        hasOpenReviewerBlockers: false,
-        lastUserPrompt: 'please implement and fix this feature',
-        progressiveToolDisclosure: true,
-      }),
-    ).toEqual(['implement'])
-  })
-
-  test('generic isEnvFlagEnabled aliases the progressive-tool disclosure flag (RF-1)', () => {
-    // RF-1: the prompt-disclosure path reused a tool-specific name for a generic
-    // truthy check. The canonical name is now `isEnvFlagEnabled`; the old name
-    // remains as an alias.
-    for (const truthy of ['1', 'true', 'yes', 'on', '  TRUE  ', 'On']) {
-      expect(isEnvFlagEnabled(truthy)).toBe(true)
-      expect(isProgressiveToolDisclosureEnvEnabled(truthy)).toBe(true)
-    }
-    for (const falsy of ['', '0', 'false', 'no', 'off', undefined]) {
-      expect(isEnvFlagEnabled(falsy as string | undefined)).toBe(false)
-      expect(
-        isProgressiveToolDisclosureEnvEnabled(falsy as string | undefined),
-      ).toBe(false)
-    }
-    expect(isEnvFlagEnabled).toBe(isProgressiveToolDisclosureEnvEnabled)
-  })
-})
-
-// RF-5 traceability: small-window (<128k) branch coverage lives canonically in
-// packages/agent-runtime/src/util/__tests__/context-pruning.test.ts (parameterized
-// 8k/16k/32k/64k cases). This smoke case keeps the changed file's RF-5 finding
-// visibly addressed without duplicating the full matrix here.
-describe('RF-5 traceability — getSemanticCompactionBudget small-window coverage', () => {
-  // Import lazily to avoid circular initialization at top-level; the module is
-  // pure and has no side effects.
-  test('8k/32k/64k small-window branch is covered (see context-pruning.test.ts)', async () => {
-    const { getSemanticCompactionBudget } = await import(
-      '@codebuff/agent-runtime/util/context-pruning'
     )
-    for (const windowTokens of [8_000, 32_000, 64_000] as const) {
-      const budget = getSemanticCompactionBudget(windowTokens)
-      expect(budget.resolvedContextWindowTokens).toBe(windowTokens)
-      expect(budget.triggerBudgetTokens).toBeGreaterThan(1)
-      expect(budget.targetBudgetTokens).toBeGreaterThan(1)
-      expect(budget.targetBudgetTokens).toBeLessThan(budget.triggerBudgetTokens)
+    for (const [tier, toolNames] of Object.entries(BASE2_TIER_TOOL_NAMES)) {
+      for (const name of toolNames) {
+        expect(surface.has(name), `${tier}:${name}`).toBe(true)
+      }
     }
+  })
+
+  test('plan mode excludes every mutation/execution tool enumerated from the tier map', () => {
+    // Mode-sensitivity guard for the hardcoded modeAllowsTool switch in
+    // agents/base2/tool-tiers.ts. Enumerate every CORE/tier tool whose name
+    // marks it as a mutation or execution surface (`edit_*`, `run_*`,
+    // `write_*`, `apply_*`, `delete_*`) and assert plan mode withholds all of
+    // them, so a future tool like `write_file` / `apply_patch` / `delete_path`
+    // added to BASE2_TIER_TOOL_NAMES without extending modeAllowsTool fails
+    // here instead of silently becoming always-on in plan mode.
+    //
+    // `create_*` is deliberately outside the pattern: create_plan is the one
+    // plan-mode-legal writer (authoring a plan is the point of plan mode), so
+    // matching it would make this guard fail on intended behavior.
+    const mutationOrExecution = /^(?:edit_|run_|write_|apply_|delete_)/
+    const mutationTools = [
+      ...BASE2_CORE_TOOL_NAMES,
+      ...Object.values(BASE2_TIER_TOOL_NAMES).flat(),
+    ].filter((name) => mutationOrExecution.test(name))
+    // Non-vacuous: the lists currently declare edit_transaction,
+    // run_targeted_validation, run_terminal_command, edit_3d_asset (tiers) and
+    // write_todos (CORE).
+    expect(mutationTools).toContain('edit_transaction')
+    expect(mutationTools).toContain('run_terminal_command')
+    expect(mutationTools).toContain('write_todos')
+    expect(mutationTools.length).toBeGreaterThanOrEqual(5)
+    // The documented exception stays explicit: create_plan is a writer that
+    // plan mode intentionally keeps.
+    expect(mutationTools).not.toContain('create_plan')
+
+    // executePlan is deliberately on: planOnly must win over it, so even
+    // run_terminal_command stays withheld.
+    const planSurface = new Set<string>(
+      resolveModelToolNames({
+        mode: 'default',
+        planOnly: true,
+        executePlan: true,
+      }),
+    )
+    for (const name of mutationTools) {
+      expect(planSurface.has(name), name).toBe(false)
+    }
+    // write_todos is CORE and matched via the `write_` prefix above; pin it
+    // explicitly too so the CORE side of the gate cannot regress even if the
+    // prefix pattern is narrowed later.
+    expect(planSurface.has('write_todos')).toBe(false)
+    // create_plan is excluded from the pattern on purpose, so pin the intended
+    // behavior directly: plan mode keeps it.
+    expect(planSurface.has('create_plan')).toBe(true)
   })
 })
 
@@ -1060,7 +793,11 @@ describe('progressive tool disclosure — runtime wiring (loopAgentSteps)', () =
     // toolNames unchanged (resume contract) — do not put implement tools on the
     // static surface or a step with [] published would still expose
     // edit_transaction.
-    const fullSurface = [...CORE_TOOLS, ...IMPLEMENT_TOOLS, 'end_turn']
+    const fullSurface = [
+      ...BASE2_CORE_TOOL_NAMES,
+      ...BASE2_TIER_TOOL_NAMES.implement,
+      'end_turn',
+    ]
     return {
       id: 'tiered-agent',
       displayName: 'Tiered Agent',
@@ -1071,7 +808,7 @@ describe('progressive tool disclosure — runtime wiring (loopAgentSteps)', () =
       includeMessageHistory: true,
       inheritParentSystemPrompt: false,
       mcpServers: {},
-      toolNames: [...CORE_TOOLS, 'end_turn'],
+      toolNames: [...BASE2_CORE_TOOL_NAMES, 'end_turn'],
       spawnableAgents: [],
       systemPrompt: 'Test system prompt',
       instructionsPrompt: 'Test instructions prompt',
