@@ -1,4 +1,3 @@
-import { getContentHash } from '@codebuff/common/util/content-hash'
 import {
   formatUnsafeToolPathError,
   hasWholeFileReadAuthorization,
@@ -21,7 +20,7 @@ import {
 } from '../../../util/preflight-syntax-validation'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
-import type { FileProcessing, FileProcessingState } from './write-file'
+import type { FileProcessingState } from './write-file'
 import type {
   ClientToolCall,
   CodebuffToolCall,
@@ -229,56 +228,37 @@ export const handleStrReplace = (async (
     !structuralRecovery
   if (needsAuthWithoutCapability && replacementsAreUniqueOnly) {
     autoRereadAttempted = true
-    // Reuse already-fresh disk content when there was no prior edit to avoid
-    // duplicate I/O; otherwise re-fetch the current disk bytes and verify hash
-    // (non-empty string) before authorizing.
-    const freshDiskContent =
-      !previousEdit && typeof latestContent === 'string'
-        ? latestContent
-        : await requestOptionalFile({ ...params, filePath: path })
+    // Reuse the content already loaded above when it came from this same
+    // handler pass — no prior same-turn edit and no failed-edit recovery — so
+    // the load is the current disk state from this client round trip and a
+    // second requestOptionalFile would be duplicate I/O. Re-fetch when a prior
+    // same-turn edit or a failed-edit recovery means the loaded bytes may not
+    // reflect current disk content.
+    const shouldReuseLatestContent =
+      !previousEdit &&
+      typeof latestContent === 'string' &&
+      !recoveringFromFailedEdit
+    const freshDiskContent = shouldReuseLatestContent
+      ? latestContent
+      : await requestOptionalFile({ ...params, filePath: path })
     if (typeof freshDiskContent === 'string') {
-      // Hash verification: ensure content hash is computable (guards against
-      // empty/undefined edge cases and confirms we observed current disk bytes).
-      const freshDiskHash = getContentHash(freshDiskContent)
-      if (!freshDiskHash) {
-        const authorizationError = strictEditAuthorizationError({
-          fileProcessingState,
-          path,
-          toolName: 'str_replace',
-          hasFreshWholeFileAuthorization: false,
-          authorizationWasStale: hasStoredWholeFileAuthorization,
-        })
-        return {
-          output: [
-            {
-              type: 'json',
-              value: {
-                file: path,
-                errorMessage:
-                  authorizationError?.errorMessage ??
-                  `str_replace blocked for ${path}: read_files must authorize the file before editing.`,
-                errorCode: 'fresh_read_required',
-                recovery: authorizationError?.recovery ?? {
-                  tool: 'read_files',
-                  input: { paths: [path] },
-                },
-              },
-            },
-          ],
-        }
-      }
+      // Any string (including '' for an empty file) is observable disk content
+      // and authorizes this attempt. A missing file falls through to the
+      // fail-closed branch below.
       latestContent = freshDiskContent
       // In-process only: authorize this str_replace call; no durable sticky mint.
       // The helper may drop failed-edit markers but keeps context_compacted.
       clearEditRereadRequirement(fileProcessingState, path)
       hadFreshWholeFileAuthorization = true
     } else {
+      // Entry condition guarantees !hasStoredWholeFileAuthorization here, so
+      // there is no stale sticky hash to report.
       const authorizationError = strictEditAuthorizationError({
         fileProcessingState,
         path,
         toolName: 'str_replace',
         hasFreshWholeFileAuthorization: false,
-        authorizationWasStale: hasStoredWholeFileAuthorization,
+        authorizationWasStale: false,
       })
       return {
         output: [
@@ -290,7 +270,7 @@ export const handleStrReplace = (async (
                 authorizationError?.errorMessage ??
                 `str_replace blocked for ${path}: read_files must authorize the file before editing.`,
               errorCode: 'fresh_read_required',
-              recovery: {
+              recovery: authorizationError?.recovery ?? {
                 tool: 'read_files',
                 input: { paths: [path] },
               },
@@ -357,7 +337,23 @@ export const handleStrReplace = (async (
   // already-applied skipIfMissing deletion, so the patch is empty) and
   // edit_transaction keys off the same structured flag. Const-captured after await
   // from strReplaceResult to avoid mutable closure state.
-  const newPromise: Promise<FileProcessing<'str_replace'>> = processStrReplace({
+  type StrReplaceResultWithMetadata = Awaited<
+    ReturnType<typeof processStrReplace>
+  > & {
+    // Required, not optional: the terminal `.then` below attaches
+    // `toolCallId` on every branch (spread success/error result and the
+    // preflight-failure object), and `FileProcessing` requires it. Marking it
+    // optional here breaks assignability to `Promise<FileProcessing>` for
+    // promisesByPath/allPromises and to postStreamProcessing.
+    toolCallId: string
+    preflightSyntaxError?: boolean
+    errorCode?: string
+    recovery?: unknown
+    // failureKind is part of processStrReplace error union; re-exposed here
+    // so typed access does not require an untyped cast.
+    failureKind?: string
+  }
+  const newPromise: Promise<StrReplaceResultWithMetadata> = processStrReplace({
     path,
     replacements,
     atomic,
@@ -412,10 +408,12 @@ export const handleStrReplace = (async (
   const strReplaceResult = await newPromise
   const everyReplacementWasNoOpSkip =
     'content' in strReplaceResult &&
-    (strReplaceResult as { hadNoOpSkip?: boolean }).hadNoOpSkip === true
+    'hadNoOpSkip' in strReplaceResult &&
+    strReplaceResult.hadNoOpSkip === true
   const hadAutoCorrect =
     !('error' in strReplaceResult) &&
-    (strReplaceResult as { hadAutoCorrect?: boolean }).hadAutoCorrect === true
+    'hadAutoCorrect' in strReplaceResult &&
+    strReplaceResult.hadAutoCorrect === true
   if ('error' in strReplaceResult) {
     // A preflight syntax failure is semantically different from a stale-anchor
     // failure: the agent's oldString was fine, the new content just had a
@@ -423,11 +421,32 @@ export const handleStrReplace = (async (
     // the agent only needs to fix the syntax, not re-read the file or switch
     // tools. (Fix C circuit breaker only counts real processing failures.)
     if (!strReplaceResult.preflightSyntaxError) {
-      const failureKind = (strReplaceResult as { failureKind?: string }).failureKind
+      const failureKind =
+        'failureKind' in strReplaceResult
+          ? strReplaceResult.failureKind
+          : undefined
       const requiresFreshCapability =
         failureKind === 'capability_scope' ||
         failureKind === 'anchor_scope_mismatch'
       if (requiresFreshCapability) {
+        markEditRequiresFreshRead({
+          fileProcessingState,
+          path,
+          reason: 'stale_capability',
+          sourceTool: 'str_replace',
+        })
+      } else if (
+        getEditRereadRequirement(fileProcessingState, path)?.reason ===
+        'context_compacted'
+      ) {
+        // RF-3: a failed edit under compaction must still revoke the sticky
+        // whole-file authorization, otherwise a later write_file could
+        // whole-file overwrite off a hash the model can no longer see. The
+        // reason is NOT clobbered: markEditRequiresFreshRead retains an
+        // existing context_compacted reason (and its original sourceTool) and
+        // never downgrades it to the weaker reason passed here. The marker
+        // stays authoritative until a complete whole-file read_files grant or
+        // an explicit whole-file basedOnRead clears it.
         markEditRequiresFreshRead({
           fileProcessingState,
           path,
@@ -442,29 +461,35 @@ export const handleStrReplace = (async (
           strReplaceResult.error,
           `Auto-re-read once failed to apply. Call read_files with paths: ["${path}"] for a complete read before retrying str_replace.`,
         ].join('\n')
-        ;(strReplaceResult as unknown as { errorCode?: string }).errorCode =
-          'fresh_read_required'
-        ;(strReplaceResult as unknown as { recovery?: unknown }).recovery = {
+        strReplaceResult.errorCode = 'fresh_read_required'
+        strReplaceResult.recovery = {
           tool: 'read_files',
           input: { paths: [path] },
         }
       }
       // Deterministic no-match/ambiguity preflight failures do not mutate the
       // client and therefore preserve any valid read authorization.
-      const consecutiveAfterError = incrementStrReplaceFailureBudget(
-        fileProcessingState,
-        path,
-      )
-      if (consecutiveAfterError >= STR_REPLACE_MAX_CONSECUTIVE_FAILURES) {
-        const displayCount = Math.min(
-          consecutiveAfterError,
-          STR_REPLACE_MAX_CONSECUTIVE_FAILURES,
+      // structuralRecovery is an explicit breaker bypass: release the budget
+      // and skip the increment entirely, so the emitted message and the stored
+      // count always agree (a released budget never carries a limit warning).
+      if (structuralRecovery) {
+        delete fileProcessingState.consecutiveStrReplaceFailuresByPath[path]
+      } else {
+        const consecutiveAfterError = incrementStrReplaceFailureBudget(
+          fileProcessingState,
+          path,
         )
-        strReplaceResult.error = [
-          strReplaceResult.error,
-          `str_replace retry limit reached for \`${path}\` after ${displayCount} failed or auto-corrected attempts in this turn.`,
-          `Do not retry another remembered str_replace batch. Switch to ${STR_REPLACE_CIRCUIT_BREAKER_TOOL_GUIDANCE} when reconstructing the whole file is safer.`,
-        ].join('\n\n')
+        if (consecutiveAfterError >= STR_REPLACE_MAX_CONSECUTIVE_FAILURES) {
+          const displayCount = Math.min(
+            consecutiveAfterError,
+            STR_REPLACE_MAX_CONSECUTIVE_FAILURES,
+          )
+          strReplaceResult.error = [
+            strReplaceResult.error,
+            `str_replace retry limit reached for \`${path}\` after ${displayCount} failed or auto-corrected attempts in this turn.`,
+            `Do not retry another remembered str_replace batch. Switch to ${STR_REPLACE_CIRCUIT_BREAKER_TOOL_GUIDANCE} when reconstructing the whole file is safer.`,
+          ].join('\n\n')
+        }
       }
     }
   } else {
@@ -621,12 +646,8 @@ export const handleStrReplace = (async (
   }
 
   if ('error' in strReplaceResult) {
-    const maybeErrorCode = (
-      strReplaceResult as unknown as { errorCode?: string }
-    ).errorCode
-    const maybeRecovery = (
-      strReplaceResult as unknown as { recovery?: unknown }
-    ).recovery
+    const maybeErrorCode = strReplaceResult.errorCode
+    const maybeRecovery = strReplaceResult.recovery
     if (
       maybeErrorCode &&
       firstResult.type === 'json' &&
