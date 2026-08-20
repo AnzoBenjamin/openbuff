@@ -24,23 +24,58 @@ import {
   ReadLogsComponent,
 } from './background-job-tools'
 
-import type {
-  ToolComponent,
-  ToolRenderConfig,
-  ToolRenderOptions,
-  ToolBlock,
-} from './types'
+import type { ToolRenderConfig, ToolRenderOptions, ToolBlock } from './types'
 import type { ChatTheme } from '../../types/theme-system'
 import type { ToolName } from '@openbuff/sdk'
-import { toolMetadata } from '@codebuff/common/tools/metadata'
+import type { RemovedToolName } from '@codebuff/common/tools/metadata'
+import {
+  getToolMetadata,
+  removedToolNames,
+  toolMetadata,
+} from '@codebuff/common/tools/metadata'
 import { toolNames } from '@codebuff/common/tools/constants'
+
+/**
+ * Every name this registry can be keyed by. Removed tools (`apply_patch`,
+ * `apply_smart_patch`) are no longer members of the live `ToolName` union, but
+ * persisted blocks still carry them verbatim, so the registry widens its key
+ * type instead of asserting removed names back into `ToolName`.
+ */
+export type RegisteredToolName = ToolName | RemovedToolName
+
+/**
+ * A tool block as restored from persisted history. The persisted block type
+ * declares `toolName: ToolName`, which no longer contains removed names such as
+ * `apply_patch`, so this widens the field to the names restored sessions
+ * actually carry (removed, custom, or MCP) and keeps such blocks representable
+ * without a cast.
+ */
+export type PersistedToolBlock = Omit<ToolBlock, 'toolName'> & {
+  toolName: RegisteredToolName | (string & {})
+}
+
+/**
+ * A registry entry. Declared with method syntax so a component specialized to a
+ * single native tool name stays assignable, and keyed by `RegisteredToolName`
+ * so a removed-tool renderer needs no cast.
+ */
+export type RegisteredToolComponent = {
+  toolName: RegisteredToolName
+  render(
+    toolBlock: PersistedToolBlock,
+    theme: ChatTheme,
+    options: ToolRenderOptions,
+  ): ToolRenderConfig
+}
 
 /**
  * Registry of all tool-specific UI components.
  * Add new tool components here to make them available in the CLI.
  */
-const toolComponentRegistry = new Map<ToolName, ToolComponent>([
-  [ApplyPatchComponent.toolName, ApplyPatchComponent],
+const toolComponentRegistry = new Map<
+  RegisteredToolName,
+  RegisteredToolComponent
+>([
   [CodeSearchComponent.toolName, CodeSearchComponent],
   [GlobComponent.toolName, GlobComponent],
   [GitStatusComponent.toolName, GitStatusComponent],
@@ -62,30 +97,51 @@ const toolComponentRegistry = new Map<ToolName, ToolComponent>([
   [WriteFileComponent.toolName, WriteFileComponent],
   [TaskCompleteComponent.toolName, TaskCompleteComponent],
   ['replace_range', StrReplaceComponent],
+  // Removed edit tools still appear verbatim in restored sessions and keep
+  // mutation-kind metadata, so they need a renderer that understands their
+  // persisted `{ operation: { path, diff } }` / `{ input: [...] }` envelopes.
+  ['apply_patch', ApplyPatchComponent],
+  ['apply_smart_patch', ApplyPatchComponent],
   [SkillComponent.toolName, SkillComponent],
   [SpawnAgentsComponent.toolName, SpawnAgentsComponent],
 ])
 
 /**
+ * String-keyed read view of the registry. Restored sessions persist `toolName`
+ * verbatim and can carry any string (removed, custom, or MCP tool), so lookups
+ * accept a plain string without widening the registry's own key type.
+ */
+const toolComponentsByName: ReadonlyMap<string, RegisteredToolComponent> =
+  toolComponentRegistry
+
+/**
  * Register a new tool component.
  * This allows plugins or extensions to add custom tool renderers.
  *
+ * Typed by `RegisteredToolComponent` so the registration entry point can
+ * express every renderer shape the registry stores, including renderers for
+ * removed tool names that are no longer members of the live `ToolName` union.
+ *
  * @param component - The tool component to register
  */
-export function registerToolComponent(component: ToolComponent): void {
+export function registerToolComponent(
+  component: RegisteredToolComponent,
+): void {
   toolComponentRegistry.set(component.toolName, component)
 }
 
 /**
- * Get the registered component for a specific tool name.
+ * Get the registered component for a specific tool name. The parameter accepts
+ * any persisted string because restored blocks are not limited to live tool
+ * names.
  *
  * @param toolName - The name of the tool
  * @returns The tool component, or undefined if not registered
  */
 export function getToolComponent(
-  toolName: ToolName,
-): ToolComponent | undefined {
-  return toolComponentRegistry.get(toolName)
+  toolName: RegisteredToolName | (string & {}),
+): RegisteredToolComponent | undefined {
+  return toolComponentsByName.get(toolName)
 }
 
 /**
@@ -98,7 +154,7 @@ export function getToolComponent(
  * @returns Render configuration, or null to use default rendering
  */
 export function renderToolComponent(
-  toolBlock: ToolBlock,
+  toolBlock: PersistedToolBlock,
   theme: ChatTheme,
   options: ToolRenderOptions,
 ): ToolRenderConfig | undefined {
@@ -109,7 +165,7 @@ export function renderToolComponent(
   }
 
   try {
-    return component.render(toolBlock as any, theme, options)
+    return component.render(toolBlock, theme, options)
   } catch (error) {
     console.error(
       `Error rendering tool component for ${toolBlock.toolName}:`,
@@ -120,22 +176,29 @@ export function renderToolComponent(
 }
 
 /**
- * Get all registered tool names.
+ * Get all registered tool names. The registry also holds removed names kept
+ * renderable for restored sessions, so the return type is the wider
+ * `RegisteredToolName` set rather than the live `ToolName` union.
  * Useful for debugging or listing available tool renderers.
  */
-export function getRegisteredToolNames(): ToolName[] {
+export function getRegisteredToolNames(): RegisteredToolName[] {
   return Array.from(toolComponentRegistry.keys())
 }
 
 export type ToolRendererDisposition = 'custom' | 'fallback' | 'hidden'
 
-/** Metadata is the exhaustive source of truth; registration may only enhance fallback. */
+/**
+ * Metadata is the exhaustive source of truth; registration may only enhance
+ * fallback. Restored sessions persist `toolName` verbatim and can carry names of
+ * removed tools (e.g. `apply_patch`), so the lookup goes through the total
+ * `getToolMetadata` accessor rather than indexing the native-only record.
+ */
 export function getToolRendererDisposition(
-  toolName: ToolName,
+  toolName: ToolName | (string & {}),
 ): ToolRendererDisposition {
-  const intent = toolMetadata[toolName].renderer
+  const intent = getToolMetadata(toolName).renderer
   if (intent === 'hidden') return 'hidden'
-  return toolComponentRegistry.has(toolName) ? 'custom' : 'fallback'
+  return toolComponentsByName.has(toolName) ? 'custom' : 'fallback'
 }
 
 export const toolRendererDispositions = Object.fromEntries(
@@ -148,5 +211,21 @@ for (const toolName of toolNames) {
     !toolComponentRegistry.has(toolName)
   ) {
     throw new Error(`Missing metadata-declared custom renderer: ${toolName}`)
+  }
+}
+
+// Removed mutation-kind tools claim that restored blocks still render their
+// recorded diffs (see common/src/tools/metadata.ts). Registration may only
+// enhance a `fallback` metadata intent, so keep that claim backed by a real
+// surviving renderer instead of the generic fallback path, which reads only
+// `input.path` / `input.content` and resolves nothing for a legacy envelope.
+for (const toolName of removedToolNames) {
+  if (
+    getToolMetadata(toolName).kind === 'mutation' &&
+    !toolComponentRegistry.has(toolName)
+  ) {
+    throw new Error(
+      `Missing renderer for removed mutation-kind tool: ${toolName}`,
+    )
   }
 }

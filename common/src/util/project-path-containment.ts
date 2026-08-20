@@ -196,7 +196,7 @@ async function realpathCachedForFileSystemRoot(
 // reaches here (raw `..` is refused up front) and `openbuff-evil.sh` matches
 // neither the `.log|.json` file pattern nor the extension-free directory
 // pattern.
-const OWNED_TEMP_SEGMENT_PATTERNS: RegExp[] = [
+export const OWNED_TEMP_SEGMENT_PATTERNS: RegExp[] = [
   // Background-job log/metadata + basher full logs: `openbuff-<id>.log|.json`.
   /^openbuff-[A-Za-z0-9._-]+\.(?:log|json)$/,
   // Openbuff-created temp directories (mkdtemp prefixes), no dot-extension.

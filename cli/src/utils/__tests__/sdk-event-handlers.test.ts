@@ -291,13 +291,13 @@ describe('sdk-event-handlers', () => {
     dispatchValidEvent(handleEvent, {
       type: 'tool_call',
       toolCallId: 'tool-2',
-      toolName: 'apply_patch',
+      toolName: 'write_file',
       input: {},
     })
     dispatchValidEvent(handleEvent, {
       type: 'tool_result',
       toolCallId: 'tool-2',
-      toolName: 'apply_patch',
+      toolName: 'write_file',
       output: [
         { type: 'json', value: { applied: true } },
         { type: 'json', value: { errorMessage: 'post-commit report failed' } },

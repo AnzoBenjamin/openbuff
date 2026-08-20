@@ -130,7 +130,6 @@ describe('editor agent', () => {
       expect(editor.toolNames).not.toContain('str_replace')
       expect(editor.toolNames).not.toContain('replace_range')
       expect(editor.toolNames).not.toContain('rewrite_symbol')
-      expect(editor.toolNames).not.toContain('apply_patch')
       expect(editor.toolNames).not.toContain('read_slices')
     })
   })

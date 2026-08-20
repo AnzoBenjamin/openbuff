@@ -1,7 +1,9 @@
 import path from 'path'
 
 import {
+  getOwnedTempRoots,
   isOwnedTempPath,
+  OWNED_TEMP_SEGMENT_PATTERNS,
   resolveProjectPath,
   resolveProjectPathForFileSystem,
   type ContainedProjectPath,
@@ -36,7 +38,7 @@ export function isSafeProjectRelativePath(input: string): boolean {
  * containment, per-project-root realpath cache, synthetic-root fallback) is
  * in `common/src/util/project-path-containment.ts`. Keeping the SDK names
  * stable here preserves the existing public SDK surface for callers in
- * this package (`apply-patch`, `change-file`, `git-status`, `glob`,
+ * this package (`change-file`, `git-status`, `glob`,
  * `list-directory`, `read-files`, `read-image`, `replace-range`, and
  * `run.ts`).
  */
@@ -52,6 +54,139 @@ export type ResolvedOperationPath = ContainedProjectPath & {
 }
 
 /**
+ * Shared owned-temp fallback for unlink-style operations (followFinalSymlink: false).
+ *
+ * A top-level owned-temp entry (e.g. an `openbuff-<mkdtemp>` scratch directory
+ * directly under the OS temp root) has the bare temp root as its parent, and
+ * the temp root is deliberately never itself owned-temp (strictly-inside rule),
+ * so the parent lookup legitimately fails there. The parent lookup also fails
+ * when the parent is only lexically owned but its realpath escapes the owned
+ * roots — in that case the synthesized candidate would land outside the owned
+ * namespace and must be refused.
+ *
+ * This helper centralizes the candidate synthesis + isOwnedTempPath re-validation
+ * so sync and async resolveFilePathFor*Operation cannot drift.
+ */
+function getUnlinkOperationPath(
+  resolved: ContainedProjectPath,
+  parent: ContainedProjectPath | null,
+): string | null {
+  if (!parent) {
+    const candidate = path.join(
+      path.dirname(resolved.realFullPath),
+      path.basename(resolved.fullPath),
+    )
+    if (resolved.scope !== 'owned-temp' || !isOwnedTempPath(candidate)) {
+      return null
+    }
+    return candidate
+  }
+
+  return path.join(parent.realFullPath, path.basename(resolved.fullPath))
+}
+
+// --- FS-aware owned-temp helpers for virtual adapters (RF-2) ---
+// Re-uses the canonical pattern list from common so the two cannot drift.
+export const OWNED_TEMP_SEGMENT_PATTERNS_FS_AWARE: RegExp[] =
+  OWNED_TEMP_SEGMENT_PATTERNS
+
+function escapesRootFsAware(root: string, target: string): boolean {
+  const relative = path.relative(root, target)
+  return (
+    relative === '..' ||
+    relative.startsWith('..' + path.sep) ||
+    path.isAbsolute(relative) ||
+    relative.split(path.sep).includes('..')
+  )
+}
+
+function isInsideOwnedTempNamespaceFsAware(
+  target: string,
+  roots: string[],
+): boolean {
+  return roots.some((root) => {
+    const relative = path.relative(root, target)
+    if (relative === '' || escapesRootFsAware(root, target)) return false
+    const firstSegment = relative.split(path.sep)[0]
+    return OWNED_TEMP_SEGMENT_PATTERNS_FS_AWARE.some((pattern) =>
+      pattern.test(firstSegment),
+    )
+  })
+}
+
+async function realpathOrLexicalForFileSystemFsAware(
+  fsPath: string,
+  fileSystem: CodebuffFileSystem,
+): Promise<string> {
+  try {
+    return String(await fileSystem.realpath(fsPath))
+  } catch {
+    const tail: string[] = []
+    let current = fsPath
+    while (true) {
+      try {
+        const realAncestor = String(await fileSystem.realpath(current))
+        return tail.length === 0
+          ? realAncestor
+          : path.join(realAncestor, ...tail.reverse())
+      } catch {
+        if (current === path.dirname(current)) return fsPath
+        tail.push(path.basename(current))
+        current = path.dirname(current)
+      }
+    }
+  }
+}
+
+async function getOwnedTempComparisonRootsForFileSystemFsAware(
+  fileSystem: CodebuffFileSystem,
+): Promise<string[]> {
+  const roots = getOwnedTempRoots()
+  const realRoots = await Promise.all(
+    roots.map((root) => realpathOrLexicalForFileSystemFsAware(root, fileSystem)),
+  )
+  return [...new Set([...roots, ...realRoots])]
+}
+
+async function isOwnedTempPathForFileSystem(
+  input: string,
+  fileSystem: CodebuffFileSystem,
+): Promise<boolean> {
+  if (!input || input.split(/[\\/]+/).includes('..')) return false
+  const fullPath = path.resolve(input)
+  const roots =
+    await getOwnedTempComparisonRootsForFileSystemFsAware(fileSystem)
+  if (!isInsideOwnedTempNamespaceFsAware(fullPath, roots)) return false
+  const realFullPath = await realpathOrLexicalForFileSystemFsAware(
+    fullPath,
+    fileSystem,
+  )
+  if (!isInsideOwnedTempNamespaceFsAware(realFullPath, roots)) return false
+  return true
+}
+
+async function getUnlinkOperationPathForFileSystem(
+  resolved: ContainedProjectPath,
+  parent: ContainedProjectPath | null,
+  fileSystem: CodebuffFileSystem,
+): Promise<string | null> {
+  if (!parent) {
+    const candidate = path.join(
+      path.dirname(resolved.realFullPath),
+      path.basename(resolved.fullPath),
+    )
+    if (
+      resolved.scope !== 'owned-temp' ||
+      !(await isOwnedTempPathForFileSystem(candidate, fileSystem))
+    ) {
+      return null
+    }
+    return candidate
+  }
+  return path.join(parent.realFullPath, path.basename(resolved.fullPath))
+}
+
+/**
  * Resolve a project path for immediate filesystem/process use.
  *
  * The public `resolveFilePathWithinProject` helper preserves the caller's
@@ -64,16 +199,6 @@ export type ResolvedOperationPath = ContainedProjectPath & {
  * symlinks are still dereferenced and contained, while the final path component
  * remains the link itself so deleting an allowed in-project symlink does not
  * delete its target.
- *
- * A top-level owned-temp entry (e.g. an `openbuff-<mkdtemp>` scratch directory
- * directly under the OS temp root) has the bare temp root as its parent, and
- * the temp root is deliberately never itself owned-temp, so the parent lookup
- * fails. In that case the fallback below synthesizes the operation path from
- * the already-dereferenced `realFullPath` and then re-validates that synthesized
- * path against the owned-temp patterns. Containment is never inferred from the
- * child's scope: a lexically-owned parent whose realpath escapes the owned
- * roots also fails the parent lookup, and the synthesized candidate would then
- * land outside the owned namespace, so it must be refused.
  */
 export function resolveFilePathForOperation(
   projectRoot: string,
@@ -91,30 +216,9 @@ export function resolveFilePathForOperation(
     projectRoot,
     path.dirname(resolved.fullPath),
   )
-  if (!parent) {
-    // An owned-temp entry directly under the temp root has the bare temp root as
-    // its parent, and the temp root is deliberately never itself owned-temp
-    // (strictly-inside rule), so the parent lookup legitimately fails there.
-    // The parent lookup also fails when the parent is only lexically owned but
-    // its realpath escapes the owned roots, so the synthesized candidate is
-    // re-validated against the owned patterns rather than trusted.
-    const candidate = path.join(
-      path.dirname(resolved.realFullPath),
-      path.basename(resolved.fullPath),
-    )
-    if (resolved.scope !== 'owned-temp' || !isOwnedTempPath(candidate)) {
-      return null
-    }
-    return { ...resolved, operationPath: candidate }
-  }
-
-  return {
-    ...resolved,
-    operationPath: path.join(
-      parent.realFullPath,
-      path.basename(resolved.fullPath),
-    ),
-  }
+  const operationPath = getUnlinkOperationPath(resolved, parent)
+  if (!operationPath) return null
+  return { ...resolved, operationPath }
 }
 
 /** Filesystem-aware counterpart used whenever the operation itself runs
@@ -141,35 +245,15 @@ export async function resolveFilePathForFileSystemOperation(
     path.dirname(resolved.fullPath),
     fileSystem,
   )
-  if (!parent) {
-    // Same re-validation as the sync helper: the synthesized candidate is
-    // checked against the owned-temp patterns instead of inferring containment
-    // from the child's scope.
-    //
-    // KNOWN FAIL-OPEN DIRECTION: `isOwnedTempPath` is the SYNC host predicate.
-    // For an injected/virtual filesystem whose candidate does not exist on the
-    // host, the underlying `realpathOrLexical` falls back to the lexical path,
-    // so this re-check degrades to a pure pattern match against HOST-named
-    // owned temp roots. A virtual path that merely looks like a host owned-temp
-    // path therefore passes, and a legitimate virtual owned-temp root that does
-    // not match the host naming is refused (fail-closed in that direction).
-    // This only widens the top-level owned-temp entry case: `resolved.scope`
-    // was already decided by the adapter-backed resolution above, and every
-    // project-scoped path still goes through the adapter parent lookup.
-    const candidate = path.join(
-      path.dirname(resolved.realFullPath),
-      path.basename(resolved.fullPath),
-    )
-    if (resolved.scope !== 'owned-temp' || !isOwnedTempPath(candidate)) {
-      return null
-    }
-    return { ...resolved, operationPath: candidate }
-  }
-  return {
-    ...resolved,
-    operationPath: path.join(
-      parent.realFullPath,
-      path.basename(resolved.fullPath),
-    ),
-  }
+  // FS-aware re-validation: the synthesized top-level owned-temp candidate
+  // is checked through the injected filesystem's realpath/roots, not the
+  // host sync predicate, so a virtual adapter cannot be spoofed by a
+  // host-named pattern and a virtual owned-temp root is honoured.
+  const operationPath = await getUnlinkOperationPathForFileSystem(
+    resolved,
+    parent,
+    fileSystem,
+  )
+  if (!operationPath) return null
+  return { ...resolved, operationPath }
 }

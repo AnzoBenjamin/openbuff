@@ -1248,14 +1248,11 @@ describe('context-pruner handleSteps', () => {
   test('does not classify negated success wording as an applied edit', () => {
     const messages = [
       createMessage('user', 'Apply the patch'),
-      createToolCallMessage('call-negated', 'apply_patch', {
-        operation: {
-          type: 'update_file',
-          path: 'src/not-applied.ts',
-          diff: '@@ -1 +1 @@\n-old\n+new',
-        },
+      createToolCallMessage('call-negated', 'apply_smart_patch', {
+        path: 'src/not-applied.ts',
+        patch: '@@ -1 +1 @@\n-old\n+new',
       }),
-      createToolResultMessage('call-negated', 'apply_patch', {
+      createToolResultMessage('call-negated', 'apply_smart_patch', {
         file: 'src/not-applied.ts',
         message: 'Patch was not applied successfully.',
       }),
@@ -1269,7 +1266,7 @@ describe('context-pruner handleSteps', () => {
 
     expect(knowledgeMemory).not.toContain('src/not-applied.ts')
     expect(content).toContain(
-      'Tool error from apply_patch: Patch was not applied successfully.',
+      'Tool error from apply_smart_patch: Patch was not applied successfully.',
     )
   })
 
@@ -4037,10 +4034,6 @@ describe('context-pruner str_replace and write_file tool results', () => {
             },
           ],
         },
-      ],
-      [
-        'apply_patch',
-        { operation: { type: 'update_file', path: 'src/patch.ts', diff: '' } },
       ],
       ['apply_smart_patch', { path: 'src/smart.ts', patch: '' }],
       [

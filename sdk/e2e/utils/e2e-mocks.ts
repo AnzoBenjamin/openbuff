@@ -92,7 +92,6 @@ const MOCK_TOOL_NAMES = [
   'get_weather',
   'execute_sql',
   'fetch_api',
-  'apply_patch',
 ] as const
 type MockToolName = (typeof MOCK_TOOL_NAMES)[number]
 
@@ -231,22 +230,6 @@ function buildMockToolCall(params: {
   }
 
   if (
-    availableTools.has('apply_patch') &&
-    (lowerPrompt.includes('apply patch') || lowerPrompt.includes('patch file'))
-  ) {
-    return {
-      toolName: 'apply_patch',
-      input: {
-        operation: {
-          type: 'create_file' as const,
-          path: 'hello-from-apply-patch.txt',
-          diff: '@@\n+hello from apply_patch\n',
-        },
-      },
-    }
-  }
-
-  if (
     availableTools.has('fetch_api') &&
     (lowerPrompt.includes('http') || lowerPrompt.includes('fetch'))
   ) {
@@ -381,14 +364,6 @@ function buildMockResponseText(params: {
     toolName === 'execute_sql'
   ) {
     return 'Users include Alice and Bob.'
-  }
-
-  if (
-    lowerPrompt.includes('apply patch') ||
-    lowerPrompt.includes('patch file') ||
-    toolName === 'apply_patch'
-  ) {
-    return 'Applied patch successfully.'
   }
 
   if (

@@ -482,8 +482,8 @@ describe('FilesystemAuthority owned-temp namespace permits CRUD except live job 
     //
     // This asserts AUTHORIZATION ONLY. No mutation tool currently performs a
     // directory delete through this path (change_file reads the source first
-    // and would fail with EISDIR; apply_patch has no directory delete), so
-    // this case deliberately does not claim an end-to-end capability.
+    // and would fail with EISDIR), so this case deliberately does not claim
+    // an end-to-end capability.
     const result = await authority.authorizePath(ownedTempDir, 'delete')
     expect(result).toMatchObject({ allowed: true })
     if (!result.allowed) throw new Error(result.code)

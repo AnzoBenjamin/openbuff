@@ -10,6 +10,21 @@
  * Reconstructed functions lose their module closure, so they cannot
  * reference imports from this file. Keep all three implementations in
  * sync; `agents/__tests__/gate-files-parity.test.ts` asserts their parity.
+ *
+ * Deliberate asymmetry: the base2 inline `hasEditArtifact` copy mirrors only
+ * the evidence the gate needs (kind/version, non-empty operationId,
+ * recognised authorityTier, accepted outcome, matching authorityReceipt
+ * operationId/receiptId, and one applied action with a string path). It does
+ * NOT mirror this module's schema-level finalHashes/commit-status
+ * correlation, action hash consistency, or per-index actionId correlation.
+ * The accepted-outcome set (`applied` | `partial` | `rollback_incomplete`)
+ * and the authorityReceipt id match are the parts that must stay identical;
+ * the parity test's canonical fixtures enforce that.
+ *
+ * A fourth copy lives in `packages/agent-runtime/src/tools/tool-executor.ts`.
+ * It cannot import from here without coupling the runtime to agent
+ * internals, and it additionally matches `edit_3d_asset`. Update it in
+ * lockstep whenever this list changes.
  */
 
 import {
@@ -49,7 +64,8 @@ export function hasEditArtifact(record: Record<string, unknown>): boolean {
  * Walks a tool-call `input` payload and adds every file path it finds to
  * `out`. Handles the three edit-tool shapes used in this repo:
  *   - a top-level `path` (str_replace / replace_range / rewrite_symbol)
- *   - an `operation: { path }` wrapper (apply_patch / apply_smart_patch)
+ *   - an `operation: { path }` wrapper or array of such wrappers (legacy
+ *     apply_patch; the tool is removed but persisted histories still replay)
  *   - an `edits: [{ path }, ...]` array (edit_transaction)
  */
 export function collectToolInputFiles(input: unknown, out: Set<string>): void {
@@ -57,12 +73,19 @@ export function collectToolInputFiles(input: unknown, out: Set<string>): void {
   const record = input as Record<string, unknown>
   if (typeof record.path === 'string') out.add(record.path)
   const operation = record.operation
-  if (
-    operation &&
-    typeof operation === 'object' &&
-    typeof (operation as Record<string, unknown>).path === 'string'
-  ) {
-    out.add((operation as Record<string, string>).path)
+  const operationItems = Array.isArray(operation)
+    ? operation
+    : operation && typeof operation === 'object'
+      ? [operation]
+      : []
+  for (const item of operationItems) {
+    if (
+      item &&
+      typeof item === 'object' &&
+      typeof (item as Record<string, unknown>).path === 'string'
+    ) {
+      out.add((item as Record<string, string>).path)
+    }
   }
   const edits = record.edits
   if (Array.isArray(edits)) {

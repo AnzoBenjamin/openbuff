@@ -14,6 +14,13 @@ const terminalResult = (value: Record<string, unknown>) => ({
   stepsComplete: false,
 })
 
+/** A programmatic tool result carrying a single canonical json part. */
+const jsonToolResult = (value: Record<string, unknown>) => ({
+  toolResult: [{ type: 'json' as const, value: value as never }],
+  agentState: {} as never,
+  stepsComplete: false,
+})
+
 function advancePastSnapshotRead(
   generator: Generator,
   environment: Record<string, unknown>,
@@ -44,13 +51,12 @@ describe('dependency-manager', () => {
       'run_terminal_command',
       'read_files',
       'write_file',
-      'apply_patch',
     ])
     expect(dependencyManager.programmaticToolNames).toEqual([
       'inspect_environment',
       'read_files',
       'write_file',
-      'apply_patch',
+      'edit_transaction',
       'set_output',
     ])
   })
@@ -249,6 +255,246 @@ describe('dependency-manager', () => {
           status: 'failed',
           rollbackRequired: false,
           rollbackReceipt: { status: 'rolled_back' },
+        },
+      },
+    })
+  })
+
+  test('deletes lockfiles created by a failed command during rollback', () => {
+    const generator = dependencyManager.handleSteps!({
+      agentState: {} as never,
+      params: { manager: 'npm', operation: 'sync' },
+      logger: {} as never,
+    })
+    generator.next()
+    expect(
+      advancePastSnapshotRead(
+        generator,
+        { packageManager: 'npm', manifests: ['package.json'] },
+      ).value,
+    ).toMatchObject({ toolName: 'run_terminal_command' })
+    expect(
+      generator.next(
+        terminalResult({ exitCode: 1, stderr: 'registry unavailable' }),
+      ).value,
+    ).toMatchObject({ toolName: 'write_file' })
+    expect(generator.next({ toolResult: [] } as any).value).toMatchObject({
+      toolName: 'inspect_environment',
+    })
+    // The created lockfile must be read before edit_transaction can delete it:
+    // strict read-before-edit refuses deletes on never-read paths.
+    expect(
+      generator.next(environmentResult({ lockfiles: ['package-lock.json'] }))
+        .value,
+    ).toMatchObject({
+      toolName: 'read_files',
+      input: { paths: ['package-lock.json'] },
+    })
+    expect(
+      generator.next({
+        toolResult: [
+          {
+            type: 'json',
+            value: [
+              { path: 'package-lock.json', content: 'created', complete: true },
+            ],
+          },
+        ],
+        agentState: {} as never,
+        stepsComplete: false,
+      } as any).value,
+    ).toMatchObject({
+      toolName: 'edit_transaction',
+      input: { edits: [{ path: 'package-lock.json', type: 'delete' }] },
+    })
+    // Only a canonical `file_mutation_result` whose `delete` action for this
+    // exact path applied proves the deletion; an empty result would not.
+    expect(
+      generator.next(
+        jsonToolResult({
+          kind: 'file_mutation_result',
+          version: 1,
+          outcome: 'applied',
+          actions: [
+            {
+              action: 'delete',
+              path: 'package-lock.json',
+              outcome: 'applied',
+            },
+          ],
+        }) as any,
+      ).value,
+    ).toMatchObject({
+      toolName: 'set_output',
+      input: {
+        data: {
+          // v2 receipts report applied deletes only, with the remainder in
+          // `undeletedCreatedFiles`.
+          schemaVersion: 2,
+          status: 'failed',
+          rollbackRequired: false,
+          rollbackReceipt: {
+            schemaVersion: 2,
+            status: 'rolled_back',
+            deletedCreatedFiles: ['package-lock.json'],
+            undeletedCreatedFiles: [],
+          },
+        },
+      },
+    })
+  })
+
+  test('does not claim a deletion when edit_transaction refused the delete', () => {
+    const generator = dependencyManager.handleSteps!({
+      agentState: {} as never,
+      params: { manager: 'npm', operation: 'sync' },
+      logger: {} as never,
+    })
+    generator.next()
+    expect(
+      advancePastSnapshotRead(generator, {
+        packageManager: 'npm',
+        manifests: ['package.json'],
+      }).value,
+    ).toMatchObject({ toolName: 'run_terminal_command' })
+    expect(
+      generator.next(
+        terminalResult({ exitCode: 1, stderr: 'registry unavailable' }),
+      ).value,
+    ).toMatchObject({ toolName: 'write_file' })
+    expect(generator.next({ toolResult: [] } as any).value).toMatchObject({
+      toolName: 'inspect_environment',
+    })
+    expect(
+      generator.next(environmentResult({ lockfiles: ['package-lock.json'] }))
+        .value,
+    ).toMatchObject({
+      toolName: 'read_files',
+      input: { paths: ['package-lock.json'] },
+    })
+    expect(
+      generator.next({
+        toolResult: [
+          {
+            type: 'json',
+            value: [
+              { path: 'package-lock.json', content: 'created', complete: true },
+            ],
+          },
+        ],
+        agentState: {} as never,
+        stepsComplete: false,
+      } as any).value,
+    ).toMatchObject({
+      toolName: 'edit_transaction',
+      input: { edits: [{ path: 'package-lock.json', type: 'delete' }] },
+    })
+    // A native v1 failure carries its message at `error.message` and has no
+    // `errorMessage` key anywhere, so substring-matching the serialized result
+    // used to record this refused delete as a successful deletion.
+    const failure = generator.next(
+      jsonToolResult({
+        kind: 'native_tool_result_error',
+        version: 1,
+        toolName: 'edit_transaction',
+        lifecycle: { state: 'failed' },
+        error: {
+          code: 'read_authorization_required',
+          message:
+            "Delete refused: 'package-lock.json' has no whole-file authorization.",
+          retryable: false,
+        },
+        issueCount: 1,
+      }) as any,
+    ).value as any
+    expect(failure).toMatchObject({
+      toolName: 'set_output',
+      input: {
+        data: {
+          schemaVersion: 2,
+          status: 'failed',
+          rollbackRequired: true,
+          rollbackReceipt: {
+            schemaVersion: 2,
+            status: 'incomplete',
+            deletedCreatedFiles: [],
+            undeletedCreatedFiles: ['package-lock.json'],
+          },
+        },
+      },
+    })
+    // Every attempted delete stays in the receipt's audit trail.
+    expect(failure.input.data.rollbackReceipt.results).toContainEqual(
+      expect.objectContaining({
+        action: 'delete-created-lockfile',
+        path: 'package-lock.json',
+      }),
+    )
+  })
+
+  test('does not claim a deletion when the rollback read grants no whole-file authorization', () => {
+    const generator = dependencyManager.handleSteps!({
+      agentState: {} as never,
+      params: { manager: 'npm', operation: 'sync' },
+      logger: {} as never,
+    })
+    generator.next()
+    expect(
+      advancePastSnapshotRead(generator, {
+        packageManager: 'npm',
+        manifests: ['package.json'],
+      }).value,
+    ).toMatchObject({ toolName: 'run_terminal_command' })
+    expect(
+      generator.next(
+        terminalResult({ exitCode: 1, stderr: 'registry unavailable' }),
+      ).value,
+    ).toMatchObject({ toolName: 'write_file' })
+    expect(generator.next({ toolResult: [] } as any).value).toMatchObject({
+      toolName: 'inspect_environment',
+    })
+    expect(
+      generator.next(environmentResult({ lockfiles: ['package-lock.json'] }))
+        .value,
+    ).toMatchObject({
+      toolName: 'read_files',
+      input: { paths: ['package-lock.json'] },
+    })
+    // The lockfile exceeded the read gate, so no whole-file authorization was
+    // registered and edit_transaction would refuse the delete. The rollback must
+    // skip the delete and the receipt must not assert it.
+    expect(
+      generator.next({
+        toolResult: [
+          {
+            type: 'json',
+            value: {
+              results: [
+                {
+                  path: 'package-lock.json',
+                  status: 'too_large',
+                  complete: false,
+                },
+              ],
+            },
+          },
+        ],
+        agentState: {} as never,
+        stepsComplete: false,
+      } as any).value,
+    ).toMatchObject({
+      toolName: 'set_output',
+      input: {
+        data: {
+          schemaVersion: 2,
+          status: 'failed',
+          rollbackRequired: true,
+          rollbackReceipt: {
+            schemaVersion: 2,
+            status: 'incomplete',
+            deletedCreatedFiles: [],
+            undeletedCreatedFiles: ['package-lock.json'],
+          },
         },
       },
     })

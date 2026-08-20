@@ -9,7 +9,6 @@ export type {
 export { run } from './run'
 export { getFilesStructured } from './tools/read-files'
 export { changeFile, changeFiles } from './tools/change-file'
-export { applyPatchTool } from './tools/apply-patch'
 export { replaceRange } from './tools/replace-range'
 export { readImages } from './tools/read-image'
 export { edit3dAsset, inspect3dAsset, render3dPreview } from './tools/3d-assets'

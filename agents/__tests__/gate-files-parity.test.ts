@@ -189,6 +189,91 @@ function assertNoSiblingHelperReferences(
   }
 }
 
+/**
+ * Canonical `file_mutation_result` receipt, duplicated locally from
+ * agents/__tests__/gate-files.test.ts (these test files keep fixtures local
+ * rather than exporting them from the canonical module). It satisfies
+ * fileMutationResultV1Schema exactly, so canonical `hasEditArtifact` returns
+ * true and canonical `visitToolValue` collects its action path. Without at
+ * least one fixture the canonical helper ACCEPTS, every battery entry would
+ * exercise only the reject path and the parity assertions below would still
+ * pass if an inline copy rejected everything.
+ */
+function editReceipt(path: string): Record<string, unknown> {
+  const operationId = `op-${path}`
+  const receiptId = `receipt-${path}`
+  const actionId = `action-${path}`
+  const hash = 'sha256:' + 'a'.repeat(64)
+  return {
+    kind: 'file_mutation_result',
+    version: 1,
+    operationId,
+    receiptId,
+    outcome: 'applied',
+    authorityTier: 'conditional_commit',
+    actions: [
+      {
+        actionId,
+        index: 0,
+        action: 'update',
+        path,
+        outcome: 'applied',
+        beforeHash: hash,
+        afterHash: hash,
+      },
+    ],
+    authorityReceipt: {
+      kind: 'commit_receipt',
+      version: 1,
+      receiptId,
+      operationId,
+      callId: `call-${path}`,
+      authorityTier: 'conditional_commit',
+      status: 'committed',
+      actions: [
+        {
+          actionId,
+          index: 0,
+          action: 'update',
+          path,
+          status: 'committed',
+          beforeHash: hash,
+          afterHash: hash,
+        },
+      ],
+      finalHashes: { [path]: hash },
+    },
+    errors: [],
+    freshCapabilities: [],
+  }
+}
+
+/**
+ * Move-action variant of the canonical receipt. A move credits the
+ * DESTINATION path, so the action and its mirrored authority-receipt entry
+ * both carry `destinationPath` and `finalHashes` is keyed by the destination
+ * (the vacated source key is kept as well, matching the canonical move
+ * fixture in agents/__tests__/gate-files.test.ts).
+ */
+function moveReceipt(
+  path: string,
+  destinationPath: string,
+): Record<string, unknown> {
+  const receipt = editReceipt(path)
+  const action = (receipt.actions as Array<Record<string, unknown>>)[0]!
+  const authorityReceipt = receipt.authorityReceipt as Record<string, unknown>
+  const authorityAction = (
+    authorityReceipt.actions as Array<Record<string, unknown>>
+  )[0]!
+  const hash = action.afterHash as string
+  receipt.actions = [{ ...action, action: 'move', destinationPath }]
+  authorityReceipt.actions = [
+    { ...authorityAction, action: 'move', destinationPath },
+  ]
+  authorityReceipt.finalHashes = { [path]: hash, [destinationPath]: hash }
+  return receipt
+}
+
 describe('gate-files helpers — inline copies match canonical exports', () => {
   test('base2 inline copies match canonical gate-files.ts exports', () => {
     const inline = loadInlineHelpers(
@@ -260,6 +345,11 @@ describe('gate-files helpers — inline copies match canonical exports', () => {
     // hasEditArtifact parity — covers diff artifacts, explicit success/error,
     // success-verb messages, failure-indicator messages, and edge cases.
     const records: Record<string, unknown>[] = [
+      // Canonical-accepting receipts: without these every entry below is
+      // rejected by the canonical helper, so the assertions could not detect
+      // an inline copy that rejects valid receipts.
+      editReceipt('src/applied.ts'),
+      moveReceipt('src/moved-from.ts', 'src/moved-to.ts'),
       {
         kind: 'file_mutation_result',
         authorityTier: 'portable_path',
@@ -304,6 +394,7 @@ describe('gate-files helpers — inline copies match canonical exports', () => {
         ],
       },
       { path: 'src/e.ts', operation: { path: 'src/f.ts' } },
+      { operation: [{ path: 'src/op-a.ts' }, { path: 'src/op-b.ts' }] },
       null,
       undefined,
       'not-an-object',
@@ -331,7 +422,7 @@ describe('gate-files helpers — inline copies match canonical exports', () => {
         toolName: 'str_replace',
         input: { path: 'src/a.ts' },
       },
-      // apply_patch operation wrapper
+      // legacy apply_patch operation wrapper
       {
         toolName: 'apply_patch',
         input: { operation: { path: 'src/b.ts' } },
@@ -345,6 +436,17 @@ describe('gate-files helpers — inline copies match canonical exports', () => {
       {
         type: 'json',
         value: { file: 'src/e.ts', success: true },
+      },
+      // canonical file_mutation_result inside a json envelope — the ACCEPT
+      // path of the recursive walker. The envelope is carried by a
+      // file-changing tool-result message because editor.ts's copy only
+      // enters artifact mode through a `role: 'tool'` entry point; a bare
+      // envelope would diverge by construction rather than because of a real
+      // gate disagreement. All three copies collect src/envelope.ts here.
+      {
+        role: 'tool',
+        toolName: 'edit_transaction',
+        content: [{ type: 'json', value: editReceipt('src/envelope.ts') }],
       },
       // tool-result with changedFiles array
       {

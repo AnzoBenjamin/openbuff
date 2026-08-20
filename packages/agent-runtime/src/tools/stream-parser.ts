@@ -15,6 +15,7 @@ import {
 } from './tool-executor'
 import { remintConfirmedPostEditAnchors } from '../util/read-authorization'
 import { withSystemTags } from '../util/messages'
+import { resolveProjectPath } from '@codebuff/common/util/project-path-containment'
 import { normalizeToolPath } from './handlers/tool/write-file'
 
 import type { CustomToolCall, ExecuteToolCallParams } from './tool-executor'
@@ -89,6 +90,7 @@ export async function processStream(
     ancestorRunIds,
     fileContext,
     fullResponse,
+    logger,
     onCostCalculated,
     onResponseChunk,
     runId,
@@ -119,6 +121,10 @@ export async function processStream(
   // `lastWriteFinished = streamDonePromise` chain caused, where every write's
   // `previousToolCallFinished` was blocked on a promise that only resolved at
   // stream end.
+  // Per-path write barriers and in-flight reads are pruned on settle (see
+  // settledToolPromise handlers below) so Maps/Sets remain bounded to active
+  // operations; without pruning, distinct-path growth would be unbounded per
+  // turn (RF-5).
   const writeBarriersByPath = new Map<string, Promise<void>>()
   // Custom/MCP tools and any write whose target path cannot be statically
   // determined serialize against each other AND against all named-path writes
@@ -130,6 +136,7 @@ export async function processStream(
   // (read auth grants, clearing stale promise refs) and are safe to run
   // concurrently with each other. Active reads remain in this set until they
   // settle so every subsequently issued write observes the same read barrier.
+  // Pruned on settle to bound growth (RF-5).
   const inFlightReads = new Set<Promise<void>>()
 
   // Returns the outstanding write barrier for a path, or a resolved promise if
@@ -154,9 +161,31 @@ export async function processStream(
   // purpose of selecting the per-path write barrier. Returns `undefined` when
   // the tool is a custom/unknown-path write (no statically determinable single
   // target path), so the caller falls back to the global custom-tool barrier.
-  // `normalizeToolPath` strips leading `./` and rejects `..` traversal segments
-  // (mirroring the handler's own normalization); an empty/missing path also
-  // falls back to the custom-tool barrier.
+  // Canonicalizes via resolveProjectPath (when projectRoot is available) so
+  // absolute vs relative forms for the same file (e.g. "/project/src/foo.ts"
+  // vs "src/foo.ts") map to the same barrier key; otherwise falls back to
+  // lexical normalizeToolPath which strips leading "./" and rejects ".."
+  // traversal. An empty/missing path also falls back to the custom-tool
+  // barrier.
+  const canonicalizePathForBarrier = (raw: string): string | undefined => {
+    if (typeof raw !== 'string' || raw.length === 0) return undefined
+    const projectRoot = fileContext.projectRoot ?? ''
+    if (!projectRoot) {
+      // Without a project root we cannot reliably canonicalize absolute vs
+      // relative forms for the same file (e.g. "/project/src/foo.ts" vs
+      // "src/foo.ts") — lexical normalizeToolPath would map them to different
+      // barrier keys and allow concurrent writes on the same inode (RF-6).
+      // Conservatively serialize via the global barrier.
+      return undefined
+    }
+    const resolved = resolveProjectPath(projectRoot, raw)
+    if (resolved) {
+      const canonical = resolved.relativePath.replace(/\\/g, '/')
+      return canonical.length > 0 ? canonical : undefined
+    }
+    const normalized = normalizeToolPath(raw)
+    return normalized.length > 0 ? normalized : undefined
+  }
   const extractWritePath = (
     name: string,
     toolInput: Record<string, unknown>,
@@ -164,22 +193,12 @@ export async function processStream(
     if (
       name === 'str_replace' ||
       name === 'write_file' ||
-      name === 'apply_smart_patch' ||
       name === 'create_plan' ||
       name === 'replace_range'
     ) {
       const raw = toolInput.path
       if (typeof raw !== 'string' || raw.length === 0) return undefined
-      const normalized = normalizeToolPath(raw)
-      return normalized.length > 0 ? normalized : undefined
-    }
-    if (name === 'apply_patch') {
-      const operation = toolInput.operation
-      if (!operation || typeof operation !== 'object') return undefined
-      const raw = (operation as { path?: unknown }).path
-      if (typeof raw !== 'string' || raw.length === 0) return undefined
-      const normalized = normalizeToolPath(raw)
-      return normalized.length > 0 ? normalized : undefined
+      return canonicalizePathForBarrier(raw)
     }
     if (name === 'edit_transaction') {
       const edits = toolInput.edits
@@ -191,9 +210,11 @@ export async function processStream(
           typeof edit === 'object' &&
           typeof (edit as { path?: unknown }).path === 'string'
         ) {
-          const normalized = normalizeToolPath((edit as { path: string }).path)
-          if (normalized.length > 0) {
-            paths.push(normalized)
+          const canonical = canonicalizePathForBarrier(
+            (edit as { path: string }).path,
+          )
+          if (canonical !== undefined) {
+            paths.push(canonical)
           } else {
             return undefined
           }
@@ -292,13 +313,141 @@ export async function processStream(
           return
         }
         const toolCallId = context?.toolCallId ?? generateCompactId()
-        const isNativeTool = toolNames.includes(toolName as ToolName)
+        // Deprecated compatibility shim: `apply_patch` was removed from the native registry but
+        // retained in the exported ToolName/ToolParamsMap as @deprecated for type-compat.
+        // Keep a runtime alias so existing callers still succeed with a deprecation warning
+        // and migration guidance instead of a type-only success / runtime failure.
+        // See `common/src/tools/params/tool/write-file.ts` for the migration guide.
+        const isApplyPatchAlias = toolName === 'apply_patch' || toolName === 'apply_smart_patch'
+        let effectiveToolName = toolName
+        let effectiveInput: Record<string, unknown> = input as Record<string, unknown>
+        if (isApplyPatchAlias) {
+          logger.warn(
+            '`apply_patch` is deprecated and will be removed in a future major version. Use `write_file` (full content) or `edit_transaction` (`str_replace`/`replace_range`/`patch`) instead. `apply_patch({ path, diff })` or `apply_patch({ operation: { path, diff } })` is being handled via `edit_transaction` patch for compatibility.',
+          )
+          // Surface a model-visible warning as well so the turn can self-correct.
+          onResponseChunk({
+            type: 'text',
+            text: '⚠️ `apply_patch` is deprecated — use `write_file` or `edit_transaction` instead (migration: `apply_patch({ path, diff })` → `write_file({ path, instructions, content })` or `edit_transaction` with `patch`/`str_replace`). Legacy `operation` envelope (`{operation:{path,diff}}` or `{operation:[{path,diff}]}`) is also handled for persisted history replay and will be removed in the next major version.\n',
+          } as unknown as PrintModeEvent)
+          const raw = input as Record<string, unknown>
+          const operation = (raw as Record<string, unknown>).operation
+          const rawInputAlias = (raw as Record<string, unknown>).input
+          const fallbackPath = raw.path ?? (raw as Record<string, unknown>).file ?? (raw as Record<string, unknown>).filePath
+          const fallbackDiff = raw.diff ?? (raw as Record<string, unknown>).content ?? (raw as Record<string, unknown>).patch
+          const fallbackBasedOnRead = (raw as Record<string, unknown>).basedOnRead as unknown
+          const coercePath = (rec: Record<string, unknown>, fallback: unknown): string | null => {
+            const p =
+              rec.path ??
+              rec.file ??
+              (rec as Record<string, unknown>).filePath ??
+              (rec as Record<string, unknown>).file_path ??
+              (rec as Record<string, unknown>).destinationPath ??
+              fallback
+            return typeof p === 'string' && p.length > 0 ? p : null
+          }
+          const coerceDiff = (rec: Record<string, unknown>, fallback: unknown): string => {
+            const d = rec.diff ?? rec.content ?? (rec as Record<string, unknown>).patch ?? (rec as Record<string, unknown>).unifiedDiff ?? fallback
+            return typeof d === 'string' ? d : d != null ? String(d) : ''
+          }
+          const coerceBasedOnRead = (rec: Record<string, unknown>, fallback: unknown): string | undefined => {
+            const b = rec.basedOnRead ?? (rec as Record<string, unknown>).basedOnRead ?? fallback
+            return typeof b === 'string' && b.length > 0 ? b : undefined
+          }
+          const toDeleteEdit = (entry: unknown, pathFallback: unknown): { type: 'delete'; path: string } | null => {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
+            const rec = entry as Record<string, unknown>
+            const p = coercePath(rec, pathFallback)
+            if (!p) return null
+            const t = typeof rec.type === 'string' ? rec.type : undefined
+            if (t === 'delete_file' || t === 'delete') return { type: 'delete' as const, path: p }
+            return null
+          }
+          const toPatchEdit = (
+            entry: unknown,
+            pathFallback: unknown,
+            diffFallback: unknown,
+            basedOnReadFallback: unknown,
+          ): { type: 'patch'; path: string; diff: string; basedOnRead?: string } | null => {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
+            const rec = entry as Record<string, unknown>
+            const t = typeof rec.type === 'string' ? rec.type : undefined
+            if (t === 'delete_file' || t === 'delete') return null
+            const p = coercePath(rec, pathFallback)
+            if (!p) return null
+            const diffStr = coerceDiff(rec, diffFallback)
+            const basedOnRead = coerceBasedOnRead(rec, basedOnReadFallback)
+            const edit: { type: 'patch'; path: string; diff: string; basedOnRead?: string } = {
+              type: 'patch' as const,
+              path: p,
+              diff: diffStr,
+            }
+            if (basedOnRead) edit.basedOnRead = basedOnRead
+            return edit
+          }
+          let edits: Array<{ type: 'patch'; path: string; diff: string; basedOnRead?: string } | { type: 'delete'; path: string }> = []
+          const collectEntry = (entry: unknown) => {
+            const del = toDeleteEdit(entry, fallbackPath)
+            if (del) {
+              edits.push(del)
+              return
+            }
+            const pat = toPatchEdit(entry, fallbackPath, fallbackDiff, fallbackBasedOnRead)
+            if (pat) edits.push(pat)
+          }
+          if (operation !== undefined) {
+            if (Array.isArray(operation)) {
+              for (const op of operation) collectEntry(op)
+            } else if (operation && typeof operation === 'object') {
+              collectEntry(operation)
+            }
+          }
+          if (edits.length === 0 && Array.isArray(rawInputAlias)) {
+            for (const op of rawInputAlias as unknown[]) collectEntry(op)
+          }
+          if (edits.length === 0) {
+            const depPath = coercePath(raw as Record<string, unknown>, undefined)
+            const depDiff = fallbackDiff
+            const depBasedOnRead = fallbackBasedOnRead as string | undefined
+            const rawType =
+              typeof (raw as Record<string, unknown>).type === 'string' ? ((raw as Record<string, unknown>).type as string) : undefined
+            if (rawType === 'delete_file' || rawType === 'delete') {
+              if (typeof depPath === 'string' && depPath.length > 0) {
+                edits = [{ type: 'delete' as const, path: depPath }]
+              } else {
+                edits = [{ type: 'delete' as const, path: typeof depPath === 'string' ? depPath : String(depPath ?? '') }]
+              }
+            } else if (typeof depPath === 'string' && depPath.length > 0) {
+              const patch: { type: 'patch'; path: string; diff: string; basedOnRead?: string } = {
+                type: 'patch' as const,
+                path: depPath,
+                diff: typeof depDiff === 'string' ? depDiff : depDiff != null ? String(depDiff) : '',
+              }
+              if (typeof depBasedOnRead === 'string' && depBasedOnRead.length > 0) patch.basedOnRead = depBasedOnRead
+              edits = [patch]
+            } else {
+              const patch: { type: 'patch'; path: string; diff: string; basedOnRead?: string } = {
+                type: 'patch' as const,
+                path: typeof depPath === 'string' ? depPath : String(depPath ?? ''),
+                diff: typeof depDiff === 'string' ? depDiff : depDiff != null ? String(depDiff) : '',
+              }
+              if (typeof depBasedOnRead === 'string' && depBasedOnRead.length > 0) patch.basedOnRead = depBasedOnRead
+              edits = [patch]
+            }
+          }
+          effectiveToolName = 'edit_transaction'
+          effectiveInput = {
+            edits,
+          }
+        }
+        const isNativeTool =
+          toolNames.includes(effectiveToolName as ToolName) || isApplyPatchAlias
 
         // Check if this is an agent tool call that should be transformed to spawn_agents
         const transformed = !isNativeTool
           ? tryTransformAgentToolCall({
-              toolName,
-              input,
+              toolName: effectiveToolName,
+              input: effectiveInput,
               spawnableAgents: agentTemplate.spawnableAgents,
             })
           : null
@@ -309,7 +458,9 @@ export async function processStream(
         // each other. Write tools (and custom/MCP tools, which are treated as
         // writes since we cannot prove they are side-effect-free) must wait for
         // all in-flight reads AND prior writes to complete.
-        const resolvedToolName = transformed ? transformed.toolName : toolName
+        const resolvedToolName = transformed
+          ? transformed.toolName
+          : (effectiveToolName as string)
         const isReadOnlyTool =
           isNativeTool && READ_ONLY_TOOLS.has(resolvedToolName)
         const resolvedMetadata = isNativeTool
@@ -329,14 +480,14 @@ export async function processStream(
 
         // Determine the target path for this write tool, so it can be assigned
         // a per-path barrier. Named-path writes (str_replace / write_file /
-        // edit_transaction / apply_smart_patch) serialize only against prior
+        // edit_transaction / create_plan / replace_range) serialize only against prior
         // writes to the SAME path; writes on DIFFERENT paths run concurrently.
         // Custom/MCP tools and any write whose path cannot be statically
         // determined (including a multi-path edit_transaction) serialize against
         // the global custom-tool barrier, which also serializes against every
         // named-path write (conservative: they might touch any path).
         const writePath = !isReadOnlyTool
-          ? extractWritePath(resolvedToolName, input)
+          ? extractWritePath(resolvedToolName, effectiveInput)
           : undefined
 
         // Compute the `queued` runtime signal for this write. A named-path write
@@ -406,8 +557,8 @@ export async function processStream(
             ...params,
             toolName: transformed
               ? transformed.toolName
-              : (toolName as ToolName),
-            input: transformed ? transformed.input : input,
+              : (effectiveToolName as ToolName),
+            input: transformed ? transformed.input : effectiveInput,
             fromHandleSteps: false,
 
             fileProcessingState,

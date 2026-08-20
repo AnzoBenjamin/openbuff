@@ -1,6 +1,5 @@
 import { handleAddMessage } from './tool/add-message'
 import { handleAddSubgoal } from './tool/add-subgoal'
-import { handleApplyPatch } from './tool/apply-patch'
 import { handleAskUser } from './tool/ask-user'
 import { handleBrowserLogs } from './tool/browser-logs'
 import { handleCheckBackgroundAgent } from './tool/check-background-agent'
@@ -78,7 +77,6 @@ import type { ToolName } from '@codebuff/common/tools/constants'
 export const codebuffToolHandlers = {
   add_message: handleAddMessage,
   add_subgoal: handleAddSubgoal,
-  apply_patch: handleApplyPatch,
   ask_user: handleAskUser,
   browser_logs: handleBrowserLogs,
   check_background_agent: handleCheckBackgroundAgent,

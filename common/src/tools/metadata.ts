@@ -4,7 +4,18 @@ export type ToolBehaviorKind = 'read' | 'mutation' | 'control' | 'other'
 export type ToolSchedulingScope = 'read_only' | 'named_path' | 'global'
 export type ToolResultContract = 'legacy_v0' | 'read_v1' | 'mutation_v1'
 export type ToolRendererIntent = 'custom' | 'fallback' | 'hidden'
-export type ToolReachability = 'active' | 'quarantined' | 'internal'
+export type ToolReachability =
+  | 'active'
+  | 'quarantined'
+  | 'internal'
+  /** Removed from the registry; only reachable through persisted artifacts. */
+  | 'removed'
+  /**
+   * Not a native tool name at all: a live custom tool, an MCP tool, or any
+   * other unrecognized string. Such a tool is neither registered here nor
+   * deprecated; its own definition owns its behavior and prompt exposure.
+   */
+  | 'unknown'
 
 export type ToolMetadata = {
   kind: ToolBehaviorKind
@@ -47,7 +58,6 @@ const READ_TOOLS = new Set<ToolName>([
   'read_subtree',
 ])
 const MUTATION_TOOLS = new Set<ToolName>([
-  'apply_patch',
   'create_plan',
   'edit_transaction',
   'edit_3d_asset',
@@ -74,7 +84,6 @@ const HIDDEN_TOOLS = new Set<ToolName>([
   'update_subgoal',
 ])
 const CUSTOM_RENDERERS = new Set<ToolName>([
-  'apply_patch',
   'edit_transaction',
   'query_index',
   'read_files',
@@ -87,7 +96,6 @@ const CUSTOM_RENDERERS = new Set<ToolName>([
   'write_todos',
 ])
 const NAMED_PATH_TOOLS = new Set<ToolName>([
-  'apply_patch',
   'create_plan',
   'replace_range',
   'rewrite_symbol',
@@ -99,7 +107,6 @@ const NAMED_PATH_TOOLS = new Set<ToolName>([
   'render_3d_preview',
 ])
 const PATH_INPUTS: Partial<Record<ToolName, readonly string[]>> = {
-  apply_patch: ['operation.path'],
   create_plan: ['path'],
   edit_transaction: ['edits[].path'],
   edit_3d_asset: ['path'],
@@ -180,6 +187,104 @@ export const toolMetadata = Object.fromEntries(
   toolNames.map((toolName) => [toolName, metadataFor(toolName)]),
 ) as Record<ToolName, ToolMetadata>
 
-export function getToolMetadata(toolName: ToolName): ToolMetadata {
-  return toolMetadata[toolName]
+/**
+ * Tool names that were removed from the registry but still appear verbatim in
+ * persisted artifacts (CLI chat blocks, tool-call histories). Restored sessions
+ * are rendered and summarized by looking metadata up from the persisted string,
+ * so the lookup must stay total for these names instead of resolving to
+ * `undefined` and throwing on the first property access.
+ */
+export const removedToolNames = [
+  'apply_patch',
+  'apply_smart_patch',
+  'read_slices',
+] as const
+export type RemovedToolName = (typeof removedToolNames)[number]
+
+/**
+ * Removed edit tools keep mutation classification so restored histories still
+ * count them in mutation summaries and render their recorded diffs. That claim
+ * only holds while a surviving consumer can read the persisted legacy call
+ * envelope (`{ operation: { path, diff } }` or `{ input: [{ path, diff }] }`),
+ * which the generic `input.path` / `input.content` helpers cannot: the CLI tool
+ * registry therefore requires a dedicated renderer
+ * (cli/src/components/tools/apply-patch.tsx) for every removed mutation-kind
+ * name and fails at load when one is missing.
+ */
+const REMOVED_MUTATION_TOOLS = new Set<string>([
+  'apply_patch',
+  'apply_smart_patch',
+])
+
+function removedMetadataFor(toolName: string): ToolMetadata {
+  const kind: ToolBehaviorKind = REMOVED_MUTATION_TOOLS.has(toolName)
+    ? 'mutation'
+    : 'read'
+  return {
+    kind,
+    scheduling: kind === 'read' ? 'read_only' : 'named_path',
+    // A removed tool is never executed again, so it scopes no live path input.
+    pathInputs: [],
+    resultContract: 'legacy_v0',
+    renderer: 'fallback',
+    includeInMutationSummary: kind === 'mutation',
+    reachability: 'removed',
+    promptVisible: false,
+    deprecated: true,
+  }
+}
+
+export const removedToolMetadata = Object.fromEntries(
+  removedToolNames.map((toolName) => [toolName, removedMetadataFor(toolName)]),
+) as Record<RemovedToolName, ToolMetadata>
+
+/**
+ * Fallback record for a name that is neither native nor removed: custom tools,
+ * MCP tools, and any other unrecognized string. Deliberately NOT the
+ * removed-tool record, so a live custom/MCP tool is never reported as removed
+ * or deprecated through the public metadata contract. Unknown behavior gets the
+ * most conservative scheduling scope and no mutation-summary participation.
+ */
+const UNKNOWN_TOOL_METADATA: ToolMetadata = {
+  kind: 'other',
+  scheduling: 'global',
+  pathInputs: [],
+  resultContract: 'legacy_v0',
+  renderer: 'fallback',
+  includeInMutationSummary: false,
+  reachability: 'unknown',
+  promptVisible: false,
+  deprecated: false,
+}
+
+// A name that is both registered and listed as removed is a registry bug: the
+// two exported surfaces (`toolMetadata` / `getToolMetadata`) would disagree.
+// Fail loudly at module load instead of resolving the name two different ways.
+const reregisteredRemovedToolNames = removedToolNames.filter((toolName) =>
+  (toolNames as readonly string[]).includes(toolName),
+)
+if (reregisteredRemovedToolNames.length > 0) {
+  throw new Error(
+    `Tool names cannot be both registered and removed: ${reregisteredRemovedToolNames.join(', ')}`,
+  )
+}
+
+// Native metadata is spread last so it always wins: `getToolMetadata(name)` can
+// never contradict the exported `toolMetadata[name]` for a registered tool.
+const metadataByToolName: Record<string, ToolMetadata> = {
+  ...removedToolMetadata,
+  ...toolMetadata,
+}
+
+/**
+ * Total metadata lookup. Native tool names resolve to their registered
+ * metadata; removed/legacy names resolve to a deprecated compatibility record;
+ * any other string (custom tool, MCP tool, unrecognized persisted name)
+ * resolves to the neutral `unknown` record, so rendering a restored session can
+ * never dereference `undefined` and a live tool is never mislabeled as removed.
+ */
+export function getToolMetadata(
+  toolName: ToolName | RemovedToolName | (string & {}),
+): ToolMetadata {
+  return metadataByToolName[toolName] ?? UNKNOWN_TOOL_METADATA
 }

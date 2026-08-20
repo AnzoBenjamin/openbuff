@@ -1,8 +1,16 @@
+// AUTO-GENERATED — do not edit manually. Regenerate via `bun scripts/generate-tool-definitions.ts`.
+// Mirrors: `agents/types/tools.ts` ↔ `common/src/templates/initial-agents-dir/types/tools.ts` (plus `.agents/types/tools.ts`).
+// Drift between mirrors is silent — keep in sync via the generator.
+
 /**
  * Union type of all available tool names
  */
+/**
+ * @deprecated `apply_patch` is retained for compatibility. Use `write_file` or `edit_transaction` instead.
+ * Migration: `apply_patch({ path, diff })` → `write_file({ path, instructions, content })` or `edit_transaction` with `str_replace`/`replace_range`.
+ * See `common/src/tools/params/tool/write-file.ts` for migration guide.
+ */
 export type ToolName =
-  | 'apply_patch'
   | 'add_message'
   | 'ask_user'
   | 'check_background_agent'
@@ -57,12 +65,12 @@ export type ToolName =
   | 'write_file'
   | 'write_audit_findings'
   | 'write_todos'
+  | 'apply_patch' // @deprecated — retained for compatibility; use write_file or edit_transaction
 
 /**
  * Map of tool names to their parameter types
  */
 export interface ToolParamsMap {
-  apply_patch: ApplyPatchParams
   add_message: AddMessageParams
   ask_user: AskUserParams
   check_background_agent: CheckBackgroundAgentParams
@@ -117,28 +125,8 @@ export interface ToolParamsMap {
   write_file: WriteFileParams
   write_audit_findings: WriteAuditFindingsParams
   write_todos: WriteTodosParams
-}
-
-/**
- * Parameters for apply_patch tool
- */
-export interface ApplyPatchParams {
-  operation:
-    | {
-        type: 'create_file'
-        path: string
-        diff: string
-      }
-    | {
-        type: 'update_file'
-        path: string
-        diff: string
-        basedOnRead?: string[]
-      }
-    | {
-        type: 'delete_file'
-        path: string
-      }
+  /** @deprecated `apply_patch` — use `write_file` or `edit_transaction`. Retained for compatibility. */
+  apply_patch: ApplyPatchParams
 }
 
 /**
@@ -1162,6 +1150,86 @@ export interface WebSearchParams {
   /** Maximum number of links to extract when include_links is true. Default: 40. */
   max_links?: number
 }
+
+export type ApplyPatchOperation =
+  | {
+      /** Create a new file */
+      type: 'create_file'
+      /** Path to the file to create */
+      path: string
+      /** Unified diff / patch content for the file */
+      diff?: string
+      /** Alternative content field persisted by some envelopes */
+      content?: string
+      /** Optional whole-file read capability for large-file patches */
+      basedOnRead?: string
+    }
+  | {
+      /** Update an existing file */
+      type: 'update_file'
+      /** Path to the file to update */
+      path: string
+      /** Unified diff / patch content to apply */
+      diff: string
+      /** Optional whole-file read capability for large-file patches */
+      basedOnRead?: string
+      /** Alternative content field persisted by some envelopes */
+      content?: string
+    }
+  | {
+      /** Delete a file */
+      type: 'delete_file'
+      /** Path to the file to delete */
+      path: string
+      /** Diff is optional for delete; persisted envelopes omit it */
+      diff?: string
+      /** Alternative content field (unused for delete but tolerated) */
+      content?: string
+      /** Optional capability (tolerated for delete but unused) */
+      basedOnRead?: string
+    }
+  | {
+      /** Loose fallback for persisted envelopes that may omit type/diff/content and use alternative field aliases */
+      type?: string
+      /** Path to the file to patch (also accepts file/filePath aliases at runtime) */
+      path: string
+      /** Unified diff / patch content (optional for replay of persisted envelopes that omit diff) */
+      diff?: string
+      /** Alternative content field persisted by some envelopes */
+      content?: string
+      /** Optional large-file capability (forwarded for update_file when present) */
+      basedOnRead?: string
+    }
+
+/**
+ * @deprecated `apply_patch` is deprecated and will be removed in a future major version.
+ * Use `write_file` (full content) or `edit_transaction` (`str_replace`/`replace_range`) instead.
+ * This alias is retained so existing callers continue to type-check and receive a runtime
+ * deprecation warning with migration guidance. See `write_file` documentation.
+ *
+ * Compatibility: retains the legacy discriminated `operation` union (single and array forms)
+ * alongside the flat `{path,diff}` envelope so persisted histories (`{operation:{path}}` /
+ * `{operation:[{path}]}` / `{input:[{path}]}`) and existing type-checked callers continue
+ * to compile during the deprecation window.
+ */
+export type ApplyPatchParams = {
+  /** Optional instructions for the patch — forwarded to migration guide */
+  instructions?: string
+  /** Flat envelope: path to the file to patch, relative to project root */
+  path?: string
+  /** Flat envelope: unified diff / patch content to apply (optional for legacy replay) */
+  diff?: string
+  /**
+   * Legacy envelope: discriminated operation union persisted by earlier versions and
+   * replayed by gate/stream history (`{operation:{path,diff}}` or `{operation:[{path,diff}]}`).
+   * Retained for compatibility until removal.
+   */
+  operation?: ApplyPatchOperation | ApplyPatchOperation[]
+} & (
+  | { path: string; diff: string }
+  | { operation: ApplyPatchOperation }
+  | { operation: ApplyPatchOperation[] }
+)
 
 /**
  * Create or overwrite a file with the given content.

@@ -1,6 +1,5 @@
 // Tool handlers for the Codebuff SDK
 import { changeFile, changeFiles } from './change-file'
-import { applyPatchTool } from './apply-patch'
 import { readImages } from './read-image'
 import { edit3dAsset, inspect3dAsset, render3dPreview } from './3d-assets'
 import { codeSearch } from './code-search'
@@ -66,7 +65,6 @@ export const ToolHelpers = {
   runFileChangeHooks,
   changeFile,
   changeFiles,
-  applyPatchTool,
   readImages,
   inspect3dAsset,
   render3dPreview,

@@ -22,8 +22,8 @@ import {
 } from '@codebuff/common/tools/results/filesystem'
 import { applyPatch } from 'diff'
 
-import { getDefaultFilesystemAuthority } from './apply-patch'
 import {
+  getDefaultFilesystemAuthority,
   hashFileContent,
   type AuthorizedFilesystemPath,
 } from './filesystem-authority'

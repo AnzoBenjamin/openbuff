@@ -2,6 +2,23 @@
 
 All notable changes to the @openbuff/sdk package will be documented in this file.
 
+## [Unreleased]
+
+### Removed
+
+- **BREAKING:** the `apply_patch` built-in tool has been removed from the published tool set (`publishedTools`/`PublishedToolName`), the client tool-call schema, the runtime tool handlers, and the SDK applicator.
+- **BREAKING:** `apply_patch` is also gone from the generated agent type definitions (`agents/types/tools.ts` and the fresh-install template): the `'apply_patch'` member of the `ToolName` union, the `apply_patch` key of `ToolParamsMap`, and the `ApplyPatchParams` interface no longer exist.
+
+### Migration guide: `apply_patch` → `edit_transaction`
+
+- Use `edit_transaction` for all partial edits. Its `{ type: 'patch', diff }` edit type replaces `apply_patch` unified-diff patches, and it also supports `delete` and `move` edit types for removing or relocating files.
+- Consumers that declare `toolNames: ['apply_patch']` must remove it from the list: unknown tool names are filtered out at runtime, so the entry no longer resolves to any tool.
+- Consumers that supply `overrideTools` keyed by `PublishedToolName` must drop the `apply_patch` key; it is no longer a valid published tool name. Override `edit_transaction` instead if custom behavior is needed.
+- Custom-agent authors hit this at compile time first. Update generated-type usages:
+  - `ToolName` no longer includes `'apply_patch'`, so `const t: ToolName = 'apply_patch'` and any `toolNames: ToolName[]` literal containing it now fail to type-check. Use `'edit_transaction'`.
+  - `ToolParamsMap['apply_patch']` no longer resolves; use `ToolParamsMap['edit_transaction']` (`EditTransactionParams`).
+  - The exported `ApplyPatchParams` interface is deleted; typed `handleSteps` code that imported or referenced it should use `EditTransactionParams` instead.
+
 ## [0.11.0] - 2026-06-29
 
 First public release of `@openbuff/sdk` (forked lineage from Codebuff SDK; see `docs/codebuff-to-openbuff-migration.md`).
@@ -9,7 +26,7 @@ First public release of `@openbuff/sdk` (forked lineage from Codebuff SDK; see `
 ### Added — Provider layer
 
 - Multi-provider router with per-model failover chains and retry config (`ProviderConfig`, `RetryConfig`). Honors provider-declared `context.windowTokens` with a safe fallback when absent.
-- New built-in tools: `git_branch`, `git_status`, `apply_patch`, `str_replace` (with `edit_transaction` atomic batch), `read_subtree`, `read_outline`, `read_image`, `query_index`, `code_search`, `run_terminal_command`, `list_directory`, `glob`, `file_picker`.
+- New built-in tools: `git_branch`, `git_status`, `str_replace` (with `edit_transaction` atomic batch), `read_subtree`, `read_outline`, `read_image`, `query_index`, `code_search`, `run_terminal_command`, `list_directory`, `glob`, `file_picker`.
 - Cost accounting + token usage tracking per run, surfaced in `RunResult.output`.
 - `skillsDir` SDK option to load custom skills from a directory.
 - `code_map` indexer: tree-sitter-powered symbol extraction with `query_index` graph edges, reference/blast-radius mode, and deterministic `.openbuff.d/indexing.json` schema.
@@ -27,7 +44,7 @@ First public release of `@openbuff/sdk` (forked lineage from Codebuff SDK; see `
 - Step-cap early-return no longer causes an infinite validation/reviewer gate loop: `runAgentStep` returns `hitStepCap`, threaded through `loopAgentSteps` → `runProgrammaticStep` → `generator.next({ hitStepCap })`, and `base2` breaks out of its `while(true)` when it fires.
 - `runAgentStep` resolves the agent's model from `agentId` before failover, fixing the "Agent run error: undefined" regression.
 - `prebuild-agents.ts` requires only `definition.id` (not `definition.model`), so all 30 valid agents bundle into the CLI binary instead of just the two with hardcoded models.
-- `write_file` is deterministic — no longer expands `// ... rest of the function ...` snippets. Use `str_replace` or `apply_patch` for partial edits.
+- `write_file` is deterministic — no longer expands `// ... rest of the function ...` snippets. Use `str_replace` or `edit_transaction` for partial edits.
 - Provider config honors `context.windowTokens`; missing values fall back to a safe default.
 
 ### Changed
@@ -39,8 +56,8 @@ First public release of `@openbuff/sdk` (forked lineage from Codebuff SDK; see `
 
 ## [0.10.7]
 
-- New code editing tool `apply_patch` which works well with Codex models (e.g. openai/gpt-5.3-codex)
-- `write_file` is now a deterministic tool that creates or replaces the file. Previously, it also accepted edit snippet comments which could expand to keep a portion of the previous file, e.g. "// ... rest of the function ...". That behavior is removed to keep things simple. `str_replace` or `apply_patch` should be used if not overwriting the whole file.
+- New code editing tool `apply_patch` which works well with Codex models (e.g. openai/gpt-5.3-codex). (Removed in a later release; see the `[Unreleased]` migration guide — use `edit_transaction` instead.)
+- `write_file` is now a deterministic tool that creates or replaces the file. Previously, it also accepted edit snippet comments which could expand to keep a portion of the previous file, e.g. "// ... rest of the function ...". That behavior is removed to keep things simple. `str_replace` or `apply_patch` should be used if not overwriting the whole file. (`apply_patch` has since been removed; use `edit_transaction` — see the `[Unreleased]` migration guide.)
 
 ## [0.10.6]
 

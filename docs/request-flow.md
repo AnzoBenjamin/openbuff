@@ -62,9 +62,9 @@ through a hosted Openbuff/Codebuff service in this primary flow.
 5. **Local tool handlers** are registered. These execute on the user's
    machine, never on a server:
    - `edit_transaction` → canonical root/editor file mutation surface;
-     standalone `write_file`, `str_replace`, `replace_range`,
-     `rewrite_symbol`, and `apply_patch` handlers remain registered for
-     persisted/external compatibility
+     standalone `write_file`, `str_replace`, `replace_range`, and
+     `rewrite_symbol` handlers remain registered for persisted/external
+     compatibility
    - `write_audit_findings` → exclusively creates one derived
      `.agents/sessions/<session>/findings/<shard>.md` artifact and returns a
      compact receipt
@@ -78,6 +78,23 @@ through a hosted Openbuff/Codebuff service in this primary flow.
    - `inspect_codebase_structure`, `inspect_feature_completeness`, `evaluate_audit_coverage` → snapshot-bound broad-audit inventory and completeness gating
    - `run_targeted_validation` → snapshot-checked scoped validation (scoped evidence only; not the full hooks+reviewer gate)
    - Custom tool definitions and MCP tools
+
+   Removed tools (`apply_patch`, `apply_smart_patch`, `read_slices`) are no
+   longer registered and cannot be called. Two compatibility guarantees remain:
+
+   - **Persisted histories stay interpretable.** CLI chat blocks and tool-call
+     histories store `toolName` verbatim, so restored sessions can still
+     contain a removed name. `getToolMetadata` in
+     `common/src/tools/metadata.ts` is a total lookup: removed names resolve to
+     a `reachability: 'removed'`, `deprecated: true` record (mutation-kind for
+     the removed edit tools) instead of `undefined`, so renderers,
+     mutation summaries, and the gate-file walkers keep working on old blocks.
+   - **Internal callers were migrated.** `apply_patch`'s `delete_file`
+     operation is now `edit_transaction` with `{ type: 'delete' }`. That
+     surface enforces strict read-before-edit, so a caller deleting a file it
+     has not read must read it first — see the lockfile rollback in
+     `agents/dependency-manager/dependency-manager.ts`, which reads the
+     created lockfiles before deleting them.
 6. **Action handlers** stream provider output back to the CLI:
    - `response-chunk` → streams text to the CLI
    - `subagent-response-chunk` → streams subagent output
@@ -298,6 +315,36 @@ authorization time. The bypass:
 - is scoped to the recorded file set — a commit claiming a file dirtied
   after authorization is still blocked;
 - is durable for the session.
+
+## Consumer-visible change: dependency-manager output `schemaVersion` 2
+
+`dependency-manager` (`agents/dependency-manager/dependency-manager.ts`) is a
+publishable bundled agent, so its `set_output` payload is a consumer-visible
+contract for external spawners. The payload envelope and the nested
+`rollbackReceipt` both carry `schemaVersion`, and both moved from `1` to `2`.
+
+Breaking change in v2:
+
+- `rollbackReceipt.deletedCreatedFiles` now lists **only** the lockfile deletes
+  whose `edit_transaction` delete actually applied. In v1 the same field listed
+  every delete the rollback *attempted*, including refused or unauthorized
+  ones, so a v1 consumer treating it as "files that no longer exist" could be
+  wrong.
+- The new `rollbackReceipt.undeletedCreatedFiles` carries the remainder: deletes
+  that were refused, unauthorized (no complete whole-file read authorization),
+  or otherwise unconfirmed.
+- A non-empty `undeletedCreatedFiles` forces `rollbackReceipt.status`
+  `incomplete` and `rollbackRequired: true`.
+
+Migration for consumers reading v1 semantics:
+
+- Branch on `schemaVersion` (envelope or receipt — they are emitted in lockstep)
+  before interpreting `deletedCreatedFiles`.
+- To recover the v1 "attempted deletes" set, use
+  `[...deletedCreatedFiles, ...undeletedCreatedFiles]`; a full per-attempt audit
+  trail remains in `rollbackReceipt.results`.
+- Treat a missing `undeletedCreatedFiles` as a v1 payload, not as "nothing left
+  behind".
 
 ## Session State
 
