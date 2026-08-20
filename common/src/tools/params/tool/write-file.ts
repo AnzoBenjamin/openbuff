@@ -47,13 +47,13 @@ Do not use this tool to delete or rename a file. Use edit_transaction delete/mov
 
 #### Deprecation — \`apply_patch\` → \`write_file\` / \`edit_transaction\`
 
-\`apply_patch\` is deprecated and retained only as a compatibility alias. It will be removed in a future major version.
+\`apply_patch\` has been removed (BREAKING). Use \`write_file\` / \`edit_transaction\` instead.
 - Migration: \`apply_patch({ path, diff })\` → \`write_file({ path, instructions, content })\` with the full patched file content, or \`edit_transaction\` with \`str_replace\` / \`replace_range\` for surgical edits.
-- Compatibility shape: \`ApplyPatchParams\` retains the original discriminated \`operation\` union (\`create_file\`/\`update_file\`/\`delete_file\` with \`path\`/\`diff\`/\`basedOnRead\`) so existing callers using \`operation:{type,path,diff,basedOnRead}\` continue to type-check, while also allowing the deprecated flat \`{path,diff}\` envelope additively (\`ApplyPatchParams = {path?,diff?,operation?} & ({path,diff} | {operation} | {operation[]})\`). The discriminated union also includes a loose fallback (\`type?\`, \`content?\`) for persisted envelopes that omit \`type\`/\`diff\`.
+- Compatibility (persisted history): historical \`ApplyPatchParams\` used the discriminated \`operation\` union (\`create_file\`/\`update_file\`/\`delete_file\` with \`path\`/\`diff\`/\`basedOnRead\`), the flat \`{path,diff}\` envelope, and a loose fallback (\`type?\`, \`content?\`) for envelopes omitting \`type\`/\`diff\`. These shapes are still honored at runtime for history replay via \`removedToolMetadata\`/\`removedToolNames\` and the CLI legacy renderer; \`ApplyPatchParams\` is no longer an exported type — new callers must use \`write_file\` or \`edit_transaction\`.
 - Runtime shim honors persisted envelopes using single \`operation:{path,diff,…}\` and array \`operation:[{path,diff,…}]\` (including \`delete_file\` without \`diff\` and envelopes that omit \`type\`) plus legacy \`input:[{path,diff}]\` and fallback \`file\`/\`filePath\` keys, correctly mapping \`delete_file\` → \`edit_transaction\` \`delete\` and otherwise \`patch\`, forwarding \`basedOnRead\` for large-file \`update_file\` patches where relevant. This is required for history replay.
-- The \`ToolName\` union and \`ToolParamsMap\` keep a deprecated \`apply_patch: ApplyPatchParams\` entry (\`@deprecated\` JSDoc) so existing consumers continue to type-check; at runtime a deprecation warning is emitted and the call is handled via the \`edit_transaction\` patch/delete path.
+- The \`ToolName\`/\`ToolParamsMap\` no longer contain \`apply_patch\` (removed, BREAKING). Persisted histories still replay via \`removedToolNames\`/\`removedToolMetadata\` and the CLI legacy renderer; new callers must use \`write_file\` or \`edit_transaction\`. See \`sdk/CHANGELOG.md\` / \`cli/CHANGELOG.md\`.
 - Prefer \`write_file\` for whole-file rewrites and \`edit_transaction\` for anchored diffs — both preserve the current mutation receipt / capability contract.
-- See \`agents/types/tools.ts\` and \`common/src/templates/initial-agents-dir/types/tools.ts\` for the retained deprecated type, and \`common/src/tools/metadata.ts\` (\`removedToolMetadata\`) for persisted-history compatibility.
+- See \`common/src/tools/metadata.ts\` (\`removedToolMetadata\`/\`removedToolNames\`) and the CLI legacy renderer for persisted-history replay; \`agents/types/tools.ts\` and \`common/src/templates/initial-agents-dir/types/tools.ts\` no longer expose a deprecated \`apply_patch\` type.
 
 Examples:
 

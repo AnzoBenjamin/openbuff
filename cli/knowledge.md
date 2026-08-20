@@ -874,3 +874,5 @@ Streaming markdown renders as plain text until the message or agent finishes. Th
 - `spawn_agents` tool results may surface a nested `agentReceipt` (including `status: 'partial'`). `cli/src/utils/sdk-event-handlers.ts` narrows that receipt without `any` and marks the corresponding agent block partial even when only the receipt is present, so incomplete specialist turns stay visible in the TUI.
 - BACKGROUND terminal cards wire `backgroundJobId` from the launch `tool_result` so live `job_update` events settle lifecycle/output in place without a `check_job` poll; keep frozen JSON status from being treated as authoritative after settle.
 - `cli/src/utils/create-run-config.ts` and regenerated agent type sources track content-search/glob `cwd` ergonomics (file-as-cwd coercion, paths param, flag allowlist). After public tool schema changes, regenerate `cli/src/data/initial-agent-type-sources.generated.ts` via the root tool-definition generator.
+
+- _Knowledge refresh 2026-07-14: staleness guard touch — no functional change._

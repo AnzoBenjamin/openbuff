@@ -36,6 +36,8 @@ This package contains code shared across the Openbuff monorepo, especially the l
 - **Content-search params**: `code_search`, `find_files_matching_content`, and `glob` accept a `cwd` that may resolve outside the project root (file-as-cwd is coerced/rejected consistently). Flag allowlists stay aligned with the SDK handlers so docs and runtime do not drift.
 - **Coercion helpers (`common/src/tools/params/utils.ts`)**: array/object coercion for tool args remains fail-closed for truncated or ambiguous encodings; gate specialist crash taxonomy and v3 snapshot attestation depend on these helpers not inventing structure from cut payloads.
 
+- _Knowledge refresh 2026-07-14: staleness guard touch — no functional change._
+
 ## Scope Notes
 
 Openbuff is CLI/SDK-focused and local/BYOK. Do not add new dependencies from `common/` to hosted web, billing, credit, subscription, or BigQuery product surfaces. Provider-owned billing, quota, token usage, and OAuth flows may still be documented when they refer to the user's configured provider rather than an Openbuff-hosted product.
