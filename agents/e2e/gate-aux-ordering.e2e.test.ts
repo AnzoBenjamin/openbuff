@@ -195,7 +195,12 @@ function crashedSpawnedReviewerResult(
 //    selectDocWriterTargets keeps it.
 //  - security-reviewer: the `auth` path segment is in SECURITY_SENSITIVE_GLOBS,
 //    so matchesSecuritySensitiveGlob is true.
-const AUX_TRIPLE_FILE = 'cli/src/auth/session.ts'
+// Why token-store.ts: the basename `token` still makes it security-sensitive
+// (matchesSecuritySensitiveGlob's word-boundary basename match), but no
+// specialist family routes it: the exact filename-stem rule needs a bare stem
+// (`session`/`ui`/`index`/`bench`/`migration`) and the compound stem
+// `token-store` never equals one.
+const AUX_TRIPLE_FILE = 'cli/src/auth/token-store.ts'
 const AUX_TEST_COMMAND = 'cd cli && bun run typecheck && bun test'
 
 // All aux gates use spawn_agent_inline with includeToolCall:false.
@@ -392,10 +397,10 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     })
 
     // The security gate is resolved by feeding a NON_BLOCKING attesting result
-    // that matches the security snapshot. The auth path does NOT route any
-    // reliability specialist (that router needs a /state/ /sessions/ /process/
-    // segment), so the aux block re-enters the loop directly at context pruning
-    // rather than fetching a specialist review bundle.
+    // that matches the security snapshot. The aux-triple file routes no
+    // specialist (see the token-store.ts note above AUX_TRIPLE_FILE: no router
+    // stem matches), so the aux block re-enters the loop directly at context
+    // pruning rather than fetching a specialist review bundle.
     const securityFingerprint = (securityReviewerYield.value as any).input
       .params.snapshot_fingerprint as string
     // Invariant 3: after every routed aux gate passes,
@@ -511,8 +516,12 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
 
   test('blocks without finalization when a routed specialist returns stale attestations twice', () => {
     // Route via SPECIALIST_FILE (state/session.ts), which the reliability
-    // reviewer router actually matches (cli/src/auth/session.ts does not),
-    // so the two-stale-retry terminal-block path fires exactly as intended.
+    // reviewer router actually matches, so the two-stale-retry terminal-block
+    // path fires exactly as intended. The aux-triple fixture itself had to
+    // move to cli/src/auth/token-store.ts: a bare auth/session.ts now ALSO
+    // routes reliability-reviewer via the exact filename-stem rule, while
+    // token-store.ts stays specialist-neutral (the compound stem
+    // `token-store` never equals a router stem).
     mkdirSync(`${SPECIALIST_SCRATCH_ROOT}/state`, { recursive: true })
     writeFileSync(SPECIALIST_FILE, 'export const session = "v1"\n')
     const base2 = createBase2('default')
@@ -629,10 +638,11 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
 
   test('a coverage-complete routed specialist review with a matching gate fingerprint does not block the gate', () => {
     const base2 = createBase2('default')
-    // Seed a reliability-reviewer owed marker (the reliability router would not
-    // auto-route a bare auth/session.ts path, so the marker forces the routing;
-    // mirror the passing 'revalidates an owed specialist reviewer' test). The
-    // other aux gates are seeded done so only the specialist gate runs.
+    // Seed a reliability-reviewer owed marker (the aux-triple fixture
+    // cli/src/auth/token-store.ts routes no specialist on its own, so the
+    // marker forces the routing; mirror the passing 'revalidates an owed
+    // specialist reviewer' test). The other aux gates are seeded done so only
+    // the specialist gate runs.
     const agentState = {
       agentId: 'base2-custom',
       base2ActiveWork: {
@@ -758,9 +768,12 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
 
   test('fails closed when a routed specialist crashes alongside a valid LOOKS_GOOD attestation', () => {
     // Route via SPECIALIST_FILE (state/session.ts), which the reliability
-    // reviewer router actually matches (cli/src/auth/session.ts does not), so
-    // the reliability-reviewer specialist gate the crash targets fires. The
-    // other aux gates are seeded done so only the specialist gate runs.
+    // reviewer router actually matches, so the reliability-reviewer specialist
+    // gate the crash targets fires. (The aux-triple fixture uses
+    // cli/src/auth/token-store.ts because a bare auth/session.ts now also
+    // routes reliability-reviewer via the exact-stem rule; token-store.ts
+    // stays specialist-neutral.) The other aux gates are seeded done so only
+    // the specialist gate runs.
     mkdirSync(`${SPECIALIST_SCRATCH_ROOT}/state`, { recursive: true })
     writeFileSync(SPECIALIST_FILE, 'export const session = "v1"\n')
     const base2 = createBase2('default')
