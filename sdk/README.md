@@ -63,6 +63,39 @@ Custom adapters should implement the optional capabilities they can guarantee:
 - `conditionalDelete` guards deletions with an exact-byte expected hash.
 - `conditionalMove` requires the source hash and an absent destination.
 
+Declare `streamDirectory` only when you can guarantee both obligations above:
+the iterator releases its handle from `return()`, and `readdirView` is the
+adapter's current `readdir`. A mis-paired `readdirView` silently disables the
+capability — callers fall back to full `readdir` materialization with no
+diagnostic. Confirm the finished wiring with `supportsStreamDirectory()`, not
+by checking member presence:
+
+```ts
+import type fs from 'fs'
+import type { Dirent } from 'fs'
+import { supportsStreamDirectory } from '@openbuff/sdk'
+import type { CodebuffFileSystem } from '@openbuff/sdk'
+
+// Virtual directory store: path -> entries. Both views below serve this store.
+const directories = new Map<string, Dirent[]>()
+
+// The adapter's own `readdir` (a real one carries the full fs.promises
+// overload set, elided here).
+const readdir = (path: fs.PathLike): Promise<Dirent[]> =>
+  Promise.resolve(directories.get(String(path)) ?? [])
+
+// Breaking out of `for await` calls the generator's built-in `return()`, releasing the handle.
+async function* iterate(path: fs.PathLike): AsyncGenerator<Dirent> {
+  yield* directories.get(String(path)) ?? []
+}
+
+const streamDirectory: NonNullable<CodebuffFileSystem['streamDirectory']> =
+  Object.assign((path: fs.PathLike) => iterate(path), { readdirView: readdir })
+
+const adapter = { readdir, streamDirectory }
+console.log(supportsStreamDirectory(adapter)) // true
+```
+
 Tools that require a host process, such as terminal commands and configured
 validation hooks, are separate from the filesystem adapter. Virtual or remote
 hosts should override or disable process-backed tools when the local process
