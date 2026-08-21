@@ -86,7 +86,7 @@ function collectVisited(value: unknown): string[] {
 }
 
 describe('isFileChangingTool', () => {
-  test('returns true for the seven edit tools', () => {
+  test('returns true for file-changing tools, including removed legacy tools', () => {
     for (const toolName of [
       'apply_patch',
       'apply_smart_patch',
@@ -215,6 +215,14 @@ describe('collectToolInputFiles', () => {
     expect(collectToolInputs({ operation: { path: 'src/b.ts' } })).toEqual([
       'src/b.ts',
     ])
+  })
+
+  test('collects paths from an operation array (legacy apply_patch multi-operation payloads)', () => {
+    expect(
+      collectToolInputs({
+        operation: [{ path: 'src/x.ts' }, { path: 'src/y.ts' }, null],
+      }),
+    ).toEqual(['src/x.ts', 'src/y.ts'])
   })
 
   test('collects paths from an edits array, skipping malformed items', () => {

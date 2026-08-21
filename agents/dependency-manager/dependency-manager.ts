@@ -64,13 +64,12 @@ const definition: SecretAgentDefinition = {
     'run_terminal_command',
     'read_files',
     'write_file',
-    'apply_patch',
   ],
   programmaticToolNames: [
     'inspect_environment',
     'read_files',
     'write_file',
-    'apply_patch',
+    'edit_transaction',
     'set_output',
   ],
   terminalPermissionProfile: 'dependency-mutation',
@@ -108,7 +107,13 @@ const definition: SecretAgentDefinition = {
       toolName: 'set_output' as const,
       input: {
         data: {
-          schemaVersion: 1,
+          // v2: `rollbackReceipt.deletedCreatedFiles` lists only the deletes
+          // that actually applied (v1 listed every requested delete) and the
+          // new `undeletedCreatedFiles` carries the rest, so a consumer can
+          // tell the two semantics apart from the version alone. The break and
+          // its consumer migration are documented in `docs/request-flow.md`
+          // ('Consumer-visible change: dependency-manager output schemaVersion 2').
+          schemaVersion: 2,
           status,
           manager,
           operation,
@@ -148,6 +153,123 @@ const definition: SecretAgentDefinition = {
       }
       visit(value)
       return snapshots
+    }
+    /**
+     * Paths a `read_files` result actually granted whole-file authorization for.
+     * `edit_transaction` refuses a delete on a path that was never completely
+     * read, so a partial, `too_large`, or errored entry must not be treated as
+     * deletable even though it may still carry some content.
+     */
+    const extractWholeFileAuthorizedPaths = (value: unknown): Set<string> => {
+      const authorized = new Set<string>()
+      const visit = (item: unknown, depth = 0): void => {
+        if (!item || depth > 8) return
+        if (Array.isArray(item)) {
+          for (const nested of item) visit(nested, depth + 1)
+          return
+        }
+        if (typeof item !== 'object') return
+        const record = item as Record<string, unknown>
+        const anchor =
+          record.editAnchor && typeof record.editAnchor === 'object'
+            ? (record.editAnchor as Record<string, unknown>)
+            : undefined
+        const filePath =
+          typeof record.path === 'string'
+            ? record.path
+            : typeof record.canonicalPath === 'string'
+              ? record.canonicalPath
+              : undefined
+        if (
+          filePath &&
+          typeof record.content === 'string' &&
+          record.status !== 'too_large' &&
+          (record.complete === true ||
+            typeof anchor?.readCapability === 'string')
+        ) {
+          authorized.add(filePath)
+        }
+        for (const nested of Object.values(record)) visit(nested, depth + 1)
+      }
+      visit(value)
+      return authorized
+    }
+
+    /**
+     * Positive applied evidence that `edit_transaction` deleted `targetPath`.
+     * Only the canonical `file_mutation_result` proves a mutation reached disk:
+     * a missing result, an unparseable payload, a `native_tool_result_error`
+     * envelope (whose message lives at `error.message`, never `errorMessage`),
+     * a non-applied outcome, or an action for a different path all count as NOT
+     * deleted. `partial` means some actions applied and others did not, so the
+     * per-action `path`/`outcome` check is what authorizes this path.
+     */
+    const deleteApplied = (result: unknown, targetPath: string): boolean => {
+      const parts = Array.isArray(result) ? result : []
+      const jsonPart = parts.find(
+        (part) =>
+          !!part &&
+          typeof part === 'object' &&
+          (part as Record<string, unknown>).type === 'json',
+      ) as Record<string, unknown> | undefined
+      const value = jsonPart?.value
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return false
+      }
+      const record = value as Record<string, unknown>
+      if (
+        record.kind !== 'file_mutation_result' ||
+        record.version !== 1 ||
+        (record.outcome !== 'applied' && record.outcome !== 'partial')
+      ) {
+        return false
+      }
+      const actions = Array.isArray(record.actions) ? record.actions : []
+      return actions.some((action) => {
+        if (!action || typeof action !== 'object') return false
+        const entry = action as Record<string, unknown>
+        return (
+          entry.action === 'delete' &&
+          entry.path === targetPath &&
+          entry.outcome === 'applied'
+        )
+      })
+    }
+    /**
+     * Structured failure evidence anywhere in a rollback result: a string or
+     * object `error` (including `error.message`), an `errorMessage`, a native
+     * error envelope, or a terminal-but-unsuccessful lifecycle state.
+     */
+    const hasFailureEvidence = (value: unknown): boolean => {
+      let failed = false
+      const visit = (item: unknown, depth = 0): void => {
+        if (failed || !item || depth > 8) return
+        if (Array.isArray(item)) {
+          for (const nested of item) visit(nested, depth + 1)
+          return
+        }
+        if (typeof item !== 'object') return
+        const record = item as Record<string, unknown>
+        const lifecycle =
+          record.lifecycle && typeof record.lifecycle === 'object'
+            ? (record.lifecycle as Record<string, unknown>)
+            : undefined
+        if (
+          (typeof record.error === 'string' && record.error.trim().length > 0) ||
+          (!!record.error && typeof record.error === 'object') ||
+          (typeof record.errorMessage === 'string' &&
+            record.errorMessage.trim().length > 0) ||
+          record.kind === 'native_tool_result_error' ||
+          lifecycle?.state === 'failed' ||
+          lifecycle?.state === 'cancelled'
+        ) {
+          failed = true
+          return
+        }
+        for (const nested of Object.values(record)) visit(nested, depth + 1)
+      }
+      visit(value)
+      return failed
     }
 
     if (rawPackages.length !== packages.length) {
@@ -517,23 +639,69 @@ const definition: SecretAgentDefinition = {
                   : value.startsWith(`${normalizedCwd}/`)),
             )
           : []
-        for (const createdLockfile of createdLockfiles) {
+        const deletableLockfiles: string[] = []
+        const unauthorizedLockfiles: string[] = []
+        if (createdLockfiles.length > 0) {
+          // edit_transaction enforces strict read-before-edit, so a lockfile the
+          // failed command created must be read in this run before it can be
+          // deleted. The read result is inspected instead of assumed: a lockfile
+          // that produced no complete whole-file snapshot (over the `too_large`
+          // gate, io_error) registers no authorization, so the delete would be
+          // refused and the receipt must not claim it.
+          const { toolResult: createdLockfileRead } = yield {
+            toolName: 'read_files',
+            input: { paths: createdLockfiles },
+            includeToolCall: false,
+          } as ToolCall<'read_files'>
+          const authorizedPaths =
+            extractWholeFileAuthorizedPaths(createdLockfileRead)
+          for (const createdLockfile of createdLockfiles) {
+            if (authorizedPaths.has(createdLockfile)) {
+              deletableLockfiles.push(createdLockfile)
+              continue
+            }
+            unauthorizedLockfiles.push(createdLockfile)
+            rollbackResults.push({
+              action: 'delete-created-lockfile',
+              path: createdLockfile,
+              result: {
+                errorMessage: `Rollback read registered no complete whole-file authorization for '${createdLockfile}', so edit_transaction would refuse the delete.`,
+              },
+            })
+          }
+        }
+        const deletedLockfiles: string[] = []
+        for (const createdLockfile of deletableLockfiles) {
           const { toolResult: deleteResult } = yield {
-            toolName: 'apply_patch',
+            toolName: 'edit_transaction',
             input: {
-              operation: { type: 'delete_file', path: createdLockfile },
+              edits: [{ path: createdLockfile, type: 'delete' }],
             },
             includeToolCall: false,
-          } as ToolCall<'apply_patch'>
+          } as ToolCall<'edit_transaction'>
+          // Only a canonical `file_mutation_result` proving this exact path's
+          // delete applied may claim the deletion; every attempted delete stays
+          // in `rollbackResults` so the receipt keeps a complete audit trail.
+          if (deleteApplied(deleteResult, createdLockfile)) {
+            deletedLockfiles.push(createdLockfile)
+          }
           rollbackResults.push({
             action: 'delete-created-lockfile',
             path: createdLockfile,
             result: deleteResult,
           })
         }
-        const rollbackFailed = rollbackResults.some((entry) =>
-          JSON.stringify(entry.result).includes('errorMessage'),
-        )
+        const undeletedLockfiles = [
+          ...unauthorizedLockfiles,
+          ...deletableLockfiles.filter(
+            (path) => !deletedLockfiles.includes(path),
+          ),
+        ]
+        // A path that was never confirmed deleted can never report a complete
+        // rollback, even when no result carried explicit failure evidence.
+        const rollbackFailed =
+          undeletedLockfiles.length > 0 ||
+          rollbackResults.some((entry) => hasFailureEvidence(entry.result))
         yield emit('failed', `Dependency command failed: ${command}`, {
           detectedManager,
           manifests,
@@ -545,9 +713,17 @@ const definition: SecretAgentDefinition = {
           })),
           rollbackRequired: rollbackFailed,
           rollbackReceipt: {
+            // Receipts are also read detached from the envelope, so they
+            // restate the version that defines their field semantics. See
+            // `docs/request-flow.md` for the v1 -> v2 consumer migration.
+            schemaVersion: 2,
             status: rollbackFailed ? 'incomplete' : 'rolled_back',
             restoredFiles: dependencySnapshots.map((snapshot) => snapshot.path),
-            deletedCreatedFiles: createdLockfiles,
+            // Only files whose delete actually applied; a refused or unauthorized
+            // delete stays in `undeletedCreatedFiles` so the receipt never
+            // asserts a deletion that did not occur.
+            deletedCreatedFiles: deletedLockfiles,
+            undeletedCreatedFiles: undeletedLockfiles,
             results: rollbackResults,
           },
           commands: commands.map((value) => value.replace(/:\/\/[^/@\s]+:[^/@\s]+@/g, '://[redacted]@')),

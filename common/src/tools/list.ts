@@ -3,7 +3,6 @@ import z from 'zod/v4'
 import { CHANGES, FileChangeSchema } from '../actions'
 import { addMessageParams } from './params/tool/add-message'
 import { addSubgoalParams } from './params/tool/add-subgoal'
-import { applyPatchParams } from './params/tool/apply-patch'
 import { askUserParams } from './params/tool/ask-user'
 import { browserLogsParams } from './params/tool/browser-logs'
 import { checkBackgroundAgentParams } from './params/tool/check-background-agent'
@@ -74,7 +73,6 @@ import type { ToolCallPart } from '../types/messages/content-part'
 const canonicalToolParams = {
   add_message: addMessageParams,
   add_subgoal: addSubgoalParams,
-  apply_patch: applyPatchParams,
   ask_user: askUserParams,
   browser_logs: browserLogsParams,
   check_background_agent: checkBackgroundAgentParams,
@@ -158,10 +156,6 @@ export type CodebuffToolMessage<T extends ToolName = ToolName> = ToolMessage & {
 
 // Tool call to send to client
 export const clientToolCallSchema = z.discriminatedUnion('toolName', [
-  z.object({
-    toolName: z.literal('apply_patch'),
-    input: toolParams.apply_patch.inputSchema,
-  }),
   z.object({
     toolName: z.literal('ask_user'),
     input: toolParams.ask_user.inputSchema,

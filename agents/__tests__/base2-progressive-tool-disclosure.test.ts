@@ -704,7 +704,7 @@ describe('base2 tier membership — resolveModelToolNames stays in sync', () => 
       noAskUser: true,
       unlockedTiers: [],
     })
-    const coreSet = new Set(BASE2_CORE_TOOL_NAMES)
+    const coreSet = new Set<string>(BASE2_CORE_TOOL_NAMES)
     for (const name of gated) {
       expect(coreSet.has(name)).toBe(true)
     }

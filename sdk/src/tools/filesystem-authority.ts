@@ -14,12 +14,14 @@ import type {
   CodebuffFileContent,
   CodebuffFileSystem,
 } from '@codebuff/common/types/filesystem'
+import { isMandatorySensitiveReadPath } from '@codebuff/common/util/sensitive-paths'
 
 import {
   isSafeProjectRelativePath,
   resolveFilePathForFileSystemOperation,
   type ResolvedOperationPath,
 } from './path-utils'
+import type { FileFilter } from './read-files'
 
 export const MAX_COMMIT_RECEIPTS_PER_RUN = 1000
 const MAX_REGISTERED_OPERATIONS_PER_RUN = 1000
@@ -850,6 +852,81 @@ export function detectFilesystemCapabilities(
           : 'baseline',
     capabilities,
   }
+}
+
+const defaultAuthorities = new WeakMap<
+  CodebuffFileSystem,
+  Map<
+    string,
+    Array<{
+      fileFilter?: FileFilter
+      filesystemPolicy?: FilesystemAuthorityPolicy
+      authority: FilesystemAuthority
+    }>
+  >
+>()
+
+export function getDefaultFilesystemAuthority(
+  cwd: string,
+  fs: CodebuffFileSystem,
+  fileFilter?: FileFilter,
+  filesystemPolicy?: FilesystemAuthorityPolicy,
+): FilesystemAuthority {
+  let byRoot = defaultAuthorities.get(fs)
+  if (!byRoot) {
+    byRoot = new Map()
+    defaultAuthorities.set(fs, byRoot)
+  }
+  const normalizedRoot = path.resolve(cwd)
+  const entries = byRoot.get(normalizedRoot) ?? []
+  const existing = entries.find(
+    (entry) =>
+      entry.fileFilter === fileFilter &&
+      entry.filesystemPolicy === filesystemPolicy,
+  )
+  if (existing) return existing.authority
+
+  const authorityFileSystem = Object.assign(Object.create(fs), {
+    createFileExclusive:
+      fs.createFileExclusive ??
+      ((
+        filePath: Parameters<CodebuffFileSystem['writeFile']>[0],
+        data: Parameters<CodebuffFileSystem['writeFile']>[1],
+      ) => fs.writeFile(filePath, data, { flag: 'wx' })),
+  }) as CodebuffFileSystem
+  const mandatoryMutationPolicy: FilesystemAuthorityPolicy = {
+    name: 'mandatory-mutation-policy',
+    async evaluate(context) {
+      const canonicalRelative = path.relative(
+        normalizedRoot,
+        context.canonicalPath,
+      )
+      const aliases = [
+        context.portablePath,
+        canonicalRelative.split(path.sep).join('/'),
+      ].flatMap((alias) => [alias, alias.toLowerCase()])
+      if (aliases.some(isMandatorySensitiveReadPath)) {
+        return { allowed: false, code: 'sensitive_path', redactPath: true }
+      }
+      if (
+        fileFilter &&
+        aliases.some((alias) => fileFilter(alias).status === 'blocked')
+      ) {
+        return { allowed: false, code: 'custom_filter' }
+      }
+      return { allowed: true }
+    },
+  }
+  const authority = new FilesystemAuthority(
+    normalizedRoot,
+    authorityFileSystem,
+    filesystemPolicy
+      ? composeFilesystemPolicies(mandatoryMutationPolicy, filesystemPolicy)
+      : mandatoryMutationPolicy,
+  )
+  entries.push({ fileFilter, filesystemPolicy, authority })
+  byRoot.set(normalizedRoot, entries)
+  return authority
 }
 
 export function hashFileContent(content: string | Uint8Array): string {

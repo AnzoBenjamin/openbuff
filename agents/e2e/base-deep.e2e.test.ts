@@ -4,7 +4,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 import { OpenbuffClient, type AgentDefinition } from '@openbuff/sdk'
-import { beforeAll, describe, expect, it } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { $ } from 'bun'
 
 import baseDeep from '../base2/base-deep'
@@ -21,6 +21,11 @@ describe('Base Deep Agent Integration', () => {
   const slowIt = runSlow ? it : it.skip
 
   const traceDir = path.resolve(process.cwd(), 'e2e-traces', 'base-deep')
+  const createdTmpDirs: string[] = []
+  const registerTmpDir = (dir: string) => {
+    createdTmpDirs.push(dir)
+    return dir
+  }
 
   const loadEnvFile = async (filePath: string) => {
     try {
@@ -49,7 +54,12 @@ describe('Base Deep Agent Integration', () => {
     }
   }
 
-  const getApiKeyOrSkip = (): string => ''
+  const getApiKeyOrSkip = (): string =>
+    process.env.OPENBUFF_API_KEY ??
+    process.env.CODEBUFF_API_KEY ??
+    process.env.ANTHROPIC_API_KEY ??
+    process.env.OPENAI_API_KEY ??
+    ''
 
   const isAuthenticationError = (error: unknown) => {
     if (!(error instanceof Error)) return false
@@ -153,10 +163,14 @@ describe('Base Deep Agent Integration', () => {
   }
 
   const createShallowClone = async () => {
-    const cloneDir = await fs.promises.mkdtemp(
-      path.join(os.tmpdir(), 'base-deep-clone-'),
+    const cloneDir = registerTmpDir(
+      await fs.promises.mkdtemp(
+        path.join(os.tmpdir(), `base-deep-clone-${process.pid}-`),
+      ),
     )
     const repoUrl = `file://${repoRoot}`
+    // Bun's $ template tag shell-escapes interpolated values, so spaces in
+    // repoRoot/cloneDir are handled safely without manual quoting.
     await $`git clone --depth 1 --no-tags ${repoUrl} ${cloneDir}`.quiet()
     return cloneDir
   }
@@ -191,6 +205,24 @@ describe('Base Deep Agent Integration', () => {
     await loadEnvFile(path.resolve(process.cwd(), '.env.local'))
     await loadEnvFile(path.resolve(process.cwd(), '../.env.local'))
     await fs.promises.mkdir(traceDir, { recursive: true })
+  })
+
+  afterAll(async () => {
+    // Teardown any tmp dirs created via mkdtemp/clone (including shallow
+    // clones and per-test edit dirs) and remove trace output to avoid disk
+    // leaks on CI. Uses force:true so missing dirs from prior cleanup do not
+    // fail the suite. Limited to the createdTmpDirs registry to avoid
+    // colliding with parallel CI runs that share the same os.tmpdir() prefix.
+    for (const dir of createdTmpDirs.splice(0)) {
+      try {
+        await fs.promises.rm(dir, { recursive: true, force: true })
+      } catch {}
+    }
+    // Remove trace dir (under cwd/e2e-traces) to avoid accumulating artifacts
+    // across CI runs; best-effort only.
+    try {
+      await fs.promises.rm(traceDir, { recursive: true, force: true })
+    } catch {}
   })
 
   slowIt(
@@ -246,8 +278,10 @@ describe('Base Deep Agent Integration', () => {
     async () => {
       const apiKey = getApiKeyOrSkip()
 
-      const tmpDir = await fs.promises.mkdtemp(
-        path.join(os.tmpdir(), 'base-deep-edit-'),
+      const tmpDir = registerTmpDir(
+        await fs.promises.mkdtemp(
+          path.join(os.tmpdir(), `base-deep-edit-${process.pid}-`),
+        ),
       )
       const notePath = path.join(tmpDir, 'note.txt')
       await fs.promises.writeFile(notePath, 'status: draft\n', 'utf-8')
@@ -268,7 +302,7 @@ describe('Base Deep Agent Integration', () => {
           client.run({
             agent: baseDeep.id,
             prompt:
-              'Use write_file or apply_patch right now to change note.txt from "status: draft" to "status: done" and add a new line "owner: qa".',
+              'Use write_file right now to change note.txt from "status: draft" to "status: done" and add a new line "owner: qa".',
             handleEvent: (event) => {
               events.push(event)
             },
@@ -305,8 +339,10 @@ describe('Base Deep Agent Integration', () => {
     async () => {
       const apiKey = getApiKeyOrSkip()
 
-      const tmpDir = await fs.promises.mkdtemp(
-        path.join(os.tmpdir(), 'base-deep-real-project-'),
+      const tmpDir = registerTmpDir(
+        await fs.promises.mkdtemp(
+          path.join(os.tmpdir(), `base-deep-real-project-${process.pid}-`),
+        ),
       )
 
       const projectFiles: Array<[string, string]> = [
@@ -579,15 +615,14 @@ describe('Base Deep Agent Integration', () => {
       expect(complexContent).toContain('describe(')
       expect(complexContent).toContain('base-deep')
 
-      let diffStats = await getDiffLineStats(cloneDir)
-      diffStats = await getDiffLineStats(cloneDir)
+      const diffStats = await getDiffLineStats(cloneDir)
       const metComplexThreshold = diffStats.total >= 200
       if (!metComplexThreshold) {
         console.warn(
           `Complex threshold not met (changed lines: ${diffStats.total}).`,
         )
       }
-      expect(diffStats.total).toBeGreaterThanOrEqual(0)
+      expect(diffStats.total).toBeGreaterThanOrEqual(200)
 
       await writeTrace({
         testName:

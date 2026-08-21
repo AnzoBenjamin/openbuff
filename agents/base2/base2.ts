@@ -7797,12 +7797,19 @@ function hashGateSnapshotDetails(details: string): string {
         const record = input as Record<string, unknown>
         if (typeof record.path === 'string') out.add(record.path)
         const operation = record.operation
-        if (
-          operation &&
-          typeof operation === 'object' &&
-          typeof (operation as Record<string, unknown>).path === 'string'
-        ) {
-          out.add((operation as Record<string, string>).path)
+        const operationItems = Array.isArray(operation)
+          ? operation
+          : operation && typeof operation === 'object'
+            ? [operation]
+            : []
+        for (const item of operationItems) {
+          if (
+            item &&
+            typeof item === 'object' &&
+            typeof (item as Record<string, unknown>).path === 'string'
+          ) {
+            out.add((item as Record<string, string>).path)
+          }
         }
         const edits = record.edits
         if (Array.isArray(edits)) {
@@ -7830,7 +7837,31 @@ function hashGateSnapshotDetails(details: string): string {
         )
       }
 
+      // Trimmed inline gate check: it verifies only the evidence the gate
+      // needs before it credits an action path — canonical kind/version, a
+      // non-empty operationId, a recognised authorityTier, an accepted
+      // outcome, an authorityReceipt whose operationId/receiptId match the
+      // record, and at least one applied action with a string path.
+      //
+      // Canonical checks in agents/base2/gate-files.ts (fileMutationResultV1
+      // schema + getConfirmedAppliedActionsV1) that are intentionally NOT
+      // mirrored here, so the sync surface for future schema edits is bounded:
+      //   - authorityReceipt.finalHashes presence / per-path correlation
+      //   - per-action committed-status correlation in the authority receipt
+      //   - action beforeHash/afterHash consistency across record + receipt
+      //   - equal action-array lengths and per-index actionId correlation
+      //   - errors / freshCapabilities array shape
+      // The accepted-outcome set MUST stay identical to canonical
+      // (applied | partial | rollback_incomplete), and the authorityReceipt id
+      // match MUST stay. agents/__tests__/gate-files-parity.test.ts is the
+      // guard for both.
       function hasEditArtifact(record: Record<string, unknown>): boolean {
+        const authorityReceipt =
+          record.authorityReceipt &&
+          typeof record.authorityReceipt === 'object' &&
+          !Array.isArray(record.authorityReceipt)
+            ? (record.authorityReceipt as Record<string, unknown>)
+            : null
         return (
           record.kind === 'file_mutation_result' &&
           record.version === 1 &&
@@ -7842,41 +7873,15 @@ function hashGateSnapshotDetails(details: string): string {
             record.outcome === 'partial' ||
             record.outcome === 'rollback_incomplete') &&
           Array.isArray(record.actions) &&
-          record.authorityReceipt !== null &&
-          typeof record.authorityReceipt === 'object' &&
-          !Array.isArray(record.authorityReceipt) &&
-          (record.authorityReceipt as Record<string, unknown>).operationId ===
-            record.operationId &&
-          (record.authorityReceipt as Record<string, unknown>).receiptId ===
-            record.receiptId &&
-          Array.isArray(
-            (record.authorityReceipt as Record<string, unknown>).actions,
-          ) &&
-          (
-            (record.authorityReceipt as Record<string, unknown>)
-              .actions as unknown[]
-          ).length === record.actions.length &&
-          record.actions.every(
-            (action, index) =>
-              action !== null &&
-              typeof action === 'object' &&
-              (action as Record<string, unknown>).index === index &&
-              typeof (action as Record<string, unknown>).actionId ===
-                'string' &&
-              typeof (action as Record<string, unknown>).path === 'string' &&
-              (
-                (record.authorityReceipt as Record<string, unknown>)
-                  .actions as Array<Record<string, unknown>>
-              )[index]?.actionId ===
-                (action as Record<string, unknown>).actionId,
-          ) &&
-          Array.isArray(record.errors) &&
-          Array.isArray(record.freshCapabilities) &&
+          authorityReceipt !== null &&
+          authorityReceipt.operationId === record.operationId &&
+          authorityReceipt.receiptId === record.receiptId &&
           record.actions.some(
             (action) =>
               action !== null &&
               typeof action === 'object' &&
-              (action as Record<string, unknown>).outcome === 'applied',
+              (action as Record<string, unknown>).outcome === 'applied' &&
+              typeof (action as Record<string, unknown>).path === 'string',
           )
         )
       }

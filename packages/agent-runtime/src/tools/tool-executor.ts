@@ -18,7 +18,10 @@ import {
   reconcileFileMutationResultV1,
   type ReadFilesItemV1,
 } from '@codebuff/common/tools/results/filesystem'
-import { getToolMetadata } from '@codebuff/common/tools/metadata'
+import {
+  getToolMetadata,
+  removedToolNames,
+} from '@codebuff/common/tools/metadata'
 import { isAbortError } from '@codebuff/common/util/error'
 import { jsonToolResult } from '@codebuff/common/util/messages'
 import { generateCompactId } from '@codebuff/common/util/string'
@@ -1086,6 +1089,14 @@ export function buildUnavailableToolMessage(params: {
       ? availableTools.map((name) => `\`${name}\``).join(', ')
       : '(none)'
   const base = `Tool \`${toolName}\` is not available for agent \`${agentId}\`. Available tools: ${availableList}. Use one of those tools or continue without a tool; do not retry the unavailable name.`
+  // Case 0: a tool that was removed from the registry but still appears in
+  // persisted histories. Name the replacement surface explicitly so a replayed
+  // legacy call migrates instead of being treated as a typo.
+  if ((removedToolNames as readonly string[]).includes(toolName)) {
+    const replacement =
+      toolName === 'read_slices' ? 'read_files' : 'edit_transaction'
+    return `${base} \`${toolName}\` was removed; use \`${replacement}\` instead. Persisted history entries for \`${toolName}\` remain readable, but the tool can no longer be called.`
+  }
   // Case 1: the name is a real registered tool this agent was simply not
   // granted. Point the model at the granted tools / spawnable agents instead
   // of letting it guess another unavailable name.
@@ -1570,16 +1581,6 @@ export function getFilesystemToolPaths(
   if (toolName === 'glob' || toolName === 'code_search') {
     return { access: 'read', paths: strings(input.cwd ?? '.') }
   }
-  if (toolName === 'apply_patch') {
-    const operation = input.operation
-    return {
-      access: 'write',
-      paths:
-        operation && typeof operation === 'object'
-          ? strings((operation as Record<string, unknown>).path)
-          : [],
-    }
-  }
   if (toolName === 'edit_transaction') {
     const edits = Array.isArray(input.edits) ? input.edits : []
     return {
@@ -1876,6 +1877,33 @@ export async function executeToolCall<T extends ToolName>(
     previousToolCallFinished,
     params.signal,
   )
+
+  // Availability must be decided BEFORE parsing, for every caller. A removed or
+  // otherwise unregistered native name has no `toolParams` entry, so
+  // `parseRawToolCall` would dereference `undefined` and throw. Model-emitted
+  // calls are additionally filtered below, but programmatic (handleSteps)
+  // callers deliberately bypass that filter, so an external custom agent that
+  // still declares a removed name (e.g. `apply_patch`) in `toolNames` /
+  // `programmaticToolNames` reached the parse first and crashed instead of
+  // receiving the documented removed-tool migration guidance. Emitting
+  // `buildUnavailableToolMessage` here keeps that guidance the single failure
+  // contract for both paths.
+  if (!(toolName in toolParams)) {
+    logger.debug(
+      { toolName, agentId: agentTemplate.id, fromHandleSteps },
+      `Blocked unregistered tool ${toolName} before parsing its input`,
+    )
+    onResponseChunk({
+      type: 'error',
+      message: buildUnavailableToolMessage({
+        toolName,
+        agentId: agentTemplate.id,
+        availableTools: getEffectiveAgentToolNames(agentTemplate),
+        input,
+      }),
+    })
+    return abortablePreviousToolCallFinished
+  }
 
   const toolCall: CodebuffToolCall<T> | ToolCallError = parseRawToolCall<T>({
     rawToolCall: {

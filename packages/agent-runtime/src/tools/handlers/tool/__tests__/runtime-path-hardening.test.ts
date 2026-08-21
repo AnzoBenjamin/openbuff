@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 
 import { handleEditTransaction } from '../edit-transaction'
-import { handleApplyPatch } from '../apply-patch'
 import { handleReadFiles } from '../read-files'
 import { handleReplaceRange } from '../replace-range'
 import { handleRewriteSymbol } from '../rewrite-symbol'
@@ -11,10 +10,7 @@ import {
   handleWriteFile,
   normalizeToolPath,
 } from '../write-file'
-import {
-  encodeReadCapabilityToken,
-  getContentHash,
-} from '@codebuff/common/util/content-hash'
+import { executeToolCall } from '../../../tool-executor'
 
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 
@@ -222,161 +218,6 @@ describe('runtime tool path hardening', () => {
     }
   })
 
-  it('blocks apply_patch before client I/O', async () => {
-    for (const inputPath of unsafePaths) {
-      let ioCalls = 0
-      const result = await handleApplyPatch({
-        previousToolCallFinished: Promise.resolve(),
-        toolCall: {
-          toolCallId: 'unsafe-apply-patch',
-          toolName: 'apply_patch',
-          input: {
-            operation: {
-              type: 'update_file',
-              path: inputPath,
-              diff: '@@\n-old\n+new\n',
-            },
-          },
-        },
-        fileProcessingState: getFileProcessingValues({
-          strictReadBeforeEdit: false,
-        }),
-        requestClientToolCall: async () => {
-          ioCalls += 1
-          return []
-        },
-      } as any)
-
-      expect(
-        String(
-          (result.output[0]?.value as { errorMessage?: string } | undefined)
-            ?.errorMessage,
-        ),
-      ).toContain('path traversal blocked')
-      expect(ioCalls).toBe(0)
-    }
-  })
-
-  it('requires a fresh read authorization for apply_patch updates', async () => {
-    let clientCalls = 0
-    const result = await handleApplyPatch({
-      previousToolCallFinished: Promise.resolve(),
-      toolCall: {
-        toolCallId: 'strict-apply-patch',
-        toolName: 'apply_patch',
-        input: {
-          operation: {
-            type: 'update_file',
-            path: 'src/a.ts',
-            diff: '@@\n-old\n+new\n',
-          },
-        },
-      },
-      fileProcessingState: getFileProcessingValues({
-        strictReadBeforeEdit: true,
-      }),
-      requestClientToolCall: async () => {
-        clientCalls += 1
-        return []
-      },
-    } as any)
-
-    expect(clientCalls).toBe(0)
-    expect(result.output[0]?.value).toMatchObject({
-      file: 'src/a.ts',
-    })
-    expect(
-      String(
-        (result.output[0]?.value as { errorMessage?: string }).errorMessage,
-      ),
-    ).toContain('strict read-before-edit')
-  })
-
-  it('does not let legacy pathless apply_patch ranges authorize an unread path', async () => {
-    let clientCalls = 0
-    const token = encodeReadCapabilityToken({
-      startLine: 1,
-      endLine: 1,
-      hash: getContentHash('old'),
-      scope: { projectId: '/project', path: 'src/other.ts', runId: 'run' },
-    })
-    const result = await handleApplyPatch({
-      previousToolCallFinished: Promise.resolve(),
-      toolCall: {
-        toolCallId: 'strict-legacy-apply-patch',
-        toolName: 'apply_patch',
-        input: {
-          operation: {
-            type: 'update_file',
-            path: 'src/a.ts',
-            diff: '@@\n-old\n+new\n',
-            basedOnRead: [token],
-          },
-        },
-      },
-      fileContext: { projectRoot: '/project' },
-      runId: 'run',
-      fileProcessingState: getFileProcessingValues({
-        strictReadBeforeEdit: true,
-      }),
-      requestClientToolCall: async () => {
-        clientCalls += 1
-        return []
-      },
-    } as any)
-
-    expect(clientCalls).toBe(0)
-    expect(String((result.output[0]?.value as any).errorMessage)).toContain(
-      'belongs to a different project, path, or agent run',
-    )
-  })
-
-  it('accepts and unwraps target-bound cap.v3 apply_patch ranges', async () => {
-    const path = 'src/a.ts'
-    const projectId = '/project'
-    const runId = 'apply-patch-run'
-    const hash = getContentHash('old')
-    const token = encodeReadCapabilityToken({
-      startLine: 1,
-      endLine: 1,
-      hash,
-      scope: { projectId, path, runId },
-    })
-    let forwardedOperation: any
-    const result = await handleApplyPatch({
-      previousToolCallFinished: Promise.resolve(),
-      toolCall: {
-        toolCallId: 'strict-scoped-apply-patch',
-        toolName: 'apply_patch',
-        input: {
-          operation: {
-            type: 'update_file',
-            path,
-            diff: '@@\n-old\n+new\n',
-            basedOnRead: [token],
-          },
-        },
-      },
-      fileContext: { projectRoot: projectId },
-      runId,
-      fileProcessingState: getFileProcessingValues({
-        strictReadBeforeEdit: true,
-      }),
-      requestClientToolCall: async (toolCall: any) => {
-        forwardedOperation = toolCall.input.operation
-        return [
-          {
-            type: 'json' as const,
-            value: { file: path, message: 'applied' },
-          },
-        ]
-      },
-    } as any)
-
-    expect(forwardedOperation.basedOnRead).toEqual([token])
-    expect(result.output[0]?.value).not.toHaveProperty('errorMessage')
-  })
-
   it('blocks a mixed read_files request rather than forwarding an empty path', async () => {
     for (const inputPath of unsafePaths) {
       let ioCalls = 0
@@ -418,5 +259,43 @@ describe('runtime tool path hardening', () => {
       )
       expect(ioCalls).toBe(0)
     }
+  })
+})
+
+describe('removed tool names on the programmatic path', () => {
+  it('returns documented removed-tool guidance instead of dereferencing absent tool params', async () => {
+    const chunks: Array<Record<string, unknown>> = []
+
+    // An external custom agent that still declares the removed name and yields
+    // it from handleSteps. That path skips the model-facing availability filter,
+    // so the guard must run before the tool input is parsed.
+    await executeToolCall({
+      toolName: 'apply_patch',
+      input: { operation: { path: 'src/a.ts', diff: 'patch body' } },
+      fromHandleSteps: true,
+      agentState: { agentId: 'agent-1' },
+      agentTemplate: {
+        id: 'external-custom-agent',
+        toolNames: ['apply_patch', 'edit_transaction'],
+        programmaticToolNames: ['apply_patch'],
+      },
+      logger,
+      previousToolCallFinished: Promise.resolve(),
+      signal: new AbortController().signal,
+      toolCalls: [],
+      toolCallsToAddToMessageHistory: [],
+      toolResults: [],
+      toolResultsToAddToMessageHistory: [],
+      onResponseChunk: (chunk: unknown) => {
+        chunks.push(chunk as Record<string, unknown>)
+      },
+    } as any)
+
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0]?.type).toBe('error')
+    const message = String(chunks[0]?.message)
+    expect(message).toContain('`apply_patch` was removed')
+    expect(message).toContain('use `edit_transaction` instead')
+    expect(message).toContain('Persisted history entries')
   })
 })

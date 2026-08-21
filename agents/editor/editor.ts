@@ -415,8 +415,15 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
         const record = input as Record<string, unknown>
         if (typeof record.path === 'string') out.add(record.path)
         const operation = record.operation
-        if (operation && typeof operation === 'object' && typeof (operation as Record<string, unknown>).path === 'string') {
-          out.add((operation as Record<string, string>).path)
+        const operationItems = Array.isArray(operation)
+          ? operation
+          : operation && typeof operation === 'object'
+            ? [operation]
+            : []
+        for (const item of operationItems) {
+          if (item && typeof item === 'object' && typeof (item as Record<string, unknown>).path === 'string') {
+            out.add((item as Record<string, string>).path)
+          }
         }
         const edits = record.edits
         if (Array.isArray(edits)) {
@@ -499,7 +506,12 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
           (record.kind === 'commit_receipt' ||
             (record.kind === 'file_mutation_result' &&
               record.version === 1 &&
-              (record.outcome === 'applied' || record.outcome === 'partial') &&
+              // Canonical accepted-outcome set (agents/base2/gate-files.ts via
+              // getConfirmedAppliedActionsV1): a partially rolled-back edit
+              // still touched disk, so it must enter the changed-file set.
+              (record.outcome === 'applied' ||
+                record.outcome === 'partial' ||
+                record.outcome === 'rollback_incomplete') &&
               record.operationId === receipt.operationId &&
               record.receiptId === receipt.receiptId &&
               record.authorityTier === receipt.authorityTier &&

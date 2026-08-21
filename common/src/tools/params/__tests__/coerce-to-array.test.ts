@@ -1,17 +1,12 @@
 import { describe, expect, it } from 'bun:test'
 import z from 'zod/v4'
 
-import { applyPatchParams } from '../tool/apply-patch'
 import {
   MAX_CONTEXT_LINES,
   MAX_READ_BLOCK_BYTES,
   MAX_WINDOW_SIZE,
   readFilesParams,
 } from '../tool/read-files'
-import {
-  encodeReadCapabilityToken,
-  getContentHash,
-} from '../../../util/content-hash'
 import {
   coerceToArray,
   coerceToObject,
@@ -680,55 +675,6 @@ describe('coerceToArray with Zod schemas', () => {
     const plainSchema = z.toJSONSchema(plain, { io: 'input' })
     const coercedSchema = z.toJSONSchema(coerced, { io: 'input' })
     expect(coercedSchema).toEqual(plainSchema)
-  })
-})
-
-describe('apply_patch basedOnRead coercion', () => {
-  const readCapability = encodeReadCapabilityToken({
-    startLine: 1,
-    endLine: 2,
-    hash: getContentHash('fresh range'),
-    scope: {
-      projectId: '/project',
-      path: 'src/file.ts',
-      runId: 'run-123',
-    },
-  })
-
-  it('coerces one scoped cap.v3 token to an array', () => {
-    const parsed = applyPatchParams.inputSchema.safeParse({
-      operation: {
-        type: 'update_file',
-        path: 'src/file.ts',
-        diff: '@@\n-old\n+new\n',
-        basedOnRead: readCapability,
-      },
-    })
-
-    expect(parsed.success).toBe(true)
-    if (parsed.success && parsed.data.operation.type === 'update_file') {
-      expect(parsed.data.operation.basedOnRead).toEqual([readCapability])
-    }
-  })
-
-  it('rejects cap.v2 and object anchors after coercion', () => {
-    const legacyValues = [
-      'cap.v2.1.2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-      { startLine: 1, endLine: 2, hash: getContentHash('fresh range') },
-    ]
-
-    for (const basedOnRead of legacyValues) {
-      expect(
-        applyPatchParams.inputSchema.safeParse({
-          operation: {
-            type: 'update_file',
-            path: 'src/file.ts',
-            diff: '@@\n-old\n+new\n',
-            basedOnRead,
-          },
-        }).success,
-      ).toBe(false)
-    }
   })
 })
 

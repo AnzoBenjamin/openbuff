@@ -13,7 +13,7 @@ Primary evidence came from:
 - `common/src/tools/params/tool/query-index.ts`
 - `common/src/tools/params/tool/str-replace.ts`
 - `common/src/tools/params/tool/write-file.ts`
-- `common/src/tools/params/tool/apply-patch.ts`
+- `apply-patch.ts` (removed, replaced by write-file/edit-transaction)
 - `common/src/tools/params/tool/edit-transaction.ts`
 - `common/src/tools/results/filesystem.ts`
 - `common/src/types/contracts/client.ts`
@@ -46,7 +46,7 @@ The findings below are based on direct source evidence. Risk statements are arch
 
 - **Risk:** Metadata tells scheduling, validation, and renderers that active mutation tools use `mutation_v1`, but their Zod/public TypeScript outputs still accept legacy success/error objects. The runtime silently converts those accepted legacy objects into an `unconfirmed` canonical mutation. A caller typed against `CodebuffToolOutput<T>` must therefore handle multiple incompatible result families even when metadata promises one contract, and an integration can appear schema-valid while losing receipt, action, hash, and applied-state evidence during normalization.
 - **Fix:** Separate compatibility input from the canonical output type. Normalize legacy SDK/override responses at the boundary before they enter `CodebuffToolOutput`, then validate and expose only `file_mutation_result` for tools marked `mutation_v1`. Put legacy acceptance behind an explicit negotiated ABI adapter with telemetry and a removal version.
-- **Evidence:** `common/src/tools/metadata.ts:173-182` assigns `mutation_v1` to every non-legacy mutation tool. `common/src/tools/list.ts:156-160` derives the public output type directly from each tool's output schema. Yet `common/src/tools/params/tool/str-replace.ts:15-33`, `apply-patch.ts:13-35`, and `edit-transaction.ts:267-291` union canonical mutation results with legacy objects; `write-file.ts:76-82` reuses that union. `packages/agent-runtime/src/tools/tool-executor.ts:180-305` accepts a schema-valid legacy result and rewrites it as `outcome: 'unconfirmed'` with no authority tier or receipt.
+- **Evidence:** `common/src/tools/metadata.ts:173-182` assigns `mutation_v1` to every non-legacy mutation tool. `common/src/tools/list.ts:156-160` derives the public output type directly from each tool's output schema. Yet `common/src/tools/params/tool/str-replace.ts:15-33`, `apply-patch.ts (removed, replaced by write-file/edit-transaction):13-35`, and `edit-transaction.ts:267-291` union canonical mutation results with legacy objects; `write-file.ts:76-82` reuses that union. `packages/agent-runtime/src/tools/tool-executor.ts:180-305` accepts a schema-valid legacy result and rewrites it as `outcome: 'unconfirmed'` with no authority tier or receipt.
 
 ## [MEDIUM] state mutation / correctness — packages/indexer/src/index-manager.ts:201 — `query_index` serves stale snapshots without a stable snapshot identifier
 

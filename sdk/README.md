@@ -50,6 +50,14 @@ outside mutations.
 Custom adapters should implement the optional capabilities they can guarantee:
 
 - `readTextRange` enables bounded reads of files larger than 10 MB.
+- `streamDirectory` keeps `list_directory` lazy, stopping one entry past the
+  listing cap instead of materializing every directory entry. Implementers must
+  (1) release the directory handle from the iterator's `return()` — the method
+  breaking out of `for await` invokes, which async generators and Node's `Dir`
+  already do — and (2) set `readdirView` to the adapter's own `readdir`. A
+  `readdirView` that is not the adapter's current `readdir` (for example after
+  a decorating adapter overrides `readdir`) makes callers ignore the capability
+  and fall back to full `readdir` materialization, with no diagnostic.
 - `createFileExclusive` prevents create collisions.
 - `conditionalCommit` prevents lost updates between validation and overwrite.
 - `conditionalDelete` guards deletions with an exact-byte expected hash.

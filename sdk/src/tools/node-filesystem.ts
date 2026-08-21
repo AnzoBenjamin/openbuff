@@ -58,6 +58,16 @@ export function createNodeFileSystem(
         }
       : {}),
     readTextRange: readNodeTextRange,
+    // Explicit streaming opt-in, deliberately not named `opendir` so adapters
+    // inheriting from `fs.promises` are never auto-detected. Node's `Dir`
+    // releases its handle from `return()`, satisfying the capability's
+    // handle-release obligation, and `readdirView` pins the capability to this
+    // adapter's own `readdir` so a decorating adapter that overrides `readdir`
+    // is not streamed past (see CodebuffStreamDirectory).
+    streamDirectory: Object.assign(
+      (filePath: PathLike) => nodeFs.opendir(filePath),
+      { readdirView: nodeFs.readdir },
+    ),
     createFileExclusive: async (
       filePath: PathLike,
       data: CodebuffFileContent,
@@ -110,7 +120,6 @@ async function readNodeTextRange(
   let currentBytes = 0
   let truncated = false
   let sawBytes = false
-  let endedWithNewline = false
 
   const finishLine = (line: Buffer): void => {
     if (currentLine >= startLine && currentLine <= endLine && !truncated) {
@@ -147,9 +156,6 @@ async function readNodeTextRange(
       const part = chunk.subarray(offset)
       currentParts.push(part)
       currentBytes += part.byteLength
-      endedWithNewline = false
-    } else {
-      endedWithNewline = true
     }
   }
 
@@ -157,11 +163,7 @@ async function readNodeTextRange(
     finishLine(Buffer.concat(currentParts, currentBytes))
   }
 
-  const totalLines = !sawBytes
-    ? 0
-    : endedWithNewline
-      ? currentLine - 1
-      : currentLine - 1
+  const totalLines = sawBytes ? currentLine - 1 : 0
   const requestedLastExistingLine = Math.min(endLine, totalLines)
   const complete =
     !truncated &&

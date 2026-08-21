@@ -48,10 +48,7 @@ import type {
   HarnessApprovalRequest,
 } from './services/harness-enforcement'
 import { changeFile, changeFiles } from './tools/change-file'
-import {
-  applyPatchTool,
-  getDefaultFilesystemAuthority,
-} from './tools/apply-patch'
+import { getDefaultFilesystemAuthority } from './tools/filesystem-authority'
 import { codeSearch } from './tools/code-search'
 import { findFilesMatchingContent } from './tools/find-files-matching-content'
 import { glob } from './tools/glob'
@@ -227,7 +224,7 @@ export type OpenbuffClientOptions = {
   customToolDefinitions?: CustomToolDefinition[]
 
   /** Called after a file-mutating tool (write_file/str_replace/edit_transaction/
-   *  apply_patch/replace_range) runs, so a host can invalidate caches such as
+   *  replace_range) runs, so a host can invalidate caches such as
    *  the codebase index. Best-effort; never blocks the tool result. */
   onFilesChanged?: () => unknown | Promise<unknown>
 
@@ -897,7 +894,7 @@ async function runOnce({
       if (runSignal.aborted || terminalRequested) {
         throw createAbortError(runSignal)
       }
-      // File-editing tools (str_replace / write_file / apply_patch) validate and
+      // File-editing tools (str_replace / write_file) validate and
       // apply against this content, so it MUST be the full, untruncated file. The
       // regular read_files rendering truncates large files at 100k chars for the
       // model; using that here corrupts edit validation (e.g. a 4,499-line file
@@ -1503,7 +1500,6 @@ async function handleToolCall({
         toolName === 'str_replace' ||
         toolName === 'create_plan' ||
         toolName === 'edit_transaction' ||
-        toolName === 'apply_patch' ||
         toolName === 'replace_range'
       ) {
         result = await Promise.all(
@@ -1611,16 +1607,6 @@ async function handleToolCall({
         fileFilter,
         filesystemPolicy,
         callId: action.requestId,
-      })
-    } else if (toolName === 'apply_patch') {
-      result = await applyPatchTool({
-        parameters: input,
-        cwd: requireCwd(cwd, toolName),
-        fs,
-        fileFilter,
-        filesystemPolicy,
-        callId: action.requestId,
-        signal,
       })
     } else if (toolName === 'replace_range') {
       result = await replaceRange({

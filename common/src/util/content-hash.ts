@@ -19,8 +19,8 @@ export function getExactContentHash(content: string): string {
 }
 
 /**
- * Canonical sha256 content hash used by `read_files`, `apply_patch`,
- * `replace_range`, and `str_replace` for stale-edit / capability-token
+ * Canonical sha256 content hash used by `read_files`, `replace_range`,
+ * and `str_replace` for stale-edit / capability-token
  * validation. The hash is computed over the normalized (LF) content and
  * prefixed with `sha256:`.
  */

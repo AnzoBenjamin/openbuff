@@ -9,7 +9,6 @@ export type {
 export { run } from './run'
 export { getFilesStructured } from './tools/read-files'
 export { changeFile, changeFiles } from './tools/change-file'
-export { applyPatchTool } from './tools/apply-patch'
 export { replaceRange } from './tools/replace-range'
 export { readImages } from './tools/read-image'
 export { edit3dAsset, inspect3dAsset, render3dPreview } from './tools/3d-assets'
@@ -35,6 +34,19 @@ export {
   expectedStateMatches,
   hashFileContent,
 } from './tools/filesystem-authority'
+// Capability detection for the optional `streamDirectory` capability. Kept with
+// the consumer of the capability so the published predicate and the listing
+// behaviour cannot diverge; presence of the member alone is not sufficient,
+// since the `readdirView` pairing is part of the contract.
+//
+// `MAX_LIST_DIRECTORY_ENTRIES` is published alongside it because the bounded
+// listing no longer reports the observed entry count: it is the supported way
+// for consumers to obtain the cap instead of parsing it out of the
+// `list_directory` error message.
+export {
+  MAX_LIST_DIRECTORY_ENTRIES,
+  supportsStreamDirectory,
+} from './tools/list-directory'
 export type { FileFilter, FileFilterResult } from './tools/read-files'
 export type {
   FilesystemError,
@@ -113,12 +125,23 @@ export {
   computeBackoffDelayMs,
 } from './retry-config'
 
+// The complete `CodebuffFileSystem` type closure. Every alias the adapter
+// surface reaches is published, so a consumer's generated `.d.ts` resolves an
+// adapter implementation without reaching into unpublished internals.
 export type {
+  CodebuffFileContent,
   CodebuffFileSystem,
+  CodebuffFileSystemBase,
   CodebuffFileSystemCapabilities,
+  CodebuffRangeReadResult,
   CodebuffConditionalCommitOptions,
   CodebuffConditionalCommitResult,
   CodebuffConditionalDeleteResult,
+  CodebuffConditionalMoveOptions,
+  CodebuffConditionalMoveResult,
+  // Required to implement the public `streamDirectory` capability, including
+  // its mandatory `readdirView` pairing.
+  CodebuffStreamDirectory,
   CodebuffTextRangeReadResult,
 } from '@codebuff/common/types/filesystem'
 

@@ -2,7 +2,6 @@
  * Union type of all available tool names
  */
 export type ToolName =
-  | 'apply_patch'
   | 'add_message'
   | 'ask_user'
   | 'check_background_agent'
@@ -62,7 +61,6 @@ export type ToolName =
  * Map of tool names to their parameter types
  */
 export interface ToolParamsMap {
-  apply_patch: ApplyPatchParams
   add_message: AddMessageParams
   ask_user: AskUserParams
   check_background_agent: CheckBackgroundAgentParams
@@ -117,28 +115,6 @@ export interface ToolParamsMap {
   write_file: WriteFileParams
   write_audit_findings: WriteAuditFindingsParams
   write_todos: WriteTodosParams
-}
-
-/**
- * Parameters for apply_patch tool
- */
-export interface ApplyPatchParams {
-  operation:
-    | {
-        type: 'create_file'
-        path: string
-        diff: string
-      }
-    | {
-        type: 'update_file'
-        path: string
-        diff: string
-        basedOnRead?: string[]
-      }
-    | {
-        type: 'delete_file'
-        path: string
-      }
 }
 
 /**
