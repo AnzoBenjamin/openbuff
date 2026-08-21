@@ -4,6 +4,19 @@ All notable changes to the @openbuff/sdk package will be documented in this file
 
 ## [Unreleased]
 
+### Added
+
+- New optional `CodebuffFileSystem` capability `streamDirectory` for lazy (bounded-memory) directory iteration, exported alongside its `CodebuffStreamDirectory` type. `list_directory` uses it to stop one entry past the entry cap instead of materializing whole directories. Implementers must (a) release the directory handle from the iterator's `return()`, which breaking out of `for await` invokes, and (b) set `streamDirectory.readdirView` to the adapter's own `readdir`. Callers ignore the capability when `readdirView` is not the adapter's current `readdir`, so an adapter that decorates `createNodeFileSystem()` (spread or `Object.create()`) and overrides `readdir` keeps serving its own view instead of the host filesystem. The capability is deliberately not named `opendir` so adapters inheriting from `fs.promises` are never auto-detected.
+- New exported predicate `supportsStreamDirectory(fs)` for detecting the `streamDirectory` capability. It is the supported way to observe whether an adapter provides streaming directory iteration, because presence of the member is only half the contract: the predicate also applies the `readdirView` pairing, so it always agrees with the path `list_directory` takes. `detectFilesystemCapabilities()` is unchanged and still reports member-presence capabilities only.
+- New exported constant `MAX_LIST_DIRECTORY_ENTRIES`, the `list_directory` entry cap. It is the supported way to obtain the cap now that the over-cap `errorMessage` no longer reports an observed entry count, so consumers that parsed the count no longer need to parse the message at all.
+- The full `CodebuffFileSystem` type closure is now exported from the SDK (`CodebuffFileContent`, `CodebuffFileSystemBase`, `CodebuffRangeReadResult`, `CodebuffConditionalMoveOptions`, `CodebuffConditionalMoveResult` in addition to the previously published aliases), so a consumer's generated `.d.ts` resolves an adapter implementation without reaching into unpublished internals.
+
+### Changed
+
+- **Consumer-visible tool output:** both `list_directory` `errorMessage` texts changed. Match on the prefixes, not the tails.
+  - Over the entry cap: `Directory listing too large: more than 5000 entries. List a specific subdirectory instead.`. The observed entry count and the previous `exceeds limit of 5000` phrasing are gone: the bounded read stops one entry past the cap, so the true total is never known. Consumers that parsed a count or matched `exceeds limit of` must match `Directory listing too large:` instead, and read the cap from the exported `MAX_LIST_DIRECTORY_ENTRIES` constant.
+  - Any other failure: `Failed to list directory '<path>'`, with an optional ` (ERRNO)` suffix, replacing the previous `Failed to list directory: <fs message>` shape. The raw filesystem message is no longer echoed because it can name absolute paths the call never resolved; only the caller-supplied logical path and a canonical errno token are reported. Consumers that read the filesystem message out of the tail must use the errno suffix.
+
 ### Removed
 
 - **BREAKING:** the `apply_patch` built-in tool has been removed from the published tool set (`publishedTools`/`PublishedToolName`), the client tool-call schema, the runtime tool handlers, and the SDK applicator.

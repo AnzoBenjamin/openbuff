@@ -4,6 +4,14 @@ import { $getNativeToolCallExampleString, jsonToolResultSchema } from '../utils'
 
 import type { $ToolParams } from '../../constants'
 
+/**
+ * Maximum entries a `list_directory` listing may contain before the tool
+ * returns an errorMessage instead of a listing. Declared here, next to the
+ * description that states it, so the number cannot drift from the prompt text;
+ * the SDK implementation imports it (common cannot import the SDK).
+ */
+export const MAX_LIST_DIRECTORY_ENTRIES = 5000
+
 const toolName = 'list_directory'
 const endsAgentStep = true
 const inputSchema = z
@@ -22,7 +30,7 @@ const inputSchema = z
 const description = `
 Lists all files and directories in the specified path. Useful for exploring directory structure and finding files.
 
-Large directories return an errorMessage when exceeding 5000 entries to preserve the persisted error contract; consumers can detect the cap via errorMessage. Narrow path or use a fileFilter for full coverage. The cap is documented and exported as MAX_LIST_DIRECTORY_ENTRIES in sdk/src/tools/list-directory.ts. A future truncated-success shape (truncated/totalEntries/warning) would be additive optional fields on the success union and may become a configurable maxEntries param in a future minor without breaking the current error contract.
+Directories with more than ${MAX_LIST_DIRECTORY_ENTRIES} entries return an errorMessage instead of a listing: list a specific subdirectory instead. Any other failure also returns an errorMessage naming the requested path, plus the errno code when the filesystem reports one.
 
 Example:
 ${$getNativeToolCallExampleString({

@@ -1,31 +1,75 @@
 import * as path from 'path'
 
-import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
-import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import { MAX_LIST_DIRECTORY_ENTRIES } from '@codebuff/common/tools/params/tool/list-directory'
+
 import { resolveFilePathForFileSystemOperation } from './path-utils'
 import { isReadPathBlocked } from './read-policy'
+
+import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
+import type {
+  CodebuffFileSystem,
+  CodebuffStreamDirectory,
+} from '@codebuff/common/types/filesystem'
+import type { Dirent } from 'fs'
 import type { FileFilter } from './read-files'
 
+/** Defined in common so the tool description states the same number. */
+export { MAX_LIST_DIRECTORY_ENTRIES }
+
 /**
- * Maximum entries before the listing returns an error. Exported and
- * documented so callers can reason about the cap. Large directories return
- * an errorMessage (not a truncated success) to preserve the persisted error
- * contract and let consumers detect the cap via error handling. Callers that
- * need large listings should narrow `path` or supply a `fileFilter`.
- * A future `maxEntries` param may allow per-call configurability without
- * breaking the current error-based contract; any truncated-success shape
- * would be introduced as an additive optional field (truncated/totalEntries)
- * so persisted schemas remain detectable.
- *
- * Note on large directories: `fs.readdir` materializes all entries before the
- * cap is checked, so a 500k-entry directory still allocates before the 5k
- * error is returned and could OOM. Streaming via `fs.opendir` would avoid
- * this but is not available through the `CodebuffFileSystem` abstraction and
- * would require a capability extension; callers should narrow `path` or use a
- * fileFilter to avoid pathological directories. The cap therefore documents
- * the contract but does not prevent the underlying readdir allocation.
+ * The streaming capability when it is usable, otherwise `undefined`. Usable
+ * means callable AND paired with this adapter's current `readdir`: a decorating
+ * adapter copies `streamDirectory` over as an own property while overriding
+ * `readdir`, so the pairing is what keeps the listing on the adapter's own
+ * view. Mis-wiring guard, not a trust boundary: see `CodebuffStreamDirectory`.
  */
-export const MAX_LIST_DIRECTORY_ENTRIES = 5000
+function resolveStreamDirectory(
+  fs: CodebuffFileSystem,
+): CodebuffStreamDirectory | undefined {
+  const streamDirectory = fs.streamDirectory
+  return typeof streamDirectory === 'function' &&
+    streamDirectory.readdirView === fs.readdir
+    ? streamDirectory
+    : undefined
+}
+
+/**
+ * Whether `fs` provides usable streaming directory iteration, i.e. whether
+ * `list_directory` takes the bounded streaming path for this adapter.
+ *
+ * Published as the capability-detection entry point for `streamDirectory`
+ * because presence of the member is only half the condition:
+ * `detectFilesystemCapabilities` reports members, and cannot express the
+ * `readdirView` pairing. Consumers asking "does this adapter stream?" must use
+ * this so their answer cannot drift from the decision the tool actually makes.
+ */
+export function supportsStreamDirectory(fs: CodebuffFileSystem): boolean {
+  return resolveStreamDirectory(fs) !== undefined
+}
+
+/**
+ * Read at most `MAX_LIST_DIRECTORY_ENTRIES + 1` entries: one past the cap makes
+ * "over the cap" decidable without counting the whole directory. See
+ * `CodebuffStreamDirectory` in common for the streaming contract this relies on.
+ */
+async function readBoundedEntries(
+  fs: CodebuffFileSystem,
+  directoryPath: string,
+): Promise<Dirent[]> {
+  const limit = MAX_LIST_DIRECTORY_ENTRIES + 1
+  const streamDirectory = resolveStreamDirectory(fs)
+  if (!streamDirectory) {
+    const entries = await fs.readdir(directoryPath, { withFileTypes: true })
+    return entries.slice(0, limit)
+  }
+
+  const entries: Dirent[] = []
+  for await (const entry of await streamDirectory.call(fs, directoryPath)) {
+    entries.push(entry)
+    if (entries.length === limit) break
+  }
+  return entries
+}
 
 export async function listDirectory(params: {
   directoryPath: string
@@ -35,13 +79,10 @@ export async function listDirectory(params: {
 }): Promise<CodebuffToolOutput<'list_directory'>> {
   const { directoryPath, projectPath, fs, fileFilter } = params
 
-  let resolvedPathForError: string | undefined
   try {
     // Reuse the shared containment helper so list_directory gets the same
-    // lexical + symlink-resolved protection as read_files.
-    // The previous `startsWith(projectPath)` check was a weak string prefix
-    // that admitted sibling directories like /project-evil/ (whose path starts
-    // with the string /project) and relied on lexical comparison alone.
+    // lexical + symlink-resolved protection as read_files; a bare
+    // `startsWith(projectPath)` prefix check admits siblings like /project-evil.
     const resolved = await resolveFilePathForFileSystemOperation(
       projectPath,
       directoryPath,
@@ -57,30 +98,23 @@ export async function listDirectory(params: {
         },
       ]
     }
-    const resolvedPath = resolved.operationPath
-    resolvedPathForError = resolvedPath
 
-    // readdir is inherently non-streaming in Node's fs and in CodebuffFileSystem;
-    // all Dirent objects are allocated before MAX_LIST_DIRECTORY_ENTRIES is enforced.
-    // See the MAX_LIST_DIRECTORY_ENTRIES doc comment for OOM implications and mitigation.
-    const entries = await fs.readdir(resolvedPath, {
-      withFileTypes: true,
-    })
+    const entries = await readBoundedEntries(fs, resolved.operationPath)
 
-    // Large-directory guard: preserve the original error contract for
-    // directories exceeding the cap so persisted error handling and consumers
-    // expecting errorMessage continue to work. The cap is documented via the
-    // exported MAX_LIST_DIRECTORY_ENTRIES constant. Callers that need large
-    // listings should narrow `path` or supply a `fileFilter`. A future
-    // truncated-success shape (truncated/totalEntries/warning) would be
-    // introduced as additive optional fields on the success union, never by
-    // replacing this error with a success.
     if (entries.length > MAX_LIST_DIRECTORY_ENTRIES) {
       return [
         {
           type: 'json',
           value: {
-            errorMessage: `Directory listing too large: ${entries.length} entries exceeds limit of ${MAX_LIST_DIRECTORY_ENTRIES}. Use a more specific path or a fileFilter to narrow the listing.`,
+            // Deliberate text change (no exact total). The "more than" bound
+            // is what the streaming path can prove: it stops at cap + 1 and
+            // never learns the true total. The `readdir` fallback does know
+            // the total, but the message stays uniform so consumers see one
+            // shape either way. See the SDK CHANGELOG [Unreleased] entry for
+            // what consumers matching on text must migrate to.
+            // `fileFilter` is host-supplied, not a tool input, so the guidance
+            // names something the model can actually do.
+            errorMessage: `Directory listing too large: more than ${MAX_LIST_DIRECTORY_ENTRIES} entries. List a specific subdirectory instead.`,
           },
         },
       ]
@@ -113,21 +147,26 @@ export async function listDirectory(params: {
       },
     ]
   } catch (error) {
-    const rawMessage = error instanceof Error ? error.message : String(error)
-    // Sanitize absolute realpath leaks: replace absolute paths with the logical directoryPath (RF-7)
-    let sanitized = rawMessage
-    if (projectPath) sanitized = sanitized.replaceAll(projectPath, directoryPath)
-    if (resolvedPathForError) sanitized = sanitized.replaceAll(resolvedPathForError, directoryPath)
-    if (!sanitized.includes(directoryPath)) {
-      sanitized = `Failed to list directory '${directoryPath}'`
-    } else {
-      sanitized = `Failed to list directory: ${sanitized}`
-    }
+    // Only the caller-supplied logical path and the errno code are reported: an
+    // fs error can name absolute realpaths this call never resolved. Replaces
+    // the previous `Failed to list directory: <fs message>` shape; see the SDK
+    // CHANGELOG [Unreleased] entry for the consumer migration.
+    const errnoCode =
+      error instanceof Error
+        ? (error as NodeJS.ErrnoException).code
+        : undefined
+    // An errno code is a short fixed uppercase token, never a path; drop
+    // anything else — including over-long uppercase text — so this branch
+    // cannot become a new leak channel.
+    const detail =
+      typeof errnoCode === 'string' && /^[A-Z][A-Z0-9_]{0,31}$/.test(errnoCode)
+        ? ` (${errnoCode})`
+        : ''
     return [
       {
         type: 'json',
         value: {
-          errorMessage: sanitized,
+          errorMessage: `Failed to list directory '${directoryPath}'${detail}`,
         },
       },
     ]
