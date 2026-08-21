@@ -14,6 +14,31 @@ Gather the exact source and snapshot evidence before spawning. Advisory speciali
 
 Post-edit reviewer-family specialists are routed automatically by the orchestrator's gate. Do not manually re-spawn them after edits, after compaction, or merely because set_output is unavailable; wait for the runtime-owned gate result. Manual specialist calls are for pre-edit advisory work or an explicit user request.
 
+## Deterministic routing triggers
+
+Post-edit reviewer-family routing is a pure deterministic function of (reviewable pending file paths, prompt text), computed by `selectSpecialistReviewers` (`common/src/agents/specialist-risk-router.ts`, mirrored inline in `agents/base2/base2.ts`). At runtime the orchestrator populates `params.orchestrationControlPlane.selectSpecialistReviewers` with that canonical export (`packages/agent-runtime/src/run-programmatic-step.ts`), so the inline mirror runs only as a fallback when the control plane is absent. Behavioral coverage lives in `agents/__tests__/specialist-risk-router.test.ts`, and inline-fallback parity is enforced by `agents/__tests__/specialist-router-parity.test.ts`. Identical inputs always produce the same routed set; the table below is the exact vocabulary the router matches against.
+
+| Specialist | Path signals | Prompt (requirements) keywords |
+| --- | --- | --- |
+| `dependency-reviewer` | Paths: `package.json`, `bun.lockb/bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`, `pyproject.toml`, `uv.lock`, `poetry.lock`, `cargo.toml/cargo.lock`, `go.mod/go.sum`, `gemfile(.lock)`, `composer.json/.lock`, `pom.xml`, `build.gradle(.kts)`, `package.swift` | Keywords: `dependency`, `dependencies`, `lockfile`, `package manager`, `supply chain`, `license`, `vulnerabilit*` |
+| `migration-reviewer` | Paths: directories/files named `migrations`/`schema`/`database`/`db` (segment or dot form), `*.sql` | Keywords: `migration`/`migrations`, `backfill`, `schema change`, `database compatibility`, `rollback` |
+| `compatibility-reviewer` | Paths: `index.*`/`exports.*`/`public-api.*` files; `routes`/`config`/`schemas`/`types` directories | Keywords: `public api`, `backward compat`, `breaking change`, `deprecat*`, `serialization`, `persisted format`, `config contract`, `environment variable`, `cli flag` |
+| `reliability-reviewer` | Paths: directory segments — a path segment equal to `queue(s)`, `worker(s)`, `job(s)`, `cache`, `session(s)`, `state`, `process`, `async`, or `concurrency` immediately followed by `/` (trailing slash required), OR a code file whose filename stem exactly equals `queue(s)|worker(s)|job(s)|cache|session(s)|state|process|async|concurrency|retry|retries|scheduler|pool|lock(s)|timeout|abort|circuit` (code extensions only; compound stems like `retry-policy.ts` and data files like `state.json` never match). `.agents/sessions/**` artifacts excluded | Keywords: `race`, `concurr*`, `retry`/`retries`, `cancel`, `abort`, `idempoten*`, `deadlock`, `state machine`, `resource leak`, `partial failure` |
+| `performance-specialist` | Paths containing `bench`/`perf`/`load-test`/`profil` | Keywords: `performance`, `latency`, `throughput`, `benchmark`, `profil*`, `allocation`, `hot path`, `load test`, `complexity` |
+| `accessibility-reviewer` | A UI-ish file is ALWAYS required — there is no keyword-only route. UI-ish = path segment/dir `components`/`pages`/`views`/`screens`/`widgets`/`layouts`/`features`/`ui`/`app` or extension `tsx`/`jsx`/`vue`/`svelte`/`css`/`scss`/`html`/`astro`/`less`/`sass`/`styl` | Keywords (all require a UI file): `accessibility`, `a11y`, `keyboard`, `focus`, `screen reader`, `aria`, `contrast`, `reduced motion` |
+| `ux-visual-reviewer` | Same always-required UI-file rule as `accessibility-reviewer` (UI-ish = path segment/dir `components`/`pages`/`views`/`screens`/`widgets`/`layouts`/`features`/`ui`/`app` or extension `tsx`/`jsx`/`vue`/`svelte`/`css`/`scss`/`html`/`astro`/`less`/`sass`/`styl`) | Keywords (all require a UI file): `visual`, `layout`, `responsive`, `design system`, `spacing`, `hierarchy`, `screenshot`, `viewport`, `interaction` |
+| `product-reviewer` | No path signal | Keywords: `user-facing`, `acceptance criteria`, `product behavior`, `user flow`, `end-to-end`, `ux`, `onboarding` |
+| `evaluator` | No path signal | Keywords: `independent evaluat*`, `score against`, `requirement coverage` |
+
+### Why a specialist may not spawn
+
+- No rule matched: the router returns an empty set and nothing spawns — silently, with no error.
+- Observable outcomes are recorded in active-work state as `activeWorkState.lastReviewerGateSkipReason`; real values include `no-pending-changes-in-snapshot`, `specialist-terminal-failure`, `specialist-rate-limited`, `specialist-repair-no-progress`, and `specialist-no-verdict-budget-exhausted`.
+- Fresh-credit suppression of an identical aux-relevant pending fingerprint is tracked via `specialistReviewGatesDone` + `specialistReviewGateFingerprints`.
+- Mode roster differences (fast/plan withhold families).
+
+Widening the vocabulary or path patterns in the router is the supported way to change routing — keep this table in sync with the router.
+
 ## Gate vs Specialists
 
 Ownership and timing — Final Gate always runs last; specialist gates are scoped auxiliaries that run in the aux phase before it.

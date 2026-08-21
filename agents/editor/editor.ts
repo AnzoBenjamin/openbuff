@@ -1,7 +1,10 @@
 import { publisher } from '../constants'
 
 import type { AgentDefinition } from '../types/agent-definition'
-import { qualitySection } from '../base2/quality-prompt-section'
+import {
+  preReviewSelfCheckSection,
+  qualitySection,
+} from '../base2/quality-prompt-section'
 import { PLACEHOLDER } from '@codebuff/agent-runtime/templates/types'
 
 type CodeEditorVariant =
@@ -214,6 +217,7 @@ More style notes:
 Write out your complete implementation now, formatting all changes as tool calls as shown above.
 
 ${qualitySection}
+${preReviewSelfCheckSection}
 
 ${PLACEHOLDER.LANGUAGE_PROFILE}
 
@@ -292,11 +296,17 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
             changedFiles,
             ...(blockedReason !== undefined ? { blockedReason } : {}),
             ...(targetFileProgress ? { targetFileProgress } : {}),
-            requirementsAddressed: [],
-            acceptanceCriteriaAddressed: [],
+            requirementsAddressed: extractBriefListItems(
+              messageHistory,
+              /requirements?/i,
+            ),
+            acceptanceCriteriaAddressed: extractBriefListItems(
+              messageHistory,
+              /acceptance criteria/i,
+            ),
             findingsAddressed,
             unresolved,
-            requestedValidation: [],
+            requestedValidation: inferValidationCommands(changedFiles),
           },
         },
         includeToolCall: false,
@@ -696,6 +706,100 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
         collectText(record.text, texts)
         collectText(record.content, texts)
         collectText(record.prompt, texts)
+      }
+
+      // Collects bullet/numbered items under brief headings matching
+      // `headingPattern` (e.g. "## Requirements", "Acceptance criteria:") so
+      // requirement/criteria receipt rows name the exact brief lines they
+      // address instead of hardcoded empty arrays. Bounded: max 50 items of
+      // 300 chars each, deduped preserving first-seen order. Self-contained
+      // inline helper (handleSteps is serialized via toString/new Function).
+      function extractBriefListItems(
+        history: unknown[],
+        headingPattern: RegExp,
+      ): string[] {
+        const texts: string[] = []
+        collectText(prompt, texts)
+        collectText(history, texts)
+        const headingLine = new RegExp(
+          '^(?:#{1,4}\\s+)?\\s*(?:' + headingPattern.source + ')\\s*(?::\\s*)?$',
+          'i',
+        )
+        const nextHeadingLike = /^(?:#{1,4}\s+)?\S[^:]*:\s*$|^(?:#{1,4}\s+)\S/
+        const items: string[] = []
+        const seen = new Set<string>()
+        for (const text of texts) {
+          let inSection = false
+          for (const rawLine of text.split(/\r?\n/)) {
+            const line = rawLine.trim()
+            if (!line) continue
+            if (headingLine.test(line)) {
+              inSection = true
+              continue
+            }
+            if (nextHeadingLike.test(rawLine)) {
+              inSection = false
+              continue
+            }
+            if (!inSection) continue
+            const bullet = rawLine.match(/^\s*(?:[-*]|\d+[.)])\s+(.*)$/)
+            if (!bullet) continue
+            const cleaned = bullet[1]
+              .trim()
+              .replace(/`+/g, '')
+              .replace(/[.,;:]+$/, '')
+              .trim()
+            if (!cleaned || seen.has(cleaned)) continue
+            seen.add(cleaned)
+            items.push(cleaned.length > 300 ? cleaned.slice(0, 300) : cleaned)
+            if (items.length >= 50) return items
+          }
+        }
+        return items
+      }
+
+      // Maps changed paths onto the validation commands for the workspace
+      // that owns them so requestedValidation names exactly the checks that
+      // cover the committed diff. Deduped preserving first-seen order, capped
+      // at 6 commands. Self-contained inline helper (see NOTE above).
+      function inferValidationCommands(files: string[]): string[] {
+        const commands: string[] = []
+        const seen = new Set<string>()
+        const addCommand = (command: string): void => {
+          if (commands.length >= 6 || seen.has(command)) return
+          seen.add(command)
+          commands.push(command)
+        }
+        for (const file of files) {
+          const path = normalizeFilePath(file)
+          if (!path) continue
+          const packageMatch = path.match(
+            /^packages\/([^/]+)\/(?:src|__tests__)\//,
+          )
+          if (packageMatch) {
+            addCommand(
+              `cd packages/${packageMatch[1]} && bun run typecheck && bun test`,
+            )
+            continue
+          }
+          if (path.startsWith('agents/') && !path.startsWith('agents/__tests__/')) {
+            addCommand('cd agents && bun run typecheck && bun test')
+            continue
+          }
+          if (path.startsWith('common/src/')) {
+            addCommand('cd common && bun run typecheck && bun test')
+            continue
+          }
+          if (path.startsWith('cli/src/')) {
+            addCommand('cd cli && bun run typecheck && bun test')
+            continue
+          }
+          if (/\.py$/.test(path)) addCommand('pytest')
+          else if (/\.go$/.test(path)) addCommand('go test ./...')
+          else if (/\.rs$/.test(path)) addCommand('cargo test')
+          else if (/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(path)) addCommand('bun test')
+        }
+        return commands
       }
     },
   } satisfies Omit<AgentDefinition, 'id'>

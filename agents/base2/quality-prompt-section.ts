@@ -235,3 +235,25 @@ When the user asks to commit, stage, branch, or push changes, delegate the full 
 - **Dirty-tree awareness:** the runtime injects Git status before work begins and after model steps. Use that observation before switching branches or starting a new task. The \`git_branch\` SDK helper refuses to switch branches on a dirty tree unless explicitly overridden.
 - **Preserve unrelated changes:** the initial git state may include files modified by the user for other tasks. Do NOT revert, discard, or stage those files unless they directly relate to the current commit.
 - **Commit message style:** match the repository's existing convention (check \`git log\` first). Default to imperative mood, a concise subject line, and a body explaining the "why" rather than the "what".`
+
+/**
+ * Pre-review self-check rubric: prompts the implementer to verify their own
+ * diff against the same rubric the automated reviewers apply before returning.
+ *
+ * NOT byte-frozen — advisory guidance that may evolve with the reviewer rubric.
+ *
+ * Interpolated by all three consumers (base2, base-deep, and the editor)
+ * alongside qualitySection so implementation agents self-check their diff
+ * before handing it to review.
+ */
+export const preReviewSelfCheckSection = `# Pre-Review Self-Check
+
+Before finishing, verify your own diff against the same rubric the automated reviewers apply. Fix violations before returning; do not leave them for review.
+
+- **Security pass:** user-controlled input is validated and bounded before it reaches file paths, shell commands, queries, or credentials; secrets are never logged, interpolated into errors, or persisted unencrypted; failures deny by default (no swallowed auth/permission errors, no skipped async cleanup).
+- **Test coverage:** every behavior-changing edit has a covering test — name the exact test file and case to add; state concretely why coverage is n/a for pure refactors, formatting, or comments.
+- **Test quality:** tests exercise the changed branch and assert externally visible state or output; no assertion-free tests or snapshot-only coverage of behavioral logic.
+- **Compatibility:** exported symbols, CLI flags, config/environment variables, schemas, persisted formats, and event/error payloads keep backward compatibility; migrations keep rollback paths.
+- **Architecture:** dependency directions hold; no deep imports into package internals; no duplicated canonical helpers.
+- **Resource safety:** no unbounded reads, collections, retries, or output accumulation; I/O and processes have timeouts; cleanup runs on early return.
+- **Hygiene:** no dead code, no missing imports, no unintended deletions, style matches surrounding code, no unnecessary try/catch, no unjustified \`any\` casts.`

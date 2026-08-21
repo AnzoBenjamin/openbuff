@@ -11,6 +11,7 @@ import {
   buildBroadAuditSection,
   gateAwarenessSection,
   gitDisciplineSection,
+  preReviewSelfCheckSection,
   qualitySection,
   securityReviewSection,
   specialistRoutingSection,
@@ -53,6 +54,21 @@ describe('shared craftsmanship prompt sections', () => {
     expect(frontendSection).toContain('Accessibility')
     expect(frontendSection).toContain('Responsive Design')
     expect(frontendSection).toContain('Performance')
+  })
+
+  test('preReviewSelfCheckSection contains the required pre-review topics (not byte-frozen)', () => {
+    // preReviewSelfCheckSection is advisory rubric guidance that may evolve
+    // with the reviewer rubric; assert topic coverage only so future wording
+    // changes cannot silently drop a required self-check topic. Unlike
+    // qualitySection, this section is intentionally NOT byte-frozen.
+    expect(preReviewSelfCheckSection).toContain('# Pre-Review Self-Check')
+    expect(preReviewSelfCheckSection).toContain('Security pass')
+    expect(preReviewSelfCheckSection).toContain('Test coverage')
+    expect(preReviewSelfCheckSection).toContain('Test quality')
+    expect(preReviewSelfCheckSection).toContain('Compatibility')
+    expect(preReviewSelfCheckSection).toContain('Architecture')
+    expect(preReviewSelfCheckSection).toContain('Resource safety')
+    expect(preReviewSelfCheckSection).toContain('Hygiene')
   })
 
   test('buildBroadAuditSection contains broad-audit production-readiness guidance (not byte-frozen)', () => {
@@ -241,6 +257,7 @@ describe('shared craftsmanship prompt sections', () => {
     expect(base2.systemPrompt).toContain(gitDisciplineSection)
     expect(base2.systemPrompt).toContain(securityReviewSection)
     expect(base2.systemPrompt).toContain(specialistRoutingSection)
+    expect(base2.systemPrompt).toContain(preReviewSelfCheckSection)
 
     expect(baseDeep.systemPrompt).toContain(qualitySection)
     expect(baseDeep.systemPrompt).toContain(PLACEHOLDER.FRONTEND_SECTION)
@@ -250,6 +267,7 @@ describe('shared craftsmanship prompt sections', () => {
     expect(baseDeep.systemPrompt).toContain(gitDisciplineSection)
     expect(baseDeep.systemPrompt).toContain(securityReviewSection)
     expect(baseDeep.systemPrompt).toContain(specialistRoutingSection)
+    expect(baseDeep.systemPrompt).toContain(preReviewSelfCheckSection)
 
     // gitDisciplineSection is intentionally NOT interpolated into the editor —
     // the editor is for code editing, not git work; the git-committer agent
@@ -261,6 +279,10 @@ describe('shared craftsmanship prompt sections', () => {
     expect(editor.instructionsPrompt).toContain(PLACEHOLDER.FRONTEND_SECTION)
     expect(editor.instructionsPrompt).toContain(PLACEHOLDER.LANGUAGE_PROFILE)
     expect(editor.instructionsPrompt).not.toContain(frontendSection)
+    // preReviewSelfCheckSection IS interpolated into the editor so the
+    // implementer self-checks its diff against the reviewer rubric before
+    // returning.
+    expect(editor.instructionsPrompt).toContain(preReviewSelfCheckSection)
   })
 
   test('base2 system prompt prefers direct code_search and multi-query code-searcher', () => {

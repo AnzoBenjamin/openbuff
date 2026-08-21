@@ -17,6 +17,7 @@ import {
   buildBroadAuditSection,
   gateAwarenessSection,
   gitDisciplineSection,
+  preReviewSelfCheckSection,
   qualitySection,
   securityReviewSection,
   specialistRoutingSection,
@@ -150,6 +151,8 @@ export function createBase2(
     'Editing security-sensitive files (auth/crypto/secrets/payment/permissions) → read_files `agents/guides/security-review.md` before editing.'
   const qualitySectionPointer =
     'Code craftsmanship standards (conventions, minimal-change, reuse, no-any, hygiene) → read_files `agents/guides/code-craftsmanship.md` before editing code.'
+  const preReviewSelfCheckPointer =
+    'Before finishing implementation work → apply the pre-review self-check rubric from `agents/base2/quality-prompt-section.ts` (preReviewSelfCheckSection): security pass, test coverage, compatibility, resource safety, hygiene.'
 
   // Model-visible surface, narrowed when the caller passes `unlockedTiers`.
   const modelToolNames = resolveModelToolNames({
@@ -510,6 +513,7 @@ ${PLACEHOLDER.SYSTEM_INFO_PROMPT}
 The runtime injects a fresh, compact Git-status observation before coding work and after model steps. Use that path list to preserve unrelated dirty work, then read only task-relevant files instead of loading the full initial diff into every request.
 
 ${disclose(qualitySection, qualitySectionPointer)}
+${disclose(preReviewSelfCheckSection, preReviewSelfCheckPointer)}
 
 ${PLACEHOLDER.FRONTEND_SECTION}
 
@@ -6663,9 +6667,42 @@ function hashGateSnapshotDetails(details: string): string {
         return lines.join('\n')
       }
 
+      // Hoisted above selectSpecialistReviewersInline (mirroring the canonical
+      // module-scope RELIABILITY_CODE_STEMS / RELIABILITY_CODE_EXTENSION in
+      // common/src/agents/specialist-risk-router.ts) so the deterministic
+      // fallback doesn't rebuild the stem set or the extension regex on every
+      // invocation. Keep this block directly above the function: the parity
+      // test slices it as the fallback's enclosing-scope bindings.
+      const reliabilityCodeStems = new Set([
+        'queue',
+        'queues',
+        'worker',
+        'workers',
+        'job',
+        'jobs',
+        'cache',
+        'session',
+        'sessions',
+        'state',
+        'process',
+        'async',
+        'concurrency',
+        'retry',
+        'retries',
+        'scheduler',
+        'pool',
+        'lock',
+        'locks',
+        'timeout',
+        'abort',
+        'circuit',
+      ])
+      const reliabilityCodeExtension =
+        /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|py|go|rs|java|kt|kts|rb|php|cs|swift|c|cc|cpp|h|hpp)$/
+
       function selectSpecialistReviewersInline(input: {
         files: string[]
-        requirements: string
+        requirements?: string
       }): string[] {
         const runtimeRouter = (params as any)?.orchestrationControlPlane
           ?.selectSpecialistReviewers
@@ -6675,7 +6712,7 @@ function hashGateSnapshotDetails(details: string): string {
         const files = input.files.map((file) =>
           file.replace(/\\/g, '/').toLowerCase(),
         )
-        const requirements = input.requirements.toLowerCase()
+        const requirements = input.requirements?.toLowerCase() ?? ''
         const joined = `${files.join('\n')}\n${requirements}`
         const selected = new Set<string>()
         if (
@@ -6690,13 +6727,13 @@ function hashGateSnapshotDetails(details: string): string {
         )
           selected.add('dependency-reviewer')
         if (
-          /(?:^|\/)(?:migrations?|schema|database|db)(?:\/|\.)|\.sql$|\b(?:migration|backfill|schema change|database compatibility|rollback)\b/.test(
+          /(?:^|\/)(?:migrations?|schema|database|db)(?:\/|\.)|\.sql$|\b(?:migrations?|backfill|schema change|database compatibility|rollback)\b/.test(
             joined,
           )
         )
           selected.add('migration-reviewer')
         if (
-          /\b(?:public api|backward compat|breaking change|deprecat|serialization|persisted format|config contract|environment variable|cli flag)\b/.test(
+          /\b(?:public api|backward compat|breaking change|deprecat\w*|serialization|persisted format|config contract|environment variable|cli flag)\b/.test(
             requirements,
           ) ||
           files.some((file) =>
@@ -6711,28 +6748,42 @@ function hashGateSnapshotDetails(details: string): string {
 
         const isReliabilityCodePath = (file: string) => {
           if (isAgentsSessionArtifact(file)) return false
-          // Directory-style concurrency/runtime surfaces only (not bare state.json filenames).
-          return /(?:^|\/)(?:queues?|workers?|jobs?|cache|sessions?|state|process|async|concurrency)\//.test(
-            file,
-          )
+          // Directory-style concurrency/runtime surfaces (unchanged)...
+          if (
+            /(?:^|\/)(?:queues?|workers?|jobs?|cache|sessions?|state|process|async|concurrency)\//.test(
+              file,
+            )
+          ) {
+            return true
+          }
+          // ...plus exact filename-stem matches on code files only: compound
+          // stems (retry-policy.ts) and data/doc extensions (state.json) never match.
+          const base = file.slice(file.lastIndexOf('/') + 1)
+          const dot = base.lastIndexOf('.')
+          if (dot <= 0) {
+            // No extension (or dotfile like .gitignore): the whole basename is the stem.
+            return reliabilityCodeStems.has(base)
+          }
+          if (!reliabilityCodeExtension.test(base)) return false
+          return reliabilityCodeStems.has(base.slice(0, dot))
         }
 
         if (
-          /\b(?:race|concurr|retry|retries|cancel|abort|idempoten|deadlock|state machine|resource leak|partial failure)\b/.test(
+          /\b(?:race|concurr\w*|retry|retries|cancel|abort|idempoten\w*|deadlock|state machine|resource leak|partial failure)\b/.test(
             requirements,
           ) ||
           files.some(isReliabilityCodePath)
         )
           selected.add('reliability-reviewer')
         if (
-          /\b(?:performance|latency|throughput|benchmark|profil|allocation|hot path|load test|complexity)\b/.test(
+          /\b(?:performance|latency|throughput|benchmark|profil\w*|allocation|hot path|load test|complexity)\b/.test(
             requirements,
           ) ||
           files.some((file) => /(?:bench|perf|load-test|profil)/.test(file))
         )
           selected.add('performance-specialist')
         const hasUiFiles = files.some((file) =>
-          /(?:^|\/)(?:components?|pages?|views?|screens?|ui|app)(?:\/|\.)|\.(?:tsx|jsx|vue|svelte|css|scss)$/.test(
+          /(?:^|\/)(?:components?|pages?|views?|screens?|widgets?|layouts?|features?|ui|app)(?:\/|\.)|\.(?:tsx|jsx|vue|svelte|css|scss|html|astro|less|sass|styl)$/.test(
             file,
           ),
         )

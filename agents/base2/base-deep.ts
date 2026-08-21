@@ -6,6 +6,7 @@ import { createBase2 } from './base2'
 import {
   gateAwarenessSection,
   gitDisciplineSection,
+  preReviewSelfCheckSection,
   qualitySection,
   securityReviewSection,
   specialistRoutingSection,
@@ -130,6 +131,7 @@ ${PLACEHOLDER.SYSTEM_INFO_PROMPT}
 The runtime injects a fresh, compact Git-status observation before coding work and after model steps. Preserve unrelated dirty paths and read only task-relevant files instead of loading the full initial diff into every request.
 
 ${qualitySection}
+${preReviewSelfCheckSection}
 
 ${gateAwarenessSection}
 

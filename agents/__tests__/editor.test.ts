@@ -1,6 +1,8 @@
 import { describe, test, expect } from 'bun:test'
+import { readFileSync } from 'node:fs'
 
 import editor, { createCodeEditor } from '../editor/editor'
+import { extractInlineFunctionSource } from './helpers/extract-inline-function-source'
 
 import type { AgentState } from '../types/agent-definition'
 
@@ -30,6 +32,14 @@ describe('editor agent', () => {
         ),
       },
     }
+  }
+  // Shared no-op logger so each handleSteps test can pass a silent logger
+  // without re-declaring the same literal.
+  const noopLogger = {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
   }
   const createMockAgentState = (messageHistory: any[] = []): AgentState => ({
     agentId: 'editor-test',
@@ -344,12 +354,7 @@ describe('editor agent', () => {
         { role: 'user', content: [{ type: 'text', text: 'Hello' }] },
       ]
       const mockAgentState = createMockAgentState(initialMessages)
-      const mockLogger = {
-        debug: () => {},
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-      }
+      const mockLogger = noopLogger
 
       const generator = editor.handleSteps!({
         agentState: mockAgentState,
@@ -365,12 +370,7 @@ describe('editor agent', () => {
         { role: 'user', content: [{ type: 'text', text: 'Initial' }] },
       ]
       const mockAgentState = createMockAgentState(initialMessages)
-      const mockLogger = {
-        debug: () => {},
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-      }
+      const mockLogger = noopLogger
 
       const generator = editor.handleSteps!({
         agentState: mockAgentState,
@@ -406,12 +406,7 @@ describe('editor agent', () => {
         { role: 'assistant', content: [{ type: 'text', text: 'Response 1' }] },
       ]
       const mockAgentState = createMockAgentState(initialMessages)
-      const mockLogger = {
-        debug: () => {},
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-      }
+      const mockLogger = noopLogger
 
       const generator = editor.handleSteps!({
         agentState: mockAgentState,
@@ -453,12 +448,7 @@ describe('editor agent', () => {
 
     test('outputs correct structure for set_output', () => {
       const mockAgentState = createMockAgentState([])
-      const mockLogger = {
-        debug: () => {},
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-      }
+      const mockLogger = noopLogger
 
       const generator = editor.handleSteps!({
         agentState: mockAgentState,
@@ -500,12 +490,7 @@ describe('editor agent', () => {
 
     test('does not report non-edit tool result file fields as changed files', () => {
       const mockAgentState = createMockAgentState([])
-      const mockLogger = {
-        debug: () => {},
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-      }
+      const mockLogger = noopLogger
 
       const generator = editor.handleSteps!({
         agentState: mockAgentState,
@@ -544,7 +529,7 @@ describe('editor agent', () => {
     test('ignores malformed, uncommitted, mismatched, and non-edit receipt payloads', () => {
       const generator = editor.handleSteps!({
         agentState: createMockAgentState([]),
-        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        logger: noopLogger as any,
         params: {},
       })
       generator.next()
@@ -601,7 +586,7 @@ describe('editor agent', () => {
     test('reports an attempted-but-uncommitted blockedReason for a failed edit_transaction', () => {
       const generator = editor.handleSteps!({
         agentState: createMockAgentState([]),
-        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        logger: noopLogger as any,
         params: {},
       })
       generator.next()
@@ -632,7 +617,7 @@ describe('editor agent', () => {
     test('includes Attempted paths from extractAttemptedEditFiles in blockedReason', () => {
       const generator = editor.handleSteps!({
         agentState: createMockAgentState([]),
-        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        logger: noopLogger as any,
         params: {},
       })
       generator.next()
@@ -672,7 +657,7 @@ describe('editor agent', () => {
     test('reports committed-but-unrecognized blockedReason when receipts commit without a correlated file', () => {
       const generator = editor.handleSteps!({
         agentState: createMockAgentState([]),
-        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        logger: noopLogger as any,
         params: {},
       })
       generator.next()
@@ -722,7 +707,7 @@ describe('editor agent', () => {
     test('reports committed-but-unrecognized blockedReason for a standalone commit_receipt', () => {
       const generator = editor.handleSteps!({
         agentState: createMockAgentState([]),
-        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        logger: noopLogger as any,
         params: {},
       })
       generator.next()
@@ -775,7 +760,7 @@ describe('editor agent', () => {
     test('does not attach blockedReason when status is completed', () => {
       const generator = editor.handleSteps!({
         agentState: createMockAgentState([]),
-        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        logger: noopLogger as any,
         params: {},
       })
       generator.next()
@@ -856,7 +841,7 @@ describe('editor agent', () => {
 
       const generator = editor.handleSteps!({
         agentState: createMockAgentState([]),
-        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        logger: noopLogger as any,
         params: {},
       })
       generator.next()
@@ -883,12 +868,7 @@ describe('editor agent', () => {
 
     test('reports every updated path from a multi-action edit_transaction receipt', () => {
       const mockAgentState = createMockAgentState([])
-      const mockLogger = {
-        debug: () => {},
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-      }
+      const mockLogger = noopLogger
 
       const generator = editor.handleSteps!({
         agentState: mockAgentState,
@@ -953,12 +933,7 @@ describe('editor agent', () => {
 
     test('reports changed files from a standalone commit_receipt artifact', () => {
       const mockAgentState = createMockAgentState([])
-      const mockLogger = {
-        debug: () => {},
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-      }
+      const mockLogger = noopLogger
 
       const generator = editor.handleSteps!({
         agentState: mockAgentState,
@@ -1018,7 +993,7 @@ describe('editor agent', () => {
     test('reports the destination from a committed move receipt', () => {
       const generator = editor.handleSteps!({
         agentState: createMockAgentState([]),
-        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        logger: noopLogger as any,
         params: {},
       })
       generator.next()
@@ -1097,7 +1072,7 @@ describe('editor agent', () => {
 
       const generator = editor.handleSteps!({
         agentState: createMockAgentState([]),
-        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        logger: noopLogger as any,
         params: {},
       })
       generator.next()
@@ -1123,7 +1098,7 @@ describe('editor agent', () => {
     test('does not attest findings from committed edits covering every finding file', () => {
       const generator = editor.handleSteps!({
         agentState: createMockAgentState([]),
-        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        logger: noopLogger as any,
         params: {
           handoff: {
             findings: [
@@ -1189,12 +1164,7 @@ describe('editor agent', () => {
 
     test('works with empty initial message history', () => {
       const mockAgentState = createMockAgentState([])
-      const mockLogger = {
-        debug: () => {},
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-      }
+      const mockLogger = noopLogger
 
       const generator = editor.handleSteps!({
         agentState: mockAgentState,
@@ -1225,7 +1195,7 @@ describe('editor agent', () => {
       const initialState = createMockAgentState([])
       const generator = editor.handleSteps!({
         agentState: initialState,
-        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        logger: noopLogger as any,
         params: {},
         prompt: ['Target files:', '- src/target.ts'].join('\n'),
       } as any)
@@ -1283,12 +1253,7 @@ describe('editor agent', () => {
 
     test('reports target file progress when one target remains unchanged', () => {
       const mockAgentState = createMockAgentState([])
-      const mockLogger = {
-        debug: () => {},
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-      }
+      const mockLogger = noopLogger
 
       const generator = editor.handleSteps!({
         agentState: mockAgentState,
@@ -1371,7 +1336,7 @@ describe('editor agent', () => {
       const mockAgentState = createMockAgentState([])
       const generator = editor.handleSteps!({
         agentState: mockAgentState,
-        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        logger: noopLogger as any,
         params: {},
         prompt: [
           'Target files:',
@@ -1440,7 +1405,7 @@ describe('editor agent', () => {
       const mockAgentState = createMockAgentState([])
       const generator = editor.handleSteps!({
         agentState: mockAgentState,
-        logger: { debug() {}, info() {}, warn() {}, error() {} } as any,
+        logger: noopLogger as any,
         params: {},
         prompt: [
           '## Requirements',
@@ -1459,6 +1424,274 @@ describe('editor agent', () => {
           paths: ['server/src/db/elastic.ts', 'server/src/db/elastic.test.ts'],
         },
       })
+    })
+
+    test('emits non-empty requestedValidation and requirementsAddressed into set_output for a completed run', () => {
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: noopLogger as any,
+        params: {},
+      })
+      generator.next()
+
+      // End-to-end wiring check: the brief-derived requirements and the
+      // changed-files-derived validation commands must flow into set_output,
+      // not just work in isolation.
+      const result = generator.next({
+        agentState: createMockAgentState([
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: [
+                  '## Requirements',
+                  '- Repair the three open reviewer findings.',
+                  '- Keep the loader body unchanged.',
+                ].join('\n'),
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            content: [
+              {
+                type: 'json',
+                value: withCommittedReceipt({
+                  kind: 'file_mutation_result',
+                  version: 1,
+                  operationId: 'editor-e2e-wiring',
+                  outcome: 'applied',
+                  authorityTier: 'portable_path',
+                  actions: [
+                    {
+                      actionId: 'router',
+                      index: 0,
+                      action: 'update',
+                      path: 'packages/foo/src/router.ts',
+                      outcome: 'applied',
+                      beforeHash: 'before',
+                      afterHash: 'after',
+                    },
+                  ],
+                  errors: [],
+                  freshCapabilities: [],
+                }),
+              },
+            ],
+          },
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      const output = (result.value as any).input.output
+      expect(output.status).toBe('completed')
+      expect(output.changedFiles).toContain('packages/foo/src/router.ts')
+      // Trailing periods are stripped by the brief-list helper.
+      expect(output.requirementsAddressed).toEqual([
+        'Repair the three open reviewer findings',
+        'Keep the loader body unchanged',
+      ])
+      expect(output.requestedValidation).toEqual([
+        'cd packages/foo && bun run typecheck && bun test',
+      ])
+    })
+  })
+
+  describe('inline brief/validation helpers (serialized handleSteps)', () => {
+    type InlineEditorHelpers = {
+      collectText: (value: unknown, texts: string[]) => void
+      normalizeFilePath: (file: string) => string
+      extractBriefListItems: (
+        history: unknown[],
+        headingPattern: RegExp,
+      ) => string[]
+      inferValidationCommands: (files: string[]) => string[]
+    }
+
+    const loadInlineHelpers = (): InlineEditorHelpers => {
+      // Same transpile+extract pattern as the specialist-router parity suite:
+      // the four helpers are authored as sibling function declarations inside
+      // createCodeEditor, OUTSIDE the serialized handleSteps generator body,
+      // so extraction targets the whole transpiled module source rather than
+      // the serialized generator. Strip remaining TS with Bun.Transpiler,
+      // slice out the authored helper declarations with the shared extractor,
+      // and rebuild them via new Function so drift in the authored
+      // declarations is still caught.
+      const editorModuleSource = readFileSync(
+        new URL('../editor/editor.ts', import.meta.url),
+        'utf8',
+      )
+      const transpiledEditorModule = new Bun.Transpiler({
+        loader: 'ts',
+      }).transformSync(editorModuleSource)
+      const helperNames = [
+        'collectText',
+        'normalizeFilePath',
+        'extractBriefListItems',
+        'inferValidationCommands',
+      ]
+      const helperSource = helperNames
+        .map((name) =>
+          extractInlineFunctionSource(transpiledEditorModule, name),
+        )
+        .join('\n\n')
+      // extractBriefListItems closes over handleSteps' `prompt` parameter, so
+      // bind it as a factory argument and neutralize it to undefined: the
+      // rebuilt helpers then parse only the history passed to them. The other
+      // three helpers have no closure deps beyond each other.
+      const buildHelpers = new Function(
+        'prompt',
+        `"use strict";\n${helperSource}\nreturn { ${helperNames.join(', ')} }`,
+      ) as (prompt: unknown) => InlineEditorHelpers
+
+      return buildHelpers(undefined)
+    }
+
+    let cachedInlineHelpers: InlineEditorHelpers | undefined
+    // Memoized lazy singleton: editor.ts is read/transpiled at most once per
+    // test-file run no matter how many helper tests request the helpers.
+    const getInlineHelpers = (): InlineEditorHelpers => {
+      if (!cachedInlineHelpers) {
+        cachedInlineHelpers = loadInlineHelpers()
+      }
+      return cachedInlineHelpers
+    }
+
+    test('extractBriefListItems parses bullet items under Requirements and Acceptance criteria headings', () => {
+      const helpers = getInlineHelpers()
+      const brief = [
+        '## Requirements',
+        '- Implement the deterministic specialist router.',
+        '* Mirror the inline fallback.',
+        '1. Keep implementer prompts self-checking.',
+        '',
+        '## Target files',
+        '- src/router.ts',
+      ].join('\n')
+
+      // Trailing punctuation is stripped by the helper, so expectations omit it.
+      expect(helpers.extractBriefListItems([brief], /requirements?/i)).toEqual([
+        'Implement the deterministic specialist router',
+        'Mirror the inline fallback',
+        'Keep implementer prompts self-checking',
+      ])
+    })
+
+    test('extractBriefListItems stops at the next heading and strips backticks and trailing punctuation', () => {
+      const helpers = getInlineHelpers()
+      const brief = [
+        'Requirements:',
+        '- Ship `bun run typecheck`.',
+        'Acceptance criteria:',
+        '- Parity suite passes;',
+        '## Constraints/non-goals',
+        '- Preserve the frozen router.',
+      ].join('\n')
+
+      expect(helpers.extractBriefListItems([brief], /requirements?/i)).toEqual(
+        ['Ship bun run typecheck'],
+      )
+      expect(
+        helpers.extractBriefListItems([brief], /acceptance criteria/i),
+      ).toEqual(['Parity suite passes'])
+    })
+
+    test('extractBriefListItems dedupes across history entries preserving first-seen order', () => {
+      const helpers = getInlineHelpers()
+      const history = [
+        [
+          '## Requirements',
+          '- Add the parity test.',
+          '- Add the parity test.',
+        ].join('\n'),
+        [
+          '## Requirements',
+          '- Add the parity test.',
+          '- Cover the negative case.',
+        ].join('\n'),
+      ]
+
+      expect(helpers.extractBriefListItems(history, /requirements?/i)).toEqual([
+        'Add the parity test',
+        'Cover the negative case',
+      ])
+    })
+
+    test('extractBriefListItems caps at 50 items of 300 characters', () => {
+      const helpers = getInlineHelpers()
+      const sixtyBullets = Array.from(
+        { length: 60 },
+        (_, index) => `- Requirement ${index + 1}.`,
+      )
+      expect(
+        helpers.extractBriefListItems(
+          [['## Requirements', ...sixtyBullets].join('\n')],
+          /requirements?/i,
+        ),
+      ).toHaveLength(50)
+
+      const oversizedBullet = `- ${'Very long requirement text '.repeat(15)}`
+      const items = helpers.extractBriefListItems(
+        ['## Requirements', oversizedBullet].join('\n'),
+        /requirements?/i,
+      )
+      expect(items).toHaveLength(1)
+      expect(items[0]).toHaveLength(300)
+    })
+
+    test('inferValidationCommands maps workspace-owned paths onto their owning workspace checks', () => {
+      const helpers = getInlineHelpers()
+
+      expect(helpers.inferValidationCommands(['packages/foo/src/x.ts'])).toEqual(
+        ['cd packages/foo && bun run typecheck && bun test'],
+      )
+      expect(helpers.inferValidationCommands(['agents/base2/y.ts'])).toEqual([
+        'cd agents && bun run typecheck && bun test',
+      ])
+      expect(helpers.inferValidationCommands(['common/src/z.ts'])).toEqual([
+        'cd common && bun run typecheck && bun test',
+      ])
+      expect(helpers.inferValidationCommands(['cli/src/a.tsx'])).toEqual([
+        'cd cli && bun run typecheck && bun test',
+      ])
+      expect(helpers.inferValidationCommands(['x.py'])).toEqual(['pytest'])
+      expect(helpers.inferValidationCommands(['x.go'])).toEqual([
+        'go test ./...',
+      ])
+      expect(helpers.inferValidationCommands(['x.rs'])).toEqual(['cargo test'])
+      expect(helpers.inferValidationCommands(['x.ts'])).toEqual(['bun test'])
+    })
+
+    test('inferValidationCommands dedupes commands and caps at 6', () => {
+      const helpers = getInlineHelpers()
+
+      expect(
+        helpers.inferValidationCommands([
+          'packages/foo/src/a.ts',
+          'packages/foo/__tests__/b.test.ts',
+          'packages/bar/src/c.ts',
+        ]),
+      ).toEqual([
+        'cd packages/foo && bun run typecheck && bun test',
+        'cd packages/bar && bun run typecheck && bun test',
+      ])
+
+      // Seven distinct workspaces plus one overflow mapping: only the first
+      // six commands survive the cap.
+      const capped = helpers.inferValidationCommands([
+        ...Array.from(
+          { length: 7 },
+          (_, index) => `packages/p${index}/src/a.ts`,
+        ),
+        'x.py',
+      ])
+      expect(capped).toHaveLength(6)
+      expect(
+        capped.every((command) => command.startsWith('cd packages/')),
+      ).toBe(true)
     })
   })
 
