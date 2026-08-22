@@ -261,3 +261,34 @@ Each must land behind: `cd agents && bun run typecheck`, `bun test base2.test.ts
 the `gate-reviewer` / `gate-*-parity` suites, the `agents/e2e` gate lifecycle +
 reviewer-spawn-conditions e2e tests, and a regenerated
 `cli/src/agents/bundled-agents.generated.ts`.
+
+---
+
+## Lessons learned during implementation (2026-08-21)
+
+- **TDZ hazard when hoisting consts inside the serialized generator.** Moving
+  `reliabilityCodeStems` / `reliabilityCodeExtension` "above"
+  `selectSpecialistReviewersInline` must mean above it AND before every runtime
+  call site: `const` bindings initialize only when execution reaches them, and
+  `handleSteps` executes top-to-bottom from its opening (~line 554) while the
+  first router call site sits at ~line 2199. Placing the hoisted block next to
+  the function's declaration site (~line 6667) crashed every gate e2e at
+  runtime with `Cannot access 'reliabilityCodeExtension' before
+  initialization` even though typecheck and the parity suite stayed green —
+  the parity harness rebuilds scope instead of executing the generator, and
+  the file-change hooks only typecheck. Rule: any hoisted binding inside
+  `handleSteps` goes at the very top of the generator body, keeping the consts
+  contiguous with the function so the parity slice keeps working. Only
+  executing the full test suite catches this class of bug.
+- **Router vocabulary widening couples to test fixtures.** Fixtures chosen
+  under old routing rules silently change meaning when vocabulary widens:
+  `cli/src/auth/session.ts` began routing reliability-reviewer once exact
+  filename stems (`session`) were added, breaking three aux-ordering e2e tests.
+  When widening the router, grep e2e fixtures for newly-matching paths and
+  prefer fixtures whose basename cannot match any family (e.g.
+  `token-store.ts`).
+- **Full-suite validation belongs before push, not after.** Both regressions
+  above were invisible to focused suites and typecheck; only
+  `cd agents && bun test` over all 51 files surfaced them. `check:ci-local`
+  now includes the full agents suite as Step E so the pre-push hook and local
+  CI mirror catch TDZ-class regressions before they reach origin/main.

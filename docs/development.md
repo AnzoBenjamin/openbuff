@@ -73,7 +73,9 @@ Before opening a PR or pushing, run the early GitHub CI gates locally:
 bun run check:ci-local
 ```
 
-This regenerates tool definitions (and fails if the tracked generated files drift), then runs `guard:memory-drift` and `guard:sync-agent-config`. Regenerating may mutate the working tree when schemas drift — review and commit those files if needed.
+This regenerates tool definitions (and fails if the tracked generated files drift from git HEAD — staged changes included), then runs `guard:memory-drift` and `guard:sync-agent-config`. Regenerating may mutate the working tree when schemas drift — review and commit those files if needed. It also runs the full `agents` and `common` test suites, so runtime-only regressions (such as TDZ errors that typecheck misses) are caught before you push.
+
+Each step can be capped with `OPENBUFF_CI_LOCAL_STEP_TIMEOUT_MS` (milliseconds; unset or `0` disables the timeout) so a hung suite cannot block a pre-push hook forever. A clean Ctrl-C releases the lock automatically. After a crash, the stale `.openbuff/ci-local.lock` records the holder PID — verify with `ps -p <pid>` that nothing is still running, then delete the file. `.openbuff/` carries its own `.gitignore`, so lock files never show up in `git status`.
 
 Optionally install a local pre-push hook (not committed; lives under `.git/hooks/`):
 

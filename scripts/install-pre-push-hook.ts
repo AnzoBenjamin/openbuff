@@ -1,19 +1,25 @@
 import { spawnSync } from 'node:child_process'
 import {
   chmodSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
-  statSync,
   unlinkSync,
-  writeFileSync,
+  writeSync,
 } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const MANAGED_PRE_PUSH_MARKER = '# openbuff-managed-pre-push-hook'
 
+/**
+ * NOTE: duplicated verbatim in check-ci-local.ts on purpose: each script stays
+ * a standalone single-file program, and the test suite aliases both copies so
+ * drift is caught. If you change one, change both.
+ */
 export function projectRootFromMeta(metaUrl = import.meta.url): string {
   return resolve(dirname(fileURLToPath(metaUrl)), '..')
 }
@@ -83,36 +89,12 @@ export function resolveGitHooksDir(root: string): string | null {
   return isAbsolute(raw) ? raw : resolve(root, raw)
 }
 
-function snapshotExistingHook(hookPath: string): {
-  content: string | null
-  mode: number | null
-} {
+function snapshotExistingHook(hookPath: string): { content: string | null } {
   if (!existsSync(hookPath)) {
-    return { content: null, mode: null }
+    return { content: null }
   }
   return {
     content: readFileSync(hookPath, 'utf8'),
-    mode: statSync(hookPath).mode,
-  }
-}
-
-function bestEffortRestoreHook(
-  hookPath: string,
-  previous: { content: string | null; mode: number | null },
-): void {
-  try {
-    if (previous.content === null) {
-      if (existsSync(hookPath)) {
-        unlinkSync(hookPath)
-      }
-      return
-    }
-    writeFileSync(hookPath, previous.content, 'utf8')
-    if (previous.mode !== null) {
-      chmodSync(hookPath, previous.mode)
-    }
-  } catch {
-    // best-effort only
   }
 }
 
@@ -126,11 +108,27 @@ function bestEffortUnlink(path: string): void {
   }
 }
 
+/**
+ * Create `path` exclusively (O_EXCL via the 'wx' flag) so a pre-planted
+ * `pre-push.openbuff.tmp.<pid>` path in a shared hooks dir is never clobbered
+ * or followed.
+ */
+export function writeTempFileExclusive(path: string, contents: string): void {
+  const fd = openSync(path, 'wx')
+  try {
+    writeSync(fd, contents)
+  } finally {
+    closeSync(fd)
+  }
+}
+
 export function installPrePushHook(options?: {
   root?: string
   force?: boolean
   /** Optional hooks dir override for tests / offline install targets. */
   hooksDir?: string
+  /** Test-only seam: replace the exclusive temp write to inject write failures. */
+  writeTempFile?: (tempPath: string, script: string) => void
 }): { installed: boolean; hookPath: string; message: string } {
   const root = options?.root ?? projectRootFromMeta()
   const force = options?.force ?? false
@@ -153,12 +151,25 @@ export function installPrePushHook(options?: {
 
   const hookPath = join(hooksDir, 'pre-push')
 
-  let existingContent: string | null = null
-  if (existsSync(hookPath)) {
-    existingContent = readFileSync(hookPath, 'utf8')
+  // Pre-flight inspection of an existing hook can fail (EACCES, or the hook
+  // vanishing/becoming unreadable mid-run); report a friendly failure instead
+  // of letting the error escape as a stack trace.
+  let previous: { content: string | null }
+  try {
+    previous = snapshotExistingHook(hookPath)
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    return {
+      installed: false,
+      hookPath,
+      message: `❌ Could not inspect the existing pre-push hook: ${detail}\n   Hook path: ${hookPath}`,
+    }
   }
 
-  const decision = shouldOverwritePrePushHook({ existingContent, force })
+  const decision = shouldOverwritePrePushHook({
+    existingContent: previous.content,
+    force,
+  })
   if (!decision.overwrite) {
     return {
       installed: false,
@@ -169,17 +180,22 @@ export function installPrePushHook(options?: {
 
   mkdirSync(hooksDir, { recursive: true })
 
-  const previous = snapshotExistingHook(hookPath)
   const script = buildPrePushHookScript()
   const tempPath = join(hooksDir, `pre-push.openbuff.tmp.${process.pid}`)
+  const writeTempFile = options?.writeTempFile ?? writeTempFileExclusive
 
+  // Atomicity invariant: the temp file is written exclusively (O_EXCL via the
+  // 'wx' flag), chmodded in place, and swapped in with a single atomic rename,
+  // so hookPath is only ever replaced wholesale on success. Any failure before
+  // the rename therefore leaves the existing hook untouched by construction —
+  // there is nothing to restore. Just clean up the temp file and report the
+  // failure.
   try {
-    writeFileSync(tempPath, script, 'utf8')
+    writeTempFile(tempPath, script)
     chmodSync(tempPath, 0o755)
     renameSync(tempPath, hookPath)
   } catch (err) {
     bestEffortUnlink(tempPath)
-    bestEffortRestoreHook(hookPath, previous)
     const detail = err instanceof Error ? err.message : String(err)
     return {
       installed: false,
@@ -194,7 +210,7 @@ export function installPrePushHook(options?: {
     message: [
       '✅ Installed Openbuff managed pre-push hook.',
       `   ${hookPath}`,
-      '   It runs `bun run check:ci-local` (tool defs + memory-drift + sync-agent-config).',
+      '   It runs `bun run check:ci-local` (tool defs + memory-drift + sync-agent-config + full agents/common suites).',
       '   The hook is local-only (not committed).',
       '   To reinstall over a foreign hook: bun run install:pre-push -- --force',
     ].join('\n'),
