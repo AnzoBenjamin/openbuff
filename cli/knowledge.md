@@ -13,6 +13,7 @@
 
 - Durable planning is entered through `mode:plan`; the standalone `/plan` command is intentionally absent from `COMMAND_REGISTRY` and `SLASH_COMMANDS` so there is one plan-entry path.
 - Keep the durable-plan quartet registered: `/resume-plan` (`rp`), `/update-plan` (`up`), `/plan-status` (`ps`), and `/lessons` (`lesson`). These commands operate on `.agents/sessions/<slug>/` artifacts and fall back to the plan-session picker when no target is provided.
+- `/memory` (alias `/mem`, `cli/src/commands/memory-command.ts`, registered in `command-registry.ts` and listed in `data/slash-commands.ts`) inspects the persisted cross-session task memory for the current project (`.openbuff/memory/task-memory.json`). `/memory status` (the default) reports the record's revision and age, its goal and per-list counts, and how much of its evidence still verifies against disk, listing up to five stale paths; `/memory prune` drops evidence that no longer verifies. Both subcommands are move-aware via `collectWorkspaceMoves` + `WorkspaceJournalService` so a renamed file's evidence rebinds rather than being reported stale and deleted.
 - Slash-command descriptions should stay model-agnostic under BYOK/local mode. Use wording such as "configured reviewer" rather than naming hosted models.
 
 ## Import Guidelines
@@ -875,4 +876,4 @@ Streaming markdown renders as plain text until the message or agent finishes. Th
 - BACKGROUND terminal cards wire `backgroundJobId` from the launch `tool_result` so live `job_update` events settle lifecycle/output in place without a `check_job` poll; keep frozen JSON status from being treated as authoritative after settle.
 - `cli/src/utils/create-run-config.ts` and regenerated agent type sources track content-search/glob `cwd` ergonomics (file-as-cwd coercion, paths param, flag allowlist). After public tool schema changes, regenerate `cli/src/data/initial-agent-type-sources.generated.ts` via the root tool-definition generator.
 
-- _Knowledge refresh 2026-07-14: staleness guard touch — no functional change._
+- _Knowledge refresh 2026-08-23: add `/memory` (alias `/mem`) slash command; staleness guard touch._
