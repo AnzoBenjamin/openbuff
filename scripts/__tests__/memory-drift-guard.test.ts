@@ -24,7 +24,107 @@ import {
   checkToolConfigSync,
   checkTodoFixme,
   checkBrokenLink,
+  checkTaskMemory,
 } from '../memory-drift-guard'
+
+/**
+ * Seed a persisted task-memory record with the given evidence entries.
+ *
+ * The checker only judges TRACKED repository content, so records are staged in
+ * a temp git repo by default; pass `{ track: false }` to reproduce the
+ * machine-local (untracked) runtime artifact case.
+ */
+function writeTaskMemory(
+  root: string,
+  evidence: Array<Record<string, unknown>>,
+  options: { track?: boolean } = {},
+): void {
+  mkdirSync(join(root, '.openbuff', 'memory'), { recursive: true })
+  writeFileSync(
+    join(root, '.openbuff', 'memory', 'task-memory.json'),
+    JSON.stringify({ schemaVersion: 1, evidence }),
+  )
+  if (options.track === false) {
+    return
+  }
+  if (!existsSync(join(root, '.git'))) {
+    initGitRepo(root)
+  }
+  // `git ls-files` reports staged paths, so adding is enough to make the
+  // record tracked repository content.
+  execSync('git add -- .openbuff/memory/task-memory.json', { cwd: root })
+}
+
+test('task-memory checker flags missing evidence paths that are not marked stale', () => {
+  writeTaskMemory(tmpRoot, [
+    { id: 'ev-missing', path: 'src/vanished.ts' },
+    { id: 'ev-known-stale', path: 'src/also-gone.ts', stale: true },
+  ])
+
+  const findings = checkTaskMemory(tmpRoot)
+
+  expect(findings.length).toBe(1)
+  expect(findings[0]!.path).toBe('.openbuff/memory/task-memory.json')
+  expect(findings[0]!.line).toBe(1)
+  expect(findings[0]!.message).toContain('src/vanished.ts')
+  expect(findings[0]!.message).toContain('not marked stale')
+})
+
+test('task-memory checker ignores an untracked machine-local record', () => {
+  // Same drifted record as above, but untracked: this blocking gate must not
+  // fail on local runtime state that no source change produced.
+  initGitRepo(tmpRoot)
+  writeTaskMemory(tmpRoot, [{ id: 'ev-missing', path: 'src/vanished.ts' }], {
+    track: false,
+  })
+
+  expect(checkTaskMemory(tmpRoot)).toEqual([])
+})
+
+test('task-memory checker ignores a record when git is unavailable', () => {
+  // No git repo at all (`git ls-files` fails): degrade to skip rather than
+  // emit findings nobody can act on.
+  writeTaskMemory(tmpRoot, [{ id: 'ev-missing', path: 'src/vanished.ts' }], {
+    track: false,
+  })
+
+  expect(checkTaskMemory(tmpRoot)).toEqual([])
+})
+
+test('task-memory checker ignores existing paths and entries without a path', () => {
+  mkdirSync(join(tmpRoot, 'src'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'src', 'present.ts'), 'export const x = 1\n')
+  writeTaskMemory(tmpRoot, [
+    { id: 'ev-present', path: 'src/present.ts' },
+    { id: 'ev-no-path', summary: 'decision without a file' },
+    { id: 'ev-empty-path', path: '' },
+  ])
+
+  expect(checkTaskMemory(tmpRoot)).toEqual([])
+})
+
+test('task-memory checker is silent for absent, malformed, or shapeless records', () => {
+  // Absent record.
+  expect(checkTaskMemory(tmpRoot)).toEqual([])
+
+  // Unparseable JSON (tracked, so the parse branch is actually reached).
+  initGitRepo(tmpRoot)
+  mkdirSync(join(tmpRoot, '.openbuff', 'memory'), { recursive: true })
+  writeFileSync(
+    join(tmpRoot, '.openbuff', 'memory', 'task-memory.json'),
+    '{ not json',
+  )
+  execSync('git add -- .openbuff/memory/task-memory.json', { cwd: tmpRoot })
+  expect(checkTaskMemory(tmpRoot)).toEqual([])
+
+  // Valid JSON without an evidence array.
+  writeFileSync(
+    join(tmpRoot, '.openbuff', 'memory', 'task-memory.json'),
+    JSON.stringify({ schemaVersion: 1, evidence: 'nope' }),
+  )
+  execSync('git add -- .openbuff/memory/task-memory.json', { cwd: tmpRoot })
+  expect(checkTaskMemory(tmpRoot)).toEqual([])
+})
 
 let tmpRoot: string
 
@@ -919,8 +1019,10 @@ test('integration: runMemoryDriftGuard returns sum score and 11 checkers in orde
     JSON.stringify({ scripts: {} }),
   )
 
+  writeTaskMemory(tmpRoot, [{ id: 'ev-drifted', path: 'src/drifted.ts' }])
+
   const result = runMemoryDriftGuard(tmpRoot)
-  expect(result.checkers.length).toBe(11)
+  expect(result.checkers.length).toBe(12)
   const expectedNames = [
     'path',
     'edges',
@@ -933,6 +1035,7 @@ test('integration: runMemoryDriftGuard returns sum score and 11 checkers in orde
     'tool-config-sync',
     'todo-fixme',
     'broken-link',
+    'task-memory',
   ]
   expect(result.checkers.map((c) => c.name)).toEqual(expectedNames)
   const sum = result.checkers.reduce((s, c) => s + c.findings.length, 0)

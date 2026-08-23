@@ -35,6 +35,19 @@ function makeSkillsMap(skills: SkillDefinition[]): SkillsMap {
 
 describe('slash-commands module', () => {
   describe('SLASH_COMMANDS', () => {
+    test('exposes the /memory command with its alias and description', () => {
+      const command = SLASH_COMMANDS.find((entry) => entry.id === 'memory')
+      expect(command).toBeDefined()
+      expect(command!.label).toBe('memory')
+      expect(command!.description).toBe(
+        'Show or prune persisted cross-session task memory',
+      )
+      expect(command!.aliases).toEqual(['mem'])
+      // Stateful command: must not fire without an explicit leading slash.
+      expect(command!.implicitCommand).toBeUndefined()
+      expect(SLASHLESS_COMMAND_IDS.has('memory')).toBe(false)
+    })
+
     test('[COR-H04] undo and redo describe conversation history, not filesystem rollback', () => {
       for (const id of ['undo', 'redo']) {
         const command = SLASH_COMMANDS.find((entry) => entry.id === id)

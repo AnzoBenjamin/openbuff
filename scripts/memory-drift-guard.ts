@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync, type Dirent } from 'node:fs'
+import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { dirname, relative, resolve, sep, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
@@ -303,7 +303,13 @@ export function checkIndexSync(root: string): Finding[] {
 }
 
 export function checkStaleness(root: string): Finding[] {
-  const findings: Finding[] = []
+  const candidates: Array<{
+    filePath: string
+    projectPath: string
+    srcRelative: string
+    topic: string
+    base: string
+  }> = []
   for (const filePath of markdownFiles(root)) {
     const base = filePath.split(sep).pop() || ''
     if (base !== 'knowledge.md' && !base.endsWith('.knowledge.md')) {
@@ -315,60 +321,99 @@ export function checkStaleness(root: string): Finding[] {
       continue
     }
     const projectPath = toProjectPath(root, filePath)
-    // `knowledge.md` documents the whole sibling `src/` tree, while a
-    // topic-prefixed `<topic>.knowledge.md` only documents the slice of that
-    // tree matching `<topic>`. An empty topic (a file literally named
-    // `.knowledge.md`) degrades to the whole-tree case rather than emitting a
-    // pathspec that matches everything.
+    const srcRelative = toProjectPath(root, siblingSrc)
     const topic = base.endsWith('.knowledge.md')
       ? base.slice(0, -'.knowledge.md'.length)
       : ''
-    try {
-      // Use git commit timestamps (the real source of truth for content
-      // recency) instead of filesystem mtimes. Filesystem mtimes are flaky
-      // in CI: git does not preserve mtime across checkouts, and a fresh
-      // checkout always orders directory mtimes by tree-traversal write
-      // order rather than by actual content freshness. This made the
-      // mtime-based check fire deterministically on every CI run.
-      const srcRelative = toProjectPath(root, siblingSrc)
+    candidates.push({ filePath, projectPath, srcRelative, topic, base })
+  }
+  if (candidates.length === 0) return []
+  try {
+    // Batch git worktree-dirty checks: one `git status` for all knowledge
+    // paths instead of one per knowledge.md (spawns scale with files, not
+    // knowledge.md count). Batch commit-timestamp lookups by deduplicating
+    // pathspecs so repeated src/ or knowledge.md paths do not respawn git.
+    const dirtySet = batchDirtySet(
+      root,
+      candidates.map((c) => c.projectPath),
+    )
+    const plainSrcPaths = [
+      ...new Set(candidates.filter((c) => c.topic === '').map((c) => c.srcRelative)),
+    ]
+    const knowledgePaths = [...new Set(candidates.map((c) => c.projectPath))]
+    const plainSrcEpochs = batchLastCommitEpochs(root, plainSrcPaths)
+    const mdEpochs = batchLastCommitEpochs(root, knowledgePaths)
+    const topicEpochs = new Map<string, number | null>()
+    const topicKeys = [...new Set(candidates.filter((c) => c.topic !== '').map((c) => `${c.srcRelative}\0${c.topic}`))]
+    for (const key of topicKeys) {
+      const separator = key.indexOf('\0')
+      const srcRel = key.slice(0, separator)
+      const topic = key.slice(separator + 1)
+      topicEpochs.set(key, lastCommitEpochForTopic(root, srcRel, topic))
+    }
+    const findings: Finding[] = []
+    for (const c of candidates) {
+      if (dirtySet.has(c.projectPath)) continue
+      const lastCommitMd = mdEpochs.get(c.projectPath) ?? null
       const lastCommitSource =
-        topic === ''
-          ? lastCommitEpoch(root, srcRelative)
-          : lastCommitEpochForTopic(root, srcRelative, topic)
-      const lastCommitMd = lastCommitEpoch(root, projectPath)
-      // In local remediation flows, a tracked knowledge file may be updated in
-      // the working tree before the commit that refreshes its git timestamp.
-      // Treat that dirty state as an in-progress freshness signal so the guard
-      // can pass before the commit lands.
-      if (pathHasWorkingTreeChanges(root, projectPath)) {
-        continue
-      }
-      // If git is unavailable or the path is untracked, fall back to no-op
-      // (skip) rather than a false positive — we cannot reason about
-      // freshness without a real signal.
-      if (lastCommitSource === null || lastCommitMd === null) {
-        continue
-      }
+        c.topic === ''
+          ? (plainSrcEpochs.get(c.srcRelative) ?? null)
+          : (topicEpochs.get(`${c.srcRelative}\0${c.topic}`) ?? null)
+      if (lastCommitSource === null || lastCommitMd === null) continue
       if (lastCommitSource > lastCommitMd) {
         findings.push({
-          path: projectPath,
+          path: c.projectPath,
           line: 1,
           message:
-            topic === ''
+            c.topic === ''
               ? `knowledge.md last commit is older than sibling src/ last commit (stale)`
-              : `\`${base}\` last commit is older than last topic-relevant \`${srcRelative}\` commit (stale)`,
+              : `\`${c.base}\` last commit is older than last topic-relevant \`${c.srcRelative}\` commit (stale)`,
         })
       }
-    } catch (err) {
-      // ignore git/stat failures
-      console.debug(
-        `[memory-drift-guard] checkStaleness git lookup failed for ${filePath}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      )
     }
+    return findings
+  } catch (err) {
+    console.debug(
+      `[memory-drift-guard] checkStaleness git lookup failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    )
+    return []
   }
-  return findings
+}
+
+function batchLastCommitEpochs(
+  root: string,
+  pathspecs: string[],
+): Map<string, number | null> {
+  const out = new Map<string, number | null>()
+  for (const ps of pathspecs) out.set(ps, lastCommitEpoch(root, ps))
+  return out
+}
+
+function batchDirtySet(root: string, pathspecs: string[]): Set<string> {
+  if (pathspecs.length === 0) return new Set()
+  try {
+    const stdout = execFileSync('git', ['status', '--porcelain', '--', ...pathspecs], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    const dirty = new Set<string>()
+    for (const line of stdout.split('\n')) {
+      if (!line.trim()) continue
+      const m = line.match(/^..\s+(.*)$/)
+      if (!m) continue
+      let p = m[1].trim()
+      if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1)
+      const arrow = p.indexOf(' -> ')
+      if (arrow !== -1) p = p.slice(arrow + 4)
+      dirty.add(p)
+    }
+    return dirty
+  } catch {
+    return new Set()
+  }
 }
 
 /**
@@ -460,6 +505,26 @@ function pathHasWorkingTreeChanges(root: string, pathspec: string): boolean {
         stdio: ['pipe', 'pipe', 'pipe'],
       },
     )
+    return stdout.trim() !== ''
+  } catch {
+    return false
+  }
+}
+
+/**
+ * True only when `pathspec` is tracked in git. Used to keep this blocking gate
+ * off machine-local artifacts: an untracked path is by definition not
+ * repository content, so no source change can produce or fix a finding on it.
+ * git being unavailable degrades to "not tracked" (skip) rather than a
+ * finding nobody can act on.
+ */
+function pathIsTracked(root: string, pathspec: string): boolean {
+  try {
+    const stdout = execFileSync('git', ['ls-files', '--', pathspec], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
     return stdout.trim() !== ''
   } catch {
     return false
@@ -644,7 +709,7 @@ function listTopLevelScripts(root: string): string[] {
   if (!existsSync(scriptsDir)) {
     return []
   }
-  let entries: Dirent[] = []
+  let entries: import('node:fs').Dirent[] = []
   try {
     entries = readdirSync(scriptsDir, { withFileTypes: true })
   } catch (err) {
@@ -864,6 +929,55 @@ export function checkBrokenLink(root: string): Finding[] {
   return findings
 }
 
+/**
+ * Validate the persisted cross-session task memory record when the repository
+ * TRACKS one: flag evidence entries whose bound path no longer exists on disk
+ * unless the record already marks them stale. Absent or unparseable records
+ * produce no findings (the store fails closed on those at hydration time).
+ * JSON has no meaningful per-finding line, so findings report line 1.
+ *
+ * `.openbuff/memory/task-memory.json` is normally machine-local runtime state
+ * written by whatever runs happened on that machine. This guard is a blocking
+ * repo gate (CI and the pre-push hook), so it must only judge tracked
+ * repository content: an untracked record is skipped entirely, because no
+ * source change produced its contents and none can clear a finding on it.
+ */
+export function checkTaskMemory(root: string): Finding[] {
+  const memoryProjectPath = '.openbuff/memory/task-memory.json'
+  const memoryFile = join(root, '.openbuff', 'memory', 'task-memory.json')
+  if (!existsSync(memoryFile) || !pathIsTracked(root, memoryProjectPath)) {
+    return []
+  }
+  let evidence: Array<{ path?: unknown; stale?: unknown }>
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(memoryFile, 'utf8'))
+    const candidate = (parsed as { evidence?: unknown } | null)?.evidence
+    if (!Array.isArray(candidate)) {
+      return []
+    }
+    evidence = candidate as Array<{ path?: unknown; stale?: unknown }>
+  } catch {
+    return []
+  }
+  const findings: Finding[] = []
+  for (const item of evidence) {
+    if (typeof item?.path !== 'string' || item.path.length === 0) {
+      continue
+    }
+    if (item.stale === true) {
+      continue
+    }
+    if (!existsSync(join(root, item.path))) {
+      findings.push({
+        path: memoryProjectPath,
+        line: 1,
+        message: `task-memory evidence path \`${item.path}\` does not exist but is not marked stale`,
+      })
+    }
+  }
+  return findings
+}
+
 export const CHECKERS: Array<{
   name: string
   run: (root: string) => Finding[]
@@ -879,6 +993,7 @@ export const CHECKERS: Array<{
   { name: 'tool-config-sync', run: checkToolConfigSync },
   { name: 'todo-fixme', run: checkTodoFixme },
   { name: 'broken-link', run: checkBrokenLink },
+  { name: 'task-memory', run: checkTaskMemory },
 ]
 
 export function runMemoryDriftGuard(

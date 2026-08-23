@@ -6,7 +6,11 @@ export type {
   TextPart,
   ImagePart,
 } from '@codebuff/common/types/messages/content-part'
-export { run } from './run'
+// `collectWorkspaceMoves` is published beside `run` so hosts that reconcile
+// persisted task-memory evidence OUTSIDE a run (the CLI `/memory` command)
+// can read the same journal-recorded moves hydration uses; without them,
+// moved-file evidence reconciles stale and prune deletes it.
+export { collectWorkspaceMoves, run } from './run'
 export { getFilesStructured } from './tools/read-files'
 export { changeFile, changeFiles } from './tools/change-file'
 export { replaceRange } from './tools/replace-range'
@@ -65,6 +69,27 @@ export { buildUserMessageContent } from '@codebuff/agent-runtime/util/messages'
 // Agent type exports
 export type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
 export type { ToolName } from '@codebuff/common/tools/constants'
+export {
+  codebuffFsToNodePromises,
+  loadPersistedTaskMemory,
+  pruneStaleTaskMemoryEvidence,
+  reconcileTaskMemoryEvidence,
+  saveMergedTaskMemory,
+} from './services/task-memory-store'
+export type {
+  TaskMemoryPruneOutcome,
+  TaskMemoryStoreFs,
+  WorkspaceMoveRecord,
+} from './services/task-memory-store'
+// The persisted-record type closure the task-memory API above is typed with.
+// Published so external consumers can name the parameter/return types of
+// loadPersistedTaskMemory, reconcileTaskMemoryEvidence, and
+// saveMergedTaskMemory instead of reaching into @codebuff/common internals.
+export type {
+  TaskMemoryDraftV1,
+  TaskMemoryEvidenceV1,
+  TaskMemoryV1,
+} from '@codebuff/common/types/task-memory'
 
 export type {
   ClientToolCall,

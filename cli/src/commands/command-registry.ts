@@ -12,6 +12,7 @@ import { handleIndexCommand } from './index-command'
 import { handleHelpCommand } from './help'
 import { handleImageCommand } from './image'
 import { handleInfoCommand } from './info'
+import { handleMemoryCommand } from './memory-command'
 import { handleInitializationFlowLocally } from './init'
 import { buildSafeGitCommand } from './git-command-args'
 import {
@@ -672,6 +673,26 @@ const ALL_COMMANDS: CommandDefinition[] = [
         message = await handleIndexCommand(args)
       } catch (error) {
         message = `Index command failed: ${error instanceof Error ? error.message : String(error)}`
+      }
+      params.setMessages((prev) => [
+        ...prev,
+        getUserMessage(input),
+        getSystemMessage(message),
+      ])
+      params.saveToHistory(input)
+      clearInput(params)
+    },
+  }),
+  defineCommandWithArgs({
+    name: 'memory',
+    aliases: ['mem'],
+    handler: async (params, args) => {
+      const input = params.inputValue.trim() || '/memory'
+      let message: string
+      try {
+        message = await handleMemoryCommand(args)
+      } catch (error) {
+        message = `Memory command failed: ${error instanceof Error ? error.message : String(error)}`
       }
       params.setMessages((prev) => [
         ...prev,

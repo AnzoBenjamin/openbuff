@@ -23,6 +23,7 @@ import {
 import {
   codebuffFsToNodePromises,
   loadPersistedTaskMemory,
+  pruneStaleTaskMemoryEvidence,
   reconcileTaskMemoryEvidence,
   saveMergedTaskMemory,
 } from '../services/task-memory-store'
@@ -348,7 +349,7 @@ describe('task-memory-store', () => {
     }
   })
 
-  test('concurrent saves rely on unique tmp names: both persist, no tmp litter', async () => {
+  test('concurrent saves serialize: unique tmp names, distinct monotonic revisions', async () => {
     const writtenPaths: string[] = []
     const spyingFs = new Proxy(nodeFsPromises, {
       get(target, prop) {
@@ -378,8 +379,11 @@ describe('task-memory-store', () => {
     ])
     // Overlapping writeFile/rename sequences both completed: the unique
     // pid+uuid tmp suffix kept them from clobbering each other mid-flight.
-    expect(savedA?.decisions).toEqual(['Save A'])
-    expect(savedB?.decisions).toEqual(['Save B'])
+    // Each save's own decision is present in its own returned record; the
+    // later one also carries the earlier one's, because serialization makes
+    // it merge against the committed record instead of an empty one.
+    expect(savedA?.decisions).toContain('Save A')
+    expect(savedB?.decisions).toContain('Save B')
 
     // Each save targeted its own tmp file — a fixed `.tmp` name would
     // collapse these into one colliding path.
@@ -389,12 +393,21 @@ describe('task-memory-store', () => {
     expect(tmpWrites).toHaveLength(2)
     expect(new Set(tmpWrites).size).toBe(2)
 
-    // Exactly one record remains and no *.tmp litter survives.
+    // Revision uniqueness across overlapping writers: the load→revision→
+    // commit section is serialized, so the second save derives its revision
+    // from the first one's committed record instead of publishing the same
+    // number with a different payload.
+    expect([savedA!.revision, savedB!.revision].sort()).toEqual([1, 2])
+
+    // Exactly one record remains, it carries the winning revision, and no
+    // *.tmp or *.lock litter survives.
     const memoryDir = path.join(rootDir, '.openbuff', 'memory')
     expect(await readdir(memoryDir)).toEqual(['task-memory.json'])
     const reloaded = await loadPersistedTaskMemory({ rootDir })
-    expect(reloaded?.revision).toBe(1)
-    expect(['Save A', 'Save B']).toContain(reloaded!.decisions[0])
+    expect(reloaded?.revision).toBe(2)
+    // The later save merged the earlier one's decisions rather than dropping
+    // them, which is only possible because it read the committed record.
+    expect([...reloaded!.decisions].sort()).toEqual(['Save A', 'Save B'])
   })
 
   test('missing renameFile capability degrades to a skipped save with no tmp litter', async () => {
@@ -826,5 +839,291 @@ describe('load and reconcile edge branches', () => {
     const reconciled = await reconcileTaskMemoryEvidence({ memory, rootDir })
     expect(reconciled.evidence[0]!.stale).toBe(false)
     expect(reconciled.evidence[0]!.verifiedAt).toBeDefined()
+  })
+})
+
+describe('pruneStaleTaskMemoryEvidence', () => {
+  let rootDir: string
+  beforeEach(async () => {
+    rootDir = await mkdtemp(path.join(tmpdir(), 'task-mem-prune-'))
+  })
+  afterEach(async () => {
+    await rm(rootDir, { recursive: true, force: true })
+  })
+
+  test('drops stale entries, keeps fresh ones and paths without staleness', async () => {
+    await writeFile(path.join(rootDir, 'fresh.ts'), 'fresh body')
+    await saveMergedTaskMemory({
+      rootDir,
+      runMemory: makeMemory({
+        evidence: [
+          makeEvidence({
+            id: 'ev-stale',
+            path: 'gone.ts',
+            freshnessHash: sha256('old body'),
+          }),
+          makeEvidence({
+            id: 'ev-fresh',
+            path: 'fresh.ts',
+            freshnessHash: sha256('fresh body'),
+          }),
+        ],
+      }),
+    })
+
+    const result = await pruneStaleTaskMemoryEvidence({ rootDir })
+
+    expect(result).toEqual({ status: 'pruned', removed: 1, remaining: 1 })
+    const reloaded = await loadPersistedTaskMemory({ rootDir })
+    expect(reloaded?.evidence.map((item) => item.id)).toEqual(['ev-fresh'])
+    expect(reloaded?.revision).toBeGreaterThan(0)
+  })
+
+  test('a save after a prune keeps revisions monotonic and does not resurrect pruned evidence', async () => {
+    await writeFile(path.join(rootDir, 'fresh.ts'), 'fresh body')
+    // Session hydrates the pre-prune record, then the prune publishes a new
+    // revision behind its back.
+    const hydrated = await saveMergedTaskMemory({
+      rootDir,
+      runMemory: makeMemory({
+        evidence: [
+          makeEvidence({
+            id: 'ev-stale',
+            path: 'gone.ts',
+            freshnessHash: sha256('old body'),
+          }),
+          makeEvidence({
+            id: 'ev-fresh',
+            path: 'fresh.ts',
+            freshnessHash: sha256('fresh body'),
+          }),
+        ],
+      }),
+    })
+    const pruned = await pruneStaleTaskMemoryEvidence({ rootDir })
+    expect(pruned).toEqual({ status: 'pruned', removed: 1, remaining: 1 })
+    const afterPrune = (await loadPersistedTaskMemory({ rootDir }))!
+
+    // The stale session saves using its pre-prune hydrated record as prior.
+    const saved = await saveMergedTaskMemory({
+      rootDir,
+      runMemory: makeMemory({ decisions: ['Later work'] }),
+      priorMemory: hydrated,
+    })
+
+    // Unique + monotonic past the prune's revision, and the dropped evidence
+    // is not written back.
+    expect(saved!.revision).toBeGreaterThan(afterPrune.revision)
+    expect(saved!.evidence.map((item) => item.id)).toEqual(['ev-fresh'])
+    const reloaded = await loadPersistedTaskMemory({ rootDir })
+    expect(reloaded?.revision).toBe(saved!.revision)
+    expect(reloaded?.evidence.map((item) => item.id)).toEqual(['ev-fresh'])
+    expect(reloaded?.decisions).toEqual(['Later work'])
+  })
+
+  test('an end-of-run save does not resurrect evidence a mid-session prune dropped', async () => {
+    // Live session: it hydrates the record, `/memory prune` runs from inside
+    // that same session, and the run then saves while `runMemory.evidence`
+    // still holds the pruned entry.
+    await writeFile(path.join(rootDir, 'fresh.ts'), 'fresh body')
+    const staleEvidence = makeEvidence({
+      id: 'ev-stale',
+      path: 'gone.ts',
+      freshnessHash: sha256('old body'),
+    })
+    const freshEvidence = makeEvidence({
+      id: 'ev-fresh',
+      path: 'fresh.ts',
+      freshnessHash: sha256('fresh body'),
+    })
+    const hydrated = await saveMergedTaskMemory({
+      rootDir,
+      runMemory: makeMemory({ evidence: [staleEvidence, freshEvidence] }),
+    })
+
+    expect(await pruneStaleTaskMemoryEvidence({ rootDir })).toEqual({
+      status: 'pruned',
+      removed: 1,
+      remaining: 1,
+    })
+
+    const saved = await saveMergedTaskMemory({
+      rootDir,
+      // Still-hydrated session memory: it carries the pruned entry verbatim
+      // plus evidence this run recorded itself.
+      runMemory: makeMemory({
+        evidence: [
+          staleEvidence,
+          freshEvidence,
+          makeEvidence({ id: 'ev-new', path: 'fresh.ts' }),
+        ],
+      }),
+      priorMemory: hydrated,
+    })
+
+    // The pruned id stays gone, while evidence the run itself produced is
+    // still persisted.
+    expect(saved!.evidence.map((item) => item.id)).toEqual([
+      'ev-fresh',
+      'ev-new',
+    ])
+    const reloaded = await loadPersistedTaskMemory({ rootDir })
+    expect(reloaded?.evidence.map((item) => item.id)).toEqual([
+      'ev-fresh',
+      'ev-new',
+    ])
+  })
+
+  test('workspaceMoves keep moved-file evidence instead of deleting it', async () => {
+    await writeFile(path.join(rootDir, 'old.ts'), 'moved body')
+    await saveMergedTaskMemory({
+      rootDir,
+      runMemory: makeMemory({
+        evidence: [
+          makeEvidence({
+            id: 'ev-moved',
+            path: 'old.ts',
+            freshnessHash: sha256('moved body'),
+          }),
+        ],
+      }),
+    })
+    // Renamed on disk exactly as hydration's move contract describes.
+    await rm(path.join(rootDir, 'old.ts'))
+    await mkdir(path.join(rootDir, 'nested'), { recursive: true })
+    await writeFile(path.join(rootDir, 'nested', 'new.ts'), 'moved body')
+
+    // With the moves supplied the entry rebinds and nothing is pruned.
+    expect(
+      await pruneStaleTaskMemoryEvidence({
+        rootDir,
+        workspaceMoves: [{ from: 'old.ts', to: 'nested/new.ts' }],
+      }),
+    ).toEqual({ status: 'pruned', removed: 0, remaining: 1 })
+    expect(
+      (await loadPersistedTaskMemory({ rootDir }))?.evidence.map(
+        (item) => item.id,
+      ),
+    ).toEqual(['ev-moved'])
+
+    // Without them the same record reconciles stale and the entry is lost —
+    // which is exactly why callers must pass the moves they know about.
+    expect(await pruneStaleTaskMemoryEvidence({ rootDir })).toEqual({
+      status: 'pruned',
+      removed: 1,
+      remaining: 0,
+    })
+    expect((await loadPersistedTaskMemory({ rootDir }))?.evidence).toEqual([])
+  })
+
+  test('returns zero removals for a fully fresh record without rewriting', async () => {
+    await writeFile(path.join(rootDir, 'ok.ts'), 'ok')
+    const saved = await saveMergedTaskMemory({
+      rootDir,
+      runMemory: makeMemory({
+        evidence: [
+          makeEvidence({ id: 'ev-ok', path: 'ok.ts', freshnessHash: sha256('ok') }),
+        ],
+      }),
+    })
+
+    const result = await pruneStaleTaskMemoryEvidence({ rootDir })
+
+    expect(result).toEqual({ status: 'pruned', removed: 0, remaining: 1 })
+    expect(await loadPersistedTaskMemory({ rootDir })).toEqual(saved)
+  })
+
+  test('reports a missing record and write failures as distinct outcomes', async () => {
+    expect(await pruneStaleTaskMemoryEvidence({ rootDir })).toEqual({
+      status: 'no-record',
+    })
+
+    await saveMergedTaskMemory({
+      rootDir,
+      runMemory: makeMemory({
+        evidence: [
+          makeEvidence({ id: 'ev-gone', path: 'gone.ts', freshnessHash: 'x' }),
+        ],
+      }),
+    })
+    const noRenameAdapter = {
+      mkdir: nodeFsPromises.mkdir.bind(nodeFsPromises),
+      readFile: nodeFsPromises.readFile.bind(nodeFsPromises),
+      stat: nodeFsPromises.stat.bind(nodeFsPromises),
+      unlink: nodeFsPromises.unlink.bind(nodeFsPromises),
+      writeFile: nodeFsPromises.writeFile.bind(nodeFsPromises),
+    } as unknown as CodebuffFileSystem
+    // A rename-less adapter is a FAILED prune, not an absent record: the
+    // stale entry it would have dropped is still there.
+    expect(
+      await pruneStaleTaskMemoryEvidence({
+        rootDir,
+        fs: codebuffFsToNodePromises(noRenameAdapter),
+      }),
+    ).toEqual({
+      status: 'failed',
+      reason: 'write-failed',
+      removed: 1,
+      remaining: 0,
+    })
+    // No tmp litter left behind by the degraded write.
+    expect(await readdir(path.join(rootDir, '.openbuff', 'memory'))).toEqual([
+      'task-memory.json',
+    ])
+    // And the record itself is untouched.
+    const reloaded = await loadPersistedTaskMemory({ rootDir })
+    expect(reloaded?.evidence.map((item) => item.id)).toEqual(['ev-gone'])
+  })
+
+  test('refuses to reuse a revision another writer published mid-prune', async () => {
+    await saveMergedTaskMemory({
+      rootDir,
+      runMemory: makeMemory({
+        evidence: [
+          makeEvidence({ id: 'ev-gone', path: 'gone.ts', freshnessHash: 'x' }),
+        ],
+      }),
+    })
+    const before = (await loadPersistedTaskMemory({ rootDir }))!
+
+    // Simulate a concurrent save landing while reconciliation hashes evidence:
+    // the stat call for the (missing) evidence file is the reconcile step, so
+    // advance the record from there.
+    let advanced = false
+    const racingFs: typeof nodeFsPromises = new Proxy(nodeFsPromises, {
+      get(target, prop) {
+        if (prop === 'stat') {
+          return async (...args: Parameters<typeof nodeFsPromises.stat>) => {
+            if (!advanced) {
+              advanced = true
+              await saveMergedTaskMemory({
+                rootDir,
+                runMemory: makeMemory({ decisions: ['Concurrent save'] }),
+                priorMemory: before,
+              })
+            }
+            return nodeFsPromises.stat(...args)
+          }
+        }
+        return Reflect.get(target, prop)
+      },
+    })
+
+    const result = await pruneStaleTaskMemoryEvidence({
+      rootDir,
+      fs: racingFs,
+    })
+
+    expect(result).toEqual({
+      status: 'failed',
+      reason: 'concurrent-write',
+      removed: 1,
+      remaining: 0,
+    })
+    // The concurrent save's revision survives intact — the prune did not
+    // overwrite it under a duplicate revision number.
+    const reloaded = (await loadPersistedTaskMemory({ rootDir }))!
+    expect(reloaded.revision).toBeGreaterThan(before.revision)
+    expect(reloaded.decisions).toEqual(['Concurrent save'])
   })
 })

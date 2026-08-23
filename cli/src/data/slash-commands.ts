@@ -57,6 +57,12 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     description: 'Show status, refresh the index, or explain retrieval results',
   },
   {
+    id: 'memory',
+    label: 'memory',
+    description: 'Show or prune persisted cross-session task memory',
+    aliases: ['mem'],
+  },
+  {
     id: 'help',
     label: 'help',
     description: 'Display keyboard shortcuts and tips',
