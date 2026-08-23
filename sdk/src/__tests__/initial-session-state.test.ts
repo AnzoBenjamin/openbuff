@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import * as nodeFsPromises from 'node:fs/promises'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs'
 import os from 'os'
 import path from 'path'
@@ -5,7 +7,12 @@ import path from 'path'
 import { describe, expect, test, beforeEach } from 'bun:test'
 import { z } from 'zod/v4'
 
-import { applyOverridesToSessionState, initialSessionState } from '../run-state'
+import {
+  applyOverridesToSessionState,
+  generateInitialRunState,
+  initialSessionState,
+} from '../run-state'
+import { saveMergedTaskMemory } from '../services/task-memory-store'
 
 import type { MockStatResult } from '@codebuff/common/testing/mock-types'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
@@ -457,6 +464,174 @@ describe('Initial Session State', () => {
       expect(continued.fileContext.knowledgeFiles['knowledge.md']).toContain(
         'Current knowledge',
       )
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('hydrates persisted task memory and rebinds evidence via workspaceMoves', async () => {
+    const projectRoot = mkdtempSync(path.join(os.tmpdir(), 'hydrate-memory-'))
+    try {
+      // Seed a checksum-consistent persisted record whose evidence points at
+      // a file that has since been renamed on disk.
+      await saveMergedTaskMemory({
+        rootDir: projectRoot,
+        runMemory: {
+          schemaVersion: 1,
+          goal: 'Cross-session work',
+          requirements: [],
+          decisions: ['Prefer content hashes'],
+          filesInspected: [],
+          editsMade: [],
+          validationResults: [],
+          reviewReceipts: [],
+          blockers: [],
+          nextActions: [],
+          historicalSummary: '',
+          evidence: [
+            {
+              id: 'ev-move',
+              kind: 'read',
+              summary: 'Read old-name.ts',
+              path: 'old-name.ts',
+              freshnessHash: createHash('sha256')
+                .update('moved body')
+                .digest('hex'),
+            },
+          ],
+          revision: 0,
+          updatedAt: 1_000,
+          checksum: 'replaced-by-save',
+        },
+      })
+      mkdirSync(path.join(projectRoot, 'lib'), { recursive: true })
+      writeFileSync(path.join(projectRoot, 'lib', 'new-name.ts'), 'moved body')
+      rmSync(path.join(projectRoot, 'old-name.ts'), { force: true })
+
+      const sessionState = await initialSessionState({
+        cwd: projectRoot,
+        workspaceMoves: [{ from: 'old-name.ts', to: 'lib/new-name.ts' }],
+        logger: mockLogger,
+      })
+
+      expect(sessionState.mainAgentState.taskMemory?.decisions).toEqual([
+        'Prefer content hashes',
+      ])
+      expect(sessionState.mainAgentState.taskMemory?.evidence[0]?.path).toBe(
+        'lib/new-name.ts',
+      )
+      expect(sessionState.mainAgentState.taskMemory?.evidence[0]?.stale).toBe(
+        false,
+      )
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('generateInitialRunState forwards persistentMemory and workspaceMoves', async () => {
+    const projectRoot = mkdtempSync(path.join(os.tmpdir(), 'gen-run-state-'))
+    try {
+      // Seed a checksum-consistent persisted record whose evidence points at
+      // a file that has since been renamed on disk.
+      await saveMergedTaskMemory({
+        rootDir: projectRoot,
+        runMemory: {
+          schemaVersion: 1,
+          goal: 'Wrapper hydration',
+          requirements: [],
+          decisions: ['Forward wrapper options'],
+          filesInspected: [],
+          editsMade: [],
+          validationResults: [],
+          reviewReceipts: [],
+          blockers: [],
+          nextActions: [],
+          historicalSummary: '',
+          evidence: [
+            {
+              id: 'ev-wrapper',
+              kind: 'read',
+              summary: 'Read old-name.ts',
+              path: 'old-name.ts',
+              freshnessHash: createHash('sha256')
+                .update('moved body')
+                .digest('hex'),
+            },
+          ],
+          revision: 0,
+          updatedAt: 1_000,
+          checksum: 'replaced-by-save',
+        },
+      })
+      mkdirSync(path.join(projectRoot, 'lib'), { recursive: true })
+      writeFileSync(path.join(projectRoot, 'lib', 'new-name.ts'), 'moved body')
+      rmSync(path.join(projectRoot, 'old-name.ts'), { force: true })
+
+      const fs = nodeFsPromises as unknown as CodebuffFileSystem
+
+      // persistentMemory:false must flow through the wrapper.
+      const withoutMemory = await generateInitialRunState({
+        cwd: projectRoot,
+        persistentMemory: false,
+        fs,
+        logger: mockLogger,
+      })
+      expect(
+        withoutMemory.sessionState?.mainAgentState.taskMemory,
+      ).toBeUndefined()
+
+      // workspaceMoves must flow through the wrapper and rebind evidence.
+      const withMoves = await generateInitialRunState({
+        cwd: projectRoot,
+        workspaceMoves: [{ from: 'old-name.ts', to: 'lib/new-name.ts' }],
+        fs,
+        logger: mockLogger,
+      })
+      expect(
+        withMoves.sessionState?.mainAgentState.taskMemory?.decisions,
+      ).toEqual(['Forward wrapper options'])
+      expect(
+        withMoves.sessionState?.mainAgentState.taskMemory?.evidence[0]?.path,
+      ).toBe('lib/new-name.ts')
+      expect(
+        withMoves.sessionState?.mainAgentState.taskMemory?.evidence[0]?.stale,
+      ).toBe(false)
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('persistentMemory:false leaves taskMemory unset even when a record exists', async () => {
+    const projectRoot = mkdtempSync(path.join(os.tmpdir(), 'hydrate-off-'))
+    try {
+      await saveMergedTaskMemory({
+        rootDir: projectRoot,
+        runMemory: {
+          schemaVersion: 1,
+          goal: 'Should not hydrate',
+          requirements: [],
+          decisions: [],
+          filesInspected: [],
+          editsMade: [],
+          validationResults: [],
+          reviewReceipts: [],
+          blockers: [],
+          nextActions: [],
+          historicalSummary: '',
+          evidence: [],
+          revision: 0,
+          updatedAt: 1_000,
+          checksum: 'replaced-by-save',
+        },
+      })
+
+      const sessionState = await initialSessionState({
+        cwd: projectRoot,
+        persistentMemory: false,
+        logger: mockLogger,
+      })
+
+      expect(sessionState.mainAgentState.taskMemory).toBeUndefined()
     } finally {
       rmSync(projectRoot, { recursive: true, force: true })
     }

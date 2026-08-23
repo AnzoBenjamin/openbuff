@@ -29,6 +29,8 @@ import { advanceWorkspaceState } from '@codebuff/common/types/workspace-state'
 import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
 import { extractApiErrorDetails } from '@codebuff/common/util/error'
 import { jobRegistry } from '@codebuff/common/util/job-registry'
+import { stableHash } from '@codebuff/common/util/stable-hash'
+import type { TaskMemoryV1 } from '@codebuff/common/types/task-memory'
 import { cloneDeep } from 'lodash'
 
 import { getErrorStatusCode } from './error-utils'
@@ -36,6 +38,10 @@ import { createJobUpdateForwarder } from './job-update-forwarder'
 import { getHarnessStateDir } from './credentials'
 import { getAgentRuntimeImpl } from './impl/agent-runtime'
 import { initialSessionState, applyOverridesToSessionState } from './run-state'
+import {
+  codebuffFsToNodePromises,
+  saveMergedTaskMemory,
+} from './services/task-memory-store'
 import { WorkspaceJournalService } from './services/workspace-journal'
 import { WorkspaceMutationBroker } from './services/workspace-mutation-broker'
 import { LocalHarnessStore } from './services/local-harness-store'
@@ -381,6 +387,72 @@ function raceAgainstAbort<T>(
   return Promise.race([execution, abort])
 }
 
+/**
+ * File moves recorded in the workspace journal, oldest-last, used to rebind
+ * persisted task-memory evidence paths across sessions. Bounded defensively.
+ */
+export function collectWorkspaceMoves(
+  workspaceJournal: WorkspaceJournalService | undefined,
+): { from: string; to: string }[] {
+  if (!workspaceJournal) return []
+  try {
+    const moves: { from: string; to: string }[] = []
+    for (const record of workspaceJournal.read().changes) {
+      for (const action of record.actions) {
+        if (
+          action.action === 'move' &&
+          action.path &&
+          action.destinationPath
+        ) {
+          moves.push({ from: action.path, to: action.destinationPath })
+        }
+      }
+    }
+    return moves.slice(-64)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Post-run persistence gate for cross-session task memory. Writes only on
+ * successful completion (cancelled, aborted, and errored runs always carry
+ * an `error` output) and merges the run's final memory over the snapshot
+ * hydrated at session start. Failures log at debug and never propagate.
+ * Exported for tests.
+ */
+export async function persistRunTaskMemory(params: {
+  cwd?: string
+  terminalState: RunState
+  priorMemory?: TaskMemoryV1
+  /** Run filesystem so saves honor injected/virtual-fs hosts like hydration does. */
+  fs?: CodebuffFileSystem
+  logger?: { debug?: (obj: unknown, message: string) => void }
+}): Promise<TaskMemoryV1 | undefined> {
+  const { cwd, terminalState, priorMemory, logger } = params
+  if (
+    !cwd ||
+    terminalState.output.type === 'error' ||
+    !terminalState.sessionState?.mainAgentState.taskMemory
+  ) {
+    return undefined
+  }
+  try {
+    // Route store IO through the same resolved filesystem hydration used,
+    // mirroring initialSessionState, so virtual-fs hosts keep .openbuff/memory
+    // inside their abstraction instead of writing it to real disk.
+    return await saveMergedTaskMemory({
+      rootDir: cwd,
+      runMemory: terminalState.sessionState.mainAgentState.taskMemory,
+      priorMemory,
+      fs: params.fs ? codebuffFsToNodePromises(params.fs) : undefined,
+    })
+  } catch (error) {
+    logger?.debug?.({ error }, 'Failed to persist task memory')
+    return undefined
+  }
+}
+
 type RunExecutionOptions = RunOptions &
   OpenbuffClientOptions & {
     apiKey: string
@@ -492,6 +564,16 @@ async function runOnce({
   } else {
     agentId = agent
   }
+  let workspaceJournal = cwd
+    ? await WorkspaceJournalService.create({
+        rootDir: resolvedHarnessStateDir,
+        cwd,
+      }).catch(() => undefined)
+    : undefined
+  // Moves recorded by prior sessions rebind persisted evidence paths during
+  // task-memory hydration inside initialSessionState below.
+  const persistedWorkspaceMoves = collectWorkspaceMoves(workspaceJournal)
+
   let sessionState: SessionState
   if (previousRun?.sessionState) {
     // applyOverridesToSessionState handles deep cloning and applying any provided overrides
@@ -520,8 +602,13 @@ async function runOnce({
       fs,
       spawn,
       logger,
+      workspaceMoves: persistedWorkspaceMoves,
     })
   }
+  // Snapshot the hydrated task memory so post-run persistence can merge the
+  // final memory into it. The runtime replaces this property rather than
+  // mutating it in place, so holding the reference is sufficient.
+  const hydratedTaskMemory = sessionState.mainAgentState.taskMemory
   // Trusted ownership identity for every process-job operation. Derived
   // ONLY from run/session state (the per-run promptId + the runtime's own
   // run/agent ids) — NEVER from model or tool input — and injected into
@@ -546,12 +633,6 @@ async function runOnce({
         callbacksEnabled && !runSignal.aborted && !!handleEvent,
     }),
   )
-  let workspaceJournal = cwd
-    ? await WorkspaceJournalService.create({
-        rootDir: resolvedHarnessStateDir,
-        cwd,
-      }).catch(() => undefined)
-    : undefined
   const approvalService = new HarnessApprovalService(
     new LocalHarnessStore(resolvedHarnessStateDir),
   )
@@ -1122,6 +1203,16 @@ async function runOnce({
       'Run completed after one or more client callbacks failed',
     )
   }
+  // Persist task memory only on successful completion (gate lives in
+  // persistRunTaskMemory) so cancelled, aborted, and errored runs never
+  // poison the cross-session store.
+  await persistRunTaskMemory({
+    cwd,
+    terminalState,
+    priorMemory: hydratedTaskMemory,
+    fs,
+    logger,
+  })
   return terminalState
 }
 
@@ -1138,22 +1229,6 @@ async function runOnce({
  * The suppression payload intentionally omits `jobs` entirely: an empty array
  * would read as "no jobs exist", which is false.
  */
-/**
- * Module-scope string hash (FNV-1a, 32-bit) rendered as hex. Used by the
- * git_status change-gate to fingerprint the concatenated observation fields
- * without relying on `JSON.stringify` (object key order is not guaranteed, so
- * two semantically identical observations could stringify differently).
- */
-function hashGitStatusFingerprint(input: string): string {
-  let hash = 0x811c9dc5
-  for (let index = 0; index < input.length; index++) {
-    hash ^= input.charCodeAt(index)
-    // hash *= 16777619 (FNV prime), kept in 32-bit via Math.imul.
-    hash = Math.imul(hash, 0x01000193)
-  }
-  // >>> 0 coerces to an unsigned 32-bit integer for a stable hex rendering.
-  return (hash >>> 0).toString(16)
-}
 
 export function applyListJobsDigestGate(
   lastFingerprint: string | null,
@@ -1263,7 +1338,7 @@ export function applyGitStatusGate(
   // separator: git porcelain/diff text never contains it. `branch` is folded
   // in because a commit changes the branch line while status/diff can stay
   // fixed, and that must bust the gate.
-  const nextFingerprint = hashGitStatusFingerprint(
+  const nextFingerprint = stableHash(
     `branch=${typeof record.branch === 'string' ? record.branch : ''}` +
       '\u0000' +
       `status=${record.status}` +

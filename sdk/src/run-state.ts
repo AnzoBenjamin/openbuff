@@ -16,6 +16,12 @@ import { getErrorObject } from '@codebuff/common/util/error'
 import z from 'zod/v4'
 
 import { loadLocalAgents } from './agents/load-agents'
+import {
+  codebuffFsToNodePromises,
+  loadPersistedTaskMemory,
+  reconcileTaskMemoryEvidence,
+} from './services/task-memory-store'
+import type { WorkspaceMoveRecord } from './services/task-memory-store'
 import { loadSkills } from './skills/load-skills'
 
 // Re-export for SDK consumers
@@ -77,6 +83,10 @@ export type InitialSessionStateOptions = {
   fs?: CodebuffFileSystem
   spawn?: CodebuffSpawn
   logger?: Logger
+  /** Set false to skip loading persisted task memory for this session. */
+  persistentMemory?: boolean
+  /** Known file moves used to rebind persisted evidence paths at hydration. */
+  workspaceMoves?: WorkspaceMoveRecord[]
 }
 
 /**
@@ -489,6 +499,8 @@ export async function initialSessionState(
     fs,
     spawn,
     logger,
+    persistentMemory,
+    workspaceMoves,
   } = params
   if (!agentDefinitions) {
     agentDefinitions = []
@@ -604,6 +616,35 @@ export async function initialSessionState(
     systemInfo: getSystemInfo(),
   })
 
+  // Hydrate durable task memory from previous sessions when enabled. Any
+  // failure must never block session start; worst case this session starts
+  // without memory and repopulates it after the run.
+  if (persistentMemory !== false && cwd) {
+    try {
+      // Route store IO through the injected filesystem so virtual-fs hosts
+      // keep using their abstraction instead of raw node fs.
+      const storeFs = codebuffFsToNodePromises(fs)
+      const priorMemory = await loadPersistedTaskMemory({
+        rootDir: cwd,
+        fs: storeFs,
+      })
+      if (priorMemory) {
+        initialState.mainAgentState.taskMemory =
+          await reconcileTaskMemoryEvidence({
+            memory: priorMemory,
+            rootDir: cwd,
+            workspaceMoves,
+            fs: storeFs,
+          })
+      }
+    } catch (error) {
+      logger.debug?.(
+        { error: getErrorObject(error) },
+        'Failed to hydrate persisted task memory',
+      )
+    }
+  }
+
   if (maxAgentSteps) {
     initialState.mainAgentState.stepsRemaining = maxAgentSteps
   }
@@ -621,6 +662,9 @@ export async function generateInitialRunState({
   customToolDefinitions,
   maxAgentSteps,
   fs,
+  persistentMemory,
+  workspaceMoves,
+  logger,
 }: {
   cwd: string
   skillsDir?: string
@@ -631,6 +675,11 @@ export async function generateInitialRunState({
   customToolDefinitions?: CustomToolDefinition[]
   maxAgentSteps?: number
   fs: CodebuffFileSystem
+  /** Set false to skip loading persisted task memory for this session. */
+  persistentMemory?: boolean
+  /** Known file moves used to rebind persisted evidence paths at hydration. */
+  workspaceMoves?: WorkspaceMoveRecord[]
+  logger?: Logger
 }): Promise<RunState> {
   return {
     sessionState: await initialSessionState({
@@ -643,6 +692,9 @@ export async function generateInitialRunState({
       customToolDefinitions,
       maxAgentSteps,
       fs,
+      persistentMemory,
+      workspaceMoves,
+      logger,
     }),
     output: {
       type: 'error',

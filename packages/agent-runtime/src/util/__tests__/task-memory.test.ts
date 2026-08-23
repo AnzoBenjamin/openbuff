@@ -263,4 +263,74 @@ describe('task memory', () => {
       requirementCount: 1,
     })
   })
+
+  test('merge dedupes repeated list entries', () => {
+    const base = commitTaskMemory({ draft, expectedRevision: -1 })
+    const merged = mergeTaskMemoryDraft(base, {
+      ...draft,
+      decisions: ['Use typed memory'],
+    })
+    expect(
+      merged.decisions.filter((entry) => entry === 'Use typed memory'),
+    ).toHaveLength(1)
+  })
+
+  test('compile excludes stale evidence from request context', () => {
+    const memory = commitTaskMemory({
+      draft: {
+        ...draft,
+        evidence: [
+          {
+            id: 'ev-fresh',
+            kind: 'decision' as const,
+            summary: 'Fresh decision context',
+          },
+          {
+            id: 'ev-stale',
+            kind: 'read' as const,
+            summary: 'Stale observation about auth.ts internals',
+            stale: true,
+          },
+        ],
+      },
+      expectedRevision: -1,
+    })
+    const compiled = compileTaskMemoryContext({ memory })
+    expect(compiled).toContain('<task_memory>')
+    expect(compiled).toContain('Fresh decision context')
+    expect(compiled).not.toContain('Stale observation about auth.ts internals')
+  })
+
+  test('budget overflow keeps newest entries instead of backfilling older ones', () => {
+    // Root-agent budgets at scale 1 give decisions maxItemChars=520 and
+    // maxTotalChars=3600. The 300-char newest entry plus seven ~519-char
+    // fillers exhaust the budget mid-list, so the small oldest entry must
+    // be dropped (break) rather than backfilled around the overflow
+    // (which the old `continue` did, inverting recency priority).
+    const memory = commitTaskMemory({
+      draft: {
+        ...draft,
+        decisions: [
+          'old-small-marker',
+          ...Array.from(
+            { length: 7 },
+            (_, index) => `filler-${index}-` + 'x'.repeat(510),
+          ),
+          'newest-decision-survives',
+        ],
+      },
+      expectedRevision: -1,
+    })
+    const compiled = compileTaskMemoryContext({ memory, rootAgent: true })
+    const json = compiled.match(
+      /<task_memory>[\s\S]*?\n(\{[\s\S]*\})\n<\/task_memory>/,
+    )?.[1]
+    expect(json).toBeDefined()
+    const parsed = JSON.parse(json!)
+    const decisions: string[] = parsed.decisions
+    expect(decisions[decisions.length - 1]).toContain(
+      'newest-decision-survives',
+    )
+    expect(JSON.stringify(decisions)).not.toContain('old-small-marker')
+  })
 })

@@ -2,6 +2,7 @@ import {
   taskMemoryDraftV1Schema,
   taskMemoryV1Schema,
 } from '@codebuff/common/types/task-memory'
+import { stableHash } from '@codebuff/common/util/stable-hash'
 
 import type {
   TaskMemoryDraftV1,
@@ -201,15 +202,6 @@ function serializeReviewReceiptForTaskMemory(receipt: AgentReceipt): string {
     errorCount: receipt.errors.length,
     truncated: true,
   })
-}
-
-function stableHash(text: string): string {
-  let hash = 2166136261
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
 function uniqueRecent(values: string[], limit: number): string[] {
@@ -503,7 +495,10 @@ function boundedMemoryList(
   for (let index = selected.length - 1; index >= 0; index -= 1) {
     const value = truncateMemoryText(selected[index]!, params.maxItemChars)
     if (used + value.length > params.maxTotalChars && output.length > 0) {
-      continue
+      // Budget exhausted at the first non-fitting newer entry: stop rather
+      // than backfilling older smaller entries, which would invert the
+      // newest-first priority this list exists to preserve.
+      break
     }
     const remaining = Math.max(1, params.maxTotalChars - used)
     output.unshift(truncateMemoryText(value, remaining))
