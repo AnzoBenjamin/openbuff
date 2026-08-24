@@ -82,6 +82,9 @@ import {
   commitTaskMemory,
   compileTaskMemoryContext,
   deriveTaskMemoryDraftFromMessages,
+  deriveTaskMemoryFocusPaths,
+  ensureTaskMemoryGoal,
+  flushBufferedToolEvidenceIntoTaskMemory,
   mergeTaskMemoryDraft,
 } from './util/task-memory'
 
@@ -445,10 +448,10 @@ export const runAgentStep = async (
   // consistent stopping point (resumable next turn via persisted run state)
   // instead of being cut off mid-edit when stepsRemaining hits 0.
   if (agentState.stepsRemaining === NEAR_STEP_CAP_WARNING_THRESHOLD) {
-    const hasWriteTodos =
-      getEffectiveAgentToolNames(agentTemplate, agentState).includes(
-        'write_todos',
-      )
+    const hasWriteTodos = getEffectiveAgentToolNames(
+      agentTemplate,
+      agentState,
+    ).includes('write_todos')
     const warningMessage = hasWriteTodos
       ? NEAR_STEP_CAP_WARNING_MESSAGE
       : NEAR_STEP_CAP_WARNING_MESSAGE_NO_WRITE_TODOS
@@ -795,6 +798,30 @@ export const runAgentStep = async (
     agentState,
     toolResults: newToolResults,
   })
+
+  // Single step-scoped task-memory commit for this agent's own reads/edits.
+  // The tool executor only derives and buffers evidence per result (model tool
+  // calls in one step run concurrently), so this is the one writer for the
+  // step: no two calls can derive the same revision, and the whole-memory
+  // normalize+checksum runs once per step instead of once per tool result.
+  try {
+    const nextTaskMemory = flushBufferedToolEvidenceIntoTaskMemory({
+      owner: agentState,
+      current: agentState.taskMemory,
+      workspaceState: agentState.workspaceState,
+    })
+    // Identity result means every derived entry was already stored, so the
+    // commit was skipped and assigning would be a no-op write.
+    if (nextTaskMemory && nextTaskMemory !== agentState.taskMemory) {
+      agentState.taskMemory = nextTaskMemory
+    }
+  } catch (error) {
+    // Best-effort bookkeeping: recording evidence must never fail the step.
+    logger.debug(
+      { error, agentId: agentState.agentId },
+      'Failed to record buffered tool evidence in task memory',
+    )
+  }
 
   agentState.messageHistory = expireMessages(
     agentState.messageHistory,
@@ -1693,6 +1720,10 @@ export async function loopAgentSteps(
                     agentType: state.agentType,
                     contextWindowTokens: state.contextWindowTokens,
                     rootAgent: !state.parentId,
+                    // Rank evidence toward the files this run has just read or
+                    // edited, so relevance rather than raw recency decides what
+                    // survives the compiled budget.
+                    focusPaths: deriveTaskMemoryFocusPaths(state.taskMemory),
                   }),
                 ),
                 tags: ['TASK_MEMORY_CONTEXT'],
@@ -1819,6 +1850,63 @@ export async function loopAgentSteps(
             systemAndToolsTokens =
               countTokensJson(system) + countTokensJson(toolsForTokenCount)
             initialAgentState.toolDefinitions = toolDefinitions
+          }
+        }
+
+        // Capture the request goal once per step for the root agent. The
+        // compaction branch below scrapes <knowledge_memory> only when a
+        // session actually compacts, so a session that never compacts used to
+        // persist a record with an empty goal. Derivation matches that branch's
+        // boundedGoal exactly so both paths record the same text.
+        //
+        // Deliberately after the programmatic step: a `set_messages`-yielding
+        // generator (the context pruner) guards its transcript replacement with
+        // `expectedTaskMemoryRevision`, and its view of the persisted revision
+        // is injected by template id. Creating a revision-0 record before that
+        // step makes the guard fail, so semantic compaction would be rejected
+        // and the run would fall back to the mechanical emergency brake. The
+        // compiled memory message is rebuilt below, so the goal still reaches
+        // this step's request.
+        if (!currentAgentState.parentId) {
+          try {
+            let derivedGoal = ''
+            for (
+              let index = currentAgentState.messageHistory.length - 1;
+              index >= 0;
+              index--
+            ) {
+              const message = currentAgentState.messageHistory[index]
+              if (message.role !== 'user') continue
+              const plainText = message.content
+                .filter((part) => part.type === 'text')
+                .map((part) => part.text)
+                .join('\n')
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
+              if (!plainText || /^(?:\/compact|compact)$/i.test(plainText)) {
+                continue
+              }
+              derivedGoal = plainText
+              break
+            }
+            const nextTaskMemory = ensureTaskMemoryGoal({
+              current: currentAgentState.taskMemory,
+              goal: derivedGoal,
+              workspaceState: currentAgentState.workspaceState,
+            })
+            // Identity result means the goal was already captured: assigning
+            // would be a no-op write, so only a genuinely new value is stored.
+            if (
+              nextTaskMemory &&
+              nextTaskMemory !== currentAgentState.taskMemory
+            ) {
+              currentAgentState.taskMemory = nextTaskMemory
+            }
+          } catch (error) {
+            // Memory bookkeeping is best-effort: a revision conflict or schema
+            // rejection must never abort the agent step.
+            logger.debug({ error }, 'Failed to capture task memory goal')
           }
         }
 

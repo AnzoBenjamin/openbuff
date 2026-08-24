@@ -21,7 +21,6 @@ import {
   loadPersistedTaskMemory,
   reconcileTaskMemoryEvidence,
 } from './services/task-memory-store'
-import type { WorkspaceMoveRecord } from './services/task-memory-store'
 import { loadSkills } from './skills/load-skills'
 
 // Re-export for SDK consumers
@@ -32,6 +31,7 @@ export {
 } from '@codebuff/common/constants/knowledge'
 
 import type { CustomToolDefinition } from './custom-tool'
+import type { WorkspaceMoveRecord } from './services/task-memory-store'
 import type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
@@ -148,6 +148,7 @@ type ProjectIndexInput = {
   fileTree: FileTreeNode[]
   filePaths: string[]
   readFile?: (filePath: string) => string | null | Promise<string | null>
+  logger?: Logger
 }
 
 const MAX_DISCOVERED_PROJECT_READ_BYTES = 1_000_000
@@ -157,7 +158,7 @@ async function computeProjectIndex(params: ProjectIndexInput): Promise<{
   fileTokenScores: Record<string, any>
   tokenCallers: Record<string, any>
 }> {
-  const { cwd, fileTree, filePaths, readFile } = params
+  const { cwd, fileTree, filePaths, readFile, logger } = params
   let fileTokenScores = {}
   let tokenCallers = {}
 
@@ -168,7 +169,10 @@ async function computeProjectIndex(params: ProjectIndexInput): Promise<{
       tokenCallers = tokenData.tokenCallers
     } catch (error) {
       // If token scoring fails, continue with empty scores
-      console.warn('Failed to generate parsed symbol scores:', error)
+      logger?.debug?.(
+        { error: getErrorObject(error) },
+        'Failed to generate parsed symbol scores',
+      )
     }
   }
 
@@ -177,8 +181,8 @@ async function computeProjectIndex(params: ProjectIndexInput): Promise<{
 
 function getProjectIndexInput(params: {
   cwd: string
-  fs?: CodebuffFileSystem
-  logger?: Logger
+  fs: CodebuffFileSystem
+  logger: Logger
   projectFiles?: Record<string, string>
   discoveredProject?: { fileTree: FileTreeNode[]; filePaths: string[] }
 }): ProjectIndexInput | undefined {
@@ -191,17 +195,17 @@ function getProjectIndexInput(params: {
       fileTree: buildFileTree(filePaths),
       filePaths,
       readFile: (filePath: string) => projectFiles[filePath] || null,
+      logger,
     }
   }
 
   if (discoveredProject) {
-    if (!fs || !logger) return undefined
-
     return {
       cwd,
       fileTree: discoveredProject.fileTree,
       filePaths: discoveredProject.filePaths.sort(),
       readFile: createDiscoveredProjectReader({ cwd, fs, logger }),
+      logger,
     }
   }
 
@@ -233,8 +237,14 @@ function createDiscoveredProjectReader(params: {
   }
 }
 
+/**
+ * An unknown size fails closed. `stat` is adapter-supplied, so a stat that
+ * omits `size` must not read past `MAX_DISCOVERED_PROJECT_READ_BYTES`: it is
+ * reported as over the cap (and therefore skipped) instead of as zero bytes,
+ * which would pull every discovered file fully into memory.
+ */
 function getFileSize(stats: Awaited<ReturnType<CodebuffFileSystem['stat']>>) {
-  return typeof stats.size === 'number' ? stats.size : 0
+  return typeof stats.size === 'number' ? stats.size : Number.POSITIVE_INFINITY
 }
 
 /**

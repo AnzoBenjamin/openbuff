@@ -54,6 +54,10 @@ import {
   validateAndGetAgentTemplate,
 } from './handlers/tool/spawn-agent-utils'
 import { getAgentTemplate } from '../templates/agent-registry'
+import {
+  bufferToolEvidenceForStep,
+  recordToolEvidenceInTaskMemory,
+} from '../util/task-memory'
 import { ensureZodSchema } from './prompts'
 
 import type { AgentTemplate } from '../templates/types'
@@ -230,7 +234,9 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
       issues: [{ message: 'mutation result exceeded cheap input bounds' }],
     }
   }
-  const parsed = toolParams[params.toolName].outputSchema.safeParse(params.output)
+  const parsed = toolParams[params.toolName].outputSchema.safeParse(
+    params.output,
+  )
   if (parsed.success) {
     if (getToolMetadata(params.toolName).resultContract === 'mutation_v1') {
       const mutationPart = params.output.find(
@@ -259,7 +265,9 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
         ) {
           return {
             valid: false,
-            output: jsonToolResult(reconciled.mutation) as CodebuffToolOutput<T>,
+            output: jsonToolResult(
+              reconciled.mutation,
+            ) as CodebuffToolOutput<T>,
             issues: [
               {
                 message:
@@ -271,7 +279,9 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
         if (reconciled.mutation.outcome !== 'unconfirmed') {
           return {
             valid: true,
-            output: jsonToolResult(reconciled.mutation) as CodebuffToolOutput<T>,
+            output: jsonToolResult(
+              reconciled.mutation,
+            ) as CodebuffToolOutput<T>,
             issues: [],
           }
         }
@@ -406,9 +416,7 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
       const record = raw as Record<string, unknown>
       const operationId =
-        typeof record.operationId === 'string'
-          ? record.operationId
-          : undefined
+        typeof record.operationId === 'string' ? record.operationId : undefined
       if (operationId) {
         const reconciled = reconcileFileMutationResultV1({
           lifecycle: {
@@ -522,7 +530,8 @@ function parseStringifiedToolInput(
       parsed = parseJsonStringWithRepair(stringInput)
       parseError = undefined
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error)
+      const errorMessage =
+        error instanceof Error ? error.message : String(error)
       if (detectTransportTruncation(stringInput, errorMessage)) {
         sawTransportTruncation = true
       }
@@ -547,7 +556,12 @@ function parseStringifiedToolInput(
     }
   }
 
-  return { input: parsed, parseError, sawTransportTruncation, truncationRecovery }
+  return {
+    input: parsed,
+    parseError,
+    sawTransportTruncation,
+    truncationRecovery,
+  }
 }
 
 function detectHeredocPayload(rawInput: unknown): string | undefined {
@@ -648,10 +662,7 @@ function repairTerminalCommandScalars(
   // "soon"/""/"NaN"/"Infinity"/"6e2" fail closed.
   if (typeof record.timeout_seconds === 'string') {
     const trimmed = record.timeout_seconds.trim()
-    if (
-      /^-?\d+(?:\.\d+)?$/.test(trimmed) &&
-      Number.isFinite(Number(trimmed))
-    ) {
+    if (/^-?\d+(?:\.\d+)?$/.test(trimmed) && Number.isFinite(Number(trimmed))) {
       copy = copy ?? { ...record }
       copy.timeout_seconds = Number(trimmed)
     }
@@ -1044,11 +1055,7 @@ function levenshteinDistanceForToolSuggestion(a: string, b: string): number {
     curr[0] = i
     for (let j = 1; j < cols; j += 1) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1
-      curr[j] = Math.min(
-        prev[j] + 1,
-        curr[j - 1] + 1,
-        prev[j - 1] + cost,
-      )
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
     }
     const next = prev
     prev = curr
@@ -1073,7 +1080,10 @@ function suggestClosestToolName(
   if (best === undefined) return undefined
   // Only suggest a genuinely close match; scale with the longer name so short
   // names need a tight match and longer names tolerate a couple edits.
-  const threshold = Math.max(2, Math.floor(Math.max(attempted.length, best.length) / 3))
+  const threshold = Math.max(
+    2,
+    Math.floor(Math.max(attempted.length, best.length) / 3),
+  )
   return bestDistance <= threshold ? best : undefined
 }
 
@@ -1106,7 +1116,10 @@ export function buildUnavailableToolMessage(params: {
     // This stays message-only; the tool remains fail-closed and nothing is
     // auto-spawned. When the rejected input carried an explicit pattern, bake
     // that exact string into the spawn recipe instead of a placeholder.
-    if (toolName === 'code_search' || toolName === 'find_files_matching_content') {
+    if (
+      toolName === 'code_search' ||
+      toolName === 'find_files_matching_content'
+    ) {
       if (availableTools.includes('code_search')) {
         return `${base} Use the granted \`code_search\` tool directly (pattern/flags/cwd/maxResults). For multi-query batching, spawn code-searcher with params.searchQueries.`
       }
@@ -1170,7 +1183,7 @@ function getFieldSpecificHint(
   if (paths.has('basedOnRead') || fieldNames.has('basedOnRead')) {
     return [
       'Hint: `basedOnRead` must be an authenticated cap.v3 readCapability token string returned by read_files. Object-form anchors and wrapped objects like { "$text": "..." } are not accepted.',
-      'Copy the `editAnchor.readCapability` value verbatim from the matching fresh read_files result.'
+      'Copy the `editAnchor.readCapability` value verbatim from the matching fresh read_files result.',
     ].join('\n')
   }
 
@@ -1270,7 +1283,7 @@ function getToolValidationHint(
         [
           'For replace_range, pass one authenticated cap.v3 readCapability copied from a fresh read_files editAnchor.',
           'Omit startLine/endLine to replace the full observed range, or provide both to target a contained sub-range within that capability.',
-          'Never pass expectedHash or other separate hash fields.'
+          'Never pass expectedHash or other separate hash fields.',
         ].join('\n'),
       )
     }
@@ -1305,7 +1318,9 @@ function getToolValidationHint(
             typeof editType === 'string' &&
             !(TRANSACTION_EDIT_TYPES as readonly string[]).includes(editType)
           ) {
-            namedBadTypes.push(`edits[${index}].type ${JSON.stringify(editType)}`)
+            namedBadTypes.push(
+              `edits[${index}].type ${JSON.stringify(editType)}`,
+            )
           }
         }
       }
@@ -1351,7 +1366,9 @@ function formatInvalidInputExcerpts(
   const handoffIssues = issues.filter(isSpawnAgentHandoffIssue)
   if (handoffIssues.length > 0) {
     const labels = new Set(
-      handoffIssues.map((issue) => `agents[${String(issue.path?.[1])}].handoff`),
+      handoffIssues.map(
+        (issue) => `agents[${String(issue.path?.[1])}].handoff`,
+      ),
     )
     return [...labels]
       .map(
@@ -1674,7 +1691,10 @@ function collectCustomInputStrings(
   out: string[],
   depth: number = 0,
 ): void {
-  if (depth > MAX_CUSTOM_INPUT_SCAN_DEPTH || out.length >= MAX_CUSTOM_INPUT_SCAN_STRINGS) {
+  if (
+    depth > MAX_CUSTOM_INPUT_SCAN_DEPTH ||
+    out.length >= MAX_CUSTOM_INPUT_SCAN_STRINGS
+  ) {
     return
   }
   if (typeof value === 'string') {
@@ -2090,8 +2110,9 @@ export async function executeToolCall<T extends ToolName>(
     // later tool-call batches in the same step cannot run non-terminal work.
     // Only set when the gate system is active so custom agents stay free.
     if (gateSystemActive) {
-      ;(agentState as { suggestFollowupsEmitted?: boolean })
-        .suggestFollowupsEmitted = true
+      ;(
+        agentState as { suggestFollowupsEmitted?: boolean }
+      ).suggestFollowupsEmitted = true
     }
   }
 
@@ -2466,11 +2487,17 @@ export async function executeToolCall<T extends ToolName>(
         }
         if (serialized.length > MAX_SINGLE_AGENT_PAYLOAD_CHARS) {
           const agentType =
-            agent && typeof agent === 'object' && typeof (agent as Record<string, unknown>).agent_type === 'string'
+            agent &&
+            typeof agent === 'object' &&
+            typeof (agent as Record<string, unknown>).agent_type === 'string'
               ? String((agent as Record<string, unknown>).agent_type)
               : 'unknown'
           logger.warn(
-            { agentType, serializedLength: serialized.length, limit: MAX_SINGLE_AGENT_PAYLOAD_CHARS },
+            {
+              agentType,
+              serializedLength: serialized.length,
+              limit: MAX_SINGLE_AGENT_PAYLOAD_CHARS,
+            },
             'spawn_agents entry exceeds the soft payload size limit; the transport may truncate it. Consider authoring large file bodies with write_file/edit_transaction and running them via a short basher command.',
           )
         }
@@ -2847,6 +2874,55 @@ export async function executeToolCall<T extends ToolName>(
     })
 
     toolResults.push(toolResult)
+
+    // Record this agent's own reads/edits as task-memory evidence. Only child
+    // agents report through mergeAgentReceiptIntoTaskMemory, so without this the
+    // root agent's exploration is never remembered. This runs for whichever
+    // agentState owns the call (child agents record their own tool calls here),
+    // and never reaches into parentAgentState, so nothing double-counts.
+    //
+    // Two writer semantics, chosen so no evidence can be silently lost:
+    //  - Model-emitted calls run CONCURRENTLY within one step, so each result is
+    //    only derived and buffered here; run-agent-step performs exactly one
+    //    commit per step via flushBufferedToolEvidenceIntoTaskMemory. A single
+    //    writer per step means two calls can never both derive revision N+1 and
+    //    have the second assignment clobber the first, and the whole-memory
+    //    normalize+checksum runs once instead of once per tool result.
+    //  - Programmatic (handleSteps) calls are awaited one at a time, so they are
+    //    their own single writer and commit immediately against the live
+    //    agentState.taskMemory.
+    try {
+      if (fromHandleSteps) {
+        const nextTaskMemory = recordToolEvidenceInTaskMemory({
+          current: agentState.taskMemory,
+          toolName,
+          callId: toolCall.toolCallId,
+          output: validatedOutput,
+          workspaceState: agentState.workspaceState,
+        })
+        // Identity result means the derived evidence is byte-identical to what
+        // is already stored, so the commit was skipped: assigning would be a
+        // no-op write and only a genuinely new revision is stored.
+        if (nextTaskMemory && nextTaskMemory !== agentState.taskMemory) {
+          agentState.taskMemory = nextTaskMemory
+        }
+      } else {
+        bufferToolEvidenceForStep({
+          owner: agentState,
+          toolName,
+          callId: toolCall.toolCallId,
+          output: validatedOutput,
+          workspaceState: agentState.workspaceState,
+        })
+      }
+    } catch (error) {
+      // Best-effort bookkeeping: a malformed payload (or a revision conflict on
+      // the sequential programmatic path) must never fail the tool call.
+      logger.debug(
+        { error, toolName, toolCallId: toolCall.toolCallId },
+        'Failed to record tool evidence in task memory',
+      )
+    }
 
     if (!excludeToolFromMessageHistory) {
       toolResultsToAddToMessageHistory.push(toolResult)

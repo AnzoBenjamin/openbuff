@@ -16,7 +16,7 @@ import { toolNames } from '@codebuff/common/tools/constants'
 import {
   fileMutationResultV1Schema,
   getConfirmedAppliedActionsV1,
-  isFileMutationResultV1,
+  type CommitReceiptV1,
   type FileMutationResultV1,
 } from '@codebuff/common/tools/results/filesystem'
 import {
@@ -91,7 +91,10 @@ import {
 } from './tools/audit-intelligence'
 import { gitBranch } from './tools/git-branch'
 import { runFileChangeHooks } from './tools/file-change-hooks'
-import { writeAuditFindings } from './tools/write-audit-findings'
+import {
+  findFileMutationResult,
+  writeAuditFindings,
+} from './tools/write-audit-findings'
 import { createNodeFileSystem } from './tools/node-filesystem'
 import {
   createToolExecutionDeadline,
@@ -123,6 +126,7 @@ import type {
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { SessionState } from '@codebuff/common/types/session-state'
 import type { JobOwner } from '@codebuff/common/util/job-registry'
+import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
 import type { Source } from '@codebuff/common/types/source'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
 import { listJobs } from './tools/list-jobs'
@@ -399,11 +403,7 @@ export function collectWorkspaceMoves(
     const moves: { from: string; to: string }[] = []
     for (const record of workspaceJournal.read().changes) {
       for (const action of record.actions) {
-        if (
-          action.action === 'move' &&
-          action.path &&
-          action.destinationPath
-        ) {
+        if (action.action === 'move' && action.path && action.destinationPath) {
           moves.push({ from: action.path, to: action.destinationPath })
         }
       }
@@ -415,11 +415,15 @@ export function collectWorkspaceMoves(
 }
 
 /**
- * Post-run persistence gate for cross-session task memory. Writes only on
- * successful completion (cancelled, aborted, and errored runs always carry
- * an `error` output) and merges the run's final memory over the snapshot
- * hydrated at session start. Failures log at debug and never propagate.
- * Exported for tests.
+ * Post-run persistence gate for cross-session task memory. Persists whenever a
+ * `cwd` is set and the run produced task memory, regardless of `output.type`:
+ * cancelled and aborted runs always carry an `error` output, and gating on that
+ * threw away everything a Ctrl-C'd session learned. This is safe because the
+ * value is a committed `TaskMemoryV1` produced by `commitTaskMemory` from work
+ * that actually happened, and `saveMergedTaskMemory` merges rather than
+ * overwrites — so a partial session contributes what it learned instead of
+ * discarding it. Do not restore an `output.type === 'error'` early return.
+ * Failures log at debug and never propagate. Exported for tests.
  */
 export async function persistRunTaskMemory(params: {
   cwd?: string
@@ -430,11 +434,7 @@ export async function persistRunTaskMemory(params: {
   logger?: { debug?: (obj: unknown, message: string) => void }
 }): Promise<TaskMemoryV1 | undefined> {
   const { cwd, terminalState, priorMemory, logger } = params
-  if (
-    !cwd ||
-    terminalState.output.type === 'error' ||
-    !terminalState.sessionState?.mainAgentState.taskMemory
-  ) {
+  if (!cwd || !terminalState.sessionState?.mainAgentState.taskMemory) {
     return undefined
   }
   try {
@@ -856,6 +856,7 @@ async function runOnce({
           fileFilter,
           filesystemPolicy,
           trustedJobOwner,
+          logger,
           capabilityIssuer: cwd
             ? {
                 projectId: cwd,
@@ -1203,9 +1204,11 @@ async function runOnce({
       'Run completed after one or more client callbacks failed',
     )
   }
-  // Persist task memory only on successful completion (gate lives in
-  // persistRunTaskMemory) so cancelled, aborted, and errored runs never
-  // poison the cross-session store.
+  // Persist task memory whenever a cwd is set. The gate lives in
+  // persistRunTaskMemory and deliberately ignores output.type, so cancelled,
+  // aborted, and errored runs still contribute the committed memory the
+  // session produced (saveMergedTaskMemory merges rather than overwrites).
+  // Do not re-add an output.type === 'error' gate here.
   await persistRunTaskMemory({
     cwd,
     terminalState,
@@ -1243,7 +1246,7 @@ export function applyListJobsDigestGate(
   const value = first.value
   const jobs =
     value && typeof value === 'object' && !Array.isArray(value)
-      ? ((value as { jobs?: unknown }).jobs)
+      ? (value as { jobs?: unknown }).jobs
       : undefined
   if (!Array.isArray(jobs)) {
     return { output, nextFingerprint: lastFingerprint }
@@ -1373,6 +1376,18 @@ function requireCwd(cwd: string | undefined, toolName: string): string {
   return cwd
 }
 
+function requireCapabilityIssuer(
+  capabilityIssuer: ReadCapabilityIssuer | undefined,
+  toolName: string,
+): ReadCapabilityIssuer {
+  if (!capabilityIssuer) {
+    throw new Error(
+      `a read capability issuer is required for the ${toolName} tool. Please provide cwd in OpenbuffClientOptions or override the ${toolName} tool.`,
+    )
+  }
+  return capabilityIssuer
+}
+
 async function readFiles({
   filePaths,
   ranges,
@@ -1392,7 +1407,7 @@ async function readFiles({
   cwd?: string
   fs: CodebuffFileSystem
   signal: AbortSignal
-  capabilityIssuer?: import('@codebuff/common/util/content-hash').ReadCapabilityIssuer
+  capabilityIssuer?: ReadCapabilityIssuer
 }) {
   if (override) {
     const output = await executeOverride({
@@ -1417,7 +1432,13 @@ async function readFiles({
   })
 }
 
-async function handleToolCall({
+/**
+ * Dispatches one client tool call and applies the post-dispatch mutation
+ * wiring (workspace state/journal advance plus change-observer notification).
+ * Exported so tests can drive that wiring directly instead of only through a
+ * full run.
+ */
+export async function handleToolCall({
   action,
   overrides,
   customToolDefinitions,
@@ -1427,6 +1448,7 @@ async function handleToolCall({
   filesystemPolicy,
   trustedJobOwner,
   capabilityIssuer,
+  logger,
   env,
   harnessStateDir,
   approvalReceiptIds,
@@ -1451,7 +1473,8 @@ async function handleToolCall({
   filesystemPolicy?: FilesystemAuthorityPolicy
   /** Trusted owner injected into every process-job op; never model-derived. */
   trustedJobOwner: JobOwner
-  capabilityIssuer?: import('@codebuff/common/util/content-hash').ReadCapabilityIssuer
+  capabilityIssuer?: ReadCapabilityIssuer
+  logger?: Logger
   env?: Record<string, string>
   harnessStateDir: string
   approvalReceiptIds: string[]
@@ -1474,7 +1497,10 @@ async function handleToolCall({
   onFilesystemMutation?: OpenbuffClientOptions['onFilesystemMutation']
   verifyExternalMutation?: OpenbuffClientOptions['verifyExternalMutation']
   signal?: AbortSignal
-}): Promise<{ output: ToolResultOutput[] }> {
+}): Promise<{
+  output: ToolResultOutput[]
+  canonicalReceipt?: CommitReceiptV1
+}> {
   const toolName = action.toolName
   const input =
     typeof action.input === 'string'
@@ -1517,7 +1543,17 @@ async function handleToolCall({
   }
 
   let result: ToolResultOutput[]
-  let canonicalReceipt: import('@codebuff/common/tools/results/filesystem').CommitReceiptV1 | undefined
+  let canonicalReceipt: CommitReceiptV1 | undefined
+  // Returned by tools whose declared output is a compact receipt rather than
+  // the file_mutation_result payload (write_audit_findings), so the
+  // post-dispatch mutation block below still observes their filesystem
+  // actions. It is returned for applied AND not_applied writes, so the
+  // `getConfirmedAppliedActionsV1` gate below — not its presence — decides
+  // whether anything landed. That receipt intentionally stays compact: the
+  // emitted FilesystemMutationEvent, which carries
+  // workspaceRevision/workspaceSnapshotId, is the correlation channel for the
+  // artifact write.
+  let compactReceiptMutation: FileMutationResultV1 | undefined
   if (!toolNames.includes(toolName as ToolName)) {
     const customToolHandler = customToolDefinitions[toolName]
 
@@ -1575,6 +1611,10 @@ async function handleToolCall({
         toolName === 'str_replace' ||
         toolName === 'create_plan' ||
         toolName === 'edit_transaction' ||
+        // Compact-receipt mutating tool: an override for it can still return a
+        // `file_mutation_result` part, which would otherwise self-certify
+        // `applied` and advance workspace state/journal without attestation.
+        toolName === 'write_audit_findings' ||
         toolName === 'replace_range'
       ) {
         result = await Promise.all(
@@ -1590,9 +1630,7 @@ async function handleToolCall({
                 result: parsed.data,
               }))
             ) {
-              if (
-                parsed.data.authorityReceipt?.callId === action.requestId
-              ) {
+              if (parsed.data.authorityReceipt?.callId === action.requestId) {
                 canonicalReceipt = parsed.data.authorityReceipt
               }
               return part
@@ -1650,7 +1688,7 @@ async function handleToolCall({
         },
       ]
     } else if (toolName === 'write_audit_findings') {
-      result = await writeAuditFindings({
+      const audit = await writeAuditFindings({
         parameters: input,
         cwd: requireCwd(cwd, toolName),
         fs,
@@ -1658,7 +1696,10 @@ async function handleToolCall({
         fileFilter,
         filesystemPolicy,
         callId: action.requestId,
+        logger,
       })
+      result = audit.output
+      compactReceiptMutation = audit.mutation
     } else if (
       toolName === 'write_file' ||
       toolName === 'str_replace' ||
@@ -1671,7 +1712,9 @@ async function handleToolCall({
         signal,
         fileFilter,
         filesystemPolicy,
+        capabilityIssuer,
         callId: action.requestId,
+        logger,
       })
     } else if (toolName === 'edit_transaction') {
       result = await changeFiles({
@@ -1681,7 +1724,9 @@ async function handleToolCall({
         signal,
         fileFilter,
         filesystemPolicy,
+        capabilityIssuer,
         callId: action.requestId,
+        logger,
       })
     } else if (toolName === 'replace_range') {
       result = await replaceRange({
@@ -1691,12 +1736,12 @@ async function handleToolCall({
         signal,
         fileFilter,
         filesystemPolicy,
-        capabilityIssuer:
-          capabilityIssuer ??
-          (() => {
-            throw new Error('replace_range requires a scoped capability issuer')
-          })(),
+        // The issuer is constructed exactly when `cwd` is set; assert it
+        // explicitly rather than depending on evaluation order of the sibling
+        // `cwd: requireCwd(...)` property.
+        capabilityIssuer: requireCapabilityIssuer(capabilityIssuer, toolName),
         callId: action.requestId,
+        logger,
       })
     } else if (toolName === 'run_terminal_command') {
       const projectRoot = requireCwd(cwd, 'run_terminal_command')
@@ -2129,24 +2174,21 @@ async function handleToolCall({
       },
     ]
   }
-  const mutation = result.find(
-    (part) => part.type === 'json' && isFileMutationResultV1(part.value),
-  )
-  const mutationValue =
-    mutation?.type === 'json' && isFileMutationResultV1(mutation.value)
-      ? mutation.value
-      : null
+  // Shared selector, so this scan cannot diverge from the one the
+  // compact-receipt tools run over their own output parts.
+  const resultMutation = findFileMutationResult(result)
+  // Fall back to the compact-receipt channel (see its declaration).
+  const mutationValue = resultMutation ?? compactReceiptMutation ?? null
   const confirmedActions = mutationValue
     ? getConfirmedAppliedActionsV1(mutationValue)
     : []
-  if (confirmedActions.length > 0) {
-    const workspaceChange = {
-      source: `sdk:${toolName}`,
-      operationId: mutationValue!.operationId,
-      ...(mutationValue!.receiptId
-        ? { receiptId: mutationValue!.receiptId }
-        : {}),
-      actions: confirmedActions.map((confirmed) => ({
+  // `mutationValue` is re-tested here so TypeScript narrows it for the whole
+  // block below instead of repeating non-null assertions on every use.
+  if (mutationValue && confirmedActions.length > 0) {
+    // Shaped once and reused below, so the journal record and the emitted
+    // event can never describe different actions.
+    const changedActions: FilesystemMutationEvent['actions'] =
+      confirmedActions.map((confirmed) => ({
         action: confirmed.action,
         path: confirmed.path,
         ...(confirmed.destinationPath
@@ -2154,61 +2196,68 @@ async function handleToolCall({
           : {}),
         beforeHash: confirmed.beforeHash,
         afterHash: confirmed.afterHash,
-      })),
+      }))
+    const workspaceChange = {
+      source: `sdk:${toolName}`,
+      operationId: mutationValue.operationId,
+      ...(mutationValue.receiptId
+        ? { receiptId: mutationValue.receiptId }
+        : {}),
+      actions: changedActions,
     }
     const workspaceState = advanceWorkspaceJournal
       ? advanceWorkspaceJournal(workspaceChange)
       : advanceWorkspaceState(getWorkspaceState(), workspaceChange)
     setWorkspaceState(workspaceState)
-    const enrichedMutation = fileMutationResultV1Schema.parse({
-      ...mutationValue,
-      workspaceRevision: workspaceState.revision,
-      workspaceSnapshotId: workspaceState.snapshotId,
-      ...(mutationValue!.authorityReceipt
-        ? {
-            authorityReceipt: {
-              ...mutationValue!.authorityReceipt,
-              workspaceRevision: workspaceState.revision,
-              workspaceSnapshotId: workspaceState.snapshotId,
-            },
-          }
-        : {}),
-    })
-    result = result.map((part) =>
-      part.type === 'json' && part.value === mutationValue
-        ? { type: 'json' as const, value: enrichedMutation }
-        : part,
-    )
+    // Only a mutation that was actually part of `result` can be enriched in
+    // place. Tools whose declared output is a compact receipt reach this block
+    // through `compactReceiptMutation`; their receipt schema declares no
+    // workspace fields (a consumer parsing it through `outputSchema` would
+    // strip them), so those hosts read the coordinates from the
+    // FilesystemMutationEvent emitted below instead.
+    if (resultMutation) {
+      const enrichedMutation = fileMutationResultV1Schema.parse({
+        ...mutationValue,
+        workspaceRevision: workspaceState.revision,
+        workspaceSnapshotId: workspaceState.snapshotId,
+        ...(mutationValue.authorityReceipt
+          ? {
+              authorityReceipt: {
+                ...mutationValue.authorityReceipt,
+                workspaceRevision: workspaceState.revision,
+                workspaceSnapshotId: workspaceState.snapshotId,
+              },
+            }
+          : {}),
+      })
+      result = result.map((part) =>
+        part.type === 'json' && part.value === mutationValue
+          ? { type: 'json' as const, value: enrichedMutation }
+          : part,
+      )
+    }
     const event: FilesystemMutationEvent = {
       toolName,
       callId: action.requestId,
-      operationId: mutationValue!.operationId,
-      ...(mutationValue!.receiptId
-        ? { receiptId: mutationValue!.receiptId }
+      operationId: mutationValue.operationId,
+      ...(mutationValue.receiptId
+        ? { receiptId: mutationValue.receiptId }
         : {}),
       workspaceRevision: workspaceState.revision,
       workspaceSnapshotId: workspaceState.snapshotId,
-      actions: confirmedActions.map((confirmed) => ({
-        action: confirmed.action,
-        path: confirmed.path,
-        ...(confirmed.destinationPath
-          ? { destinationPath: confirmed.destinationPath }
-          : {}),
-        beforeHash: confirmed.beforeHash,
-        afterHash: confirmed.afterHash,
-      })),
+      actions: changedActions,
     }
     if (onFilesystemMutation) {
       try {
         await onFilesystemMutation(event)
       } catch (error) {
-        console.warn('[openbuff] filesystem mutation observer failed', error)
+        logger?.warn({ error }, 'Filesystem mutation observer failed')
         try {
           await onFilesChanged?.()
         } catch (fallbackError) {
-          console.warn(
-            '[openbuff] file-change fallback observer failed',
-            fallbackError,
+          logger?.warn(
+            { error: fallbackError },
+            'File-change fallback observer failed',
           )
         }
       }
@@ -2216,7 +2265,7 @@ async function handleToolCall({
       try {
         await onFilesChanged?.()
       } catch (error) {
-        console.warn('[openbuff] file-change observer failed', error)
+        logger?.warn({ error }, 'File-change observer failed')
       }
     }
   } else if (
@@ -2227,7 +2276,7 @@ async function handleToolCall({
     try {
       await onFilesChanged?.()
     } catch (error) {
-      console.warn('[openbuff] unknown-mutation observer failed', error)
+      logger?.warn({ error }, 'Unknown-mutation observer failed')
     }
   }
   if (!canonicalReceipt && mutationValue && cwd) {

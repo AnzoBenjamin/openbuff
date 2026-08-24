@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 
+import { MAX_FILE_CHANGES_PER_TRANSACTION } from '@codebuff/common/actions'
 import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
+import { fileMutationResultV1Schema } from '@codebuff/common/tools/results/filesystem'
 import { getContentHash } from '@codebuff/common/util/content-hash'
 
 import { changeFile, changeFiles } from '../tools/change-file'
-import { MAX_FILE_CHANGES_PER_TRANSACTION } from '@codebuff/common/actions'
 
 const capabilityIssuer = {
   projectId: '/repo',
@@ -224,6 +225,82 @@ describe('changeFile', () => {
     expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe('before\n')
   })
 
+  test('reports update for a rejected unguarded write to an existing file', async () => {
+    const fs = createMockFs({ files: { '/repo/src/file.ts': 'before\n' } })
+    fs.conditionalCommit = async () => ({
+      applied: false,
+      actualHash: getContentHash('external\n'),
+    })
+
+    const result = await changeFile({
+      // Absolute prompt path: the failure result must still report the
+      // project-relative path, like the applied branch does.
+      parameters: {
+        type: 'file',
+        path: '/repo/src/file.ts',
+        content: 'after\n',
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+
+    expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
+      outcome: 'not_applied',
+      actions: [
+        expect.objectContaining({
+          action: 'update',
+          path: 'src/file.ts',
+          outcome: 'not_applied',
+        }),
+      ],
+      errors: [expect.objectContaining({ code: 'stale_state' })],
+    })
+    expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe('before\n')
+  })
+
+  test('logs a redacted diagnostic when a guarded update is stale', async () => {
+    const fs = createMockFs({ files: { '/repo/src/file.ts': 'current\n' } })
+    const logged: Array<{ data: unknown; message?: string }> = []
+    const logger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: (data: unknown, message?: string) => {
+        logged.push({ data, message })
+      },
+    }
+
+    const result = await changeFile({
+      parameters: {
+        type: 'file',
+        path: 'src/file.ts',
+        content: 'sensitive-new-content\n',
+        expectedHash: getContentHash('stale\n'),
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+      logger,
+    })
+
+    expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
+      outcome: 'not_applied',
+      errors: [expect.objectContaining({ code: 'stale_state' })],
+    })
+    expect(logged).toHaveLength(1)
+    expect(logged[0].data).toEqual({
+      path: 'src/file.ts',
+      type: 'file',
+      byteLength: Buffer.byteLength('sensitive-new-content\n'),
+      code: 'stale_state',
+    })
+    const serialized = JSON.stringify(logged[0])
+    expect(serialized).not.toContain('sensitive-new-content')
+    expect(serialized).not.toContain('current')
+    expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe('current\n')
+  })
+
   test('fails closed for a guarded update when conditional commit is unavailable', async () => {
     const fs = createMockFs({ files: { '/repo/src/file.ts': 'before\n' } })
     fs.conditionalCommit = undefined
@@ -339,27 +416,21 @@ describe('changeFile', () => {
       capabilityIssuer,
     })
 
-    const output = result[0]
-    expect(output.type).toBe('json')
-    if (
-      output.type === 'json' &&
-      output.value !== null &&
-      typeof output.value === 'object' &&
-      'kind' in output.value &&
-      output.value.kind === 'file_mutation_result'
-    ) {
-      expect(output.value).toMatchObject({
-        kind: 'file_mutation_result',
-        outcome: 'not_applied',
-      })
-      expect(
-        output.value.actions.every(
-          (action) =>
-            action.afterContent === undefined &&
-            action.editAnchor === undefined,
-        ),
-      ).toBe(true)
-    }
+    // Parsed unconditionally: a shape regression must fail the test instead of
+    // silently skipping these assertions.
+    const mutation = fileMutationResultV1Schema.parse(
+      result[0]?.type === 'json' ? result[0].value : null,
+    )
+    expect(mutation).toMatchObject({
+      kind: 'file_mutation_result',
+      outcome: 'not_applied',
+    })
+    expect(
+      mutation.actions.every(
+        (action) =>
+          action.afterContent === undefined && action.editAnchor === undefined,
+      ),
+    ).toBe(true)
     expect(await fs.readFile('/repo/src/one.ts', 'utf-8')).toBe(
       'const one = 1\n',
     )
@@ -408,14 +479,10 @@ describe('changeFile', () => {
       fs,
     })
 
-    const output = result[0]
-    expect(output.type).toBe('json')
-    if (output.type === 'json') {
-      expect(output.value).toMatchObject({
-        kind: 'file_mutation_result',
-        outcome: 'rolled_back',
-      })
-    }
+    expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
+      kind: 'file_mutation_result',
+      outcome: 'rolled_back',
+    })
     expect(files['/repo/src/one.ts']).toBe('const one = 1\n')
     expect(files['/repo/src/two.ts']).toBe('const two = 1\n')
   })
@@ -563,7 +630,10 @@ describe('changeFile', () => {
       capabilityIssuer,
     })
 
-    expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
+    const mutation = fileMutationResultV1Schema.parse(
+      result[0]?.type === 'json' ? result[0].value : null,
+    )
+    expect(mutation).toMatchObject({
       kind: 'file_mutation_result',
       outcome: 'applied',
       actions: [
@@ -572,10 +642,9 @@ describe('changeFile', () => {
           path: 'created.txt',
           afterContent: 'created',
         }),
-        expect.not.objectContaining({
+        expect.objectContaining({
           action: 'delete',
           path: 'delete.txt',
-          afterContent: expect.anything(),
         }),
         expect.objectContaining({
           action: 'move',
@@ -590,6 +659,11 @@ describe('changeFile', () => {
         }),
       ],
     })
+    // A deleted path has no post-state, so it must carry neither content nor
+    // a read capability that would authorize editing the removed file.
+    const deleteAction = mutation.actions[1]
+    expect(deleteAction.afterContent).toBeUndefined()
+    expect(deleteAction.editAnchor).toBeUndefined()
     expect(await fs.readFile('/repo/created.txt', 'utf-8')).toBe('created')
     await expect(fs.readFile('/repo/delete.txt', 'utf-8')).rejects.toThrow()
     await expect(fs.readFile('/repo/source.txt', 'utf-8')).rejects.toThrow()
@@ -659,6 +733,15 @@ describe('changeFile', () => {
     ).toMatchObject({
       kind: 'file_mutation_result',
       outcome: 'not_applied',
+      // A rejected write to a missing path is still reported as a `create`,
+      // not an `update`, so the agent can tell why it was blocked.
+      actions: [
+        expect.objectContaining({
+          action: 'create',
+          path: '.env',
+          outcome: 'not_applied',
+        }),
+      ],
       errors: [expect.objectContaining({ code: 'blocked' })],
     })
     const customBlocked = await changeFile({

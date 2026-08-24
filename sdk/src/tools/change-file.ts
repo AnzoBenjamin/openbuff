@@ -12,6 +12,7 @@ import {
 import { fileExists } from '@codebuff/common/util/file'
 import {
   getContentHash,
+  getExactContentHash,
   type ReadCapabilityIssuer,
 } from '@codebuff/common/util/content-hash'
 import {
@@ -32,6 +33,7 @@ import { buildFreshWholeFileMutationAuthority } from './mutation-capabilities'
 
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ResolvedOperationPath } from './path-utils'
 import type { FileFilter } from './read-files'
 import type { FilesystemAuthorityPolicy } from './filesystem-authority'
@@ -53,8 +55,52 @@ type ApplyChangeResult =
       file: string
       patch: string
       error: FilesystemError
+      exists: boolean
     }
-  | { status: 'invalid'; file: string; error: FilesystemError }
+  | {
+      status: 'invalid'
+      file: string
+      error: FilesystemError
+      /**
+       * Target state used to report the attempted action: the in-lock
+       * observation when the mutation was rejected inside the lock, and `false`
+       * when path policy blocked the mutation before anything was observed.
+       */
+      exists: boolean
+    }
+
+/** Upper bound on any raw model-supplied value echoed into a diagnostic. */
+const MAX_ECHOED_VALUE_LENGTH = 500
+
+/**
+ * Placeholder reported instead of a model-supplied value that cannot be echoed
+ * back verbatim. Shared by `replace_range`'s path echo and
+ * `write_audit_findings`' artifact-identifier echo so the placeholder wording
+ * cannot drift between them.
+ */
+export const UNREPORTABLE_ECHO = '(unparsed)'
+
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index)
+    if (code < 0x20 || code === 0x7f) return true
+  }
+  return false
+}
+
+/**
+ * Bounded, single-line echo of raw model input for an agent-facing diagnostic:
+ * an oversized value cannot amplify the message, and a value carrying CR/LF or
+ * other control characters cannot forge extra lines in it. Anything unusable is
+ * reported as `UNREPORTABLE_ECHO` instead.
+ */
+export function boundedDiagnosticEcho(value: unknown): string {
+  return typeof value === 'string' &&
+    value.length <= MAX_ECHOED_VALUE_LENGTH &&
+    !hasControlCharacter(value)
+    ? value
+    : UNREPORTABLE_ECHO
+}
 
 export async function changeFile(params: {
   parameters: unknown
@@ -65,6 +111,15 @@ export async function changeFile(params: {
   callId?: string
   filesystemPolicy?: FilesystemAuthorityPolicy
   capabilityIssuer?: ReadCapabilityIssuer
+  /**
+   * Optional byte-exact companion to `parameters.expectedHash`. `expectedHash`
+   * is LF-normalized, so callers that derived their new content from raw bytes
+   * read outside this function's lock (`replace_range`'s range splice) pass the
+   * byte-exact hash of what they read as well, and the commit is refused when
+   * only the line terminators changed underneath them.
+   */
+  expectedExactHash?: string | null
+  logger?: Logger
 }): Promise<CodebuffToolOutput<'str_replace'>> {
   const {
     parameters,
@@ -75,6 +130,8 @@ export async function changeFile(params: {
     callId,
     filesystemPolicy,
     capabilityIssuer,
+    expectedExactHash,
+    logger,
   } = params
 
   const fileChange = FileContentChangeSchema.parse(parameters)
@@ -96,6 +153,8 @@ export async function changeFile(params: {
     fileFilter,
     callId,
     filesystemPolicy,
+    expectedExactHash,
+    logger,
   })
 
   if (result.status === 'created' || result.status === 'modified') {
@@ -151,6 +210,20 @@ export async function changeFile(params: {
     'error' in result
       ? result.error
       : filesystemError('application_rejected', 'Mutation did not apply.')
+  // An unguarded write (`expectedHash === undefined`) can target either an
+  // existing or a missing path, so the reported action is derived from the
+  // target state `applyChange` observed when it rejected the mutation rather
+  // than defaulting to 'update'. Guarded changes keep the action implied by
+  // the guard the caller asked for.
+  const targetExisted = 'exists' in result ? result.exists : false
+  const attemptedAction =
+    fileChange.expectedHash === null
+      ? 'create'
+      : fileChange.expectedHash !== undefined
+        ? 'update'
+        : targetExisted
+          ? 'update'
+          : 'create'
   return [
     {
       type: 'json',
@@ -163,8 +236,8 @@ export async function changeFile(params: {
           {
             actionId: `${operationId}:0`,
             index: 0,
-            action: fileChange.expectedHash === null ? 'create' : 'update',
-            path: fileChange.path,
+            action: attemptedAction,
+            path: resolvedPath.relativePath,
             outcome: 'not_applied',
             beforeHash: null,
             afterHash: null,
@@ -189,6 +262,7 @@ export async function changeFiles(params: {
   callId?: string
   filesystemPolicy?: FilesystemAuthorityPolicy
   capabilityIssuer?: ReadCapabilityIssuer
+  logger?: Logger
 }): Promise<CodebuffToolOutput<'edit_transaction'>> {
   const {
     parameters,
@@ -199,6 +273,7 @@ export async function changeFiles(params: {
     callId,
     filesystemPolicy,
     capabilityIssuer,
+    logger,
   } = params
   const parsedChanges = CHANGES.safeParse(parameters)
   if (!parsedChanges.success) {
@@ -388,7 +463,7 @@ export async function changeFiles(params: {
         ),
       })
     }
-    for (const entry of authorized) {
+    for (const [entryIndex, entry] of authorized.entries()) {
       const sourceOperation =
         entry.change.type === 'delete'
           ? 'delete'
@@ -408,7 +483,7 @@ export async function changeFiles(params: {
           operationId,
           changes,
           authorityTier: tier,
-          failedIndex: prepared.length,
+          failedIndex: entryIndex,
           error: filesystemError(
             'blocked',
             'Transaction commit denied by policy.',
@@ -426,7 +501,7 @@ export async function changeFiles(params: {
           operationId,
           changes,
           authorityTier: tier,
-          failedIndex: prepared.length,
+          failedIndex: entryIndex,
           error: filesystemError(
             'blocked',
             'Move destination commit denied by policy.',
@@ -652,6 +727,19 @@ export async function changeFiles(params: {
             : {}),
         })),
       })
+      logger?.error(
+        {
+          operationId,
+          receiptId: receipt.receiptId,
+          status: receipt.status,
+          code: commitError.code,
+          paths: prepared.map((change) => change.path),
+          committedCount: committed.length,
+          rollbackFailureCount: rollbackFailures.size,
+          rollbackRestoredCount: rollbackRestored.size,
+        },
+        'File transaction commit failed',
+      )
       return [
         {
           type: 'json',
@@ -1155,6 +1243,8 @@ async function applyChange(params: {
   fileFilter?: FileFilter
   callId?: string
   filesystemPolicy?: FilesystemAuthorityPolicy
+  expectedExactHash?: string | null
+  logger?: Logger
 }): Promise<ApplyChangeResult> {
   const {
     change,
@@ -1165,6 +1255,8 @@ async function applyChange(params: {
     fileFilter,
     callId,
     filesystemPolicy,
+    expectedExactHash,
+    logger,
   } = params
   const { content, type } = change
   const { operationPath: fullPath, relativePath } = resolvedPath
@@ -1174,14 +1266,23 @@ async function applyChange(params: {
     fileFilter,
     filesystemPolicy,
   )
+  const authorizedOperation =
+    change.expectedHash === null ? ('create' as const) : ('overwrite' as const)
   const authorization = await authority.authorizePath(
     change.path,
-    change.expectedHash === null ? 'create' : 'overwrite',
+    authorizedOperation,
   )
   if (!authorization.allowed) {
     return {
       status: 'invalid',
       file: relativePath,
+      // Path policy blocked the mutation before any lock, read, or snapshot, so
+      // nothing about the target was observed. Report the unobserved state
+      // instead of issuing a second filesystem probe on a path the policy just
+      // refused: an unguarded write to a blocked path is reported as the
+      // 'create' it is not known to overwrite, and a guarded change still keeps
+      // the action implied by its own guard below.
+      exists: false,
       error: filesystemError(
         'blocked',
         `Mutation denied for ${relativePath}: ${authorization.code}.`,
@@ -1191,10 +1292,13 @@ async function applyChange(params: {
   const operationId = crypto.randomUUID()
   authority.registerOperation({
     id: operationId,
-    kind: change.expectedHash === null ? 'create' : 'overwrite',
+    kind: authorizedOperation,
     paths: [authorization.path],
   })
 
+  // Carries the in-lock observation out to the failure paths below so no
+  // caller has to re-stat the target after the lock is released.
+  let observedExists = false
   try {
     return await authority.withAuthorizedPathLocks(
       [authorization.path],
@@ -1210,6 +1314,7 @@ async function applyChange(params: {
           )
         }
         const exists = initialSnapshot.state === 'present'
+        observedExists = exists
         const oldContent = exists ? await fs.readFile(fullPath, 'utf-8') : null
         const beforeHash =
           initialSnapshot.state === 'present' ? initialSnapshot.hash : null
@@ -1235,11 +1340,35 @@ async function applyChange(params: {
             ),
           )
         }
+        // `expectedHash` above is LF-normalized, so a purely CRLF<->LF
+        // external rewrite passes it. A caller that spliced raw bytes read
+        // outside this lock also pins the byte-exact content it observed, so
+        // such a rewrite cannot be silently overwritten with the terminators
+        // that read saw.
+        if (
+          expectedExactHash !== undefined &&
+          expectedExactHash !==
+            (oldContent === null ? null : getExactContentHash(oldContent))
+        ) {
+          throw new MutationApplicationError(
+            filesystemError(
+              'stale_state',
+              `Update rejected for ${relativePath}: the exact bytes changed after the file was read.`,
+              {
+                retryable: true,
+                requiresFreshRead: true,
+                recovery: 'read_again',
+              },
+            ),
+          )
+        }
         if (type === 'patch' && oldContent === null) {
+          authority.cancel(operationId)
           return {
             status: 'patchFailed',
             file: relativePath,
             patch: content,
+            exists,
             error: filesystemError(
               'not_found',
               `Patch target ${relativePath} does not exist.`,
@@ -1251,10 +1380,12 @@ async function applyChange(params: {
         const newContent =
           type === 'file' ? content : applyPatch(oldContent ?? '', content)
         if (newContent === false) {
+          authority.cancel(operationId)
           return {
             status: 'patchFailed',
             file: relativePath,
             patch: content,
+            exists,
             error: filesystemError(
               'application_rejected',
               `Patch context did not match ${relativePath}.`,
@@ -1274,7 +1405,6 @@ async function applyChange(params: {
           throw new Error(`Commit denied: ${commitAuthorization.code}`)
         }
         if (signal?.aborted) {
-          authority.cancel(operationId)
           throw signal.reason instanceof Error
             ? signal.reason
             : new Error('Mutation cancelled before commit')
@@ -1370,6 +1500,12 @@ async function applyChange(params: {
       },
     )
   } catch (error) {
+    // Release the still-open registration on every pre-commit failure path
+    // (unavailable snapshot, stale/already-exists guard, denied commit, failed
+    // lease start, cancellation). `cancel` only transitions an 'open'
+    // operation, so it is a no-op once a commit lease was begun and finished,
+    // and `pruneTerminalOperations` can then reclaim the entry.
+    authority.cancel(operationId)
     const filesystemFailure =
       error instanceof MutationApplicationError
         ? error.filesystemError
@@ -1378,17 +1514,23 @@ async function applyChange(params: {
             signal?.aborted
               ? `Mutation cancelled for ${relativePath}.`
               : `Mutation failed for ${relativePath}: ${error instanceof Error ? error.message : String(error)}`,
-            signal?.aborted
-              ? { retryable: true, recovery: 'retry' }
-              : { retryable: true, recovery: 'retry' },
+            { retryable: true, recovery: 'retry' },
           )
-    console.error('File mutation failed', {
-      path: relativePath,
-      type,
-      byteLength: Buffer.byteLength(content),
-      code: filesystemFailure.code,
-    })
-    return { status: 'invalid', file: relativePath, error: filesystemFailure }
+    logger?.error(
+      {
+        path: relativePath,
+        type,
+        byteLength: Buffer.byteLength(content),
+        code: filesystemFailure.code,
+      },
+      'File mutation failed',
+    )
+    return {
+      status: 'invalid',
+      file: relativePath,
+      exists: observedExists,
+      error: filesystemFailure,
+    }
   }
 }
 
