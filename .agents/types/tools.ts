@@ -1157,12 +1157,13 @@ export interface WriteFileParams {
  * Parameters for write_audit_findings tool
  */
 export interface WriteAuditFindingsParams {
-  /** Existing durable audit session slug under .agents/sessions/. */
+  /** Existing durable audit session slug under .agents/sessions/. Accepts only a short identifier token: 1 to 100 characters of letters, digits, dot, underscore, or dash, and neither `.` nor `..` on its own. */
   sessionSlug: string
-  /** Unique shard identifier used as the findings filename. */
+  /** Unique shard identifier used as the findings filename. Accepts only a short identifier token: 1 to 100 characters of letters, digits, dot, underscore, or dash, and neither `.` nor `..` on its own. */
   shardId: string
-  /** Exact snapshotId returned by inspect_codebase_structure. Required for a directly composable structuralReceipt; omitted only for legacy callers. */
+  /** Exact snapshotId returned by inspect_codebase_structure, such as its 64-character sha256 digest. Required for a directly composable structuralReceipt; omitted only for legacy callers. Accepts only a short identifier token: 1 to 100 characters of letters, digits, dot, underscore, or dash, and neither `.` nor `..` on its own. When snapshotId and coverage.domains are both present the call receives a structuralReceipt, so coverage.subsystemIds and coverage.files must each name at least one entry: evaluate_audit_coverage rejects a receipt whose subsystem_ids or files list is empty. */
   snapshotId?: string
+  /** Each findings entry rejects control and Unicode format characters in title, risk, fix, and evidence — NUL, any other control character, and the U+2028/U+2029 line separators — while still accepting tabs and line breaks in that prose. findings[].path is a location rather than prose, so it must be a single-line value with none of those characters and no tabs or line breaks; it is trimmed, and the trimmed value is the one rendered into the finding heading. */
   findings: {
     severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW'
     domain:
@@ -1182,10 +1183,15 @@ export interface WriteAuditFindingsParams {
     fix: string
     evidence: string
   }[]
+  /** Every coverage list must name each entry at most once: a repeated file, subsystemId, featureId, or domain is rejected rather than counted twice. Entries are compared after trimming surrounding whitespace, and the trimmed value is what reaches the artifact and the receipt, so two spellings that differ only in whitespace are the same entry. Every coverage files, subsystemIds, and featureIds entry must be a single-line value: tabs, carriage returns, newlines, NUL, any other control or Unicode format character, and the U+2028/U+2029 line separators are rejected. Entries are trimmed, and the trimmed value is the one uniqueness is judged on. */
   coverage: {
+    /** See the coverage description for the single-line hygiene rule, which applies to this list too. See the coverage description for the uniqueness rule, which applies to this list too. */
     subsystemIds: string[]
+    /** See the coverage description for the single-line hygiene rule, which applies to this list too. See the coverage description for the uniqueness rule, which applies to this list too. */
     featureIds: string[]
+    /** See the coverage description for the single-line hygiene rule, which applies to this list too. See the coverage description for the uniqueness rule, which applies to this list too. */
     files: string[]
+    /** coverage.domains accepts canonical domain ids only, so use api-contract there: the legacy api-abi alias is accepted only in findings[].domain. When coverage.domains is present it must name at least one domain: an empty list is rejected rather than treated as an omitted field. See the coverage description for the uniqueness rule, which applies to this list too. */
     domains?: (
       | 'security'
       | 'correctness'
@@ -1197,6 +1203,7 @@ export interface WriteAuditFindingsParams {
       | 'api-contract'
     )[]
   }
+  /** Set noIssuesFound=true exactly when findings is empty and false whenever findings is non-empty; any other combination is rejected. */
   noIssuesFound?: boolean
 }
 
