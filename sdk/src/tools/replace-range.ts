@@ -215,7 +215,9 @@ export async function replaceRange(params: {
     )
   }
 
-  const currentRange = lines.slice(targetStartLine - 1, targetEndLine).join('\n')
+  const currentRange = lines
+    .slice(targetStartLine - 1, targetEndLine)
+    .join('\n')
   const normalizedNewContent = normalizeLineEndings(input.newContent)
   // Both sides are LF-normalized, so a line-endings-only edit is rejected as a
   // no-op: the splice below cannot apply newContent's terminator style anyway.

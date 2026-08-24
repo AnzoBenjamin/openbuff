@@ -8,6 +8,7 @@ import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import {
   encodeReadCapabilityToken,
   getContentHash,
+  getExactContentHash,
 } from '@codebuff/common/util/content-hash'
 import { getStubProjectFileContext } from '@codebuff/common/util/file'
 import {
@@ -22,12 +23,15 @@ import {
 
 import { OpenbuffClient } from '../client'
 import * as databaseModule from '../impl/database'
-import { requireCapabilityIssuer } from '../run'
+import { handleToolCall } from '../run'
+import { HarnessApprovalService } from '../services/harness-enforcement'
+import { LocalHarnessStore } from '../services/local-harness-store'
 
 import type { FilesystemMutationEvent, OpenbuffClientOptions } from '../run'
 import type { CommitReceiptV1 } from '@codebuff/common/tools/results/filesystem'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
+import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
 
 // Harness/journal state is written through real node fs, so keep it inside a
 // temp root instead of the user's config directory.
@@ -197,7 +201,7 @@ describe('write_audit_findings dispatch advances workspace state', () => {
     })
     expect(event.workspaceRevision).toBeGreaterThan(0)
     expect(event.workspaceSnapshotId).toContain('workspace.v1.')
-    // The side-channel mutation also feeds the canonical-receipt fallback, so
+    // The returned mutation also feeds the canonical-receipt fallback, so
     // the compact tool output is still correlated to a committed receipt for
     // the same operation the event reports.
     const receipt = canonicalReceipts[0]
@@ -272,7 +276,7 @@ describe('write_audit_findings dispatch advances workspace state', () => {
     })
     expect(events).toHaveLength(0)
     expect(fileChangeCalls).toBe(0)
-    // `onMutationResult` also fires for `not_applied` results, so the rejected
+    // The mutation is returned for `not_applied` results too, so the rejected
     // write still reaches run.ts's canonical-receipt fallback; it must not
     // publish a committed-looking receipt for an edit that never landed.
     expect(canonicalReceipts).toHaveLength(1)
@@ -363,17 +367,228 @@ describe('replace_range dispatch wiring', () => {
     })
     expect(await fs.readFile('/repo/src/file.ts', 'utf8')).toBe(original)
   })
+
+  it('applies a range edit when the capability scope matches the run and notifies observers', async () => {
+    const original = 'line 1\nline 2\nline 3\n'
+    const fs: CodebuffFileSystem = createMockFs({
+      files: { '/repo/src/file.ts': original },
+    })
+    const events: FilesystemMutationEvent[] = []
+    let workspaceState: WorkspaceStateV1 | undefined
+    const capabilityIssuer = { projectId: '/repo', runId: 'run-1' }
+    const readCapability = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: 1,
+      hash: getContentHash('line 1'),
+      scope: { projectId: '/repo', path: 'src/file.ts', runId: 'run-1' },
+    })
+    const handled = await handleToolCall({
+      action: {
+        type: 'tool-call-request',
+        requestId: 'call-replace-range-applied',
+        userInputId: 'input-1',
+        toolName: 'replace_range',
+        input: {
+          path: 'src/file.ts',
+          readCapability,
+          newContent: 'updated line 1',
+        },
+      },
+      overrides: {},
+      customToolDefinitions: {},
+      cwd: '/repo',
+      fs,
+      trustedJobOwner: {
+        clientSessionId: 'session-1',
+        rootRunId: 'run-1',
+        parentRunId: 'run-1',
+        parentAgentId: 'agent-1',
+      },
+      capabilityIssuer,
+      harnessStateDir,
+      approvalReceiptIds: [],
+      approvalMode: 'balanced',
+      approvalService: new HarnessApprovalService(
+        new LocalHarnessStore(harnessStateDir),
+      ),
+      getWorkspaceState: () => workspaceState,
+      setWorkspaceState: (state) => {
+        workspaceState = state
+      },
+      onFilesystemMutation: (event) => {
+        events.push(event)
+      },
+    })
+    expect(handled.output[0]).toMatchObject({
+      type: 'json',
+      value: { kind: 'file_mutation_result', outcome: 'applied' },
+    })
+    expect(await fs.readFile('/repo/src/file.ts', 'utf8')).toBe(
+      'updated line 1\nline 2\nline 3\n',
+    )
+    if (!workspaceState) throw new Error('expected workspace state to be set')
+    expect(workspaceState.revision).toBe(1)
+    expect(workspaceState.snapshotId).toContain('workspace.v1.')
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      toolName: 'replace_range',
+      callId: 'call-replace-range-applied',
+      workspaceRevision: workspaceState.revision,
+      workspaceSnapshotId: workspaceState.snapshotId,
+      actions: [
+        expect.objectContaining({ action: 'update', path: 'src/file.ts' }),
+      ],
+    })
+  })
 })
 
-describe('requireCapabilityIssuer', () => {
-  it('throws an actionable error when no issuer is available', () => {
-    expect(() => requireCapabilityIssuer(undefined, 'replace_range')).toThrow(
-      'a read capability issuer is required for the replace_range tool',
-    )
+/**
+ * Drives the exported dispatcher directly (no agent loop, no client), so the
+ * returned-mutation wiring for compact-receipt tools can be asserted on
+ * exactly the state it advances: the caller-owned workspace state, the emitted
+ * event, and the tool output handed back to the agent.
+ */
+async function dispatchAuditWriteDirectly(params: {
+  fs: CodebuffFileSystem
+  input: unknown
+  requestId: string
+  workspaceState?: WorkspaceStateV1
+  onFilesystemMutation?: (event: FilesystemMutationEvent) => void
+  onFilesChanged?: () => void
+}): Promise<{
+  output: ToolResultOutput[]
+  workspaceState: WorkspaceStateV1 | undefined
+}> {
+  let workspaceState = params.workspaceState
+  const handled = await handleToolCall({
+    action: {
+      type: 'tool-call-request',
+      requestId: params.requestId,
+      userInputId: 'input-1',
+      toolName: 'write_audit_findings',
+      input: params.input,
+    },
+    overrides: {},
+    customToolDefinitions: {},
+    cwd: '/repo',
+    fs: params.fs,
+    trustedJobOwner: {
+      clientSessionId: 'session-1',
+      rootRunId: 'run-1',
+      parentRunId: 'run-1',
+      parentAgentId: 'agent-1',
+    },
+    harnessStateDir,
+    approvalReceiptIds: [],
+    approvalMode: 'balanced',
+    approvalService: new HarnessApprovalService(
+      new LocalHarnessStore(harnessStateDir),
+    ),
+    getWorkspaceState: () => workspaceState,
+    setWorkspaceState: (state) => {
+      workspaceState = state
+    },
+    onFilesystemMutation: params.onFilesystemMutation,
+    onFilesChanged: params.onFilesChanged,
+  })
+  return { output: handled.output, workspaceState }
+}
+
+describe('handleToolCall compact-receipt mutation wiring', () => {
+  it('advances workspace state and emits the artifact actions for an applied write', async () => {
+    const fs: CodebuffFileSystem = createMockFs()
+    const events: FilesystemMutationEvent[] = []
+
+    const { output, workspaceState } = await dispatchAuditWriteDirectly({
+      fs,
+      input: snapshotBoundAuditInput,
+      requestId: 'call-applied',
+      onFilesystemMutation: (event) => {
+        events.push(event)
+      },
+    })
+
+    if (!workspaceState) throw new Error('expected advanced workspace state')
+    expect(workspaceState.revision).toBe(1)
+    expect(workspaceState.snapshotId).toStartWith('workspace.v1.1.')
+    expect(events).toHaveLength(1)
+    const event = events[0]
+    if (!event) throw new Error('expected a filesystem mutation event')
+    expect(event).toMatchObject({
+      toolName: 'write_audit_findings',
+      callId: 'call-applied',
+      workspaceRevision: workspaceState.revision,
+      workspaceSnapshotId: workspaceState.snapshotId,
+    })
+    // Asserted as the whole action list, so the hoisted action shaping is
+    // pinned: the journal record and this event are built from one array, and
+    // the hashes must describe the artifact that was actually created.
+    // Receipt hashes are byte-exact, so the expectation uses the byte-exact
+    // digest rather than the LF-normalized read/edit hash.
+    const written = await fs.readFile(`/repo/${auditArtifactPath}`, 'utf8')
+    expect(event.actions).toEqual([
+      {
+        action: 'create',
+        path: auditArtifactPath,
+        beforeHash: null,
+        afterHash: getExactContentHash(written),
+      },
+    ])
+    // The journal record must describe the same revision the event reports.
+    expect(workspaceState.changes.at(-1)).toMatchObject({
+      revision: workspaceState.revision,
+      source: 'sdk:write_audit_findings',
+      actions: event.actions,
+    })
+
+    // (b) The agent still receives the tool's compact declared receipt: its
+    // output schema declares no workspace fields, so enriching it here would
+    // publish coordinates a schema-parsing consumer silently strips.
+    const receipt = jsonValue(output)
+    expect(receipt).toMatchObject({ artifactPath: auditArtifactPath })
+    expect(receipt).not.toHaveProperty('workspaceRevision')
+    expect(receipt).not.toHaveProperty('workspaceSnapshotId')
   })
 
-  it('returns the issuer unchanged when present', () => {
-    const issuer = { projectId: '/repo', runId: 'run-1' }
-    expect(requireCapabilityIssuer(issuer, 'replace_range')).toBe(issuer)
+  it('advances nothing and notifies nobody for a not_applied write', async () => {
+    // The artifact already exists, so the exclusive create is refused and the
+    // returned mutation carries a `not_applied` receipt: it is returned for
+    // every well-formed mutation, applied or not.
+    const fs: CodebuffFileSystem = createMockFs({
+      files: { [`/repo/${auditArtifactPath}`]: 'existing\n' },
+    })
+    const events: FilesystemMutationEvent[] = []
+    let fileChangeCalls = 0
+    const priorState: WorkspaceStateV1 = {
+      schemaVersion: 1,
+      revision: 7,
+      snapshotId: 'workspace.v1.7.deadbeef',
+      updatedAt: 1,
+      changes: [],
+    }
+
+    const { output, workspaceState } = await dispatchAuditWriteDirectly({
+      fs,
+      input: auditInput,
+      requestId: 'call-not-applied',
+      workspaceState: priorState,
+      onFilesystemMutation: (event) => {
+        events.push(event)
+      },
+      onFilesChanged: () => {
+        fileChangeCalls++
+      },
+    })
+
+    expect(jsonValue(output)).toMatchObject({
+      artifactPath: auditArtifactPath,
+      errorMessage: expect.stringContaining('already exists'),
+    })
+    expect(workspaceState).toBe(priorState)
+    expect(events).toHaveLength(0)
+    expect(fileChangeCalls).toBe(0)
+    expect(await fs.readFile(`/repo/${auditArtifactPath}`, 'utf8')).toBe(
+      'existing\n',
+    )
   })
 })

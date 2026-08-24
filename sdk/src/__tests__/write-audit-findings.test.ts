@@ -161,11 +161,18 @@ describe('writeAuditFindings', () => {
     const artifactPath = auditFindingsArtifactPath(input)
     const markdown = renderAuditFindingsMarkdown(input)
 
-    const first = await writeAuditFindings({
+    const firstCall = await writeAuditFindings({
       parameters: input,
       cwd: '/repo',
       fs,
     })
+    // The declared output is a compact receipt, so the underlying mutation is
+    // returned alongside it for hosts that advance workspace state from it.
+    expect(firstCall.mutation?.outcome).toBe('applied')
+    expect(firstCall.mutation?.actions.map((action) => action.path)).toEqual([
+      artifactPath,
+    ])
+    const first = firstCall.output
     const receipt = first[0]?.type === 'json' ? first[0].value : undefined
     expect(receipt).toEqual({
       artifactPath,
@@ -195,11 +202,16 @@ describe('writeAuditFindings', () => {
     expect(JSON.stringify(receipt)).not.toContain(input.findings[0].risk)
     expect(await fs.readFile(`/repo/${artifactPath}`, 'utf8')).toBe(markdown)
 
-    const second = await writeAuditFindings({
+    const secondCall = await writeAuditFindings({
       parameters: input,
       cwd: '/repo',
       fs,
     })
+    // Returned for a rejected write too, so a host must gate on the outcome
+    // rather than on the mutation being present at all.
+    expect(secondCall.mutation).toBeDefined()
+    expect(secondCall.mutation?.outcome).not.toBe('applied')
+    const second = secondCall.output
     const collision = second[0]?.type === 'json' ? second[0].value : undefined
     expect(collision).toMatchObject({ artifactPath })
     const collisionMessage =
@@ -218,7 +230,7 @@ describe('writeAuditFindings', () => {
     const legacyParams = { ...legacyInput, shardId: 'runtime-legacy' }
     const artifactPath = auditFindingsArtifactPath(legacyParams)
     const markdown = renderAuditFindingsMarkdown(legacyParams)
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: legacyParams,
       cwd: '/repo',
       fs,
@@ -247,7 +259,7 @@ describe('writeAuditFindings', () => {
     }
     const artifactPath = auditFindingsArtifactPath(params)
     const markdown = renderAuditFindingsMarkdown(params)
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: params,
       cwd: '/repo',
       fs,
@@ -271,7 +283,7 @@ describe('writeAuditFindings', () => {
       sessionSlug: input.sessionSlug,
       shardId,
     })
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: {
         ...input,
         shardId,
@@ -297,7 +309,7 @@ describe('writeAuditFindings', () => {
       sessionSlug: input.sessionSlug,
       shardId,
     })
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: { ...input, shardId, noIssuesFound: true },
       cwd: '/repo',
       fs,
@@ -320,7 +332,7 @@ describe('writeAuditFindings', () => {
       sessionSlug: input.sessionSlug,
       shardId,
     })
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: { ...input, shardId, findings: [], noIssuesFound: false },
       cwd: '/repo',
       fs,
@@ -347,7 +359,7 @@ describe('writeAuditFindings', () => {
 
     // The flag defaults to false, so a clean shard must attest explicitly
     // instead of having the claim inferred from an empty findings array.
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: { ...legacyParams, shardId, findings: [] },
       cwd: '/repo',
       fs,
@@ -373,7 +385,7 @@ describe('writeAuditFindings', () => {
     // Pins the accepted direction of the default: it must stay `false`, so a
     // shard that reports findings without sending the flag still writes its
     // artifact. A default flipped to `true` would reject this call.
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: params,
       cwd: '/repo',
       fs,
@@ -399,7 +411,7 @@ describe('writeAuditFindings', () => {
 
     // The alias is only accepted on findings[].domain; the tool description
     // states this restriction because the rejection message is generic.
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: {
         ...input,
         shardId,
@@ -431,7 +443,7 @@ describe('writeAuditFindings', () => {
     // counts, and structuralReceipt.files. One list is enough at this level:
     // the schema-issue case below pins the refinement on all four lists; this
     // case pins that the writer refuses the call and writes no artifact.
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: {
         ...input,
         shardId,
@@ -467,7 +479,7 @@ describe('writeAuditFindings', () => {
     // relying on the Markdown normalization. One list is enough at this level:
     // the schema-level case below pins the per-field character matrix; this
     // case pins that the writer refuses the call and writes no artifact.
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: {
         ...input,
         shardId,
@@ -588,7 +600,7 @@ describe('writeAuditFindings', () => {
     // coverageEntrySchema is what keeps the Markdown bullet and
     // structuralReceipt.files/subsystem_ids equal to the trimmed path
     // evaluate_audit_coverage compares against.
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: {
         ...input,
         shardId,
@@ -736,7 +748,7 @@ describe('writeAuditFindings', () => {
       sessionSlug: input.sessionSlug,
       shardId,
     })
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: { ...input, shardId, snapshotId: oversized },
       cwd: '/repo',
       fs,
@@ -1019,7 +1031,7 @@ describe('writeAuditFindings', () => {
     const fs = createMockFs()
     // Missing findings/coverage: the schema rejects it, but sessionSlug and
     // shardId are usable so the artifactPath is still reported.
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: {
         sessionSlug: 'audit-openbuff-2026-07',
         shardId: 'runtime-1',
@@ -1040,7 +1052,7 @@ describe('writeAuditFindings', () => {
 
   test('does not echo unusable identifiers into the reported artifact path', async () => {
     const fs = createMockFs()
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: { sessionSlug: '../escape', shardId: 42 },
       cwd: '/repo',
       fs,
@@ -1058,7 +1070,7 @@ describe('writeAuditFindings', () => {
   test('does not echo bare dot-segment identifiers into the reported artifact path', async () => {
     const fs = createMockFs()
     // No slash, so only the dot-segment refinement rejects these.
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: { sessionSlug: '..', shardId: '.' },
       cwd: '/repo',
       fs,
@@ -1076,7 +1088,7 @@ describe('writeAuditFindings', () => {
   test('does not echo an over-long identifier into the reported artifact path', async () => {
     const fs = createMockFs()
     const oversizedSlug = 'a'.repeat(101)
-    const result = await writeAuditFindings({
+    const { output: result } = await writeAuditFindings({
       parameters: { sessionSlug: oversizedSlug, shardId: 'runtime-1' },
       cwd: '/repo',
       fs,

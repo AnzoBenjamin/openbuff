@@ -1,6 +1,6 @@
 import { toolParams } from '@codebuff/common/tools/list'
 import { auditIdentifierSchema } from '@codebuff/common/tools/params/tool/write-audit-findings'
-import { fileMutationResultV1Schema } from '@codebuff/common/tools/results/filesystem'
+import { isFileMutationResultV1 } from '@codebuff/common/tools/results/filesystem'
 import { getContentHash } from '@codebuff/common/util/content-hash'
 
 import { changeFile, UNREPORTABLE_ECHO } from './change-file'
@@ -98,6 +98,39 @@ export function renderAuditFindingsMarkdown(input: AuditFindingsInput): string {
   return lines.join('\n')
 }
 
+/**
+ * Selects a `file_mutation_result` payload from tool output parts with the
+ * canonical `isFileMutationResultV1` predicate rather than by position: a
+ * mutating tool may emit further json parts, and first-json matching would
+ * report a generic failure (and hide the mutation from the host) for an
+ * artifact that was actually written. run.ts runs the same selection over its
+ * dispatch result, so both share this one implementation and cannot diverge.
+ */
+export function findFileMutationResult(
+  parts: readonly { type: string; value?: unknown }[],
+): FileMutationResultV1 | undefined {
+  for (const part of parts) {
+    if (part.type === 'json' && isFileMutationResultV1(part.value)) {
+      return part.value
+    }
+  }
+  return undefined
+}
+
+export type WriteAuditFindingsResult = {
+  output: CodebuffToolOutput<'write_audit_findings'>
+  /**
+   * The artifact write's underlying `file_mutation_result`. The declared
+   * output is a compact receipt, so hosts that key off the mutation payload
+   * (run.ts advances workspace state/journal and notifies the change observers
+   * from it) would otherwise never see the artifact write. It is returned for
+   * every well-formed mutation result, applied or NOT, so a receiving host must
+   * gate on the outcome (e.g. `getConfirmedAppliedActionsV1`) instead of
+   * treating its presence as proof that the write succeeded.
+   */
+  mutation?: FileMutationResultV1
+}
+
 export async function writeAuditFindings(params: {
   parameters: unknown
   cwd: string
@@ -107,16 +140,7 @@ export async function writeAuditFindings(params: {
   filesystemPolicy?: FilesystemAuthorityPolicy
   callId?: string
   logger?: Logger
-  /**
-   * Receives the underlying `file_mutation_result` for the artifact write.
-   * This tool's declared output is a compact receipt, so hosts that key off
-   * the mutation payload (run.ts advances workspace state/journal and notifies
-   * the change observers from it) would otherwise never see the artifact
-   * write. Invoked for every well-formed mutation result, applied or not; the
-   * caller decides which actions were confirmed.
-   */
-  onMutationResult?: (mutation: FileMutationResultV1) => void
-}): Promise<CodebuffToolOutput<'write_audit_findings'>> {
+}): Promise<WriteAuditFindingsResult> {
   const parsed = toolParams.write_audit_findings.inputSchema.safeParse(
     params.parameters,
   )
@@ -126,21 +150,23 @@ export async function writeAuditFindings(params: {
     // `{ errorMessage }`-only value that does not satisfy the
     // write_audit_findings output union, so the agent loses the artifactPath
     // identifying which call failed.
-    return [
-      {
-        type: 'json',
-        value: {
-          artifactPath: auditFindingsArtifactPath({
-            sessionSlug: rawArtifactIdentifier(
-              params.parameters,
-              'sessionSlug',
-            ),
-            shardId: rawArtifactIdentifier(params.parameters, 'shardId'),
-          }),
-          errorMessage: 'Missing or invalid write_audit_findings parameters.',
+    return {
+      output: [
+        {
+          type: 'json',
+          value: {
+            artifactPath: auditFindingsArtifactPath({
+              sessionSlug: rawArtifactIdentifier(
+                params.parameters,
+                'sessionSlug',
+              ),
+              shardId: rawArtifactIdentifier(params.parameters, 'shardId'),
+            }),
+            errorMessage: 'Missing or invalid write_audit_findings parameters.',
+          },
         },
-      },
-    ]
+      ],
+    }
   }
   const input = parsed.data
   const artifactPath = auditFindingsArtifactPath(input)
@@ -164,25 +190,25 @@ export async function writeAuditFindings(params: {
     callId: params.callId,
     logger: params.logger,
   })
-  const mutationPart = mutationOutput.find((part) => part.type === 'json')
-  const mutation = fileMutationResultV1Schema.safeParse(mutationPart?.value)
-  if (mutation.success) {
-    params.onMutationResult?.(mutation.data)
-  }
-  if (!mutation.success || mutation.data.outcome !== 'applied') {
-    const reported = mutation.success
-      ? mutation.data.errors.map((error) => error.message).join('; ')
+  const mutation = findFileMutationResult(mutationOutput)
+  if (!mutation || mutation.outcome !== 'applied') {
+    const reported = mutation
+      ? mutation.errors.map((error) => error.message).join('; ')
       : ''
-    return [
-      {
-        type: 'json',
-        value: {
-          artifactPath,
-          errorMessage:
-            reported || 'Audit findings artifact was not confirmed as written.',
+    return {
+      output: [
+        {
+          type: 'json',
+          value: {
+            artifactPath,
+            errorMessage:
+              reported ||
+              'Audit findings artifact was not confirmed as written.',
+          },
         },
-      },
-    ]
+      ],
+      ...(mutation ? { mutation } : {}),
+    }
   }
   const severityCounts = {
     CRITICAL: 0,
@@ -191,33 +217,36 @@ export async function writeAuditFindings(params: {
     LOW: 0,
   }
   for (const finding of input.findings) severityCounts[finding.severity]++
-  return [
-    {
-      type: 'json',
-      value: {
-        artifactPath,
-        artifacts: [artifactPath],
-        findingCount: input.findings.length,
-        severityCounts,
-        coverage: {
-          subsystemCount: input.coverage.subsystemIds.length,
-          featureCount: input.coverage.featureIds.length,
-          fileCount: input.coverage.files.length,
+  return {
+    output: [
+      {
+        type: 'json',
+        value: {
+          artifactPath,
+          artifacts: [artifactPath],
+          findingCount: input.findings.length,
+          severityCounts,
+          coverage: {
+            subsystemCount: input.coverage.subsystemIds.length,
+            featureCount: input.coverage.featureIds.length,
+            fileCount: input.coverage.files.length,
+          },
+          ...(input.snapshotId && input.coverage.domains
+            ? {
+                structuralReceipt: {
+                  schema_version: 1 as const,
+                  snapshot_id: input.snapshotId,
+                  shard_id: input.shardId,
+                  subsystem_ids: input.coverage.subsystemIds,
+                  files: input.coverage.files,
+                  domains: input.coverage.domains,
+                },
+              }
+            : {}),
+          contentHash: getContentHash(content),
         },
-        ...(input.snapshotId && input.coverage.domains
-          ? {
-              structuralReceipt: {
-                schema_version: 1 as const,
-                snapshot_id: input.snapshotId,
-                shard_id: input.shardId,
-                subsystem_ids: input.coverage.subsystemIds,
-                files: input.coverage.files,
-                domains: input.coverage.domains,
-              },
-            }
-          : {}),
-        contentHash: getContentHash(content),
       },
-    },
-  ]
+    ],
+    mutation,
+  }
 }

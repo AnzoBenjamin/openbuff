@@ -163,6 +163,48 @@ describe('Initial Session State', () => {
     expect(readFilePaths.some((p) => p.endsWith('knowledge.md'))).toBe(true)
   })
 
+  test('skips discovered files when stat omits size', async () => {
+    // The size cap fails closed: an adapter whose stat carries no `size` must
+    // not have every discovered file read fully into memory just because the
+    // cap cannot be evaluated.
+    mockFs.readdir = (async (dirPath: string) => {
+      if (dirPath === '/test-project') {
+        return ['src', '.git', 'knowledge.md', 'README.md', '.gitignore']
+      }
+      if (dirPath === '/test-project/src') {
+        return ['index.ts', 'utils.ts']
+      }
+      return []
+    }) as CodebuffFileSystem['readdir']
+    mockFs.stat = (async (filePath: string) =>
+      ({
+        isDirectory: () =>
+          filePath === '/test-project/src' || filePath === '/test-project/.git',
+        isFile: () =>
+          filePath !== '/test-project/src' && filePath !== '/test-project/.git',
+      }) as MockStatResult) as CodebuffFileSystem['stat']
+
+    const readFilePaths: string[] = []
+    const originalReadFile = mockFs.readFile
+    mockFs.readFile = (async (filePath: string, encoding?: BufferEncoding) => {
+      readFilePaths.push(filePath)
+      return originalReadFile(filePath, encoding)
+    }) as CodebuffFileSystem['readFile']
+
+    await initialSessionState({
+      cwd: '/test-project',
+      projectFiles: undefined,
+      fs: mockFs,
+      logger: mockLogger,
+    })
+
+    expect(readFilePaths.some((p) => p.endsWith('src/index.ts'))).toBe(false)
+    expect(readFilePaths.some((p) => p.endsWith('src/utils.ts'))).toBe(false)
+    // Knowledge files are loaded directly rather than through the size-capped
+    // discovered-project reader, so they must still be read.
+    expect(readFilePaths.some((p) => p.endsWith('knowledge.md'))).toBe(true)
+  })
+
   test('derives knowledgeFiles from projectFiles when not provided', async () => {
     const projectFiles = {
       'src/index.ts': 'console.log("Hello world");',

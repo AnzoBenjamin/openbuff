@@ -14,12 +14,10 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
+import { recordToolEvidenceInTaskMemory } from '@codebuff/agent-runtime/util/task-memory'
 import { stableHash } from '@codebuff/common/util/stable-hash'
 
-import {
-  collectWorkspaceMoves,
-  persistRunTaskMemory,
-} from '../run'
+import { collectWorkspaceMoves, persistRunTaskMemory } from '../run'
 import {
   codebuffFsToNodePromises,
   loadPersistedTaskMemory,
@@ -27,11 +25,17 @@ import {
   reconcileTaskMemoryEvidence,
   saveMergedTaskMemory,
 } from '../services/task-memory-store'
+import { changeFile } from '../tools/change-file'
+import { createNodeFileSystem } from '../tools/node-filesystem'
+import { getFilesStructured } from '../tools/read-files'
 
 import type { RunState } from '../run-state'
 import type { WorkspaceJournalService } from '../services/workspace-journal'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
-import type { TaskMemoryEvidenceV1, TaskMemoryV1 } from '@codebuff/common/types/task-memory'
+import type {
+  TaskMemoryEvidenceV1,
+  TaskMemoryV1,
+} from '@codebuff/common/types/task-memory'
 
 function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex')
@@ -109,8 +113,16 @@ describe('task-memory-store', () => {
     await writeFile(path.join(rootDir, 'b.ts'), 'beta')
     const memory = makeMemory({
       evidence: [
-        makeEvidence({ id: 'ev-a', path: 'a.ts', freshnessHash: sha256('alpha') }),
-        makeEvidence({ id: 'ev-b', path: 'b.ts', freshnessHash: sha256('beta') }),
+        makeEvidence({
+          id: 'ev-a',
+          path: 'a.ts',
+          freshnessHash: sha256('alpha'),
+        }),
+        makeEvidence({
+          id: 'ev-b',
+          path: 'b.ts',
+          freshnessHash: sha256('beta'),
+        }),
       ],
     })
     await saveMergedTaskMemory({ rootDir, runMemory: memory })
@@ -387,9 +399,7 @@ describe('task-memory-store', () => {
 
     // Each save targeted its own tmp file — a fixed `.tmp` name would
     // collapse these into one colliding path.
-    const tmpWrites = writtenPaths.filter((written) =>
-      written.endsWith('.tmp'),
-    )
+    const tmpWrites = writtenPaths.filter((written) => written.endsWith('.tmp'))
     expect(tmpWrites).toHaveLength(2)
     expect(new Set(tmpWrites).size).toBe(2)
 
@@ -616,6 +626,125 @@ describe('task-memory-store', () => {
   })
 })
 
+describe('recorded tool evidence round trip', () => {
+  // End-to-end over the REAL producer/consumer pair: a real file on disk, a
+  // real read_files anchor hash (or mutation afterHash), the runtime recorder,
+  // the store's save, and the store's reconcile. Both suites used to build their
+  // own hashes in-test (synthetic `sha256:aaa` in agent-runtime, bare hex here),
+  // so the prefix mismatch between the two packages passed both while every
+  // recorded entry reconciled stale on the next session.
+  let rootDir: string
+
+  beforeEach(async () => {
+    rootDir = await mkdtemp(path.join(tmpdir(), 'task-memory-roundtrip-'))
+  })
+
+  afterEach(async () => {
+    await rm(rootDir, { recursive: true, force: true })
+  })
+
+  test('a real read_files anchor hash reconciles fresh in the next session', async () => {
+    // LF content: the read anchor digest is LF-normalized while the store
+    // digests raw bytes, so the canonical committed form must reconcile.
+    await writeFile(path.join(rootDir, 'read-me.ts'), 'export const a = 1\n')
+
+    const readResult = await getFilesStructured({
+      filePaths: ['read-me.ts'],
+      cwd: rootDir,
+      fs: createNodeFileSystem(),
+      capabilityIssuer: { projectId: rootDir, runId: 'roundtrip-read' },
+    })
+    const readItem = readResult.results[0]!
+    const anchorHash =
+      'editAnchor' in readItem ? readItem.editAnchor?.contentHash : undefined
+    expect(anchorHash).toMatch(/^sha256:[0-9a-f]{64}$/)
+
+    const memory = recordToolEvidenceInTaskMemory({
+      toolName: 'read_files',
+      callId: 'roundtrip-read-1',
+      output: [{ type: 'json', value: readResult }],
+    })
+    const recorded = memory!.evidence.find(
+      (item) => item.id === 'read:read-me.ts',
+    )!
+    // Stored in the store's canonical bare-hex form, so `digest ===
+    // item.freshnessHash` can match.
+    expect(recorded.freshnessHash).toBe(sha256('export const a = 1\n'))
+
+    expect(
+      await saveMergedTaskMemory({ rootDir, runMemory: memory }),
+    ).toBeDefined()
+    const reconciled = await reconcileTaskMemoryEvidence({
+      memory: (await loadPersistedTaskMemory({ rootDir }))!,
+      rootDir,
+    })
+    const reconciledRead = reconciled.evidence.find(
+      (item) => item.id === 'read:read-me.ts',
+    )!
+    expect(reconciledRead.stale).toBe(false)
+    expect(reconciledRead.verifiedAt).toBeDefined()
+
+    // Same evidence after the file changes must flip stale, so the assertion
+    // above cannot be satisfied by a hash comparison that never runs.
+    await writeFile(path.join(rootDir, 'read-me.ts'), 'export const a = 2\n')
+    const afterChange = await reconcileTaskMemoryEvidence({
+      memory: (await loadPersistedTaskMemory({ rootDir }))!,
+      rootDir,
+    })
+    expect(
+      afterChange.evidence.find((item) => item.id === 'read:read-me.ts')!.stale,
+    ).toBe(true)
+  })
+
+  test('a real mutation afterHash reconciles fresh in the next session', async () => {
+    const mutation = await changeFile({
+      parameters: {
+        type: 'file',
+        path: 'edited.ts',
+        content: 'export const edited = true\n',
+        expectedHash: null,
+      },
+      cwd: rootDir,
+      fs: createNodeFileSystem(),
+      capabilityIssuer: { projectId: rootDir, runId: 'roundtrip-edit' },
+    })
+    const mutationValue =
+      mutation[0]?.type === 'json'
+        ? (mutation[0].value as {
+            outcome: string
+            actions: Array<{ afterHash: string | null }>
+          })
+        : undefined
+    expect(mutationValue?.outcome).toBe('applied')
+    expect(mutationValue!.actions[0]!.afterHash).toMatch(
+      /^sha256:[0-9a-f]{64}$/,
+    )
+
+    const memory = recordToolEvidenceInTaskMemory({
+      toolName: 'str_replace',
+      callId: 'roundtrip-edit-1',
+      output: mutation,
+    })
+    const recorded = memory!.evidence.find(
+      (item) => item.id === 'edit:edited.ts',
+    )!
+    // The mutation namespace is byte-exact rather than LF-normalized, but it is
+    // stored in the same bare-hex spelling the store compares against.
+    expect(recorded.freshnessHash).toBe(sha256('export const edited = true\n'))
+
+    expect(
+      await saveMergedTaskMemory({ rootDir, runMemory: memory }),
+    ).toBeDefined()
+    const reconciled = await reconcileTaskMemoryEvidence({
+      memory: (await loadPersistedTaskMemory({ rootDir }))!,
+      rootDir,
+    })
+    expect(
+      reconciled.evidence.find((item) => item.id === 'edit:edited.ts')!.stale,
+    ).toBe(false)
+  })
+})
+
 describe('run integration gates', () => {
   test('collectWorkspaceMoves extracts moves, maps destinations, bounds to last 64', async () => {
     const movesRoot = await mkdtemp(path.join(tmpdir(), 'workspace-moves-'))
@@ -659,7 +788,7 @@ describe('run integration gates', () => {
     }
   })
 
-  test('persistRunTaskMemory persists success, skips error runs and missing memory', async () => {
+  test('persistRunTaskMemory persists success and aborted runs, skips missing memory and cwd', async () => {
     const gateRoot = await mkdtemp(path.join(tmpdir(), 'persist-gate-'))
     try {
       const persisted = await persistRunTaskMemory({
@@ -675,21 +804,23 @@ describe('run integration gates', () => {
       })
       expect(persisted?.decisions).toEqual(['Keep me'])
 
-      // Error runs (also cancelled/aborted shape) must never write.
+      // Cancelled/aborted runs carry an `error` output but still learned real
+      // things, and saveMergedTaskMemory merges rather than overwrites, so the
+      // partial session must contribute instead of being discarded.
       const errored = await persistRunTaskMemory({
         cwd: gateRoot,
         terminalState: {
           output: { type: 'error', message: 'boom' },
           sessionState: {
             mainAgentState: {
-              taskMemory: makeMemory({ decisions: ['Poison'] }),
+              taskMemory: makeMemory({ decisions: ['Learned before Ctrl-C'] }),
             },
           },
         } as unknown as RunState,
       })
-      expect(errored).toBeUndefined()
+      expect(errored?.decisions).toContain('Learned before Ctrl-C')
 
-      // Successful run without task memory writes nothing either.
+      // Successful run without task memory writes nothing.
       const noMemory = await persistRunTaskMemory({
         cwd: gateRoot,
         terminalState: {
@@ -699,9 +830,23 @@ describe('run integration gates', () => {
       })
       expect(noMemory).toBeUndefined()
 
-      // And the error run did not overwrite the good record from above.
+      // No cwd means no store location, so nothing is written either.
+      const noCwd = await persistRunTaskMemory({
+        terminalState: {
+          output: { type: 'lastMessage', value: [] },
+          sessionState: {
+            mainAgentState: {
+              taskMemory: makeMemory({ decisions: ['Nowhere to go'] }),
+            },
+          },
+        } as unknown as RunState,
+      })
+      expect(noCwd).toBeUndefined()
+
+      // The merged record retains the earlier successful decision too.
       const reloaded = await loadPersistedTaskMemory({ rootDir: gateRoot })
-      expect(reloaded?.decisions).toEqual(['Keep me'])
+      expect(reloaded?.decisions).toContain('Keep me')
+      expect(reloaded?.decisions).toContain('Learned before Ctrl-C')
     } finally {
       await rm(gateRoot, { recursive: true, force: true })
     }
@@ -1022,7 +1167,11 @@ describe('pruneStaleTaskMemoryEvidence', () => {
       rootDir,
       runMemory: makeMemory({
         evidence: [
-          makeEvidence({ id: 'ev-ok', path: 'ok.ts', freshnessHash: sha256('ok') }),
+          makeEvidence({
+            id: 'ev-ok',
+            path: 'ok.ts',
+            freshnessHash: sha256('ok'),
+          }),
         ],
       }),
     })

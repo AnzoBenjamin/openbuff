@@ -17,6 +17,38 @@ const ROOT_CONTEXT_CHARS = 36_000
 const CHILD_CONTEXT_CHARS = 14_000
 const TASK_MEMORY_REVIEW_RECEIPT_MAX_CHARS = 4_000
 
+// Kept equal to TASK_MEMORY_LIST_CAPS.evidence in
+// @codebuff/common/types/task-memory so persisted evidence never exceeds what
+// the schema accepts.
+const TASK_MEMORY_EVIDENCE_TOTAL_CAP = 256
+
+// Per-kind caps intentionally sum above the total cap. Their job is not to
+// shrink the budget but to stop one kind from consuming all of it: a single
+// reviewer receipt contributes up to 256 `review` entries at once, which used
+// to evict every read/edit/decision entry before the global trim ran.
+const TASK_MEMORY_EVIDENCE_KIND_CAPS: Record<
+  TaskMemoryEvidenceV1['kind'],
+  number
+> = {
+  read: 64,
+  edit: 64,
+  requirement: 32,
+  decision: 32,
+  validation: 32,
+  review: 32,
+  blocker: 32,
+  handoff: 32,
+  note: 16,
+}
+
+// Hoisted so the per-item freshness filter allocates nothing per evidence entry.
+const REVISION_GUARDED_EVIDENCE_KINDS: ReadonlySet<string> = new Set([
+  'read',
+  'edit',
+  'validation',
+  'review',
+])
+
 function boundText(value: string, maxChars: number): string {
   const normalized = value.trim()
   if (normalized.length <= maxChars) return normalized
@@ -75,6 +107,14 @@ function serializeReviewReceiptForTaskMemory(receipt: AgentReceipt): string {
       return typeof id === 'string' && id.trim() ? [boundText(id, 120)] : []
     })
     .slice(0, 4)
+  const findingIdCount = findings.filter(
+    (finding) =>
+      finding &&
+      typeof finding === 'object' &&
+      !Array.isArray(finding) &&
+      typeof (finding as Record<string, unknown>).id === 'string' &&
+      ((finding as Record<string, unknown>).id as string).trim(),
+  ).length
   const requirementCoverage = Array.isArray(review?.requirementCoverage)
     ? review.requirementCoverage
     : []
@@ -152,7 +192,7 @@ function serializeReviewReceiptForTaskMemory(receipt: AgentReceipt): string {
         (Array.isArray(review?.reviewedFiles)
           ? review.reviewedFiles.length
           : 0) ||
-      findingIds.length < findings.length ||
+      findingIds.length < findingIdCount ||
       receipt.changedFiles.length > 4 ||
       receipt.unresolved.length > 2 ||
       receipt.requestedValidation.length > 2 ||
@@ -230,14 +270,32 @@ function normalizeEvidence(
   const superseded = new Set(
     [...byId.values()].flatMap((item) => item.supersedes ?? []),
   )
-  return [...byId.values()]
+  // Sort ascending first so "newest" means the same thing for both trims below.
+  const sorted = [...byId.values()]
     .map((item) =>
       superseded.has(item.id) && item.stale !== false
         ? { ...item, stale: true }
         : item,
     )
     .sort((a, b) => (a.verifiedAt ?? 0) - (b.verifiedAt ?? 0))
-    .slice(-256)
+
+  // Partition the budget by kind before the global trim: a burst of one kind
+  // (typically reviewer receipts, all sharing one verifiedAt) would otherwise
+  // fill the whole cap and drop the read/edit/decision entries the next
+  // session needs. Newest-wins per kind, matching uniqueRecent's iteration.
+  const perKindCount = new Map<string, number>()
+  const kept: TaskMemoryEvidenceV1[] = []
+  for (let index = sorted.length - 1; index >= 0; index -= 1) {
+    const item = sorted[index]!
+    const used = perKindCount.get(item.kind) ?? 0
+    // No `??` fallback: the map is an exhaustive Record over the kind union, so
+    // a future missing kind must fail typecheck here instead of silently
+    // picking up a default cap.
+    if (used >= TASK_MEMORY_EVIDENCE_KIND_CAPS[item.kind]) continue
+    perKindCount.set(item.kind, used + 1)
+    kept.unshift(item)
+  }
+  return kept.slice(-TASK_MEMORY_EVIDENCE_TOTAL_CAP)
 }
 
 function normalizeDraft(draft: TaskMemoryDraftV1): TaskMemoryDraftV1 {
@@ -383,6 +441,423 @@ export function mergeAgentReceiptIntoTaskMemory(params: {
   })
 }
 
+/**
+ * Captures the request goal outside compaction. `deriveTaskMemoryDraftFromMessages`
+ * only runs when a session compacts, so a session that never compacts used to
+ * persist a record with an empty goal — unusable for the next session.
+ *
+ * Returns `undefined` when there is nothing worth committing (no goal observed
+ * and no existing memory), and returns `current` unchanged once a goal is
+ * already stored so repeat steps burn no revision.
+ */
+export function ensureTaskMemoryGoal(params: {
+  current?: TaskMemoryV1
+  goal: string
+  workspaceState?: WorkspaceStateV1
+}): TaskMemoryV1 | undefined {
+  const { current, workspaceState } = params
+  const goal = boundText(params.goal, 8_000)
+  if (!goal && !current) return undefined
+  // Identity return: the caller compares by reference and skips the write, so
+  // an already-captured goal costs no revision, checksum, or updatedAt churn.
+  if (current?.goal) return current
+  const incoming = taskMemoryDraftV1Schema.parse({
+    schemaVersion: 1,
+    goal,
+    ...(workspaceState
+      ? {
+          workspaceRevision: workspaceState.revision,
+          workspaceSnapshotId: boundText(workspaceState.snapshotId, 256),
+        }
+      : {}),
+  })
+  return commitTaskMemory({
+    current,
+    draft: mergeTaskMemoryDraft(current, incoming),
+    expectedRevision: current?.revision ?? -1,
+  })
+}
+
+// Evidence derived from one tool result is capped defensively, and each loop
+// below keeps its OWN counter: one read_files or edit_transaction call can touch
+// far more files than a single memory commit should record, and a 32-result
+// read payload must never starve the mutation loop of the same output. No tool
+// returns both kinds today, but the cap must not silently depend on that.
+const TOOL_EVIDENCE_PER_RESULT_CAP = 32
+
+/**
+ * Upper bound on derived entries buffered for one step before further entries
+ * are dropped, so a runaway step cannot accumulate evidence without limit. The
+ * per-kind and total caps in `normalizeEvidence` discard the overflow at commit
+ * time anyway.
+ */
+const MAX_BUFFERED_STEP_EVIDENCE = 512
+
+const FRESHNESS_HASH_PREFIX = 'sha256:'
+
+/**
+ * Canonical `freshnessHash` spelling, agreed with the only consumer: `hashFile`
+ * in sdk/src/services/task-memory-store.ts emits a bare lowercase sha256 hex
+ * digest with no `sha256:` prefix, and `reconcileTaskMemoryEvidence` compares it
+ * with `digest === item.freshnessHash`. Runtime producers emit the prefixed
+ * spelling (`getContentHash` for a read anchor, `getExactContentHash` /
+ * `hashFileContent` for a mutation `afterHash`), so the prefix is stripped here
+ * at record time; without that, every entry this path records would reconcile
+ * `stale: true` on the next session and then be dropped by `evidenceIsFresh`,
+ * `deriveTaskMemoryFocusPaths`, and `pruneStaleTaskMemoryEvidence`.
+ *
+ * Two hash NAMESPACES share that single spelling and must never be conflated,
+ * which is why the ids below keep separate `read:` / `edit:` prefixes:
+ *  - `read:<path>` stores a whole-file read anchor hash, taken over
+ *    LF-normalized content. It matches the store's raw-byte digest for LF files
+ *    (the canonical committed form here); a CRLF working copy reconciles stale
+ *    rather than falsely fresh.
+ *  - `edit:<path>` stores a mutation `afterHash`, taken over the exact bytes
+ *    just written, so it reconciles byte-for-byte.
+ * The store also digests only the leading MAX_EVIDENCE_HASH_BYTES of a file, so
+ * evidence for a larger file reconciles stale for the same fail-closed reason.
+ */
+function toStoredFreshnessHash(hash: string): string {
+  return boundText(
+    hash.startsWith(FRESHNESS_HASH_PREFIX)
+      ? hash.slice(FRESHNESS_HASH_PREFIX.length)
+      : hash,
+    256,
+  )
+}
+
+function findToolResultValueByKind(
+  output: unknown,
+  kind: 'read_files_result' | 'file_mutation_result',
+): Record<string, unknown> | undefined {
+  if (!Array.isArray(output)) return undefined
+  for (const part of output) {
+    if (!part || typeof part !== 'object' || Array.isArray(part)) continue
+    const record = part as Record<string, unknown>
+    if (record.type !== 'json') continue
+    const value = record.value
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+    if ((value as Record<string, unknown>).kind === kind) {
+      return value as Record<string, unknown>
+    }
+  }
+  return undefined
+}
+
+function asRecordArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) =>
+    item && typeof item === 'object' && !Array.isArray(item)
+      ? [item as Record<string, unknown>]
+      : [],
+  )
+}
+
+/**
+ * True when a derived entry is byte-identical to what is already stored: same
+ * id, kind, path, summary and a defined, matching `freshnessHash`, with the
+ * path already present in the matching list. Only then can the commit be
+ * skipped without losing information. An entry without a hash (a delete, or an
+ * anchorless payload) can never be proven unchanged.
+ */
+function storedEvidenceIsUnchanged(
+  current: TaskMemoryV1,
+  storedById: Map<string, TaskMemoryEvidenceV1>,
+  item: TaskMemoryEvidenceV1,
+): boolean {
+  const previous = storedById.get(item.id)
+  if (!previous || previous.stale === true) return false
+  if (
+    previous.kind !== item.kind ||
+    previous.path !== item.path ||
+    previous.summary !== item.summary
+  ) {
+    return false
+  }
+  if (!item.freshnessHash || previous.freshnessHash !== item.freshnessHash) {
+    return false
+  }
+  if (!item.path) return false
+  const recorded =
+    item.kind === 'edit' ? current.editsMade : current.filesInspected
+  return recorded.includes(item.path)
+}
+
+type DerivedToolEvidence = {
+  evidence: TaskMemoryEvidenceV1[]
+  filesInspected: string[]
+  editsMade: string[]
+}
+
+/**
+ * Derives — but deliberately does not commit — the read/edit evidence a single
+ * tool result proves. No zod parse and no checksum happen here, so this stays
+ * cheap enough to run on every tool result while the expensive commit
+ * (`normalizeDraft` + `JSON.stringify` + `stableHash` over the whole memory)
+ * runs once per step.
+ */
+function deriveToolEvidence(params: {
+  toolName: string
+  callId: string
+  output: unknown
+  workspaceState?: WorkspaceStateV1
+}): DerivedToolEvidence {
+  const { toolName, callId, output, workspaceState } = params
+  const verifiedAt = Date.now()
+  const source = boundText(`${toolName}:${callId}`, 1_000)
+  const evidence: TaskMemoryEvidenceV1[] = []
+  const filesInspected: string[] = []
+  const editsMade: string[] = []
+
+  // Ids are deliberately stable per path (`read:<path>` / `edit:<path>`):
+  // `normalizeEvidence` dedupes by id keeping the newest `verifiedAt`, so
+  // re-reading or re-editing a file replaces its stale entry instead of
+  // accumulating one duplicate per tool call. The two prefixes are also the two
+  // hash namespaces documented on `toStoredFreshnessHash`: a read anchor hash is
+  // LF-normalized while a mutation `afterHash` is byte-exact, so the same file
+  // yields two different digests that must never be compared as one.
+  const readResult =
+    toolName === 'read_files'
+      ? findToolResultValueByKind(output, 'read_files_result')
+      : undefined
+  // Per-loop counter, so a 32-result read payload cannot consume the mutation
+  // loop's budget in the same output.
+  let readCount = 0
+  for (const item of asRecordArray(readResult?.results)) {
+    if (readCount >= TOOL_EVIDENCE_PER_RESULT_CAP) break
+    // Only a COMPLETE WHOLE-FILE `ok` result carries a hash the next session can
+    // re-verify. `reconcileTaskMemoryEvidence` re-hashes the whole file, so a
+    // range/symbol slice anchor (the digest of that slice alone) could never
+    // match it, and partial/error/anchorless items carry no trustworthy digest
+    // at all — recording either would store permanently stale evidence.
+    if (
+      item.status !== 'ok' ||
+      item.selector !== 'file' ||
+      item.complete !== true ||
+      typeof item.path !== 'string' ||
+      !item.path
+    ) {
+      continue
+    }
+    const anchor =
+      item.editAnchor && typeof item.editAnchor === 'object'
+        ? (item.editAnchor as Record<string, unknown>)
+        : undefined
+    if (!anchor || typeof anchor.contentHash !== 'string') continue
+    const path = boundText(item.path, 1_000)
+    const startLine =
+      typeof anchor.startLine === 'number' ? anchor.startLine : '?'
+    const endLine = typeof anchor.endLine === 'number' ? anchor.endLine : '?'
+    evidence.push({
+      id: boundText(`read:${path}`, 160),
+      kind: 'read',
+      summary: boundText(`Read ${path} lines ${startLine}-${endLine}`, 2_000),
+      source,
+      path,
+      freshnessHash: toStoredFreshnessHash(anchor.contentHash),
+      verifiedAt,
+      workspaceRevision: workspaceState?.revision,
+    })
+    filesInspected.push(path)
+    readCount += 1
+  }
+
+  // Guard on the payload shape, not the tool name: every mutating tool
+  // (edit_transaction, str_replace, write_file, replace_range, create_plan)
+  // returns this kind, and an override returning something else is skipped.
+  const mutation = findToolResultValueByKind(output, 'file_mutation_result')
+  const mutationApplied = mutation?.outcome === 'applied'
+  let editCount = 0
+  for (const action of asRecordArray(mutation?.actions)) {
+    if (editCount >= TOOL_EVIDENCE_PER_RESULT_CAP) break
+    // Trust a per-action outcome when the payload carries one; without it only
+    // a fully applied mutation confirms the action landed.
+    const applied =
+      typeof action.outcome === 'string'
+        ? action.outcome === 'applied'
+        : mutationApplied
+    if (!applied || typeof action.path !== 'string' || !action.path) continue
+    const path = boundText(action.path, 1_000)
+    const actionKind =
+      typeof action.action === 'string' ? boundText(action.action, 32) : 'edit'
+    evidence.push({
+      id: boundText(`edit:${path}`, 160),
+      kind: 'edit',
+      summary: boundText(`${actionKind} ${path}`, 2_000),
+      source,
+      path,
+      // A deleted file has no post-state to hash, so record the edit without a
+      // freshnessHash rather than storing one that can never re-verify.
+      freshnessHash:
+        actionKind === 'delete' || typeof action.afterHash !== 'string'
+          ? undefined
+          : toStoredFreshnessHash(action.afterHash),
+      verifiedAt,
+      workspaceRevision: workspaceState?.revision,
+    })
+    editsMade.push(path)
+    editCount += 1
+  }
+
+  return { evidence, filesInspected, editsMade }
+}
+
+/**
+ * Commits one batch of derived evidence as a single task-memory revision.
+ *
+ * Returns `undefined` when the batch is empty (any other tool, or a custom/MCP
+ * tool with an unrelated payload) so the caller can skip the write entirely, and
+ * returns `current` unchanged when every derived entry is byte-identical to what
+ * is already stored so repeat reads of an unchanged file cost no revision.
+ */
+function commitDerivedToolEvidence(params: {
+  current?: TaskMemoryV1
+  derived: DerivedToolEvidence
+  workspaceState?: WorkspaceStateV1
+}): TaskMemoryV1 | undefined {
+  const { current, derived, workspaceState } = params
+  const { evidence } = derived
+  if (evidence.length === 0) return undefined
+
+  // Identity return, mirroring `ensureTaskMemoryGoal`: re-reading an unchanged
+  // file derives the same evidence, and committing it would re-normalize and
+  // re-checksum the whole memory (hundreds of KB at the evidence cap) to store
+  // nothing new. Any workspace movement still commits so the memory's own
+  // revision and snapshot id stay current.
+  if (current) {
+    const storedById = new Map(
+      current.evidence.map((item) => [item.id, item] as const),
+    )
+    const workspaceUnchanged =
+      workspaceState === undefined ||
+      (current.workspaceRevision === workspaceState.revision &&
+        current.workspaceSnapshotId ===
+          boundText(workspaceState.snapshotId, 256))
+    if (
+      workspaceUnchanged &&
+      evidence.every((item) =>
+        storedEvidenceIsUnchanged(current, storedById, item),
+      )
+    ) {
+      return current
+    }
+  }
+
+  const incoming = taskMemoryDraftV1Schema.parse({
+    schemaVersion: 1,
+    goal: current?.goal ?? '',
+    // A whole step can derive more than one list cap's worth of paths, so the
+    // incoming draft is bounded here (newest wins) rather than letting the
+    // schema reject the batch and lose every entry in it.
+    filesInspected: uniqueRecent(derived.filesInspected, 128),
+    editsMade: uniqueRecent(derived.editsMade, 128),
+    historicalSummary: current?.historicalSummary ?? '',
+    evidence: normalizeEvidence(evidence),
+    ...(workspaceState
+      ? {
+          workspaceRevision: workspaceState.revision,
+          workspaceSnapshotId: boundText(workspaceState.snapshotId, 256),
+        }
+      : {}),
+  })
+  return commitTaskMemory({
+    current,
+    draft: mergeTaskMemoryDraft(current, incoming),
+    expectedRevision: current?.revision ?? -1,
+  })
+}
+
+/**
+ * Records the reads and edits an agent performed itself as task-memory evidence,
+ * committing one tool result immediately. Only child agents report through
+ * `mergeAgentReceiptIntoTaskMemory`, so without this the root agent's own
+ * exploration and edits are never remembered, and the stored `freshnessHash`
+ * values use the store's canonical form (see {@link toStoredFreshnessHash}) so
+ * they reconcile fresh — and therefore stay useful — in the next session.
+ *
+ * For callers that observe several results per step concurrently, prefer
+ * {@link bufferToolEvidenceForStep} plus
+ * {@link flushBufferedToolEvidenceIntoTaskMemory}: one commit per step keeps the
+ * whole-memory normalize/checksum off the per-result path and leaves exactly one
+ * writer per step.
+ */
+export function recordToolEvidenceInTaskMemory(params: {
+  current?: TaskMemoryV1
+  toolName: string
+  callId: string
+  output: unknown
+  workspaceState?: WorkspaceStateV1
+}): TaskMemoryV1 | undefined {
+  const { current, toolName, callId, output, workspaceState } = params
+  return commitDerivedToolEvidence({
+    current,
+    derived: deriveToolEvidence({ toolName, callId, output, workspaceState }),
+    workspaceState,
+  })
+}
+
+/**
+ * Derived evidence awaiting this step's single commit, keyed by the agent state
+ * object that owns the calls. A WeakMap so an abandoned step's buffer is
+ * collected with its agent state instead of leaking.
+ */
+const BUFFERED_STEP_EVIDENCE = new WeakMap<object, DerivedToolEvidence>()
+
+/**
+ * Derives the evidence one tool result proves and buffers it for this step's
+ * single commit. Only the cheap derivation runs per result; nothing is
+ * normalized, checksummed, or assigned to the agent state here, so concurrent
+ * tool calls in one step cannot each derive revision N+1 and clobber one
+ * another.
+ */
+export function bufferToolEvidenceForStep(params: {
+  owner: object
+  toolName: string
+  callId: string
+  output: unknown
+  workspaceState?: WorkspaceStateV1
+}): void {
+  const { owner, toolName, callId, output, workspaceState } = params
+  const derived = deriveToolEvidence({
+    toolName,
+    callId,
+    output,
+    workspaceState,
+  })
+  if (derived.evidence.length === 0) return
+  const buffered = BUFFERED_STEP_EVIDENCE.get(owner)
+  if (!buffered) {
+    BUFFERED_STEP_EVIDENCE.set(owner, derived)
+    return
+  }
+  if (buffered.evidence.length >= MAX_BUFFERED_STEP_EVIDENCE) return
+  buffered.evidence.push(...derived.evidence)
+  buffered.filesInspected.push(...derived.filesInspected)
+  buffered.editsMade.push(...derived.editsMade)
+}
+
+/**
+ * Commits everything {@link bufferToolEvidenceForStep} buffered for this step as
+ * ONE revision and clears the buffer. The caller is the only writer at this
+ * point, so the returned memory (when it differs from `current`) can be assigned
+ * without a retry loop; `undefined` means nothing was buffered.
+ */
+export function flushBufferedToolEvidenceIntoTaskMemory(params: {
+  owner: object
+  current?: TaskMemoryV1
+  workspaceState?: WorkspaceStateV1
+}): TaskMemoryV1 | undefined {
+  const buffered = BUFFERED_STEP_EVIDENCE.get(params.owner)
+  if (!buffered) return undefined
+  const result = commitDerivedToolEvidence({
+    current: params.current,
+    derived: buffered,
+    workspaceState: params.workspaceState,
+  })
+  BUFFERED_STEP_EVIDENCE.delete(params.owner)
+  return result
+}
+
 function extractSection(block: string, header: string, nextHeaders: string[]) {
   const escaped = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const lookahead = nextHeaders
@@ -513,13 +988,95 @@ function evidenceIsFresh(
   workspaceRevision: number | undefined,
 ): boolean {
   if (item.stale) return false
+  // A path means `reconcileTaskMemoryEvidence` (task-memory-store.ts, run at
+  // session start) re-hashed this entry against disk and already wrote the
+  // authoritative verdict into `stale`. Do not re-add a revision check here:
+  // workspaceRevision bumps on every unrelated mutation anywhere in the repo,
+  // so it would discard hash-verified evidence.
+  //
+  // In-session contract: nothing re-reconciles mid-session, so an entry recorded
+  // earlier in THIS session stays trusted even after the same session edits that
+  // file. Entries carry no file content (only a summary and a digest), so the
+  // worst case is a stale pointer rather than stale content — the compiled
+  // banner in `compileTaskMemoryContext` states exactly that scope instead of
+  // promising session-wide freshness.
+  if (item.path) return true
+  // Pathless observations cannot be hash-verified, so the revision counter
+  // stays their only guard.
   if (workspaceRevision === undefined || item.workspaceRevision === undefined) {
     return true
   }
-  if (!['read', 'edit', 'validation', 'review'].includes(item.kind)) {
+  if (!REVISION_GUARDED_EVIDENCE_KINDS.has(item.kind)) {
     return true
   }
   return item.workspaceRevision === workspaceRevision
+}
+
+/**
+ * True when `summary` mentions `focus` as a whole path rather than as the prefix
+ * of a longer one, so focus `src/a.ts` is not scored by a summary that only
+ * talks about `src/a.tsx`.
+ */
+function summaryMentionsFocusPath(summary: string, focus: string): boolean {
+  for (
+    let index = summary.indexOf(focus);
+    index !== -1;
+    index = summary.indexOf(focus, index + 1)
+  ) {
+    const next = summary[index + focus.length]
+    if (next === undefined || !/[A-Za-z0-9_./\\-]/.test(next)) return true
+  }
+  return false
+}
+
+function evidenceRelevanceScore(
+  item: TaskMemoryEvidenceV1,
+  focusPaths: string[],
+): number {
+  let score = 0
+  for (const focus of focusPaths) {
+    if (!focus) continue
+    if (item.path === focus) return 2
+    // Exact equality above plus a SEGMENT-AWARE prefix here: a directory focus
+    // (`src/a`) still scores the files under it, while a near-miss filename
+    // (`src/a.tsx` for focus `src/a.ts`) scores nothing and cannot dilute the
+    // ranking.
+    if (
+      item.path?.startsWith(`${focus}/`) ||
+      summaryMentionsFocusPath(item.summary, focus)
+    ) {
+      score = 1
+    }
+  }
+  return score
+}
+
+/**
+ * Focus paths for `compileTaskMemoryContext`: the files the current request is
+ * actually working on, newest first, taken from the most recent non-stale
+ * read/edit evidence (`recordToolEvidenceInTaskMemory` writes one entry per
+ * path). Ranking against these keeps older validation, review, and decision
+ * evidence about those same files, which pure recency drops.
+ */
+export function deriveTaskMemoryFocusPaths(
+  memory: TaskMemoryV1 | undefined,
+  limit = 8,
+): string[] {
+  if (!memory) return []
+  const seen = new Set<string>()
+  const paths: string[] = []
+  // `normalizeEvidence` stores evidence ascending by verifiedAt, so walking
+  // backwards yields newest-first without another sort.
+  for (let index = memory.evidence.length - 1; index >= 0; index -= 1) {
+    const item = memory.evidence[index]!
+    if (item.stale || !item.path) continue
+    if (item.kind !== 'read' && item.kind !== 'edit') continue
+    if (seen.has(item.path)) continue
+    seen.add(item.path)
+    paths.push(item.path)
+    if (paths.length >= limit) break
+  }
+  return paths
 }
 
 function compileBoundedMemoryObject(params: {
@@ -527,6 +1084,7 @@ function compileBoundedMemoryObject(params: {
   agentType?: string | null
   contextWindowTokens?: number
   rootAgent?: boolean
+  focusPaths?: string[]
   maxChars: number
 }): Record<string, unknown> {
   const { memory, maxChars, rootAgent } = params
@@ -548,18 +1106,45 @@ function compileBoundedMemoryObject(params: {
     })
 
   const evidenceLimit = Math.max(2, Math.floor((rootAgent ? 64 : 20) * scale))
-  const evidence = memory.evidence
-    .filter((item) => evidenceIsFresh(item, memory.workspaceRevision))
-    .slice(-evidenceLimit)
-    .map((item) => ({
-      ...item,
-      summary: truncateMemoryText(item.summary, Math.max(160, 600 * scale)),
-      ...(item.source
-        ? {
-            source: truncateMemoryText(item.source, Math.max(100, 280 * scale)),
-          }
-        : {}),
-    }))
+  const fresh = memory.evidence.filter((item) =>
+    evidenceIsFresh(item, memory.workspaceRevision),
+  )
+  const focusPaths = params.focusPaths
+  // Recency alone drops evidence about the files this request is actually
+  // about, so rank by relevance when the caller names focus paths. Ties break
+  // on verifiedAt then original index, so equal-timestamp receipt bursts stay
+  // deterministic; emission order is still oldest -> newest either way.
+  const selectedEvidence =
+    focusPaths && focusPaths.length > 0
+      ? fresh
+          .map((item, index) => ({
+            item,
+            index,
+            score: evidenceRelevanceScore(item, focusPaths),
+          }))
+          .sort(
+            (a, b) =>
+              b.score - a.score ||
+              (b.item.verifiedAt ?? 0) - (a.item.verifiedAt ?? 0) ||
+              b.index - a.index,
+          )
+          .slice(0, evidenceLimit)
+          .sort(
+            (a, b) =>
+              (a.item.verifiedAt ?? 0) - (b.item.verifiedAt ?? 0) ||
+              a.index - b.index,
+          )
+          .map((entry) => entry.item)
+      : fresh.slice(-evidenceLimit)
+  const evidence = selectedEvidence.map((item) => ({
+    ...item,
+    summary: truncateMemoryText(item.summary, Math.max(160, 600 * scale)),
+    ...(item.source
+      ? {
+          source: truncateMemoryText(item.source, Math.max(100, 280 * scale)),
+        }
+      : {}),
+  }))
 
   return {
     schemaVersion: memory.schemaVersion,
@@ -590,6 +1175,7 @@ export function compileTaskMemoryContext(params: {
   agentType?: string | null
   contextWindowTokens?: number
   rootAgent?: boolean
+  focusPaths?: string[]
 }): string {
   const fixedMax = params.rootAgent ? ROOT_CONTEXT_CHARS : CHILD_CONTEXT_CHARS
   const modelScaledMax = params.contextWindowTokens
@@ -600,7 +1186,7 @@ export function compileTaskMemoryContext(params: {
   const serialized = JSON.stringify(compact, null, 2)
   return [
     '<task_memory>',
-    'Authoritative structured operational memory compiled for this request. Verify live files before mutation; stale evidence is excluded.',
+    'Authoritative structured operational memory compiled for this request. Evidence that failed re-verification against disk at session start is excluded; entries recorded earlier in this same session are not re-verified, so verify live files before mutation.',
     serialized,
     '</task_memory>',
   ].join('\n')
