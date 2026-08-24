@@ -17,6 +17,7 @@ import {
   fileMutationResultV1Schema,
   getConfirmedAppliedActionsV1,
   isFileMutationResultV1,
+  type CommitReceiptV1,
   type FileMutationResultV1,
 } from '@codebuff/common/tools/results/filesystem'
 import {
@@ -123,6 +124,7 @@ import type {
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { SessionState } from '@codebuff/common/types/session-state'
 import type { JobOwner } from '@codebuff/common/util/job-registry'
+import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
 import type { Source } from '@codebuff/common/types/source'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
 import { listJobs } from './tools/list-jobs'
@@ -856,6 +858,7 @@ async function runOnce({
           fileFilter,
           filesystemPolicy,
           trustedJobOwner,
+          logger,
           capabilityIssuer: cwd
             ? {
                 projectId: cwd,
@@ -1373,6 +1376,23 @@ function requireCwd(cwd: string | undefined, toolName: string): string {
   return cwd
 }
 
+/**
+ * Asserts the read-capability issuer required by capability-bound mutation
+ * tools (currently `replace_range`). Exported so the dispatch precondition can
+ * be covered directly (`sdk/src/__tests__/run-mutation-dispatch.test.ts`).
+ */
+export function requireCapabilityIssuer(
+  capabilityIssuer: ReadCapabilityIssuer | undefined,
+  toolName: string,
+): ReadCapabilityIssuer {
+  if (!capabilityIssuer) {
+    throw new Error(
+      `a read capability issuer is required for the ${toolName} tool. Please provide cwd in OpenbuffClientOptions or override the ${toolName} tool.`,
+    )
+  }
+  return capabilityIssuer
+}
+
 async function readFiles({
   filePaths,
   ranges,
@@ -1392,7 +1412,7 @@ async function readFiles({
   cwd?: string
   fs: CodebuffFileSystem
   signal: AbortSignal
-  capabilityIssuer?: import('@codebuff/common/util/content-hash').ReadCapabilityIssuer
+  capabilityIssuer?: ReadCapabilityIssuer
 }) {
   if (override) {
     const output = await executeOverride({
@@ -1427,6 +1447,7 @@ async function handleToolCall({
   filesystemPolicy,
   trustedJobOwner,
   capabilityIssuer,
+  logger,
   env,
   harnessStateDir,
   approvalReceiptIds,
@@ -1451,7 +1472,8 @@ async function handleToolCall({
   filesystemPolicy?: FilesystemAuthorityPolicy
   /** Trusted owner injected into every process-job op; never model-derived. */
   trustedJobOwner: JobOwner
-  capabilityIssuer?: import('@codebuff/common/util/content-hash').ReadCapabilityIssuer
+  capabilityIssuer?: ReadCapabilityIssuer
+  logger?: Logger
   env?: Record<string, string>
   harnessStateDir: string
   approvalReceiptIds: string[]
@@ -1474,7 +1496,7 @@ async function handleToolCall({
   onFilesystemMutation?: OpenbuffClientOptions['onFilesystemMutation']
   verifyExternalMutation?: OpenbuffClientOptions['verifyExternalMutation']
   signal?: AbortSignal
-}): Promise<{ output: ToolResultOutput[] }> {
+}): Promise<{ output: ToolResultOutput[]; canonicalReceipt?: CommitReceiptV1 }> {
   const toolName = action.toolName
   const input =
     typeof action.input === 'string'
@@ -1517,7 +1539,14 @@ async function handleToolCall({
   }
 
   let result: ToolResultOutput[]
-  let canonicalReceipt: import('@codebuff/common/tools/results/filesystem').CommitReceiptV1 | undefined
+  let canonicalReceipt: CommitReceiptV1 | undefined
+  // Set by tools whose declared output is a compact receipt rather than the
+  // file_mutation_result payload (write_audit_findings), so the post-dispatch
+  // mutation block below still observes their confirmed filesystem actions.
+  // That receipt intentionally stays compact: the emitted FilesystemMutationEvent,
+  // which carries workspaceRevision/workspaceSnapshotId, is the correlation
+  // channel for the artifact write.
+  let sideChannelMutation: FileMutationResultV1 | undefined
   if (!toolNames.includes(toolName as ToolName)) {
     const customToolHandler = customToolDefinitions[toolName]
 
@@ -1658,6 +1687,11 @@ async function handleToolCall({
         fileFilter,
         filesystemPolicy,
         callId: action.requestId,
+        logger,
+        // Compact declared output, so the write is reported via `sideChannelMutation`.
+        onMutationResult: (mutation) => {
+          sideChannelMutation = mutation
+        },
       })
     } else if (
       toolName === 'write_file' ||
@@ -1671,7 +1705,9 @@ async function handleToolCall({
         signal,
         fileFilter,
         filesystemPolicy,
+        capabilityIssuer,
         callId: action.requestId,
+        logger,
       })
     } else if (toolName === 'edit_transaction') {
       result = await changeFiles({
@@ -1681,7 +1717,9 @@ async function handleToolCall({
         signal,
         fileFilter,
         filesystemPolicy,
+        capabilityIssuer,
         callId: action.requestId,
+        logger,
       })
     } else if (toolName === 'replace_range') {
       result = await replaceRange({
@@ -1691,12 +1729,12 @@ async function handleToolCall({
         signal,
         fileFilter,
         filesystemPolicy,
-        capabilityIssuer:
-          capabilityIssuer ??
-          (() => {
-            throw new Error('replace_range requires a scoped capability issuer')
-          })(),
+        // The issuer is constructed exactly when `cwd` is set; assert it
+        // explicitly rather than depending on evaluation order of the sibling
+        // `cwd: requireCwd(...)` property.
+        capabilityIssuer: requireCapabilityIssuer(capabilityIssuer, toolName),
         callId: action.requestId,
+        logger,
       })
     } else if (toolName === 'run_terminal_command') {
       const projectRoot = requireCwd(cwd, 'run_terminal_command')
@@ -2132,19 +2170,22 @@ async function handleToolCall({
   const mutation = result.find(
     (part) => part.type === 'json' && isFileMutationResultV1(part.value),
   )
+  // Fall back to the side channel for compact-receipt tools (see its declaration).
   const mutationValue =
     mutation?.type === 'json' && isFileMutationResultV1(mutation.value)
       ? mutation.value
-      : null
+      : (sideChannelMutation ?? null)
   const confirmedActions = mutationValue
     ? getConfirmedAppliedActionsV1(mutationValue)
     : []
-  if (confirmedActions.length > 0) {
+  // `mutationValue` is re-tested here so TypeScript narrows it for the whole
+  // block below instead of repeating non-null assertions on every use.
+  if (mutationValue && confirmedActions.length > 0) {
     const workspaceChange = {
       source: `sdk:${toolName}`,
-      operationId: mutationValue!.operationId,
-      ...(mutationValue!.receiptId
-        ? { receiptId: mutationValue!.receiptId }
+      operationId: mutationValue.operationId,
+      ...(mutationValue.receiptId
+        ? { receiptId: mutationValue.receiptId }
         : {}),
       actions: confirmedActions.map((confirmed) => ({
         action: confirmed.action,
@@ -2160,31 +2201,39 @@ async function handleToolCall({
       ? advanceWorkspaceJournal(workspaceChange)
       : advanceWorkspaceState(getWorkspaceState(), workspaceChange)
     setWorkspaceState(workspaceState)
-    const enrichedMutation = fileMutationResultV1Schema.parse({
-      ...mutationValue,
-      workspaceRevision: workspaceState.revision,
-      workspaceSnapshotId: workspaceState.snapshotId,
-      ...(mutationValue!.authorityReceipt
-        ? {
-            authorityReceipt: {
-              ...mutationValue!.authorityReceipt,
-              workspaceRevision: workspaceState.revision,
-              workspaceSnapshotId: workspaceState.snapshotId,
-            },
-          }
-        : {}),
-    })
-    result = result.map((part) =>
-      part.type === 'json' && part.value === mutationValue
-        ? { type: 'json' as const, value: enrichedMutation }
-        : part,
-    )
+    // Only a mutation that was actually part of `result` can be enriched in
+    // place. Tools whose declared output is a compact receipt reach this block
+    // through `sideChannelMutation`; their receipt schema declares no
+    // workspace fields (a consumer parsing it through `outputSchema` would
+    // strip them), so those hosts read the coordinates from the
+    // FilesystemMutationEvent emitted below instead.
+    if (mutation?.type === 'json' && mutation.value === mutationValue) {
+      const enrichedMutation = fileMutationResultV1Schema.parse({
+        ...mutationValue,
+        workspaceRevision: workspaceState.revision,
+        workspaceSnapshotId: workspaceState.snapshotId,
+        ...(mutationValue.authorityReceipt
+          ? {
+              authorityReceipt: {
+                ...mutationValue.authorityReceipt,
+                workspaceRevision: workspaceState.revision,
+                workspaceSnapshotId: workspaceState.snapshotId,
+              },
+            }
+          : {}),
+      })
+      result = result.map((part) =>
+        part.type === 'json' && part.value === mutationValue
+          ? { type: 'json' as const, value: enrichedMutation }
+          : part,
+      )
+    }
     const event: FilesystemMutationEvent = {
       toolName,
       callId: action.requestId,
-      operationId: mutationValue!.operationId,
-      ...(mutationValue!.receiptId
-        ? { receiptId: mutationValue!.receiptId }
+      operationId: mutationValue.operationId,
+      ...(mutationValue.receiptId
+        ? { receiptId: mutationValue.receiptId }
         : {}),
       workspaceRevision: workspaceState.revision,
       workspaceSnapshotId: workspaceState.snapshotId,
