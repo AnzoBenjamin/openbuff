@@ -8,11 +8,13 @@ import {
 
 import { registerPlanTimelineCommand } from './plan-timeline'
 import { handleContextCommand } from './context'
-import { handleIndexCommand } from './index-command'
+import {
+  handleIndexCommandBlocks,
+} from './index-command'
 import { handleHelpCommand } from './help'
 import { handleImageCommand } from './image'
 import { handleInfoCommand } from './info'
-import { handleMemoryCommand } from './memory-command'
+import { handleMemoryCommandBlocks } from './memory-command'
 import { handleInitializationFlowLocally } from './init'
 import { buildSafeGitCommand } from './git-command-args'
 import {
@@ -61,7 +63,7 @@ import {
 
 import type { MultilineInputHandle } from '../components/multiline-input'
 import type { InputValue, PendingAttachment } from '../types/store'
-import type { ChatMessage } from '../types/chat'
+import type { ChatMessage, ContentBlock } from '../types/chat'
 import type { SendMessageFn } from '../types/contracts/send-message'
 import type { AgentMode } from '../utils/constants'
 
@@ -204,6 +206,19 @@ const appendLocalMessage = (params: RouterParams, body: string) => {
   ])
 }
 
+const appendLocalBlocks = (
+  params: RouterParams,
+  blocksLike: ContentBlock[],
+  userInput?: string,
+) => {
+  const input = userInput ?? params.inputValue.trim()
+  params.setMessages((prev) => [
+    ...prev,
+    getUserMessage(input),
+    getSystemMessage(blocksLike),
+  ])
+}
+
 const showMissingArtifactsMessage = (
   params: RouterParams,
   command: string,
@@ -223,7 +238,7 @@ const openPlanSessionPicker = (
   return { openPlanSessionPicker: command }
 }
 
-const formatPlanStatusReport = (
+export const formatPlanStatusReport = (
   sessionDir: string,
   artifacts: ReturnType<typeof readPlanArtifacts>,
 ): string => {
@@ -259,7 +274,7 @@ const STATUS_BADGE: Record<string, string> = {
   archived: '[archived] ',
 }
 
-const formatPlanListReport = (): string => {
+export const formatPlanListReport = (): string => {
   const sessions = listPlanSessions()
   if (sessions.length === 0) {
     return [
@@ -637,29 +652,21 @@ const ALL_COMMANDS: CommandDefinition[] = [
           error instanceof Error ? error.message : String(error)
         }`
       }
-      const message = [
-        'Openbuff doctor',
-        '',
-        `Project: ${getProjectRoot()}`,
-        `Project agents: ${getProjectAgentTrustStatus() ? 'trusted and enabled' : 'disabled (use --trust-project-agents to enable)'}`,
-        `Project skills: ${getProjectSkillTrustStatus() ? 'trusted and enabled' : 'disabled with project-agent trust policy'}`,
-        `Loaded skills: ${getSkillCount()}`,
-        `Loaded MCP servers: ${Object.keys(getLoadedMCPServers()).length}`,
-        `Agent diagnostics: ${diagnostics.length}`,
-        ...diagnostics
-          .slice(0, 10)
-          .map(
-            (diagnostic) =>
-              `- ${diagnostic.filePath || diagnostic.agentId}: ${diagnostic.message}`,
-          ),
-        '',
+      const block: ContentBlock = {
+        type: 'doctor',
+        projectRoot: getProjectRoot(),
+        agentsTrusted: getProjectAgentTrustStatus(),
+        skillsTrusted: getProjectSkillTrustStatus(),
+        skillCount: getSkillCount(),
+        mcpCount: Object.keys(getLoadedMCPServers()).length,
+        diagnostics: diagnostics.slice(0, 10).map((diagnostic) => ({
+          filePath: diagnostic.filePath,
+          agentId: diagnostic.agentId,
+          message: diagnostic.message,
+        })),
         providerStatus,
-      ].join('\n')
-      params.setMessages((prev) => [
-        ...prev,
-        getUserMessage(params.inputValue.trim()),
-        getSystemMessage(message),
-      ])
+      }
+      appendLocalBlocks(params, [block])
       params.saveToHistory(params.inputValue.trim())
       clearInput(params)
     },
@@ -668,17 +675,25 @@ const ALL_COMMANDS: CommandDefinition[] = [
     name: 'index',
     handler: async (params, args) => {
       const input = params.inputValue.trim() || '/index'
-      let message: string
       try {
-        message = await handleIndexCommand(args)
+        const result = await handleIndexCommandBlocks(args)
+        if (typeof result === 'string') {
+          params.setMessages((prev) => [
+            ...prev,
+            getUserMessage(input),
+            getSystemMessage(result),
+          ])
+        } else {
+          appendLocalBlocks(params, [result], input)
+        }
       } catch (error) {
-        message = `Index command failed: ${error instanceof Error ? error.message : String(error)}`
+        const message = `Index command failed: ${error instanceof Error ? error.message : String(error)}`
+        params.setMessages((prev) => [
+          ...prev,
+          getUserMessage(input),
+          getSystemMessage(message),
+        ])
       }
-      params.setMessages((prev) => [
-        ...prev,
-        getUserMessage(input),
-        getSystemMessage(message),
-      ])
       params.saveToHistory(input)
       clearInput(params)
     },
@@ -688,17 +703,21 @@ const ALL_COMMANDS: CommandDefinition[] = [
     aliases: ['mem'],
     handler: async (params, args) => {
       const input = params.inputValue.trim() || '/memory'
-      let message: string
       try {
-        message = await handleMemoryCommand(args)
+        const block = await handleMemoryCommandBlocks(args)
+        params.setMessages((prev) => [
+          ...prev,
+          getUserMessage(input),
+          getSystemMessage([block]),
+        ])
       } catch (error) {
-        message = `Memory command failed: ${error instanceof Error ? error.message : String(error)}`
+        const message = `Memory command failed: ${error instanceof Error ? error.message : String(error)}`
+        params.setMessages((prev) => [
+          ...prev,
+          getUserMessage(input),
+          getSystemMessage(message),
+        ])
       }
-      params.setMessages((prev) => [
-        ...prev,
-        getUserMessage(input),
-        getSystemMessage(message),
-      ])
       params.saveToHistory(input)
       clearInput(params)
     },
@@ -923,10 +942,15 @@ const ALL_COMMANDS: CommandDefinition[] = [
         return
       }
       const artifacts = readPlanArtifacts(parsed.target)
-      appendLocalMessage(
-        params,
-        formatPlanStatusReport(resolved.sessionDir, artifacts),
-      )
+      const reportText = formatPlanStatusReport(resolved.sessionDir, artifacts)
+      const block: ContentBlock = {
+        type: 'plan-status',
+        mode: 'status',
+        kind: 'status',
+        reportText,
+        isStatusReport: true,
+      }
+      appendLocalBlocks(params, [block])
       clearInput(params)
     },
   }),
@@ -935,7 +959,17 @@ const ALL_COMMANDS: CommandDefinition[] = [
     aliases: ['plan-ls'],
     handler: (params) => {
       params.saveToHistory(params.inputValue.trim())
-      appendLocalMessage(params, formatPlanListReport())
+      const reportText = formatPlanListReport()
+      const sessions = listPlanSessions()
+      const block: ContentBlock = {
+        type: 'plan-status-list',
+        mode: 'list',
+        kind: 'list',
+        reportText,
+        sessions,
+        isStatusReport: false,
+      }
+      appendLocalBlocks(params, [block])
       clearInput(params)
     },
   }),

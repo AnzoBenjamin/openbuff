@@ -1,19 +1,37 @@
-import { describe, test, expect } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+
+import { applyRetriedNavigation, parseHistoryItem } from '../use-input-history'
+import { hashString } from '../../utils/hash'
+import {
+  MESSAGE_HISTORY_MAX_RETRY_ATTEMPTS,
+  MESSAGE_HISTORY_RETRY_COOLDOWN_MS,
+  MESSAGE_HISTORY_RETRY_REFUND_MS,
+  getSessionHistoryRetry,
+  recordSessionHistoryRetryAttempt,
+  resolveNavigationDraftText,
+  setSessionHistoryRetry,
+} from '../../utils/message-history'
 
 import type { InputMode } from '../../utils/input-modes'
+import type { MessageHistoryLoadOutcome } from '../../utils/message-history'
+
+const IDLE_SESSION_RETRY = {
+  attempts: 0,
+  lastAttemptMs: Number.NEGATIVE_INFINITY,
+}
+
+const resetSessionHistoryState = (): void => {
+  setSessionHistoryRetry(IDLE_SESSION_RETRY)
+}
+
+beforeEach(resetSessionHistoryState)
+afterEach(resetSessionHistoryState)
 
 // Tests cross-mode history navigation (default <-> bash mode)
-// Uses mock implementation since React 19 + Bun + RTL renderHook() is unreliable
-
-function parseHistoryItem(item: string): {
-  mode: InputMode
-  displayText: string
-} {
-  if (item.startsWith('!') && item.length > 1) {
-    return { mode: 'bash', displayText: item.slice(1) }
-  }
-  return { mode: 'default', displayText: item }
-}
+// parseHistoryItem is imported from the hook itself so these tests exercise
+// the real implementation instead of a duplicated mock copy that can silently
+// drift. The cross-mode navigation suites below keep a state-machine mock
+// because React 19 + Bun + RTL renderHook() is unreliable.
 
 describe('use-input-history - parseHistoryItem', () => {
   describe('default mode entries', () => {
@@ -436,11 +454,33 @@ describe('use-input-history - isNavigating flag behavior', () => {
     test('mode change during navigation does NOT reset history', () => {
       const nav = createMockHistoryNavigator(['default entry', '!bash command'])
 
+      nav.navigateUp()
+      expect(nav.state.historyIndex).toBe(1)
+      // Seed a draft to verify it is preserved through navigated mode changes
+      nav.state.currentDraft = 'preserved draft'
+      nav.state.currentDraftMode = 'default'
+      const preservedIndex = nav.state.historyIndex
+      const preservedDraft = nav.state.currentDraft
+      const preservedDraftMode = nav.state.currentDraftMode
+
       nav.state.isNavigating = true
       nav.simulateInputModeChange('bash')
-      nav.state.historyIndex = 1
+      expect(nav.state.historyIndex).toBe(preservedIndex)
+      expect(nav.state.currentDraft).toBe(preservedDraft)
+      expect(nav.state.currentDraftMode).toBe(preservedDraftMode)
+
       nav.simulateInputModeChange('default')
+      expect(nav.state.historyIndex).toBe(preservedIndex)
+      expect(nav.state.currentDraft).toBe(preservedDraft)
+      expect(nav.state.currentDraftMode).toBe(preservedDraftMode)
+
       nav.state.isNavigating = false
+
+      // After navigation ends, a manual mode change should reset
+      nav.simulateInputModeChange('bash')
+      expect(nav.state.historyIndex).toBe(-1)
+      expect(nav.state.currentDraft).toBe('')
+      expect(nav.state.currentDraftMode).toBe('default')
     })
 
     test('exiting feedback mode explicitly resets history navigation', () => {
@@ -700,5 +740,231 @@ describe('use-input-history - mode preservation', () => {
     nav.navigateDown()
     expect(nav.state.inputMode).toBe('bash')
     expect(nav.state.inputValue).toBe('npm test')
+  })
+})
+
+describe('interactive history navigation retry wiring', () => {
+  /**
+   * Drives use-input-history.ts's real retry/apply step (applyRetriedNavigation)
+   * against the refs the hook keeps, so deleting the retry call, the cursor
+   * re-anchor or the draft restore from it fails here. It lives beside the hook
+   * rather than in utils: it imports the message-history constants. Rendering the
+   * hook itself is unreliable under React 19 + Bun (see the hook's own test
+   * file).
+   *
+   * The retry budget is not part of this state: applyRetriedNavigation reads and
+   * spends the process-wide one, exactly as the hook does, and it is reset by
+   * the file-scoped hooks above so a test that throws cannot leak a spent budget.
+   */
+  const createNavigator = (initialHistory: string[]) => {
+    setSessionHistoryRetry({ attempts: 1, lastAttemptMs: 0 })
+    const state = {
+      history: initialHistory,
+      unavailable: true,
+      index: -1,
+      draft: '',
+      draftIsBash: false,
+      input: '',
+      inputIsBash: false,
+      nowMs: 0,
+      loadCalls: 0,
+    }
+    const loads: MessageHistoryLoadOutcome[] = []
+
+    const retryIfUnavailable = () => {
+      const applied = applyRetriedNavigation({
+        history: state.history,
+        index: state.index,
+        unavailable: state.unavailable,
+        nowMs: state.nowMs,
+        load: () => {
+          state.loadCalls += 1
+          return loads.shift() ?? { history: state.history, unavailable: true }
+        },
+      })
+      state.history = applied.history
+      state.unavailable = applied.unavailable
+      state.index = applied.index
+      if (applied.restoreDraft) {
+        state.inputIsBash = state.draftIsBash
+        state.input = resolveNavigationDraftText(state.draft, state.draftIsBash)
+        state.index = -1
+        state.draft = ''
+        state.draftIsBash = false
+      }
+    }
+
+    const navigateUp = () => {
+      retryIfUnavailable()
+      const history = state.history
+      if (history.length === 0) return
+      if (state.index === -1) {
+        state.draft = state.inputIsBash ? `!${state.input}` : state.input
+        state.draftIsBash = state.inputIsBash
+        state.index = history.length - 1
+      } else if (state.index > 0) {
+        state.index -= 1
+      }
+      const entry = history[state.index]
+      if (entry === undefined) return
+      state.inputIsBash = entry.startsWith('!') && entry.length > 1
+      state.input = state.inputIsBash ? entry.slice(1) : entry
+    }
+
+    return { state, loads, navigateUp }
+  }
+
+  test('applyRetriedNavigation loads nothing and changes nothing when no retry is due', () => {
+    let loads = 0
+    const load = () => {
+      loads += 1
+      return { history: [], unavailable: false }
+    }
+    setSessionHistoryRetry({ attempts: 0, lastAttemptMs: 0 })
+    expect(
+      applyRetriedNavigation({
+        history: ['a', 'b'],
+        index: 1,
+        unavailable: false,
+        nowMs: MESSAGE_HISTORY_RETRY_COOLDOWN_MS,
+        load,
+      }),
+    ).toEqual({
+      history: ['a', 'b'],
+      index: 1,
+      unavailable: false,
+      restoreDraft: false,
+    })
+    expect(loads).toBe(0)
+    expect(getSessionHistoryRetry()).toEqual({ attempts: 0, lastAttemptMs: 0 })
+
+    setSessionHistoryRetry({ attempts: 1, lastAttemptMs: 0 })
+    expect(
+      applyRetriedNavigation({
+        history: ['a', 'b'],
+        index: 1,
+        unavailable: true,
+        nowMs: MESSAGE_HISTORY_RETRY_COOLDOWN_MS - 1,
+        load,
+      }),
+    ).toEqual({
+      history: ['a', 'b'],
+      index: 1,
+      unavailable: true,
+      restoreDraft: false,
+    })
+    expect(loads).toBe(0)
+    expect(getSessionHistoryRetry()).toEqual({ attempts: 1, lastAttemptMs: 0 })
+  })
+
+  test('the cursor follows its entry when a longer reload lands mid-navigation', () => {
+    const nav = createNavigator(['b', 'c'])
+    nav.navigateUp()
+    expect(nav.state.loadCalls).toBe(0)
+    expect(nav.state.input).toBe('c')
+    expect(nav.state.index).toBe(1)
+
+    nav.state.nowMs = MESSAGE_HISTORY_RETRY_COOLDOWN_MS
+    nav.loads.push({ history: ['a', 'b', 'c'], unavailable: false })
+    nav.navigateUp()
+    expect(nav.state.loadCalls).toBe(1)
+    expect(nav.state.history).toEqual(['a', 'b', 'c'])
+    expect(nav.state.unavailable).toBe(false)
+    expect(nav.state.index).toBe(1)
+    expect(nav.state.input).toBe('b')
+    expect(getSessionHistoryRetry()).toEqual({
+      attempts: 0,
+      lastAttemptMs: MESSAGE_HISTORY_RETRY_COOLDOWN_MS,
+    })
+  })
+
+  test('an empty trustworthy reload puts the saved bash draft back into the input', () => {
+    const nav = createNavigator(['c'])
+    nav.state.input = 'git status'
+    nav.state.inputIsBash = true
+    nav.navigateUp()
+    expect(nav.state.draft).toBe('!git status')
+    expect(nav.state.draftIsBash).toBe(true)
+    expect(nav.state.input).toBe('c')
+
+    nav.state.nowMs = MESSAGE_HISTORY_RETRY_COOLDOWN_MS
+    nav.loads.push({ history: [], unavailable: false })
+    nav.navigateUp()
+    expect(nav.state.input).toBe('git status')
+    expect(nav.state.inputIsBash).toBe(true)
+    expect(nav.state.index).toBe(-1)
+    expect(nav.state.draft).toBe('')
+    expect(nav.state.history).toEqual([])
+  })
+
+  test('a spent retry budget is refunded after a long idle stretch', () => {
+    const nav = createNavigator(['c'])
+    setSessionHistoryRetry({
+      attempts: MESSAGE_HISTORY_MAX_RETRY_ATTEMPTS,
+      lastAttemptMs: 0,
+    })
+
+    nav.state.nowMs = MESSAGE_HISTORY_RETRY_REFUND_MS - 1
+    nav.loads.push({ history: ['a', 'c'], unavailable: false })
+    nav.navigateUp()
+    expect(nav.state.loadCalls).toBe(0)
+    expect(nav.state.history).toEqual(['c'])
+
+    nav.state.nowMs = MESSAGE_HISTORY_RETRY_REFUND_MS
+    nav.navigateUp()
+    expect(nav.state.loadCalls).toBe(1)
+    expect(nav.state.history).toEqual(['a', 'c'])
+    expect(nav.state.unavailable).toBe(false)
+  })
+
+  test('navigation spends the same bounded budget the overlay does', () => {
+    const nav = createNavigator(['c'])
+    let attemptMs = 0
+    for (
+      let attempt = 1;
+      attempt < MESSAGE_HISTORY_MAX_RETRY_ATTEMPTS;
+      attempt++
+    ) {
+      attemptMs = attempt * MESSAGE_HISTORY_RETRY_COOLDOWN_MS
+      recordSessionHistoryRetryAttempt(attemptMs, true)
+    }
+    expect(getSessionHistoryRetry().attempts).toBe(
+      MESSAGE_HISTORY_MAX_RETRY_ATTEMPTS,
+    )
+
+    nav.state.nowMs = attemptMs + MESSAGE_HISTORY_RETRY_COOLDOWN_MS
+    nav.loads.push({ history: ['a', 'c'], unavailable: false })
+    nav.navigateUp()
+    expect(nav.state.loadCalls).toBe(0)
+    expect(nav.state.history).toEqual(['c'])
+    expect(nav.state.unavailable).toBe(true)
+  })
+})
+
+describe('hashString deterministic cases', () => {
+  test('empty string hashes to stable base36 of 5381', () => {
+    expect(hashString('')).toBe('45h')
+    expect(hashString('')).toBe(hashString(''))
+  })
+
+  test('ascii string hashes deterministically', () => {
+    const first = hashString('hello')
+    expect(first).toBe(hashString('hello'))
+    expect(typeof first).toBe('string')
+    expect(first.length).toBeGreaterThan(0)
+    expect(first).not.toBe(hashString(''))
+    expect(first).not.toBe(hashString('hello '))
+  })
+
+  test('emoji surrogate pair hashes deterministically as two UTF-16 units', () => {
+    const emojiHash = hashString('😀')
+    expect(emojiHash).toBe(hashString('😀'))
+    expect(typeof emojiHash).toBe('string')
+    expect(emojiHash.length).toBeGreaterThan(0)
+    expect(emojiHash).not.toBe(hashString(''))
+    // Different emoji should produce different hash
+    expect(emojiHash).not.toBe(hashString('😁'))
+    // Single surrogate-pair emoji is two code units, not one code point
+    expect('😀'.length).toBe(2)
   })
 })

@@ -1,7 +1,7 @@
 import { memo } from 'react'
 
 import { useTheme } from '../../hooks/use-theme'
-import { BORDER_CHARS } from '../../utils/ui-constants'
+import { HarnessBox } from './harness-box'
 
 import type { GateStateContentBlock, GateStateStatus } from '../../types/chat'
 import type { ChatTheme } from '../../types/theme-system'
@@ -24,40 +24,24 @@ const STATUS_ICON: Record<GateStateStatus, string> = {
   skipped: '–',
 }
 
-const statusColor = (status: GateStateStatus, theme: ChatTheme): string => {
-  switch (status) {
-    case 'passed':
-      return theme.success
-    case 'failed':
-      return theme.error
-    case 'pending':
-      return theme.warning
-    case 'skipped':
-      return theme.warning
-  }
+const STATUS_TONE: Record<GateStateStatus, 'success' | 'error' | 'warning' | 'secondary'> = {
+  pending: 'warning',
+  passed: 'success',
+  failed: 'error',
+  skipped: 'secondary',
 }
+
+const statusColor = (status: GateStateStatus, theme: ChatTheme): string => theme[STATUS_TONE[status]]
+
+const statusTone = (status: GateStateStatus): 'success' | 'error' | 'warning' | 'secondary' => STATUS_TONE[status]
 
 export const GateStateBox = memo(({ block }: GateStateBoxProps) => {
   const theme = useTheme()
   const color = statusColor(block.gateStatus, theme)
-  const heading = `${STATUS_ICON[block.gateStatus]} ${block.origin ?? 'Gate'} · ${block.gate} · ${STATUS_LABEL[block.gateStatus]}`
+  const heading = `${STATUS_ICON[block.gateStatus]} ${block.origin?.trim() || 'Gate'} · ${block.gate} · ${STATUS_LABEL[block.gateStatus]}`
 
   return (
-    <box
-      style={{
-        flexDirection: 'column',
-        gap: 0,
-        width: '100%',
-        borderStyle: 'single',
-        borderColor: color,
-        customBorderChars: BORDER_CHARS,
-        paddingLeft: 1,
-        paddingRight: 1,
-        paddingTop: 0,
-        paddingBottom: 0,
-      }}
-    >
-      <text style={{ fg: color }}>{heading}</text>
+    <HarnessBox tone={statusTone(block.gateStatus)} title={heading} gap={0} paddingBottom={0}>
       {block.gateStatus === 'skipped' ? (
         <text
           style={{
@@ -78,6 +62,6 @@ export const GateStateBox = memo(({ block }: GateStateBoxProps) => {
           {block.details}
         </text>
       ) : null}
-    </box>
+    </HarnessBox>
   )
 })

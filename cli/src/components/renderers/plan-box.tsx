@@ -8,6 +8,7 @@ import {
 import { BORDER_CHARS } from '../../utils/ui-constants'
 import { Button } from '../button'
 import { BuildModeButtons } from '../build-mode-buttons'
+import { HarnessBox } from './harness-box'
 
 import type { PlanArtifactMetadata } from '../../types/chat'
 
@@ -30,12 +31,12 @@ const formatArtifactRows = (metadata: PlanArtifactMetadata): string[] => {
     ['STATUS.md', metadata.statusPath],
     ['LESSONS.md', metadata.lessonsPath],
   ]
-    .filter((row): row is [string, string] => Boolean(row[1]))
+    .filter((row): row is [string, string] => Boolean(row[1]?.trim()))
     .map(([label, value]) => `${label}: ${value}`)
 
-  const customArtifactRows = (metadata.customArtifacts ?? []).map(
-    ({ label, path }) => `${label}: ${path}`,
-  )
+  const customArtifactRows = (metadata.customArtifacts ?? [])
+    .filter(({ label, path }) => Boolean(label?.trim()) && Boolean(path?.trim()))
+    .map(({ label, path }) => `${label}: ${path}`)
 
   return [...artifactRows, ...customArtifactRows]
 }
@@ -49,7 +50,7 @@ const formatCommandRows = (metadata: PlanArtifactMetadata): string[] =>
     metadata.statusCommand,
     metadata.lessonsCommand,
     ...(metadata.customArtifactCommands ?? []),
-  ].filter((command): command is string => Boolean(command))
+  ].filter((command): command is string => Boolean(command?.trim()))
 
 export const PlanBox = memo(
   ({
@@ -65,23 +66,10 @@ export const PlanBox = memo(
     const commandRows = metadata ? formatCommandRows(metadata) : []
     const hasMetadata = artifactRows.length > 0 || commandRows.length > 0
     // Track which command is hovered so each button highlights independently.
-    const [hoveredCommand, setHoveredCommand] = useState<string | null>(null)
+    const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
 
     return (
-      <box
-        style={{
-          flexDirection: 'column',
-          gap: 1,
-          width: '100%',
-          borderStyle: 'single',
-          borderColor: theme.secondary,
-          customBorderChars: BORDER_CHARS,
-          paddingLeft: 1,
-          paddingRight: 1,
-          paddingTop: 0,
-          paddingBottom: 1,
-        }}
-      >
+      <HarnessBox tone="secondary" gap={1} paddingBottom={1}>
         <text style={{ wrapMode: 'word', fg: theme.foreground }}>
           {renderMarkdown(planContent, {
             codeBlockWidth: Math.max(10, availableWidth - 8),
@@ -91,30 +79,30 @@ export const PlanBox = memo(
         {hasMetadata && (
           <box style={{ flexDirection: 'column', gap: 0 }}>
             <text style={{ fg: theme.secondary }}>Artifacts</text>
-            {artifactRows.map((row) => (
-              <text key={row} style={{ wrapMode: 'word', fg: theme.secondary }}>
+            {artifactRows.map((row, index) => (
+              <text key={`${row}-${index}`} style={{ wrapMode: 'word', fg: theme.secondary }}>
                 {row}
               </text>
             ))}
-            {commandRows.map((command) => (
+            {commandRows.map((command, index) => (
               <Button
-                key={command}
+                key={`${command}-${index}`}
                 style={{
                   flexDirection: 'row',
                   paddingLeft: 1,
                   paddingRight: 1,
                   borderStyle: 'single',
                   borderColor:
-                    hoveredCommand === command
+                    hoveredIndex === index
                       ? theme.foreground
                       : theme.secondary,
                   customBorderChars: BORDER_CHARS,
                 }}
                 onClick={() => onInsertCommand(command)}
-                onMouseOver={() => setHoveredCommand(command)}
+                onMouseOver={() => setHoveredIndex(index)}
                 onMouseOut={() =>
-                  setHoveredCommand((current) =>
-                    current === command ? null : current,
+                  setHoveredIndex((current) =>
+                    current === index ? null : current,
                   )
                 }
               >
@@ -126,7 +114,7 @@ export const PlanBox = memo(
           </box>
         )}
         <BuildModeButtons theme={theme} onBuildFast={onBuildFast} />
-      </box>
+      </HarnessBox>
     )
   },
 )

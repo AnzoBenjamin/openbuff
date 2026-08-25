@@ -2,6 +2,7 @@ import { IndexManager } from '@codebuff/indexer'
 import { createConfiguredEmbedder, loadProviderConfigSync } from '@openbuff/sdk'
 
 import { getProjectRoot } from '../project-files'
+import { formatAge } from '../utils/format-helpers'
 
 type IndexQueryResult = {
   results: Array<{
@@ -79,11 +80,121 @@ const defaultDeps: IndexCommandDeps = {
   },
 }
 
+export function buildIndexStatusContentBlock(
+  result: IndexQueryResult,
+  semanticReady: boolean,
+  semanticEnabled: boolean,
+): import('../types/chat').IndexStatusContentBlock {
+  const status = result.status
+  const statusLine = `Index status: ${status.state}${status.refreshing ? ' · refreshing' : ''}.`
+  const messageLine = status.message
+  const corpusLine = `${status.totalIndexed} indexed file${status.totalIndexed === 1 ? '' : 's'}.`
+  const ageLine = status.indexAge > 0 ? formatAge(status.indexAge) : 'not available'
+  const semantic = !semanticEnabled
+    ? 'disabled'
+    : semanticReady
+      ? 'ready'
+      : `${status.semantic} (metadata-only fallback)`
+  const vectorLine = semantic
+  const hintLine = status.ready
+    ? 'Use /index explain <query> to inspect ranking provenance.'
+    : 'Retry shortly, run /index rebuild, or use read_subtree/glob/code_search.'
+  const coverageLine = status.coverage?.truncated
+    ? `Coverage: partial at ${status.coverage.maxFiles} files; skipped ${status.coverage.skippedFiles} under ${status.coverage.skippedPrefixes.join(', ') || 'unknown prefixes'}.`
+    : undefined
+  const diagnosticsLines =
+    status.diagnostics.length > 0
+      ? [
+          `Diagnostics: ${status.diagnostics.length} parser issue${status.diagnostics.length === 1 ? '' : 's'}.`,
+          ...status.diagnostics
+            .slice(0, 5)
+            .map((diagnostic) => `- ${diagnostic.filePath} (${diagnostic.stage}): ${diagnostic.message}`),
+        ]
+      : undefined
+  const lines = [
+    statusLine,
+    messageLine,
+    `Corpus: ${corpusLine}`,
+    `Age: ${ageLine}`,
+    `Vector embeddings: ${vectorLine}`,
+    hintLine,
+    ...(coverageLine ? [coverageLine] : []),
+    ...(diagnosticsLines ? diagnosticsLines : []),
+  ]
+  return {
+    type: 'index-status',
+    statusLine,
+    messageLine,
+    corpusLine,
+    ageLine,
+    vectorLine,
+    hintLine,
+    coverageLine,
+    diagnosticsLines,
+    lines,
+  }
+}
+
+export async function handleIndexCommandBlocks(
+  rawArgs: string,
+  deps: IndexCommandDeps = defaultDeps,
+): Promise<import('../types/chat').IndexStatusContentBlock | string> {
+  const [subcommand = 'status', ...rest] = rawArgs.trim().split(/\s+/).filter(Boolean)
+  const normalized = subcommand.toLowerCase()
+  const setup = deps.getManager()
+
+  if (!setup.enabled || !setup.manager) {
+    const lines = [
+      'Index status: disabled in openbuff.json.',
+      'Use read_subtree, glob, or code_search for live discovery.',
+    ]
+    return {
+      type: 'index-status',
+      statusLine: lines[0],
+      messageLine: lines[1],
+      corpusLine: '',
+      ageLine: '',
+      vectorLine: '',
+      hintLine: '',
+      lines,
+    }
+  }
+
+  if (normalized === 'status') {
+    return buildIndexStatusContentBlock(
+      setup.manager.query('', { limit: 1 }),
+      setup.manager.isSemanticReady(),
+      setup.semanticEnabled,
+    )
+  }
+
+  if (normalized === 'rebuild') {
+    setup.manager.markStale()
+    setup.manager.ensureBuilt()
+    await setup.manager.waitUntilReady(30_000)
+    const status = setup.manager.query('', { limit: 1 })
+    const block = buildIndexStatusContentBlock(
+      status,
+      setup.manager.isSemanticReady(),
+      setup.semanticEnabled,
+    )
+    const prefix = 'Index refresh requested. Compatible caches are reconciled incrementally; incompatible caches rebuild.'
+    return {
+      ...block,
+      messageLine: `${prefix}\n${block.messageLine}`,
+      lines: [prefix, ...block.lines],
+    }
+  }
+
+  // For non-status subcommands (explain, etc.), fall back to string.
+  return handleIndexCommand(rawArgs, deps)
+}
+
 export async function handleIndexCommand(
   rawArgs: string,
   deps: IndexCommandDeps = defaultDeps,
 ): Promise<string> {
-  const [subcommand = 'status', ...rest] = rawArgs.trim().split(/\s+/)
+  const [subcommand = 'status', ...rest] = rawArgs.trim().split(/\s+/).filter(Boolean)
   const normalized = subcommand.toLowerCase()
   const setup = deps.getManager()
 
@@ -151,7 +262,7 @@ export async function handleIndexCommand(
   return 'Usage: /index [status|rebuild|explain <query>]'
 }
 
-function formatIndexStatus(
+export function formatIndexStatus(
   result: IndexQueryResult,
   semanticReady: boolean,
   semanticEnabled: boolean,
@@ -191,16 +302,8 @@ function formatIndexStatus(
   return lines.join('\n')
 }
 
-function formatAge(milliseconds: number): string {
-  if (milliseconds < 1_000) return '<1s'
-  const seconds = Math.floor(milliseconds / 1_000)
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  return `${hours}h ${minutes % 60}m`
-}
+export { formatAge } from '../utils/format-helpers'
 
-function round(value: number): string {
+export function round(value: number): string {
   return (Math.round(value * 100) / 100).toString()
 }

@@ -115,4 +115,80 @@ describe('GateStateBox', () => {
 
     expect(passedMarkup).toContain(theme.success)
   })
+
+  test('uses warning color for pending status', () => {
+    const markup = renderToStaticMarkup(
+      <GateStateBox block={makeBlock({ gateStatus: 'pending' })} />,
+    )
+
+    expect(markup).toContain(theme.warning)
+  })
+
+  test('uses secondary color for skipped status', () => {
+    const markup = renderToStaticMarkup(
+      <GateStateBox block={makeBlock({ gateStatus: 'skipped' })} />,
+    )
+
+    expect(markup).toContain(theme.secondary)
+  })
+
+  test('skipped uses secondary not warning', () => {
+    const markup = renderToStaticMarkup(
+      <GateStateBox block={makeBlock({ gateStatus: 'skipped' })} />,
+    )
+
+    expect(markup).toContain(theme.secondary)
+    expect(markup).not.toContain(theme.warning)
+  })
+
+  test('pending uses warning not secondary', () => {
+    const markup = renderToStaticMarkup(
+      <GateStateBox block={makeBlock({ gateStatus: 'pending' })} />,
+    )
+
+    expect(markup).toContain(theme.warning)
+    expect(markup).not.toContain(theme.secondary)
+  })
+
+  test('skipped hint text is rendered', () => {
+    const markup = renderToStaticMarkup(
+      <GateStateBox block={makeBlock({ gateStatus: 'skipped' })} />,
+    )
+
+    expect(markup).toContain('SKIPPED — gate intentionally not run')
+  })
+
+  test('maps all gate statuses to correct tones via border color', () => {
+    const cases: Array<{
+      status: GateStateContentBlock['gateStatus']
+      expectedColor: string
+    }> = [
+      { status: 'passed', expectedColor: theme.success },
+      { status: 'failed', expectedColor: theme.error },
+      { status: 'pending', expectedColor: theme.warning },
+      { status: 'skipped', expectedColor: theme.secondary },
+    ]
+    for (const { status, expectedColor } of cases) {
+      const markup = renderToStaticMarkup(
+        <GateStateBox block={makeBlock({ gateStatus: status })} />,
+      )
+      expect(markup).toContain(expectedColor)
+    }
+  })
+
+  test('passed does not use error', () => {
+    const markup = renderToStaticMarkup(
+      <GateStateBox block={makeBlock({ gateStatus: 'passed' })} />,
+    )
+    expect(markup).toContain(theme.success)
+    expect(markup).not.toContain(theme.error)
+  })
+
+  test('failed does not use success', () => {
+    const markup = renderToStaticMarkup(
+      <GateStateBox block={makeBlock({ gateStatus: 'failed' })} />,
+    )
+    expect(markup).toContain(theme.error)
+    expect(markup).not.toContain(theme.success)
+  })
 })
