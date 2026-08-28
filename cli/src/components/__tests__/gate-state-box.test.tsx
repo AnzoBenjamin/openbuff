@@ -99,6 +99,83 @@ describe('GateStateBox', () => {
     expect(markup).not.toContain('undefined')
   })
 
+  test('renders advisories below the details when provided', () => {
+    const markup = renderToStaticMarkup(
+      <GateStateBox
+        block={makeBlock({
+          gateStatus: 'passed',
+          details: 'no blockers',
+          advisories: ['consider a regression test', 'naming nit in helper'],
+        })}
+      />,
+    )
+
+    expect(markup).toContain('Advisory (non-blocking)')
+    expect(markup).toContain('consider a regression test')
+    expect(markup).toContain('naming nit in helper')
+    expect(markup.indexOf('no blockers')).toBeLessThan(
+      markup.indexOf('Advisory (non-blocking)'),
+    )
+    expect(markup).toContain(theme.secondary)
+  })
+
+  // Delimiter safety: after the parser unescapes the payload, advisory text may
+  // legitimately contain the literal `</gate-state>` closing delimiter.
+  test('renders advisory text containing the gate-state closing delimiter', () => {
+    const markup = renderToStaticMarkup(
+      <GateStateBox
+        block={makeBlock({
+          gateStatus: 'passed',
+          advisories: [
+            'advisory quoting </gate-state> from the persisted format',
+          ],
+        })}
+      />,
+    )
+
+    expect(markup).toContain('Advisory (non-blocking)')
+    expect(markup).toContain('advisory quoting')
+    // The delimiter text reaches the rendered output (React escapes `<`/`>` in
+    // text children, so accept either form rather than pinning the escaping).
+    expect(markup).toMatch(/(&lt;|<)\/gate-state(&gt;|>)/)
+  })
+
+  // Render contract: the parser only admits advisory lists within the
+  // producer's bound (8 entries), and every admitted entry is rendered.
+  test('renders every advisory of a list at the producer cap', () => {
+    const advisories = Array.from(
+      { length: 8 },
+      (_, index) => `advisory ${index}`,
+    )
+    const markup = renderToStaticMarkup(
+      <GateStateBox block={makeBlock({ gateStatus: 'passed', advisories })} />,
+    )
+
+    expect(markup).toContain('Advisory (non-blocking)')
+    for (const advisory of advisories) {
+      expect(markup).toContain(advisory)
+    }
+  })
+
+  test('renders no advisory text when the field is absent', () => {
+    const block = makeBlock({ gateStatus: 'passed', details: 'no blockers' })
+    delete block.advisories
+    const markup = renderToStaticMarkup(<GateStateBox block={block} />)
+
+    expect(markup).toContain('no blockers')
+    expect(markup).not.toContain('Advisory')
+  })
+
+  test('renders no advisory text for an empty advisories array', () => {
+    const markup = renderToStaticMarkup(
+      <GateStateBox
+        block={makeBlock({ gateStatus: 'passed', advisories: [] })}
+      />,
+    )
+
+    expect(markup).not.toContain('Advisory')
+  })
+
   test('uses error color for failed status', () => {
     const failedMarkup = renderToStaticMarkup(
       <GateStateBox block={makeBlock({ gateStatus: 'failed' })} />,

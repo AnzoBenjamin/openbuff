@@ -3,6 +3,12 @@ import { frontendSection } from '@codebuff/common/constants/prompt-sections'
 import { formatLanguageProfilePromptForFileTree } from '@codebuff/common/util/language-profiles'
 import { formatEngineProfilePromptForFileTree } from '@codebuff/common/util/engine-profiles'
 import {
+  BROAD_AUDIT_FALLBACK_SECTIONS,
+  FALLBACK_GUIDES,
+  findMissingGuides,
+  formatGuideFallbackSection,
+} from '@codebuff/common/util/guides'
+import {
   formatPatternsIndexPrompt,
   loadPatternsIndex,
 } from '@codebuff/common/util/patterns'
@@ -29,6 +35,7 @@ import {
   getProjectFileTreePrompt,
   getSystemInfoPrompt,
 } from '../system-prompt/prompts'
+import { applyMeasure } from '../util/context-budget'
 import { parseUserMessage } from '../util/messages'
 
 import type { AgentTemplate, PlaceholderValue } from './types'
@@ -112,6 +119,49 @@ export async function formatPrompt(
         localAgentTemplates: agentTemplates,
       })
     : null
+
+  // T1.4d embedder guide fallback. base2's pointers name agents/guides/*.md
+  // paths that read_files resolves against the EMBEDDER's workspace root, and no
+  // publish pipeline ships those guides, so outside this repo the pointer read
+  // fails and the relocated section is lost. Detection has to live here
+  // (filesystem-capable, keyed on the caller's projectRoot) because the authored
+  // prompt is frozen into cli/src/agents/bundled-agents.generated.ts at CLI
+  // build time, inside this worktree, where every guide exists. Every provider
+  // returns '' in-repo so the resolved prompt stays byte-identical to today.
+  //
+  // Probed lazily and at most once per formatted prompt: the providers below run
+  // only for the placeholders the prompt actually contains, and they share this
+  // single filesystem sweep.
+  let missingGuidesCache: string[] | undefined
+  const missingGuides = (): string[] =>
+    (missingGuidesCache ??= findMissingGuides(fileContext.projectRoot))
+  // One recovered body per placeholder, so a mode that deliberately omits a
+  // pointer (plan mode omits git-discipline) cannot get that body back through
+  // recovery. base2 concatenates the placeholders with no separator, so each
+  // non-empty block carries its own trailing blank line; an absent guide's block
+  // collapses to '' and leaves no seam behind.
+  //
+  // A recovered body is the largest block this path adds (tens of KB), so record
+  // what is actually inserted in the shared ledger the way
+  // getProjectFileTreePrompt and getGitChangesPrompt do; a collapsed block
+  // records nothing.
+  const guideFallback = (guide: string, body?: string): string => {
+    const block = formatGuideFallbackSection({
+      missing: missingGuides(),
+      guide,
+      body,
+    })
+    if (block === '') return ''
+    const inserted = `${block}\n\n`
+    if (ledger) {
+      applyMeasure(ledger, {
+        category: 'systemPrompt',
+        label: `guide-fallback:${guide}`,
+        content: inserted,
+      })
+    }
+    return inserted
+  }
 
   const toInject: Record<PlaceholderValue, () => string | Promise<string>> = {
     [PLACEHOLDER.AGENT_NAME]: () =>
@@ -233,6 +283,34 @@ export async function formatPrompt(
       const index = loadPatternsIndex(fileContext.projectRoot, logger)
       return formatPatternsIndexPrompt({ index })
     },
+    [PLACEHOLDER.ON_DEMAND_GUIDE_FALLBACK_CODE_CRAFTSMANSHIP]: () =>
+      guideFallback(FALLBACK_GUIDES.codeCraftsmanship),
+    [PLACEHOLDER.ON_DEMAND_GUIDE_FALLBACK_PRE_REVIEW_SELF_CHECK]: () =>
+      guideFallback(FALLBACK_GUIDES.preReviewSelfCheck),
+    [PLACEHOLDER.ON_DEMAND_GUIDE_FALLBACK_GIT_DISCIPLINE]: () =>
+      guideFallback(FALLBACK_GUIDES.gitDiscipline),
+    [PLACEHOLDER.ON_DEMAND_GUIDE_FALLBACK_SECURITY_REVIEW]: () =>
+      guideFallback(FALLBACK_GUIDES.securityReview),
+    [PLACEHOLDER.ON_DEMAND_GUIDE_FALLBACK_SPECIALIST_ROUTING]: () =>
+      guideFallback(FALLBACK_GUIDES.specialistRouting),
+    // The broad-audit body is clause-parameterized: base2 emits the
+    // implementation-clause placeholder on the implementation/execute-plan
+    // surfaces and the plan-clause one in plan mode, so the recovered body can
+    // never contradict the finalize clause that surface's pointer emitted.
+    [PLACEHOLDER.ON_DEMAND_GUIDE_FALLBACK_BROAD_AUDIT]: () =>
+      guideFallback(
+        FALLBACK_GUIDES.broadAudit,
+        BROAD_AUDIT_FALLBACK_SECTIONS[
+          'proceed to implementation or the answer'
+        ],
+      ),
+    [PLACEHOLDER.ON_DEMAND_GUIDE_FALLBACK_BROAD_AUDIT_PLAN]: () =>
+      guideFallback(
+        FALLBACK_GUIDES.broadAudit,
+        BROAD_AUDIT_FALLBACK_SECTIONS[
+          'translate the findings into the durable plan packet below'
+        ],
+      ),
   }
 
   for (const varName of placeholderValues) {

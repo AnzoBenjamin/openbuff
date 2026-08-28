@@ -1,6 +1,7 @@
 import { HandleStepsYieldValueSchema } from '@codebuff/common/types/agent-template'
 import { selectSpecialistReviewers } from '@codebuff/common/agents/specialist-risk-router'
 import { planDiscoveryBatch } from './orchestration/discovery-coordinator'
+import { createGateTelemetryRecorder } from './orchestration/gate-telemetry-sink'
 import { transitionBase2Gate } from './orchestration/workflow-engine'
 import { getErrorObject } from '@codebuff/common/util/error'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
@@ -14,6 +15,7 @@ import {
   getSemanticCompactionBudget,
 } from './util/context-pruning'
 import { remintConfirmedPostEditAnchors } from './util/read-authorization'
+import { createWarnLatch } from './util/warn-latch'
 
 import type { FileProcessingState } from './tools/handlers/tool/write-file'
 import type { ExecuteToolCallParams } from './tools/tool-executor'
@@ -41,6 +43,15 @@ import type {
 } from '@codebuff/common/types/messages/content-part'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { AgentState } from '@codebuff/common/types/session-state'
+
+/**
+ * Cap on how many DISTINCT base2 template ids the blank-projectRoot warning
+ * latch ever tracks: template ids are caller-controlled, so this is handed to
+ * `createWarnLatch` as its `maxKeys` to keep that key space finite. Exported so
+ * the wiring test derives its loop count from the cap.
+ */
+export const MISSING_BASE2_PROJECT_ROOT_WARN_KEY_CAP = 8
+
 // Maintains generator state for all agents. Generator state can't be
 // serialized, so we store it in memory. The three pieces of per-run state
 // (the cached generator, the STEP_ALL latch, and the owner-agent-id used for
@@ -56,6 +67,13 @@ class AgentRunContextRegistry {
   // distinct agent runs (which would otherwise silently resume each other's
   // generator).
   private readonly runIdToOwnerAgentId = new Map<string, string>()
+  // Latch for the "base2 run has no projectRoot" warning (a missing root makes
+  // the gate-telemetry sink a silent no-op), keyed by template id so a second,
+  // differently-misconfigured base2 variant stays diagnosable. Registry-owned
+  // so `clearAll` doubles as its re-arm hook.
+  private readonly missingBase2ProjectRootWarnLatch = createWarnLatch({
+    maxKeys: MISSING_BASE2_PROJECT_ROOT_WARN_KEY_CAP,
+  })
 
   getGenerator(runId: string): StepGenerator | undefined {
     return this.runIdToGenerator[runId]
@@ -68,10 +86,6 @@ class AgentRunContextRegistry {
   ): void {
     this.runIdToGenerator[runId] = generator
     this.runIdToOwnerAgentId.set(runId, ownerAgentId)
-  }
-
-  deleteGenerator(runId: string): void {
-    delete this.runIdToGenerator[runId]
   }
 
   getOwnerAgentId(runId: string): string | undefined {
@@ -90,6 +104,15 @@ class AgentRunContextRegistry {
     this.runIdToStepAll.delete(runId)
   }
 
+  /**
+   * True the first time `templateId` is seen without a projectRoot, then false
+   * until `clearAll` re-arms it — and false once
+   * `MISSING_BASE2_PROJECT_ROOT_WARN_KEY_CAP` distinct ids have warned.
+   */
+  shouldWarnMissingBase2ProjectRoot(templateId: string): boolean {
+    return this.missingBase2ProjectRootWarnLatch.shouldWarn(templateId)
+  }
+
   /** Per-run teardown: drop the generator, STEP_ALL latch, and owner mapping. */
   clearRun(runId: string): void {
     delete this.runIdToGenerator[runId]
@@ -104,13 +127,19 @@ class AgentRunContextRegistry {
     }
     this.runIdToStepAll.clear()
     this.runIdToOwnerAgentId.clear()
+    this.missingBase2ProjectRootWarnLatch.clear()
   }
 }
 
 const agentRunContextRegistry = new AgentRunContextRegistry()
 
-// Function to clear the generator cache for testing purposes
-export function clearAgentGeneratorCache(params: { logger: Logger }) {
+// Function to clear the generator cache for testing purposes. Also re-arms the
+// per-template-id "base2 run has no projectRoot" warning latch, so tests
+// asserting on that warning do not depend on execution order.
+//
+// Takes no arguments: the reset logs nothing, so the signature advertises no
+// logger it would ignore.
+export function clearAgentGeneratorCache() {
   agentRunContextRegistry.clearAll()
 }
 
@@ -214,6 +243,7 @@ export async function runProgrammaticStep(
     repoId: _repoId,
     fingerprintId: _fingerprintId,
     onResponseChunk,
+    fileContext,
     localAgentTemplates: _localAgentTemplates,
     stepsComplete,
     hitStepCap,
@@ -256,6 +286,14 @@ export async function runProgrammaticStep(
       )
     }
   }
+
+  // Single hoisted project root for this run: bound into the base2
+  // gate-telemetry sink below and reused when reminting confirmed post-edit
+  // anchors.
+  // `fileContext` is declared on the param type, but keep the optional chain:
+  // a caller that omits it must still degrade to a disabled sink rather than
+  // throw here.
+  const projectRoot = fileContext?.projectRoot ?? ''
 
   // Check if we need to initialize a generator
   if (!generator) {
@@ -326,6 +364,21 @@ export async function runProgrammaticStep(
         : modelMessageLimit === undefined
           ? requestedContextLimit
           : Math.min(requestedContextLimit, modelMessageLimit)
+    // Hoisted so the blank-root warning and the control-plane injection below
+    // can never diverge on what counts as a base2 run.
+    const isBase2 = template.id.startsWith('base2')
+    // The latch check is last, so only an actual blank-root base2 run consumes
+    // the warning for this template id.
+    if (
+      !projectRoot &&
+      isBase2 &&
+      agentRunContextRegistry.shouldWarnMissingBase2ProjectRoot(template.id)
+    ) {
+      logger.warn(
+        { template: template.id, runId: agentState.runId },
+        `No fileContext.projectRoot for a base2 run: gate telemetry sink disabled, so no gate telemetry will be recorded. Warning once per base2 template id per process, for at most ${MISSING_BASE2_PROJECT_ROOT_WARN_KEY_CAP} ids.`,
+      )
+    }
     const generatorParams =
       template.id === 'context-pruner'
         ? {
@@ -339,13 +392,30 @@ export async function runProgrammaticStep(
             taskMemory: agentState.taskMemory,
             workspaceState: agentState.workspaceState,
           }
-        : template.id.startsWith('base2')
+        : isBase2
           ? {
               ...(toolCallParams ?? {}),
               orchestrationControlPlane: {
                 selectSpecialistReviewers,
                 planDiscoveryBatch,
                 transitionBase2Gate,
+                // Durable JSONL sink for base2's gate telemetry. Injected here
+                // because handleSteps is serialized and cannot import it. The
+                // key is dropped entirely without a projectRoot — base2
+                // type-guards the field — so the disabled case the warning
+                // above reports is explicit instead of a recorder whose every
+                // append is a no-op.
+                // Deliberately the raw backend `logger`, not `streamingLogger`:
+                // a sink failure is a backend filesystem diagnostic, not
+                // generator output, so it is not streamed to the client log.
+                ...(projectRoot
+                  ? {
+                      recordGateTelemetry: createGateTelemetryRecorder({
+                        projectRoot,
+                        logger,
+                      }),
+                    }
+                  : {}),
               },
             }
           : toolCallParams
@@ -402,11 +472,13 @@ export async function runProgrammaticStep(
     readAuthorizationHashesByPath: {
       ...(agentState.readAuthorizationHashesByPath ?? {}),
     },
+    // `projectRoot` is '' only when the caller omitted `fileContext`, and that
+    // fails closed rather than widening anchor scoping: an empty projectId
+    // makes `hasAuthoritativeReadCapabilityScope` reject every scope, so each
+    // stored anchor is dropped instead of being reminted under a looser scope.
     confirmedPostEditAnchorsByPath: remintConfirmedPostEditAnchors({
       anchors: agentState.confirmedPostEditAnchorsByPath,
-      projectId:
-        (params as { fileContext?: { projectRoot?: string } }).fileContext
-          ?.projectRoot ?? '',
+      projectId: projectRoot,
       runId: agentState.runId ?? '',
     }),
     editRereadRequirementsByPath: {

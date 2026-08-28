@@ -119,7 +119,7 @@ describe('n parameter and GENERATE_N functionality', () => {
 
   afterEach(() => {
     mock.restore()
-    clearAgentGeneratorCache({ logger })
+    clearAgentGeneratorCache()
   })
 
   describe('runAgentStep with n parameter', () => {
@@ -259,7 +259,7 @@ describe('n parameter and GENERATE_N functionality', () => {
         expect(result.generateN).toBe(nValue)
 
         // Clear the generator cache between iterations
-        clearAgentGeneratorCache({ logger })
+        clearAgentGeneratorCache()
       }
     })
 

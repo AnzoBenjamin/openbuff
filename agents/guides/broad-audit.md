@@ -1,4 +1,4 @@
-## Broad audit / exploration requests — scope first, then shard
+# Broad audit / exploration requests — scope first, then shard
 
 For broad, open-ended, or audit-style requests (for example: "check this codebase for any feature improvements", "audit the codebase for security/correctness/perf issues", "assess this codebase for how production ready it is on a feature, security and code level", "find all the places X is handled", "what can be improved in the agents/sdk/cli", or anything where the relevant surface is not already obvious), do NOT default to a single surface-level codesearch or one or two file reads. Instead, run a deliberate scope-then-shard flow:
 

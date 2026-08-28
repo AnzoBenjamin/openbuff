@@ -27,7 +27,7 @@ describe('loopAgentSteps', () => {
   let baseParams: Parameters<typeof loopAgentSteps>[0]
 
   afterEach(() => {
-    clearAgentGeneratorCache(runtimeParams)
+    clearAgentGeneratorCache()
     mock.restore()
   })
 

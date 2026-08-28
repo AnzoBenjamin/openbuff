@@ -1987,6 +1987,247 @@ describe('parseGateStateBlock', () => {
     expect(parseGateStateBlock('<gate-state>gate: ci</gate-state>')).toBeNull()
   })
 
+  test('parses the JSON payload form emitted by base2', () => {
+    const buffer =
+      '<gate-state>{"gate":"validation/reviewer","status":"passed","details":"2 findings resolved"}</gate-state>'
+    expect(parseGateStateBlock(buffer)).toEqual({
+      type: 'gate-state',
+      gate: 'validation/reviewer',
+      gateStatus: 'passed',
+      details: '2 findings resolved',
+      origin: 'Base2',
+    })
+  })
+
+  test('parses advisories and an explicit origin from the JSON payload form', () => {
+    const buffer = [
+      '<gate-state>',
+      JSON.stringify({
+        gate: 'validation/reviewer',
+        status: 'passed',
+        details: 'no blockers',
+        origin: 'Promotion',
+        advisories: ['consider a regression test', 'naming nit in helper'],
+      }),
+      '</gate-state>',
+    ].join('\n')
+    expect(parseGateStateBlock(buffer)).toEqual({
+      type: 'gate-state',
+      gate: 'validation/reviewer',
+      gateStatus: 'passed',
+      details: 'no blockers',
+      advisories: ['consider a regression test', 'naming nit in helper'],
+      origin: 'Promotion',
+    })
+  })
+
+  test('returns null for a JSON payload with an unrecognized status', () => {
+    const buffer =
+      '<gate-state>{"gate":"validation/reviewer","status":"maybe"}</gate-state>'
+    expect(parseGateStateBlock(buffer)).toBeNull()
+  })
+
+  test('drops advisories that are not an array of non-empty strings', () => {
+    const notAnArray =
+      '<gate-state>{"gate":"ci","status":"passed","advisories":"one advisory"}</gate-state>'
+    expect(parseGateStateBlock(notAnArray)).toEqual({
+      type: 'gate-state',
+      gate: 'ci',
+      gateStatus: 'passed',
+      origin: 'Base2',
+    })
+
+    const mixedEntries =
+      '<gate-state>{"gate":"ci","status":"passed","advisories":["ok",42,"  "]}</gate-state>'
+    expect(parseGateStateBlock(mixedEntries)).toEqual({
+      type: 'gate-state',
+      gate: 'ci',
+      gateStatus: 'passed',
+      origin: 'Base2',
+    })
+
+    const emptyArray =
+      '<gate-state>{"gate":"ci","status":"passed","advisories":[]}</gate-state>'
+    expect(parseGateStateBlock(emptyArray)).toEqual({
+      type: 'gate-state',
+      gate: 'ci',
+      gateStatus: 'passed',
+      origin: 'Base2',
+    })
+
+    // Producer bound (base2's formatGateStateBlock caps at 8 entries / 240
+    // chars): an over-cap payload from non-base2 or malformed assistant text
+    // must not render an unbounded advisory list.
+    const overCapCount = `<gate-state>${JSON.stringify({
+      gate: 'ci',
+      status: 'passed',
+      advisories: Array.from({ length: 9 }, (_, index) => `advisory ${index}`),
+    })}</gate-state>`
+    expect(parseGateStateBlock(overCapCount)).toEqual({
+      type: 'gate-state',
+      gate: 'ci',
+      gateStatus: 'passed',
+      origin: 'Base2',
+    })
+
+    const overCapEntryLength = `<gate-state>${JSON.stringify({
+      gate: 'ci',
+      status: 'passed',
+      advisories: ['a'.repeat(241)],
+    })}</gate-state>`
+    expect(parseGateStateBlock(overCapEntryLength)).toEqual({
+      type: 'gate-state',
+      gate: 'ci',
+      gateStatus: 'passed',
+      origin: 'Base2',
+    })
+  })
+
+  test('keeps advisories exactly at the producer cap', () => {
+    const advisories = [
+      ...Array.from({ length: 7 }, (_, index) => `advisory ${index}`),
+      'b'.repeat(240),
+    ]
+    const buffer = `<gate-state>${JSON.stringify({
+      gate: 'ci',
+      status: 'passed',
+      advisories,
+    })}</gate-state>`
+    expect(parseGateStateBlock(buffer)).toEqual({
+      type: 'gate-state',
+      gate: 'ci',
+      gateStatus: 'passed',
+      advisories,
+      origin: 'Base2',
+    })
+  })
+
+  // Parse-side mirror of base2's producer strip: a non-base2 or hand-authored
+  // payload cannot smuggle ANSI escapes / NUL / DEL into the renderer.
+  test('strips control characters from JSON-payload details and advisories', () => {
+    const controlChars = /[\u0000-\u001f\u007f]/
+    const buffer = `<gate-state>${JSON.stringify({
+      gate: 'validation/reviewer',
+      status: 'passed',
+      details: 'reviewer \u001b[31mdetails\u0000 text\u007f',
+      advisories: ['advisory \u001b[31mone\u0000\u007f', 'plain advisory'],
+    })}</gate-state>`
+
+    const parsed = parseGateStateBlock(buffer)
+    expect(parsed).toEqual({
+      type: 'gate-state',
+      gate: 'validation/reviewer',
+      gateStatus: 'passed',
+      details: 'reviewer [31mdetails text',
+      advisories: ['advisory [31mone', 'plain advisory'],
+      origin: 'Base2',
+    })
+    expect(controlChars.test(parsed!.details!)).toBe(false)
+    for (const advisory of parsed!.advisories ?? []) {
+      expect(controlChars.test(advisory)).toBe(false)
+    }
+  })
+
+  test('drops the whole advisory list when an entry is only control characters', () => {
+    const buffer = `<gate-state>${JSON.stringify({
+      gate: 'ci',
+      status: 'passed',
+      details: 'ok',
+      advisories: ['real advisory', '\u0000\u001b\u007f'],
+    })}</gate-state>`
+
+    // Sanitization runs before the non-empty check, so the controls-only entry
+    // becomes empty and the existing strictness rule drops the list.
+    expect(parseGateStateBlock(buffer)).toEqual({
+      type: 'gate-state',
+      gate: 'ci',
+      gateStatus: 'passed',
+      details: 'ok',
+      origin: 'Base2',
+    })
+  })
+
+  // Delimiter safety: the producer escapes `</` as `<\/` (a legal JSON string
+  // escape) before emitting, so reviewer-authored details/advisories carrying a
+  // literal `</gate-state>` round-trip here instead of truncating the block.
+  test('recovers payload text containing an escaped closing delimiter', () => {
+    const payload = JSON.stringify({
+      gate: 'validation/reviewer',
+      status: 'passed',
+      details: 'reviewer quoted </gate-state> in details',
+      advisories: ['advisory quoting </gate-state> from the persisted format'],
+    }).replace(/<\//g, '<\\/')
+    const buffer = `<gate-state>${payload}</gate-state>`
+
+    // Only the real terminator remains in the emitted bytes.
+    expect(buffer.split('</gate-state>')).toHaveLength(2)
+    expect(parseGateStateBlock(buffer)).toEqual({
+      type: 'gate-state',
+      gate: 'validation/reviewer',
+      gateStatus: 'passed',
+      details: 'reviewer quoted </gate-state> in details',
+      advisories: ['advisory quoting </gate-state> from the persisted format'],
+      origin: 'Base2',
+    })
+    // The block is still fully scrubbed from the prose stream.
+    expect(scrubGateStateTags(buffer).trim()).toBe('')
+  })
+
+  test('stays strict for an unescaped closing delimiter inside the payload', () => {
+    const buffer =
+      '<gate-state>{"gate":"ci","status":"passed","details":"raw </gate-state> leak"}</gate-state>'
+    // The truncated inner text is neither valid JSON nor the legacy line form,
+    // so the block fails closed rather than being recovered by a looser match.
+    expect(parseGateStateBlock(buffer)).toBeNull()
+  })
+
+  test('still parses the key: value line form alongside the JSON form', () => {
+    const lineForm = [
+      '<gate-state>',
+      'gate: ci',
+      'status: failed',
+      'details: typecheck exit 1',
+      '</gate-state>',
+    ].join('\n')
+    expect(parseGateStateBlock(lineForm)).toEqual({
+      type: 'gate-state',
+      gate: 'ci',
+      gateStatus: 'failed',
+      details: 'typecheck exit 1',
+      origin: 'Base2',
+    })
+
+    const jsonForm =
+      '<gate-state>{"gate":"ci","status":"failed","details":"typecheck exit 1"}</gate-state>'
+    expect(parseGateStateBlock(jsonForm)).toEqual(parseGateStateBlock(lineForm))
+  })
+
+  // Parse contract: advisories are a JSON-payload-only field. The legacy line
+  // form never carried them, so an `advisories:` line stays an ordinary
+  // unrecognized key rather than becoming a structured advisory list.
+  test('does not read advisories from the legacy line form', () => {
+    const buffer = [
+      '<gate-state>',
+      'gate: ci',
+      'status: passed',
+      'advisories: one, two',
+      '</gate-state>',
+    ].join('\n')
+    expect(parseGateStateBlock(buffer)).toEqual({
+      type: 'gate-state',
+      gate: 'ci',
+      gateStatus: 'passed',
+      origin: 'Base2',
+    })
+  })
+
+  test('returns null for JSON that is not a gate-state object', () => {
+    expect(
+      parseGateStateBlock('<gate-state>["gate","status"]</gate-state>'),
+    ).toBeNull()
+    expect(parseGateStateBlock('<gate-state>"passed"</gate-state>')).toBeNull()
+  })
+
   test('scrubGateStateTags removes the pinned block and collapses blank runs', () => {
     const buffer = [
       'Hello.',

@@ -599,14 +599,18 @@ of scope for those reviewers, including duties such as:
 - similar "parent must" / operator-only process steps
 
 Canonical helpers live in `agents/base2/gate-reviewer.ts`
-(`isParentOwnedOrOutOfScopeRequirement`, `isParentOwnedRequirementBlocker`,
+(`isParentOwnedOrOutOfScopeRequirement`,
+`collectParentOwnedRequirementBlockers`,
 `buildSpecialistScopedReviewPrompt`, etc.). They skip elevating parent-owned
 missing/uncertain rows to review-finding blockers and still allow `LOOKS_GOOD`
 finalization when dimensions and behavior coverage pass. Call-site parent-owned
-filters pass the reviewer `toolResult` into `isParentOwnedRequirementBlocker` so
-structured `requirementCoverage` evidence is consulted the same way as
+filters call `collectParentOwnedRequirementBlockers(blockers, toolResult)`,
+which returns the subset of blockers that are parent-owned only, so structured
+`requirementCoverage` evidence is consulted the same way as
 `getReviewerFinalizationVerdict` (a gap that is parent-owned only via evidence
-must not finalize while still spawning `repair-editor`). Specialists receive a
+must not finalize while still spawning `repair-editor`). When several structured
+rows share the same `status` + requirement text, an in-scope row wins over a
+parent-owned one, matching the finalization verdict. Specialists receive a
 scoped spawn brief (`Requirements (specialist-domain only)`), not the raw user
 prompt as a checklist; parent process wording may appear only under non-blocking
 parent context. Defense in depth: pure parent-owned RF sets with `LOOKS_GOOD` do

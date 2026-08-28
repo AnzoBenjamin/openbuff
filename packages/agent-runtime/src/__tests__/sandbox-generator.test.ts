@@ -27,7 +27,7 @@ describe('QuickJS Sandbox Generator', () => {
   beforeEach(() => {
     agentRuntimeImpl = { ...TEST_AGENT_RUNTIME_IMPL, sendAction: () => {} }
 
-    clearAgentGeneratorCache(agentRuntimeImpl)
+    clearAgentGeneratorCache()
 
     // Mock dependencies
     spyOn(crypto, 'randomUUID').mockImplementation(
@@ -94,7 +94,7 @@ describe('QuickJS Sandbox Generator', () => {
   })
 
   afterEach(() => {
-    clearAgentGeneratorCache(agentRuntimeImpl)
+    clearAgentGeneratorCache()
   })
 
   test('should execute string-based generator in QuickJS sandbox', async () => {

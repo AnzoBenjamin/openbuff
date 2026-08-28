@@ -258,7 +258,7 @@ describe('runAgentStep - set_output tool', () => {
     agentRuntimeImpl.promptAiSdk = async function () {
       return promptSuccess('Test response')
     }
-    clearAgentGeneratorCache(agentRuntimeImpl)
+    clearAgentGeneratorCache()
 
     runAgentStepBaseParams = {
       ...agentRuntimeImpl,
@@ -286,7 +286,7 @@ describe('runAgentStep - set_output tool', () => {
   })
 
   afterAll(() => {
-    clearAgentGeneratorCache(agentRuntimeImpl)
+    clearAgentGeneratorCache()
   })
 
   const mockFileContext: ProjectFileContext = {
@@ -715,7 +715,9 @@ describe('runAgentStep - set_output tool', () => {
         (chunk as Record<string, unknown>).toolName === 'spawn_agents',
     ) as Record<string, unknown> | undefined
     expect(spawnCall).toBeDefined()
-    const spawnInput = spawnCall?.input as { agents: Array<{ agent_type: string }> }
+    const spawnInput = spawnCall?.input as {
+      agents: Array<{ agent_type: string }>
+    }
     expect(spawnInput.agents).toHaveLength(1)
     expect(spawnInput.agents[0]?.agent_type).toBe('test-helper-agent')
   })
@@ -799,7 +801,11 @@ describe('runAgentStep - set_output tool', () => {
     ) as Record<string, unknown> | undefined
     expect(spawnCall).toBeDefined()
     expect(
-      (spawnCall?.input as { agents: Array<{ agent_type: string; prompt: string }> }).agents,
+      (
+        spawnCall?.input as {
+          agents: Array<{ agent_type: string; prompt: string }>
+        }
+      ).agents,
     ).toEqual([{ agent_type: 'test-helper-agent', prompt: 'Do helper work' }])
   })
 
@@ -881,7 +887,11 @@ describe('runAgentStep - set_output tool', () => {
       ) as Record<string, unknown> | undefined
       expect(spawnCall).toBeDefined()
       expect(
-        (spawnCall?.input as { agents: Array<{ agent_type: string; prompt: string }> }).agents,
+        (
+          spawnCall?.input as {
+            agents: Array<{ agent_type: string; prompt: string }>
+          }
+        ).agents,
       ).toEqual([{ agent_type: 'test-helper-agent', prompt: 'Keep helping' }])
     }
   })
@@ -1486,9 +1496,7 @@ describe('runAgentStep - set_output tool', () => {
     expect(spawnCall).toBeDefined()
     expect(
       (spawnCall?.input as { agents: Array<{ agent_type: string }> }).agents,
-    ).toEqual([
-      expect.objectContaining({ agent_type: 'git-committer' }),
-    ])
+    ).toEqual([expect.objectContaining({ agent_type: 'git-committer' })])
   })
 
   it('blocks git-committer when an alias-form owned_path resolves to an uncommitted-unvalidated file', async () => {
@@ -1617,7 +1625,10 @@ describe('runAgentStep - set_output tool', () => {
     // Non-empty raw list, but every entry is uncanonicalizable and drops out:
     // a '..'-traversal alias and an absolute-outside-cwd path both normalize
     // to '' -> dirtyFiles is empty while the raw list length is 2.
-    agentState.uncommittedUnvalidatedFiles = ['src/../../escape.ts', '/etc/passwd']
+    agentState.uncommittedUnvalidatedFiles = [
+      'src/../../escape.ts',
+      '/etc/passwd',
+    ]
     const committerAgent: AgentTemplate = {
       ...testAgent,
       id: 'test-committer-agent',
@@ -1658,9 +1669,11 @@ describe('runAgentStep - set_output tool', () => {
     }
     // Spy on the logger threaded into executeToolCall so we can assert the
     // soft payload-size warning fires for the oversized entry only.
-    const baseLogger = (runAgentStepBaseParams as unknown as {
-      logger: { warn: (...args: unknown[]) => void }
-    }).logger
+    const baseLogger = (
+      runAgentStepBaseParams as unknown as {
+        logger: { warn: (...args: unknown[]) => void }
+      }
+    ).logger
     const warnSpy = spyOn(baseLogger, 'warn').mockImplementation(() => {})
 
     const helperAgent: AgentTemplate = {

@@ -149,6 +149,20 @@ export type GateStateContentBlock = {
   details?: string
   /** Optional human label for the gate origin (e.g. "Base2"). */
   origin?: string
+  /**
+   * Non-blocking reviewer observations reported alongside the gate result.
+   * Advisories never change the gate status: they are surfaced for awareness
+   * only. Omitted when the producer reported none.
+   *
+   * Bounded by contract: base2's `formatGateStateBlock` emits at most 8 entries
+   * of at most 240 characters each, and the CLI parser
+   * (`parseGateStateAdvisories`) enforces the same bounds, dropping the whole
+   * list when arbitrary assistant text exceeds them. Entries are stored
+   * verbatim and may legitimately contain the literal `</gate-state>` text: the
+   * producer escapes `</` as `<\/` (a legal JSON string escape) so payload text
+   * cannot terminate the tag-delimited block early.
+   */
+  advisories?: string[]
 }
 
 export type CompletionSummaryContentBlock = {
@@ -444,11 +458,15 @@ export function isCompletionSummaryBlock(
   return block.type === 'completion-summary'
 }
 
-export function isMemoryBlock(block: ContentBlock): block is MemoryContentBlock {
+export function isMemoryBlock(
+  block: ContentBlock,
+): block is MemoryContentBlock {
   return block.type === 'memory'
 }
 
-export function isContextBlock(block: ContentBlock): block is ContextContentBlock {
+export function isContextBlock(
+  block: ContentBlock,
+): block is ContextContentBlock {
   return block.type === 'context'
 }
 
@@ -456,14 +474,20 @@ export function isInfoBlock(block: ContentBlock): block is InfoContentBlock {
   return block.type === 'info'
 }
 
-export function isDoctorBlock(block: ContentBlock): block is DoctorContentBlock {
+export function isDoctorBlock(
+  block: ContentBlock,
+): block is DoctorContentBlock {
   return block.type === 'doctor'
 }
 
-export function isIndexStatusBlock(block: ContentBlock): block is IndexStatusContentBlock {
+export function isIndexStatusBlock(
+  block: ContentBlock,
+): block is IndexStatusContentBlock {
   return block.type === 'index-status'
 }
 
-export function isPlanStatusBlock(block: ContentBlock): block is PlanStatusContentBlock {
+export function isPlanStatusBlock(
+  block: ContentBlock,
+): block is PlanStatusContentBlock {
   return block.type === 'plan-status' || block.type === 'plan-status-list'
 }

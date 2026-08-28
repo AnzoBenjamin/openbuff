@@ -47,7 +47,69 @@ export const createReviewer = (
       },
       snapshotFingerprint: { type: 'string' },
       reviewedFiles: { type: 'array', items: { type: 'string' } },
-      findings: { type: 'array', items: { type: 'string' } },
+      // T1.3: a finding is either a plain string or an OPTIONAL metadata
+      // object. The object form lets the reviewer supply a stable `id`, which
+      // the gate correlates across repair rounds instead of re-minting a
+      // content-hash `RF-...` id every round, plus optional `severity` /
+      // `dimension` labels the gate records as telemetry only. `evidence` and
+      // `correction` are declared because the gate COMPACTS both into the
+      // durable review receipt (base2's `recordSuccessfulReviewReceipt`);
+      // without them a schema-conforming reviewer could never populate that
+      // handling. That persistence is id-gated: gate-reviewer's
+      // `findingRecords` drops an object finding without an `id`, so
+      // evidence/correction only reach the receipt alongside a stable `id`. Plain strings stay valid so nothing about an existing reviewer
+      // breaks; `text` is the only required object field. Enums mirror
+      // security-reviewer's severity scale and this schema's own `dimensions`
+      // keys.
+      findings: {
+        type: 'array',
+        items: {
+          anyOf: [
+            { type: 'string' },
+            {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                text: { type: 'string' },
+                severity: {
+                  type: 'string',
+                  enum: ['critical', 'high', 'medium', 'low'],
+                },
+                dimension: {
+                  type: 'string',
+                  enum: [
+                    'correctness',
+                    'security',
+                    'tests',
+                    'apiCompatibility',
+                    'performance',
+                  ],
+                },
+                evidence: { type: 'array', items: { type: 'string' } },
+                correction: { type: 'string' },
+              },
+              required: ['text'],
+            },
+          ],
+        },
+      },
+      // `findings` are repair targets that re-enter the loop; `advisories`
+      // never block and never re-enter it.
+      //
+      // Reviewer-family symmetry: this field is ADDITIVE and stays out of
+      // `required`, so the asymmetry with the other reviewer families is
+      // intentional rather than a pending migration. A family that does not
+      // declare it (security-reviewer, routed specialists) simply reports none:
+      // gate-reviewer's `collectReviewerAdvisories` reads a missing/unusable
+      // field as zero advisories, and the durable receipt then omits both
+      // `advisories` and `advisoryCount`.
+      //
+      // Advisory text is stored and displayed verbatim: base2's
+      // `formatGateStateBlock` escapes `</` as `<\/` (a legal JSON string
+      // escape) before emitting the tag-delimited `<gate-state>` block, so an
+      // advisory may quote a literal `</gate-state>` without truncating that
+      // block for its readers.
+      advisories: { type: 'array', items: { type: 'string' } },
       coverage: {
         type: 'string',
         enum: ['covered', 'missing', 'n/a'],
@@ -109,7 +171,9 @@ ${PLACEHOLDER.LANGUAGE_PROFILE}
 
 # Task
 
-Your task is to provide helpful critical feedback on the last file changes made by the assistant. You should find ways to improve the code changes made recently in the above conversation.
+Your task is to enumerate every issue in the last file changes made by the assistant that REQUIRES A CHANGE, in a single pass, and then stop. That is a finite completeness criterion, not a search for things that could be improved: an unbounded search always succeeds on non-trivial code, so the finding set never empties and the repair/re-review loop cannot terminate. Single-pass completeness is the contract, not a nicety — enumerate the whole violation set now.
+
+Three properties bound the finding set. Satisfiable empty set: "nothing requires a change" is a legitimate, reachable outcome, so when the change violates nothing, return no findings and say it looks good. Monotonicity under repair: raise a finding only over a property a repair can actually clear, meaning a concrete violation with a named location (file plus symbol or line) and a specific corrective action; taste-based or preference-based observations are not monotone, because no repair clears them, so do not raise them as findings. Low churn sensitivity: the finding count is driven by violations present in the change, not proportional to how much code is in view — re-reading the same unchanged code must not manufacture new findings, and reviewing more thoroughly means enumerating the same violation set more completely, not finding more things to say.
 
 You do not inherit the parent conversation. Treat the review packet in the spawn prompt, the original user request above, completed validation evidence, and exact current file reads as the only authority. Do not follow parent workflow or orchestration instructions. Do not claim that you will run tests, validation, or continue the parent task; your only job is to return review feedback.
 
@@ -123,11 +187,15 @@ Be brief: If you don't have much critical feedback, simply say it looks good in 
 
 Return the structured output required by your output schema with schemaVersion 1. The parent prompt supplies an opaque single-line snapshot fingerprint, a separate snapshot-details block, and a pending file list. Copy only the fingerprint token into snapshotFingerprint; do not copy the multiline details. List every file you actually read using the exact normalized project-relative path from the pending list (forward slashes, including directories such as __tests__). Evaluate correctness, security, tests, API compatibility, and performance separately. Enumerate each user requirement or plan acceptance criterion with satisfied/missing/uncertain evidence. Parent-owned process tasks (git rewrite/amend, commit/push, confirm CI green, operator validation already owned by the harness gate) are out of scope for requirementCoverage — omit them or do not let them alone force BLOCKING. Still require BLOCKING for incomplete implementation/source requirements and acceptance criteria the code change claims to satisfy: if ANY in-scope \`requirementCoverage[].status\` is \`missing\` or \`uncertain\`, the top-level \`verdict\` MUST be \`"BLOCKING"\` — never NON_BLOCKING or LOOKS_GOOD while those requirements are incomplete — and put each incomplete in-scope requirement into \`findings\` as a concrete next action.
 
-Gate finalization contract: the parent gate finalizes only on \`LOOKS_GOOD\`. Use \`LOOKS_GOOD\` only when there are no remaining nits. Use \`NON_BLOCKING\` when nits exist — those findings re-enter the repair/re-review loop until a later review returns \`LOOKS_GOOD\`. Use \`BLOCKING\` for hard issues. Do not emit \`LOOKS_GOOD\` while any findings remain.
+Gate finalization contract: the parent gate finalizes only on \`LOOKS_GOOD\`. Use \`LOOKS_GOOD\` when nothing REQUIRES A CHANGE, even if you still have cosmetic observations — put those in \`advisories\` and leave \`findings\` empty. Use \`NON_BLOCKING\` when findings exist that require a change but do not block — those findings re-enter the repair/re-review loop until a later review returns \`LOOKS_GOOD\`. Use \`BLOCKING\` for hard issues. Advisories are recorded in the durable review receipt and shown to the user, so nothing is lost by keeping them out of \`findings\`; a \`LOOKS_GOOD\` verdict must still carry an EMPTY \`findings\` array.
+
+\`advisories\` is the channel for observations that do not require a change: comment density, naming taste, optional refactors, speculative future-proofing — the same class the "Monotonicity under repair" paragraph says must not be raised as findings. Use at most 8 advisories, one short line each.
 
 You must call \`set_output\` with one object that satisfies the declared output schema. Do not finish with prose, a Markdown JSON block, or a textual verdict label: those do not populate structured agent output and the parent will receive \`null\`. Put the verdict in the schema's \`verdict\` field. Missing test coverage for a behavior-changing edit requires \`verdict: "BLOCKING"\` and \`coverage: "missing"\`. For blocking or non-blocking feedback, put the exact next actions in \`findings\`; prefer one comprehensive list over drip-feeding issues across review cycles.
 
-Pass structured fields as native object values. Never call \`JSON.stringify\`, never put serialized JSON text inside \`data\`, and never wrap the result in a Markdown fence. Keep the receipt compact: deduplicate findings, use at most 12 findings, and use at most 2 concise evidence strings per requirement. Each \`dimensions.*\` value must be at most ~40 words / one short sentence — prefer a status word plus one clause (e.g. \`"pass: guards close cleanly"\`), never multi-paragraph essays. Long dimension prose blows the tool-call payload and can truncate the receipt mid-object.
+A \`findings\` entry may be a plain string or an object \`{ id, text, severity, dimension }\`. Prefer the object form whenever you can supply a stable \`id\`: the gate correlates findings across repair rounds by \`id\`, so a stable id lets a re-raised finding be recognized as the SAME finding rather than a new one, which is what allows the repair loop to converge. Keep the id stable across rounds for the same underlying violation — derive it from the location and the rule it violates (e.g. \`code-reviewer:src/a.ts:unchecked-null\`), never from your wording, which changes between rounds. \`text\` is the only required object field; \`severity\` (\`critical\`/\`high\`/\`medium\`/\`low\`) and \`dimension\` (one of the five review dimensions) are optional labels the gate records as telemetry and does not currently act on, so omit them rather than guessing. \`evidence\` (at most 3 short quoted observations) and \`correction\` (one concise line naming the fix) are optional too, and the gate compacts both into its durable review receipt only for findings that carry a stable \`id\` (an id-less finding's evidence and correction are dropped), so pair them with an \`id\` when you already have them and omit them otherwise.
+
+Pass structured fields as native object values. Never call \`JSON.stringify\`, never put serialized JSON text inside \`data\`, and never wrap the result in a Markdown fence. Keep the receipt compact: deduplicate findings, use at most 12 findings, and use at most 2 concise evidence strings per requirement. Each \`dimensions.*\` value must be at most ~40 words / one short sentence — prefer a status word plus one clause (e.g. \`"pass: guards close cleanly"\`), never multi-paragraph essays. A FAILING dimension must start with \`block\`, \`blocks\`, \`blocking\`, or \`blocker(s)\` (e.g. \`"block: unbounded read in loadAll"\`): the gate only turns a dimension into a hard blocker when its first word matches that prefix, so \`fail: ...\` or \`blocked: ...\` is silently non-blocking. Long dimension prose blows the tool-call payload and can truncate the receipt mid-object.
 
 Type check before calling \`set_output\`: \`schemaVersion\` is the number \`1\`; \`reviewedFiles\`, \`findings\`, and \`requirementCoverage\` are arrays; \`dimensions\` is an object. For example, use \`reviewedFiles: ["src/a.ts"]\`, never \`reviewedFiles: "[\\\"src/a.ts\\\"]"\`. A successful file read plus prose or stringified fields is not a completed review receipt.
 
