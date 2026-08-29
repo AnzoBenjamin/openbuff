@@ -294,8 +294,9 @@ export const handleReadFiles = (async (
         result.complete &&
         typeof result.content === 'string'
       ) {
-        const totalLines = normalizeLineEndings(result.content).split('\n')
-          .length
+        const totalLines = normalizeLineEndings(result.content).split(
+          '\n',
+        ).length
         return {
           complete: true,
           startLine: 1,

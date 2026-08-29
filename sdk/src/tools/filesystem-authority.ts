@@ -683,7 +683,8 @@ export class FilesystemAuthority {
     resolved: ResolvedOperationPath,
     operation: FilesystemOperationKind,
   ): { allowed: false; code: string } | undefined {
-    if (resolved.scope !== 'owned-temp' || operation === 'read') return undefined
+    if (resolved.scope !== 'owned-temp' || operation === 'read')
+      return undefined
     const basename = path.basename(resolved.operationPath)
     if (BACKGROUND_JOB_FILE_PATTERN.test(basename)) {
       return { allowed: false, code: 'owned_temp_job_artifact_read_only' }

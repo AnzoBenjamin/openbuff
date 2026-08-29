@@ -1,9 +1,14 @@
 import {
   decodeReadCapabilityToken,
   getContentHash,
-  normalizeLineEndings,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
+import {
+  describeLineBounds,
+  getLineCoordinates,
+  getRangeSlice,
+  isWholeFileCoveringRange,
+} from '@codebuff/common/util/line-coordinates'
 import {
   MAX_FILE_CHANGES_PER_TRANSACTION,
   MAX_TRANSACTION_FILE_BYTES,
@@ -492,14 +497,25 @@ export const handleEditTransaction = (async (
         error: `write_file basedOnRead for ${path} belongs to a different project, path, or agent run. Re-read the whole file and pass the fresh capability.`,
       }
     }
-    const lineCount = normalizeLineEndings(content).split('\n').length
-    if (decoded.startLine !== 1 || decoded.endLine !== lineCount) {
+    // A full-file RANGE read numbers lines in visible space and hashes the slice
+    // without the trailing newline, while a whole-file paths read binds the
+    // capability ceiling. Both are complete observations, so accept either and
+    // re-hash exactly the slice the capability covered.
+    const coordinates = getLineCoordinates(content)
+    if (
+      !isWholeFileCoveringRange(coordinates, decoded.startLine, decoded.endLine)
+    ) {
       return {
         ok: false,
-        error: `a range capability cannot authorize a whole-file overwrite for ${path} (capability covers lines ${decoded.startLine}-${decoded.endLine}; file has ${lineCount} lines). Pass only a whole-file-covering cap.v3 from a complete paths or full-file range read.`,
+        error: `a range capability cannot authorize a whole-file overwrite for ${path} (capability covers lines ${decoded.startLine}-${decoded.endLine}; ${describeLineBounds(coordinates)}). Pass only a whole-file-covering cap.v3 from a complete paths or full-file range read.`,
       }
     }
-    if (decoded.hash !== getContentHash(content)) {
+    if (
+      decoded.hash !==
+      getContentHash(
+        getRangeSlice(coordinates, decoded.startLine, decoded.endLine),
+      )
+    ) {
       return {
         ok: false,
         error: `write_file basedOnRead for ${path} did not match the current file content (stale hash). Re-read the whole file and retry with the fresh capability.`,
@@ -945,9 +961,8 @@ export const handleEditTransaction = (async (
       (kind) => typeof kind === 'string' && kind.startsWith('capability'),
     )
     // An anchored scope mismatch is a per-path targeting mistake: the supplied
-    // capability was fresh, no file changed, and only the offending path's read
-    // scope is wrong. Narrow the invalidation blast radius so the other
-    // transaction targets keep their read authorization.
+    // capability was fresh and no file changed, only the offending path's read
+    // scope is wrong. It selects the replace_range recovery strategy below.
     const isAnchorScopeMismatch = failureKinds.some(
       (kind) => kind === 'anchor_scope_mismatch',
     )
@@ -957,21 +972,36 @@ export const handleEditTransaction = (async (
         kind === 'preflight_failed' ||
         kind === 'anchor_scope_mismatch',
     )
-    // Only the paths that actually failed with an anchored scope mismatch may
-    // keep the narrowed invalidation; a co-failing unrelated path must never be
-    // pulled in, even if a future result reports more than one failure.
-    const anchorScopeMismatchPaths = Array.from(
+    // Only the paths that actually failed lose read authorization, for every
+    // failure kind that reaches this branch. A preflight abort writes NO bytes,
+    // so each non-failing target is still byte-identical to the snapshot this
+    // transaction read. Retaining its authorization is not a trust widening:
+    // isWholeFileReadAuthorizationFresh re-hashes the stored hash against the
+    // live file and every replace_range / scoped str_replace re-hashes its
+    // capability slice before applying, so a path an external actor changed
+    // fails closed at its next use exactly as it does today. Narrowing only
+    // removes a redundant re-read of files that provably did not change.
+    // Guard failures can report an empty path (editIndex: -1), and one reported
+    // failure may cover several coalesced same-path edits, so dedupe and drop
+    // empty paths rather than counting failures.
+    const failingPaths = Array.from(
       new Set(
         transactionResult.failures
-          .filter((failure) => failure.failureKind === 'anchor_scope_mismatch')
           .map((failure) => failure.path)
           .filter((path) => Boolean(path)),
       ),
     )
+    const failingPathSet = new Set(failingPaths)
+    // Narrow only when the failing set is a proper subset of the targets: an
+    // empty set (guard failure) or a set covering every target (single-path
+    // transaction) must fall back to uniquePaths so recovery.paths is never
+    // empty and never silently misdescribes the blast radius.
     const narrowInvalidationToFailingPaths =
-      isAnchorScopeMismatch &&
-      !requiresFreshCapability &&
-      anchorScopeMismatchPaths.length > 0
+      failingPaths.length > 0 &&
+      uniquePaths.some((path) => !failingPathSet.has(path))
+    const invalidationPaths = narrowInvalidationToFailingPaths
+      ? failingPaths
+      : uniquePaths
     // Match / atomic-batch aborts and capability failures both require one new
     // snapshot for every transaction target so multi-file retries cannot reuse
     // other paths from memory. Pure syntax failures never reach this branch.
@@ -1002,12 +1032,16 @@ export const handleEditTransaction = (async (
               : {}),
           }
         : undefined)
+    // processEditTransaction builds its own recovery via buildTransactionRecovery
+    // (which always carries every transaction path), and the handler prefers it
+    // when present. Narrowing the FINAL emitted object is what makes the rule
+    // hold regardless of which branch produced the recovery.
     const scopedRecovery =
       recovery && narrowInvalidationToFailingPaths
         ? {
             ...recovery,
-            paths: anchorScopeMismatchPaths,
-            input: { paths: anchorScopeMismatchPaths },
+            paths: failingPaths,
+            input: { paths: failingPaths },
           }
         : recovery
     const errorCode =
@@ -1021,9 +1055,7 @@ export const handleEditTransaction = (async (
             : undefined)
     invalidatePreparedEditPaths({
       fileProcessingState,
-      paths: narrowInvalidationToFailingPaths
-        ? anchorScopeMismatchPaths
-        : uniquePaths,
+      paths: invalidationPaths,
       revokeReadAuthorization: requiresFreshRead,
       requiresFreshRead,
       ...(requiresFreshRead
@@ -1036,9 +1068,12 @@ export const handleEditTransaction = (async (
         : {}),
     })
 
+    // Model-facing recovery instructions: name the exact next call, and be
+    // explicit that the retained targets must NOT be re-read while the whole
+    // transaction still has to be resent (nothing was applied).
     const multiTargetRecoveryProse = narrowInvalidationToFailingPaths
       ? [
-          `Only ${anchorScopeMismatchPaths.join(', ')} lost read authorization; every other transaction target retains valid read state. Re-read a range that contains the target lines for that path only, then resend the whole transaction because no files were changed.`,
+          `Only ${failingPaths.join(', ')} lost read authorization and needs a fresh read; every other transaction target retains valid read state and does NOT need re-reading (this supersedes the generic re-read-every-target note above). Re-read ${failingPaths.join(', ')} only — for an anchored-scope or capability failure, a range that contains the target lines for that path is enough — then resend the whole transaction because no files were changed.`,
         ]
       : requiresFreshRead
         ? [

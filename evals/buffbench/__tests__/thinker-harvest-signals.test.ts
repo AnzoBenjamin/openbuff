@@ -40,7 +40,8 @@ function setOutputCall(params: {
 }): PrintModeEvent {
   return {
     type: 'tool_call',
-    toolCallId: params.toolCallId ?? `so-${Math.random().toString(36).slice(2, 8)}`,
+    toolCallId:
+      params.toolCallId ?? `so-${Math.random().toString(36).slice(2, 8)}`,
     toolName: 'set_output',
     input: params.input,
     agentId: params.agentId,
@@ -58,9 +59,9 @@ function textEvent(text: string, agentId?: string): PrintModeEvent {
 
 describe('extractMessageFromSetOutputInput', () => {
   test('recovers top-level message', () => {
-    expect(
-      extractMessageFromSetOutputInput({ message: 'final answer' }),
-    ).toBe('final answer')
+    expect(extractMessageFromSetOutputInput({ message: 'final answer' })).toBe(
+      'final answer',
+    )
   })
 
   test('recovers nested data.message (LsHOhL5cwBo shape)', () => {
@@ -279,9 +280,9 @@ describe('thinker harvest signals', () => {
 
     const signals = computeThinkerHarvestSignals({ events })
     expect(signals.thinkerAgentIds).toEqual([goodId, badId])
-    expect(signals.agents.find((a) => a.agentId === goodId)?.preservedNonEmpty).toBe(
-      true,
-    )
+    expect(
+      signals.agents.find((a) => a.agentId === goodId)?.preservedNonEmpty,
+    ).toBe(true)
     expect(
       signals.agents.find((a) => a.agentId === badId)?.emptyHarvestClobber,
     ).toBe(true)

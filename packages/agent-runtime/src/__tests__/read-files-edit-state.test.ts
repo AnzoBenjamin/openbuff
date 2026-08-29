@@ -15,6 +15,7 @@ import { handleReplaceRange } from '../tools/handlers/tool/replace-range'
 import { handleStrReplace } from '../tools/handlers/tool/str-replace'
 import {
   handleWriteFile,
+  hasWholeFileReadAuthorization,
   normalizeToolPath,
 } from '../tools/handlers/tool/write-file'
 import { processEditTransaction } from '../process-edit-transaction'
@@ -4437,7 +4438,7 @@ describe('read_files edit-state recovery', () => {
       }
     })
 
-    it('stale rewrite_symbol capability requires fresh reads for every transaction target', async () => {
+    it('stale rewrite_symbol capability requires a fresh read only for the failing path', async () => {
       const symbolPath = 'src/stale-symbol.ts'
       const otherPath = 'src/atomic-peer.ts'
       const symbolContent = 'export function target() {\n  return 1\n}\n'
@@ -4507,40 +4508,48 @@ describe('read_files edit-state recovery', () => {
       } as any)
 
       expect(clientMutationCalls).toBe(0)
-      for (const path of [symbolPath, otherPath]) {
-        expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(
-          true,
-        )
-        expect(
-          fileProcessingState.editRereadRequirementsByPath?.[path],
-        ).toMatchObject({
-          reason: 'stale_capability',
-          sourceTool: 'edit_transaction',
-        })
-        expect(
-          fileProcessingState.readAuthorizationsByPath?.[path],
-        ).toBeUndefined()
-        expect(
-          fileProcessingState.readAuthorizationHashesByPath?.[path],
-        ).toBeUndefined()
-      }
+      // Only the stale-capability path loses its read state.
+      expect(fileProcessingState.failedEditRequiresReadByPath[symbolPath]).toBe(
+        true,
+      )
+      expect(
+        fileProcessingState.editRereadRequirementsByPath?.[symbolPath],
+      ).toMatchObject({
+        reason: 'stale_capability',
+        sourceTool: 'edit_transaction',
+      })
+      expect(
+        fileProcessingState.readAuthorizationsByPath?.[symbolPath],
+      ).toBeUndefined()
+      expect(
+        fileProcessingState.readAuthorizationHashesByPath?.[symbolPath],
+      ).toBeUndefined()
+      // The co-target never failed and nothing was written, so it keeps auth.
+      expect(
+        fileProcessingState.failedEditRequiresReadByPath[otherPath],
+      ).toBeFalsy()
+      expect(hasWholeFileReadAuthorization(fileProcessingState, otherPath)).toBe(
+        true,
+      )
       expect(result.output[0]?.type).toBe('json')
       if (result.output[0]?.type === 'json') {
         const value = result.output[0].value as {
           errorMessage?: string
+          recovery?: { paths?: string[] }
           failures?: Array<{ errorMessage?: string }>
         }
         expect(String(value.failures?.[0]?.errorMessage)).toContain(
           'readCapability-covered symbol content is stale',
         )
+        expect(String(value.errorMessage)).toContain('lost read authorization')
         expect(String(value.errorMessage)).toContain(
+          'every other transaction target retains valid read state',
+        )
+        expect(String(value.errorMessage)).not.toContain(
           'Atomic recovery requires fresh read state for every transaction target',
         )
-        expect(String(value.errorMessage)).toContain(
-          'Re-read all targets and rebuild the complete transaction',
-        )
         expect(String(value.errorMessage)).toContain(symbolPath)
-        expect(String(value.errorMessage)).toContain(otherPath)
+        expect(value.recovery?.paths).toEqual([symbolPath])
       }
     })
 
@@ -5237,14 +5246,19 @@ describe('read_files edit-state recovery', () => {
 
     it('does not let a range basedOnRead capability authorize a whole-file overwrite', async () => {
       const path = 'src/helper.ts'
-      const diskContent = 'export const value = 1\n'
+      // Newline-terminated multi-line fixture: visibleLineCount 2,
+      // maxCapabilityLine 3, so a `1..1` capability is a genuine PROPER
+      // SUBSET of the file rather than a complete full-file range read.
+      const diskContent = 'export const a = 1\nexport const b = 2\n'
       const runId = 'range-write-floor-run'
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
       const rangeCapability = encodeReadCapabilityToken({
         startLine: 1,
         endLine: 1,
-        hash: getContentHash(diskContent.trimEnd()),
+        // Exactly the slice a `1..1` range read hashes: the first line's text
+        // with no trailing newline.
+        hash: getContentHash('export const a = 1'),
         scope: {
           projectId: mockFileContext.projectRoot,
           path,
@@ -5252,8 +5266,8 @@ describe('read_files edit-state recovery', () => {
         },
       })
 
-      // A range capability is not sufficient proof for replacing the whole
-      // file. Strict mode requires a successful whole-file read authorization.
+      // A proper-subset range capability is not sufficient proof for replacing
+      // the whole file. Strict mode requires whole-file read authorization.
       const writeResult = await handleWriteFile({
         ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
@@ -5263,7 +5277,7 @@ describe('read_files edit-state recovery', () => {
           input: {
             path,
             instructions: 'Update helper value',
-            content: 'export const value = 2\n',
+            content: 'export const a = 2\nexport const b = 3\n',
             basedOnRead: rangeCapability,
           },
         },
@@ -7489,10 +7503,10 @@ describe('read_files edit-state recovery', () => {
       ).toBe('stale_capability')
     })
 
-    it('match/no-match preflight failure requires fresh read on all transaction paths', async () => {
-      // Match failures on edit_transaction now mark every unique path for a
-      // fresh re-read so multi-file retries cannot reuse other paths from memory.
-      // Pure syntax preflight failures remain special-cased and do not reach here.
+    it('match/no-match preflight failure requires fresh read only on the failing transaction path', async () => {
+      // A preflight abort writes no bytes, so only the path that actually failed
+      // loses read authorization. The non-failing target keeps its (still
+      // hash-verified) read state, but the whole transaction must be resent.
       const pathA = 'src/match-a.ts'
       const pathB = 'src/match-b.ts'
       const contentA = 'export const value = 1\n'
@@ -7559,17 +7573,22 @@ describe('read_files edit-state recovery', () => {
       } as any)
 
       expect(clientCalls).toBe(0)
-      for (const path of [pathA, pathB]) {
-        expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(
-          true,
-        )
-        expect(
-          fileProcessingState.editRereadRequirementsByPath?.[path],
-        ).toMatchObject({
-          reason: 'preflight_failed',
-          sourceTool: 'edit_transaction',
-        })
-      }
+      // Only pathB's oldString failed to match, so only pathB is marked.
+      expect(fileProcessingState.failedEditRequiresReadByPath[pathB]).toBe(true)
+      expect(
+        fileProcessingState.editRereadRequirementsByPath?.[pathB],
+      ).toMatchObject({
+        reason: 'preflight_failed',
+        sourceTool: 'edit_transaction',
+      })
+      // pathA never failed and no bytes were written, so it keeps its read
+      // authorization and must not be re-read.
+      expect(
+        fileProcessingState.failedEditRequiresReadByPath[pathA],
+      ).toBeFalsy()
+      expect(hasWholeFileReadAuthorization(fileProcessingState, pathA)).toBe(
+        true,
+      )
 
       const output = result.output[0]
       expect(output.type).toBe('json')
@@ -7588,14 +7607,15 @@ describe('read_files edit-state recovery', () => {
         expect(value.errorCode).toBe('no_match')
         expect(value.recovery?.action).toBe('rebuild_whole_transaction')
         expect(value.recovery?.requiresFreshRead).toBe(true)
-        expect(value.recovery?.paths).toEqual(
-          expect.arrayContaining([pathA, pathB]),
-        )
+        // The narrowed recovery target must agree with the prose: pathB only.
+        expect(value.recovery?.paths).toEqual([pathB])
+        expect(String(value.errorMessage)).toContain(pathB)
         expect(String(value.errorMessage)).toContain(
+          'every other transaction target retains valid read state',
+        )
+        expect(String(value.errorMessage)).not.toContain(
           'Atomic recovery requires fresh read state for every transaction target',
         )
-        expect(String(value.errorMessage)).toContain(pathA)
-        expect(String(value.errorMessage)).toContain(pathB)
       }
     })
 

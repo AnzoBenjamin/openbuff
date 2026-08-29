@@ -158,8 +158,7 @@ const SPAWN_AGENT_TYPE_ALIASES: Readonly<Record<string, string>> = {
  * lookup. Keep this list narrow so legitimate custom agent IDs are unaffected.
  */
 export function normalizeSpawnAgentType(agentTypeStr: string): string {
-  const typoCorrected =
-    SPAWN_AGENT_TYPE_ALIASES[agentTypeStr] ?? agentTypeStr
+  const typoCorrected = SPAWN_AGENT_TYPE_ALIASES[agentTypeStr] ?? agentTypeStr
   return normalizeAgentIdForLookup(typoCorrected)
 }
 
@@ -928,9 +927,9 @@ export async function finalizeOwnedLibrarianClone(params: {
   const trustedCloneDir =
     extractCloneDir(systemTrustedMessages) ??
     extractCloneDir(
-      params.messageHistory?.filter(
-        (m) => (m as Message).role === 'user',
-      ) as Message[] | undefined,
+      params.messageHistory?.filter((m) => (m as Message).role === 'user') as
+        | Message[]
+        | undefined,
     )
   const retainClone = params.spawnParams?.retainClone === true
   if (retainClone) {
@@ -1114,7 +1113,9 @@ function extractMutationAttestations(value: unknown): Array<{
       const partRecord = part as Record<string, unknown>
       if (partRecord.type !== 'json') continue
 
-      const parsedResult = fileMutationResultV1Schema.safeParse(partRecord.value)
+      const parsedResult = fileMutationResultV1Schema.safeParse(
+        partRecord.value,
+      )
       if (
         parsedResult.success &&
         parsedResult.data.authorityReceipt &&
@@ -1288,9 +1289,7 @@ export function buildRuntimeAgentReceipt(params: {
   const shardId = params.spawnParams?.shardId
   const snapshotId = params.spawnParams?.snapshotId
   const trimmedSnapshotId =
-    typeof snapshotId === 'string' && snapshotId.trim()
-      ? snapshotId.trim()
-      : ''
+    typeof snapshotId === 'string' && snapshotId.trim() ? snapshotId.trim() : ''
   const auditRequested =
     isGeneralAgent &&
     typeof sessionSlug === 'string' &&
@@ -1399,7 +1398,9 @@ export function buildRuntimeAgentReceipt(params: {
       ? []
       : params.handoff
         ? claimedFindingIds.filter((id) => {
-            const finding = params.handoff?.findings.find((item) => item.id === id)
+            const finding = params.handoff?.findings.find(
+              (item) => item.id === id,
+            )
             return !!finding?.files.some((path) => actualChangedPaths.has(path))
           })
         : claimedFindingIds
@@ -1417,7 +1418,9 @@ export function buildRuntimeAgentReceipt(params: {
       ? 'failed'
       : mutationsComplete
         ? 'completed'
-        : (params.status ?? foundOutputStatus ?? (mutationAgent ? 'blocked' : 'completed'))
+        : (params.status ??
+          foundOutputStatus ??
+          (mutationAgent ? 'blocked' : 'completed'))
   const normalizedOutput = normalizeSpawnedAgentOutput(
     params.output,
     params.agentType,
@@ -1596,10 +1599,9 @@ const AGENT_PARAMS_CONTRACT_MAX_CHARS = 2_400
 
 function formatAgentParamsContract(schema: unknown): string {
   try {
-    const rendered = z.toJSONSchema(schema as z.ZodType, { io: 'input' }) as Record<
-      string,
-      unknown
-    >
+    const rendered = z.toJSONSchema(schema as z.ZodType, {
+      io: 'input',
+    }) as Record<string, unknown>
     const compact = (value: unknown, depth = 0): unknown => {
       if (depth > 8 || value === null || typeof value !== 'object') return value
       if (Array.isArray(value)) {
@@ -1627,7 +1629,9 @@ function formatAgentParamsContract(schema: unknown): string {
         ? Object.keys(properties).slice(0, 64)
         : []
     const required = Array.isArray(rendered.required)
-      ? rendered.required.filter((key): key is string => typeof key === 'string')
+      ? rendered.required.filter(
+          (key): key is string => typeof key === 'string',
+        )
       : []
     return JSON.stringify({
       type: rendered.type ?? 'object',
@@ -2045,7 +2049,10 @@ export async function executeSubagent(
     timeoutController && parentSignal
       ? (AbortSignal as any).any
         ? (AbortSignal as any).any([parentSignal, timeoutController.signal])
-        : (combinedSignal = createCombinedAbortSignal(parentSignal, timeoutController.signal))
+        : (combinedSignal = createCombinedAbortSignal(
+            parentSignal,
+            timeoutController.signal,
+          ))
       : timeoutController
         ? timeoutController.signal
         : parentSignal

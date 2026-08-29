@@ -162,14 +162,8 @@ function simplifyToolResultHelper(params: {
   tags?: string[]
   logger: Logger
 }): { result: CodebuffToolOutput; numKept: number } {
-  const {
-    toolName,
-    toolResult,
-    numKept,
-    keepDuringTruncation,
-    tags,
-    logger,
-  } = params
+  const { toolName, toolResult, numKept, keepDuringTruncation, tags, logger } =
+    params
   const simplified = simplifyToolResultContent({
     toolName,
     content: toolResult,

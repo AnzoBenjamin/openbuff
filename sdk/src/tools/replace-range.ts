@@ -7,6 +7,11 @@ import {
   normalizeLineEndings,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
+import {
+  describeReanchorFailure,
+  getLineCoordinates,
+  reanchorCapabilityRange,
+} from '@codebuff/common/util/line-coordinates'
 import { resolveFilePathForFileSystemOperation } from './path-utils'
 import { boundedDiagnosticEcho, changeFile } from './change-file'
 
@@ -22,14 +27,6 @@ function errorResult(
   errorMessage: string,
 ): CodebuffToolOutput<'replace_range'> {
   return [{ type: 'json', value: { file, errorMessage } }]
-}
-
-/**
- * Visible line count: `split('\n')` reports a trailing empty entry for content
- * ending in a newline, and `['']` for empty content, so both collapse here.
- */
-function getDisplayLineCount(lines: string[]): number {
-  return lines.at(-1) === '' ? lines.length - 1 : lines.length
 }
 
 /**
@@ -179,17 +176,17 @@ export async function replaceRange(params: {
     )
   }
 
-  const normalizedOldContent = normalizeLineEndings(oldContent)
-  const lines = normalizedOldContent.split('\n')
+  const coordinates = getLineCoordinates(oldContent)
+  const { normalized: normalizedOldContent, lines } = coordinates
 
   if (
-    input.capabilityStartLine > lines.length ||
-    input.capabilityEndLine > lines.length
+    input.capabilityStartLine > coordinates.maxCapabilityLine ||
+    input.capabilityEndLine > coordinates.maxCapabilityLine
   ) {
-    // `lines.length` is one past the visible count when the content ends in a
-    // newline, so the diagnostic names both bounds.
-    const displayLineCount = getDisplayLineCount(lines)
-    const maxCapabilityLine = lines.length
+    // `maxCapabilityLine` is one past the visible count when the content ends
+    // in a newline, so the diagnostic names both bounds.
+    const displayLineCount = coordinates.visibleLineCount
+    const maxCapabilityLine = coordinates.maxCapabilityLine
     return errorResult(
       relativePath,
       `replace_range rejected: the capability-covered range ${input.capabilityStartLine}-${input.capabilityEndLine} is beyond the current file length (${displayLineCount} lines). Capability bounds may extend to line ${maxCapabilityLine}${maxCapabilityLine > displayLineCount ? ', the phantom final entry a read reports past the visible content' : ''}. Re-read the target range before editing.`,
@@ -198,21 +195,35 @@ export async function replaceRange(params: {
 
   // The schema contains the target inside the capability range and the guard
   // above bounds that range, so no separate target length check is needed.
-  const targetStartLine = input.startLine ?? input.capabilityStartLine
-  const targetEndLine = input.endLine ?? input.capabilityEndLine
+  let targetStartLine = input.startLine ?? input.capabilityStartLine
+  let targetEndLine = input.endLine ?? input.capabilityEndLine
 
-  const capabilityContent = lines
-    .slice(input.capabilityStartLine - 1, input.capabilityEndLine)
-    .join('\n')
-  // Freshness is checked LF-normalized, so a purely CRLF<->LF external rewrite
-  // is not detected here; any content-level change still mismatches this hash,
-  // and the byte-exact expectation passed to `changeFile` below refuses the
-  // commit if only the terminators changed.
-  if (getContentHash(capabilityContent) !== input.capabilityHash) {
+  // Freshness is proven by locating the exact observed slice, which tolerates
+  // lines inserted or deleted ABOVE the span without widening what the
+  // capability authorizes: a missing or duplicated span still fails closed.
+  // The match is LF-normalized, so a purely CRLF<->LF external rewrite is not
+  // detected here; any content-level change still fails to match, and the
+  // byte-exact expectation passed to `changeFile` below refuses the commit if
+  // only the terminators changed.
+  const reanchored = reanchorCapabilityRange({
+    coordinates,
+    startLine: input.capabilityStartLine,
+    endLine: input.capabilityEndLine,
+    expectedHash: input.capabilityHash,
+  })
+  if (!reanchored.ok) {
     return errorResult(
       relativePath,
-      `replace_range rejected: ${relativePath} changed after the readCapability was issued. Re-read the exact target in this run and retry with the fresh cap.v3 token.`,
+      `replace_range rejected: ${relativePath} changed after the readCapability was issued (${describeReanchorFailure(reanchored)}). Re-read the exact target in this run and retry with the fresh cap.v3 token.`,
     )
+  }
+  if (reanchored.shiftedBy !== undefined) {
+    // The authorized window now lives at reanchored.startLine-endLine, so the
+    // target moves by the SAME delta: it stays exactly where it was observed
+    // inside that window, and the raw splice below hits the shifted lines
+    // instead of the stale ones.
+    targetStartLine += reanchored.shiftedBy
+    targetEndLine += reanchored.shiftedBy
   }
 
   const currentRange = lines

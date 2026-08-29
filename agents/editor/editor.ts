@@ -431,14 +431,22 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
             ? [operation]
             : []
         for (const item of operationItems) {
-          if (item && typeof item === 'object' && typeof (item as Record<string, unknown>).path === 'string') {
+          if (
+            item &&
+            typeof item === 'object' &&
+            typeof (item as Record<string, unknown>).path === 'string'
+          ) {
             out.add((item as Record<string, string>).path)
           }
         }
         const edits = record.edits
         if (Array.isArray(edits)) {
           for (const edit of edits) {
-            if (edit && typeof edit === 'object' && typeof (edit as Record<string, unknown>).path === 'string') {
+            if (
+              edit &&
+              typeof edit === 'object' &&
+              typeof (edit as Record<string, unknown>).path === 'string'
+            ) {
               out.add((edit as Record<string, string>).path)
             }
           }
@@ -722,7 +730,9 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
         collectText(prompt, texts)
         collectText(history, texts)
         const headingLine = new RegExp(
-          '^(?:#{1,4}\\s+)?\\s*(?:' + headingPattern.source + ')\\s*(?::\\s*)?$',
+          '^(?:#{1,4}\\s+)?\\s*(?:' +
+            headingPattern.source +
+            ')\\s*(?::\\s*)?$',
           'i',
         )
         const nextHeadingLike = /^(?:#{1,4}\s+)?\S[^:]*:\s*$|^(?:#{1,4}\s+)\S/
@@ -782,7 +792,10 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
             )
             continue
           }
-          if (path.startsWith('agents/') && !path.startsWith('agents/__tests__/')) {
+          if (
+            path.startsWith('agents/') &&
+            !path.startsWith('agents/__tests__/')
+          ) {
             addCommand('cd agents && bun run typecheck && bun test')
             continue
           }
@@ -797,7 +810,8 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
           if (/\.py$/.test(path)) addCommand('pytest')
           else if (/\.go$/.test(path)) addCommand('go test ./...')
           else if (/\.rs$/.test(path)) addCommand('cargo test')
-          else if (/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(path)) addCommand('bun test')
+          else if (/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(path))
+            addCommand('bun test')
         }
         return commands
       }

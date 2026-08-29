@@ -3,11 +3,12 @@
 Session: context-baseline-25k
 Spec: ./SPEC.md
 Status: active
+
 <!-- current-task: X-T5 smoke set -->
 
 Sequencing: **measure first (M0)**, then **tool tiers (M1)** as largest fixed win, parallel **prompt default-on (M2)** + **tree/knowledge (M3)**, then **proactive lean (M4)**, optional **schema diet (M5)**, **history polish (M6)**. Gate e2e after every default flip.
 
-Predecessor complete (do not re-implement): ledger, `/context`, prompt disclosure *flag*, proactive cache+epoch, git gate, semantic compaction, tool-result lifecycle — see `../context-budget-architecture-2026-08/STATUS.md`.
+Predecessor complete (do not re-implement): ledger, `/context`, prompt disclosure _flag_, proactive cache+epoch, git gate, semantic compaction, tool-result lifecycle — see `../context-budget-architecture-2026-08/STATUS.md`.
 
 ---
 
@@ -26,7 +27,7 @@ Goal: production-faithful numbers; stop optimizing the wrong baseline.
 
 ---
 
-## Milestone 1 — Progressive tool disclosure (R1, AC-F2, AC-G*)
+## Milestone 1 — Progressive tool disclosure (R1, AC-F2, AC-G\*)
 
 Goal: cut tool definition tax from ~23.5k toward core ≤12k.
 
@@ -34,13 +35,13 @@ Goal: cut tool definition tax from ~23.5k toward core ≤12k.
 - [x] M1-T2 Wire `createBase2` `toolNames` from tiers + existing mode gates (`planOnly`, `fast`, `executePlan`, `noAskUser`); keep `programmaticToolNames` unchanged
 - [ ] M1-T3 Agent state: `unlockedToolTiers`; deterministic unlock in `handleSteps` on implement intent / active work / audit classifier / media paths
   - Acceptance: `publishUnlockedToolTiers` runs before each STEP inside serialized handleSteps; inline copy guarded by a sync test against `resolveUnlockedTiersForPhase(deriveIntentSignals(...))`
-  - Validate: bun test agents/__tests__/base2-progressive-tool-disclosure.test.ts
+  - Validate: bun test agents/**tests**/base2-progressive-tool-disclosure.test.ts
 - [ ] M1-T4 Runtime: only unlocked tools in `getToolSet` / token ledger; locked call → actionable message (tool-executor or spawn path)
   - Acceptance: loopAgentSteps test shows per-step expand AND shrink; `tool-executor` rejects still-locked tier tools with the listed current surface
-  - Validate: bun test agents/__tests__/base2-progressive-tool-disclosure.test.ts
+  - Validate: bun test agents/**tests**/base2-progressive-tool-disclosure.test.ts
 - [ ] M1-T5 Short always-on “Tool surface” prompt block
   - Acceptance: `## Tool surface` block present in the base2 system prompt exactly when progressiveToolDisclosure is on
-  - Validate: bun test agents/__tests__/base2-progressive-tool-disclosure.test.ts
+  - Validate: bun test agents/**tests**/base2-progressive-tool-disclosure.test.ts
 - [x] M1-T6 Flag: `progressiveToolDisclosure` option + `OPENBUFF_PROGRESSIVE_TOOL_DISCLOSURE` canary (default off until canary green)
 - [x] M1-T7 Tests (partial — unit canary + core &lt;12k + planOnly gates; gate e2e unlock + locked-tool path now landed and green):
   - [x] Core-only token total ≤ ~12k; full ≤ 25k
@@ -53,11 +54,11 @@ Goal: cut tool definition tax from ~23.5k toward core ≤12k.
 
 ### M1 rollout
 
-| Phase | Behavior |
-|---|---|
-| Canary | env on: core + auto-unlock IMPLEMENT on implement intent (does **not** satisfy AC-A1) |
-| Default-on | only after **AC-A1**: full gate e2e **and** buffbench subset or fixed smoke set; results no worse than STATUS baseline |
-| Kill switch | explicit false → full 33-tool surface |
+| Phase       | Behavior                                                                                                               |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Canary      | env on: core + auto-unlock IMPLEMENT on implement intent (does **not** satisfy AC-A1)                                  |
+| Default-on  | only after **AC-A1**: full gate e2e **and** buffbench subset or fixed smoke set; results no worse than STATUS baseline |
+| Kill switch | explicit false → full 33-tool surface                                                                                  |
 
 ---
 
@@ -146,10 +147,10 @@ Goal: remaining window lasts longer (not fixed baseline).
 
 ## Suggested calendar (indicative)
 
-| Window | Work |
-|---|---|
-| Week 1 | M0 measurement lock |
-| Week 1–2 | M1 tool tiers (canary) |
-| Week 2 | M2 prompt default-on + M3 tree/knowledge (parallel) |
-| Week 3 | M4 proactive + M5 schema diet |
-| Week 4 | M1/M2 default-on only after |
+| Window   | Work                                                |
+| -------- | --------------------------------------------------- |
+| Week 1   | M0 measurement lock                                 |
+| Week 1–2 | M1 tool tiers (canary)                              |
+| Week 2   | M2 prompt default-on + M3 tree/knowledge (parallel) |
+| Week 3   | M4 proactive + M5 schema diet                       |
+| Week 4   | M1/M2 default-on only after                         |

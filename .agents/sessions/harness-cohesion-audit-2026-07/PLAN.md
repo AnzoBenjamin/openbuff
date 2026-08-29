@@ -1,9 +1,11 @@
 # PLAN — Harness Cohesion Remediation
+
 <!-- current-task: none -->
 
 Milestones are ordered by risk/leverage. Each executable task has a stable ID, dependencies, acceptance, and validation. Do the roster + prompt-mismatch milestones first (highest cohesion payoff, lowest blast radius), gate/tool hygiene next, orchestration-duality decision last.
 
 Validation routing (per AGENTS.md path→suite map):
+
 - `agents/*` → agents typecheck + relevant `agents/__tests__/*` and e2e
 - `common/*` → common checks + dependent package typechecks
 - `packages/agent-runtime/*` → runtime typecheck/tests
@@ -97,7 +99,7 @@ Validation routing (per AGENTS.md path→suite map):
 
 ## M7 — Orchestration subsystem decision
 
-- [x] M7.1 Decide fate of `packages/agent-runtime/src/orchestration/*` (Deciding fate of packages/agent-runtime/src/orchestration/*.) (orchestration/ kept advisory/telemetry with doc marker in workflow-engine.ts; runtime typecheck green.)
+- [x] M7.1 Decide fate of `packages/agent-runtime/src/orchestration/*` (Deciding fate of packages/agent-runtime/src/orchestration/\*.) (orchestration/ kept advisory/telemetry with doc marker in workflow-engine.ts; runtime typecheck green.)
   - Acceptance: a documented decision (keep-as-telemetry / remove `workflow-engine` / promote to authoritative); if kept, a doc note marks it advisory so it is not mistaken for the authoritative gate
   - Validate: runtime typecheck/tests if code changes; else doc-only
 

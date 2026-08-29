@@ -302,12 +302,18 @@ edit variants does not bypass this rule.
 ### Multi-file `edit_transaction` abort recovery
 
 `edit_transaction` is all-or-nothing: any preflight failure means **no disk
-writes**. Match/no-match and capability aborts require a fresh read of **every**
-transaction target in that run, not only the failed path. Pure syntax preflight
-failures do **not** force multi-path re-read (fix the new content only).
+writes**, so every target file is still byte-identical to the snapshot the
+transaction read. On match/no-match and capability aborts a fresh read is
+required only for the **failing** paths named in `recovery.paths`. Non-failing
+targets keep their existing read authorization and do **not** need re-reading —
+that retained authorization is still hash-verified against live content at its
+next use, so a path some external actor changed fails closed then, exactly as it
+would after a full re-read. The whole transaction must still be rebuilt and
+resubmitted, because nothing was applied. Pure syntax preflight failures do
+**not** revoke any authorization (fix the new content only).
 
 This is **not** an always-on force-read before the first multi-file attempt. Fresh
-multi-path reads are abort-time / capability / match recovery only.
+reads of the failing paths are abort-time / capability / match recovery only.
 
 On those aborts the model-visible result is additive and machine-readable:
 
@@ -319,11 +325,13 @@ On those aborts the model-visible result is additive and machine-readable:
 failedEditIndex?, failedReplacementIndex?, preferredStrategy?, tool:
 'read_files', input: { paths } }`
 
-Correct next step: one multi-path `read_files` (or range/symbol selectors) over
-`recovery.paths`, copy exact live text into new `oldString`s / use
-`replace_range` with `readCapability`, then resubmit the **whole** transaction
-from that one snapshot. Do not refresh only the failed path or replay memory for
-other targets. Large or low-similarity `oldString` diagnostics may set
+Correct next step: one `read_files` (paths, or range/symbol selectors) over
+`recovery.paths` — the failing targets only — copy exact live text into new
+`oldString`s / use `replace_range` with `readCapability`, then resubmit the
+**whole** transaction from that snapshot, reusing the retained read state of the
+non-failing targets. Do not re-read targets `recovery.paths` does not name, and
+do not replay a stale token or `oldString` from memory for a path that did lose
+its authorization. Large or low-similarity `oldString` diagnostics may set
 `preferredStrategy` to `replace_range` or `smaller_oldString`.
 
 ### Post-edit anchors and reread telemetry

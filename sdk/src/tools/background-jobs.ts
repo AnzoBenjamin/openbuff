@@ -1045,7 +1045,10 @@ function readProcessStartTime(pid: number): string | undefined {
     // (fields 3..22 are state, ppid, ..., starttime).
     const closeParen = stat.lastIndexOf(')')
     if (closeParen < 0) return undefined
-    const fields = stat.slice(closeParen + 1).trim().split(/\s+/)
+    const fields = stat
+      .slice(closeParen + 1)
+      .trim()
+      .split(/\s+/)
     return fields[STARTTIME_FIELD_INDEX]
   } catch {
     return undefined

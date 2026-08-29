@@ -1295,6 +1295,56 @@ describe('terminal command permission policy', () => {
     }
   })
 
+  it('confines validation-diagnosis writes to diagnostic output files', () => {
+    for (const command of [
+      'cat > repro/fixture.log',
+      'cat > repro/nested/run-1.txt',
+      'cat > packages/agent-runtime/diagnostics/trace.json',
+      "cat > diagnostics/summary.csv <<'EOF'\nkey,value\na,1\nEOF",
+      'rg TODO src 2> repro/stderr.err',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'validation-diagnosis',
+          projectRoot,
+        }),
+      ).toEqual({ allowed: true })
+    }
+
+    for (const command of [
+      // Manifest rewrites become code execution through `bun run <script>`.
+      'cat > package.json',
+      "cat > package.json <<'EOF'\n{}\nEOF",
+      'cat > repro/package.json',
+      'cat > tsconfig.json',
+      // Source and test files are owned by edit_transaction authority.
+      'cat > src/index.ts',
+      "cat > src/index.ts <<'EOF'\nexport const x = 1\nEOF",
+      'cat > repro/fixture.ts',
+      'cat >> src/index.ts',
+      // In-project but outside the diagnostic namespace.
+      'cat > notes.log',
+      'cat > src/repro.log',
+      'cat > /workspace/project/package.json',
+      // A normalized `..` cannot forge a diagnostic directory segment.
+      'cat > repro/../package.json',
+      // Extension-less and directory targets stay blocked.
+      'cat > repro/fixture',
+      'cat > repro',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'validation-diagnosis',
+          projectRoot,
+        }).allowed,
+      ).toBe(false)
+    }
+  })
+
   it('keeps multiline diagnostic heredocs fail-closed for tmux-test', () => {
     expect(
       evaluateTerminalCommandPolicy({

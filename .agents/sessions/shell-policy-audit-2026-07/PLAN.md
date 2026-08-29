@@ -40,7 +40,7 @@ validation/reviewer gate after.
 ## Tier 2 — Reduce redundant enforcement layers (optional)
 
 - [ ] T2.1 De-duplicate git-action gating for the git-commit profile
-  - Depends on: T1.*
+  - Depends on: T1.\*
   - Decide the git-commit profile is authoritative; avoid double-gating `commit`
     through the harness approval layer for that profile (push/force still gated).
     Document which layer owns which concern in `docs/agents-and-tools.md`.
@@ -65,6 +65,7 @@ validation/reviewer gate after.
   - Validate: `bun test cli/src/commands/__tests__/git-command-args.test.ts`.
 
 ## Risks / blockers
+
 - These are security controls. Any relaxation must be reviewed by
   `security-reviewer` and must not weaken the (C) keep-list in SPEC.
 - Approach B (T1.1) is a larger surface (new structured executor path); Approach
@@ -72,6 +73,7 @@ validation/reviewer gate after.
 - Open question: which tiers to execute, and A vs B for T1.1.
 
 ## Validation gates
+
 - Per-task `bun test` on the named suites.
 - Full runtime validation + reviewer gate before finalizing any tier.
 - security-reviewer advisory pass on `terminal-command-policy.ts` changes.

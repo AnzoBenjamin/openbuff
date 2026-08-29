@@ -86,7 +86,12 @@ export const UNKNOWN_JOB_OWNER: JobOwner = {
 export type JobEventPayload =
   | { type: 'output'; data: string }
   | { type: 'agent_chunk'; chunkType: string; data: unknown }
-  | { type: 'lifecycle'; state: JobState; exitCode?: number | null; error?: string }
+  | {
+      type: 'lifecycle'
+      state: JobState
+      exitCode?: number | null
+      error?: string
+    }
   | { type: 'status'; message?: string }
 
 /**
@@ -479,7 +484,8 @@ export class JobRegistry {
     this.sweep()
     const record = this.records.get(jobId)
     if (!record) return { ok: false, reason: 'not_found' }
-    if (!this.ownedBy(record.job, owner)) return { ok: false, reason: 'foreign' }
+    if (!this.ownedBy(record.job, owner))
+      return { ok: false, reason: 'foreign' }
     return { ok: true, job: { ...record.job } }
   }
 
@@ -726,7 +732,10 @@ export class JobRegistry {
    * event, enforces ring-buffer bounds, and notifies waiters/subscribers.
    * Returns `false` when a lifecycle transition was rejected.
    */
-  private appendEvent(jobId: string, payload: JobEventPayload): JobEvent | undefined {
+  private appendEvent(
+    jobId: string,
+    payload: JobEventPayload,
+  ): JobEvent | undefined {
     const record = this.records.get(jobId)
     if (!record) return undefined
 

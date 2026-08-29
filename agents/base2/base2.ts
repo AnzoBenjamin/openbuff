@@ -1263,16 +1263,13 @@ ${guideSections}
         ) {
           return false
         }
-        const deliveryScope =
-          String.raw`(?:changes?|files?|work|branch|working[- ]tree)`
+        const deliveryScope = String.raw`(?:changes?|files?|work|branch|working[- ]tree)`
         const explicitImperativeDelivery =
           new RegExp(
             String.raw`\b(?:please|then|now|can you|could you|would you)\s+(?:also\s+)?${gitAction}\b`,
             'i',
           ).test(text) ||
-          new RegExp(String.raw`^(?:please\s+)?${gitAction}\b`, 'i').test(
-            text,
-          )
+          new RegExp(String.raw`^(?:please\s+)?${gitAction}\b`, 'i').test(text)
         if (explicitImperativeDelivery) return true
 
         const advisoryQuestion =
@@ -1429,8 +1426,9 @@ ${guideSections}
         (finalResponseGateOpen ||
           activeWorkState.currentPhase === 'final_response_allowed')
       ) {
-        const unreviewedAtTurnStart =
-          collectUnreviewedDirtyReviewableFiles(initialGitStatusDirtyFiles)
+        const unreviewedAtTurnStart = collectUnreviewedDirtyReviewableFiles(
+          initialGitStatusDirtyFiles,
+        )
         if (unreviewedAtTurnStart.length > 0) {
           rearmGateForUnreviewedDirty(unreviewedAtTurnStart)
         }
@@ -2205,8 +2203,7 @@ ${guideSections}
           const stuckOnSecurityProtocol =
             nextRequired.includes(
               'fresh matching snapshot-bound security review',
-            ) ||
-            /security review is incomplete/i.test(latestSummary)
+            ) || /security review is incomplete/i.test(latestSummary)
           if (stuckOnSecurityProtocol) {
             activeWorkState.securityReviewGateDone = true
             activeWorkState.preEditSecurityReviewDone = true
@@ -2376,20 +2373,21 @@ ${guideSections}
                       requirements: activeWorkState.openReviewerFindings.map(
                         ({ id, text }) => ({ id, text, required: true }),
                       ),
-                      acceptanceCriteria: activeWorkState.openReviewerFindings.map(
-                        ({ id }) => ({
+                      acceptanceCriteria:
+                        activeWorkState.openReviewerFindings.map(({ id }) => ({
                           id: `clear-${id}`,
                           behavior: `Security finding ${id} is addressed in the live workspace.`,
                           verification:
                             'Targeted validation passes and a fresh snapshot-bound security review clears the finding.',
-                        }),
-                      ),
+                        })),
                       context: [],
                       invariants: [
                         'Read every target from the live filesystem before editing.',
                         'Treat every finding ID as open until a fresh security reviewer clears it.',
                       ],
-                      nonGoals: ['Unrelated diagnostics, refactors, or cleanup.'],
+                      nonGoals: [
+                        'Unrelated diagnostics, refactors, or cleanup.',
+                      ],
                       risks: [
                         'Security findings may be stale if the workspace snapshot changed.',
                       ],
@@ -2473,7 +2471,8 @@ ${guideSections}
               (!securityRepairHasProgress &&
                 (securityRepairReceipt.status !== 'completed' ||
                   [...openSecurityFindingIds].some(
-                    (id) => !securityRepairReceipt.findingsAddressed.includes(id),
+                    (id) =>
+                      !securityRepairReceipt.findingsAddressed.includes(id),
                   )))
             ) {
               activeWorkState.currentPhase = 'blocked'
@@ -2593,7 +2592,9 @@ ${guideSections}
           ) as string[]
           for (const owedSpecialist of owedSpecialists) {
             if (
-              activeWorkState.specialistReviewGatesDone?.includes(owedSpecialist)
+              activeWorkState.specialistReviewGatesDone?.includes(
+                owedSpecialist,
+              )
             ) {
               activeWorkState.specialistReviewGatesDone =
                 activeWorkState.specialistReviewGatesDone.filter(
@@ -2693,9 +2694,7 @@ ${guideSections}
             // Gate-owned v3 fingerprint is the sole specialist attestation
             // token (same family as security/code-reviewer). Fail closed when
             // crypto is unavailable rather than spawning with a bare bundle id.
-            if (
-              !isAttestableSnapshotFingerprint(specialistCreditFingerprint)
-            ) {
+            if (!isAttestableSnapshotFingerprint(specialistCreditFingerprint)) {
               activeWorkState.currentPhase = 'blocked'
               activeWorkState.openReviewerBlockers = [
                 'Specialist review cannot attest: gate snapshot fingerprint is non-attestable (crypto unavailable).',
@@ -2736,10 +2735,7 @@ ${guideSections}
               const specialistResults = new Map<string, unknown>()
               const specialistSnapshots = new Map<string, string>()
               for (const agentType of routedSpecialists) {
-                specialistSnapshots.set(
-                  agentType,
-                  specialistCreditFingerprint,
-                )
+                specialistSnapshots.set(agentType, specialistCreditFingerprint)
               }
               const firstSpecialistBatch = yield {
                 toolName: 'spawn_agents',
@@ -2747,8 +2743,7 @@ ${guideSections}
                   agents: routedSpecialists.map((agentType) => ({
                     agent_type: agentType,
                     prompt: buildSpecialistScopedReviewPrompt({
-                      title:
-                        'Perform the routed post-edit specialist review.',
+                      title: 'Perform the routed post-edit specialist review.',
                       agentType,
                       files: specialistPendingFiles,
                       snapshotFingerprint: specialistCreditFingerprint,
@@ -2763,7 +2758,8 @@ ${guideSections}
                 includeToolCall: false,
               } as any
               const firstBatchToolResult =
-                (firstSpecialistBatch as any)?.toolResult ?? firstSpecialistBatch
+                (firstSpecialistBatch as any)?.toolResult ??
+                firstSpecialistBatch
               for (const agentType of routedSpecialists) {
                 specialistResults.set(
                   agentType,
@@ -2802,9 +2798,7 @@ ${guideSections}
                     '',
                   ),
                 )
-                if (
-                  !isAttestableSnapshotFingerprint(retryCreditFingerprint)
-                ) {
+                if (!isAttestableSnapshotFingerprint(retryCreditFingerprint)) {
                   activeWorkState.currentPhase = 'blocked'
                   activeWorkState.openReviewerBlockers = [
                     'Specialist review retry cannot attest: recomputed gate snapshot fingerprint is non-attestable.',
@@ -3025,8 +3019,7 @@ ${guideSections}
                           records,
                         )
                         return {
-                          id:
-                            record?.id ?? buildReviewerFindingId(text, index),
+                          id: record?.id ?? buildReviewerFindingId(text, index),
                           gateId: `${agentType}:${expectedSnapshotId}`,
                           // Prefixed blocker string for the same reason as the
                           // security path above: the condone key's verdict class
@@ -3060,7 +3053,8 @@ ${guideSections}
                       ]
                     }
                     const specialistRepairRound: number =
-                      Number(activeWorkState.specialistRepairRoundCount ?? 0) + 1
+                      Number(activeWorkState.specialistRepairRoundCount ?? 0) +
+                      1
                     activeWorkState.specialistRepairRoundCount =
                       specialistRepairRound
                     specialistBlocked = true
@@ -3133,7 +3127,10 @@ ${guideSections}
                     // Snapshot-progress guard baseline, captured BEFORE the
                     // repair spawn so a repair that changes nothing is caught.
                     const preRepairFingerprint = hashGateSnapshotDetails(
-                      buildGateSnapshotDetails(Array.from(pendingGateFiles), ''),
+                      buildGateSnapshotDetails(
+                        Array.from(pendingGateFiles),
+                        '',
+                      ),
                     )
                     // Recording the BASELINE (not just post-repair states) is
                     // what makes A→B→A trip: round 1 records A, post B is new;
@@ -3157,7 +3154,11 @@ ${guideSections}
                               role: 'repair-editor',
                               objective: `Resolve every open ${agentType} finding without unrelated changes.`,
                               requirements: specialistOpenFindings.map(
-                                ({ id, text }) => ({ id, text, required: true }),
+                                ({ id, text }) => ({
+                                  id,
+                                  text,
+                                  required: true,
+                                }),
                               ),
                               acceptanceCriteria: specialistOpenFindings.map(
                                 ({ id }) => ({
@@ -3298,7 +3299,10 @@ ${guideSections}
                       })
                     }
                     const postRepairFingerprint = hashGateSnapshotDetails(
-                      buildGateSnapshotDetails(Array.from(pendingGateFiles), ''),
+                      buildGateSnapshotDetails(
+                        Array.from(pendingGateFiles),
+                        '',
+                      ),
                     )
                     // No-progress detection for the specialist
                     // review -> repair -> re-review loop. A repair round that
@@ -4038,7 +4042,8 @@ ${guideSections}
                 !!validationRepairReceipt &&
                 validationRepairReceipt.changedFiles.some(
                   (file: { path: string }) =>
-                    typeof file.path === 'string' && file.path.trim().length > 0,
+                    typeof file.path === 'string' &&
+                    file.path.trim().length > 0,
                 )
               if (
                 !validationRepairReceipt ||
@@ -4046,9 +4051,7 @@ ${guideSections}
                   (validationRepairReceipt.status !== 'completed' ||
                     validationFindingIds.some(
                       (id: string) =>
-                        !validationRepairReceipt.findingsAddressed.includes(
-                          id,
-                        ),
+                        !validationRepairReceipt.findingsAddressed.includes(id),
                     )))
               ) {
                 activeWorkState.currentPhase = 'blocked'
@@ -4286,10 +4289,7 @@ ${guideSections}
             receipt.verdict === 'LOOKS_GOOD' &&
             receipt.snapshotFingerprint === reviewableFingerprint &&
             receipt.reviewedFileCount === reviewableGateScopeFiles.length &&
-            gateFileSetsEqual(
-              receipt.reviewedFiles,
-              reviewableGateScopeFiles,
-            ),
+            gateFileSetsEqual(receipt.reviewedFiles, reviewableGateScopeFiles),
         )
         const reviewableSetAlreadyReviewed =
           reviewableGateScopeFiles.length > 0 &&
@@ -4373,9 +4373,7 @@ ${guideSections}
                     `Validation gate summary: ${validationSummary}`,
                     // Re-review ledger; empty on round 0 so no stray heading or
                     // blank line appears in the first review's prompt.
-                    ...buildReviewerRoundLedgerLines(
-                      requiredReviewerAgentType,
-                    ),
+                    ...buildReviewerRoundLedgerLines(requiredReviewerAgentType),
                     'Read large files via read_files windows (bounded block reads) instead of whole-file reads so your accumulated read context stays bounded; still attest to every pending file in reviewedFiles.',
                     '',
                     'Return the required structured review object. Echo snapshotFingerprint exactly, list every pending changed file in reviewedFiles (including tests), evaluate all review dimensions, and map every user requirement to evidence. Changed tests are first-class review targets and may also be cited as coverage evidence. Use coverage: missing only when no covering test exists in the changed files or elsewhere in the repo.',
@@ -4657,10 +4655,7 @@ ${guideSections}
                     )?.id,
                   )
                 }
-                return !legacyCondonedTextMatches(
-                  cleanupCondonedTexts,
-                  blocker,
-                )
+                return !legacyCondonedTextMatches(cleanupCondonedTexts, blocker)
               })
               markActiveWorkStateChanged()
             }
@@ -4716,8 +4711,7 @@ ${guideSections}
                 blockers,
               )
               activeWorkState.currentPhase = 'blocked'
-              activeWorkState.nextRequiredAction =
-                `Reviewer repair budget exhausted (${MAX_REVIEWER_REPAIR_ROUNDS}/${MAX_REVIEWER_REPAIR_ROUNDS}); the reviewer findings are still open. Stop retrying automatically and inspect the findings or handoff.`
+              activeWorkState.nextRequiredAction = `Reviewer repair budget exhausted (${MAX_REVIEWER_REPAIR_ROUNDS}/${MAX_REVIEWER_REPAIR_ROUNDS}); the reviewer findings are still open. Stop retrying automatically and inspect the findings or handoff.`
               activeWorkState.latestWorkSummary = `Reviewer repair budget exhausted for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`
               markActiveWorkStateChanged()
               yield {
@@ -4790,7 +4784,9 @@ ${guideSections}
               currentPhase: activeWorkState.currentPhase,
               reviewerStatus: 'round-findings',
               reviewer: requiredReviewerAgentType,
-              repairRound: Number(activeWorkState.reviewerRepairRoundCount ?? 0),
+              repairRound: Number(
+                activeWorkState.reviewerRepairRoundCount ?? 0,
+              ),
               findingCount: blockers.length,
               rawFindingCount: rawCollectedBlockers.length,
               newFindingCount: blockers.length - carriedFindingCount,
@@ -5001,16 +4997,19 @@ ${guideSections}
                           role: 'repair-editor',
                           objective:
                             'Resolve every open reviewer finding without unrelated changes. Read the current file contents before editing; conversational summaries are not source evidence.',
-                          requirements: activeWorkState.openReviewerFindings.map(
-                            ({ id, text }) => ({ id, text, required: true }),
-                          ),
+                          requirements:
+                            activeWorkState.openReviewerFindings.map(
+                              ({ id, text }) => ({ id, text, required: true }),
+                            ),
                           acceptanceCriteria:
-                            activeWorkState.openReviewerFindings.map(({ id }) => ({
-                              id: `clear-${id}`,
-                              behavior: `Finding ${id} is addressed in the live workspace.`,
-                              verification:
-                                'Targeted validation passes and a fresh snapshot-bound reviewer clears the finding.',
-                            })),
+                            activeWorkState.openReviewerFindings.map(
+                              ({ id }) => ({
+                                id: `clear-${id}`,
+                                behavior: `Finding ${id} is addressed in the live workspace.`,
+                                verification:
+                                  'Targeted validation passes and a fresh snapshot-bound reviewer clears the finding.',
+                              }),
+                            ),
                           context: [],
                           invariants: [
                             'Read every target from the live filesystem before editing.',
@@ -5093,8 +5092,7 @@ ${guideSections}
             )
             if (repairCrash) {
               activeWorkState.currentPhase = 'blocked'
-              activeWorkState.nextRequiredAction =
-                `${repairAgentLabel} failed while addressing reviewer findings. Inspect the failure before retrying.`
+              activeWorkState.nextRequiredAction = `${repairAgentLabel} failed while addressing reviewer findings. Inspect the failure before retrying.`
               activeWorkState.latestWorkSummary = `${repairAgentLabel} failed: ${repairCrash}`
               markActiveWorkStateChanged()
               break
@@ -5123,8 +5121,7 @@ ${guideSections}
                   )))
             ) {
               activeWorkState.currentPhase = 'blocked'
-              activeWorkState.nextRequiredAction =
-                `${repairAgentLabel} did not return a completed receipt addressing every open reviewer finding.`
+              activeWorkState.nextRequiredAction = `${repairAgentLabel} did not return a completed receipt addressing every open reviewer finding.`
               activeWorkState.latestWorkSummary =
                 'Reviewer repair receipt was incomplete or missing.'
               markActiveWorkStateChanged()
@@ -5144,10 +5141,11 @@ ${guideSections}
             // predicate the loop-continuation guard above uses (that guard's break
             // condition is deliberately unchanged — it governs whether the loop
             // proceeds, which is a separate concern).
-            const addressedFindings = (activeWorkState.openReviewerFindings ?? [])
-              .filter((finding) =>
-                reviewerRepairReceipt!.findingsAddressed.includes(finding.id),
-              )
+            const addressedFindings = (
+              activeWorkState.openReviewerFindings ?? []
+            ).filter((finding) =>
+              reviewerRepairReceipt!.findingsAddressed.includes(finding.id),
+            )
             const condoneEvidenceIsSufficient =
               reviewerRepairReceipt!.status === 'completed' &&
               reviewerRepairHasProgress
@@ -5212,8 +5210,7 @@ ${guideSections}
               activeWorkState.lastReviewerGateSkipReason =
                 'reviewer-repair-no-progress'
               activeWorkState.currentPhase = 'blocked'
-              activeWorkState.nextRequiredAction =
-                `${repairAgentLabel} made no snapshot-visible progress on the reviewer findings. Stop retrying and inspect the finding or handoff.`
+              activeWorkState.nextRequiredAction = `${repairAgentLabel} made no snapshot-visible progress on the reviewer findings. Stop retrying and inspect the finding or handoff.`
               activeWorkState.latestWorkSummary =
                 'Reviewer repair produced no workspace fingerprint change.'
               mutableAgentState.canSuggestFollowups = false
@@ -5282,8 +5279,7 @@ ${guideSections}
               activeWorkState.lastValidationSummary = validationSummary
               activeWorkState.currentPhase = 'awaiting_review'
               activeWorkState.nextRequiredAction = ''
-              activeWorkState.latestWorkSummary =
-                `${repairAgentLabel} addressed reviewer findings; validation re-ran inline and a fresh reviewer pass is required.`
+              activeWorkState.latestWorkSummary = `${repairAgentLabel} addressed reviewer findings; validation re-ran inline and a fresh reviewer pass is required.`
               markActiveWorkStateChanged()
               emitGateTelemetry({
                 currentPhase: 'awaiting_review',
@@ -5536,7 +5532,8 @@ ${guideSections}
             // R5: record the reviewable subset's fingerprint so a later
             // git-action turn (no new source edits) that reopens the gate on
             // an unchanged reviewable set can skip re-review.
-            activeWorkState.reviewedReviewableFingerprint = reviewableFingerprint
+            activeWorkState.reviewedReviewableFingerprint =
+              reviewableFingerprint
             activeWorkState.lastReviewerGateSkipReason = ''
             activeWorkState.repairRoundCount = 0
             activeWorkState.repairSessionId = undefined
@@ -5953,7 +5950,10 @@ ${guideSections}
       // Self-contained pure string logic (no module-scope imports) because
       // handleSteps is serialized via .toString() + new Function(...).
       function reviewerFamilyFromFinding(finding: {
-        reviewer?: 'code-reviewer' | 'security-reviewer' | SpecialistReviewerAgent
+        reviewer?:
+          | 'code-reviewer'
+          | 'security-reviewer'
+          | SpecialistReviewerAgent
         gateId: string
       }): 'code-reviewer' | 'security-reviewer' | SpecialistReviewerAgent {
         if (finding.reviewer) return finding.reviewer
@@ -6192,7 +6192,7 @@ ${guideSections}
         )
       }
 
-// <gate-helpers-generated> DO NOT EDIT — regenerate via: bun run scripts/generate-gate-helpers.ts
+      // <gate-helpers-generated> DO NOT EDIT — regenerate via: bun run scripts/generate-gate-helpers.ts
 /**
  * Pure gate path / set helpers extracted from `base2.ts`.
  *
@@ -7521,7 +7521,6 @@ function hashGateSnapshotDetails(details: string): string {
 }
 // </gate-helpers-generated>
 
-
       function recordChangedFiles(
         files: string[],
         opts?: { fromRepair?: boolean; fromStatusObservation?: boolean },
@@ -8460,7 +8459,9 @@ function hashGateSnapshotDetails(details: string): string {
         messages: unknown,
       ): { reviewerVerdict: 'LOOKS_GOOD' | '' } | undefined {
         if (files.length === 0 || !Array.isArray(messages)) return undefined
-        let latestMatchingPass: { reviewerVerdict: 'LOOKS_GOOD' | '' } | undefined
+        let latestMatchingPass:
+          | { reviewerVerdict: 'LOOKS_GOOD' | '' }
+          | undefined
         for (const message of messages) {
           if (latestMatchingPass && messageChangedFiles(message)) {
             latestMatchingPass = undefined
@@ -8662,8 +8663,7 @@ function hashGateSnapshotDetails(details: string): string {
         const hasIncompleteWorkflowTodos =
           !!workflowTodoProgress &&
           workflowTodoProgress.nextWorkflowAction.trim().length > 0
-        const unreviewedDirty =
-          state.unreviewedDirtyReviewableFiles ?? []
+        const unreviewedDirty = state.unreviewedDirtyReviewableFiles ?? []
         const dirtyReviewableCount =
           typeof state.dirtyReviewableCount === 'number'
             ? state.dirtyReviewableCount
@@ -8718,10 +8718,7 @@ function hashGateSnapshotDetails(details: string): string {
             ].join('\n'),
           )
         }
-        if (
-          dirtyReviewableCount > 0 ||
-          unreviewedDirty.length > 0
-        ) {
+        if (dirtyReviewableCount > 0 || unreviewedDirty.length > 0) {
           sections.push(
             `dirty reviewable: ${dirtyReviewableCount} (unreviewed: ${unreviewedDirty.length})`,
           )
@@ -8866,9 +8863,7 @@ function hashGateSnapshotDetails(details: string): string {
           const texts: string[] = []
           collectMessageText(record.content, texts)
           if (
-            !texts.some(
-              (text) => text.trim().toUpperCase() === 'COMMIT ANYWAY',
-            )
+            !texts.some((text) => text.trim().toUpperCase() === 'COMMIT ANYWAY')
           ) {
             continue
           }
@@ -9529,7 +9524,9 @@ function hashGateSnapshotDetails(details: string): string {
           return 'unreadable:outside-project'
         }
         try {
-          const pathSegments = projectRelativePath.split(path.sep).filter(Boolean)
+          const pathSegments = projectRelativePath
+            .split(path.sep)
+            .filter(Boolean)
           const symlinkParts: string[] = []
           let entryPath = cwd
           for (let index = 0; index < pathSegments.length; index += 1) {
@@ -9549,7 +9546,9 @@ function hashGateSnapshotDetails(details: string): string {
           if (pathSegments.length === 0) return 'unreadable:not-a-file'
 
           const resolvedPath =
-            symlinkParts.length > 0 ? fs.realpathSync(absolutePath) : absolutePath
+            symlinkParts.length > 0
+              ? fs.realpathSync(absolutePath)
+              : absolutePath
           // Fail closed BEFORE opening: if the resolved target escapes the
           // project root, reject without reading. This prevents blocking on
           // external FIFOs and unbounded I/O on large external files.
@@ -9564,10 +9563,7 @@ function hashGateSnapshotDetails(details: string): string {
             }
           }
           const noFollow = fs.constants.O_NOFOLLOW ?? 0
-          const fd = fs.openSync(
-            resolvedPath,
-            fs.constants.O_RDONLY | noFollow,
-          )
+          const fd = fs.openSync(resolvedPath, fs.constants.O_RDONLY | noFollow)
           try {
             const openedStat = fs.fstatSync(fd)
             if (!openedStat.isFile()) return 'unreadable:not-a-file'
