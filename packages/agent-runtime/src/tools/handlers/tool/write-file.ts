@@ -2,9 +2,14 @@ import { AbortError } from '@codebuff/common/util/error'
 import {
   decodeReadCapabilityToken,
   getContentHash,
-  normalizeLineEndings,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
+import {
+  describeLineBounds,
+  getLineCoordinates,
+  getRangeSlice,
+  isWholeFileCoveringRange,
+} from '@codebuff/common/util/line-coordinates'
 
 import { coordinateEditApplication } from './edit-application-coordinator'
 import {
@@ -394,14 +399,29 @@ export const handleWriteFile = (async (
           error: `write_file blocked for ${path}: basedOnRead belongs to a different project, path, or agent run. Call read_files with paths: ["${path}"] and retry with the capability from that complete model-visible read.`,
         }
       }
-      const lineCount = normalizeLineEndings(fileContent).split('\n').length
-      if (decoded.startLine !== 1 || decoded.endLine !== lineCount) {
+      // A full-file RANGE read numbers lines in visible space and hashes the
+      // slice without the trailing newline, while a whole-file paths read binds
+      // the capability ceiling. Both are complete observations, so accept either
+      // and re-hash exactly the slice the capability covered.
+      const coordinates = getLineCoordinates(fileContent)
+      if (
+        !isWholeFileCoveringRange(
+          coordinates,
+          decoded.startLine,
+          decoded.endLine,
+        )
+      ) {
         return {
           ok: false,
-          error: `write_file blocked for ${path}: a range capability cannot authorize a whole-file overwrite (capability covers lines ${decoded.startLine}-${decoded.endLine}; file has ${lineCount} lines). Call read_files with paths: ["${path}"] and retry with the whole-file capability from that complete model-visible read.`,
+          error: `write_file blocked for ${path}: a range capability cannot authorize a whole-file overwrite (capability covers lines ${decoded.startLine}-${decoded.endLine}; ${describeLineBounds(coordinates)}). Call read_files with paths: ["${path}"] and retry with the whole-file capability from that complete model-visible read.`,
         }
       }
-      if (decoded.hash !== getContentHash(fileContent)) {
+      if (
+        decoded.hash !==
+        getContentHash(
+          getRangeSlice(coordinates, decoded.startLine, decoded.endLine),
+        )
+      ) {
         return {
           ok: false,
           error: `write_file blocked for ${path}: basedOnRead did not match the current file content (stale hash). Call read_files with paths: ["${path}"] and retry with the capability from that complete model-visible read.`,

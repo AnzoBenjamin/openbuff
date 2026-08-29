@@ -235,7 +235,8 @@ export const fileMutationActionV1Schema = z
       })
     }
     if (
-      (value.editAnchor !== undefined) !== (value.afterContent !== undefined)
+      (value.editAnchor !== undefined) !==
+      (value.afterContent !== undefined)
     ) {
       ctx.addIssue({
         code: 'custom',
@@ -250,7 +251,8 @@ export const fileMutationActionV1Schema = z
         value.editAnchor.startLine !== 1 ||
         value.editAnchor.endLine !==
           normalizeLineEndings(value.afterContent ?? '').split('\n').length ||
-        value.editAnchor.contentHash !== getContentHash(value.afterContent ?? ''))
+        value.editAnchor.contentHash !==
+          getContentHash(value.afterContent ?? ''))
     ) {
       ctx.addIssue({
         code: 'custom',
@@ -331,7 +333,8 @@ export const fileMutationResultV1Schema = z
       (value.freshCapabilities.length > 0 ||
         value.actions.some(
           (action) =>
-            action.afterContent !== undefined || action.editAnchor !== undefined,
+            action.afterContent !== undefined ||
+            action.editAnchor !== undefined,
         ))
     ) {
       ctx.addIssue({
@@ -353,7 +356,8 @@ export const fileMutationResultV1Schema = z
     ) {
       ctx.addIssue({
         code: 'custom',
-        message: 'whole-file fresh capabilities require a matching action anchor',
+        message:
+          'whole-file fresh capabilities require a matching action anchor',
       })
     }
 
@@ -1155,10 +1159,7 @@ function mutationActionFromReceipt(
   }
 }
 
-export type FileMutationActionContentsV1 = ReadonlyMap<
-  number | string,
-  string
->
+export type FileMutationActionContentsV1 = ReadonlyMap<number | string, string>
 
 export type FileMutationActionEditAnchorsV1 = ReadonlyMap<
   number | string,

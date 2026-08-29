@@ -704,10 +704,7 @@ const definition: AgentDefinition = {
       agentState.contextTokenCount ?? 0,
       estimatedContextTokens,
     )
-    if (
-      contextTokenCount + TOKEN_COUNT_FUDGE_FACTOR <=
-      maxContextLength
-    ) {
+    if (contextTokenCount + TOKEN_COUNT_FUDGE_FACTOR <= maxContextLength) {
       yield {
         toolName: 'set_messages',
         input: { messages: currentMessages },
@@ -1181,11 +1178,7 @@ const definition: AgentDefinition = {
       if (values.length === 0 || requestedPaths.length === 0) return []
 
       for (const value of values) {
-        if (
-          !isRecord(value) ||
-          value.kind !== 'read_files_result'
-        )
-          continue
+        if (!isRecord(value) || value.kind !== 'read_files_result') continue
         if (value.version !== 1 || !Array.isArray(value.results)) return []
         const canonicalPaths: string[] = []
         for (const result of value.results) {
@@ -1259,7 +1252,8 @@ const definition: AgentDefinition = {
     function getEffectiveActionPath(
       action: Record<string, unknown>,
     ): string | null {
-      const path = action.action === 'move' ? action.destinationPath : action.path
+      const path =
+        action.action === 'move' ? action.destinationPath : action.path
       return typeof path === 'string' && path.length > 0 ? path : null
     }
 
@@ -1276,8 +1270,7 @@ const definition: AgentDefinition = {
         return null
       }
       const indexMatches = receiptActions.filter(
-        (candidate) =>
-          isRecord(candidate) && candidate.index === action.index,
+        (candidate) => isRecord(candidate) && candidate.index === action.index,
       )
       const actionIdMatches = receiptActions.filter(
         (candidate) =>
@@ -1314,9 +1307,8 @@ const definition: AgentDefinition = {
         const actions = Array.isArray(value.actions) ? value.actions : []
         const receiptActions =
           receipt && Array.isArray(receipt.actions) ? receipt.actions : []
-        const finalHashes = receipt && isRecord(receipt.finalHashes)
-          ? receipt.finalHashes
-          : null
+        const finalHashes =
+          receipt && isRecord(receipt.finalHashes) ? receipt.finalHashes : null
         const validReceipt =
           receipt?.kind === 'commit_receipt' &&
           receipt.version === 1 &&
@@ -1355,10 +1347,7 @@ const definition: AgentDefinition = {
             ) {
               continue
             }
-            const confirmed = getCorrelatedReceiptAction(
-              receiptActions,
-              action,
-            )
+            const confirmed = getCorrelatedReceiptAction(receiptActions, action)
             const effectivePath = getEffectiveActionPath(action)
             const correlated =
               isRecord(confirmed) &&
@@ -1402,9 +1391,8 @@ const definition: AgentDefinition = {
         const actions = Array.isArray(value.actions) ? value.actions : []
         const receiptActions =
           receipt && Array.isArray(receipt.actions) ? receipt.actions : []
-        const finalHashes = receipt && isRecord(receipt.finalHashes)
-          ? receipt.finalHashes
-          : null
+        const finalHashes =
+          receipt && isRecord(receipt.finalHashes) ? receipt.finalHashes : null
         const fullyCorrelated =
           value.kind === 'file_mutation_result' &&
           value.version === 1 &&
@@ -1436,10 +1424,7 @@ const definition: AgentDefinition = {
             ) {
               return false
             }
-            const confirmed = getCorrelatedReceiptAction(
-              receiptActions,
-              action,
-            )
+            const confirmed = getCorrelatedReceiptAction(receiptActions, action)
             const effectivePath = getEffectiveActionPath(action)
             return (
               confirmed !== null &&
@@ -1460,7 +1445,8 @@ const definition: AgentDefinition = {
           for (const action of actions) {
             if (!isRecord(action)) continue
             const effectivePath = getEffectiveActionPath(action)
-            if (typeof action.path !== 'string' || effectivePath === null) continue
+            if (typeof action.path !== 'string' || effectivePath === null)
+              continue
             invalidatedPaths.add(action.path)
             invalidatedPaths.add(effectivePath)
             if (!isRecord(action.editAnchor)) continue
@@ -1550,7 +1536,9 @@ const definition: AgentDefinition = {
       if (km.editsMade.length > KNOWLEDGE_MEMORY_MAX_EDITS) {
         km.editsMade = km.editsMade.slice(-KNOWLEDGE_MEMORY_MAX_EDITS)
       }
-      if (km.validationResults.length > KNOWLEDGE_MEMORY_MAX_VALIDATION_RESULTS) {
+      if (
+        km.validationResults.length > KNOWLEDGE_MEMORY_MAX_VALIDATION_RESULTS
+      ) {
         km.validationResults = km.validationResults.slice(
           -KNOWLEDGE_MEMORY_MAX_VALIDATION_RESULTS,
         )
@@ -1623,9 +1611,7 @@ const definition: AgentDefinition = {
               !Array.isArray(parsed) &&
               Object.keys(parsed).some((key) => prunerParamKeys.includes(key))
             ) {
-              text = text
-                .slice(0, text.length - trailingJson[0].length)
-                .trim()
+              text = text.slice(0, text.length - trailingJson[0].length).trim()
             }
           } catch {
             // Keep the original text when the trailing blob is not valid JSON.

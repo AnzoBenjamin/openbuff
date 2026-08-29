@@ -3,6 +3,7 @@
 ## Current state (workspace.v1.827) — M0–M4 + security fix GREEN
 
 ### Done
+
 - **M0** Discovery/blast-radius machine-confirmed.
 - **M1** Unified `common/src/util/job-registry.ts` core (lifecycle state machine, sequenced ring buffer, per-consumer cursors, wait/snapshot/stream, in-registry ownership). 63 unit tests.
 - **M2** Shell (process) adapter in `sdk` on the unified core (spawn/kill/log capture/quota, cross-session recovery as write-only disk projection).
@@ -16,19 +17,23 @@
   - 3 agent-runtime handler tests retyped `forwardedToolCall` to `ProcessJobClientToolCall`.
 
 ### Validation (workspace.v1.827)
+
 - Typechecks: common:0, sdk:0, agent-runtime:0 (clean).
 - sdk background-job suites: 55 pass / 0 fail.
 - agent-runtime + common job suites: 94 pass / 0 fail.
 
 ### Remaining
+
 - **M5** Wire live job event stream to CLI; render live job activity.
 - **M6** Update prompts, docs, evals; regenerate release bundles (controlled breaks).
 - **M7** Final cross-package validation + dev-server smoke + coverage gate; final review.
 
 ## Resume instructions
+
 Backend unification + security hardening is complete and green. Next checkpoint is M5 (live UI). The full design lives in `PLAN.md`; the security findings/decisions live in `LESSONS.md`.
 
 <!-- update_plan_status:appended -->
+
 ## M5 Live UI Complete (verified implemented) — 2026-08-01 — 2026-08-01T14:43:39.935Z
 
 M5 needed NO new code — the live-UI chain was already implemented and unit-tested; the plan's IN PROGRESS checkbox was stale. Verified by reading source + running the two relevant suites.
@@ -43,8 +48,8 @@ Remaining for M5's spirit: the LIVE real-terminal dev-server smoke — that is M
 
 Next: M6 (prompts/docs/evals/generated bundles). M6.1 base2 prompt (line 292) already documents live-surface behavior; verify editor.ts/base-deep.ts prompts, docs/deterministic-edit-system.md, and regenerate cli/release bundles.
 
-
 <!-- update_plan_status:appended -->
+
 ## M6 Prompts/Docs/Evals Complete — 2026-08-01 — 2026-08-01T14:58:36.878Z
 
 M6 needed NO new edits — prompts, docs, and evals were already aligned with the unified job contracts. Verified by source search, not assumed.
@@ -53,6 +58,6 @@ M6.1 (agent prompts): `agents/base2/base2.ts:292` already documents the unified 
 
 M6.2 (docs): `docs/deterministic-edit-system.md:28` and `docs/agents-and-tools.md:581-628` already describe the unified JobRegistry (process+agent kinds, one lifecycle machine, assertOwned foreign→not-found, restampOwner, additive job_update). No doc still documents the deleted tri-state gate or pending-background-jobs Map.
 
-M6.3 (evals + bundles): evals/buffbench/* are clean — no job-tool references, no ownership-behavior assertions. cli/release*/index.js regeneration DEFERRED to the CI release workflow (user decision): build-binary.ts is the CI release path (requires version, compiles platform binaries), and the bundles are regenerate-not-hand-edit artifacts.
+M6.3 (evals + bundles): evals/buffbench/_ are clean — no job-tool references, no ownership-behavior assertions. cli/release_/index.js regeneration DEFERRED to the CI release workflow (user decision): build-binary.ts is the CI release path (requires version, compiles platform binaries), and the bundles are regenerate-not-hand-edit artifacts.
 
 Next: M7 (final cross-package validation + live dev-server smoke + coverage gate + final review).

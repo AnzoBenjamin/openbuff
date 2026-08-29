@@ -5,6 +5,14 @@ import {
   normalizeLineEndings,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
+import {
+  describeLineBounds,
+  describeReanchorFailure,
+  getLineCoordinates,
+  getRangeSlice,
+  reanchorCapabilityRange,
+  resolveLineRange,
+} from '@codebuff/common/util/line-coordinates'
 
 import { processStrReplace } from './process-str-replace'
 import { processStructuredEdit } from './process-structured-edit'
@@ -21,6 +29,7 @@ import type {
 } from './process-structured-edit'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
+
 
 type StrReplaceTransactionEdit = {
   id?: string
@@ -74,9 +83,21 @@ type ResolvedReplaceRangeTransactionEdit = {
   startLine: number
   endLine: number
   occurrence?: { match: string; occurrence?: number }
+  /**
+   * Bounds decoded from the token, used ONLY for the authenticity equality
+   * check against the capability the caller passed.
+   */
+  capabilityTokenStartLine: number
+  capabilityTokenEndLine: number
+  /**
+   * Bounds where the capability-covered content actually lives in the original
+   * snapshot. Equal to the token bounds unless the span was re-anchored.
+   */
   capabilityStartLine: number
   capabilityEndLine: number
   capabilityHash: string
+  /** Signed line delta applied by a re-anchor; absent when nothing shifted. */
+  reanchoredBy?: number
   readCapability: string
   newContent: string
   /** Internal immutable-snapshot bounds and exact mapped working span. */
@@ -556,8 +577,7 @@ function buildTransactionRecovery(params: {
   const { paths, failure, failedReplacementIndex } = params
   const kind =
     failure.failureKind ?? classifyTransactionFailureKind(failure.errorMessage)
-  const isCapability =
-    typeof kind === 'string' && kind.startsWith('capability')
+  const isCapability = typeof kind === 'string' && kind.startsWith('capability')
   // An anchored scope mismatch needs the same fresh-read handling as a match
   // failure, but the correct fix is a capability that actually covers the target
   // lines, so replace_range is the preferred strategy rather than a shorter
@@ -603,25 +623,26 @@ function originalLineSpan(
   startLine: number,
   endLine: number,
 ): { startOffset: number; endOffset: number } | null {
-  const normalized = normalizeLineEndings(content)
-  const lines = normalized.split('\n')
-  const visibleLineCount =
-    normalized.length === 0
-      ? 0
-      : lines.at(-1) === ''
-        ? lines.length - 1
-        : lines.length
-  if (startLine < 1 || endLine < startLine || endLine > visibleLineCount) {
+  const coordinates = getLineCoordinates(content)
+  // Resolve in capability space: read_files mints whole-file capabilities that
+  // bind the trailing entry past the final newline, so resolving in visible
+  // space here would drop provenance for exactly the whole-file case and let it
+  // skip the transformation-ledger overlap checks.
+  const resolved = resolveLineRange({ coordinates, startLine, endLine })
+  if (!resolved.ok) {
     return null
   }
+  const { lines } = coordinates
   let startOffset = 0
-  for (let index = 0; index < startLine - 1; index++) {
+  for (let index = 0; index < resolved.startLine - 1; index++) {
     startOffset += lines[index]!.length + 1
   }
   let endOffset = startOffset
-  for (let index = startLine - 1; index < endLine; index++) {
+  // When endLine is maxCapabilityLine the final entry is the empty string after
+  // the last newline, so this walk naturally ends at normalized.length.
+  for (let index = resolved.startLine - 1; index < resolved.endLine; index++) {
     endOffset += lines[index]!.length
-    if (index < endLine - 1) endOffset += 1
+    if (index < resolved.endLine - 1) endOffset += 1
   }
   return { startOffset, endOffset }
 }
@@ -648,7 +669,9 @@ function mapOriginalOffset(
         affinity === 'right')
     ) {
       currentOffset +=
-        entry.afterEnd - entry.afterStart - (entry.beforeEnd - entry.beforeStart)
+        entry.afterEnd -
+        entry.afterStart -
+        (entry.beforeEnd - entry.beforeStart)
     }
   }
   return currentOffset
@@ -675,8 +698,41 @@ function resolveReplaceRangeEdit(
         : {}),
     }
   }
-  const startLine = edit.startLine ?? decoded.startLine
-  const endLine = edit.endLine ?? decoded.endLine
+  // Re-anchor the CAPABILITY span here, before occurrence resolution and before
+  // provenance mapping, so every downstream consumer sees ONE already-shifted
+  // span. Shifting later instead would search the wrong window or shift twice.
+  // With no snapshot content to search, today's behavior is kept: the freshness
+  // re-hash downstream still fails closed.
+  let capabilityStartLine = decoded.startLine
+  let capabilityEndLine = decoded.endLine
+  let reanchoredBy: number | undefined
+  if (typeof currentContent === 'string') {
+    const reanchored = reanchorCapabilityRange({
+      coordinates: getLineCoordinates(currentContent),
+      startLine: decoded.startLine,
+      endLine: decoded.endLine,
+      expectedHash: decoded.hash,
+    })
+    if (!reanchored.ok) {
+      return {
+        error: `replace_range blocked for ${edit.path}: the readCapability-covered content is stale. Re-read lines ${decoded.startLine}-${decoded.endLine} and retry with the fresh token. Cause: ${describeReanchorFailure(reanchored)}.`,
+        failureKind: 'capability_stale' as const,
+      }
+    }
+    if (reanchored.shiftedBy !== undefined) {
+      capabilityStartLine = reanchored.startLine
+      capabilityEndLine = reanchored.endLine
+      reanchoredBy = reanchored.shiftedBy
+    }
+  }
+  const capabilityFields = {
+    capabilityTokenStartLine: decoded.startLine,
+    capabilityTokenEndLine: decoded.endLine,
+    capabilityStartLine,
+    capabilityEndLine,
+    capabilityHash: decoded.hash,
+    ...(reanchoredBy !== undefined ? { reanchoredBy } : {}),
+  }
   if (edit.occurrence) {
     // Resolve occurrence targeting to absolute original-snapshot lines here, so
     // the resolved bounds flow through provenance mapping and capability
@@ -694,34 +750,35 @@ function resolveReplaceRangeEdit(
       content: currentContent,
       match: edit.occurrence.match,
       occurrence: edit.occurrence.occurrence,
-      capabilityStartLine: decoded.startLine,
-      capabilityEndLine: decoded.endLine,
+      capabilityStartLine,
+      capabilityEndLine,
     })
     if (!resolved.range) {
       return {
-        error: `replace_range blocked for ${edit.path}: found ${resolved.found} occurrence(s) of the requested match inside the authorized range ${decoded.startLine}-${decoded.endLine}, so occurrence ${edit.occurrence.occurrence ?? 1} does not exist. Re-read the range and target an existing occurrence or absolute lines.`,
+        error: `replace_range blocked for ${edit.path}: found ${resolved.found} occurrence(s) of the requested match inside the authorized range ${capabilityStartLine}-${capabilityEndLine}, so occurrence ${edit.occurrence.occurrence ?? 1} does not exist. Re-read the range and target an existing occurrence or absolute lines.`,
         failureKind: 'no_match' as const,
       }
     }
     return {
       edit: {
         ...edit,
+        // Already resolved inside the re-anchored window, so it must not shift
+        // a second time.
         startLine: resolved.range.startLine,
         endLine: resolved.range.endLine,
-        capabilityStartLine: decoded.startLine,
-        capabilityEndLine: decoded.endLine,
-        capabilityHash: decoded.hash,
+        ...capabilityFields,
       },
     }
   }
+  // Explicit (and capability-default) target lines were observed in the token's
+  // line space, so they move with the capability span.
+  const shift = reanchoredBy ?? 0
   return {
     edit: {
       ...edit,
-      startLine,
-      endLine,
-      capabilityStartLine: decoded.startLine,
-      capabilityEndLine: decoded.endLine,
-      capabilityHash: decoded.hash,
+      startLine: (edit.startLine ?? decoded.startLine) + shift,
+      endLine: (edit.endLine ?? decoded.endLine) + shift,
+      ...capabilityFields,
     },
   }
 }
@@ -760,7 +817,11 @@ function getEffectiveReplaceRangeEdit(
       }
     }
   }
-  const startOffset = mapOriginalOffset(originalSpan.startOffset, ledger, 'right')
+  const startOffset = mapOriginalOffset(
+    originalSpan.startOffset,
+    ledger,
+    'right',
+  )
   const endOffset = mapOriginalOffset(originalSpan.endOffset, ledger, 'left')
   if (startOffset === null || endOffset === null || endOffset < startOffset) {
     return {
@@ -785,7 +846,10 @@ function mapWorkingOffsetToOriginal(
   for (let index = ledger.length - 1; index >= 0; ) {
     const actionIndex = ledger[index]!.actionIndex
     let firstIndex = index
-    while (firstIndex > 0 && ledger[firstIndex - 1]!.actionIndex === actionIndex) {
+    while (
+      firstIndex > 0 &&
+      ledger[firstIndex - 1]!.actionIndex === actionIndex
+    ) {
       firstIndex--
     }
     let actionDelta = 0
@@ -799,7 +863,9 @@ function mapWorkingOffsetToOriginal(
         (isDeletion && offset === entry.afterStart && affinity === 'right')
       ) {
         actionDelta +=
-          entry.afterEnd - entry.afterStart - (entry.beforeEnd - entry.beforeStart)
+          entry.afterEnd -
+          entry.afterStart -
+          (entry.beforeEnd - entry.beforeStart)
       }
     }
     offset -= actionDelta
@@ -819,7 +885,12 @@ function appendTransformationLedgerEntries(
   let beforeOffset = 0
   let afterOffset = 0
   let pending:
-    | { beforeStart: number; beforeEnd: number; afterStart: number; afterEnd: number }
+    | {
+        beforeStart: number
+        beforeEnd: number
+        afterStart: number
+        afterEnd: number
+      }
     | undefined
   const flush = (): boolean => {
     if (!pending) return true
@@ -833,7 +904,11 @@ function appendTransformationLedgerEntries(
       existingLedger,
       'left',
     )
-    if (originalStart === null || originalEnd === null || originalEnd < originalStart) {
+    if (
+      originalStart === null ||
+      originalEnd === null ||
+      originalEnd < originalStart
+    ) {
       return false
     }
     entries.push({
@@ -849,7 +924,8 @@ function appendTransformationLedgerEntries(
     if (!part.added && !part.removed) {
       if (!flush()) {
         return {
-          error: 'a changed interval originated in text introduced by a prior edit',
+          error:
+            'a changed interval originated in text introduced by a prior edit',
         }
       }
       beforeOffset += part.value.length
@@ -941,17 +1017,8 @@ async function processTransactionEdit(params: {
       if (initialContent === null) {
         return { error: `Cannot replace a range in missing file ${edit.path}.` }
       }
-      const normalized = normalizeLineEndings(initialContent)
-      const lines = normalized.split('\n')
-      // visibleLineCount excludes a trailing-empty line so the requested
-      // sub-range bounds check never permits a phantom line beyond the last
-      // real line (preserves the original bounds behavior).
-      const visibleLineCount =
-        normalized.length === 0
-          ? 0
-          : lines.at(-1) === ''
-            ? lines.length - 1
-            : lines.length
+      const coordinates = getLineCoordinates(initialContent)
+      const { normalized, lines } = coordinates
       const authorizationTarget = edit.originalRange ?? {
         startLine: edit.startLine,
         endLine: edit.endLine,
@@ -961,10 +1028,7 @@ async function processTransactionEdit(params: {
         if (typeof decoded === 'string') {
           return { error: decoded, failureKind: 'capability_invalid' }
         }
-        if (
-          !readCapabilityIssuer?.projectId ||
-          !readCapabilityIssuer.runId
-        ) {
+        if (!readCapabilityIssuer?.projectId || !readCapabilityIssuer.runId) {
           return {
             error: `replace_range blocked for ${edit.path}: authenticated readCapability scope is unavailable. Re-read the target in a runtime with a nonempty project and run scope.`,
           }
@@ -976,11 +1040,13 @@ async function processTransactionEdit(params: {
             failureKind: 'capability_scope',
           }
         }
-        // Authenticate original snapshot coordinates. Prior edits may shift the
-        // working target, but they do not change the bytes the capability proved.
+        // Authenticate original snapshot coordinates against the bounds the
+        // TOKEN carries. A re-anchor may have moved where those bytes live, but
+        // it never changes what the capability proved, so the equality check
+        // stays on the token bounds.
         if (
-          decoded.startLine !== edit.capabilityStartLine ||
-          decoded.endLine !== edit.capabilityEndLine ||
+          decoded.startLine !== edit.capabilityTokenStartLine ||
+          decoded.endLine !== edit.capabilityTokenEndLine ||
           decoded.hash !== edit.capabilityHash
         ) {
           return {
@@ -989,10 +1055,14 @@ async function processTransactionEdit(params: {
           }
         }
         const originalContent = await originalContentPromise
-        const observedContent = normalizeLineEndings(originalContent ?? '')
-          .split('\n')
-          .slice(edit.capabilityStartLine - 1, edit.capabilityEndLine)
-          .join('\n')
+        // Freshness is re-verified at the ACTUAL located bounds: after a
+        // re-anchor the proven bytes live there, and re-slicing the token's
+        // original bounds would re-report the staleness the re-anchor resolved.
+        const observedContent = getRangeSlice(
+          getLineCoordinates(originalContent ?? ''),
+          edit.capabilityStartLine,
+          edit.capabilityEndLine,
+        )
         if (getContentHash(observedContent) !== decoded.hash) {
           return {
             error: `replace_range blocked for ${edit.path}: the readCapability-covered content is stale. Re-read lines ${edit.capabilityStartLine}-${edit.capabilityEndLine} and retry with the fresh token.`,
@@ -1009,14 +1079,28 @@ async function processTransactionEdit(params: {
           }
         }
       }
-      if (
-        !edit.mappedRange &&
-        (edit.startLine < 1 ||
-          edit.endLine < edit.startLine ||
-          edit.endLine > visibleLineCount)
-      ) {
-        return {
-          error: `replace_range ${edit.startLine}-${edit.endLine} is outside ${edit.path} (${visibleLineCount} lines).`,
+      // Bounds resolve in CAPABILITY space: a whole-file capability legally binds
+      // the trailing entry past the final newline, so checking against the
+      // visible ceiling would reject every whole-file range edit on a
+      // newline-terminated file.
+      let targetStartLine = edit.startLine
+      let targetEndLine = edit.endLine
+      let clampSuffix = ''
+      if (!edit.mappedRange) {
+        const resolved = resolveLineRange({
+          coordinates,
+          startLine: edit.startLine,
+          endLine: edit.endLine,
+        })
+        if (!resolved.ok) {
+          return {
+            error: `replace_range ${edit.startLine}-${edit.endLine} is outside ${edit.path} (${describeLineBounds(coordinates)}).`,
+          }
+        }
+        targetStartLine = resolved.startLine
+        targetEndLine = resolved.endLine
+        if (resolved.clampedFrom) {
+          clampSuffix = ` Requested endLine ${resolved.clampedFrom.endLine} was clamped to line ${resolved.endLine}, the file's last capability line.`
         }
       }
       const narrowedTarget =
@@ -1025,14 +1109,20 @@ async function processTransactionEdit(params: {
       const narrowedTargetSuffix = narrowedTarget
         ? ' within the readCapability-covered range'
         : ''
+      // A relocated edit must never be silent: the message names the shift so
+      // the reported lines can be reconciled with the ones that were read.
+      const reanchorSuffix =
+        edit.reanchoredBy === undefined
+          ? ''
+          : ` (re-anchored ${edit.reanchoredBy > 0 ? '+' : ''}${edit.reanchoredBy} lines after content shifted above the target)`
       const replacementContent = normalizeLineEndings(edit.newContent)
       const content = edit.mappedRange
         ? `${normalized.slice(0, edit.mappedRange.startOffset)}${replacementContent}${normalized.slice(edit.mappedRange.endOffset)}`
         : (() => {
             const replacementLines = replacementContent.split('\n')
             lines.splice(
-              edit.startLine - 1,
-              edit.endLine - edit.startLine + 1,
+              targetStartLine - 1,
+              targetEndLine - targetStartLine + 1,
               ...replacementLines,
             )
             return lines.join('\n')
@@ -1040,7 +1130,7 @@ async function processTransactionEdit(params: {
       return {
         content,
         messages: [
-          `Replaced lines ${authorizationTarget.startLine}-${authorizationTarget.endLine} in ${edit.path}${narrowedTargetSuffix}.`,
+          `Replaced lines ${authorizationTarget.startLine}-${authorizationTarget.endLine} in ${edit.path}${narrowedTargetSuffix}${reanchorSuffix}.${clampSuffix}`,
         ],
       }
     }
@@ -1082,7 +1172,10 @@ async function processTransactionEdit(params: {
         const originalMatch = edit.occurrence
           ? originalMatches[edit.occurrence - 1]
           : originalMatches[0]
-        if (!originalMatch || (!edit.occurrence && originalMatches.length > 1)) {
+        if (
+          !originalMatch ||
+          (!edit.occurrence && originalMatches.length > 1)
+        ) {
           return {
             error: `rewrite_symbol blocked for ${edit.path}: the original symbol replacement span is no longer uniquely resolvable.`,
           }

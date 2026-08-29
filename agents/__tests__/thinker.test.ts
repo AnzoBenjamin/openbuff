@@ -113,7 +113,9 @@ describe('thinker agent', () => {
       expect(base2.systemPrompt).toContain('params.depth')
       expect(base2.systemPrompt).toContain('params.outputSchemaHint')
       expect(base2.instructionsPrompt).toContain('includeMessageHistory:false')
-      expect(base2.instructionsPrompt).toContain('self-contained decision packet')
+      expect(base2.instructionsPrompt).toContain(
+        'self-contained decision packet',
+      )
       expect(base2.instructionsPrompt).toContain('params.depth')
       expect(base2.instructionsPrompt).toContain('params.outputSchemaHint')
     })
@@ -158,7 +160,9 @@ describe('thinker agent', () => {
     })
 
     test('prefers plain assistant text for the final answer', () => {
-      expect(thinker.instructionsPrompt).toContain('prefer plain assistant text')
+      expect(thinker.instructionsPrompt).toContain(
+        'prefer plain assistant text',
+      )
       expect(thinker.instructionsPrompt).toContain('ordinary response text')
       expect(thinker.instructionsPrompt).toContain(
         'harvested automatically from that plain text',

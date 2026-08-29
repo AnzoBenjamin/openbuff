@@ -52,6 +52,7 @@ starts.
   `renderer: 'custom'` with no registered component — metadata and registration land together.
 
 <!-- update_plan_status:appended -->
+
 ## M1 + M2 complete (gate-verified) — 2026-08-02T17:34:06.607Z
 
 Milestone M1 (correctness: authority ladder + bounds + ecosystem wiring) and Milestone M2 (unified selector surface on read_files) are complete and gate-verified.
@@ -64,8 +65,8 @@ Milestone M1 (correctness: authority ladder + bounds + ecosystem wiring) and Mil
 
 **Next:** M3 (deprecate read_blocks to a forwarding surface + prompt/docs updates). M3-T1 makes read_blocks a thin adapter over the shared handler; M3-T2 updates editor/base2 prompts + docs + AGENTS.md; M3-GATE runs agents suites incl. quality-prompt-snapshot.
 
-
 <!-- update_plan_status:appended -->
+
 ## M3 complete: read_blocks fully removed (gate-verified) — 2026-08-02T20:18:50.156Z
 
 M3 is complete. Per user decision (full removal, not a forwarding alias), the `read_blocks` tool was deleted across every layer after `read_files` became a strict functional superset.
@@ -73,7 +74,8 @@ M3 is complete. Per user decision (full removal, not a forwarding alias), the `r
 **Prerequisite (occurrence gap closed first):** added the occurrence-aware `symbol` selector to `read_files` (`symbol: [{ path, name, occurrence? }]`, mirroring rewrite_symbol occurrence semantics) so `read_files` is a strict superset of `read_blocks`: paths, ranges, windows, around, occurrence-aware `symbol`, batch `symbols`. Context-pruner + CLI renderer brought to parity for the new selectors; mirrors regenerated; gate NON_BLOCKING.
 
 **M3 removal (2 editor waves + follow-ups):**
-- Wave 1 (core): removed `read_blocks` from `constants.ts` (toolNames + publishedTools), `list.ts`, `metadata.ts` (READ_TOOLS/CUSTOM_RENDERERS/PATH_INPUTS); deleted `params/tool/read-blocks.ts` (selector schemas + MAX_* constants relocated into `read-files.ts`); removed `readBlocksResultV1Schema`/`buildReadBlocksResultV1`/`isReadBlocksResultV1` + types from `filesystem.ts` (kept the `readBlocks*ItemSchema` window/around/symbol item kinds inside the shared `readFilesItemV1Schema` union); deleted the runtime handler + its registration; deleted the CLI renderer + registry entry; deleted `read-blocks.test.ts` + `read-blocks-schema.test.ts`; removed all `read_blocks`/`read_blocks_result` handling from `agents/context-pruner.ts`.
+
+- Wave 1 (core): removed `read_blocks` from `constants.ts` (toolNames + publishedTools), `list.ts`, `metadata.ts` (READ*TOOLS/CUSTOM_RENDERERS/PATH_INPUTS); deleted `params/tool/read-blocks.ts` (selector schemas + MAX\*\* constants relocated into `read-files.ts`); removed `readBlocksResultV1Schema`/`buildReadBlocksResultV1`/`isReadBlocksResultV1` + types from `filesystem.ts` (kept the `readBlocks*ItemSchema`window/around/symbol item kinds inside the shared`readFilesItemV1Schema`union); deleted the runtime handler + its registration; deleted the CLI renderer + registry entry; deleted`read-blocks.test.ts`+`read-blocks-schema.test.ts`; removed all `read_blocks`/`read_blocks_result`handling from`agents/context-pruner.ts`.
 - Wave 2 (agents + docs): removed `read_blocks` from every agent `toolNames` (editor, repair-editor, thinker, code-reviewer, security-reviewer, debugger, doc-writer, test-writer, synthesizer, general-agent, base2, base-deep, create-specialist); rewrote prompt prose to point at `read_files` windows/around/symbol selectors; updated agent tests (thinker/code-reviewer/editor/base2/gate-lifecycle e2e); folded `read_blocks` docs into `read_files` in `docs/agents-and-tools.md` + `docs/deterministic-edit-system.md`.
 - Follow-up fixes surfaced by validation/review: input-aliases map — the occurrence-aware `symbol` is a real canonical selector, NOT aliased onto batch `symbols` (self-alias with coerce:'array'+coerceCanonical so a singular object coerces to a one-element array); added `window`/`around`/`symbol` alias entries; updated the input-aliases test. `metadata.ts` PATH_INPUTS for `read_files` extended with `windows[].path`/`around[].path`/`symbol[].path`. `structural-read.ts` user-facing error strings/comments re-pointed from `read_blocks` to `read_files`. Model-facing `read_files` description re-pointed the `symbol` selector's occurrence semantics from `read_blocks` to `rewrite_symbol`. Four generated type mirrors regenerated (init-type-sources 3/3; tool-registration-consistency green).
 
@@ -81,9 +83,8 @@ M3 is complete. Per user decision (full removal, not a forwarding alias), the `r
 
 **Plan complete:** M1 (authority ladder + ecosystem), M2 (unified selector surface), M3 (full read_blocks removal) all done and gate-verified. The read surface is now a single `read_files` tool with six selectors, one authority ladder, cap.v3 minting, byte budgets, and full CLI/pruner/agent parity.
 
-
 <!-- update_plan_status:appended -->
+
 ## Session closed — all milestones complete — 2026-08-02T21:34:04.262Z
 
 All three milestones (M1 authority ladder, M2 unified selector surface, M3 read_blocks removal) are complete and gate-verified per the appended entries above. The read surface is now unified on `read_files` with six selectors (paths, ranges, windows, around, symbol, symbols). `read_blocks` is fully removed from every layer (registry, handler, schemas, CLI renderer, agent grants, prompts, docs). Flipping session state to completed.
-

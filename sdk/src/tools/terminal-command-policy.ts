@@ -125,13 +125,7 @@ function envRestUtilityBasename(rest: string): string | undefined {
       index += 1
       continue
     }
-    return (
-      token
-        .split('/')
-        .filter(Boolean)
-        .at(-1)
-        ?.toLowerCase() ?? undefined
-    )
+    return token.split('/').filter(Boolean).at(-1)?.toLowerCase() ?? undefined
   }
   return undefined
 }
@@ -226,7 +220,10 @@ function advancePastEnvironmentDumpWrapper(
     }
   }
   // Positional preamble required before the utility for some wrappers.
-  if (index < tokens.length && (executable === 'timeout' || executable === 'flock')) {
+  if (
+    index < tokens.length &&
+    (executable === 'timeout' || executable === 'flock')
+  ) {
     index += 1
   } else if (
     index < tokens.length &&
@@ -373,7 +370,9 @@ function findProcessEnvironmentIssue(
   style: 'workspace' | 'read-only',
 ): string | undefined {
   const reason =
-    style === 'workspace' ? WORKSPACE_ENV_DUMP_REASON : READ_ONLY_ENV_DUMP_REASON
+    style === 'workspace'
+      ? WORKSPACE_ENV_DUMP_REASON
+      : READ_ONLY_ENV_DUMP_REASON
   const trimmed = segment.trim()
 
   // Bare leading builtins: preserve safe set / export assignment / env+cmd.
@@ -414,22 +413,13 @@ function findProcessEnvironmentIssue(
     return reason
   }
   if (resolved.executable === 'set') {
-    return classifyShellSetIssue(
-      resolved.arguments.join(' '),
-      style,
-      reason,
-    )
+    return classifyShellSetIssue(resolved.arguments.join(' '), style, reason)
   }
   if (resolved.executable === 'export') {
-    return classifyExportIssue(
-      resolved.arguments.join(' '),
-      style,
-      reason,
-    )
+    return classifyExportIssue(resolved.arguments.join(' '), style, reason)
   }
   return undefined
 }
-
 
 /**
  * Extract active `$(...)` / backtick / `<(...)` / `>(...)` bodies and the
@@ -622,7 +612,9 @@ function findProcessEnvironmentIssueInCommand(
   substitutionMode: 'fail-closed' | 'inspect-bodies' = 'fail-closed',
 ): string | undefined {
   const reason =
-    style === 'workspace' ? WORKSPACE_ENV_DUMP_REASON : READ_ONLY_ENV_DUMP_REASON
+    style === 'workspace'
+      ? WORKSPACE_ENV_DUMP_REASON
+      : READ_ONLY_ENV_DUMP_REASON
   if (substitutionMode === 'inspect-bodies') {
     // Workspace-write: inspect substitution bodies and remaining segments
     // instead of treating every `$()` / process substitution as a dump.
@@ -990,9 +982,15 @@ function resolveTmuxCommand(segment: string): TmuxCommand | undefined {
         if (!optionsEnded && argument === '--') {
           optionsEnded = true
           index += 1
-        } else if (!optionsEnded && (argument === '-i' || argument === '--ignore-environment')) {
+        } else if (
+          !optionsEnded &&
+          (argument === '-i' || argument === '--ignore-environment')
+        ) {
           index += 1
-        } else if (!optionsEnded && (argument === '-u' || argument === '--unset')) {
+        } else if (
+          !optionsEnded &&
+          (argument === '-u' || argument === '--unset')
+        ) {
           if (!tokens[index + 1]) {
             return { executable: '__unsafe-tmux-wrapper__', arguments: [] }
           }
@@ -1158,7 +1156,8 @@ function hasUnsafeTmuxWriteRedirection(command: string): boolean {
     if (char !== '>') continue
 
     let targetStart = index + 1
-    if (command[targetStart] === '>' || command[targetStart] === '|') targetStart += 1
+    if (command[targetStart] === '>' || command[targetStart] === '|')
+      targetStart += 1
     while (/\s/.test(command[targetStart] ?? '')) targetStart += 1
     if (
       command[targetStart] === '&' &&
@@ -1259,12 +1258,45 @@ function findEscapingTraversalPath(
 }
 
 /**
+ * Diagnostic write namespace for the validation-diagnosis profile. A repro
+ * fixture must live in a directory named `repro` or `diagnostics` anywhere in
+ * the project (`repro/fixture.log`, `packages/foo/diagnostics/run.json`).
+ * Containment inside the project root is not sufficient on its own: manifests
+ * such as `package.json` are executed later by `bun run <script>`, and source
+ * files are owned by edit_transaction, so a read-only diagnosis profile must
+ * not be able to write either.
+ */
+const DIAGNOSTIC_WRITE_DIRECTORIES = new Set(['repro', 'diagnostics'])
+
+/** Output extensions no project tooling loads as code, a test, or a manifest. */
+const DIAGNOSTIC_WRITE_EXTENSIONS = new Set([
+  '.log',
+  '.txt',
+  '.out',
+  '.err',
+  '.diff',
+  '.json',
+  '.csv',
+])
+
+/** Manifest basenames tooling auto-loads even from a nested directory. */
+const DIAGNOSTIC_WRITE_RESERVED_BASENAMES = new Set([
+  'package.json',
+  'package-lock.json',
+  'tsconfig.json',
+  'jsconfig.json',
+])
+
+/**
  * Write-target guard for the validation-diagnosis profile: only plain,
- * unquoted, expansion-free paths that resolve inside the project root are
- * allowed (e.g. `cat > repro/fixture.log <<'EOF'`). Absolute targets must
- * stay inside the project, and targets with `..` segments must not resolve
- * outside it; anything else (tilde/variable/backtick expansion or shell
- * escaping) is unsafe and keeps the command blocked.
+ * unquoted, expansion-free paths that resolve to a diagnostic output file
+ * inside the project root are allowed (e.g. `cat > repro/fixture.log <<'EOF'`).
+ * The resolved path must sit under a `repro`/`diagnostics` directory and carry
+ * an inert output extension, so `cat > package.json` or `cat > src/index.ts`
+ * stays blocked. Absolute targets must stay inside the project, and targets
+ * with `..` segments must not resolve outside it; anything else
+ * (tilde/variable/backtick expansion or shell escaping) is unsafe and keeps
+ * the command blocked.
  */
 function isDiagnosticWriteTargetSafe(
   target: string,
@@ -1278,25 +1310,83 @@ function isDiagnosticWriteTargetSafe(
     ? path.resolve(target)
     : path.resolve(root, target)
   const relative = path.relative(root, resolved)
-  return !relative.startsWith('..') && !path.isAbsolute(relative)
+  if (
+    relative.length === 0 ||
+    relative.startsWith('..') ||
+    path.isAbsolute(relative)
+  ) {
+    return false
+  }
+  // `relative` is already normalized, so a directory match cannot be forged
+  // with `repro/../package.json` (that resolves to a top-level basename).
+  const segments = relative.split(/[/\\]+/)
+  const basename = segments.at(-1) ?? ''
+  return (
+    segments
+      .slice(0, -1)
+      .some((segment) => DIAGNOSTIC_WRITE_DIRECTORIES.has(segment)) &&
+    !DIAGNOSTIC_WRITE_RESERVED_BASENAMES.has(basename.toLowerCase()) &&
+    DIAGNOSTIC_WRITE_EXTENSIONS.has(path.extname(basename).toLowerCase())
+  )
 }
+
+/**
+ * One shared source for a diagnostic write-target token character: anything
+ * that neither whitespace nor a shell operator would end the token at. Both
+ * patterns below are composed from it so the two cannot drift into accepting
+ * different targets.
+ */
+const DIAGNOSTIC_WRITE_TARGET_TOKEN = String.raw`[^\s<>|;&]`
+
+/**
+ * `>`/`>>` writes and their target, for stripDiagnosticRedirections. The
+ * capture order is part of the replacer contract: group 1 is the leading
+ * boundary (re-emitted in place of the stripped redirection) and group 2 is the
+ * target.
+ *
+ * The target repeats `*`, not `+`, on purpose: a `>` with no target must still
+ * match so the EMPTY target reaches isDiagnosticWriteTargetSafe, whose first
+ * check (`target.length === 0`) rejects it. With `+` a bare `>` would not match
+ * at all and would slip through unchecked.
+ */
+const DIAGNOSTIC_WRITE_REDIRECTION_PATTERN = new RegExp(
+  String.raw`(^|\s)[012]?>>?(?![&0-9])\s*(${DIAGNOSTIC_WRITE_TARGET_TOKEN}*)`,
+  'g',
+)
+
+/**
+ * The single accepted heredoc shape (`cat > <target> <<'EOF'` … `EOF`). Group 1
+ * is the target, group 2 the quoted delimiter, and group 3 the body, so the
+ * `\2` backreference pins the terminator to the opening delimiter.
+ *
+ * The target repeats `+`, not `*`, on purpose: this is a full-string shape
+ * match with no target-safety callback to fail closed on an empty capture, so
+ * a `cat >` with no file must simply not match.
+ */
+const BOUNDED_DIAGNOSTIC_HEREDOC_PATTERN = new RegExp(
+  String.raw`^\s*cat\s+>\s*(${DIAGNOSTIC_WRITE_TARGET_TOKEN}+)\s*<<\s*'([A-Za-z_][A-Za-z0-9_]*)'\s*\r?\n([\s\S]*)\r?\n\2\s*$`,
+)
 
 /**
  * validation-diagnosis variant of stripSafeReadOnlyRedirections: on top of
  * the base /dev/null and descriptor redirects, it also strips heredoc
- * operators and `>`/`>>` writes whose targets are safe project-relative (or
- * in-project absolute) paths. Any other `<`/`>` — input redirections,
- * process substitution, or writes outside the project — still returns
- * undefined so the command is rejected as an unsafe shell redirection.
+ * operators and `>`/`>>` writes whose targets are diagnostic output files
+ * inside the project (see isDiagnosticWriteTargetSafe). Any other `<`/`>` —
+ * input redirections, process substitution, writes outside the project, or
+ * writes to manifests/source — still returns undefined so the command is
+ * rejected as an unsafe shell redirection.
  */
 function stripDiagnosticRedirections(
   segment: string,
   projectRoot: string,
 ): string | undefined {
-  const withoutHeredocs = segment.replace(/<<-?\s*(?:'[^']*'|"[^"]*"|\\?\S+)/g, ' ')
+  const withoutHeredocs = segment.replace(
+    /<<-?\s*(?:'[^']*'|"[^"]*"|\\?\S+)/g,
+    ' ',
+  )
   let safe = true
   const withoutWrites = withoutHeredocs.replace(
-    /(^|\s)[012]?>>?(?![&0-9])\s*([^\s<>|;&]*)/g,
+    DIAGNOSTIC_WRITE_REDIRECTION_PATTERN,
     (match, leading: string, rawTarget: string) => {
       if (!isDiagnosticWriteTargetSafe(rawTarget, projectRoot)) {
         safe = false
@@ -1317,9 +1407,7 @@ function stripDiagnosticRedirections(
  * trailing command after the terminator.
  */
 function stripBoundedDiagnosticHeredoc(command: string): string | undefined {
-  const match = command.match(
-    /^\s*cat\s+>\s*([^\s<>|;&]+)\s*<<\s*'([A-Za-z_][A-Za-z0-9_]*)'\s*\r?\n([\s\S]*)\r?\n\2\s*$/,
-  )
+  const match = command.match(BOUNDED_DIAGNOSTIC_HEREDOC_PATTERN)
   if (
     !match ||
     match[3].length > 65_536 ||
@@ -1496,9 +1584,11 @@ function hasPlaceholderCommitMessage(command: string): boolean {
 }
 
 function hasUnsafeReadOnlyGitOption(command: string): boolean {
-  return /(?:^|\s)--(?:output|exec-path)(?:=|\s|$)/i.test(command) ||
+  return (
+    /(?:^|\s)--(?:output|exec-path)(?:=|\s|$)/i.test(command) ||
     /(?:^|\s)--(?:ext-diff|textconv)(?:\s|$)/i.test(command) ||
     /(?:^|\s)-o(?:\s|$)/i.test(command)
+  )
 }
 
 /**
@@ -1545,9 +1635,7 @@ function isReadOnlyGitCommand(command: string): boolean {
     /^git\s+name-rev(?:\s+--(?:name-only|tags|always|no-undefined))?(?:\s+[A-Za-z0-9._/^-]+)*\s*$/i.test(
       command,
     ) ||
-    /^git\s+config\s+--get(?:-regexp)?\s+[A-Za-z0-9._/-]+\s*$/i.test(
-      command,
-    ) ||
+    /^git\s+config\s+--get(?:-regexp)?\s+[A-Za-z0-9._/-]+\s*$/i.test(command) ||
     /^git\s+cat-file\s+-(?:t|s|p|e)\s+[A-Za-z0-9._/^-]+\s*$/i.test(command)
   )
 }
@@ -1590,26 +1678,46 @@ function isAllowedComplexGitCommand(command: string): boolean {
   }
   // restore worktree/patch/source/overlay overwrite (data loss): deny any
   // restore carrying --worktree/-W, --patch/-p, --source, or --overlay.
-  if (/\brestore\b[\s\S]*(?:--worktree\b|-[A-Za-z]*W\b|--patch\b|-[A-Za-z]*p\b|--source\b|--overlay\b)/i.test(command)) return false
+  if (
+    /\brestore\b[\s\S]*(?:--worktree\b|-[A-Za-z]*W\b|--patch\b|-[A-Za-z]*p\b|--source\b|--overlay\b)/i.test(
+      command,
+    )
+  )
+    return false
   // merge/cherry-pick strategy option: deny `-X` standalone or attached (e.g.
   // `-Xours`), which the in-regex `-X\b` guard cannot catch when attached.
   if (/(?:^|\s)-X/i.test(command)) return false
   if (/\bstash\s+(?:drop|clear)\b/i.test(command)) return false
   // Force delete / force ref reset: `-d` (safe delete) stays allowed;
   // `-D`/`--delete` (force delete) and `-f`/`--force` (reset branch ref) do not.
-  if (/\bbranch\s+(?:-[a-zA-Z]*[Df]|--delete|--force)\b/.test(command)) return false
+  if (/\bbranch\s+(?:-[a-zA-Z]*[Df]|--delete|--force)\b/.test(command))
+    return false
   if (/^git\s+clean\b/i.test(command)) return false
   if (/^git\s+rebase\b/i.test(command)) return false
   if (/^git\s+config\b/i.test(command)) return false
   // switch force/discard: `-f` aliases `--discard-changes` (discards uncommitted
   // work); `-C` force-creates over an existing branch. Deny before allow regexes.
-  if (/^git\s+switch\b/i.test(command) && /(?:\s-f\b|\s-C\b|--force\b|--discard-changes\b)/.test(command)) return false
+  if (
+    /^git\s+switch\b/i.test(command) &&
+    /(?:\s-f\b|\s-C\b|--force\b|--discard-changes\b)/.test(command)
+  )
+    return false
   // checkout worktree overwrite: `-f`/`--force` discard changes, `-p`/`--patch`
   // selectively overwrite, `--merge`/`--theirs`/`--ours` resolve by discarding.
-  if (/^git\s+checkout\b/i.test(command) && /(?:\s-f\b|\s-p\b|--force\b|--patch\b|--merge\b|--theirs\b|--ours\b)/.test(command)) return false
+  if (
+    /^git\s+checkout\b/i.test(command) &&
+    /(?:\s-f\b|\s-p\b|--force\b|--patch\b|--merge\b|--theirs\b|--ours\b)/.test(
+      command,
+    )
+  )
+    return false
   // merge short strategy: `-s` standalone or attached (e.g. `-sours`) selects a
   // strategy (such as `ours`) that discards one side of the merge.
-  if (/^git\s+merge\b/i.test(command) && /(?:\s-s\b|\s-s[A-Za-z])/.test(command)) return false
+  if (
+    /^git\s+merge\b/i.test(command) &&
+    /(?:\s-s\b|\s-s[A-Za-z])/.test(command)
+  )
+    return false
 
   // Message bodies are inert data (already substitution-scanned on the full
   // string). Strip -m/--message values so quoted subjects like `a -> b` do not
@@ -1618,7 +1726,9 @@ function isAllowedComplexGitCommand(command: string): boolean {
 
   return (
     // switch: `git switch foo`, `git switch -c foo [start-point]`.
-    /^git\s+switch\s+(?:-[A-Za-z]+\s+)*[A-Za-z0-9._/-]+\s*$/i.test(commandForAllow) ||
+    /^git\s+switch\s+(?:-[A-Za-z]+\s+)*[A-Za-z0-9._/-]+\s*$/i.test(
+      commandForAllow,
+    ) ||
     // checkout (branch-only): the standalone `--` path form is rejected above
     // and by the negative lookahead, so this cannot overwrite the worktree.
     /^git\s+checkout\s+(?!.*(?:^|\s)--(?:\s|$))(?:-[bB]\s+)?[A-Za-z0-9._/][A-Za-z0-9._/-]*\s*$/i.test(
@@ -1626,7 +1736,9 @@ function isAllowedComplexGitCommand(command: string): boolean {
     ) ||
     // branch create / safe delete: lowercase short flags only, so `-d` (safe
     // delete) and plain create pass while `-D`/`--delete` (force) do not.
-    /^git\s+branch\s+(?:-[a-z]+\s+)*[A-Za-z0-9._/-]+\s*$/i.test(commandForAllow) ||
+    /^git\s+branch\s+(?:-[a-z]+\s+)*[A-Za-z0-9._/-]+\s*$/i.test(
+      commandForAllow,
+    ) ||
     // merge (no strategy/exec/upload-pack/-X; standalone/attached -X also denied above).
     /^git\s+merge\s+(?!.*(?:--(?:strategy|exec-path|upload-pack)\b|(?:^|\s)-[sX]))(?:--(?:no-ff|ff-only|no-commit|no-edit|edit|squash|abort|continue|quit)\s+)*(?:-[A-Za-z]+\s+)*[A-Za-z0-9._/-]+\s*$/i.test(
       commandForAllow,
@@ -1786,7 +1898,9 @@ export function evaluateTerminalCommandPolicy(params: {
     ]
     if (
       workspaceWriteSyntax.some(
-        (pattern) => pattern === true || (pattern instanceof RegExp && pattern.test(command)),
+        (pattern) =>
+          pattern === true ||
+          (pattern instanceof RegExp && pattern.test(command)),
       )
     ) {
       return {
@@ -1838,9 +1952,7 @@ export function evaluateTerminalCommandPolicy(params: {
         const rawPaths =
           command
             .replace(
-              isGitAdd
-                ? /^git\s+add\s+/i
-                : /^git\s+restore\s+--staged\s+/i,
+              isGitAdd ? /^git\s+add\s+/i : /^git\s+restore\s+--staged\s+/i,
               '',
             )
             .match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
@@ -1909,7 +2021,9 @@ export function evaluateTerminalCommandPolicy(params: {
         // the allow clause stays fail-closed on its own.
         (!/(?:^|\s)--amend\b/i.test(command) &&
           !hasPlaceholderCommitMessage(command) &&
-          /^git\s+commit\s+(?=.*(?:-m|--message)(?:\s|=|$)).+/i.test(command)) ||
+          /^git\s+commit\s+(?=.*(?:-m|--message)(?:\s|=|$)).+/i.test(
+            command,
+          )) ||
         /^git\s+push\s+(?!.*(?:--force|-f\b|--delete\b|:))(?:-u\s+|--set-upstream\s+)?[A-Za-z0-9._/-]+\s+[A-Za-z0-9._/-]+$/i.test(
           command,
         )
@@ -1935,10 +2049,7 @@ export function evaluateTerminalCommandPolicy(params: {
   }
 
   if (params.permissionProfile === 'dependency-mutation') {
-    if (
-      hasUnquotedShellSyntax(command) ||
-      hasShellInterpreterEscape(command)
-    ) {
+    if (hasUnquotedShellSyntax(command) || hasShellInterpreterEscape(command)) {
       return {
         allowed: false,
         reason:
@@ -1974,8 +2085,9 @@ export function evaluateTerminalCommandPolicy(params: {
   // Base read-only and librarian-read-only stay fully strict. The
   // validation-diagnosis profile (debugger agent) additionally tolerates
   // in-project `..` references (handled by the traversal gate above) and
-  // `>`/`>>`/heredoc writes to project-relative paths, so diagnostic repro
-  // fixtures can be captured without opening workspace-write authority.
+  // `>`/`>>`/heredoc writes to in-project diagnostic output files under a
+  // `repro`/`diagnostics` directory, so repro fixtures can be captured
+  // without opening workspace-write authority over manifests or source.
   if (
     params.permissionProfile === 'read-only' ||
     params.permissionProfile === 'librarian-read-only' ||
@@ -2005,7 +2117,7 @@ export function evaluateTerminalCommandPolicy(params: {
           allowed: false,
           reason:
             params.permissionProfile === 'validation-diagnosis'
-              ? 'validation-diagnosis commands may only redirect writes to project-relative paths inside the project'
+              ? 'validation-diagnosis commands may only redirect writes to in-project diagnostic output files under a repro/ or diagnostics/ directory (.log, .txt, .out, .err, .diff, .json, .csv)'
               : 'read-only commands cannot use unsafe shell redirection',
         }
       }
@@ -2020,7 +2132,11 @@ export function evaluateTerminalCommandPolicy(params: {
     // fixtures, but env-dump policy and outside-absolute-path containment
     // still apply, so `printenv` / `cat /etc/passwd` stay blocked.
     if (params.permissionProfile !== 'tmux-test') {
-      if (/(?:^|[;&|(\n]\s*)(?:eval|source)\b|\b(?:bash|sh|zsh|fish)\s+-c\b/i.test(command)) {
+      if (
+        /(?:^|[;&|(\n]\s*)(?:eval|source)\b|\b(?:bash|sh|zsh|fish)\s+-c\b/i.test(
+          command,
+        )
+      ) {
         return {
           allowed: false,
           reason: 'shell indirection requires an explicit full-access workflow',
