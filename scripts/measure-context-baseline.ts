@@ -17,7 +17,10 @@
  * Usage: bun run scripts/measure-context-baseline.ts
  */
 
-import { countTokens, countTokensJson } from '../packages/agent-runtime/src/util/token-counter'
+import {
+  countTokens,
+  countTokensJson,
+} from '../packages/agent-runtime/src/util/token-counter'
 import {
   getProjectFileTreePrompt,
   getSystemInfoPrompt,
@@ -109,10 +112,9 @@ function measureTools(toolNames: string[]): {
   count: number
 } {
   const toolsForTokenCount = toolNames.flatMap((name) => {
-    const def = (toolParams as Record<
-      string,
-      (typeof toolParams)[ToolName] | undefined
-    >)[name]
+    const def = (
+      toolParams as Record<string, (typeof toolParams)[ToolName] | undefined>
+    )[name]
     if (!def) return []
     let input_schema: unknown
     try {
@@ -135,7 +137,11 @@ function measureTools(toolNames: string[]): {
   }
 }
 
-function formatTargetLine(label: string, target: number, actual: number): string {
+function formatTargetLine(
+  label: string,
+  target: number,
+  actual: number,
+): string {
   const ok = actual <= target
   return `  ${label.padEnd(36)} ≤ ${target.toLocaleString().padStart(6)}  actual ${actual.toLocaleString().padStart(6)}  ${ok ? 'PASS' : 'OVER'} (advisory)`
 }
@@ -163,9 +169,8 @@ async function main() {
     console.error('  FAILED to build project context:', e)
     console.error('  Falling back to stub context.')
     failedMeasurements++
-    const { getStubProjectFileContext } = await import(
-      '@codebuff/common/util/file'
-    )
+    const { getStubProjectFileContext } =
+      await import('@codebuff/common/util/file')
     fileContext = getStubProjectFileContext()
   }
 
@@ -443,9 +448,8 @@ async function main() {
 
   // 10. Patterns index + language profile
   try {
-    const { loadPatternsIndex, formatPatternsIndexPrompt } = await import(
-      '@codebuff/common/util/patterns'
-    )
+    const { loadPatternsIndex, formatPatternsIndexPrompt } =
+      await import('@codebuff/common/util/patterns')
     const index = loadPatternsIndex(cwd, noopLogger)
     const patternsPrompt = formatPatternsIndexPrompt({ index })
     measurements.push({
@@ -464,12 +468,10 @@ async function main() {
   }
 
   try {
-    const { formatLanguageProfilePromptForFileTree } = await import(
-      '@codebuff/common/util/language-profiles'
-    )
-    const { formatEngineProfilePromptForFileTree } = await import(
-      '@codebuff/common/util/engine-profiles'
-    )
+    const { formatLanguageProfilePromptForFileTree } =
+      await import('@codebuff/common/util/language-profiles')
+    const { formatEngineProfilePromptForFileTree } =
+      await import('@codebuff/common/util/engine-profiles')
     const langProfile =
       formatLanguageProfilePromptForFileTree(fileContext.fileTree, {
         taskText: 'implement a feature',
@@ -580,12 +582,22 @@ async function main() {
   console.log(
     '--- Soft phase targets (advisory; script does not fail on OVER) ---',
   )
-  console.log(formatTargetLine('Phase-1 fixed', PHASE1_FIXED_TARGET, productionFixed))
-  console.log(formatTargetLine('Phase-2 fixed', PHASE2_FIXED_TARGET, productionFixed))
   console.log(
-    formatTargetLine('Program fixed (AC-F1)', PROGRAM_FIXED_TARGET, productionFixed),
+    formatTargetLine('Phase-1 fixed', PHASE1_FIXED_TARGET, productionFixed),
   )
-  console.log(formatTargetLine('Stretch fixed', STRETCH_FIXED_TARGET, productionFixed))
+  console.log(
+    formatTargetLine('Phase-2 fixed', PHASE2_FIXED_TARGET, productionFixed),
+  )
+  console.log(
+    formatTargetLine(
+      'Program fixed (AC-F1)',
+      PROGRAM_FIXED_TARGET,
+      productionFixed,
+    ),
+  )
+  console.log(
+    formatTargetLine('Stretch fixed', STRETCH_FIXED_TARGET, productionFixed),
+  )
   console.log('')
   console.log(
     'Note: token counts use gpt-tokenizer with 1.35x Anthropic fudge factor.',

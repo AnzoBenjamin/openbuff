@@ -22,7 +22,6 @@ import contextPruner from '../context-pruner'
 // Typed wrapper preserves schema-drift detection via `satisfies` — avoids `as unknown` erasure (RF-3).
 const prunerAgent = contextPruner satisfies AgentDefinition
 
-
 /**
  * Integration tests for the context-pruner agent.
  * These tests verify that context-pruner correctly prunes message history
@@ -191,7 +190,8 @@ describe('Context Pruner Agent Integration', () => {
               part.text.includes('Previous context compacted')),
         )
       })
-      const wasPruned = hasSummary || finalMessages.length < initialMessages.length
+      const wasPruned =
+        hasSummary || finalMessages.length < initialMessages.length
       expect(wasPruned).toBe(true)
       expect(finalMessages.length).toBeLessThan(initialMessages.length)
     },
@@ -308,7 +308,8 @@ describe('Context Pruner Agent Integration', () => {
               part.text.includes('Previous context compacted')),
         )
       })
-      const wasPruned = hasSummary || finalMessages.length < initialMessages.length
+      const wasPruned =
+        hasSummary || finalMessages.length < initialMessages.length
       expect(wasPruned).toBe(true)
       expect(finalMessages.length).toBeLessThan(initialMessages.length)
     },

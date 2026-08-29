@@ -762,10 +762,7 @@ test('memory-drift guard skips .agents/sessions plan-session markdown', () => {
   )
   // Control: a normal docs path with the same content still flags.
   mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
-  writeFileSync(
-    join(tmpRoot, 'docs', 'notes.md'),
-    'See `src/missing.ts`.\n',
-  )
+  writeFileSync(join(tmpRoot, 'docs', 'notes.md'), 'See `src/missing.ts`.\n')
 
   const pathFindings = checkPath(tmpRoot)
   const brokenFindings = checkBrokenLink(tmpRoot)

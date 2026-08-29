@@ -1,11 +1,4 @@
-import {
-  describe,
-  expect,
-  test,
-  beforeEach,
-  afterEach,
-  spyOn,
-} from 'bun:test'
+import { describe, expect, test, beforeEach, afterEach, spyOn } from 'bun:test'
 import {
   chmodSync,
   existsSync,
@@ -106,7 +99,9 @@ describe('check-ci-local helpers', () => {
   })
 
   test('formatGenerateFailedMessage mentions generate-tool-definitions', () => {
-    expect(formatGenerateFailedMessage(2)).toContain('generate-tool-definitions')
+    expect(formatGenerateFailedMessage(2)).toContain(
+      'generate-tool-definitions',
+    )
     expect(formatGenerateFailedMessage(2)).toContain('2')
   })
 
@@ -296,13 +291,7 @@ describe('runCiLocalChecks orchestration', () => {
     { command: 'bun', args: ['run', 'generate-tool-definitions'], cwdDir: '' },
     {
       command: 'git',
-      args: [
-        'diff',
-        '--exit-code',
-        'HEAD',
-        '--',
-        ...TOOL_DEF_TRACKED_PATHS,
-      ],
+      args: ['diff', '--exit-code', 'HEAD', '--', ...TOOL_DEF_TRACKED_PATHS],
       cwdDir: '',
     },
     {
@@ -528,18 +517,13 @@ describe('runInherited step runner', () => {
         expect(logged).toContain('3000 ms')
 
         errorSpy.mockClear()
-        const enoent = runInherited(
-          'missing-binary',
-          [],
-          tmpRoot,
-          () => ({
-            status: null,
-            signal: null,
-            error: Object.assign(new Error('spawn missing-binary ENOENT'), {
-              code: 'ENOENT',
-            }),
+        const enoent = runInherited('missing-binary', [], tmpRoot, () => ({
+          status: null,
+          signal: null,
+          error: Object.assign(new Error('spawn missing-binary ENOENT'), {
+            code: 'ENOENT',
           }),
-        )
+        }))
         expect(enoent).toEqual({ status: 1 })
         logged = errorSpy.mock.calls.map((c) => c.join(' ')).join('\n')
         expect(logged).toContain('spawn missing-binary ENOENT')

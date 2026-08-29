@@ -3,6 +3,7 @@
 Some files carry elevated security risk — credentials, auth flows, crypto, payment, secrets management. Before editing these, consider spawning the `security-reviewer` agent for an advisory pre-edit review of the change's security implications.
 
 **Security-sensitive file patterns (non-exhaustive):**
+
 - Auth/identity: `**/auth/**`, `**/oauth/**`, `**/credentials/**`, `**/session/**`
 - Crypto/keys: `**/crypto/**`, `**/keys/**`, `**/*secret*`, `**/*token*`, `**/*apikey*`
 - Payment/billing: `**/billing/**`, `**/payment/**`, `**/stripe/**`
@@ -10,6 +11,7 @@ Some files carry elevated security risk — credentials, auth flows, crypto, pay
 - Permissions/policy: `**/permissions/**`, `**/rbac/**`, `**/policy/**`
 
 **Guidance:**
+
 - This is **advisory, not blocking** — the security-reviewer's findings inform your approach but do not gate the edit.
 - Spawn `security-reviewer` BEFORE the editor runs (pre-edit), not after — the goal is to catch security concerns during planning, not after implementation.
 - For trivial changes (typo, comment) in sensitive files, skip the review.

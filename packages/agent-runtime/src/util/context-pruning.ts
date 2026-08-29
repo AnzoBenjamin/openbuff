@@ -50,7 +50,7 @@ export const MODEL_CONTEXT_MAX_RESERVED_FRACTION = 0.5
  * test (agents/__tests__/base2-progressive-tool-disclosure.test.ts) until
  * codegen/shared literal source is implemented.
  */
-export const SEMANTIC_COMPACTION_TRIGGER_FRACTION = 0.70
+export const SEMANTIC_COMPACTION_TRIGGER_FRACTION = 0.7
 export const SEMANTIC_COMPACTION_TARGET_FRACTION = 0.35
 export const SEMANTIC_COMPACTION_HEADROOM_FRACTION = 0.15
 export const SEMANTIC_COMPACTION_MIN_HEADROOM_TOKENS = 32_000

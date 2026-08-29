@@ -86,8 +86,7 @@ If the caller passed params.outputSchemaHint, format your final message content 
       } else if (Array.isArray(content)) {
         text = content
           .filter(
-            (part) =>
-              part && typeof part === 'object' && part.type === 'text',
+            (part) => part && typeof part === 'object' && part.type === 'text',
           )
           .map((part) => part.text)
           .join('')

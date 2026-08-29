@@ -632,7 +632,9 @@ export const handleEditTransaction = (async (
       if (
         Array.isArray(edit.replacements) &&
         edit.replacements.length > 0 &&
-        edit.replacements.every((replacement) => Boolean(replacement.basedOnRead))
+        edit.replacements.every((replacement) =>
+          Boolean(replacement.basedOnRead),
+        )
       ) {
         continue
       }
@@ -1078,7 +1080,8 @@ export const handleEditTransaction = (async (
       // target the same path; the first is the most actionable starting point).
       const editIndex = edits.findIndex((edit) => edit.path === file.path)
       const truncated = looksLikeTruncatedEditContent(
-        edits[editIndex] ?? ({ type: 'delete', path: file.path } as TransactionEdit),
+        edits[editIndex] ??
+          ({ type: 'delete', path: file.path } as TransactionEdit),
         syntaxValidation.message,
         file.content,
       )

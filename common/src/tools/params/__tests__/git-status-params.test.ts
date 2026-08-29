@@ -6,7 +6,9 @@ describe('git_status params', () => {
   describe('description', () => {
     it('documents the suppressed { unchanged: true, note } variant', () => {
       expect(gitStatusParams.description).toContain('{ unchanged: true, note }')
-      expect(gitStatusParams.description).toContain('no status/diff/branch fields')
+      expect(gitStatusParams.description).toContain(
+        'no status/diff/branch fields',
+      )
     })
   })
 

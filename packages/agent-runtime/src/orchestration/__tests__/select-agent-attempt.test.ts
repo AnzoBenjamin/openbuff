@@ -61,7 +61,10 @@ describe('selectAgentAttempt', () => {
 
     expect(selection.candidate.template.id).toBe('eligible')
     expect(selection.alternatives).toEqual([
-      { agentId: 'missing-tool', rejectedReasons: ['missing tools: write_file'] },
+      {
+        agentId: 'missing-tool',
+        rejectedReasons: ['missing tools: write_file'],
+      },
       {
         agentId: 'wrong-scope',
         rejectedReasons: ['writable scope excludes: src/a.ts'],

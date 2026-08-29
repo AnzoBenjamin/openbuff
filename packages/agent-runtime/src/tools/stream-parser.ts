@@ -318,9 +318,13 @@ export async function processStream(
         // Keep a runtime alias so existing callers still succeed with a deprecation warning
         // and migration guidance instead of a type-only success / runtime failure.
         // See `common/src/tools/params/tool/write-file.ts` for the migration guide.
-        const isApplyPatchAlias = toolName === 'apply_patch' || toolName === 'apply_smart_patch'
+        const isApplyPatchAlias =
+          toolName === 'apply_patch' || toolName === 'apply_smart_patch'
         let effectiveToolName = toolName
-        let effectiveInput: Record<string, unknown> = input as Record<string, unknown>
+        let effectiveInput: Record<string, unknown> = input as Record<
+          string,
+          unknown
+        >
         if (isApplyPatchAlias) {
           logger.warn(
             '`apply_patch` is deprecated and will be removed in a future major version. Use `write_file` (full content) or `edit_transaction` (`str_replace`/`replace_range`/`patch`) instead. `apply_patch({ path, diff })` or `apply_patch({ operation: { path, diff } })` is being handled via `edit_transaction` patch for compatibility.',
@@ -333,10 +337,20 @@ export async function processStream(
           const raw = input as Record<string, unknown>
           const operation = (raw as Record<string, unknown>).operation
           const rawInputAlias = (raw as Record<string, unknown>).input
-          const fallbackPath = raw.path ?? (raw as Record<string, unknown>).file ?? (raw as Record<string, unknown>).filePath
-          const fallbackDiff = raw.diff ?? (raw as Record<string, unknown>).content ?? (raw as Record<string, unknown>).patch
-          const fallbackBasedOnRead = (raw as Record<string, unknown>).basedOnRead as unknown
-          const coercePath = (rec: Record<string, unknown>, fallback: unknown): string | null => {
+          const fallbackPath =
+            raw.path ??
+            (raw as Record<string, unknown>).file ??
+            (raw as Record<string, unknown>).filePath
+          const fallbackDiff =
+            raw.diff ??
+            (raw as Record<string, unknown>).content ??
+            (raw as Record<string, unknown>).patch
+          const fallbackBasedOnRead = (raw as Record<string, unknown>)
+            .basedOnRead as unknown
+          const coercePath = (
+            rec: Record<string, unknown>,
+            fallback: unknown,
+          ): string | null => {
             const p =
               rec.path ??
               rec.file ??
@@ -346,21 +360,40 @@ export async function processStream(
               fallback
             return typeof p === 'string' && p.length > 0 ? p : null
           }
-          const coerceDiff = (rec: Record<string, unknown>, fallback: unknown): string => {
-            const d = rec.diff ?? rec.content ?? (rec as Record<string, unknown>).patch ?? (rec as Record<string, unknown>).unifiedDiff ?? fallback
+          const coerceDiff = (
+            rec: Record<string, unknown>,
+            fallback: unknown,
+          ): string => {
+            const d =
+              rec.diff ??
+              rec.content ??
+              (rec as Record<string, unknown>).patch ??
+              (rec as Record<string, unknown>).unifiedDiff ??
+              fallback
             return typeof d === 'string' ? d : d != null ? String(d) : ''
           }
-          const coerceBasedOnRead = (rec: Record<string, unknown>, fallback: unknown): string | undefined => {
-            const b = rec.basedOnRead ?? (rec as Record<string, unknown>).basedOnRead ?? fallback
+          const coerceBasedOnRead = (
+            rec: Record<string, unknown>,
+            fallback: unknown,
+          ): string | undefined => {
+            const b =
+              rec.basedOnRead ??
+              (rec as Record<string, unknown>).basedOnRead ??
+              fallback
             return typeof b === 'string' && b.length > 0 ? b : undefined
           }
-          const toDeleteEdit = (entry: unknown, pathFallback: unknown): { type: 'delete'; path: string } | null => {
-            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
+          const toDeleteEdit = (
+            entry: unknown,
+            pathFallback: unknown,
+          ): { type: 'delete'; path: string } | null => {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry))
+              return null
             const rec = entry as Record<string, unknown>
             const p = coercePath(rec, pathFallback)
             if (!p) return null
             const t = typeof rec.type === 'string' ? rec.type : undefined
-            if (t === 'delete_file' || t === 'delete') return { type: 'delete' as const, path: p }
+            if (t === 'delete_file' || t === 'delete')
+              return { type: 'delete' as const, path: p }
             return null
           }
           const toPatchEdit = (
@@ -368,8 +401,14 @@ export async function processStream(
             pathFallback: unknown,
             diffFallback: unknown,
             basedOnReadFallback: unknown,
-          ): { type: 'patch'; path: string; diff: string; basedOnRead?: string } | null => {
-            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
+          ): {
+            type: 'patch'
+            path: string
+            diff: string
+            basedOnRead?: string
+          } | null => {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry))
+              return null
             const rec = entry as Record<string, unknown>
             const t = typeof rec.type === 'string' ? rec.type : undefined
             if (t === 'delete_file' || t === 'delete') return null
@@ -377,7 +416,12 @@ export async function processStream(
             if (!p) return null
             const diffStr = coerceDiff(rec, diffFallback)
             const basedOnRead = coerceBasedOnRead(rec, basedOnReadFallback)
-            const edit: { type: 'patch'; path: string; diff: string; basedOnRead?: string } = {
+            const edit: {
+              type: 'patch'
+              path: string
+              diff: string
+              basedOnRead?: string
+            } = {
               type: 'patch' as const,
               path: p,
               diff: diffStr,
@@ -385,14 +429,27 @@ export async function processStream(
             if (basedOnRead) edit.basedOnRead = basedOnRead
             return edit
           }
-          let edits: Array<{ type: 'patch'; path: string; diff: string; basedOnRead?: string } | { type: 'delete'; path: string }> = []
+          let edits: Array<
+            | {
+                type: 'patch'
+                path: string
+                diff: string
+                basedOnRead?: string
+              }
+            | { type: 'delete'; path: string }
+          > = []
           const collectEntry = (entry: unknown) => {
             const del = toDeleteEdit(entry, fallbackPath)
             if (del) {
               edits.push(del)
               return
             }
-            const pat = toPatchEdit(entry, fallbackPath, fallbackDiff, fallbackBasedOnRead)
+            const pat = toPatchEdit(
+              entry,
+              fallbackPath,
+              fallbackDiff,
+              fallbackBasedOnRead,
+            )
             if (pat) edits.push(pat)
           }
           if (operation !== undefined) {
@@ -406,32 +463,74 @@ export async function processStream(
             for (const op of rawInputAlias as unknown[]) collectEntry(op)
           }
           if (edits.length === 0) {
-            const depPath = coercePath(raw as Record<string, unknown>, undefined)
+            const depPath = coercePath(
+              raw as Record<string, unknown>,
+              undefined,
+            )
             const depDiff = fallbackDiff
             const depBasedOnRead = fallbackBasedOnRead as string | undefined
             const rawType =
-              typeof (raw as Record<string, unknown>).type === 'string' ? ((raw as Record<string, unknown>).type as string) : undefined
+              typeof (raw as Record<string, unknown>).type === 'string'
+                ? ((raw as Record<string, unknown>).type as string)
+                : undefined
             if (rawType === 'delete_file' || rawType === 'delete') {
               if (typeof depPath === 'string' && depPath.length > 0) {
                 edits = [{ type: 'delete' as const, path: depPath }]
               } else {
-                edits = [{ type: 'delete' as const, path: typeof depPath === 'string' ? depPath : String(depPath ?? '') }]
+                edits = [
+                  {
+                    type: 'delete' as const,
+                    path:
+                      typeof depPath === 'string'
+                        ? depPath
+                        : String(depPath ?? ''),
+                  },
+                ]
               }
             } else if (typeof depPath === 'string' && depPath.length > 0) {
-              const patch: { type: 'patch'; path: string; diff: string; basedOnRead?: string } = {
+              const patch: {
+                type: 'patch'
+                path: string
+                diff: string
+                basedOnRead?: string
+              } = {
                 type: 'patch' as const,
                 path: depPath,
-                diff: typeof depDiff === 'string' ? depDiff : depDiff != null ? String(depDiff) : '',
+                diff:
+                  typeof depDiff === 'string'
+                    ? depDiff
+                    : depDiff != null
+                      ? String(depDiff)
+                      : '',
               }
-              if (typeof depBasedOnRead === 'string' && depBasedOnRead.length > 0) patch.basedOnRead = depBasedOnRead
+              if (
+                typeof depBasedOnRead === 'string' &&
+                depBasedOnRead.length > 0
+              )
+                patch.basedOnRead = depBasedOnRead
               edits = [patch]
             } else {
-              const patch: { type: 'patch'; path: string; diff: string; basedOnRead?: string } = {
+              const patch: {
+                type: 'patch'
+                path: string
+                diff: string
+                basedOnRead?: string
+              } = {
                 type: 'patch' as const,
-                path: typeof depPath === 'string' ? depPath : String(depPath ?? ''),
-                diff: typeof depDiff === 'string' ? depDiff : depDiff != null ? String(depDiff) : '',
+                path:
+                  typeof depPath === 'string' ? depPath : String(depPath ?? ''),
+                diff:
+                  typeof depDiff === 'string'
+                    ? depDiff
+                    : depDiff != null
+                      ? String(depDiff)
+                      : '',
               }
-              if (typeof depBasedOnRead === 'string' && depBasedOnRead.length > 0) patch.basedOnRead = depBasedOnRead
+              if (
+                typeof depBasedOnRead === 'string' &&
+                depBasedOnRead.length > 0
+              )
+                patch.basedOnRead = depBasedOnRead
               edits = [patch]
             }
           }

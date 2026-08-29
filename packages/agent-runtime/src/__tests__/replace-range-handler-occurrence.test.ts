@@ -146,9 +146,9 @@ describe('handleReplaceRange occurrence resolution', () => {
     expect(
       replaceRangeParams.providerInputSchema.safeParse(capturedInput).success,
     ).toBe(true)
-    expect(replaceRangeParams.inputSchema.safeParse(capturedInput).success).toBe(
-      true,
-    )
+    expect(
+      replaceRangeParams.inputSchema.safeParse(capturedInput).success,
+    ).toBe(true)
   })
 
   it('forwards a multi-line occurrence match with endLine > startLine', async () => {
@@ -216,14 +216,15 @@ describe('handleReplaceRange occurrence resolution', () => {
         occurrence: { match: 'outside-only();', occurrence: 1 },
         newContent: 'outside-only(1);',
       }),
-      currentContent: [
-        'outside-only();',
-        'const alpha = 1',
-        'repeat();',
-        'const beta = 2',
-        'repeat();',
-        'const gamma = 3',
-      ].join('\n') + '\n',
+      currentContent:
+        [
+          'outside-only();',
+          'const alpha = 1',
+          'repeat();',
+          'const beta = 2',
+          'repeat();',
+          'const gamma = 3',
+        ].join('\n') + '\n',
       capturedInputs,
     })
 

@@ -394,25 +394,27 @@ describe('harness intelligence services', () => {
     expect(second).toMatchObject({ generation: 2, status: 'active' })
   })
 
-  test('serializes conflicting workspace acquisition across processes', async () => {
-    const root = tempRoot()
-    const gate = path.join(root, 'gate')
-    const servicePath = path.resolve(
-      import.meta.dir,
-      '..',
-      'services',
-      'harness-intelligence.ts',
-    )
-    const storePath = path.resolve(
-      import.meta.dir,
-      '..',
-      'services',
-      'local-harness-store.ts',
-    )
+  test(
+    'serializes conflicting workspace acquisition across processes',
+    async () => {
+      const root = tempRoot()
+      const gate = path.join(root, 'gate')
+      const servicePath = path.resolve(
+        import.meta.dir,
+        '..',
+        'services',
+        'harness-intelligence.ts',
+      )
+      const storePath = path.resolve(
+        import.meta.dir,
+        '..',
+        'services',
+        'local-harness-store.ts',
+      )
 
-    const startChild = (name: string) => {
-      const ready = path.join(root, `ready-${name}`)
-      const code = `
+      const startChild = (name: string) => {
+        const ready = path.join(root, `ready-${name}`)
+        const code = `
         import fs from 'node:fs';
         import { WorkspaceLeaseService } from ${JSON.stringify(servicePath)};
         import { LocalHarnessStore } from ${JSON.stringify(storePath)};
@@ -434,43 +436,45 @@ describe('harness intelligence services', () => {
           console.log(error instanceof Error ? error.message : String(error));
         }
       `
-      const child = spawn(process.execPath, ['-e', code], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      let stdout = ''
-      let stderr = ''
-      child.stdout.on('data', (chunk) => (stdout += String(chunk)))
-      child.stderr.on('data', (chunk) => (stderr += String(chunk)))
-      const completed = new Promise<string>((resolve, reject) => {
-        child.on('error', reject)
-        child.on('close', (exitCode) => {
-          if (exitCode === 0) resolve(stdout.trim())
-          else reject(new Error(stderr || `child exited ${exitCode}`))
+        const child = spawn(process.execPath, ['-e', code], {
+          stdio: ['ignore', 'pipe', 'pipe'],
         })
-      })
-      return { ready, completed }
-    }
+        let stdout = ''
+        let stderr = ''
+        child.stdout.on('data', (chunk) => (stdout += String(chunk)))
+        child.stderr.on('data', (chunk) => (stderr += String(chunk)))
+        const completed = new Promise<string>((resolve, reject) => {
+          child.on('error', reject)
+          child.on('close', (exitCode) => {
+            if (exitCode === 0) resolve(stdout.trim())
+            else reject(new Error(stderr || `child exited ${exitCode}`))
+          })
+        })
+        return { ready, completed }
+      }
 
-    const first = startChild('first')
-    const second = startChild('second')
-    const wait = new Int32Array(new SharedArrayBuffer(4))
-    const deadline = Date.now() + CROSS_PROCESS_READY_TIMEOUT_MS
-    while (
-      (!fs.existsSync(first.ready) || !fs.existsSync(second.ready)) &&
-      Date.now() < deadline
-    ) {
-      Atomics.wait(wait, 0, 0, 5)
-    }
-    expect(fs.existsSync(first.ready)).toBe(true)
-    expect(fs.existsSync(second.ready)).toBe(true)
-    fs.writeFileSync(gate, 'go')
+      const first = startChild('first')
+      const second = startChild('second')
+      const wait = new Int32Array(new SharedArrayBuffer(4))
+      const deadline = Date.now() + CROSS_PROCESS_READY_TIMEOUT_MS
+      while (
+        (!fs.existsSync(first.ready) || !fs.existsSync(second.ready)) &&
+        Date.now() < deadline
+      ) {
+        Atomics.wait(wait, 0, 0, 5)
+      }
+      expect(fs.existsSync(first.ready)).toBe(true)
+      expect(fs.existsSync(second.ready)).toBe(true)
+      fs.writeFileSync(gate, 'go')
 
-    const outcomes = await Promise.all([first.completed, second.completed])
-    expect(outcomes.filter((outcome) => outcome === 'ok')).toHaveLength(1)
-    expect(
-      outcomes.filter((outcome) => outcome.includes('already leased')),
-    ).toHaveLength(1)
-  }, CROSS_PROCESS_TIMEOUT_MS)
+      const outcomes = await Promise.all([first.completed, second.completed])
+      expect(outcomes.filter((outcome) => outcome === 'ok')).toHaveLength(1)
+      expect(
+        outcomes.filter((outcome) => outcome.includes('already leased')),
+      ).toHaveLength(1)
+    },
+    CROSS_PROCESS_TIMEOUT_MS,
+  )
 
   test('external connector mutations require approval', () => {
     expect(

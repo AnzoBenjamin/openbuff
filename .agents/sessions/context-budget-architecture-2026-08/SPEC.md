@@ -16,6 +16,7 @@ The model context window fills quickly because cost lives in two pools and only 
 2. Conversation history (the ONLY pruned pool). Pruning is reactive: maybePruneContext (packages/agent-runtime/src/util/context-pruning.ts:262) does nothing until total tokens exceed DEFAULT_MAX_CONTEXT_TOKENS = 190_000, then trimMessagesToFitTokenLimitWithReport (packages/agent-runtime/src/util/messages.ts:385) drops oldest messages and simplifies old tool results (keep N most recent full via numToolResultsToKeep).
 
 Automatic injections compound the problem:
+
 - Proactive query_index: classifyProactiveRetrieval (agents/base2/base2.ts:7893) fires on a very broad keyword set (code, file, repo, project, module, package, function, class, component, hook, api, schema, config, test, implement, fix, debug, refactor, audit, review, investigate, architecture, flow, index, context). Result is a verbose programmatic_tool_result block (often ~10k tokens) with NO cross-turn dedup. A second site exists in agents/general-agent/general-agent.ts (shouldProactivelyQueryIndex).
 - git_status: yielded at 9 sites in agents/base2/base2.ts handleSteps (lines 787, 1097, 2480, 3133, 3354, 3474, 4064, 4301, 4449). Cheap individually but redundant; re-fires even when the worktree is unchanged, and each injection rides along in history.
 
@@ -46,7 +47,7 @@ Root structural gap: there is no per-component token accounting and no per-turn 
 - R5 (Progressive disclosure). Split the orchestrator system prompt into a compact always-on index plus on-demand detail blocks served through the existing skill/knowledge mechanism. Keep behavior-equivalent guidance reachable; do not drop any mandate, only relocate verbose detail.
 - R6 (Early compaction). Call getSemanticCompactionBudget (context-pruning.ts:109) in the main loop (packages/agent-runtime/src/run-agent-step.ts) and trigger semantic compaction at triggerBudgetTokens rather than waiting for DEFAULT_MAX_CONTEXT_TOKENS. Preserve pinned control-plane memory and the fixed baseline (they sit outside the history budget).
 - R7 (Tool-result lifecycle). Tag verbose tool results (query_index, read_files, spawn_agents) with a TTL/importance so they compress to receipts after a configurable number of turns, replacing the blunt numToolResultsToKeep cutoff. Must remain deterministic and testable.
-- R8 (Backward compat). All changes behind feature flags / config with safe defaults; existing tests (agents/__tests__/base2.test.ts "base2 proactive index lookup", packages/agent-runtime/src/util/__tests__/context-pruning.test.ts, agents/e2e/context-pruning-threshold.e2e.test.ts) must keep passing.
+- R8 (Backward compat). All changes behind feature flags / config with safe defaults; existing tests (agents/**tests**/base2.test.ts "base2 proactive index lookup", packages/agent-runtime/src/util/**tests**/context-pruning.test.ts, agents/e2e/context-pruning-threshold.e2e.test.ts) must keep passing.
 
 ## Acceptance criteria
 
@@ -78,16 +79,16 @@ Root structural gap: there is no per-component token accounting and no per-turn 
 
 // packages/agent-runtime/src/util/context-budget.ts (NEW)
 export type ContextCategory =
-  | 'system-core' | 'system-rules' | 'file-tree' | 'knowledge'
-  | 'proactive-retrieval' | 'git-observation' | 'conversation' | 'tool-result'
+| 'system-core' | 'system-rules' | 'file-tree' | 'knowledge'
+| 'proactive-retrieval' | 'git-observation' | 'conversation' | 'tool-result'
 
 export interface BudgetLine { category: ContextCategory; label: string; tokens: number; cacheable: boolean }
 export interface ContextBudgetLedger {
-  lines: BudgetLine[]
-  totalTokens: number
-  windowTokens: number
-  reservedTokens: number
-  byCategory: Record<ContextCategory, number>
+lines: BudgetLine[]
+totalTokens: number
+windowTokens: number
+reservedTokens: number
+byCategory: Record<ContextCategory, number>
 }
 export function recordBlock(ledger, category, label, content, opts?): BudgetLine
 export function finalizeLedger(ledger, windowTokens): ContextBudgetLedger
@@ -100,9 +101,9 @@ export function shouldReuseRetrieval(entry, query, revision): boolean
 
 // git delta helper (NEW helper consumed by base2 handleSteps)
 export function maybeYieldGitObservation(state: { lastGitFingerprint?: string; workspaceRevision?: number }):
-  | { toolName: 'git_status'; input: {}; note: 'first'|'changed' }
-  | { addMessage: string }   // compact delta or nothing
-  | undefined                // unchanged -> inject nothing
+| { toolName: 'git_status'; input: {}; note: 'first'|'changed' }
+| { addMessage: string } // compact delta or nothing
+| undefined // unchanged -> inject nothing
 
 ## Risks and mitigations
 

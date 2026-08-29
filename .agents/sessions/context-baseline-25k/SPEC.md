@@ -14,15 +14,15 @@ The model context window fills quickly. Cost lives in two pools; the prior archi
 
 From `bun run scripts/measure-context-baseline.ts` (gpt-tokenizer + 1.35× Anthropic fudge):
 
-| Component | Tokens | Notes |
-|---|---:|---|
-| Tool definitions (33 base2 tools) | **23,506** | Dominant fixed cost; regression cap 25k in `agents/__tests__/base2-context-budget.test.ts` |
-| base2 systemPrompt (raw template) | **11,612** | Placeholders not expanded |
-| File tree @ 10k budget | **9,126** | **Overstates default base2** — production uses `FILE_TREE_PROMPT_SMALL` (2.5k) |
-| Knowledge files instruction (static) | 1,036 | Always-on “how to write knowledge” |
-| System info / git / patterns / language | ~1.5k | Small |
-| Proactive `query_index` (representative) | ~4.9k | Variable; often every coding turn |
-| git_status | ~52 | Cheap; already gated by SDK |
+| Component                                |     Tokens | Notes                                                                                      |
+| ---------------------------------------- | ---------: | ------------------------------------------------------------------------------------------ |
+| Tool definitions (33 base2 tools)        | **23,506** | Dominant fixed cost; regression cap 25k in `agents/__tests__/base2-context-budget.test.ts` |
+| base2 systemPrompt (raw template)        | **11,612** | Placeholders not expanded                                                                  |
+| File tree @ 10k budget                   |  **9,126** | **Overstates default base2** — production uses `FILE_TREE_PROMPT_SMALL` (2.5k)             |
+| Knowledge files instruction (static)     |      1,036 | Always-on “how to write knowledge”                                                         |
+| System info / git / patterns / language  |      ~1.5k | Small                                                                                      |
+| Proactive `query_index` (representative) |      ~4.9k | Variable; often every coding turn                                                          |
+| git_status                               |        ~52 | Cheap; already gated by SDK                                                                |
 
 **Script total (incl. 10k tree + injections):** ~51.9k (~27% of 190k).
 **Realistic default-mode fixed cost (SMALL tree, no proactive):** ~**40–45k**.
@@ -159,17 +159,17 @@ Any optimization MUST preserve:
 
 ## Acceptance criteria
 
-| ID | Criterion |
-|---|---|
-| AC-F1 | Default-mode **fixed** baseline ≤ **30k**; stretch ≤ **25k** (no proactive) |
-| AC-F2 | Core-only tools ≤ **12k**; full tools ≤ **25k** |
-| AC-G1 | Gate e2e suites pass (`gate-lifecycle`, `gate-aux-ordering`, reviewer spawn conditions) |
-| AC-G2 | `gateAwarenessSection` still fully inline when progressive prompt is on |
-| AC-G3 | Programmatic hooks/git/spawn_inline work with locked model tools |
-| AC-P1 | Progressive prompt default-on ≥ **25%** authored reduction |
-| AC-R1 | Weak-intent prompts do not proactive-inject; compact proactive &lt; **1.5k** when fired |
-| AC-T1 | Baseline script reports production-faithful default fixed line |
-| AC-C1 | `/context` reflects tool tiers and tree budget after changes |
+| ID    | Criterion                                                                                                                                                                                                                                                                                                               |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AC-F1 | Default-mode **fixed** baseline ≤ **30k**; stretch ≤ **25k** (no proactive)                                                                                                                                                                                                                                             |
+| AC-F2 | Core-only tools ≤ **12k**; full tools ≤ **25k**                                                                                                                                                                                                                                                                         |
+| AC-G1 | Gate e2e suites pass (`gate-lifecycle`, `gate-aux-ordering`, reviewer spawn conditions)                                                                                                                                                                                                                                 |
+| AC-G2 | `gateAwarenessSection` still fully inline when progressive prompt is on                                                                                                                                                                                                                                                 |
+| AC-G3 | Programmatic hooks/git/spawn_inline work with locked model tools                                                                                                                                                                                                                                                        |
+| AC-P1 | Progressive prompt default-on ≥ **25%** authored reduction                                                                                                                                                                                                                                                              |
+| AC-R1 | Weak-intent prompts do not proactive-inject; compact proactive &lt; **1.5k** when fired                                                                                                                                                                                                                                 |
+| AC-T1 | Baseline script reports production-faithful default fixed line                                                                                                                                                                                                                                                          |
+| AC-C1 | `/context` reflects tool tiers and tree budget after changes                                                                                                                                                                                                                                                            |
 | AC-A1 | Before flipping M1 or M2 to **default-on**, run (a) full gate e2e suite **and** (b) either a buffbench subset or a fixed smoke task set documented in STATUS; results must be **no worse than the pre-flip baseline** recorded in STATUS (task success / gate pass rates). Canary-only shipping does not satisfy AC-A1. |
 
 ## Relevant systems (exact files)
@@ -194,10 +194,18 @@ Any optimization MUST preserve:
 
 ```ts
 // agents/base2/tool-tiers.ts (NEW)
-export const CORE_TOOLS = [/* spawn_agents, query_index, read_*, list_directory, glob, ask_user, skill, jobs minimal, ... */] as const
-export const IMPLEMENT_TOOLS = [/* edit_transaction, create_plan, update_plan_status, inspect_*, get_affected_tests, run_targeted_validation, ... */] as const
-export const AUDIT_TOOLS = [/* inspect_codebase_structure, inspect_feature_completeness, evaluate_audit_coverage, get_change_review_bundle, get_task */] as const
-export const MEDIA_3D_TOOLS = [/* read_image, inspect_3d_asset, render_3d_preview, edit_3d_asset */] as const
+export const CORE_TOOLS = [
+  /* spawn_agents, query_index, read_*, list_directory, glob, ask_user, skill, jobs minimal, ... */
+] as const
+export const IMPLEMENT_TOOLS = [
+  /* edit_transaction, create_plan, update_plan_status, inspect_*, get_affected_tests, run_targeted_validation, ... */
+] as const
+export const AUDIT_TOOLS = [
+  /* inspect_codebase_structure, inspect_feature_completeness, evaluate_audit_coverage, get_change_review_bundle, get_task */
+] as const
+export const MEDIA_3D_TOOLS = [
+  /* read_image, inspect_3d_asset, render_3d_preview, edit_3d_asset */
+] as const
 
 export type ToolTier = 'core' | 'implement' | 'audit' | 'media_3d' | 'job_extra'
 export function resolveModelToolNames(params: {
@@ -217,28 +225,28 @@ export function resolveModelToolNames(params: {
 
 ## Token budget math (how to hit 25–30k)
 
-| Workstream | Est. save | Mechanism |
-|---|---:|---|
-| Progressive tool disclosure | **12–16k** | Core ~12–15 tools always; rest on demand |
-| Default progressive prompt disclosure | **3–5k** | M4 flag on; gate text inline |
-| Cheaper tree + knowledge | **1–3k** | 1.5–2k tree; short knowledge blurb |
-| Lean proactive | **2–4k/firing** | Classifier + compact envelope (variable) |
-| Schema diet | **1–3k** | Shorter CORE schemas |
+| Workstream                            |       Est. save | Mechanism                                |
+| ------------------------------------- | --------------: | ---------------------------------------- |
+| Progressive tool disclosure           |      **12–16k** | Core ~12–15 tools always; rest on demand |
+| Default progressive prompt disclosure |        **3–5k** | M4 flag on; gate text inline             |
+| Cheaper tree + knowledge              |        **1–3k** | 1.5–2k tree; short knowledge blurb       |
+| Lean proactive                        | **2–4k/firing** | Classifier + compact envelope (variable) |
+| Schema diet                           |        **1–3k** | Shorter CORE schemas                     |
 
 Stack: ~42k realistic fixed − 14k tools − 4k prompt − 2k tree/knowledge ≈ **22–26k** fixed.
 
 ## Risks and mitigations
 
-| Risk | Mitigation |
-|---|---|
-| Model cannot find locked tool | Deterministic phase unlock + clear error |
-| Hidden craftsmanship/git rules | Trigger pointers; canary; **AC-A1** buffbench/smoke before default-on |
-| Prompt-cache thrash on tool unlock | Unlock once per phase; stabilize CORE all session |
-| Audit quality drop from lean proactive | Full envelope on explicit tool; structure when audit confirmed |
-| Gate weakened by thinner prompts | Never relocate `gateAwarenessSection`; gate e2e is merge bar |
+| Risk                                   | Mitigation                                                                   |
+| -------------------------------------- | ---------------------------------------------------------------------------- |
+| Model cannot find locked tool          | Deterministic phase unlock + clear error                                     |
+| Hidden craftsmanship/git rules         | Trigger pointers; canary; **AC-A1** buffbench/smoke before default-on        |
+| Prompt-cache thrash on tool unlock     | Unlock once per phase; stabilize CORE all session                            |
+| Audit quality drop from lean proactive | Full envelope on explicit tool; structure when audit confirmed               |
+| Gate weakened by thinner prompts       | Never relocate `gateAwarenessSection`; gate e2e is merge bar                 |
 | Ability regression on default-on flips | **AC-A1** hard bar: gate e2e + buffbench/smoke no worse than STATUS baseline |
-| Measuring wrong tree budget | R0 production-faithful script |
-| e2e asserting full tool list | Update only intentional assertions; keep gate semantics |
+| Measuring wrong tree budget            | R0 production-faithful script                                                |
+| e2e asserting full tool list           | Update only intentional assertions; keep gate semantics                      |
 
 ## Out of scope (future)
 

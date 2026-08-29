@@ -12,7 +12,9 @@ initializeThemeStore()
 
 const theme = chatThemes.dark
 
-const makeBlock = (overrides: Partial<DoctorContentBlock> = {}): DoctorContentBlock => ({
+const makeBlock = (
+  overrides: Partial<DoctorContentBlock> = {},
+): DoctorContentBlock => ({
   type: 'doctor',
   projectRoot: '/repo/project',
   agentsTrusted: true,
@@ -46,20 +48,26 @@ describe('DoctorBox', () => {
   })
 
   test('shows disabled badge when agents not trusted with warning color', () => {
-    const markup = renderToStaticMarkup(<DoctorBox block={makeBlock({ agentsTrusted: false })} />)
+    const markup = renderToStaticMarkup(
+      <DoctorBox block={makeBlock({ agentsTrusted: false })} />,
+    )
     expect(markup).toContain('disabled (use --trust-project-agents to enable)')
     expect(markup).toContain(theme.warning)
   })
 
   test('shows skills disabled badge with warning when not trusted', () => {
-    const markup = renderToStaticMarkup(<DoctorBox block={makeBlock({ skillsTrusted: false })} />)
+    const markup = renderToStaticMarkup(
+      <DoctorBox block={makeBlock({ skillsTrusted: false })} />,
+    )
     expect(markup).toContain('disabled with project-agent trust policy')
     expect(markup).toContain(theme.warning)
   })
 
   test('shows success color when trusted', () => {
     const markup = renderToStaticMarkup(
-      <DoctorBox block={makeBlock({ agentsTrusted: true, skillsTrusted: true })} />,
+      <DoctorBox
+        block={makeBlock({ agentsTrusted: true, skillsTrusted: true })}
+      />,
     )
     expect(markup).toContain(theme.success)
   })
@@ -69,7 +77,9 @@ describe('DoctorBox', () => {
       filePath: `src/file-${i}.ts`,
       message: `err ${i}`,
     }))
-    const markup = renderToStaticMarkup(<DoctorBox block={makeBlock({ diagnostics: manyDiagnostics })} />)
+    const markup = renderToStaticMarkup(
+      <DoctorBox block={makeBlock({ diagnostics: manyDiagnostics })} />,
+    )
     expect(markup).toContain('src/file-0.ts: err 0')
     expect(markup).toContain('src/file-9.ts: err 9')
     expect(markup).not.toContain('src/file-10.ts: err 10')
@@ -87,7 +97,9 @@ describe('DoctorBox', () => {
   })
 
   test('handles boundary counts zero', () => {
-    const markup = renderToStaticMarkup(<DoctorBox block={makeBlock({ skillCount: 0, mcpCount: 0 })} />)
+    const markup = renderToStaticMarkup(
+      <DoctorBox block={makeBlock({ skillCount: 0, mcpCount: 0 })} />,
+    )
     expect(markup).toContain('Loaded skills:')
     expect(markup).toContain('Loaded MCP servers:')
   })

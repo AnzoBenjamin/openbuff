@@ -63,17 +63,28 @@ describe('run job_update forwarding', () => {
     const guards = { callbacksEnabled: true, aborted: false }
     const dispose = attachJobForwarding({
       registry,
-      runOwner: { clientSessionId: OWNER.clientSessionId, rootRunId: OWNER.rootRunId },
+      runOwner: {
+        clientSessionId: OWNER.clientSessionId,
+        rootRunId: OWNER.rootRunId,
+      },
       handleEvent: (event) => {
         if (event.type === 'job_update') events.push(event)
       },
       guards,
     })
 
-    const job = registry.create({ kind: 'process', label: 'echo hi', owner: OWNER })
+    const job = registry.create({
+      kind: 'process',
+      label: 'echo hi',
+      owner: OWNER,
+    })
     registry.start(job.jobId)
     registry.emit(job.jobId, { type: 'output', data: 'hello' })
-    registry.emit(job.jobId, { type: 'lifecycle', state: 'completed', exitCode: 0 })
+    registry.emit(job.jobId, {
+      type: 'lifecycle',
+      state: 'completed',
+      exitCode: 0,
+    })
     await Promise.resolve()
 
     expect(events.map((e) => e.state)).toEqual([
@@ -94,14 +105,21 @@ describe('run job_update forwarding', () => {
     const events: PrintModeEvent[] = []
     attachJobForwarding({
       registry,
-      runOwner: { clientSessionId: OWNER.clientSessionId, rootRunId: OWNER.rootRunId },
+      runOwner: {
+        clientSessionId: OWNER.clientSessionId,
+        rootRunId: OWNER.rootRunId,
+      },
       handleEvent: (event) => {
         events.push(event)
       },
       guards: { callbacksEnabled: true, aborted: false },
     })
 
-    const job = registry.create({ kind: 'process', label: 'foreign', owner: FOREIGN })
+    const job = registry.create({
+      kind: 'process',
+      label: 'foreign',
+      owner: FOREIGN,
+    })
     registry.start(job.jobId)
     registry.emit(job.jobId, { type: 'output', data: 'leak?' })
     await Promise.resolve()
@@ -114,7 +132,10 @@ describe('run job_update forwarding', () => {
     const events: PrintModeEvent[] = []
     attachJobForwarding({
       registry,
-      runOwner: { clientSessionId: OWNER.clientSessionId, rootRunId: OWNER.rootRunId },
+      runOwner: {
+        clientSessionId: OWNER.clientSessionId,
+        rootRunId: OWNER.rootRunId,
+      },
       handleEvent: (event) => {
         events.push(event)
       },
@@ -138,23 +159,30 @@ describe('run job_update forwarding', () => {
     const events: PrintModeEvent[] = []
     const dispose = attachJobForwarding({
       registry,
-      runOwner: { clientSessionId: OWNER.clientSessionId, rootRunId: OWNER.rootRunId },
+      runOwner: {
+        clientSessionId: OWNER.clientSessionId,
+        rootRunId: OWNER.rootRunId,
+      },
       handleEvent: (event) => {
         events.push(event)
       },
       guards: { callbacksEnabled: true, aborted: false },
     })
 
-    const job = registry.create({ kind: 'process', label: 'teardown', owner: OWNER })
+    const job = registry.create({
+      kind: 'process',
+      label: 'teardown',
+      owner: OWNER,
+    })
     dispose()
     registry.start(job.jobId)
     registry.emit(job.jobId, { type: 'output', data: 'after-teardown' })
     await Promise.resolve()
 
     // Only the create(queued) event fired before disposal.
-    expect(events.map((e) => (e.type === 'job_update' ? e.state : e.type))).toEqual([
-      'queued',
-    ])
+    expect(
+      events.map((e) => (e.type === 'job_update' ? e.state : e.type)),
+    ).toEqual(['queued'])
   })
 
   it('ignores agent_chunk/status payloads (M5 forwards state + process output only)', async () => {
@@ -162,7 +190,10 @@ describe('run job_update forwarding', () => {
     const events: Extract<PrintModeEvent, { type: 'job_update' }>[] = []
     attachJobForwarding({
       registry,
-      runOwner: { clientSessionId: OWNER.clientSessionId, rootRunId: OWNER.rootRunId },
+      runOwner: {
+        clientSessionId: OWNER.clientSessionId,
+        rootRunId: OWNER.rootRunId,
+      },
       handleEvent: (event) => {
         if (event.type === 'job_update') events.push(event)
       },
@@ -171,7 +202,11 @@ describe('run job_update forwarding', () => {
 
     const job = registry.create({ kind: 'agent', label: 'agent', owner: OWNER })
     registry.start(job.jobId)
-    registry.emit(job.jobId, { type: 'agent_chunk', chunkType: 'text', data: 'chunk' })
+    registry.emit(job.jobId, {
+      type: 'agent_chunk',
+      chunkType: 'text',
+      data: 'chunk',
+    })
     registry.emit(job.jobId, { type: 'status', message: 'thinking' })
     await Promise.resolve()
 
@@ -185,14 +220,21 @@ describe('run job_update forwarding', () => {
     const guards = { callbacksEnabled: false, aborted: false }
     attachJobForwarding({
       registry,
-      runOwner: { clientSessionId: OWNER.clientSessionId, rootRunId: OWNER.rootRunId },
+      runOwner: {
+        clientSessionId: OWNER.clientSessionId,
+        rootRunId: OWNER.rootRunId,
+      },
       handleEvent: (event) => {
         events.push(event)
       },
       guards,
     })
 
-    const job = registry.create({ kind: 'process', label: 'guarded', owner: OWNER })
+    const job = registry.create({
+      kind: 'process',
+      label: 'guarded',
+      owner: OWNER,
+    })
     registry.start(job.jobId)
     await Promise.resolve()
     expect(events).toEqual([])

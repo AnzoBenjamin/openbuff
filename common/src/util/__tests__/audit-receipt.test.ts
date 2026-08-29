@@ -26,9 +26,7 @@ describe('containsStructuralAuditReceipt', () => {
   })
 
   it('returns true for any structuralReceipt with a string snapshot_id when expected id is undefined or empty', () => {
-    const value = [
-      { structuralReceipt: { snapshot_id: 'whatever' } },
-    ]
+    const value = [{ structuralReceipt: { snapshot_id: 'whatever' } }]
 
     expect(containsStructuralAuditReceipt(value)).toBe(true)
     expect(containsStructuralAuditReceipt(value, '')).toBe(true)
@@ -46,7 +44,10 @@ describe('containsStructuralAuditReceipt', () => {
 
   it('returns false when there is no structuralReceipt anywhere', () => {
     expect(
-      containsStructuralAuditReceipt({ foo: { bar: [{ baz: 1 }] } }, 'snapshot-1'),
+      containsStructuralAuditReceipt(
+        { foo: { bar: [{ baz: 1 }] } },
+        'snapshot-1',
+      ),
     ).toBe(false)
   })
 
@@ -71,7 +72,9 @@ describe('containsStructuralAuditReceipt', () => {
 
   it('returns false for non-object inputs', () => {
     expect(containsStructuralAuditReceipt(null, 'snapshot-1')).toBe(false)
-    expect(containsStructuralAuditReceipt('snapshot-1', 'snapshot-1')).toBe(false)
+    expect(containsStructuralAuditReceipt('snapshot-1', 'snapshot-1')).toBe(
+      false,
+    )
     expect(containsStructuralAuditReceipt(42, 'snapshot-1')).toBe(false)
     expect(containsStructuralAuditReceipt(undefined, 'snapshot-1')).toBe(false)
   })
@@ -102,9 +105,9 @@ describe('containsStructuralAuditReceipt', () => {
   })
 
   it('returns false when structuralReceipt exists but snapshot_id is missing or non-string', () => {
-    expect(
-      containsStructuralAuditReceipt({ structuralReceipt: {} }),
-    ).toBe(false)
+    expect(containsStructuralAuditReceipt({ structuralReceipt: {} })).toBe(
+      false,
+    )
     expect(
       containsStructuralAuditReceipt({
         structuralReceipt: { snapshot_id: 123 },

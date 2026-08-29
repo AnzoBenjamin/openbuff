@@ -19,7 +19,9 @@ type GitStatusValue = {
   truncated?: true
 }
 
-const makeValue = (overrides: Partial<GitStatusValue> = {}): GitStatusValue => ({
+const makeValue = (
+  overrides: Partial<GitStatusValue> = {},
+): GitStatusValue => ({
   branch: 'main',
   status: ' M src/a.ts',
   diff: 'diff --git a/src/a.ts b/src/a.ts\n+line\n',
@@ -83,7 +85,9 @@ describe('applyGitStatusGate', () => {
     const first = applyGitStatusGate(null, gitStatusOutput())
     // Dirty status/diff stay fixed, but a commit moved the branch head. This
     // MUST bust the gate or the model would keep acting on a stale branch.
-    const changedOutput = gitStatusOutput({ branch: 'main...origin/main [ahead 1]' })
+    const changedOutput = gitStatusOutput({
+      branch: 'main...origin/main [ahead 1]',
+    })
     const second = applyGitStatusGate(first.nextFingerprint, changedOutput)
     expect(second.output).toBe(changedOutput)
     expect(second.nextFingerprint).not.toBe(first.nextFingerprint)
@@ -94,7 +98,10 @@ describe('applyGitStatusGate', () => {
     const first = applyGitStatusGate(null, noDiff)
     expect(first.output).toBe(noDiff)
     expect(first.nextFingerprint).not.toBeNull()
-    const second = applyGitStatusGate(first.nextFingerprint, gitStatusOutput({ diff: undefined }))
+    const second = applyGitStatusGate(
+      first.nextFingerprint,
+      gitStatusOutput({ diff: undefined }),
+    )
     const entry = second.output[0]
     expect(entry.type === 'json' && (entry.value as any).unchanged).toBe(true)
   })
@@ -191,18 +198,22 @@ describe('git_status per-turn change-gating (run integration)', () => {
         const sessionState = getInitialSessionState(getStubProjectFileContext())
 
         results.push(
-          (await requestToolCall({
-            userInputId: promptId,
-            toolName: 'git_status',
-            input: {},
-          })).output,
+          (
+            await requestToolCall({
+              userInputId: promptId,
+              toolName: 'git_status',
+              input: {},
+            })
+          ).output,
         )
         results.push(
-          (await requestToolCall({
-            userInputId: promptId,
-            toolName: 'git_status',
-            input: {},
-          })).output,
+          (
+            await requestToolCall({
+              userInputId: promptId,
+              toolName: 'git_status',
+              input: {},
+            })
+          ).output,
         )
 
         await sendAction({
@@ -213,11 +224,17 @@ describe('git_status per-turn change-gating (run integration)', () => {
             output: { type: 'lastMessage', value: [] },
           },
         })
-        return { sessionState, output: { type: 'lastMessage' as const, value: [] } }
+        return {
+          sessionState,
+          output: { type: 'lastMessage' as const, value: [] },
+        }
       },
     )
 
-    await makeClient(() => gitStatusOutput()).run({ agent: 'base2', prompt: 'hi' })
+    await makeClient(() => gitStatusOutput()).run({
+      agent: 'base2',
+      prompt: 'hi',
+    })
 
     const first = results[0]?.[0]
     const second = results[1]?.[0]
@@ -248,22 +265,26 @@ describe('git_status per-turn change-gating (run integration)', () => {
         const sessionState = getInitialSessionState(getStubProjectFileContext())
 
         results.push(
-          (await requestToolCall({
-            userInputId: promptId,
-            toolName: 'git_status',
-            input: {},
-          })).output,
+          (
+            await requestToolCall({
+              userInputId: promptId,
+              toolName: 'git_status',
+              input: {},
+            })
+          ).output,
         )
 
         // Change the worktree between observations.
         observation = gitStatusOutput({ status: ' M src/b.ts\n' })
 
         results.push(
-          (await requestToolCall({
-            userInputId: promptId,
-            toolName: 'git_status',
-            input: {},
-          })).output,
+          (
+            await requestToolCall({
+              userInputId: promptId,
+              toolName: 'git_status',
+              input: {},
+            })
+          ).output,
         )
 
         await sendAction({
@@ -274,7 +295,10 @@ describe('git_status per-turn change-gating (run integration)', () => {
             output: { type: 'lastMessage', value: [] },
           },
         })
-        return { sessionState, output: { type: 'lastMessage' as const, value: [] } }
+        return {
+          sessionState,
+          output: { type: 'lastMessage' as const, value: [] },
+        }
       },
     )
 
@@ -300,18 +324,22 @@ describe('git_status per-turn change-gating (run integration)', () => {
 
         const outputs: ToolResultOutput[][] = []
         outputs.push(
-          (await requestToolCall({
-            userInputId: promptId,
-            toolName: 'git_status',
-            input: {},
-          })).output,
+          (
+            await requestToolCall({
+              userInputId: promptId,
+              toolName: 'git_status',
+              input: {},
+            })
+          ).output,
         )
         outputs.push(
-          (await requestToolCall({
-            userInputId: promptId,
-            toolName: 'git_status',
-            input: {},
-          })).output,
+          (
+            await requestToolCall({
+              userInputId: promptId,
+              toolName: 'git_status',
+              input: {},
+            })
+          ).output,
         )
         runResults.push(outputs)
 
@@ -323,14 +351,23 @@ describe('git_status per-turn change-gating (run integration)', () => {
             output: { type: 'lastMessage', value: [] },
           },
         })
-        return { sessionState, output: { type: 'lastMessage' as const, value: [] } }
+        return {
+          sessionState,
+          output: { type: 'lastMessage' as const, value: [] },
+        }
       },
     )
 
     // Two independent runs; the per-turn closure state must reset between
     // run() calls so the first observation of a new run is always full.
-    await makeClient(() => gitStatusOutput()).run({ agent: 'base2', prompt: 'first' })
-    await makeClient(() => gitStatusOutput()).run({ agent: 'base2', prompt: 'second' })
+    await makeClient(() => gitStatusOutput()).run({
+      agent: 'base2',
+      prompt: 'first',
+    })
+    await makeClient(() => gitStatusOutput()).run({
+      agent: 'base2',
+      prompt: 'second',
+    })
 
     const secondRunFirst = runResults[1]?.[0]?.[0]
     expect(secondRunFirst?.type).toBe('json')

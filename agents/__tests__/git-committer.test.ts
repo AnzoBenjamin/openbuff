@@ -201,9 +201,7 @@ describe('git-committer (M5.2 resurrected)', () => {
     expect(gitCommitter.systemPrompt).toMatch(/stop and report/i)
   })
 
-  type CommitterSteps = ReturnType<
-    NonNullable<typeof gitCommitter.handleSteps>
-  >
+  type CommitterSteps = ReturnType<NonNullable<typeof gitCommitter.handleSteps>>
 
   const feedJson = (value: Record<string, unknown>) =>
     ({ toolResult: [{ type: 'json', value }] }) as any

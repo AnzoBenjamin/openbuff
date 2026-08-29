@@ -13,7 +13,9 @@ export type PendingBucket = 'none' | '<10' | '<100' | '<1k' | '1k+'
  * non-process output is not line-bucketed the same way.
  */
 export function countPendingOutputLines(params: {
-  eventsAfterCursor: ReadonlyArray<Pick<JobEvent, 'payload'> | { payload: { type: string; data?: unknown } }>
+  eventsAfterCursor: ReadonlyArray<
+    Pick<JobEvent, 'payload'> | { payload: { type: string; data?: unknown } }
+  >
   lineCarry?: string
 }): number {
   let count = 0
@@ -21,7 +23,7 @@ export function countPendingOutputLines(params: {
     if (event.payload.type !== 'output') continue
     const data =
       typeof (event.payload as { data?: unknown }).data === 'string'
-        ? ((event.payload as { data: string }).data)
+        ? (event.payload as { data: string }).data
         : ''
     for (let i = 0; i < data.length; i++) {
       if (data[i] === '\n') count += 1
@@ -85,7 +87,9 @@ function isNonTerminalStatus(status: JobState): boolean {
  */
 export function selectListJobsRows<
   T extends Pick<ListJobsViewRow, 'status' | 'startedAt'>,
->(rows: T[]): {
+>(
+  rows: T[],
+): {
   rows: T[]
   truncatedCount: number
 } {

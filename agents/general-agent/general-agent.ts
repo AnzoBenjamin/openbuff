@@ -202,9 +202,7 @@ export const createGeneralAgent = (options: {
         const shardId =
           typeof params?.shardId === 'string' ? params.shardId.trim() : ''
         const snapshotId =
-          typeof params?.snapshotId === 'string'
-            ? params.snapshotId.trim()
-            : ''
+          typeof params?.snapshotId === 'string' ? params.snapshotId.trim() : ''
         const expectedSnapshotId = snapshotId
         const auditRequested = Boolean(sessionSlug && shardId && snapshotId)
         if (

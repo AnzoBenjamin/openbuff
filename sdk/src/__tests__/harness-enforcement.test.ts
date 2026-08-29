@@ -185,13 +185,11 @@ describe('harness enforcement services', () => {
     expect(
       classifyTerminalHarnessAction('git restore --worktree src/a.ts'),
     ).toMatchObject({ action: 'workspace-delete' })
+    expect(classifyTerminalHarnessAction('git restore src/a.ts')).toMatchObject(
+      { action: 'workspace-delete' },
+    )
     expect(
-      classifyTerminalHarnessAction('git restore src/a.ts'),
-    ).toMatchObject({ action: 'workspace-delete' })
-    expect(
-      classifyTerminalHarnessAction(
-        'git restore --staged --worktree src/a.ts',
-      ),
+      classifyTerminalHarnessAction('git restore --staged --worktree src/a.ts'),
     ).toMatchObject({ action: 'workspace-delete' })
     expect(
       classifyTerminalHarnessAction('git restore -W src/a.ts'),
@@ -218,9 +216,7 @@ describe('harness enforcement services', () => {
     ).toBeUndefined()
     expect(classifyTerminalHarnessAction('echo $(pwd)')).toBeUndefined()
     expect(
-      classifyTerminalHarnessAction(
-        'git log --oneline $(git rev-parse HEAD)',
-      ),
+      classifyTerminalHarnessAction('git log --oneline $(git rev-parse HEAD)'),
     ).toBeUndefined()
     expect(
       classifyTerminalHarnessAction(
@@ -229,7 +225,7 @@ describe('harness enforcement services', () => {
     ).toBeUndefined()
     expect(
       classifyTerminalHarnessAction(
-        "set -o pipefail; (bun test sdk) 2>&1 | tee /tmp/openbuff-basher-x.log >/dev/null; status=${PIPESTATUS[0]}; echo exit_status=$status; grep -n -E '\\(fail\\)|error:' /tmp/x.log | head -120 || true; exit \"$status\"",
+        'set -o pipefail; (bun test sdk) 2>&1 | tee /tmp/openbuff-basher-x.log >/dev/null; status=${PIPESTATUS[0]}; echo exit_status=$status; grep -n -E \'\\(fail\\)|error:\' /tmp/x.log | head -120 || true; exit "$status"',
       ),
     ).toBeUndefined()
     expect(
@@ -242,9 +238,7 @@ describe('harness enforcement services', () => {
     expect(
       classifyTerminalHarnessAction('echo "$(git rev-parse --short HEAD)"'),
     ).toBeUndefined()
-    expect(
-      classifyTerminalHarnessAction('gh pr create --title test'),
-    ).toEqual({
+    expect(classifyTerminalHarnessAction('gh pr create --title test')).toEqual({
       action: 'pull-request',
       target: 'gh pr create --title test',
     })

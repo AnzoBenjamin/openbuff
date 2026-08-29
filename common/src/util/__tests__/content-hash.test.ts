@@ -94,9 +94,9 @@ describe('read capabilities', () => {
       scope,
     })
 
-    expect(
-      decodeReadCapabilityToken(`readCapability=\"${token}\"`),
-    ).toEqual(decodeReadCapabilityToken(token))
+    expect(decodeReadCapabilityToken(`readCapability=\"${token}\"`)).toEqual(
+      decodeReadCapabilityToken(token),
+    )
   })
 
   it('requires a canonical sha256 hash when encoding', () => {

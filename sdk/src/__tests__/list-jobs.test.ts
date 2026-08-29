@@ -143,7 +143,8 @@ describe('listJobs', () => {
     }>
     expect(rootJobs.map((job) => job.jobId)).toContain(jobId)
 
-    const foreignJobs = value(await listJobs({ owner: foreignOwner })).jobs as Array<{
+    const foreignJobs = value(await listJobs({ owner: foreignOwner }))
+      .jobs as Array<{
       jobId: string
     }>
     expect(foreignJobs.map((job) => job.jobId)).not.toContain(jobId)
@@ -161,7 +162,9 @@ describe('listJobs', () => {
     }
     const jobId = seedRunningJob('basher-bg', basherStamped, 'process')
 
-    const jobs = value(await listJobs({ owner })).jobs as Array<{ jobId: string }>
+    const jobs = value(await listJobs({ owner })).jobs as Array<{
+      jobId: string
+    }>
     expect(jobs.map((job) => job.jobId)).toContain(jobId)
   })
 
@@ -174,11 +177,13 @@ describe('listJobs', () => {
 
     const result = value(await listJobs({ owner }))
     expect(result.note).toBe('No action required unless you need this output.')
-    const entry = (result.jobs as Array<{
-      jobId: string
-      pending: string
-      gap: boolean
-    }>).find((job) => job.jobId === jobId)
+    const entry = (
+      result.jobs as Array<{
+        jobId: string
+        pending: string
+        gap: boolean
+      }>
+    ).find((job) => job.jobId === jobId)
     expect(entry?.pending).toBe('<10')
     expect(entry?.gap).toBe(false)
   })
@@ -204,12 +209,14 @@ describe('listJobs', () => {
 
     const result = value(await listJobs({ owner }))
     expect(result.note).toBe('No action required unless you need this output.')
-    const entry = (result.jobs as Array<{
-      jobId: string
-      status: string
-      exitCode?: number | null
-      pending: string
-    }>).find((job) => job.jobId === jobId)
+    const entry = (
+      result.jobs as Array<{
+        jobId: string
+        status: string
+        exitCode?: number | null
+        pending: string
+      }>
+    ).find((job) => job.jobId === jobId)
     expect(entry?.status).toBe('completed')
     expect(entry?.exitCode).toBe(0)
     expect(entry?.pending).not.toBeUndefined()
@@ -325,9 +332,8 @@ describe('listJobs', () => {
     jobRegistry.emit(registryJobId!, { type: 'output', data: 'line-3\n' })
 
     // Advance lastCheckCursor via check_job on the user-facing id.
-    const checkResult = (
-      await checkJob({ jobId: userJobId, owner })
-    )[0].value as {
+    const checkResult = (await checkJob({ jobId: userJobId, owner }))[0]
+      .value as {
       jobId: string
       nextCursor?: number
       errorMessage?: string
@@ -364,9 +370,11 @@ describe('listJobs', () => {
     expect(afterMore?.pending).toBe('<10')
 
     const listedId = entry!.jobId
-    const recheck = (
-      await checkJob({ jobId: listedId, owner })
-    )[0].value as { jobId: string; errorMessage?: string; events?: unknown[] }
+    const recheck = (await checkJob({ jobId: listedId, owner }))[0].value as {
+      jobId: string
+      errorMessage?: string
+      events?: unknown[]
+    }
     expect(recheck.errorMessage).toBeUndefined()
     expect(recheck.jobId).toBe(userJobId)
 

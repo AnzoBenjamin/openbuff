@@ -69,9 +69,7 @@ export const readFilesAroundSelectorSchema = z.object({
     .int()
     .min(1)
     .optional()
-    .describe(
-      '1-indexed occurrence of `match` to anchor on. Defaults to 1.',
-    ),
+    .describe('1-indexed occurrence of `match` to anchor on. Defaults to 1.'),
   contextLines: z
     .number()
     .int()
@@ -229,10 +227,7 @@ const inputSchema = z
       ranges: z
         .array(
           z.object({
-            path: z
-              .string()
-              .min(1)
-              .describe('Project-relative file path.'),
+            path: z.string().min(1).describe('Project-relative file path.'),
             startLine: z
               .number()
               .int()
@@ -274,10 +269,7 @@ const inputSchema = z
       symbols: z
         .array(
           z.object({
-            path: z
-              .string()
-              .min(1)
-              .describe('Project-relative file path.'),
+            path: z.string().min(1).describe('Project-relative file path.'),
             names: z
               .preprocess(coerceToArray, z.array(z.string().min(1)))
               .describe('Symbol names to slice.'),

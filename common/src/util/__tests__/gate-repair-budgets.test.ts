@@ -44,9 +44,9 @@ describe('gate-repair-budgets', () => {
     expect(resolvePositiveIntBudget(-2)).toBe(null)
     expect(resolvePositiveIntBudget(4.9)).toBe(4)
     expect(resolvePositiveIntBudget('7')).toBe(7)
-    expect(
-      resolvePositiveIntBudget(99, null, MAX_MAX_GATE_REPAIR_ROUNDS),
-    ).toBe(MAX_MAX_GATE_REPAIR_ROUNDS)
+    expect(resolvePositiveIntBudget(99, null, MAX_MAX_GATE_REPAIR_ROUNDS)).toBe(
+      MAX_MAX_GATE_REPAIR_ROUNDS,
+    )
   })
 
   it('per-budget resolvers default to unlimited (null)', () => {

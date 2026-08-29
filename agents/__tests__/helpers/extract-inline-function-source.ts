@@ -102,7 +102,9 @@ export function extractInlineFunctionSource(
     index += 1
   }
   if (parenDepth !== 0) {
-    throw new Error(`Unable to find end of inline ${functionName} parameter list`)
+    throw new Error(
+      `Unable to find end of inline ${functionName} parameter list`,
+    )
   }
 
   // After the params there may be a return-type annotation whose own braces

@@ -27,13 +27,15 @@ const row = (
   label: string,
   tokens: number,
   pct: string,
-) => `${label.padEnd(labelWidth)}  ${String(tokens).padStart(tokenWidth)}  ${pct.padStart(5)}%`
+) =>
+  `${label.padEnd(labelWidth)}  ${String(tokens).padStart(tokenWidth)}  ${pct.padStart(5)}%`
 
 const windowRow = (
   labelWidth: number,
   tokenWidth: number,
   windowTokens: number,
-) => `${'window'.padEnd(labelWidth)}  ${String(windowTokens).padStart(tokenWidth)}`
+) =>
+  `${'window'.padEnd(labelWidth)}  ${String(windowTokens).padStart(tokenWidth)}`
 
 describe('formatLedgerForCli (common)', () => {
   it('emits a row per category, a total row, and the window row', () => {
@@ -119,9 +121,7 @@ describe('formatLedgerForCli (common)', () => {
 
     // Alignment: the shared token column puts the percent column at one
     // offset on every category/total line.
-    const percentLines = output
-      .split('\n')
-      .filter((line) => line.endsWith('%'))
+    const percentLines = output.split('\n').filter((line) => line.endsWith('%'))
     expect(new Set(percentLines.map((line) => line.length)).size).toBe(1)
   })
 

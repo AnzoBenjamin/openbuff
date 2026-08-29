@@ -72,8 +72,9 @@ describe('handleListJobs', () => {
     })
     expect(output[0].type).toBe('json')
     if (output[0].type === 'json') {
-      const jobs = (output[0].value as { jobs: Array<{ jobId: string; kind: string }> })
-        .jobs
+      const jobs = (
+        output[0].value as { jobs: Array<{ jobId: string; kind: string }> }
+      ).jobs
       expect(jobs).toContainEqual(
         expect.objectContaining({ jobId: 'bg-agent-1', kind: 'agent' }),
       )
@@ -110,13 +111,13 @@ describe('handleListJobs', () => {
       },
     } as unknown as Parameters<typeof handleListJobs>[0])
 
-    expect(
-      (forwardedToolCall?.input as Record<string, unknown>).owner,
-    ).toEqual({
-      clientSessionId: 'client-1',
-      rootRunId: 'root-run',
-      parentRunId: 'basher-run',
-      parentAgentId: 'basher',
-    })
+    expect((forwardedToolCall?.input as Record<string, unknown>).owner).toEqual(
+      {
+        clientSessionId: 'client-1',
+        rootRunId: 'root-run',
+        parentRunId: 'basher-run',
+        parentAgentId: 'basher',
+      },
+    )
   })
 })

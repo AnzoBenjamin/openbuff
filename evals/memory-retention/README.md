@@ -9,12 +9,12 @@ honestly across the session boundary. Drives the SDK store API directly:
 
 ## Scenarios
 
-| ID | Claim under test |
-|----|------------------|
-| S1 | Cold start (no persisted memory) recalls nothing |
-| S2 | Warm unchanged session retains decisions with fresh evidence |
-| S3 | Mutating a file marks exactly its own evidence stale |
-| S4 | Renames rebind via workspace moves; without journal knowledge they degrade to stale-not-deleted |
+| ID  | Claim under test                                                                                |
+| --- | ----------------------------------------------------------------------------------------------- |
+| S1  | Cold start (no persisted memory) recalls nothing                                                |
+| S2  | Warm unchanged session retains decisions with fresh evidence                                    |
+| S3  | Mutating a file marks exactly its own evidence stale                                            |
+| S4  | Renames rebind via workspace moves; without journal knowledge they degrade to stale-not-deleted |
 
 Compiled-context exclusion of stale evidence lives in the runtime suite
 (`packages/agent-runtime/src/util/__tests__/task-memory.test.ts`).

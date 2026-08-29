@@ -280,9 +280,7 @@ describe('agent prompt/tool availability alignment', () => {
         (def.programmaticToolNames ?? []).includes('set_output') &&
         !hasSetOutput
       const agentLabel =
-        ('id' in def ? def.id : undefined) ??
-        def.displayName ??
-        'unknown agent'
+        ('id' in def ? def.id : undefined) ?? def.displayName ?? 'unknown agent'
       if (!hasSetOutput && !programmaticOnlySetOutput) {
         expect(
           modelVisiblePrompt,

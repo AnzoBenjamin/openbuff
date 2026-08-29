@@ -137,7 +137,9 @@ function createBoundedCapture(marker?: RegExp) {
   let bootHit: RegExp | null = null
   let markerHit: RegExp | null = null
   // Clone marker without /g so lastIndex never bleeds across chunk scans or re-tests.
-  const safeMarker = marker ? new RegExp(marker.source, marker.flags.replace('g', '')) : null
+  const safeMarker = marker
+    ? new RegExp(marker.source, marker.flags.replace('g', ''))
+    : null
   const append = (chunk: Buffer): void => {
     const text = chunk.toString('utf8')
     // RF-4: scanCandidate is scanTail+text per chunk (bounded to SCAN_OVERLAP + chunk length); patterns must stay without /g to avoid lastIndex bleed.
@@ -181,18 +183,28 @@ function createBoundedCapture(marker?: RegExp) {
     bootMatched: () => bootHit,
     markerMatched: () => markerHit,
     append,
-    attach: (proc: { stdout?: NodeJS.ReadableStream | null; stderr?: NodeJS.ReadableStream | null }) => {
+    attach: (proc: {
+      stdout?: NodeJS.ReadableStream | null
+      stderr?: NodeJS.ReadableStream | null
+    }) => {
       proc.stdout?.on('data', append)
       proc.stderr?.on('data', append)
     },
-    detach: (proc: { stdout?: NodeJS.ReadableStream | null; stderr?: NodeJS.ReadableStream | null }) => {
+    detach: (proc: {
+      stdout?: NodeJS.ReadableStream | null
+      stderr?: NodeJS.ReadableStream | null
+    }) => {
       proc.stdout?.removeListener('data', append)
       proc.stderr?.removeListener('data', append)
     },
   }
 }
 
-function runProbe(binary: string, flag: string, marker?: RegExp): Promise<ProcessResult> {
+function runProbe(
+  binary: string,
+  flag: string,
+  marker?: RegExp,
+): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const proc = spawn(binary, [flag], {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -238,7 +250,15 @@ function runProbe(binary: string, flag: string, marker?: RegExp): Promise<Proces
       clearTimeout(timer)
       cleanup()
       proc.removeAllListeners()
-      resolve({ captured: cap.getCaptured(), tail: cap.getTail(), fatalHit: cap.fatalMatched(), bootHit: cap.bootMatched(), markerHit: cap.markerMatched(), code, signal })
+      resolve({
+        captured: cap.getCaptured(),
+        tail: cap.getTail(),
+        fatalHit: cap.fatalMatched(),
+        bootHit: cap.bootMatched(),
+        markerHit: cap.markerMatched(),
+        code,
+        signal,
+      })
     })
   })
 }
@@ -254,9 +274,16 @@ async function requireProbe(
 
   // RF-2: include stream-scanned fatalHit and bounded tail so late fatals beyond the head cap are not lost in diagnostics.
   const headSlice = result.captured.slice(0, CAPTURED_OUTPUT_FAIL_SLICE)
-  const tailSlice = result.tail && result.tail !== result.captured ? result.tail.slice(-CAPTURED_OUTPUT_FAIL_SLICE) : ''
-  const fatalInfo = result.fatalHit ? ` stream fatal ${result.fatalHit} (stream-scanned)` : ''
-  const tailInfo = tailSlice ? `\n--- tail (last ${CAPTURED_OUTPUT_FAIL_SLICE / 1024}KB) ---\n${tailSlice}` : ''
+  const tailSlice =
+    result.tail && result.tail !== result.captured
+      ? result.tail.slice(-CAPTURED_OUTPUT_FAIL_SLICE)
+      : ''
+  const fatalInfo = result.fatalHit
+    ? ` stream fatal ${result.fatalHit} (stream-scanned)`
+    : ''
+  const tailInfo = tailSlice
+    ? `\n--- tail (last ${CAPTURED_OUTPUT_FAIL_SLICE / 1024}KB) ---\n${tailSlice}`
+    : ''
   throw new Error(
     `${label} smoke failed (${formatExit(result.code, result.signal)})${fatalInfo}\n${headSlice}${tailInfo}`,
   )
@@ -374,10 +401,14 @@ async function main(): Promise<void> {
     console.error(
       `smoke-binary: FAIL — ${reason} (${formatExit(earlyExitCode, exitSignal)}).`,
     )
-    console.error(`--- captured output head (truncated to ${CAPTURED_OUTPUT_FAIL_SLICE / 1024}KB) ---`)
+    console.error(
+      `--- captured output head (truncated to ${CAPTURED_OUTPUT_FAIL_SLICE / 1024}KB) ---`,
+    )
     console.error(head.slice(0, CAPTURED_OUTPUT_FAIL_SLICE))
     if (tail && tail !== head) {
-      console.error(`--- captured output tail (last ${CAPTURED_OUTPUT_FAIL_SLICE / 1024}KB) ---`)
+      console.error(
+        `--- captured output tail (last ${CAPTURED_OUTPUT_FAIL_SLICE / 1024}KB) ---`,
+      )
       console.error(tail.slice(-CAPTURED_OUTPUT_FAIL_SLICE))
     }
     process.exit(1)
@@ -414,7 +445,10 @@ async function main(): Promise<void> {
   // fatals. Checked via stream-scanned bootHit plus bounded head/tail fallback.
   const streamBoot = cap.bootMatched()
   const matchedSignal =
-    streamBoot ?? BOOT_SIGNAL_PATTERNS.find((p) => p.test(cap.getCaptured()) || p.test(cap.getTail()))
+    streamBoot ??
+    BOOT_SIGNAL_PATTERNS.find(
+      (p) => p.test(cap.getCaptured()) || p.test(cap.getTail()),
+    )
   if (!matchedSignal) {
     fail(
       `binary never reached a known boot screen — checked ${BOOT_SIGNAL_PATTERNS.length} patterns`,

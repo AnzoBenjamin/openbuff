@@ -6,6 +6,7 @@ Three milestones. M1 is correctness-only with no public schema change. M2 is the
 change. M3 is deprecation/cleanup. Each milestone is independently shippable and gated.
 
 Validation commands used throughout:
+
 - `cd packages/agent-runtime && bun run typecheck && bun test src/__tests__/read-blocks.test.ts src/__tests__/read-files-edit-state.test.ts`
 - `cd common && bun run typecheck && bun test src/tools`
 - `cd sdk && bun run typecheck && bun test src/__tests__/read-files.test.ts`
@@ -40,11 +41,14 @@ export type ReadBlockCoverage = {
  * whole_file requires ALL of: complete, startLine === 1, endLine === totalLines,
  * a real sourceContent string. Anything else is scoped at best. Fails closed.
  */
-export function classifyReadBlockAuthority(c: ReadBlockCoverage): ReadBlockAuthority {
+export function classifyReadBlockAuthority(
+  c: ReadBlockCoverage,
+): ReadBlockAuthority {
   if (!c.complete) return 'none'
   if (c.capabilityEligible === false) return 'none'
   if (c.sourceContent === undefined) return 'none'
-  if (c.startLine === 1 && c.endLine === c.totalLines && c.totalLines > 0) return 'whole_file'
+  if (c.startLine === 1 && c.endLine === c.totalLines && c.totalLines > 0)
+    return 'whole_file'
   return 'scoped'
 }
 ```
@@ -73,6 +77,7 @@ whole-file read classifies as `whole_file` exactly as before.
 ### M1-T3 — `read_blocks` grants whole-file authority on full coverage (R1)
 
 In `read-blocks.ts`:
+
 - import `classifyReadBlockAuthority`, `grantWholeFileReadAuthorization`.
 - Track `const wholeFileGrantPaths = new Set<string>()` alongside `successfulReadPaths`.
 - After building each `window` / `around` item, classify with the block's real
@@ -89,8 +94,8 @@ In `common/src/tools/params/tool/read-blocks.ts` add shared caps next to the exi
 defaults and export them for reuse in M2:
 
 ```ts
-export const MAX_WINDOW_SIZE = 5_000       // lines
-export const MAX_CONTEXT_LINES = 2_000     // lines per side
+export const MAX_WINDOW_SIZE = 5_000 // lines
+export const MAX_CONTEXT_LINES = 2_000 // lines per side
 ```
 
 Apply `.max(MAX_WINDOW_SIZE)` / `.max(MAX_CONTEXT_LINES)` and mention the cap in each
@@ -106,6 +111,7 @@ have the SDK constant reference it in M2). Over budget → emit
 ### M1-T5 — Context-pruner recognizes `read_blocks` (R7)
 
 In `agents/context-pruner.ts`:
+
 - add `'read_blocks'` to the tool list at ~line 161;
 - add a `case 'read_blocks':` next to `case 'read_files':` (~line 229) summarizing
   `windows: path:win`, `around: path@match#occ`, `symbols: path#name`, and ending with the
@@ -152,6 +158,7 @@ check before touching).
 ### M1 tests to author
 
 In `packages/agent-runtime/src/__tests__/read-blocks.test.ts`:
+
 1. window covering `1..totalLines` on a strict-mode state → `readAuthorizationsByPath[path]`
    is `true` and `readAuthorizationHashesByPath[path]` equals the content hash.
 2. window covering a sub-range → neither map is set, but `editAnchor.readCapability` decodes
@@ -185,6 +192,7 @@ schemas — export them from the read-blocks params module rather than duplicati
 ### M2-T2 — Unify the result item union (R4, R5)
 
 In `common/src/tools/results/filesystem.ts`:
+
 - move `readBlocksWindowItemSchema` / `readBlocksAroundItemSchema` /
   `readBlocksSymbolItemSchema` into `readFilesItemV1Schema`'s union (the error item's
   `selector` enum already lists `window`/`around`/`symbol`);
@@ -288,9 +296,11 @@ snapshot will need updating), plus A7 and A9 from SPEC.
 - [ ] M3-GATE agents suites incl. prompt snapshot (A7, A9)
 
 <!-- update_plan_status:appended -->
+
 ## M1-T1 through M1-T4 + M1-T8 complete — 2026-07-30 — 2026-07-30T18:25:38.435Z
 
 All four implementation tasks done and verified:
+
 - M1-T1: read-authority-ladder.ts created (classifyReadBlockAuthority, 9 unit tests)
 - M1-T2: read_files rewired onto the ladder (both file/range branches unified)
 - M1-T3: read_blocks gains whole-file grant + context_compacted parity (6 regression tests)

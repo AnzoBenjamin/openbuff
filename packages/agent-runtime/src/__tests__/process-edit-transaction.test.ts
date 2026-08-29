@@ -177,7 +177,12 @@ describe('processEditTransaction', () => {
         requiresFreshRead: true,
         failedEditIndex: 1,
         tool: 'read_files',
-        input: { paths: expect.arrayContaining(['src/helper.ts', 'src/helper.test.ts']) },
+        input: {
+          paths: expect.arrayContaining([
+            'src/helper.ts',
+            'src/helper.test.ts',
+          ]),
+        },
       })
       expect(result.recovery?.paths).toEqual(
         expect.arrayContaining(['src/helper.ts', 'src/helper.test.ts']),
@@ -1337,7 +1342,9 @@ describe('processEditTransaction', () => {
       expect(result.failures[0]).toEqual(
         expect.objectContaining({ editIndex: 1, path: 'src/file.ts' }),
       )
-      expect(result.failures[0]?.errorMessage).toContain('overlap bytes changed earlier')
+      expect(result.failures[0]?.errorMessage).toContain(
+        'overlap bytes changed earlier',
+      )
     }
   })
 
@@ -1552,9 +1559,7 @@ describe('processEditTransaction', () => {
       }),
     ])
     const message = result.failures[0]!.errorMessage
-    expect(message).toContain(
-      'the readCapability-covered content is stale',
-    )
+    expect(message).toContain('the readCapability-covered content is stale')
     expect(message).toContain('Re-read lines 1-3')
     expect(message).not.toContain('Recovery capability')
     expect(message).not.toContain('readCapability="')
@@ -2001,7 +2006,9 @@ describe('processEditTransaction', () => {
 
     expect('error' in invalidResult).toBe(true)
     if ('error' in invalidResult) {
-      expect(invalidResult.failures[0]?.errorMessage).toMatch(/Invalid basedOnRead/i)
+      expect(invalidResult.failures[0]?.errorMessage).toMatch(
+        /Invalid basedOnRead/i,
+      )
       expect(invalidResult.failures[0]?.failureKind).toBe('capability_invalid')
     }
   })

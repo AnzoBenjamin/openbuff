@@ -1240,7 +1240,9 @@ describe('editor agent', () => {
 
       const editorMessage = {
         role: 'assistant' as const,
-        content: [{ type: 'text' as const, text: 'Subsequent editor activity' }],
+        content: [
+          { type: 'text' as const, text: 'Subsequent editor activity' },
+        ],
       }
       const result = generator.next({
         agentState: createMockAgentState([...preReadMessages, editorMessage]),
@@ -1248,7 +1250,9 @@ describe('editor agent', () => {
         stepsComplete: true,
       })
 
-      expect((result.value as any).input.output.messages).toEqual([editorMessage])
+      expect((result.value as any).input.output.messages).toEqual([
+        editorMessage,
+      ])
     })
 
     test('reports target file progress when one target remains unchanged', () => {
@@ -1591,9 +1595,9 @@ describe('editor agent', () => {
         '- Preserve the frozen router.',
       ].join('\n')
 
-      expect(helpers.extractBriefListItems([brief], /requirements?/i)).toEqual(
-        ['Ship bun run typecheck'],
-      )
+      expect(helpers.extractBriefListItems([brief], /requirements?/i)).toEqual([
+        'Ship bun run typecheck',
+      ])
       expect(
         helpers.extractBriefListItems([brief], /acceptance criteria/i),
       ).toEqual(['Parity suite passes'])
@@ -1645,9 +1649,9 @@ describe('editor agent', () => {
     test('inferValidationCommands maps workspace-owned paths onto their owning workspace checks', () => {
       const helpers = getInlineHelpers()
 
-      expect(helpers.inferValidationCommands(['packages/foo/src/x.ts'])).toEqual(
-        ['cd packages/foo && bun run typecheck && bun test'],
-      )
+      expect(
+        helpers.inferValidationCommands(['packages/foo/src/x.ts']),
+      ).toEqual(['cd packages/foo && bun run typecheck && bun test'])
       expect(helpers.inferValidationCommands(['agents/base2/y.ts'])).toEqual([
         'cd agents && bun run typecheck && bun test',
       ])

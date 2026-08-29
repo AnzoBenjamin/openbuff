@@ -22,7 +22,7 @@ Not merely because prompt assembly is synchronous. `cli/scripts/prebuild-agents.
 
 ### Why option B cannot ship as authored text
 
-`agents/__tests__/base2-progressive-disclosure.test.ts` measures `authoredSurface` (systemPrompt + instructionsPrompt + stepPrompt) **before** placeholder injection and asserts `(off - on) / off >= 0.25`. The disclosed/explicit-off delta *is* the six section bodies, so inlining them as authored text destroys the acceptance metric it was created to protect.
+`agents/__tests__/base2-progressive-disclosure.test.ts` measures `authoredSurface` (systemPrompt + instructionsPrompt + stepPrompt) **before** placeholder injection and asserts `(off - on) / off >= 0.25`. The disclosed/explicit-off delta _is_ the six section bodies, so inlining them as authored text destroys the acceptance metric it was created to protect.
 
 ### Recommended: hybrid C + runtime placeholder
 

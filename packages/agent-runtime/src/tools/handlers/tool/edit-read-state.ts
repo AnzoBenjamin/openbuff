@@ -49,7 +49,10 @@ export function clearEditRereadRequirement(
 ): void {
   const existing = fileProcessingState.editRereadRequirementsByPath?.[path]
   delete fileProcessingState.failedEditRequiresReadByPath[path]
-  if (existing?.reason === 'context_compacted' && !options?.clearContextCompacted) {
+  if (
+    existing?.reason === 'context_compacted' &&
+    !options?.clearContextCompacted
+  ) {
     return
   }
   delete fileProcessingState.editRereadRequirementsByPath?.[path]
@@ -146,7 +149,8 @@ export function strictEditAuthorizationError(params: {
   const echoPostEditCapability = prior?.reason !== 'context_compacted'
   const effectiveFreshReadCapability = echoPostEditCapability
     ? (freshReadCapability ??
-      fileProcessingState.confirmedPostEditAnchorsByPath?.[path]?.readCapability)
+      fileProcessingState.confirmedPostEditAnchorsByPath?.[path]
+        ?.readCapability)
     : undefined
   // Prefer capability-retry when a whole-file token is already available; keep
   // read_files only as the secondary path when no capability can be echoed.

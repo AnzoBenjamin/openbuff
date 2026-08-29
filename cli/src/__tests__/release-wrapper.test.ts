@@ -131,9 +131,12 @@ function mockResponse(bytes: Buffer) {
   })
 }
 
-function createMockHttpGet(fileName: string, archive: Buffer, checksum?: string) {
-  const digest =
-    checksum || createHash('sha256').update(archive).digest('hex')
+function createMockHttpGet(
+  fileName: string,
+  archive: Buffer,
+  checksum?: string,
+) {
+  const digest = checksum || createHash('sha256').update(archive).digest('hex')
   return async (url: string) =>
     url.endsWith('/SHA256SUMS')
       ? mockResponse(Buffer.from(`${digest}  ${fileName}\n`))
@@ -768,8 +771,11 @@ describe('release wrapper update safety', () => {
           config.metadataPath,
           JSON.stringify({ version: '1.0.0', platformKey: 'linux-x64' }),
         )
-        const { downloadBinary, ensureBinaryExists, getTreeSitterAssetProblems } =
-          require(path.join(repoRoot, wrapperPath))
+        const {
+          downloadBinary,
+          ensureBinaryExists,
+          getTreeSitterAssetProblems,
+        } = require(path.join(repoRoot, wrapperPath))
 
         await ensureBinaryExists({
           config,
@@ -845,7 +851,9 @@ describe('release wrapper update safety', () => {
         const installedNames = [
           config.binaryName,
           path.basename(config.metadataPath),
-          ...readdirSync(tempDir).filter((name) => name.startsWith('tree-sitter')),
+          ...readdirSync(tempDir).filter((name) =>
+            name.startsWith('tree-sitter'),
+          ),
         ]
         const before = Object.fromEntries(
           installedNames.map((name) => [
@@ -1080,8 +1088,7 @@ describe('release wrapper update safety', () => {
         await checkForUpdates({
           currentVersion: '1.0.0',
           getLatestVersion: async () => '1.1.0',
-          writePendingUpdateVersion: (version: string) =>
-            pending.push(version),
+          writePendingUpdateVersion: (version: string) => pending.push(version),
         })
 
         expect(pending).toEqual(['1.1.0'])
@@ -1089,7 +1096,10 @@ describe('release wrapper update safety', () => {
       } finally {
         activeChild.kill()
         await new Promise<void>((resolve) => {
-          if (activeChild.exitCode !== null || activeChild.signalCode !== null) {
+          if (
+            activeChild.exitCode !== null ||
+            activeChild.signalCode !== null
+          ) {
             resolve()
           } else {
             activeChild.once('exit', () => resolve())

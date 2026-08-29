@@ -96,9 +96,7 @@ export async function listDirectory(params: {
     // the previous `Failed to list directory: <fs message>` shape; see the SDK
     // CHANGELOG [Unreleased] entry for the consumer migration.
     const errnoCode =
-      error instanceof Error
-        ? (error as NodeJS.ErrnoException).code
-        : undefined
+      error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined
     // An errno code is a short fixed uppercase token, never a path; drop
     // anything else — including over-long uppercase text — so this branch
     // cannot become a new leak channel.

@@ -100,7 +100,10 @@ describe('specialist risk router', () => {
     ).toEqual([])
     // Non-code extensions (data/doc files) never match either.
     expect(
-      selectSpecialistReviewers({ files: ['src/state.json'], requirements: '' }),
+      selectSpecialistReviewers({
+        files: ['src/state.json'],
+        requirements: '',
+      }),
     ).toEqual([])
     // Directory-segment routing is unchanged. Note index.ts additionally
     // matches the pre-existing compatibility-reviewer path rule.

@@ -172,7 +172,6 @@ export function buildHarnessApprovalPrompt(request: HarnessApprovalRequest) {
   }
 }
 
-
 export const createRunConfig = (params: CreateRunConfigParams) => {
   const {
     logger,

@@ -42,14 +42,13 @@ export function transitionWorkflow(params: {
   event: string
   expectedRevision?: number
 }): WorkflowStateV1 {
-  const current =
-    params.current ?? {
-      schemaVersion: 1 as const,
-      workflowId: params.definition.id,
-      state: params.definition.initialState,
-      revision: 0,
-      updatedAt: Date.now(),
-    }
+  const current = params.current ?? {
+    schemaVersion: 1 as const,
+    workflowId: params.definition.id,
+    state: params.definition.initialState,
+    revision: 0,
+    updatedAt: Date.now(),
+  }
   if (current.workflowId !== params.definition.id) {
     throw new Error(
       `Workflow state ${current.workflowId} cannot be used with ${params.definition.id}.`,
@@ -65,7 +64,8 @@ export function transitionWorkflow(params: {
   }
   const transition = params.definition.transitions.find(
     (candidate) =>
-      candidate.event === params.event && candidate.from.includes(current.state),
+      candidate.event === params.event &&
+      candidate.from.includes(current.state),
   )
   if (!transition) {
     throw new Error(
@@ -88,11 +88,43 @@ export const base2GateWorkflowV1: WorkflowDefinitionV1 = {
   initialState: 'idle',
   terminalStates: ['final_response_allowed'],
   transitions: [
-    { event: 'awaiting_validation', from: ['idle', 'blocked', 'repair_loop', 'awaiting_review', 'final_response_allowed'], to: 'awaiting_validation' },
-    { event: 'awaiting_review', from: ['idle', 'awaiting_validation', 'repair_loop', 'blocked'], to: 'awaiting_review' },
-    { event: 'repair_loop', from: ['awaiting_validation', 'awaiting_review', 'blocked'], to: 'repair_loop' },
-    { event: 'blocked', from: ['idle', 'awaiting_validation', 'awaiting_review', 'repair_loop', 'blocked'], to: 'blocked' },
-    { event: 'final_response_allowed', from: ['idle', 'awaiting_validation', 'awaiting_review', 'blocked'], to: 'final_response_allowed' },
+    {
+      event: 'awaiting_validation',
+      from: [
+        'idle',
+        'blocked',
+        'repair_loop',
+        'awaiting_review',
+        'final_response_allowed',
+      ],
+      to: 'awaiting_validation',
+    },
+    {
+      event: 'awaiting_review',
+      from: ['idle', 'awaiting_validation', 'repair_loop', 'blocked'],
+      to: 'awaiting_review',
+    },
+    {
+      event: 'repair_loop',
+      from: ['awaiting_validation', 'awaiting_review', 'blocked'],
+      to: 'repair_loop',
+    },
+    {
+      event: 'blocked',
+      from: [
+        'idle',
+        'awaiting_validation',
+        'awaiting_review',
+        'repair_loop',
+        'blocked',
+      ],
+      to: 'blocked',
+    },
+    {
+      event: 'final_response_allowed',
+      from: ['idle', 'awaiting_validation', 'awaiting_review', 'blocked'],
+      to: 'final_response_allowed',
+    },
   ],
 }
 

@@ -111,14 +111,14 @@ describe('handleReadLogs', () => {
 
     expect(forwardedToolCall?.input.path).toBe('logs/app.log')
     expect(forwardedToolCall?.input.jobId).toBeUndefined()
-    expect(
-      (forwardedToolCall?.input as Record<string, unknown>).owner,
-    ).toEqual({
-      clientSessionId: 'client-1',
-      rootRunId: 'root-run',
-      parentRunId: 'parent-run',
-      parentAgentId: 'parent-agent',
-    })
+    expect((forwardedToolCall?.input as Record<string, unknown>).owner).toEqual(
+      {
+        clientSessionId: 'client-1',
+        rootRunId: 'root-run',
+        parentRunId: 'parent-run',
+        parentAgentId: 'parent-agent',
+      },
+    )
     expect(output[0].type).toBe('json')
   })
 })

@@ -10,12 +10,7 @@ const definition: AgentDefinition = {
   displayName: 'Repair Editor',
   // Narrow tool set: diagnosis reads (including subtree within authorized
   // patterns) plus edit_transaction. Do not broaden to the full editor set.
-  toolNames: [
-    'read_files',
-    'read_outline',
-    'read_subtree',
-    'edit_transaction',
-  ],
+  toolNames: ['read_files', 'read_outline', 'read_subtree', 'edit_transaction'],
   spawnerPrompt:
     'Repairs exact validation diagnostics or stable reviewer finding IDs. May only make finding-scoped edits and must not perform unrelated cleanup. Requires a versioned `handoff` with schemaVersion 1, taskId, objective, at least one finding, and explicit permissions.',
   instructionsPrompt: `${base.instructionsPrompt}

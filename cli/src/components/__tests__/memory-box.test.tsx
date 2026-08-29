@@ -55,11 +55,16 @@ describe('MemoryBox', () => {
     const block: MemoryContentBlock = { type: 'memory', state: 'empty' }
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
     expect(markup).toContain('No persisted task memory for this project yet.')
-    expect(markup).toContain('It is written after your first successful run completes.')
+    expect(markup).toContain(
+      'It is written after your first successful run completes.',
+    )
   })
 
   test('status renders revision·age header', () => {
-    const block = makeStatusBlock({ revision: 12, updatedAt: FIXED_NOW - 5_000 })
+    const block = makeStatusBlock({
+      revision: 12,
+      updatedAt: FIXED_NOW - 5_000,
+    })
     const expectedAge = formatAge(FIXED_NOW - block.updatedAt) // should be "5s"
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
     expect(markup).toContain(`${block.revision} \u00B7 ${expectedAge}`)
@@ -67,7 +72,10 @@ describe('MemoryBox', () => {
   })
 
   test('status renders goalPreview', () => {
-    const block = makeStatusBlock({ goalPreview: 'Ship the feature', goal: 'Ship the feature' })
+    const block = makeStatusBlock({
+      goalPreview: 'Ship the feature',
+      goal: 'Ship the feature',
+    })
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
     expect(markup).toContain('Ship the feature')
     expect(markup).toContain('Goal')
@@ -85,7 +93,9 @@ describe('MemoryBox', () => {
   })
 
   test('status renders evidence badge with fresh/stale/total', () => {
-    const block = makeStatusBlock({ evidence: { fresh: 5, stale: 2, total: 7 } })
+    const block = makeStatusBlock({
+      evidence: { fresh: 5, stale: 2, total: 7 },
+    })
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
     expect(markup).toContain('Evidence:')
     expect(markup).toContain('5 fresh')
@@ -94,7 +104,11 @@ describe('MemoryBox', () => {
   })
 
   test('status shows stale header button with total count', () => {
-    const block = makeStatusBlock({ stalePaths: ['a.ts'], totalStaleCount: 1, evidence: { fresh: 1, stale: 1, total: 2 } })
+    const block = makeStatusBlock({
+      stalePaths: ['a.ts'],
+      totalStaleCount: 1,
+      evidence: { fresh: 1, stale: 1, total: 2 },
+    })
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
     expect(markup).toContain('Stale paths (1)')
     expect(markup).toContain('\u25BE Stale paths (1)')
@@ -116,15 +130,25 @@ describe('MemoryBox', () => {
   })
 
   test('status shows prune button when stale > 0', () => {
-    const block = makeStatusBlock({ evidence: { fresh: 1, stale: 3, total: 4 } })
+    const block = makeStatusBlock({
+      evidence: { fresh: 1, stale: 3, total: 4 },
+    })
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
-    expect(markup).toContain('Run /memory prune to drop stale evidence entries.')
+    expect(markup).toContain(
+      'Run /memory prune to drop stale evidence entries.',
+    )
   })
 
   test('status hides prune button when stale === 0', () => {
-    const block = makeStatusBlock({ evidence: { fresh: 4, stale: 0, total: 4 }, totalStaleCount: 0, stalePaths: [] })
+    const block = makeStatusBlock({
+      evidence: { fresh: 4, stale: 0, total: 4 },
+      totalStaleCount: 0,
+      stalePaths: [],
+    })
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
-    expect(markup).not.toContain('Run /memory prune to drop stale evidence entries.')
+    expect(markup).not.toContain(
+      'Run /memory prune to drop stale evidence entries.',
+    )
     expect(markup).not.toContain('Stale paths')
   })
 
@@ -147,27 +171,45 @@ describe('MemoryBox', () => {
   })
 
   test('pruned renders with plural entries', () => {
-    const block: MemoryContentBlock = { type: 'memory', state: 'pruned', removed: 2, remaining: 5 }
+    const block: MemoryContentBlock = {
+      type: 'memory',
+      state: 'pruned',
+      removed: 2,
+      remaining: 5,
+    }
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
     expect(markup).toContain('Pruned 2 stale evidence entries; 5 remain.')
   })
 
   test('pruned renders singular entry', () => {
-    const block: MemoryContentBlock = { type: 'memory', state: 'pruned', removed: 1, remaining: 9 }
+    const block: MemoryContentBlock = {
+      type: 'memory',
+      state: 'pruned',
+      removed: 1,
+      remaining: 9,
+    }
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
     expect(markup).toContain('Pruned 1 stale evidence entry; 9 remain.')
   })
 
   test('nothing-to-prune renders correctly', () => {
-    const block: MemoryContentBlock = { type: 'memory', state: 'nothing-to-prune', remaining: 4 }
+    const block: MemoryContentBlock = {
+      type: 'memory',
+      state: 'nothing-to-prune',
+      remaining: 4,
+    }
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
-    expect(markup).toContain('Nothing to prune: all 4 evidence entries are fresh.')
+    expect(markup).toContain(
+      'Nothing to prune: all 4 evidence entries are fresh.',
+    )
   })
 
   test('no-record renders correctly', () => {
     const block: MemoryContentBlock = { type: 'memory', state: 'no-record' }
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
-    expect(markup).toContain('No persisted task memory to prune for this project.')
+    expect(markup).toContain(
+      'No persisted task memory to prune for this project.',
+    )
   })
 
   test('failed renders cause and unchanged record line', () => {
@@ -175,13 +217,18 @@ describe('MemoryBox', () => {
       type: 'memory',
       state: 'failed',
       reason: 'concurrent-write',
-      cause: 'the record changed while pruning (a run saved task memory); re-run /memory prune',
+      cause:
+        'the record changed while pruning (a run saved task memory); re-run /memory prune',
       removed: 3,
       remaining: 2,
     }
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
-    expect(markup).toContain('Memory prune failed: the record changed while pruning')
-    expect(markup).toContain('The record is unchanged: 3 stale evidence entries still present (2 fresh).')
+    expect(markup).toContain(
+      'Memory prune failed: the record changed while pruning',
+    )
+    expect(markup).toContain(
+      'The record is unchanged: 3 stale evidence entries still present (2 fresh).',
+    )
   })
 
   test('failed singular entry', () => {
@@ -198,14 +245,25 @@ describe('MemoryBox', () => {
   })
 
   test('error renders message', () => {
-    const block: MemoryContentBlock = { type: 'memory', state: 'error', message: 'Memory status failed: boom' }
+    const block: MemoryContentBlock = {
+      type: 'memory',
+      state: 'error',
+      message: 'Memory status failed: boom',
+    }
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
     expect(markup).toContain('Memory status failed: boom')
   })
 
   test('status renders zero counts without throwing', () => {
     const block = makeStatusBlock({
-      counts: { decisions: 0, requirements: 0, editsMade: 0, validationResults: 0, blockers: 0, nextActions: 0 },
+      counts: {
+        decisions: 0,
+        requirements: 0,
+        editsMade: 0,
+        validationResults: 0,
+        blockers: 0,
+        nextActions: 0,
+      },
       evidence: { fresh: 0, stale: 0, total: 0 },
       stalePaths: [],
       totalStaleCount: 0,
@@ -216,7 +274,11 @@ describe('MemoryBox', () => {
   })
 
   test('status with null goal still shows placeholder preview', () => {
-    const block = makeStatusBlock({ goal: null, goalPreview: '(none recorded)', isGoalTruncated: false })
+    const block = makeStatusBlock({
+      goal: null,
+      goalPreview: '(none recorded)',
+      isGoalTruncated: false,
+    })
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
     expect(markup).toContain('(none recorded)')
   })

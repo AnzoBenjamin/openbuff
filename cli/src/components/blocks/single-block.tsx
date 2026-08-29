@@ -138,7 +138,10 @@ export const SingleBlock = memo(
 
       case 'completion-summary': {
         return (
-          <box key={`${messageId}-completion-summary-${idx}`} style={{ width: '100%' }}>
+          <box
+            key={`${messageId}-completion-summary-${idx}`}
+            style={{ width: '100%' }}
+          >
             <CompletionSummaryBox block={block} />
           </box>
         )
@@ -178,7 +181,10 @@ export const SingleBlock = memo(
 
       case 'index-status': {
         return (
-          <box key={`${messageId}-index-status-${idx}`} style={{ width: '100%' }}>
+          <box
+            key={`${messageId}-index-status-${idx}`}
+            style={{ width: '100%' }}
+          >
             <IndexStatusBox block={block} />
           </box>
         )
@@ -187,7 +193,10 @@ export const SingleBlock = memo(
       case 'plan-status':
       case 'plan-status-list': {
         return (
-          <box key={`${messageId}-plan-status-${idx}`} style={{ width: '100%' }}>
+          <box
+            key={`${messageId}-plan-status-${idx}`}
+            style={{ width: '100%' }}
+          >
             <PlanStatusBox block={block} />
           </box>
         )

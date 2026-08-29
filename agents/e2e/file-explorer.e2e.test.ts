@@ -1,4 +1,8 @@
-import { OpenbuffClient, type AgentDefinition, type Message } from '@openbuff/sdk'
+import {
+  OpenbuffClient,
+  type AgentDefinition,
+  type Message,
+} from '@openbuff/sdk'
 import { beforeAll, describe, expect, it } from 'bun:test'
 
 import { setupE2eMocks } from '../../sdk/e2e/utils/e2e-mocks'
@@ -212,7 +216,12 @@ export interface User {
       const client = new OpenbuffClient({
         cwd: '/tmp/test-project',
         projectFiles,
-        agentDefinitions: [{ ...fileListerDefinition, model: 'anthropic/claude-haiku-4.5' } as unknown as AgentDefinition],
+        agentDefinitions: [
+          {
+            ...fileListerDefinition,
+            model: 'anthropic/claude-haiku-4.5',
+          } as unknown as AgentDefinition,
+        ],
       })
 
       const events: PrintModeEvent[] = []
@@ -243,7 +252,9 @@ export interface User {
         'src/services/auth-service.ts',
         'src/types/user.ts',
       ]
-      const matchedFiles = expectedFiles.filter((file) => outputStr.includes(file))
+      const matchedFiles = expectedFiles.filter((file) =>
+        outputStr.includes(file),
+      )
       expect(matchedFiles.length).toBeGreaterThanOrEqual(2)
       // Also assert file-list structured output: try JSON first, then split fallback, and verify at least 2 project files listed
       const listedPaths = parseListedPaths(outputStr).filter(
@@ -273,7 +284,12 @@ export interface User {
       const client = new OpenbuffClient({
         cwd: '/tmp/test-project',
         projectFiles,
-        agentDefinitions: [{ ...fileListerDefinition, model: 'anthropic/claude-haiku-4.5' } as unknown as AgentDefinition],
+        agentDefinitions: [
+          {
+            ...fileListerDefinition,
+            model: 'anthropic/claude-haiku-4.5',
+          } as unknown as AgentDefinition,
+        ],
       })
 
       const events: PrintModeEvent[] = []
@@ -298,7 +314,9 @@ export interface User {
         'packages/core/src/api/routes.ts',
         'packages/core/src/index.ts',
       ]
-      const matchedFiles = expectedFiles.filter((file) => outputStr.includes(file))
+      const matchedFiles = expectedFiles.filter((file) =>
+        outputStr.includes(file),
+      )
       expect(matchedFiles.length).toBeGreaterThanOrEqual(2)
       const listedPaths = parseListedPaths(outputStr).filter(
         (s) => s.endsWith('.ts') || s.endsWith('.md'),
@@ -328,7 +346,12 @@ export interface User {
       const client = new OpenbuffClient({
         cwd: '/tmp/test-project',
         projectFiles,
-        agentDefinitions: [{ ...fileListerDefinition, model: 'anthropic/claude-haiku-4.5' } as unknown as AgentDefinition],
+        agentDefinitions: [
+          {
+            ...fileListerDefinition,
+            model: 'anthropic/claude-haiku-4.5',
+          } as unknown as AgentDefinition,
+        ],
       })
 
       // Run file-lister with directories parameter to limit to frontend only
@@ -351,7 +374,9 @@ export interface User {
         'frontend/src/App.tsx',
         'frontend/src/components/Button.tsx',
       ]
-      const matchedFiles = expectedFiles.filter((file) => outputStr.includes(file))
+      const matchedFiles = expectedFiles.filter((file) =>
+        outputStr.includes(file),
+      )
       expect(matchedFiles.length).toBeGreaterThanOrEqual(1)
       // Ensure no backend files leak through the directory filter
       expect(outputStr).not.toContain('backend/src/server.ts')
@@ -456,7 +481,9 @@ export class AuthService {
         'src/services/auth-service.ts',
         'src/index.ts',
       ]
-      const matchedFiles = expectedFiles.filter((file) => outputStr.includes(file))
+      const matchedFiles = expectedFiles.filter((file) =>
+        outputStr.includes(file),
+      )
       expect(matchedFiles.length).toBeGreaterThanOrEqual(2)
       const listedPaths = parseListedPaths(outputStr).filter(
         (s) => s.endsWith('.ts') || s.endsWith('.json') || s.endsWith('.md'),

@@ -21,9 +21,7 @@ describe('AgentChecklist focus rows', () => {
     })
 
     expect(
-      rows.map((row) =>
-        row.kind === 'agent' ? row.agent.id : row.agentId,
-      ),
+      rows.map((row) => (row.kind === 'agent' ? row.agent.id : row.agentId)),
     ).toEqual(['root', 'child', 'grandchild'])
     expect(rows.map((row) => row.kind)).toEqual([
       'agent',
@@ -37,9 +35,7 @@ describe('AgentChecklist focus rows', () => {
       allAgents: agents,
       filteredAgents: [agents[0]],
       expandedAgentIds: new Set(),
-      agentDefinitions: new Map([
-        ['root', { spawnableAgents: ['child'] }],
-      ]),
+      agentDefinitions: new Map([['root', { spawnableAgents: ['child'] }]]),
     })
 
     expect(rows).toHaveLength(1)

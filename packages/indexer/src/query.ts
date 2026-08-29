@@ -141,8 +141,7 @@ export function queryIndex(
   const { limit = 20, fileTypes, mode = 'search', pathPrefixes } = options
   const tokens = tokenizeQuery(query)
   const adjacency = getAdjacency(index)
-  const commandIntent =
-    mode === 'commands' || isCommandDiscoveryQuery(query)
+  const commandIntent = mode === 'commands' || isCommandDiscoveryQuery(query)
   const lexicalWeights = resolveLexicalWeights(options.lexicalWeights)
 
   if (mode === 'neighbors') {
@@ -379,7 +378,13 @@ function queryPath(
   const seedPaths =
     options.from && options.to
       ? []
-      : findSeedPaths(index, tokens, undefined, options.fileTypes, lexicalWeights)
+      : findSeedPaths(
+          index,
+          tokens,
+          undefined,
+          options.fileTypes,
+          lexicalWeights,
+        )
   const from = options.from ?? seedPaths[0]
   const to = options.to ?? seedPaths.find((path) => path !== from)
   if (!from || !to) return []

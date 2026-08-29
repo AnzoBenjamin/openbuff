@@ -32,12 +32,12 @@ describe('formatIndexStatusChip', () => {
   })
 
   test('shows refreshing when a snapshot exists and a refresh is running', () => {
-    expect(
-      formatIndexStatusChip({ state: 'ready', refreshing: true }),
-    ).toEqual({
-      label: 'idx refreshing',
-      tone: 'warning',
-    })
+    expect(formatIndexStatusChip({ state: 'ready', refreshing: true })).toEqual(
+      {
+        label: 'idx refreshing',
+        tone: 'warning',
+      },
+    )
     expect(
       formatIndexStatusChip({ state: 'degraded', refreshing: true }),
     ).toEqual({

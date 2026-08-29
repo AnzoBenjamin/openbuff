@@ -1111,13 +1111,17 @@ describe('task memory', () => {
       owner: ownerA,
       toolName: 'read_files',
       callId: 'call-a-1',
-      output: readFilesOutput([{ path: 'src/a.ts', contentHash: 'sha256:aaa' }]),
+      output: readFilesOutput([
+        { path: 'src/a.ts', contentHash: 'sha256:aaa' },
+      ]),
     })
     bufferToolEvidenceForStep({
       owner: ownerB,
       toolName: 'read_files',
       callId: 'call-b-1',
-      output: readFilesOutput([{ path: 'src/b.ts', contentHash: 'sha256:bbb' }]),
+      output: readFilesOutput([
+        { path: 'src/b.ts', contentHash: 'sha256:bbb' },
+      ]),
     })
     bufferToolEvidenceForStep({
       owner: ownerA,
@@ -1135,7 +1139,11 @@ describe('task memory', () => {
     ])
     expect(flushedB!.evidence.map((item) => item.path)).toEqual(['src/b.ts'])
     // Each owner's buffer is isolated and cleared independently.
-    expect(flushBufferedToolEvidenceIntoTaskMemory({ owner: ownerA })).toBeUndefined()
-    expect(flushBufferedToolEvidenceIntoTaskMemory({ owner: ownerB })).toBeUndefined()
+    expect(
+      flushBufferedToolEvidenceIntoTaskMemory({ owner: ownerA }),
+    ).toBeUndefined()
+    expect(
+      flushBufferedToolEvidenceIntoTaskMemory({ owner: ownerB }),
+    ).toBeUndefined()
   })
 })

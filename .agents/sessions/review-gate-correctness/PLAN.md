@@ -1,6 +1,7 @@
 # Review-gate correctness & convergence plan (rev 3)
 
 > **Progress is tracked outside this file.** This document is the design: conclusions, evidence, tiers, sequencing. It carries no status markers by design, so nothing here goes stale as work lands.
+>
 > - `STATUS.md` — what has landed (with verified code citations), what is open and why, and resume instructions.
 > - `LESSONS.md` — decision records (incl. the T1.4d architect decision) and gotchas.
 >
@@ -18,56 +19,56 @@ Rev 3 supersedes rev 2 after adversarial review by `architect` and `thinker`. El
 ## Governing conclusions
 
 1. **The current prompt makes termination logically impossible.** "Find ways to improve the code changes" is a search that succeeds on any non-trivial file; "Do not emit `LOOKS_GOOD` while any findings remain" then forbids stopping. The acceptance predicate is unsatisfiable by construction — a divergence proof readable off `code-reviewer.ts` alone, not a probabilistic argument. Fixing the generator (T1.2) is the highest-confidence item here.
-2. **Cross-round memory is an optimization for expected-case termination and a necessity for any worst-case bound.** With a stateless reviewer there is no monotone decreasing quantity to induct on. Rev 2's "fix the generator and drop the ledger" was half right: fix the generator *and* repair the memory that already exists.
+2. **Cross-round memory is an optimization for expected-case termination and a necessity for any worst-case bound.** With a stateless reviewer there is no monotone decreasing quantity to induct on. Rev 2's "fix the generator and drop the ledger" was half right: fix the generator _and_ repair the memory that already exists.
 3. **Locality does not bound the observed pathology.** New findings decompose into repair-induced (scales with edit size; contracts as repairs shrink) and **rediscovery** (findings about code the previous sample happened not to mention — not caused by the edit, so locality does nothing). Rediscovery dominates under an unbounded rubric. This is why "repair edits are small" never saved this loop, and why bounding the rubric precedes any output filtering.
 4. **Enforcement belongs on the orchestrator side, never in new required reviewer output fields.** More required fields raise schema-non-compliance probability, and non-compliance routes to `currentPhase = 'blocked'` after one bounded retry — worse than an extra nit round. The condone credit is orchestrator-owned and costs zero protocol risk.
 
 ## Prior attempts (read before proposing anything)
 
-| Commit | Subject |
-|---|---|
-| `6b5b035db` | Harden gate TUI and reviewer loop convergence |
-| `bf31b9f3d` | harden the base2 specialist reviewer gate and its repair loop |
+| Commit      | Subject                                                              |
+| ----------- | -------------------------------------------------------------------- |
+| `6b5b035db` | Harden gate TUI and reviewer loop convergence                        |
+| `bf31b9f3d` | harden the base2 specialist reviewer gate and its repair loop        |
 | `4573e2753` | Harden reviewer and validation gate against stalls, loops, and churn |
-| `2d6ad7c27` | fix structured reviewer retry loop |
-| `933dd440e` | add explicit MAX_REVIEWER_REPAIR_ROUNDS cap to reviewer-repair loop |
-| `ff2ff4e24` | Run reviewer repair loop until findings clear |
+| `2d6ad7c27` | fix structured reviewer retry loop                                   |
+| `933dd440e` | add explicit MAX_REVIEWER_REPAIR_ROUNDS cap to reviewer-repair loop  |
+| `ff2ff4e24` | Run reviewer repair loop until findings clear                        |
 
-The last two are opposite directions — a cap added, then removed for "run until findings clear." The fossil is still in `common/src/util/gate-repair-budgets.ts`: `DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS` is `null`, commented *"@deprecated Omitted option/env means unlimited, not these values."*
+The last two are opposite directions — a cap added, then removed for "run until findings clear." The fossil is still in `common/src/util/gate-repair-budgets.ts`: `DEFAULT_MAX_REVIEWER_REPAIR_ROUNDS` is `null`, commented _"@deprecated Omitted option/env means unlimited, not these values."_
 
 Every one of those fixes was unfalsifiable when it shipped: no per-round finding telemetry exists, so each author decided on judgment. **Do not add a seventh judgment-based fix without instrumentation.**
 
 ## Evidence base (verified reads)
 
-| Fact | Location |
-|---|---|
-| Only `LOOKS_GOOD` finalizes; `NON_BLOCKING` is repair fuel | `gate-reviewer.ts:464-499`, `:319-334` |
-| **Condoned pass pre-sets the verdict** | `base2.ts:4121-4127` |
-| **…and the derivation is guarded, so the hard rules never run** | `base2.ts:4650-4655` (`if (!reviewerFinalizationVerdict)`) |
-| `getReviewerFinalizationVerdict` is the only enforcement of `coverage: missing` and in-scope `missing`/`uncertain` | `gate-reviewer.ts:471-491` |
-| Those hard rules are emitted as plain strings the condone capture can absorb | `gate-reviewer.ts:288-315` vs `base2.ts:4529-4539` |
-| `recordSuccessfulReviewReceipt` returns early on `BLOCKING` ⇒ all-condoned BLOCKING round passes with **no receipt** | `base2.ts:6927-6932` |
-| Fabricated verdict is persisted | `base2.ts:4842-4843` |
-| Reviewer prompt is an unbounded generator, and self-contradicts | `code-reviewer.ts` instructionsPrompt |
-| Condoning is exact-string after stripping the verdict prefix | `base2.ts:4093-4103`, capture `:4529-4539`, cleared `:4828` |
-| Prefix stripping is severity-blind ⇒ NON_BLOCKING→BLOCKING escalation of identical text is swallowed | `base2.ts:4097-4101`, `:4530-4532` |
-| **`openReviewerFindings` already is an id-keyed ledger** (`id`, `gateId`, `text`, `status: open\|resolved\|condoned`, `files[]`, `snapshotFingerprint`, `reviewer`) | `gate-state.ts:111-122` |
-| …with rehydration already wired | `base2.ts:904` |
-| …and `mergeReviewerFindings` already flips records to `condoned` | `base2.ts:5192-5206` |
-| …and repair reconciliation is already id-keyed | `base2.ts:4493-4511`, `:4525-4528` |
-| Condone credit is unverified self-report; `reviewerRepairHasProgress` (any changed file) short-circuits completeness | `base2.ts:4498-4511` |
-| Finding identity has three owners: reviewer-supplied id, FNV hash of text, raw condone text | `gate-reviewer.ts:627-634`; `base2.ts:7459-7466`; `:4090-4101` |
-| code-reviewer path is the only one that does **not** correlate reviewer ids (security/specialist do) | `base2.ts:4218-4232` vs `:2047-2054`, `:2688-2696` |
-| Object findings render as `[id] summary` ⇒ ids churn every text-keyed identity | `gate-reviewer.ts:548-560` |
-| `retainedBlockers` matches by substring | `base2.ts:5214-5221` |
-| No-progress guard compares **only** the immediately preceding fingerprint | `base2.ts:4551-4575`; specialist `:2962-2995` |
-| Bare-string findings never become `findingRecords` (`if (!id \|\| !text) return []`) | `gate-reviewer.ts:623-634` |
-| ⇒ a `LOOKS_GOOD` receipt with bare-string nits records `findings: []` | `base2.ts:7042`, `:7069` |
-| Receipt state + parsers already accept optional `severity`/`dimension` | `gate-state.ts:32-43`; `gate-reviewer.ts:639-644` |
-| Findings carry `evidence: string[]` prose; `files[]` exists but is populated with the **whole pending set** | `code-reviewer.ts` schema; `base2.ts:4183`, `:4224` |
-| Rubric reaches the model only as a pointer, uniquely targeting a `.ts` module | `base2.ts:154-155`, `:516`; siblings `:146-153` |
-| Dead-env-canary trap: with a default-ON flag, `envFlag \|\| DEFAULT` can never read the env | `base2.ts:87-94` |
-| Repair budgets resolve missing→null→unlimited; surfaced in `/context` | `base2.ts:100-123`; `gate-repair-budgets.ts:28-46`; `cli/src/commands/context.ts` |
+| Fact                                                                                                                                                                | Location                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Only `LOOKS_GOOD` finalizes; `NON_BLOCKING` is repair fuel                                                                                                          | `gate-reviewer.ts:464-499`, `:319-334`                                            |
+| **Condoned pass pre-sets the verdict**                                                                                                                              | `base2.ts:4121-4127`                                                              |
+| **…and the derivation is guarded, so the hard rules never run**                                                                                                     | `base2.ts:4650-4655` (`if (!reviewerFinalizationVerdict)`)                        |
+| `getReviewerFinalizationVerdict` is the only enforcement of `coverage: missing` and in-scope `missing`/`uncertain`                                                  | `gate-reviewer.ts:471-491`                                                        |
+| Those hard rules are emitted as plain strings the condone capture can absorb                                                                                        | `gate-reviewer.ts:288-315` vs `base2.ts:4529-4539`                                |
+| `recordSuccessfulReviewReceipt` returns early on `BLOCKING` ⇒ all-condoned BLOCKING round passes with **no receipt**                                                | `base2.ts:6927-6932`                                                              |
+| Fabricated verdict is persisted                                                                                                                                     | `base2.ts:4842-4843`                                                              |
+| Reviewer prompt is an unbounded generator, and self-contradicts                                                                                                     | `code-reviewer.ts` instructionsPrompt                                             |
+| Condoning is exact-string after stripping the verdict prefix                                                                                                        | `base2.ts:4093-4103`, capture `:4529-4539`, cleared `:4828`                       |
+| Prefix stripping is severity-blind ⇒ NON_BLOCKING→BLOCKING escalation of identical text is swallowed                                                                | `base2.ts:4097-4101`, `:4530-4532`                                                |
+| **`openReviewerFindings` already is an id-keyed ledger** (`id`, `gateId`, `text`, `status: open\|resolved\|condoned`, `files[]`, `snapshotFingerprint`, `reviewer`) | `gate-state.ts:111-122`                                                           |
+| …with rehydration already wired                                                                                                                                     | `base2.ts:904`                                                                    |
+| …and `mergeReviewerFindings` already flips records to `condoned`                                                                                                    | `base2.ts:5192-5206`                                                              |
+| …and repair reconciliation is already id-keyed                                                                                                                      | `base2.ts:4493-4511`, `:4525-4528`                                                |
+| Condone credit is unverified self-report; `reviewerRepairHasProgress` (any changed file) short-circuits completeness                                                | `base2.ts:4498-4511`                                                              |
+| Finding identity has three owners: reviewer-supplied id, FNV hash of text, raw condone text                                                                         | `gate-reviewer.ts:627-634`; `base2.ts:7459-7466`; `:4090-4101`                    |
+| code-reviewer path is the only one that does **not** correlate reviewer ids (security/specialist do)                                                                | `base2.ts:4218-4232` vs `:2047-2054`, `:2688-2696`                                |
+| Object findings render as `[id] summary` ⇒ ids churn every text-keyed identity                                                                                      | `gate-reviewer.ts:548-560`                                                        |
+| `retainedBlockers` matches by substring                                                                                                                             | `base2.ts:5214-5221`                                                              |
+| No-progress guard compares **only** the immediately preceding fingerprint                                                                                           | `base2.ts:4551-4575`; specialist `:2962-2995`                                     |
+| Bare-string findings never become `findingRecords` (`if (!id \|\| !text) return []`)                                                                                | `gate-reviewer.ts:623-634`                                                        |
+| ⇒ a `LOOKS_GOOD` receipt with bare-string nits records `findings: []`                                                                                               | `base2.ts:7042`, `:7069`                                                          |
+| Receipt state + parsers already accept optional `severity`/`dimension`                                                                                              | `gate-state.ts:32-43`; `gate-reviewer.ts:639-644`                                 |
+| Findings carry `evidence: string[]` prose; `files[]` exists but is populated with the **whole pending set**                                                         | `code-reviewer.ts` schema; `base2.ts:4183`, `:4224`                               |
+| Rubric reaches the model only as a pointer, uniquely targeting a `.ts` module                                                                                       | `base2.ts:154-155`, `:516`; siblings `:146-153`                                   |
+| Dead-env-canary trap: with a default-ON flag, `envFlag \|\| DEFAULT` can never read the env                                                                         | `base2.ts:87-94`                                                                  |
+| Repair budgets resolve missing→null→unlimited; surfaced in `/context`                                                                                               | `base2.ts:100-123`; `gate-repair-budgets.ts:28-46`; `cli/src/commands/context.ts` |
 
 ---
 
@@ -99,13 +100,13 @@ else { keep the round open — coverage/requirement rules still stand }
 
 Remove the `if (!reviewerFinalizationVerdict)` guard's dependence on the condone path, or at minimum re-run the coverage and requirement checks before crediting. Never let the condone path fabricate a verdict.
 
-Note the interaction with T1.4b: rev 2 promised to teach implementers that "uncertain blocks exactly like missing," which is currently *not* reliably true. Fixing the code and the guideline together avoids documenting an aspiration.
+Note the interaction with T1.4b: rev 2 promised to teach implementers that "uncertain blocks exactly like missing," which is currently _not_ reliably true. Fixing the code and the guideline together avoids documenting an aspiration.
 
 Acceptance: an all-condoned round whose receipt carries `coverage: "missing"` or an in-scope `uncertain` requirement does **not** pass. Add e2e coverage in `agents/e2e/gate-lifecycle.e2e.test.ts`.
 
 ## T0.2 — Condone credit must be backed by evidence
 
-Condoning is credited purely from the repair-editor's self-reported `findingsAddressed`, with no check that the claimed finding was touched. Worse, `reviewerRepairHasProgress` — true when *any* changed file path exists — short-circuits the completeness check, so a receipt with `status: 'blocked'` and unaddressed ids still condones every id it lists (`base2.ts:4498-4511`, `:4525-4539`).
+Condoning is credited purely from the repair-editor's self-reported `findingsAddressed`, with no check that the claimed finding was touched. Worse, `reviewerRepairHasProgress` — true when _any_ changed file path exists — short-circuits the completeness check, so a receipt with `status: 'blocked'` and unaddressed ids still condones every id it lists (`base2.ts:4498-4511`, `:4525-4539`).
 
 This is the rubber-stamping risk, located in the orchestrator rather than the reviewer. Fix (zero protocol-failure cost, because no reviewer output changes):
 
@@ -121,7 +122,7 @@ Acceptance: a repair receipt that lists ids without changed files condones nothi
 
 Gate statement, stated once: **T1.1 data gates Tier 2. Tier 3 follows re-measurement.** No other tier gate exists.
 
-## T1.1 — Per-round telemetry + shadow mode  ← first
+## T1.1 — Per-round telemetry + shadow mode ← first
 
 `emitGateTelemetry` already carries `repairRound` and `skipReason`. Add per round:
 
@@ -133,7 +134,7 @@ Gate statement, stated once: **T1.1 data gates Tier 2. Tier 3 follows re-measure
 
 **Durability (architect finding 9).** Rev 2 defined round-over-round comparison against generator locals while forbidding new persisted state — so the counterfactual would silently degrade across a serialized turn, which is exactly when the metric matters (`base2.ts:4863` resets round count only on gate pass; rounds are expected to span serialization). Resolution: derive the comparison from **already-persisted** state — the prior round's `openReviewerFindings` plus `reviewReceipts`. If that proves insufficient, grant T1.1 one explicit persisted field with a `??=` default at `base2.ts:889-917` and say so; do not leave it on locals.
 
-**Shadow mode.** Compute what a severity threshold *would* decide and log it without enforcing:
+**Shadow mode.** Compute what a severity threshold _would_ decide and log it without enforcing:
 
 ```
 would-suppress: 4 of 6 findings (severity low / unlabeled-hygiene)
@@ -163,7 +164,7 @@ re-raise it and say why:
 Files the last repair changed: <paths>
 ```
 
-**Why withheld (architect finding 2, decisive).** Condoning is exact-string equality (`base2.ts:4093-4103`). "Re-raise it and say why" changes the text, so the re-raise escapes the filter and re-enters the repair loop — while a *verbatim* re-raise of a genuinely unfixed blocker gets swallowed. T1.2(c) is therefore simultaneously suppressed and loop-amplifying depending on wording: the exact "reword problem" rev 2 cited as grounds to drop H2, reintroduced via prompt. Ship (c) only after T1.5 re-keys condoning on finding id — or, as a fallback, instruct re-raises to repeat the original text verbatim with the reason on a separate line the matcher strips. Also note: shipping (c) before T0.1 would worsen the escaped-defect path.
+**Why withheld (architect finding 2, decisive).** Condoning is exact-string equality (`base2.ts:4093-4103`). "Re-raise it and say why" changes the text, so the re-raise escapes the filter and re-enters the repair loop — while a _verbatim_ re-raise of a genuinely unfixed blocker gets swallowed. T1.2(c) is therefore simultaneously suppressed and loop-amplifying depending on wording: the exact "reword problem" rev 2 cited as grounds to drop H2, reintroduced via prompt. Ship (c) only after T1.5 re-keys condoning on finding id — or, as a fallback, instruct re-raises to repeat the original text verbatim with the reason on a separate line the matcher strips. Also note: shipping (c) before T0.1 would worsen the escaped-defect path.
 
 ## T1.3 — Optional `id` / `severity` / `dimension` metadata
 
@@ -205,12 +206,13 @@ Progressive prompt disclosure defaults ON, and every guide pointer names a path 
 Rev 2 dropped this claiming it "adds another persisted structure with its own migration and desync modes." **That was false.** `openReviewerFindings` (`gate-state.ts:111-122`) already carries `id`, `gateId`, `text`, `status: 'open' | 'resolved' | 'condoned'`, `files[]`, `snapshotFingerprint`, `reviewer`; rehydration is wired at `base2.ts:904`; `mergeReviewerFindings` already sets `condoned` (`:5192-5206`); repair reconciliation is already id-keyed (`:4493-4511`). This is a refactor of existing state, not new state.
 
 Changes:
+
 - Condone by `openReviewerFindings[].id` instead of raw text, in both the filter (`:4090-4101`) and `mergeReviewerFindings` (`:5197-5206`).
 - **Key on (verdict class, id), not prefix-stripped text** (architect finding 6). Today both prefixes map to one key, so a NON_BLOCKING finding escalated to BLOCKING with identical text is silently suppressed and can trigger the all-condoned pass.
 - Keep reading legacy `condonedFindingTexts` on resume so an in-flight session does not lose convergence progress and restart the loop.
 - Unblocks T1.2(c).
 
-**Still dropped: the changed-files admissibility rule.** Rev 2's reason was imprecise (architect finding 10) — the repair side is structured `{ path: string }[]` (`base2.ts:4500-4503`) and `files[]` exists on every finding (`gate-state.ts:117`); the real defect is that it is populated with the entire pending set (`:4183`, `:4224`), so it carries no per-finding attribution. That makes admissibility a *field-semantics* problem, not an impossibility. Revisit only if T1.1 shows persistent `newFindingCount > 0` on untouched files after T1.2 — and if so, populate `files[]` from the finding's cited path first.
+**Still dropped: the changed-files admissibility rule.** Rev 2's reason was imprecise (architect finding 10) — the repair side is structured `{ path: string }[]` (`base2.ts:4500-4503`) and `files[]` exists on every finding (`gate-state.ts:117`); the real defect is that it is populated with the entire pending set (`:4183`, `:4224`), so it carries no per-finding attribution. That makes admissibility a _field-semantics_ problem, not an impossibility. Revisit only if T1.1 shows persistent `newFindingCount > 0` on untouched files after T1.2 — and if so, populate `files[]` from the finding's cited path first.
 
 ## T1.6 — Fingerprint cycle detection (new; missed by rev 1 and rev 2)
 
@@ -236,11 +238,11 @@ Needs a kill switch on the `createBase2` option + `OPENBUFF_*` env pattern (`bas
 
 ## T2.2 — Scope re-review to what changed
 
-After a repair, pass the full pending set for *attestation* but direct deep review only at the repair receipt's `changedFiles`, citing the prior verdict for the rest. Attacks the "runs for a while" cost. Keep `collectReviewerAttestationIssues` unchanged so coverage gaps still fail closed. Promote if T1.1 shows reviewer wall-clock dominates.
+After a repair, pass the full pending set for _attestation_ but direct deep review only at the repair receipt's `changedFiles`, citing the prior verdict for the rest. Attacks the "runs for a while" cost. Keep `collectReviewerAttestationIssues` unchanged so coverage gaps still fail closed. Promote if T1.1 shows reviewer wall-clock dominates.
 
 ## T2.3 — Requirement ledger through the editor handoff
 
-Carry verbatim acceptance criteria in the editor handoff `Requirements` field, have the editor self-score each in its receipt, and pass that to the reviewer as *claimed* coverage. Reviewer contradicting a claim is a real finding; silence is not.
+Carry verbatim acceptance criteria in the editor handoff `Requirements` field, have the editor self-score each in its receipt, and pass that to the reviewer as _claimed_ coverage. Reviewer contradicting a claim is a real finding; silence is not.
 
 ## T2.4 — Nit-ratchet on the no-progress guard
 

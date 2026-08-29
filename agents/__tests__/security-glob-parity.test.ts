@@ -23,10 +23,7 @@ type SecurityConstantName = (typeof SECURITY_CONSTANT_NAMES)[number]
 // gate-paths-parity.test.ts: slice from `const NAME = [` to the matching `]`.
 // The arrays are simple string literals (no nested brackets), so a naive
 // depth scan reliably yields the whole literal.
-function extractInlineArrayLiteral(
-  source: string,
-  constName: string,
-): string {
+function extractInlineArrayLiteral(source: string, constName: string): string {
   const declarationStart = source.indexOf(`const ${constName} = [`)
   if (declarationStart < 0) {
     throw new Error(`Unable to find inline ${constName} declaration`)
@@ -52,10 +49,7 @@ function extractInlineArrayLiteral(
 
 // Reconstruct the real array from its source literal, mirroring the
 // `new Function(...)` reconstruction technique in gate-paths-parity.test.ts.
-function reconstructInlineArray(
-  source: string,
-  constName: string,
-): string[] {
+function reconstructInlineArray(source: string, constName: string): string[] {
   const literal = extractInlineArrayLiteral(source, constName)
   const buildArrayValue = new Function(
     `"use strict"; return (${literal})`,

@@ -27,10 +27,12 @@ This spec captures a source-backed audit and a remediation plan to restore cohes
 ## Key Findings (source-backed, from sharded audit at snapshot `68f0ffb8…`)
 
 ### Roster drift (no single source of truth)
+
 - Agent roster is maintained in 5 independent places: `agents/**/*.ts` default exports (de-facto truth), `cli/src/agents/bundled-agents.generated.ts` (generated, in sync), `openbuff.d.example/routes.json` (hand, **12 dead unshipped ids**), `common/src/constants/agents.ts` `AGENT_PERSONAS`/`AGENT_IDS` (hand, **missing ~18 shipped, includes 6 non-shipped**: `ask`, `planner`, `agent-builder`, `reviewer`, `file-explorer`, `researcher`), and `spawnableAgents` arrays in `base2.ts:116`, `base-deep.ts:352`, `general-agent.ts`.
 - `directory-lister` and `glob-matcher` are bundled + registered + routed but **NOT spawnable by any orchestrator** (dead-end agents).
 
 ### Orchestrator family inconsistency
+
 - `base-deep.ts:352` hand-overrides `spawnableAgents`, dropping `context-pruner` and `tmux-cli` that `base2`'s computed list includes.
 - `base2-fast` omits `browser-use` (present in DEFAULT/PLAN/EXECUTE_PLAN).
 - EXECUTE_PLAN step prompt (`buildExecutePlanStepPrompt`, base2.ts:6424) **drops** the editor-handoff / "don't manually spawn code-reviewer" guidance that DEFAULT's `buildImplementationStepPrompt` carries.
@@ -38,25 +40,30 @@ This spec captures a source-backed audit and a remediation plan to restore cohes
 - PLAN's instruction builder (`buildPlanOnlyInstructionsPrompt`) reimplements blocks rather than composing from the implementation builder — the main prompt drift surface.
 
 ### Prompt ↔ capability mismatch (core of the complaint)
+
 - **HIGH:** `buildBroadAuditSection` (quality-prompt-section.ts step 4) tells the coordinator to call `evaluate_audit_coverage` with each shard's `structuralReceipt`, but the shards it names in steps 1–3 are `file-picker`/`code-searcher` (discovery-only) which **cannot emit `structuralReceipt`**. Only `general-agent` audit shards emit it via `write_audit_findings`. The prompt's produce-path and consume-path don't connect.
 - `write_audit_findings` / `synthesizer` / `general-agent` durable-findings flow is essentially invisible in the orchestrator prompt, so the coordinator won't reliably use it.
 - `frontendSection` re-export at `quality-prompt-section.ts:77` is production-dead (only the snapshot test imports it; production uses the `{CODEBUFF_FRONTEND_SECTION}` placeholder).
 
 ### Gate / reviewer drift risk
+
 - Entire gate lifecycle is inline-mirrored inside `createBase2.handleSteps` (serialized via `.toString()`), with canonical copies in `gate-*.ts`.
 - Parity guards exist for `gate-repair.ts` and `gate-reviewer.ts` (good), but the aux-path helpers `normalizeGateFilePath`, `normalizeGateFileList`, `gateFileSetsEqual` (`gate-paths.ts`) have **no cross-implementation parity test** — `gate-aux-triggers.test.ts` only tests the inline copies.
 - Security-sensitive glob list is duplicated (inline gate predicate vs `securityReviewSection`), kept in sync by convention only.
 
 ### Tool registry hygiene
+
 - schema/handler/metadata form a compile-enforced bijection (good).
 - Dead tools (active + promptVisible, granted to no agent): `lookup_agent_info`, `render_ui`, `find_files`, `find_files_matching_content`.
 - `read_slices` is correctly quarantined in metadata but still in `publishedTools` and the generated `agents/types/tools.ts` type surface.
 - `tool-reachability.test.ts` does not enumerate all structured-output agents (coverage gap).
 
 ### Orchestration subsystem duality
+
 - `packages/agent-runtime/src/orchestration/` (`select-agent-attempt`, `workflow-engine`, `discovery-coordinator`) is invoked but advisory/bookkeeping; the authoritative orchestration is the base2 inline gate. `workflow-engine` is telemetry-only — a dual-system smell.
 
 ### Discovery agent boundaries
+
 - `basher` has no `terminalPermissionProfile` while debugger/git-committer/dependency-manager/librarian all do.
 - `file-picker` ↔ `file-lister` overlap (file-lister is file-picker's internal worker yet carries its own spawnerPrompt).
 

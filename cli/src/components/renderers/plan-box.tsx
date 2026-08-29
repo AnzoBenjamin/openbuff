@@ -35,7 +35,9 @@ const formatArtifactRows = (metadata: PlanArtifactMetadata): string[] => {
     .map(([label, value]) => `${label}: ${value}`)
 
   const customArtifactRows = (metadata.customArtifacts ?? [])
-    .filter(({ label, path }) => Boolean(label?.trim()) && Boolean(path?.trim()))
+    .filter(
+      ({ label, path }) => Boolean(label?.trim()) && Boolean(path?.trim()),
+    )
     .map(({ label, path }) => `${label}: ${path}`)
 
   return [...artifactRows, ...customArtifactRows]
@@ -80,7 +82,10 @@ export const PlanBox = memo(
           <box style={{ flexDirection: 'column', gap: 0 }}>
             <text style={{ fg: theme.secondary }}>Artifacts</text>
             {artifactRows.map((row, index) => (
-              <text key={`${row}-${index}`} style={{ wrapMode: 'word', fg: theme.secondary }}>
+              <text
+                key={`${row}-${index}`}
+                style={{ wrapMode: 'word', fg: theme.secondary }}
+              >
                 {row}
               </text>
             ))}
@@ -93,9 +98,7 @@ export const PlanBox = memo(
                   paddingRight: 1,
                   borderStyle: 'single',
                   borderColor:
-                    hoveredIndex === index
-                      ? theme.foreground
-                      : theme.secondary,
+                    hoveredIndex === index ? theme.foreground : theme.secondary,
                   customBorderChars: BORDER_CHARS,
                 }}
                 onClick={() => onInsertCommand(command)}

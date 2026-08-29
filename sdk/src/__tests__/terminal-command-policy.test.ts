@@ -100,7 +100,7 @@ describe('terminal command permission policy', () => {
       "node -e 'console.log(process.env.API_KEY)'",
       "ruby -e 'puts ENV.to_h'",
       "python -c 'import os; print(os.environ)'",
-      "python3 -c 'import os; print(os.getenv(\"HOME\"))'",
+      'python3 -c \'import os; print(os.getenv("HOME"))\'',
       "perl -e 'print $ENV{HOME}'",
       // Recursive/force deletion and destructive git verbs (already covered
       // by the filesystem/git tuples; locked in as regression guards).
@@ -944,9 +944,9 @@ describe('terminal command permission policy', () => {
       "/usr/bin/perl -pi -e 's/x/y/' workspace.txt",
       "sed -i 's/a/b/' workspace.txt",
       "sed -i'' 's/a/b/' /tmp/tmux-fixture.txt",
-      "sed -i\"\" 's/a/b/' /tmp/tmux-fixture.txt",
+      'sed -i"" \'s/a/b/\' /tmp/tmux-fixture.txt',
       "env X=1 sed -i'' 's/a/b/' /tmp/tmux-fixture.txt",
-      "command /usr/bin/sed -i\"\" 's/a/b/' /tmp/tmux-fixture.txt",
+      'command /usr/bin/sed -i"" \'s/a/b/\' /tmp/tmux-fixture.txt',
       "env X=1 command /usr/bin/sed --in-place 's/a/b/' workspace.txt",
       'tar -xf /tmp/payload.tar -C .',
       'unzip /tmp/payload.zip -d .',
@@ -957,20 +957,20 @@ describe('terminal command permission policy', () => {
       "/bin/bash -c 'touch workspace.txt'",
       "env X=1 bash -c 'touch workspace.txt'",
       "env -i bash -c 'touch workspace.txt'",
-      "env -- node -e 'require(\"fs\").writeFileSync(\"workspace.txt\", \"x\")'",
+      'env -- node -e \'require("fs").writeFileSync("workspace.txt", "x")\'',
       "env -u NAME bash -c 'touch workspace.txt'",
       "command -- bash -c 'touch workspace.txt'",
-      "node -e 'require(\"fs\").writeFileSync(\"workspace.txt\", \"x\")'",
-      "nodejs -e 'require(\"fs\").writeFileSync(\"workspace.txt\", \"x\")'",
-      "python -c 'open(\"workspace.txt\", \"w\")'",
-      "python3 -c 'open(\"workspace.txt\", \"w\")'",
-      "perl -e 'open STDOUT, \">\", \"workspace.txt\"'",
-      "ruby -e 'File.write(\"workspace.txt\", \"x\")'",
-      "awk 'BEGIN { print \"x\" > \"workspace.txt\" }'",
-      "php -r 'file_put_contents(\"workspace.txt\", \"x\");'",
-      "lua -e 'io.open(\"workspace.txt\", \"w\")'",
-      "deno eval 'await Deno.writeTextFile(\"workspace.txt\", \"w\")'",
-      "bun -e 'require(\"fs\").writeFileSync(\"workspace.txt\", \"x\")'",
+      'node -e \'require("fs").writeFileSync("workspace.txt", "x")\'',
+      'nodejs -e \'require("fs").writeFileSync("workspace.txt", "x")\'',
+      'python -c \'open("workspace.txt", "w")\'',
+      'python3 -c \'open("workspace.txt", "w")\'',
+      'perl -e \'open STDOUT, ">", "workspace.txt"\'',
+      'ruby -e \'File.write("workspace.txt", "x")\'',
+      'awk \'BEGIN { print "x" > "workspace.txt" }\'',
+      'php -r \'file_put_contents("workspace.txt", "x");\'',
+      'lua -e \'io.open("workspace.txt", "w")\'',
+      'deno eval \'await Deno.writeTextFile("workspace.txt", "w")\'',
+      'bun -e \'require("fs").writeFileSync("workspace.txt", "x")\'',
       'env X=1 /usr/bin/busybox touch workspace-pwned.txt',
       'command /usr/bin/find . -exec touch workspace-pwned.txt \\;',
       'env X=1 /usr/bin/xargs touch workspace-pwned.txt',
@@ -1019,10 +1019,7 @@ describe('terminal command permission policy', () => {
         }).allowed,
       ).toBe(false)
     }
-    for (const command of [
-      "printf '$X ${X}'",
-      'rg TODO src >/dev/null',
-    ]) {
+    for (const command of ["printf '$X ${X}'", 'rg TODO src >/dev/null']) {
       expect(
         evaluateTerminalCommandPolicy({
           command,
@@ -1160,10 +1157,7 @@ describe('terminal command permission policy', () => {
     try {
       fs.symlinkSync(process.cwd(), fixtureLink, 'dir')
 
-      for (const command of [
-        `touch ${fixtureLink}`,
-        `echo x>${fixtureLink}`,
-      ]) {
+      for (const command of [`touch ${fixtureLink}`, `echo x>${fixtureLink}`]) {
         expect(
           evaluateTerminalCommandPolicy({
             command,
@@ -1179,7 +1173,10 @@ describe('terminal command permission policy', () => {
   })
 
   it('rejects tmux fixture hard links', () => {
-    const fixtureSource = path.join('/tmp', `tmux-fixture-source-${randomUUID()}`)
+    const fixtureSource = path.join(
+      '/tmp',
+      `tmux-fixture-source-${randomUUID()}`,
+    )
     const fixtureLink = path.join('/tmp', `tmux-fixture-link-${randomUUID()}`)
 
     try {
@@ -1203,7 +1200,15 @@ describe('terminal command permission policy', () => {
   })
 
   it('enforces /tmp operands for every wrapped tmux filesystem mutator', () => {
-    for (const executable of ['rm', 'mv', 'cp', 'mkdir', 'touch', 'truncate', 'install']) {
+    for (const executable of [
+      'rm',
+      'mv',
+      'cp',
+      'mkdir',
+      'touch',
+      'truncate',
+      'install',
+    ]) {
       expect(
         evaluateTerminalCommandPolicy({
           command: `env X=1 ${executable} workspace.txt`,

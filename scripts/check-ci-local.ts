@@ -238,8 +238,7 @@ function stepWasKilledByTimeout(result: CiLocalSpawnResult): boolean {
       ? String((result.error as { code: unknown }).code)
       : undefined
   return (
-    code === 'ETIMEDOUT' ||
-    (result.status === null && result.signal != null)
+    code === 'ETIMEDOUT' || (result.status === null && result.signal != null)
   )
 }
 

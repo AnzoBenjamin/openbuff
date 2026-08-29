@@ -3,6 +3,7 @@
 ## Current state — M1–M4 implemented; awaiting gate on M4 files
 
 ### Done
+
 - M1: truncatedAtCursor gap predicate; bound returned events; tests.
 - M2: live 250ms drain, per-line events, hasLiveDrainer, peekJobLineCarry.
 - M3: checkJob wait() wake; matched=false; follow without wait_for; OOM bounds tests.
@@ -14,17 +15,21 @@
   - base2 yields programmatic `list_jobs` after initial + mid-loop `git_status` (pushed status digest).
 
 ### Validation (local)
+
 - check-job 41/41; list-jobs-view + list-jobs 12/12; combined suites 53/53.
 - typecheck: common, sdk, agents clean.
 
 ### Pending
+
 - Runtime validation/reviewer gate on M4 dirty set.
 - M5: cross-package smoke + live dev-server if desired.
 
 ## Resume
+
 If gate returns blockers, fix finding-scoped issues only. M5 is optional next after LOOKS_GOOD.
 
 <!-- update_plan_status:appended -->
+
 ## Session closed — M1–M5 delivered, R7 deferred — 2026-08-02T10:29:36.462Z
 
 The session is closed with M1–M5 delivered and one requirement (R7) explicitly deferred. Rather than checking boxes silently, `PLAN.md` was rewritten to be honest about what shipped: every milestone line now carries the concrete evidence for its claim, and a new §Deviations section records three places where the implementation diverged from the original DESIGN.

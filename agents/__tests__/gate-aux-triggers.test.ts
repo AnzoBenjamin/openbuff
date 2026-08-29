@@ -227,36 +227,30 @@ describe('gate-aux-triggers', () => {
     })
 
     test('tokenize / polygon basenames do not match token', () => {
-      expect(
-        helpers.matchesSecuritySensitiveGlob(['tokenize.ts']),
-      ).toBe(false)
-      expect(
-        helpers.matchesSecuritySensitiveGlob(['polygon.ts']),
-      ).toBe(false)
+      expect(helpers.matchesSecuritySensitiveGlob(['tokenize.ts'])).toBe(false)
+      expect(helpers.matchesSecuritySensitiveGlob(['polygon.ts'])).toBe(false)
     })
 
     test('delimited token/secret/apikey basenames still match', () => {
       expect(helpers.matchesSecuritySensitiveGlob(['token.ts'])).toBe(true)
-      expect(
-        helpers.matchesSecuritySensitiveGlob(['foo_token_bar.ts']),
-      ).toBe(true)
-      expect(
-        helpers.matchesSecuritySensitiveGlob(['api.token.json']),
-      ).toBe(true)
-      expect(
-        helpers.matchesSecuritySensitiveGlob(['api-secret.ts']),
-      ).toBe(true)
-      expect(
-        helpers.matchesSecuritySensitiveGlob(['client-apikey.ts']),
-      ).toBe(true)
+      expect(helpers.matchesSecuritySensitiveGlob(['foo_token_bar.ts'])).toBe(
+        true,
+      )
+      expect(helpers.matchesSecuritySensitiveGlob(['api.token.json'])).toBe(
+        true,
+      )
+      expect(helpers.matchesSecuritySensitiveGlob(['api-secret.ts'])).toBe(true)
+      expect(helpers.matchesSecuritySensitiveGlob(['client-apikey.ts'])).toBe(
+        true,
+      )
     })
 
     // secrets.ts no longer matches basename substring `secret` (word boundary);
     // directory segment secrets/ still matches via SECURITY_SENSITIVE_GLOBS.
     test('secrets directory still matches; bare secrets.ts basename does not', () => {
-      expect(
-        helpers.matchesSecuritySensitiveGlob(['secrets/config.ts']),
-      ).toBe(true)
+      expect(helpers.matchesSecuritySensitiveGlob(['secrets/config.ts'])).toBe(
+        true,
+      )
       expect(helpers.matchesSecuritySensitiveGlob(['secrets.ts'])).toBe(false)
     })
 

@@ -388,7 +388,9 @@ describe('structured filesystem results', () => {
     expect(
       readFilesResultV1Schema.safeParse({
         ...result,
-        results: [{ ...result.results[0], rangeHash: `sha256:${'f'.repeat(64)}` }],
+        results: [
+          { ...result.results[0], rangeHash: `sha256:${'f'.repeat(64)}` },
+        ],
       }).success,
     ).toBe(false)
   })
@@ -752,10 +754,7 @@ describe('mutation receipts and reconciliation', () => {
     const cases: Array<
       [string, Array<(typeof portableReceipt.actions)[number]>]
     > = [
-      [
-        'empty',
-        [{ ...portableReceipt.actions[0], actionId: '' }],
-      ],
+      ['empty', [{ ...portableReceipt.actions[0], actionId: '' }]],
       [
         'duplicate',
         [
@@ -1162,9 +1161,7 @@ describe('mutation receipts and reconciliation', () => {
       mutationResultExceedsCheapBoundsV1({
         actions: [
           {
-            afterContent: 'x'.repeat(
-              FILESYSTEM_RESULT_CONTENT_MAX_BYTES + 1,
-            ),
+            afterContent: 'x'.repeat(FILESYSTEM_RESULT_CONTENT_MAX_BYTES + 1),
           },
         ],
         freshCapabilities: [],
@@ -1240,8 +1237,14 @@ describe('mutation receipts and reconciliation', () => {
       receipt,
       [],
       [capability],
-      new Map([[0, afterContent], [1, afterContent]]),
-      new Map([[0, anchor], [1, anchor]]),
+      new Map([
+        [0, afterContent],
+        [1, afterContent],
+      ]),
+      new Map([
+        [0, anchor],
+        [1, anchor],
+      ]),
     )
     const reconciled = reconcileFileMutationResultV1({
       lifecycle: {

@@ -165,7 +165,10 @@ describe('system-prompt builders ledger recording', () => {
       'fileTree',
       'systemInfo',
     ])
-    const expectedTotal = ledger.lines.reduce((sum, line) => sum + line.tokens, 0)
+    const expectedTotal = ledger.lines.reduce(
+      (sum, line) => sum + line.tokens,
+      0,
+    )
     expect(ledger.totalTokens).toBe(expectedTotal)
     expect(ledger.byCategory.gitChanges).toBeGreaterThan(0)
     expect(ledger.byCategory.fileTree).toBeGreaterThan(0)

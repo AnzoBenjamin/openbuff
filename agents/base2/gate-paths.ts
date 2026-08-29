@@ -79,9 +79,7 @@ export function isReviewableGateFile(filePath: string): boolean {
   if (filePath.startsWith('evals/') || filePath.startsWith('.agents/')) {
     return false
   }
-  return /\.(?:tsx?|jsx?|mjs|cjs|py|go|rs|java|kt|kts|cs|fs|vb)$/.test(
-    filePath,
-  )
+  return /\.(?:tsx?|jsx?|mjs|cjs|py|go|rs|java|kt|kts|cs|fs|vb)$/.test(filePath)
 }
 
 export function selectReviewableGateFiles(files: string[]): string[] {

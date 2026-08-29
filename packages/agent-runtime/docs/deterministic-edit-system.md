@@ -6,12 +6,12 @@ This document describes the **runtime public contract** for `read_files`, `str_r
 
 ## Authorization surfaces
 
-| Surface | What it is | Grants |
-| --- | --- | --- |
-| **Sticky whole-file auth** | Path + content hash stored after a complete whole-file read (or after a successful edit that refreshes observed bytes) | Subsequent edits that check hash freshness against disk |
-| **Scoped capability** (`basedOnRead` / `readCapability`) | Hash-bound token from `editAnchor.readCapability` on a complete read | That edit only, when the live file hash still matches |
-| **Whole-file-covering capability** | `cap.v3` with `startLine === 1` and `endLine === current line count`, hash-matched to disk | Overwrite via `write_file` / `edit_transaction` `write_file` (and clears `context_compacted` for that path) |
-| **In-process auto-reread** | Server-side one-shot load used by `str_replace` when there is no sticky auth and no capability | Authorizes **that** unique `str_replace` only; does **not** mint durable sticky for later `write_file` |
+| Surface                                                  | What it is                                                                                                             | Grants                                                                                                      |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Sticky whole-file auth**                               | Path + content hash stored after a complete whole-file read (or after a successful edit that refreshes observed bytes) | Subsequent edits that check hash freshness against disk                                                     |
+| **Scoped capability** (`basedOnRead` / `readCapability`) | Hash-bound token from `editAnchor.readCapability` on a complete read                                                   | That edit only, when the live file hash still matches                                                       |
+| **Whole-file-covering capability**                       | `cap.v3` with `startLine === 1` and `endLine === current line count`, hash-matched to disk                             | Overwrite via `write_file` / `edit_transaction` `write_file` (and clears `context_compacted` for that path) |
+| **In-process auto-reread**                               | Server-side one-shot load used by `str_replace` when there is no sticky auth and no capability                         | Authorizes **that** unique `str_replace` only; does **not** mint durable sticky for later `write_file`      |
 
 ### What mints sticky whole-file auth
 
@@ -56,12 +56,12 @@ After compaction removes exact read bodies from model-visible context (`revokeIm
 
 Tool-specific behavior while `context_compacted` is set:
 
-| Tool | Behavior |
-| --- | --- |
-| `write_file` (standalone or in `edit_transaction`) | Hash-fresh sticky alone is **not** enough. Overwrite is allowed after a **complete whole-file** `read_files` grant, or when the call supplies a validated whole-file-covering `basedOnRead`. Failure messages include a ready-to-paste `basedOnRead` when content is available. |
-| `str_replace` | May proceed when sticky is hash-fresh and the unique `oldString` match is the safety bound. The `context_compacted` marker is cleared only after a **successful unique apply** (not after a failed no-match attempt). |
-| `delete` / `move` (in `edit_transaction`) | The confirmed post-edit anchor branch intentionally **ignores** the `context_compacted` marker when deciding authorization: a fresh whole-file anchor whose hash matches the live snapshot is stronger evidence than the marker. The marker is deliberately **not** cleared by this branch either, so a subsequent `write_file` on the same path stays blocked until a fresh whole-file read. |
-| Partial range / symbol re-read | May clear other reread gates, but **must not** drop `context_compacted` until a complete whole-file grant. |
+| Tool                                               | Behavior                                                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `write_file` (standalone or in `edit_transaction`) | Hash-fresh sticky alone is **not** enough. Overwrite is allowed after a **complete whole-file** `read_files` grant, or when the call supplies a validated whole-file-covering `basedOnRead`. Failure messages include a ready-to-paste `basedOnRead` when content is available.                                                                                                               |
+| `str_replace`                                      | May proceed when sticky is hash-fresh and the unique `oldString` match is the safety bound. The `context_compacted` marker is cleared only after a **successful unique apply** (not after a failed no-match attempt).                                                                                                                                                                         |
+| `delete` / `move` (in `edit_transaction`)          | The confirmed post-edit anchor branch intentionally **ignores** the `context_compacted` marker when deciding authorization: a fresh whole-file anchor whose hash matches the live snapshot is stronger evidence than the marker. The marker is deliberately **not** cleared by this branch either, so a subsequent `write_file` on the same path stays blocked until a fresh whole-file read. |
+| Partial range / symbol re-read                     | May clear other reread gates, but **must not** drop `context_compacted` until a complete whole-file grant.                                                                                                                                                                                                                                                                                    |
 
 ## Auto-reread and capability echo
 
@@ -106,12 +106,12 @@ Standalone `write_file` and `edit_transaction` edits of type `write_file` accept
 
 ### `write_file` (standalone)
 
-| Situation | Authorization |
-| --- | --- |
-| **Create** (disk content `null`) | No prior sticky or capability required. |
-| **Overwrite** | Hash-fresh whole-file sticky, **or** a prior same-turn successful whole-file `write_file` on that path, **or** a validated whole-file-covering `basedOnRead`. |
-| **Overwrite under `context_compacted`** | Sticky alone is insufficient. Supply whole-file-covering `basedOnRead`, or complete a whole-file `read_files` first. |
-| **Auth miss / bad capability** | No blind auto-apply of the overwrite. Error includes ready-to-paste `basedOnRead` when content is loadable; retry with that token. |
+| Situation                               | Authorization                                                                                                                                                 |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Create** (disk content `null`)        | No prior sticky or capability required.                                                                                                                       |
+| **Overwrite**                           | Hash-fresh whole-file sticky, **or** a prior same-turn successful whole-file `write_file` on that path, **or** a validated whole-file-covering `basedOnRead`. |
+| **Overwrite under `context_compacted`** | Sticky alone is insufficient. Supply whole-file-covering `basedOnRead`, or complete a whole-file `read_files` first.                                          |
+| **Auth miss / bad capability**          | No blind auto-apply of the overwrite. Error includes ready-to-paste `basedOnRead` when content is loadable; retry with that token.                            |
 
 ### `edit_transaction` create
 

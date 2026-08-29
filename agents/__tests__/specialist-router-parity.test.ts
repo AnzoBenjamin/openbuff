@@ -110,7 +110,10 @@ const REPRESENTATIVE_INPUTS: SelectSpecialistReviewersInput[] = [
   },
   // Migration family: sql/migrations path and keyword fallback.
   { files: ['src/migrations/001.sql'], requirements: '' },
-  { files: [], requirements: 'Plan the schema change, backfill, and rollback.' },
+  {
+    files: [],
+    requirements: 'Plan the schema change, backfill, and rollback.',
+  },
   // Compatibility family: public-api file, types directory, keyword.
   { files: ['src/public-api.ts', 'src/types/x.ts'], requirements: '' },
   {
@@ -129,7 +132,10 @@ const REPRESENTATIVE_INPUTS: SelectSpecialistReviewersInput[] = [
   { files: ['src/gate-state.ts'], requirements: '' },
   { files: ['src/retry-policy.ts'], requirements: '' },
   { files: ['state.json'], requirements: '' },
-  { files: ['.agents/sessions/read-tool-unification/STATE.json'], requirements: '' },
+  {
+    files: ['.agents/sessions/read-tool-unification/STATE.json'],
+    requirements: '',
+  },
   // Reliability keywords still route without any path signal.
   { files: [], requirements: 'Make the retry state machine idempotent.' },
   // Keyword-stem inflections (\w*-suffixed stems) must route identically in

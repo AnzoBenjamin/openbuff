@@ -417,8 +417,10 @@ describe('reanchorFocusedPrompt', () => {
     // End-to-end shape of the finding: the overlay opened on a degraded read
     // that saw two prompts, the user focused the older one, and the retry read
     // the full history.
-    const displayedPrompts = deriveLoadedPrompts(['older', 'newer'], true)
-      .prompts
+    const displayedPrompts = deriveLoadedPrompts(
+      ['older', 'newer'],
+      true,
+    ).prompts
     const focusedPrompt = displayedPrompts[1]
 
     const retried = retryUnavailablePromptHistory({
@@ -601,8 +603,9 @@ describe('readPromptHistoryForDisplay', () => {
 
     // Re-folded on every read: a second load (mount of a reopened overlay, or a
     // retry) must not lose it.
-    expect(displayed(readPromptHistoryForDisplay(['append-failed', 'on-disk'])))
-      .toEqual(['append-failed', 'on-disk'])
+    expect(
+      displayed(readPromptHistoryForDisplay(['append-failed', 'on-disk'])),
+    ).toEqual(['append-failed', 'on-disk'])
     expect(getUnpersistedMessageHistory()).toEqual(['append-failed'])
   })
 

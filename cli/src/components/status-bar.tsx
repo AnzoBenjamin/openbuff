@@ -7,7 +7,10 @@ import { ShimmerText } from './shimmer-text'
 
 import { useTerminalLayout } from '../hooks/use-terminal-layout'
 import { useTheme } from '../hooks/use-theme'
-import { formatIndexStatusChip, type IndexStatusPeek } from '../utils/index-status'
+import {
+  formatIndexStatusChip,
+  type IndexStatusPeek,
+} from '../utils/index-status'
 import {
   selectStatusBarChips,
   type StatusBarChipTone,

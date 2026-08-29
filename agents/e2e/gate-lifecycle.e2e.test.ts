@@ -457,7 +457,10 @@ describe('base2 deterministic gate lifecycle e2e', () => {
       params: {},
     } as any)
 
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
@@ -639,7 +642,10 @@ describe('base2 deterministic gate lifecycle e2e', () => {
       params: {},
     } as any)
 
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(gen.next(feedJson({ status: dirtyStatus })).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
@@ -841,7 +847,10 @@ describe('base2 deterministic gate lifecycle e2e', () => {
     } as any)
 
     // Continuity prompt starts from an explicit working-tree snapshot.
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(
       gen.next(feedJson({ status: ` D ${DELETED_FILE}` })).value,
     ).toMatchObject({
@@ -1083,7 +1092,10 @@ describe('base2 deterministic gate lifecycle e2e', () => {
       params: {},
     } as any)
 
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
@@ -1158,7 +1170,10 @@ describe('base2 deterministic gate lifecycle e2e', () => {
   // target instead of finalizing silently.
   test('keeps the gate closed when one requirement gap is in-scope work', () => {
     mkdirSync(path.dirname(IN_SCOPE_REQUIREMENT_FILE), { recursive: true })
-    writeFileSync(IN_SCOPE_REQUIREMENT_FILE, 'export const inScope = "before"\n')
+    writeFileSync(
+      IN_SCOPE_REQUIREMENT_FILE,
+      'export const inScope = "before"\n',
+    )
     const base2 = createBase2('default')
     const agentState = { agentId: 'base2-custom' }
     const gen = base2.handleSteps!({
@@ -1167,7 +1182,10 @@ describe('base2 deterministic gate lifecycle e2e', () => {
       params: {},
     } as any)
 
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },

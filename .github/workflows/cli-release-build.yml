@@ -595,7 +595,7 @@ jobs:
         # SMOKE_VERBOSE passthrough for Windows diagnostics — buildSmokeEnv spreads
         # parent env so this reaches the smoke child; keep shell: bash for Git Bash.
         env:
-          SMOKE_VERBOSE: "1"
+          SMOKE_VERBOSE: '1'
         run: |
           set -euo pipefail
           SMOKE_DIR="$(mktemp -d)"

@@ -202,9 +202,7 @@ describe('ReadFilesComponent', () => {
         chatThemes.dark,
         renderOptions,
       )
-      const markup = renderToStaticMarkup(
-        result?.content as React.ReactElement,
-      )
+      const markup = renderToStaticMarkup(result?.content as React.ReactElement)
       expect(markup).not.toContain('Read failed')
     }
   })

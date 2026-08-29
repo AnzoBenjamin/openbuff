@@ -132,10 +132,12 @@ describe('dependency-manager', () => {
     expect(generator.next().value).toMatchObject({
       toolName: 'inspect_environment',
     })
-    expect(advancePastSnapshotRead(generator, environment).value).toMatchObject({
-      toolName: 'run_terminal_command',
-      input: { command: expected, timeout_seconds: 600 },
-    })
+    expect(advancePastSnapshotRead(generator, environment).value).toMatchObject(
+      {
+        toolName: 'run_terminal_command',
+        input: { command: expected, timeout_seconds: 600 },
+      },
+    )
   })
 
   test('rejects unsupported manager-operation pairs without running a command', () => {
@@ -181,13 +183,10 @@ describe('dependency-manager', () => {
     })
     generator.next()
     expect(
-      advancePastSnapshotRead(
-        generator,
-        {
-          packageManager: 'pnpm',
-          manifests: ['package.json'],
-        },
-      ).value,
+      advancePastSnapshotRead(generator, {
+        packageManager: 'pnpm',
+        manifests: ['package.json'],
+      }).value,
     ).toMatchObject({
       toolName: 'set_output',
       input: {
@@ -204,13 +203,10 @@ describe('dependency-manager', () => {
     })
     generator.next()
     expect(
-      advancePastSnapshotRead(
-        generator,
-        {
-          packageManager: 'pnpm',
-          manifests: ['package.json', 'Cargo.toml'],
-        },
-      ).value,
+      advancePastSnapshotRead(generator, {
+        packageManager: 'pnpm',
+        manifests: ['package.json', 'Cargo.toml'],
+      }).value,
     ).toMatchObject({
       toolName: 'run_terminal_command',
       input: { command: 'cargo fetch', cwd: 'crates/core' },
@@ -229,13 +225,10 @@ describe('dependency-manager', () => {
     })
     generator.next()
     expect(
-      advancePastSnapshotRead(
-        generator,
-        {
-          packageManager: 'npm',
-          manifests: ['package.json'],
-        },
-      ).value,
+      advancePastSnapshotRead(generator, {
+        packageManager: 'npm',
+        manifests: ['package.json'],
+      }).value,
     ).toMatchObject({
       toolName: 'run_terminal_command',
       input: { timeout_seconds: 30 },
@@ -248,7 +241,9 @@ describe('dependency-manager', () => {
     expect(generator.next({ toolResult: [] } as any).value).toMatchObject({
       toolName: 'inspect_environment',
     })
-    expect(generator.next(environmentResult({ lockfiles: [] })).value).toMatchObject({
+    expect(
+      generator.next(environmentResult({ lockfiles: [] })).value,
+    ).toMatchObject({
       toolName: 'set_output',
       input: {
         data: {
@@ -268,10 +263,10 @@ describe('dependency-manager', () => {
     })
     generator.next()
     expect(
-      advancePastSnapshotRead(
-        generator,
-        { packageManager: 'npm', manifests: ['package.json'] },
-      ).value,
+      advancePastSnapshotRead(generator, {
+        packageManager: 'npm',
+        manifests: ['package.json'],
+      }).value,
     ).toMatchObject({ toolName: 'run_terminal_command' })
     expect(
       generator.next(

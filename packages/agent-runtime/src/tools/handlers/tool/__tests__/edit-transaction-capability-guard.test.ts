@@ -30,9 +30,7 @@ describe('edit_transaction preflight truncation reclassification (F1/F3)', () =>
   const baseHandlerParams = (params: {
     edits: unknown[]
     fileProcessingState: FileProcessingState
-    requestOptionalFile?: (args: {
-      filePath: string
-    }) => Promise<string | null>
+    requestOptionalFile?: (args: { filePath: string }) => Promise<string | null>
   }) => ({
     previousToolCallFinished: Promise.resolve(),
     toolCall: {

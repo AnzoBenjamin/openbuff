@@ -545,7 +545,10 @@ describe('listDirectory listing behaviour', () => {
       dirent('host-dir', 'dir'),
     ])
     const host = streamingFs(hostStream)
-    const readdir = makeReaddir([dirent('virtual.txt'), dirent('nested', 'dir')])
+    const readdir = makeReaddir([
+      dirent('virtual.txt'),
+      dirent('nested', 'dir'),
+    ])
     const decorated: CodebuffFileSystem = { ...host, readdir }
     // Preconditions: the capability really did survive decoration as an own
     // property, and it is no longer paired with the adapter's readdir.

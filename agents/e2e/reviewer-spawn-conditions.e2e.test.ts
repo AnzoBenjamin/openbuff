@@ -24,10 +24,7 @@ import {
   hashGateSnapshotDetails,
   isAttestableSnapshotFingerprint,
 } from '../base2/gate-fingerprint'
-import {
-  editReceipt,
-  feedJson,
-} from '../__tests__/helpers/base2-step-fixtures'
+import { editReceipt, feedJson } from '../__tests__/helpers/base2-step-fixtures'
 import { extractInlineFunctionSource } from '../__tests__/helpers/extract-inline-function-source'
 
 /**
@@ -265,9 +262,7 @@ describe('base2 reviewer spawn conditions e2e', () => {
       toolName: 'git_status',
       input: {},
     })
-    const reviewerSpawn = gen.next(
-      feedJson({ status: ' M src/lifecycle.ts' }),
-    )
+    const reviewerSpawn = gen.next(feedJson({ status: ' M src/lifecycle.ts' }))
     expect(reviewerSpawn.value).toMatchObject({
       toolName: 'spawn_agents',
       input: { agents: [{ agent_type: 'code-reviewer' }] },
@@ -334,7 +329,9 @@ describe('base2 reviewer spawn conditions e2e', () => {
       toolName: 'spawn_agent_inline',
     })
     expect(gen.next().value).toBe('STEP')
-    expect(gen.next(finishStep(editReceipt('.agents/sessions/x/PLAN.md'))).value).toMatchObject({
+    expect(
+      gen.next(finishStep(editReceipt('.agents/sessions/x/PLAN.md'))).value,
+    ).toMatchObject({
       toolName: 'git_status',
     })
     const skipped = gen.next(
@@ -364,7 +361,9 @@ describe('base2 reviewer spawn conditions e2e', () => {
       toolName: 'spawn_agent_inline',
     })
     expect(gen.next().value).toBe('STEP')
-    expect(gen.next(finishStep(editReceipt('src/lifecycle.ts'))).value).toMatchObject({
+    expect(
+      gen.next(finishStep(editReceipt('src/lifecycle.ts'))).value,
+    ).toMatchObject({
       toolName: 'git_status',
     })
     expect(
@@ -529,9 +528,8 @@ describe('base2 reviewer spawn conditions e2e', () => {
       input: { files: ['src/lifecycle.ts'] },
     })
     expect(
-      gen.next(
-        feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }]),
-      ).value,
+      gen.next(feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }]))
+        .value,
     ).toMatchObject({ toolName: 'git_status' })
     const reviewerSpawn = gen.next(feedJson({ status: '' }))
     expect(reviewerSpawn.value).toMatchObject({
@@ -599,9 +597,8 @@ describe('base2 reviewer spawn conditions e2e', () => {
       toolName: 'run_file_change_hooks',
     })
     expect(
-      gen.next(
-        feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }]),
-      ).value,
+      gen.next(feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }]))
+        .value,
     ).toMatchObject({ toolName: 'git_status' })
     const reviewerSkip = gen.next(feedJson({ status: '' }))
     expect(reviewerSkip.value).toMatchObject({ toolName: 'add_message' })
@@ -671,9 +668,7 @@ describe('base2 reviewer spawn conditions e2e', () => {
       expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
       // A is still dirty + gate-passed; src/c.ts is foreign (not task-related).
       expect(
-        gen.next(
-          feedJson({ status: ` M ${pathA}\n M src/c.ts` }),
-        ).value,
+        gen.next(feedJson({ status: ` M ${pathA}\n M src/c.ts` })).value,
       ).toMatchObject({
         toolName: 'spawn_agent_inline',
         input: { agent_type: 'context-pruner' },
@@ -701,9 +696,9 @@ describe('base2 reviewer spawn conditions e2e', () => {
         pendingGateFiles: [],
         currentPhase: 'final_response_allowed',
       })
-      expect((agentState as any).base2ActiveWork.pendingGateFiles).not.toContain(
-        'src/c.ts',
-      )
+      expect(
+        (agentState as any).base2ActiveWork.pendingGateFiles,
+      ).not.toContain('src/c.ts')
       expect(
         (agentState as any).base2ActiveWork.unreviewedDirtyReviewableFiles,
       ).toEqual([])
@@ -1001,7 +996,10 @@ describe('base2 reviewer spawn conditions e2e', () => {
     const savedGetBuiltinModule = hadGetBuiltinModule
       ? (process as any).getBuiltinModule
       : undefined
-    const hadRequire = Object.prototype.hasOwnProperty.call(globalThis, 'require')
+    const hadRequire = Object.prototype.hasOwnProperty.call(
+      globalThis,
+      'require',
+    )
     const savedRequire = hadRequire ? (globalThis as any).require : undefined
     try {
       delete (process as any).getBuiltinModule
@@ -1055,9 +1053,7 @@ describe('base2 reviewer spawn conditions e2e', () => {
       gen.next({ stepsComplete: true, toolResult: [] } as any).value,
     ).toMatchObject({ toolName: 'git_status' })
     expect(
-      gen.next(
-        feedJson({ status: ' M src/owned.ts\n?? src/new.ts' }),
-      ).value,
+      gen.next(feedJson({ status: ' M src/owned.ts\n?? src/new.ts' })).value,
     ).toMatchObject({
       toolName: 'run_file_change_hooks',
       input: { files: ['src/owned.ts', 'src/new.ts'] },
@@ -1213,9 +1209,7 @@ describe('base2 reviewer spawn conditions e2e', () => {
         /\\/g,
         '/',
       )
-      expect(gateFileMarker(regularPath)).toBe(
-        productionMarker(regularPath),
-      )
+      expect(gateFileMarker(regularPath)).toBe(productionMarker(regularPath))
 
       const missingAbsolute = join(tempDir, 'missing.ts')
       const missingPath = relative(process.cwd(), missingAbsolute).replace(
@@ -1239,9 +1233,7 @@ describe('base2 reviewer spawn conditions e2e', () => {
           /\\/g,
           '/',
         )
-        expect(gateFileMarker(symlinkPath)).toBe(
-          productionMarker(symlinkPath),
-        )
+        expect(gateFileMarker(symlinkPath)).toBe(productionMarker(symlinkPath))
         expect(gateFileMarker(symlinkPath)).toBe(
           'unreadable:outside-project-symlink',
         )

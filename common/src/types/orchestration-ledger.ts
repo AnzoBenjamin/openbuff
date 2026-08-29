@@ -92,18 +92,13 @@ export const orchestrationLedgerV1Schema = z.object({
   events: z.array(orchestrationEventV1Schema),
 })
 
-export type OrchestrationEventV1 = z.infer<
-  typeof orchestrationEventV1Schema
->
-export type OrchestrationLedgerV1 = z.infer<
-  typeof orchestrationLedgerV1Schema
->
-export type OrchestrationEventDraftV1 =
-  OrchestrationEventV1 extends infer Event
-    ? Event extends OrchestrationEventV1
-      ? Omit<Event, 'schemaVersion' | 'eventId' | 'sequence' | 'timestamp'> & {
-          eventId?: string
-          timestamp?: number
-        }
-      : never
+export type OrchestrationEventV1 = z.infer<typeof orchestrationEventV1Schema>
+export type OrchestrationLedgerV1 = z.infer<typeof orchestrationLedgerV1Schema>
+export type OrchestrationEventDraftV1 = OrchestrationEventV1 extends infer Event
+  ? Event extends OrchestrationEventV1
+    ? Omit<Event, 'schemaVersion' | 'eventId' | 'sequence' | 'timestamp'> & {
+        eventId?: string
+        timestamp?: number
+      }
     : never
+  : never

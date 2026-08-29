@@ -400,7 +400,9 @@ export async function extractSlices(
         lines,
         fallback.startLine,
       )
-      const sliceContent = lines.slice(startLine - 1, fallback.endLine).join('\n')
+      const sliceContent = lines
+        .slice(startLine - 1, fallback.endLine)
+        .join('\n')
       slices.push({
         symbol,
         content: sliceContent,
@@ -786,7 +788,12 @@ export async function buildSymbolBlock(
   // readCapability) expose an editAnchor; heuristic regex slices stay
   // read-only and require an anchored window/around read before editing.
   const editAnchor = slice.readCapability
-    ? ctx.mintBlockEditAnchor(path, slice.startLine, slice.endLine, slice.content)
+    ? ctx.mintBlockEditAnchor(
+        path,
+        slice.startLine,
+        slice.endLine,
+        slice.content,
+      )
     : undefined
   ctx.successfulReadPaths.add(path)
   const item: ReadFilesItemV1 = {

@@ -33,7 +33,6 @@ import type {
 import type { ParseCoverage, ParsedFileTokens } from '@codebuff/code-map'
 import type { WalkedFile, WalkProjectResult } from './file-walker'
 
-
 const CODE_EXTENSIONS = new Set(SUPPORTED_CODE_EXTENSIONS)
 
 const DOC_EXTENSIONS = new Set(['.md', '.mdx', '.txt', '.rst'])
@@ -572,9 +571,7 @@ async function collectPreciseWalk(
     changedPaths,
     getIndexExcludes(config),
   )
-  const statedByPath = new Map(
-    stated.map((file) => [file.relativePath, file]),
-  )
+  const statedByPath = new Map(stated.map((file) => [file.relativePath, file]))
 
   const files: WalkedFile[] = []
   for (const [relativePath, indexed] of Object.entries(existing.files)) {
@@ -591,7 +588,10 @@ async function collectPreciseWalk(
   }
 
   for (const file of stated) {
-    if (!existing.files[file.relativePath] && !deletedPaths.has(file.relativePath)) {
+    if (
+      !existing.files[file.relativePath] &&
+      !deletedPaths.has(file.relativePath)
+    ) {
       files.push(file)
     }
   }

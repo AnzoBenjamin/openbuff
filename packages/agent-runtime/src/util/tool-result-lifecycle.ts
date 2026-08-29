@@ -6,8 +6,7 @@
 
 export const TOOL_RESULT_LIFECYCLE_TAG = 'tool-result-lifecycle'
 export const TOOL_RESULT_IMPORTANCE_HIGH_TAG = 'tool-result-importance:high'
-export const TOOL_RESULT_IMPORTANCE_NORMAL_TAG =
-  'tool-result-importance:normal'
+export const TOOL_RESULT_IMPORTANCE_NORMAL_TAG = 'tool-result-importance:normal'
 export const DEFAULT_FULL_TOOL_RESULTS_TO_KEEP = 1
 
 const VERBOSE_LIFECYCLE_TOOLS = new Set([
@@ -23,10 +22,7 @@ const VERBOSE_LIFECYCLE_TOOLS = new Set([
   'spawn_agent_inline',
 ])
 
-const HIGH_IMPORTANCE_TOOLS = new Set([
-  'spawn_agents',
-  'spawn_agent_inline',
-])
+const HIGH_IMPORTANCE_TOOLS = new Set(['spawn_agents', 'spawn_agent_inline'])
 
 const PROTECTED_TAGS = new Set([
   TOOL_RESULT_IMPORTANCE_HIGH_TAG,
@@ -90,6 +86,7 @@ export function shouldKeepFullToolResult(params: {
   ) {
     return true
   }
-  const maxFullToKeep = params.maxFullToKeep ?? DEFAULT_FULL_TOOL_RESULTS_TO_KEEP
+  const maxFullToKeep =
+    params.maxFullToKeep ?? DEFAULT_FULL_TOOL_RESULTS_TO_KEEP
   return params.numFullKeptSoFar < maxFullToKeep
 }

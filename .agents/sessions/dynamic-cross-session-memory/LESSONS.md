@@ -1,6 +1,7 @@
 # LESSONS: Dynamic Cross-Session Memory
 
 ## 2026-08-22
+
 - The runtime already deduped merges (`uniqueRecent`, `normalizeEvidence`) and excluded stale evidence (`evidenceIsFresh`) — verify existing helpers before writing new ones; the real gap was persistence + reconciliation only.
 - `TaskMemoryV1.evidence[]` was schema-designed for cross-session staleness (`freshnessHash`, `workspaceRevision`, `supersedes`, `stale`) months before anyone wired persistence; read schemas for intent, not just current usage.
 - `runOnce` has many terminal paths; the only reliable success discriminator is `terminalState.output.type !== 'error'` (cancelled/error states always emit `type:'error'`).

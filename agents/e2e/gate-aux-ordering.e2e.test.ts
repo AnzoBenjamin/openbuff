@@ -536,7 +536,10 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     } as any)
 
     // Resumed-state prelude.
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(
       gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
     ).toMatchObject({
@@ -606,11 +609,9 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     // The retry is also stale: fail closed rather than clearing the gate or
     // spawning repair-editor for a reviewer-protocol failure.
     const blocked = gen.next(
-      staleSpawnedReviewerResult(
-        'reliability-reviewer',
-        retryFingerprint,
-        [SPECIALIST_FILE],
-      ),
+      staleSpawnedReviewerResult('reliability-reviewer', retryFingerprint, [
+        SPECIALIST_FILE,
+      ]),
     )
     expect(blocked.value).toMatchObject({
       toolName: 'add_message',
@@ -630,9 +631,9 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
         'fresh matching specialist review',
       ),
     })
-    expect((agentState as any).base2ActiveWork.openReviewerBlockers).not.toEqual(
-      [],
-    )
+    expect(
+      (agentState as any).base2ActiveWork.openReviewerBlockers,
+    ).not.toEqual([])
     expect((agentState as any).canSuggestFollowups).toBe(false)
   })
 
@@ -688,7 +689,10 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     } as any)
 
     // Resumed-state prelude.
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(
       gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` })).value,
     ).toMatchObject({
@@ -724,11 +728,9 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     // is a clean PASS (zero attestation issues). This path locks the primary
     // happy path: correct echo + full file coverage does not block the gate.
     const after = gen.next(
-      spawnedReviewerResult(
-        'reliability-reviewer',
-        expectedGateFingerprint,
-        [AUX_TRIPLE_FILE],
-      ),
+      spawnedReviewerResult('reliability-reviewer', expectedGateFingerprint, [
+        AUX_TRIPLE_FILE,
+      ]),
     )
 
     // Invariant: the coverage-complete review is accepted, not terminal-blocked.
@@ -757,9 +759,9 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     // asymmetric matchers are not reliably applied by toContain, so the .not case
     // can pass even when reliability blockers are present.
     expect(
-      ((agentState as any).base2ActiveWork.openReviewerBlockers as string[]).some(
-        (b) => b.includes('reliability-reviewer'),
-      ),
+      (
+        (agentState as any).base2ActiveWork.openReviewerBlockers as string[]
+      ).some((b) => b.includes('reliability-reviewer')),
     ).toBe(false)
     expect(
       (agentState as any).base2ActiveWork.specialistReviewGatesDone,
@@ -788,7 +790,10 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     } as any)
 
     // Resumed-state prelude.
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(
       gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
     ).toMatchObject({
@@ -829,11 +834,9 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     // gate must fail closed (no repair-editor, no finalize) instead of treating
     // the LOOKS_GOOD verdict as a pass.
     const blocked = gen.next(
-      crashedSpawnedReviewerResult(
-        'reliability-reviewer',
-        crashFingerprint,
-        [SPECIALIST_FILE],
-      ),
+      crashedSpawnedReviewerResult('reliability-reviewer', crashFingerprint, [
+        SPECIALIST_FILE,
+      ]),
     )
     expect(blocked.value).toMatchObject({
       toolName: 'add_message',
@@ -968,9 +971,9 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     // invariant under test.
     expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
     expect(gen.next().value).toBe('STEP')
-    expect(
-      gen.next(finishStepWithToolResult({})).value,
-    ).toMatchObject({ toolName: 'git_status' })
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+    })
 
     // Idempotency invariant: on this second iteration reaching the aux block
     // with the same aux-relevant pending file set, NONE of the three aux gates
@@ -1034,7 +1037,10 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     } as any)
 
     // Resumed-state prelude.
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(
       gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` })).value,
     ).toMatchObject({
@@ -1095,9 +1101,9 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       }),
     )
     expect(isAuxSpawn(secondIterationNext.value)).toBe(false)
-    expect(
-      (secondIterationNext.value as any)?.input?.agent_type,
-    ).not.toBe('security-reviewer')
+    expect((secondIterationNext.value as any)?.input?.agent_type).not.toBe(
+      'security-reviewer',
+    )
     expect(secondIterationNext.value).toMatchObject({
       toolName: 'run_file_change_hooks',
     })
@@ -1220,7 +1226,10 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       includeToolCall: false,
     })
     const specialistSpawn = gen.next(
-      feedJson({ snapshotId: 'revalidation-snapshot', files: [AUX_TRIPLE_FILE] }),
+      feedJson({
+        snapshotId: 'revalidation-snapshot',
+        files: [AUX_TRIPLE_FILE],
+      }),
     )
     // Invariant 1: the owed specialist re-fires here (reliability-reviewer with
     // the gate-owned v3 snapshot_id), NOT the final code-reviewer.
@@ -1244,11 +1253,9 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     // (family-guarded clear). The aux block then re-enters the loop at context
     // pruning.
     const reLoopContextPruner = gen.next(
-      spawnedReviewerResult(
-        'reliability-reviewer',
-        revalidationFingerprint,
-        [AUX_TRIPLE_FILE],
-      ),
+      spawnedReviewerResult('reliability-reviewer', revalidationFingerprint, [
+        AUX_TRIPLE_FILE,
+      ]),
     )
     expect(reLoopContextPruner.value).toMatchObject({
       toolName: 'spawn_agent_inline',
@@ -1321,12 +1328,12 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     expect((gatePassed.value as any).input.content).toContain(
       'Automated validation and reviewer gate passed with LOOKS_GOOD',
     )
-    expect(parseGateStateBlock((gatePassed.value as any).input.content)).toMatchObject(
-      {
-        gate: 'validation/reviewer',
-        status: 'passed',
-      },
-    )
+    expect(
+      parseGateStateBlock((gatePassed.value as any).input.content),
+    ).toMatchObject({
+      gate: 'validation/reviewer',
+      status: 'passed',
+    })
 
     // Invariant 4: the turn finalizes and the owed marker stays cleared.
     expect((agentState as any).base2ActiveWork).toMatchObject({
@@ -1573,9 +1580,7 @@ function blockingReviewerResult(
   files: string[],
   finding: { id: string; summary: string },
 ) {
-  return feedJson(
-    blockingSpecialistValue(snapshotFingerprint, files, finding),
-  )
+  return feedJson(blockingSpecialistValue(snapshotFingerprint, files, finding))
 }
 
 describe('base2 specialist reviewer-gate state machine e2e', () => {
@@ -1604,7 +1609,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     } as any)
 
     // Resumed-state prelude.
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(
       gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
     ).toMatchObject({
@@ -1703,16 +1711,17 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     expect((agentState as any).base2ActiveWork.currentPhase).not.toBe(
       'repair_loop',
     )
-    expect((agentState as any).base2ActiveWork.currentPhase).not.toBe(
-      'blocked',
-    )
+    expect((agentState as any).base2ActiveWork.currentPhase).not.toBe('blocked')
   })
 
   test('specialist blocking findings drive a repair->revalidate loop with the owed marker set in-turn (G1+G2)', () => {
     mkdirSync(`${SPECIALIST_SCRATCH_ROOT}/state`, { recursive: true })
     writeFileSync(SPECIALIST_FILE, 'export const session = "v1"\n')
     const base2 = createBase2('default')
-    const agentState = { agentId: 'base2-custom', base2ActiveWork: specialistSeed() }
+    const agentState = {
+      agentId: 'base2-custom',
+      base2ActiveWork: specialistSeed(),
+    }
     const gen = base2.handleSteps!({
       agentState,
       prompt: 'Please finish the pending reliability finding.',
@@ -1722,7 +1731,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     // Resumed-state prelude: initial git_status -> context-pruner -> pinned
     // state -> STEP -> post-step git_status. The generator runs no body code
     // until the first next().
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(
       gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
     ).toMatchObject({
@@ -1781,9 +1793,9 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
       (agentState as any).base2ActiveWork.requiredReviewerRevalidation,
     ).toBe('reliability-reviewer')
     expect((agentState as any).base2ActiveWork.currentPhase).toBe('repair_loop')
-    expect(
-      (agentState as any).base2ActiveWork.specialistRepairRoundCount,
-    ).toBe(1)
+    expect((agentState as any).base2ActiveWork.specialistRepairRoundCount).toBe(
+      1,
+    )
 
     // (d) the next yield is a repair-editor spawn carrying a typed handoff
     // whose requirements/acceptanceCriteria/findings derive ONLY from this
@@ -1816,11 +1828,12 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     // receipt addressing the finding id.
     writeFileSync(SPECIALIST_FILE, 'export const session = "v2-repaired"\n')
     const repairStatus = gen.next(repairReceipt(SPECIALIST_FILE, [finding.id]))
-    expect(repairStatus.value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(repairStatus.value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     // The repair loop re-enters the outer loop at context-pruner.
-    const reLoopPruner = gen.next(
-      feedJson({ status: ` M ${SPECIALIST_FILE}` }),
-    )
+    const reLoopPruner = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
     expect(reLoopPruner.value).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
@@ -1860,9 +1873,7 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     // The re-attestation passes: the owed marker clears and the specialist is
     // credited done. The aux block re-enters the loop.
     const reLoopPruner2 = gen.next(
-      spawnedReviewerResult('reliability-reviewer', snap2, [
-        SPECIALIST_FILE,
-      ]),
+      spawnedReviewerResult('reliability-reviewer', snap2, [SPECIALIST_FILE]),
     )
     expect(reLoopPruner2.value).toMatchObject({
       toolName: 'spawn_agent_inline',
@@ -1877,9 +1888,9 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     expect(
       (agentState as any).base2ActiveWork.specialistReviewGatesDone,
     ).toEqual(['reliability-reviewer'])
-    expect(
-      (agentState as any).base2ActiveWork.specialistRepairRoundCount,
-    ).toBe(1)
+    expect((agentState as any).base2ActiveWork.specialistRepairRoundCount).toBe(
+      1,
+    )
   })
 
   test('specialist repair budget exhaustion stops respawning repair-editor and blocks (G2)', () => {
@@ -1888,7 +1899,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     // Explicit hard cap: default createBase2 specialist budget is unlimited
     // (progress-gated). This test needs a finite cap so round 4 blocks.
     const base2 = createBase2('default', { maxSpecialistRepairRounds: 3 })
-    const agentState = { agentId: 'base2-custom', base2ActiveWork: specialistSeed() }
+    const agentState = {
+      agentId: 'base2-custom',
+      base2ActiveWork: specialistSeed(),
+    }
     const gen = base2.handleSteps!({
       agentState,
       prompt: 'Please finish the pending reliability finding.',
@@ -1899,7 +1913,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     } as any)
 
     // Resumed-state prelude.
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(
       gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
     ).toMatchObject({
@@ -2001,19 +2018,21 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     // The 4th blocking result exhausted the budget: no repair-editor spawn, the
     // phase is blocked, and the nextRequiredAction names the exhausted budget.
     expect((agentState as any).base2ActiveWork.currentPhase).toBe('blocked')
-    expect(
-      (agentState as any).base2ActiveWork.specialistRepairRoundCount,
-    ).toBe(4)
+    expect((agentState as any).base2ActiveWork.specialistRepairRoundCount).toBe(
+      4,
+    )
     expect((budgetNotice as any).input.content).toContain(
       'automated repair budget exhausted',
     )
-    expect((budgetNotice as any).input.content).toContain('reliability-reviewer')
-    expect(
-      (agentState as any).base2ActiveWork.nextRequiredAction,
-    ).toContain('Specialist repair budget exhausted')
-    expect(
-      (agentState as any).base2ActiveWork.nextRequiredAction,
-    ).toContain('reliability-reviewer')
+    expect((budgetNotice as any).input.content).toContain(
+      'reliability-reviewer',
+    )
+    expect((agentState as any).base2ActiveWork.nextRequiredAction).toContain(
+      'Specialist repair budget exhausted',
+    )
+    expect((agentState as any).base2ActiveWork.nextRequiredAction).toContain(
+      'reliability-reviewer',
+    )
     // The generator `break`s out of the gate loop after the budget message; the
     // next next() is NOT another repair-editor spawn (the turn ends blocked).
     const after = gen.next()
@@ -2066,7 +2085,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     } as any)
 
     // First next() runs setup rehydration.
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     // Owed set contains BOTH families; requiredReviewerRevalidation is the
     // first-seen one (reliability-reviewer, the first finding's reviewer).
     expect(
@@ -2099,7 +2121,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
       (spawn.value as any).input.agents as Array<{ agent_type: string }>
     ).map((a) => a.agent_type)
     expect(spawnedTypes).toEqual(
-      expect.arrayContaining(['reliability-reviewer', 'compatibility-reviewer']),
+      expect.arrayContaining([
+        'reliability-reviewer',
+        'compatibility-reviewer',
+      ]),
     )
     const g3Fingerprint = specialistFingerprintFromSpawn(spawn.value)
 
@@ -2117,10 +2142,14 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
       summary: 'Restore the public session contract.',
     }
     const notice = gen.next(
-      batchedSpecialistResults(g3Fingerprint, [SPECIALIST_FILE], [
-        { agentType: 'reliability-reviewer', blocking: relFinding },
-        { agentType: 'compatibility-reviewer', blocking: compatFinding },
-      ]),
+      batchedSpecialistResults(
+        g3Fingerprint,
+        [SPECIALIST_FILE],
+        [
+          { agentType: 'reliability-reviewer', blocking: relFinding },
+          { agentType: 'compatibility-reviewer', blocking: compatFinding },
+        ],
+      ),
     )
     expect(notice.value).toMatchObject({
       toolName: 'add_message',
@@ -2132,16 +2161,21 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     // The compatibility-reviewer finding is still open (not clobbered).
     const openFindings = (agentState as any).base2ActiveWork
       .openReviewerFindings as Array<{ reviewer: string; id: string }>
-    expect(openFindings.some((f) => f.reviewer === 'compatibility-reviewer')).toBe(
-      true,
-    )
-    expect(openFindings.some((f) => f.reviewer === 'reliability-reviewer')).toBe(
-      true,
-    )
+    expect(
+      openFindings.some((f) => f.reviewer === 'compatibility-reviewer'),
+    ).toBe(true)
+    expect(
+      openFindings.some((f) => f.reviewer === 'reliability-reviewer'),
+    ).toBe(true)
     // Both reviewers remain owed.
     expect(
       (agentState as any).base2ActiveWork.owedReviewerRevalidations,
-    ).toEqual(expect.arrayContaining(['reliability-reviewer', 'compatibility-reviewer']))
+    ).toEqual(
+      expect.arrayContaining([
+        'reliability-reviewer',
+        'compatibility-reviewer',
+      ]),
+    )
 
     // Repair the reliability finding so the loop can re-enter, then let
     // reliability-reviewer PASS: only its own owed entry clears.
@@ -2150,8 +2184,13 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
       'repair-editor',
     )
     writeFileSync(SPECIALIST_FILE, 'export const session = "v2-repaired"\n')
-    const repairStatus = gen.next(repairReceipt(SPECIALIST_FILE, [relFinding.id]))
-    expect(repairStatus.value).toMatchObject({ toolName: 'git_status', input: {} })
+    const repairStatus = gen.next(
+      repairReceipt(SPECIALIST_FILE, [relFinding.id]),
+    )
+    expect(repairStatus.value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     // Re-enter loop.
     gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })) // context-pruner
     gen.next() // pinned add_message
@@ -2171,17 +2210,24 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
       (spawn2.value as any).input.agents as Array<{ agent_type: string }>
     ).map((a) => a.agent_type)
     expect(spawnedTypes2).toEqual(
-      expect.arrayContaining(['reliability-reviewer', 'compatibility-reviewer']),
+      expect.arrayContaining([
+        'reliability-reviewer',
+        'compatibility-reviewer',
+      ]),
     )
     const g3bFingerprint = specialistFingerprintFromSpawn(spawn2.value)
     // Feed every routed agent again: reliability-reviewer now PASSES while
     // compatibility-reviewer still blocks, so only reliability's owed entry
     // clears and the compatibility blocking notice is the next yield.
     const compatNotice = gen.next(
-      batchedSpecialistResults(g3bFingerprint, [SPECIALIST_FILE], [
-        { agentType: 'reliability-reviewer' },
-        { agentType: 'compatibility-reviewer', blocking: compatFinding },
-      ]),
+      batchedSpecialistResults(
+        g3bFingerprint,
+        [SPECIALIST_FILE],
+        [
+          { agentType: 'reliability-reviewer' },
+          { agentType: 'compatibility-reviewer', blocking: compatFinding },
+        ],
+      ),
     )
     expect(compatNotice.value).toMatchObject({
       toolName: 'add_message',
@@ -2210,13 +2256,19 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     // current bytes is SKIPPED (the converse of drift). ---
     {
       const base2 = createBase2('default')
-      const agentState = { agentId: 'base2-custom', base2ActiveWork: specialistSeed() }
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: specialistSeed(),
+      }
       const gen = base2.handleSteps!({
         agentState,
         prompt: 'Please finish the pending reliability finding.',
         params: {},
       } as any)
-      expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+      expect(gen.next().value).toMatchObject({
+        toolName: 'git_status',
+        input: {},
+      })
       expect(
         gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
       ).toMatchObject({
@@ -2250,9 +2302,8 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
       expect(
         (agentState as any).base2ActiveWork.specialistReviewGatesDone,
       ).toContain('reliability-reviewer')
-      const storedFingerprint = (
-        (agentState as any).base2ActiveWork.specialistReviewGateFingerprints ?? {}
-      )['reliability-reviewer']
+      const storedFingerprint = ((agentState as any).base2ActiveWork
+        .specialistReviewGateFingerprints ?? {})['reliability-reviewer']
       expect(typeof storedFingerprint).toBe('string')
       expect(storedFingerprint.length).toBeGreaterThan(0)
       // Re-enter the loop with NO byte change: the aux block reaches the
@@ -2297,7 +2348,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
         prompt: 'Please finish the pending reliability finding.',
         params: {},
       } as any)
-      expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+      expect(gen.next().value).toMatchObject({
+        toolName: 'git_status',
+        input: {},
+      })
       expect(
         gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
       ).toMatchObject({
@@ -2333,7 +2387,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     mkdirSync(`${SPECIALIST_SCRATCH_ROOT}/state`, { recursive: true })
     writeFileSync(SPECIALIST_FILE, 'export const session = "v1"\n')
     const base2 = createBase2('default')
-    const agentState = { agentId: 'base2-custom', base2ActiveWork: specialistSeed() }
+    const agentState = {
+      agentId: 'base2-custom',
+      base2ActiveWork: specialistSeed(),
+    }
     const gen = base2.handleSteps!({
       agentState,
       prompt: 'Please finish the pending reliability finding.',
@@ -2341,7 +2398,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     } as any)
 
     // Prelude.
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(
       gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
     ).toMatchObject({
@@ -2410,7 +2470,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     mkdirSync(`${SPECIALIST_SCRATCH_ROOT}/state`, { recursive: true })
     writeFileSync(SPECIALIST_FILE, 'export const session = "v1"\n')
     const base2 = createBase2('default')
-    const agentState = { agentId: 'base2-custom', base2ActiveWork: specialistSeed() }
+    const agentState = {
+      agentId: 'base2-custom',
+      base2ActiveWork: specialistSeed(),
+    }
     const gen = base2.handleSteps!({
       agentState,
       prompt: 'Please finish the pending reliability finding.',
@@ -2418,7 +2481,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     } as any)
 
     // Prelude.
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(
       gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
     ).toMatchObject({
@@ -2455,9 +2521,9 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
         finding,
       ),
     ) // blocking notice
-    expect(
-      (agentState as any).base2ActiveWork.specialistRepairRoundCount,
-    ).toBe(1)
+    expect((agentState as any).base2ActiveWork.specialistRepairRoundCount).toBe(
+      1,
+    )
     expect(
       (agentState as any).base2ActiveWork.owedReviewerRevalidations,
     ).toContain('reliability-reviewer')
@@ -2544,9 +2610,9 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     expect(
       (agentState as any).base2ActiveWork.owedReviewerRevalidations,
     ).toEqual([])
-    expect(
-      (agentState as any).base2ActiveWork.specialistRepairRoundCount,
-    ).toBe(0)
+    expect((agentState as any).base2ActiveWork.specialistRepairRoundCount).toBe(
+      0,
+    )
     expect(
       (agentState as any).base2ActiveWork.specialistNoVerdictCounts,
     ).toEqual({})
@@ -2556,7 +2622,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     mkdirSync(`${SPECIALIST_SCRATCH_ROOT}/state`, { recursive: true })
     writeFileSync(SPECIALIST_FILE, 'export const session = "v1"\n')
     const base2 = createBase2('default')
-    const agentState = { agentId: 'base2-custom', base2ActiveWork: specialistSeed() }
+    const agentState = {
+      agentId: 'base2-custom',
+      base2ActiveWork: specialistSeed(),
+    }
     const gen = base2.handleSteps!({
       agentState,
       prompt: 'Please finish the pending reliability finding.',
@@ -2564,7 +2633,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     } as any)
 
     // Prelude.
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(
       gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
     ).toMatchObject({
@@ -2609,9 +2681,9 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     expect((repairSpawn.value as any).input.agents[0].agent_type).toBe(
       'repair-editor',
     )
-    expect(
-      (agentState as any).base2ActiveWork.specialistRepairRoundCount,
-    ).toBe(1)
+    expect((agentState as any).base2ActiveWork.specialistRepairRoundCount).toBe(
+      1,
+    )
 
     // The repair-editor returns a completed receipt naming a changed file but
     // NEVER touches the real bytes (the scratch file is deliberately left at
@@ -2625,9 +2697,7 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     // preRepairFingerprint and exits the gate loop instead of re-spawning
     // repair-editor or re-firing the specialist: the turn ends immediately.
     // Feed git_status JSON for the post-repair yield (same protocol as G8).
-    const afterGuard = gen.next(
-      feedJson({ status: ` M ${SPECIALIST_FILE}` }),
-    )
+    const afterGuard = gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
     expect(afterGuard.done).toBe(true)
 
     // The turn is blocked, the specialist is still owed and uncredited, and the
@@ -2641,9 +2711,9 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
         'no snapshot-visible progress',
       ),
     })
-    expect(
-      (agentState as any).base2ActiveWork.latestWorkSummary,
-    ).toContain('no workspace fingerprint change')
+    expect((agentState as any).base2ActiveWork.latestWorkSummary).toContain(
+      'no workspace fingerprint change',
+    )
     expect(
       (agentState as any).base2ActiveWork.owedReviewerRevalidations,
     ).toContain('reliability-reviewer')
@@ -2674,7 +2744,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     } as any)
 
     // Resumed-state prelude.
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(
       gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
     ).toMatchObject({
@@ -2753,7 +2826,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     } as any)
 
     // Resumed-state prelude.
-    expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
     expect(
       gen.next(feedJson({ status: ` M ${REVIEWER_REPAIR_FILE}` })).value,
     ).toMatchObject({
@@ -2805,9 +2881,7 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     expect((notice.value as any).input.content).toContain(
       'returned blocking feedback',
     )
-    expect(
-      (agentState as any).base2ActiveWork.reviewerRepairRoundCount,
-    ).toBe(1)
+    expect((agentState as any).base2ActiveWork.reviewerRepairRoundCount).toBe(1)
     const repairSpawn = gen.next()
     const repairAgent = (repairSpawn.value as any).input.agents[0]
     expect(repairAgent.agent_type).toBe('repair-editor')
@@ -2842,9 +2916,9 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
         'no snapshot-visible progress',
       ),
     })
-    expect(
-      (agentState as any).base2ActiveWork.latestWorkSummary,
-    ).toContain('no workspace fingerprint change')
+    expect((agentState as any).base2ActiveWork.latestWorkSummary).toContain(
+      'no workspace fingerprint change',
+    )
     expect(
       (agentState as any).base2ActiveWork.openReviewerBlockers,
     ).not.toEqual([])

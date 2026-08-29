@@ -130,9 +130,12 @@ Then, write up a concise report that includes key findings for the user's prompt
       if (parts.length === 2) {
         if (nums[0] > 255 || nums[1] > 0xffffff) return null
         const rest = nums[1]
-        return [nums[0], (rest >>> 16) & 255, (rest >>> 8) & 255, rest & 255].join(
-          '.',
-        )
+        return [
+          nums[0],
+          (rest >>> 16) & 255,
+          (rest >>> 8) & 255,
+          rest & 255,
+        ].join('.')
       }
       if (nums[0] > 255 || nums[1] > 255 || nums[2] > 0xffff) return null
       const rest = nums[2]

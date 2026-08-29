@@ -1,6 +1,7 @@
 # SPEC — Over-strict Agent Guardrail Audit (codebase-wide)
 
 ## Overview
+
 The user asked for a GENERAL audit of security/guardrail controls that limit our
 agents more than they protect. The git-committer (git-commit terminal profile)
 is ONE example, not the scope. This audit covers every "agent restriction"
@@ -13,10 +14,12 @@ the terminal-command policy. That session's F1–F6 findings are folded in here 
 the "terminal-policy" shard.
 
 ## Snapshot
+
 - inspect_codebase_structure snapshotId:
   7ae7b7cee225b1cd331f12ae17993437bd4a8fd96509802ed572f4e0567cd33a
 
 ## Goals
+
 - Enumerate ALL runtime-enforced agent restrictions, not just terminal/git.
 - For each, cite the exact file:line enforcement point and give a concrete,
   minimal relaxation candidate where the control is mostly friction.
@@ -24,12 +27,14 @@ the "terminal-policy" shard.
   SSRF, force-push) intact.
 
 ## Non-Goals
+
 - Removing traversal/containment, secret-scanning, privilege-escalation, SSRF,
   or force/default-branch-push protections.
 - Rewriting the harness approval architecture.
 - Implementation (plan mode).
 
 ## Restriction surfaces / shards
+
 1. terminal-policy — sdk/src/tools/terminal-command-policy.ts,
    sdk/src/services/harness-enforcement.ts, sdk/src/tools/run-terminal-command.ts,
    agents/git-committer, common/src/constants/git-discipline.ts.
@@ -47,6 +52,7 @@ the "terminal-policy" shard.
    spawn-agent-utils.ts permission/profile/tool derivation for child agents.
 
 ## Acceptance criteria
+
 - Every shard writes findings with file:line evidence + A/B/C classification.
 - evaluate_audit_coverage passes over the shard receipts + snapshot.
 - Synthesized report ranks removal candidates by (friction relieved / risk added).

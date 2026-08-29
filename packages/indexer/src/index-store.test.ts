@@ -279,9 +279,9 @@ describe('index cache ownership', () => {
       files: {},
       graph: { nodes: {}, edges: [] },
     }
-    await expect(
-      saveIndex({ ...base, builtAt: 400 }, root),
-    ).rejects.toThrow('Timed out waiting for index cache lock')
+    await expect(saveIndex({ ...base, builtAt: 400 }, root)).rejects.toThrow(
+      'Timed out waiting for index cache lock',
+    )
   }, 15_000)
 
   test('merges concurrent semantic fingerprint writes under the cache lock', async () => {

@@ -21,8 +21,10 @@ function normalizePattern(value: string): string {
 function stablePrefix(value: string): string {
   const normalized = normalizePattern(value)
   const wildcard = normalized.search(/[?*{[]/)
-  return (wildcard < 0 ? normalized : normalized.slice(0, wildcard))
-    .replace(/\/+$/, '')
+  return (wildcard < 0 ? normalized : normalized.slice(0, wildcard)).replace(
+    /\/+$/,
+    '',
+  )
 }
 
 function overlaps(left: string, right: string): boolean {
@@ -50,7 +52,9 @@ export function acquireWorkspacePathLease(params: {
   paths: string[]
   leaseMs?: number
 }): string | undefined {
-  const requested = [...new Set(params.paths.map(normalizePattern).filter(Boolean))]
+  const requested = [
+    ...new Set(params.paths.map(normalizePattern).filter(Boolean)),
+  ]
   if (requested.length === 0) return undefined
   sweep()
   const projectRoot = path.resolve(params.projectRoot)

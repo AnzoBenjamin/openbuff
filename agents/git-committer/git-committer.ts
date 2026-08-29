@@ -217,23 +217,18 @@ const definition: SecretAgentDefinition = {
         .map((line) => line.trim())
         .filter((line) => line.length > 0)
       const normalizedOwnedPaths = ownedPaths.map((ownedPath: string) =>
-        ownedPath
+        ownedPath.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, ''),
+      )
+      const unexpectedStagedPaths = stagedPaths.filter((stagedPath: string) => {
+        const normalizedStagedPath = stagedPath
           .replace(/\\/g, '/')
           .replace(/^\.\//, '')
-          .replace(/\/+$/, ''),
-      )
-      const unexpectedStagedPaths = stagedPaths.filter(
-        (stagedPath: string) => {
-          const normalizedStagedPath = stagedPath
-            .replace(/\\/g, '/')
-            .replace(/^\.\//, '')
-          return !normalizedOwnedPaths.some(
-            (ownedPath: string) =>
-              normalizedStagedPath === ownedPath ||
-              normalizedStagedPath.startsWith(`${ownedPath}/`),
-          )
-        },
-      )
+        return !normalizedOwnedPaths.some(
+          (ownedPath: string) =>
+            normalizedStagedPath === ownedPath ||
+            normalizedStagedPath.startsWith(`${ownedPath}/`),
+        )
+      })
       if (unexpectedStagedPaths.length > 0) {
         // Safe unstage path: `git restore --staged <path>...` is the
         // policy-permitted shape, so only bare path tokens are passed.

@@ -343,9 +343,7 @@ describe('gate-path helpers — canonical export behavior', () => {
     // in-cwd absolute prefix is stripped to a repo-relative path
     expect(normalizeGateFilePath(`${cwd}/src/foo.ts`)).toBe('src/foo.ts')
     // file:// + in-cwd absolute path -> stripped to a repo-relative path
-    expect(normalizeGateFilePath(`file://${cwd}/src/foo.ts`)).toBe(
-      'src/foo.ts',
-    )
+    expect(normalizeGateFilePath(`file://${cwd}/src/foo.ts`)).toBe('src/foo.ts')
     // plain relative, backslash, and leading './' inputs normalize as expected
     expect(normalizeGateFilePath('src/foo.ts')).toBe('src/foo.ts')
     expect(normalizeGateFilePath('src\\foo\\bar.ts')).toBe('src/foo/bar.ts')

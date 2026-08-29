@@ -763,9 +763,7 @@ describe('getFilesStructured', () => {
 
       const result = await getFilesStructured({
         filePaths: [],
-        ranges: [
-          { path: 'src/large.ts', startLine: 20_000, endLine: 20_002 },
-        ],
+        ranges: [{ path: 'src/large.ts', startLine: 20_000, endLine: 20_002 }],
         cwd: '/project',
         fs: mockFs,
         capabilityIssuer,

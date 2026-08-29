@@ -52,26 +52,32 @@ describe('classifyReadBlockAuthority', () => {
   it('fails closed to none for an incomplete block even when it covers 1..totalLines', () => {
     // Incompleteness is checked first: full coverage cannot rescue a truncated
     // block.
-    expect(classifyReadBlockAuthority(wholeFileCoverage({ complete: false }))).toBe(
-      'none',
-    )
+    expect(
+      classifyReadBlockAuthority(wholeFileCoverage({ complete: false })),
+    ).toBe('none')
   })
 
   it('fails closed to none when sourceContent is undefined even for full coverage', () => {
     expect(
-      classifyReadBlockAuthority(wholeFileCoverage({ sourceContent: undefined })),
+      classifyReadBlockAuthority(
+        wholeFileCoverage({ sourceContent: undefined }),
+      ),
     ).toBe('none')
   })
 
   it('fails closed to none when the block is not capability eligible', () => {
     expect(
-      classifyReadBlockAuthority(wholeFileCoverage({ capabilityEligible: false })),
+      classifyReadBlockAuthority(
+        wholeFileCoverage({ capabilityEligible: false }),
+      ),
     ).toBe('none')
   })
 
   it('treats capabilityEligible true and undefined identically', () => {
     expect(
-      classifyReadBlockAuthority(wholeFileCoverage({ capabilityEligible: true })),
+      classifyReadBlockAuthority(
+        wholeFileCoverage({ capabilityEligible: true }),
+      ),
     ).toBe('whole_file')
     expect(
       classifyReadBlockAuthority(

@@ -89,7 +89,8 @@ export function buildIndexStatusContentBlock(
   const statusLine = `Index status: ${status.state}${status.refreshing ? ' · refreshing' : ''}.`
   const messageLine = status.message
   const corpusLine = `${status.totalIndexed} indexed file${status.totalIndexed === 1 ? '' : 's'}.`
-  const ageLine = status.indexAge > 0 ? formatAge(status.indexAge) : 'not available'
+  const ageLine =
+    status.indexAge > 0 ? formatAge(status.indexAge) : 'not available'
   const semantic = !semanticEnabled
     ? 'disabled'
     : semanticReady
@@ -108,7 +109,10 @@ export function buildIndexStatusContentBlock(
           `Diagnostics: ${status.diagnostics.length} parser issue${status.diagnostics.length === 1 ? '' : 's'}.`,
           ...status.diagnostics
             .slice(0, 5)
-            .map((diagnostic) => `- ${diagnostic.filePath} (${diagnostic.stage}): ${diagnostic.message}`),
+            .map(
+              (diagnostic) =>
+                `- ${diagnostic.filePath} (${diagnostic.stage}): ${diagnostic.message}`,
+            ),
         ]
       : undefined
   const lines = [
@@ -139,7 +143,10 @@ export async function handleIndexCommandBlocks(
   rawArgs: string,
   deps: IndexCommandDeps = defaultDeps,
 ): Promise<import('../types/chat').IndexStatusContentBlock | string> {
-  const [subcommand = 'status', ...rest] = rawArgs.trim().split(/\s+/).filter(Boolean)
+  const [subcommand = 'status', ...rest] = rawArgs
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
   const normalized = subcommand.toLowerCase()
   const setup = deps.getManager()
 
@@ -178,7 +185,8 @@ export async function handleIndexCommandBlocks(
       setup.manager.isSemanticReady(),
       setup.semanticEnabled,
     )
-    const prefix = 'Index refresh requested. Compatible caches are reconciled incrementally; incompatible caches rebuild.'
+    const prefix =
+      'Index refresh requested. Compatible caches are reconciled incrementally; incompatible caches rebuild.'
     return {
       ...block,
       messageLine: `${prefix}\n${block.messageLine}`,
@@ -194,7 +202,10 @@ export async function handleIndexCommand(
   rawArgs: string,
   deps: IndexCommandDeps = defaultDeps,
 ): Promise<string> {
-  const [subcommand = 'status', ...rest] = rawArgs.trim().split(/\s+/).filter(Boolean)
+  const [subcommand = 'status', ...rest] = rawArgs
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
   const normalized = subcommand.toLowerCase()
   const setup = deps.getManager()
 

@@ -110,7 +110,9 @@ function classifyThinkerAgent(params: {
   setOutputCalls: ThinkerSetOutputCall[]
 }): ThinkerHarvestAgentSignal {
   const { agentId, setOutputCalls } = params
-  const nonEmptySetOutputCount = setOutputCalls.filter((c) => c.isNonEmpty).length
+  const nonEmptySetOutputCount = setOutputCalls.filter(
+    (c) => c.isNonEmpty,
+  ).length
   const emptySetOutputCount = setOutputCalls.length - nonEmptySetOutputCount
   const plainTextOnly = setOutputCalls.length === 0
 
@@ -183,8 +185,7 @@ export function computeThinkerHarvestSignals(params: {
 
     const message = extractMessageFromSetOutputInput(event.input)
     const call: ThinkerSetOutputCall = {
-      toolCallId:
-        typeof event.toolCallId === 'string' ? event.toolCallId : '',
+      toolCallId: typeof event.toolCallId === 'string' ? event.toolCallId : '',
       message,
       isNonEmpty: message !== undefined,
       includeToolCall:
@@ -290,9 +291,7 @@ export function evaluateThinkerHarvest(params: {
   const plain = signals.agents.filter((a) => a.plainTextOnly)
   reasons.push(
     `No empty-harvest clobber; ${preserved.length} thinker(s) preserved non-empty final set_output` +
-      (plain.length > 0
-        ? `, ${plain.length} plain-text-only.`
-        : '.'),
+      (plain.length > 0 ? `, ${plain.length} plain-text-only.` : '.'),
   )
 
   return {

@@ -2357,7 +2357,9 @@ function frameDelayMs(
   return DEFAULT_FRAME_DELAY_MS
 }
 
-function buildApng(frames: Array<{ buffer: Buffer; timestamp: number }>): Buffer {
+function buildApng(
+  frames: Array<{ buffer: Buffer; timestamp: number }>,
+): Buffer {
   if (frames.length === 0) return Buffer.alloc(0)
   const parsed = frames.map((frame) => parsePngChunks(frame.buffer))
   const first = parsed[0]

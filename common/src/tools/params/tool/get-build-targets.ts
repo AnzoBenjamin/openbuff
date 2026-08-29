@@ -17,9 +17,7 @@ export const getBuildTargetsParams = {
           manifest: z.string(),
           manager: z.string().optional(),
           commands: z.array(z.string()).optional(),
-          confidence: z
-            .enum(['confirmed', 'inferred', 'unknown'])
-            .optional(),
+          confidence: z.enum(['confirmed', 'inferred', 'unknown']).optional(),
         }),
       ),
     }),

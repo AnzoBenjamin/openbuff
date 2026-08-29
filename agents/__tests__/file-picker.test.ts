@@ -229,7 +229,9 @@ describe('file-picker agent', () => {
 
       const toolCall = result.value as ToolCall<'set_output'>
       expect(toolCall.toolName).toBe('set_output')
-      const paths = toolCall.input.files.map((file: { path: string }) => file.path)
+      const paths = toolCall.input.files.map(
+        (file: { path: string }) => file.path,
+      )
       expect(paths).toContain('src/auth.ts')
       expect(paths).toContain('src/login.ts')
     })
@@ -265,7 +267,9 @@ describe('file-picker agent', () => {
                     },
                     {
                       role: 'assistant',
-                      content: [{ type: 'text', text: 'src/user.ts\nsrc/config.ts' }],
+                      content: [
+                        { type: 'text', text: 'src/user.ts\nsrc/config.ts' },
+                      ],
                     },
                   ],
                 },
@@ -280,7 +284,9 @@ describe('file-picker agent', () => {
 
       const toolCall = result.value as ToolCall<'set_output'>
       expect(toolCall.toolName).toBe('set_output')
-      const paths = toolCall.input.files.map((file: { path: string }) => file.path)
+      const paths = toolCall.input.files.map(
+        (file: { path: string }) => file.path,
+      )
       expect(paths).toContain('src/user.ts')
       expect(paths).toContain('src/config.ts')
     })
@@ -322,7 +328,9 @@ describe('file-picker agent', () => {
 
       const toolCall = result.value as ToolCall<'set_output'>
       expect(toolCall.toolName).toBe('set_output')
-      const paths = toolCall.input.files.map((file: { path: string }) => file.path)
+      const paths = toolCall.input.files.map(
+        (file: { path: string }) => file.path,
+      )
       expect(paths).toContain('src/foo.ts')
       expect(paths).toContain('src/bar.ts')
     })
@@ -375,7 +383,9 @@ describe('file-picker agent', () => {
 
       // Should deduplicate
       const toolCall = result.value as ToolCall<'set_output'>
-      const paths = toolCall.input.files.map((file: { path: string }) => file.path)
+      const paths = toolCall.input.files.map(
+        (file: { path: string }) => file.path,
+      )
       expect(paths).toHaveLength(2)
       expect(paths).toContain('src/file.ts')
       expect(paths).toContain('src/other.ts')
@@ -692,7 +702,9 @@ describe('file-picker agent', () => {
       )
       const toolCall = result.value as ToolCall<'set_output'>
       expect(toolCall.toolName).toBe('set_output')
-      const paths = toolCall.input.files.map((file: { path: string }) => file.path)
+      const paths = toolCall.input.files.map(
+        (file: { path: string }) => file.path,
+      )
       expect(paths).toEqual(['src/safe.ts', 'src/also-safe.ts'])
       expect(paths).not.toContain('../secret.ts')
     })
@@ -709,7 +721,9 @@ describe('file-picker agent', () => {
       )
       const toolCall = result.value as ToolCall<'set_output'>
       expect(toolCall.toolName).toBe('set_output')
-      const paths = toolCall.input.files.map((file: { path: string }) => file.path)
+      const paths = toolCall.input.files.map(
+        (file: { path: string }) => file.path,
+      )
       expect(paths).toEqual(['src/ok.ts'])
       expect(paths).not.toContain('/tmp/outside-cwd.ts')
       expect(paths).not.toContain('/etc/passwd.ts')
@@ -723,7 +737,9 @@ describe('file-picker agent', () => {
       })
       generator.next()
       const result = generator.next(
-        spawnFileListResult('../secret.ts\n/tmp/outside-cwd.ts\n../../etc/hosts.ts'),
+        spawnFileListResult(
+          '../secret.ts\n/tmp/outside-cwd.ts\n../../etc/hosts.ts',
+        ),
       )
       const stepText = result.value as StepText
       expect(stepText.type).toBe('STEP_TEXT')
@@ -749,7 +765,9 @@ describe('file-picker agent', () => {
       })
       generator.next()
       const result = generator.next(
-        spawnFileListResult('src/in-scope.ts\nlib/out-of-scope.ts\n../escape.ts'),
+        spawnFileListResult(
+          'src/in-scope.ts\nlib/out-of-scope.ts\n../escape.ts',
+        ),
       )
       expect(
         (result.value as ToolCall<'set_output'>).input.files.map(
@@ -839,7 +857,9 @@ describe('file-picker agent', () => {
 
       const toolCall = result.value as ToolCall<'set_output'>
       expect(toolCall.toolName).toBe('set_output')
-      const paths = toolCall.input.files.map((file: { path: string }) => file.path)
+      const paths = toolCall.input.files.map(
+        (file: { path: string }) => file.path,
+      )
       // auth-bearing paths score higher than unrelated/utils paths.
       expect(paths[0]).toBe('src/auth/login.ts')
       expect(paths[1]).toBe('src/auth/session.ts')
@@ -1016,5 +1036,4 @@ describe('file-picker agent', () => {
       expect(extractErrorMessage(null)).toBeNull()
     })
   })
-
 })

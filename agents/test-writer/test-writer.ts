@@ -88,12 +88,7 @@ const definition: SecretAgentDefinition = {
       '**/tests/**',
     ],
   },
-  toolNames: [
-    'read_files',
-    'read_outline',
-    'edit_transaction',
-    'set_output',
-  ],
+  toolNames: ['read_files', 'read_outline', 'edit_transaction', 'set_output'],
   spawnableAgents: [],
 
   systemPrompt: `You are an expert test writer. You write clear, focused, idiomatic tests that follow the project's existing test conventions. You prefer behavior over implementation coupling. You do not run terminal commands directly; when validation is requested, report the command for the parent/basher to run.`,

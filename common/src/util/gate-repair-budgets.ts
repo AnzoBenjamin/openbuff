@@ -150,10 +150,7 @@ export function formatGateRepairBudgetsForCli(
     if (valueText.length > valueWidth) valueWidth = valueText.length
   }
 
-  const lines: string[] = [
-    'Gate repair budgets',
-    '-------------------',
-  ]
+  const lines: string[] = ['Gate repair budgets', '-------------------']
   for (const [label, value] of rows) {
     lines.push(
       `${label.padEnd(labelWidth)}  ${formatBudgetValue(value).padStart(valueWidth)}`,

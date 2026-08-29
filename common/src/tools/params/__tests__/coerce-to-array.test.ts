@@ -884,7 +884,9 @@ describe('read_files block selector input schema', () => {
         ],
       }).success,
     ).toBe(false)
-    expect(parse({ windows: [{ path: 'a.ts', window: 0 }] }).success).toBe(false)
+    expect(parse({ windows: [{ path: 'a.ts', window: 0 }] }).success).toBe(
+      false,
+    )
     expect(
       parse({ around: [{ path: 'a.ts', match: 'x', occurrence: 0 }] }).success,
     ).toBe(false)
@@ -903,7 +905,9 @@ describe('read_files block selector input schema', () => {
     }
     expect(parse({ windows: [{ path: 'a.ts' }] }).success).toBe(true)
     expect(parse({ around: [{ path: 'a.ts', match: 'x' }] }).success).toBe(true)
-    expect(parse({ symbol: [{ path: 'a.ts', name: 'run' }] }).success).toBe(true)
+    expect(parse({ symbol: [{ path: 'a.ts', name: 'run' }] }).success).toBe(
+      true,
+    )
   })
 
   it('infers the sole paths entry into window/around/symbol selectors', () => {
@@ -1044,7 +1048,9 @@ describe('normalizeTransactionEditList', () => {
 
   it('leaves an invalid type with an ambiguous shape unchanged', () => {
     expect(
-      normalizeTransactionEditList([{ path: 'a.ts', type: 'bogus', content: 'x' }]),
+      normalizeTransactionEditList([
+        { path: 'a.ts', type: 'bogus', content: 'x' },
+      ]),
     ).toEqual([{ path: 'a.ts', type: 'bogus', content: 'x' }])
   })
 

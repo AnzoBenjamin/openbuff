@@ -60,11 +60,7 @@ const definition: SecretAgentDefinition = {
   },
   outputMode: 'structured_output',
   includeMessageHistory: false,
-  toolNames: [
-    'run_terminal_command',
-    'read_files',
-    'write_file',
-  ],
+  toolNames: ['run_terminal_command', 'read_files', 'write_file'],
   programmaticToolNames: [
     'inspect_environment',
     'read_files',
@@ -255,7 +251,8 @@ const definition: SecretAgentDefinition = {
             ? (record.lifecycle as Record<string, unknown>)
             : undefined
         if (
-          (typeof record.error === 'string' && record.error.trim().length > 0) ||
+          (typeof record.error === 'string' &&
+            record.error.trim().length > 0) ||
           (!!record.error && typeof record.error === 'object') ||
           (typeof record.errorMessage === 'string' &&
             record.errorMessage.trim().length > 0) ||
@@ -407,11 +404,12 @@ const definition: SecretAgentDefinition = {
               ? !manifest.includes('/')
               : manifest.startsWith(`${normalizedCwd}/`),
           )
-    const selectedLockfiles = (Array.isArray(environmentValue?.lockfiles)
-      ? environmentValue.lockfiles.filter(
-          (value): value is string => typeof value === 'string',
-        )
-      : []
+    const selectedLockfiles = (
+      Array.isArray(environmentValue?.lockfiles)
+        ? environmentValue.lockfiles.filter(
+            (value): value is string => typeof value === 'string',
+          )
+        : []
     ).filter((lockfile) =>
       normalizedCwd === '.'
         ? !lockfile.includes('/')
@@ -726,7 +724,9 @@ const definition: SecretAgentDefinition = {
             undeletedCreatedFiles: undeletedLockfiles,
             results: rollbackResults,
           },
-          commands: commands.map((value) => value.replace(/:\/\/[^/@\s]+:[^/@\s]+@/g, '://[redacted]@')),
+          commands: commands.map((value) =>
+            value.replace(/:\/\/[^/@\s]+:[^/@\s]+@/g, '://[redacted]@'),
+          ),
           results,
         }) as ToolCall<'set_output'>
         return
@@ -742,7 +742,9 @@ const definition: SecretAgentDefinition = {
         size: snapshot.content.length,
       })),
       rollbackRequired: false,
-      commands: commands.map((value) => value.replace(/:\/\/[^/@\s]+:[^/@\s]+@/g, '://[redacted]@')),
+      commands: commands.map((value) =>
+        value.replace(/:\/\/[^/@\s]+:[^/@\s]+@/g, '://[redacted]@'),
+      ),
       results,
     }) as ToolCall<'set_output'>
   },

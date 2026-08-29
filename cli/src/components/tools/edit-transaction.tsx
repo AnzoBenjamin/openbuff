@@ -99,9 +99,7 @@ function getTransactionError(toolBlock: ToolBlock): string | null {
     return redactCapabilityText(value.error)
   }
   const errors = getStructuredErrorMessages(toolBlock.outputRaw)
-  return errors.length > 0
-    ? redactCapabilityText(errors.join('\n'))
-    : null
+  return errors.length > 0 ? redactCapabilityText(errors.join('\n')) : null
 }
 
 function getPostEditAnchorLabel(

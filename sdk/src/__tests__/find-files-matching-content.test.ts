@@ -277,7 +277,9 @@ describe('findFilesMatchingContent', () => {
 
   it('applies host fileFilter to files-only and groupBySymbol match paths', async () => {
     const fileFilter = (filePath: string) => ({
-      status: filePath.includes('blocked') ? ('blocked' as const) : ('allow' as const),
+      status: filePath.includes('blocked')
+        ? ('blocked' as const)
+        : ('allow' as const),
     })
 
     const filesOnlyPromise = findFilesMatchingContent({

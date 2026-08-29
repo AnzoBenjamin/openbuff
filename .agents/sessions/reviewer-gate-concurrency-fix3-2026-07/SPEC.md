@@ -40,7 +40,7 @@ attestation churn.
 
 The mid-turn git-status sweep (~930-947, `recordChangedFiles([file], {
 fromStatusObservation: true })`) pulls in ANY newly-dirty path that appeared
-*after* turn start, regardless of whether THIS agent authored it. If instance A
+_after_ turn start, regardless of whether THIS agent authored it. If instance A
 writes `foo.ts` during instance B's turn, B's post-step `git_status` reports
 `foo.ts` as newly dirty (not in B's `initialGitStatusFiles`), so B absorbs it.
 
