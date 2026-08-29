@@ -565,7 +565,8 @@ describe('rewrite_symbol handler', () => {
         input: {
           path: 'svc.ts',
           symbol: 'greet',
-          content: 'export function greet(name: string) {\n  return `hello ${name}`\n}',
+          content:
+            'export function greet(name: string) {\n  return `hello ${name}`\n}',
         },
       },
       fileContext: { projectRoot: PROJECT_ROOT },
@@ -587,8 +588,7 @@ describe('rewrite_symbol handler', () => {
   })
 
   test('accepts only an exact caller-provided symbol capability', async () => {
-    const symbolContent =
-      '/** doc */\nexport function greet() {\n  return 1\n}'
+    const symbolContent = '/** doc */\nexport function greet() {\n  return 1\n}'
     const source = `${symbolContent}\nexport const tail = 2\n`
     const capability = (params: {
       startLine: number
@@ -741,9 +741,7 @@ describe('rewrite_symbol handler', () => {
       if (attempt.shouldSucceed) {
         expect(clientCallCount).toBe(1)
         expect(state.failedEditRequiresReadByPath['svc.ts']).toBeUndefined()
-        expect(
-          state.editRereadRequirementsByPath?.['svc.ts'],
-        ).toBeUndefined()
+        expect(state.editRereadRequirementsByPath?.['svc.ts']).toBeUndefined()
         expect(state.readAuthorizationsByPath?.['svc.ts']).toBe(true)
         expect(state.readAuthorizationHashesByPath?.['svc.ts']).toBe(
           getContentHash(source),
@@ -759,9 +757,7 @@ describe('rewrite_symbol handler', () => {
           sourceTool: 'rewrite_symbol',
         })
         expect(state.readAuthorizationsByPath?.['svc.ts']).toBeUndefined()
-        expect(
-          state.readAuthorizationHashesByPath?.['svc.ts'],
-        ).toBeUndefined()
+        expect(state.readAuthorizationHashesByPath?.['svc.ts']).toBeUndefined()
         expect(
           state.modelVisibleReadAuthorizationHashesByPath?.['svc.ts'],
         ).toBeUndefined()

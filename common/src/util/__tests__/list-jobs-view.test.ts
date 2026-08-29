@@ -107,7 +107,9 @@ describe('fingerprintListJobsRows', () => {
   test('stable for same rows different order; changes when pending changes', () => {
     const a = row({ jobId: 'a', pending: 'none', status: 'running' })
     const b = row({ jobId: 'b', pending: '<10', status: 'completed' })
-    expect(fingerprintListJobsRows([a, b])).toBe(fingerprintListJobsRows([b, a]))
+    expect(fingerprintListJobsRows([a, b])).toBe(
+      fingerprintListJobsRows([b, a]),
+    )
 
     const changed = row({ ...a, pending: '<10' })
     expect(fingerprintListJobsRows([changed, b])).not.toBe(

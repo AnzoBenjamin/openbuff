@@ -181,7 +181,9 @@ describe('checkJob', () => {
     const job = makeJob()
     fs.appendFileSync(job.logFile, 'line one\n')
 
-    const first = value(await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }))
+    const first = value(
+      await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+    )
     expect(first).toMatchObject({
       jobId: job.jobId,
       state: 'running',
@@ -531,7 +533,10 @@ describe('checkJob', () => {
     })
 
     try {
-      ;(process.kill as any) = (pid: number, signal?: NodeJS.Signals | number) => {
+      ;(process.kill as any) = (
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
         // Group kill uses a negated pid (the process-group leader).
         killCalled = true
         return true
@@ -663,7 +668,9 @@ describe('checkJob', () => {
   test('reports completed status and exit code', async () => {
     const job = makeJob({ status: 'completed', exitCode: 0 })
     fs.appendFileSync(job.logFile, 'done\n')
-    const result = value(await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }))
+    const result = value(
+      await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+    )
     expect(result).toMatchObject({ state: 'completed', exitCode: 0 })
   })
 
@@ -762,7 +769,9 @@ describe('checkJob', () => {
   test('success output includes the job logFile for a running job', async () => {
     const job = makeJob()
     fs.appendFileSync(job.logFile, 'line one\n')
-    const result = value(await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }))
+    const result = value(
+      await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+    )
     expect(result.logFile).toBe(job.logFile)
   })
 
@@ -1186,10 +1195,7 @@ describe('checkJob', () => {
     __clearJobsForTest()
     const freshJobId = `job-prune-recover-${++counter}`
     const freshLog = path.join(os.tmpdir(), `openbuff-${freshJobId}.log`)
-    const freshMetadata = path.join(
-      os.tmpdir(),
-      `openbuff-${freshJobId}.json`,
-    )
+    const freshMetadata = path.join(os.tmpdir(), `openbuff-${freshJobId}.json`)
     const freshSettledAt = Date.now() - 1000
     fs.writeFileSync(freshLog, 'done\n')
     fs.writeFileSync(

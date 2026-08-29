@@ -24,7 +24,8 @@ describe('sweep renderers', () => {
     const block: ContextContentBlock = {
       type: 'context',
       ledgerText: 'Ledger header\nLedger detail\nmore ledger',
-      gateBudgetsText: 'Gate budgets line 1\nGate repair budgets detail\nbudget row',
+      gateBudgetsText:
+        'Gate budgets line 1\nGate repair budgets detail\nbudget row',
     }
     const markup = renderToStaticMarkup(<ContextBox block={block} />)
     expect(markup).toContain('Context')
@@ -194,11 +195,15 @@ describe('sweep renderers', () => {
   test('each sweep box renders without throwing on minimal input', () => {
     expect(() =>
       renderToStaticMarkup(
-        <ContextBox block={{ type: 'context', ledgerText: null, gateBudgetsText: '' }} />,
+        <ContextBox
+          block={{ type: 'context', ledgerText: null, gateBudgetsText: '' }}
+        />,
       ),
     ).not.toThrow()
     expect(() =>
-      renderToStaticMarkup(<InfoBox block={{ type: 'info', version: '0.0.0', workspace: '' }} />),
+      renderToStaticMarkup(
+        <InfoBox block={{ type: 'info', version: '0.0.0', workspace: '' }} />,
+      ),
     ).not.toThrow()
     expect(() =>
       renderToStaticMarkup(
@@ -234,7 +239,14 @@ describe('sweep renderers', () => {
     ).not.toThrow()
     expect(() =>
       renderToStaticMarkup(
-        <PlanStatusBox block={{ type: 'plan-status', mode: 'status', reportText: '', isStatusReport: true }} />,
+        <PlanStatusBox
+          block={{
+            type: 'plan-status',
+            mode: 'status',
+            reportText: '',
+            isStatusReport: true,
+          }}
+        />,
       ),
     ).not.toThrow()
   })

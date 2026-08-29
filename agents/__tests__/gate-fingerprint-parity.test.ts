@@ -120,7 +120,10 @@ describe('gate-fingerprint helpers — inline copies match canonical exports', (
     const savedGetBuiltinModule = hadGetBuiltinModule
       ? (process as any).getBuiltinModule
       : undefined
-    const hadRequire = Object.prototype.hasOwnProperty.call(globalThis, 'require')
+    const hadRequire = Object.prototype.hasOwnProperty.call(
+      globalThis,
+      'require',
+    )
     const savedRequire = hadRequire ? (globalThis as any).require : undefined
     try {
       delete (process as any).getBuiltinModule

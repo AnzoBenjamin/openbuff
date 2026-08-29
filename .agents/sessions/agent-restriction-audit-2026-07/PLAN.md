@@ -1,4 +1,5 @@
 # PLAN — Over-strict Agent Guardrail Remediation (codebase-wide)
+
 <!-- current-task: none -->
 
 Tiered so you can approve only what you want. Every change touches a security
@@ -17,7 +18,7 @@ Ranked by (friction relieved / risk added). Highest-value, lowest-risk first.
     the child's static (possibly undefined = unrestricted) scope. Same for write
     when writablePaths is empty. Preserves child-cannot-exceed-parent.
   - Acceptance: empty readablePaths leaves filesystemScope.read undefined/unrestricted when child had no static read scope; non-empty still narrows
-  - Validate: bun test packages/agent-runtime/src/__tests__/spawn-agents-permissions.test.ts
+  - Validate: bun test packages/agent-runtime/src/**tests**/spawn-agents-permissions.test.ts
 
 - [x] T1.2 Stop zeroing spawnableAgents / stripping programmaticToolNames on handoff (MEDIUM) (preserves static spawnableAgents + programmaticToolNames)
   - Surface: packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts
@@ -26,14 +27,14 @@ Ranked by (friction relieved / risk added). Highest-value, lowest-risk first.
   - Fix: preserve child static spawnableAgents; do not gate programmaticToolNames
     on model-visible allowedTools.
   - Acceptance: handoff child retains static spawnableAgents and programmaticToolNames
-  - Validate: bun test packages/agent-runtime/src/__tests__/spawn-agents-permissions.test.ts
+  - Validate: bun test packages/agent-runtime/src/**tests**/spawn-agents-permissions.test.ts
 
 - [x] T1.3 Fix git-committer commit contradiction (folds in shell-policy-audit F1) (guide uses multiple -m; HEREDOC forbidden)
   - Surface: sdk/src/tools/terminal-command-policy.ts; common/src/constants/git-discipline.ts
   - Problem: git-commit profile rejects `$(`/heredoc, but gitCommitGuidePrompt instructs it.
   - Fix: structured commit-message path OR minimal bounded-heredoc allowance; reconcile guide.
   - Acceptance: multi-line commit possible under git-commit profile; guidance matches policy
-  - Validate: bun test sdk/src/__tests__/terminal-command-policy.test.ts
+  - Validate: bun test sdk/src/**tests**/terminal-command-policy.test.ts
 
 - [x] T1.4 Expand combined short ripgrep flags + benign output flags (MEDIUM) (26/26 find-files-matching-content pass)
   - Surface: sdk/src/tools/find-files-matching-content.ts
@@ -41,14 +42,14 @@ Ranked by (friction relieved / risk added). Highest-value, lowest-risk first.
     -c/--count/--count-matches (and -o for code_search via extra switches). Keep
     dangerous-flag denials.
   - Acceptance: -ni accepted; --exec still rejected
-  - Validate: bun test sdk/src/__tests__/find-files-matching-content.test.ts
+  - Validate: bun test sdk/src/**tests**/find-files-matching-content.test.ts
 
 - [x] T1.5 Narrow FORBIDDEN_SHELL_CHARACTERS for /git slash commands (MEDIUM) (8/8 git-command-args pass)
   - Surface: cli/src/commands/git-command-args.ts
   - Fix: keep hard-blocking newlines and shell operators `$;` + backtick + `|&<>\\`;
     allow `( ) [ ] { }` (args are single-quoted).
   - Acceptance: `:(exclude)dist` and `{a,b}.ts` parse; injection cases still throw
-  - Validate: bun test cli/src/commands/__tests__/git-command-args.test.ts
+  - Validate: bun test cli/src/commands/**tests**/git-command-args.test.ts
 
 ## Tier 2 — Sensitive-path precision fixes (read surface)
 
@@ -56,14 +57,14 @@ Ranked by (friction relieved / risk added). Highest-value, lowest-risk first.
   - Surface: common/src/util/sensitive-paths.ts
   - Fix: remove .crt/.cer; anchor kubeconfig and .tfstate; drop .yarnrc blanket ban.
   - Acceptance: public certs and kubeconfig docs readable; real secrets still blocked
-  - Validate: bun test common/src/util/__tests__/sensitive-paths.test.ts
+  - Validate: bun test common/src/util/**tests**/sensitive-paths.test.ts
 
 - [x] T2.2 Allow in-project absolute read paths (MEDIUM) (POSIX absolute form allowed; containment still authority)
   - Depends on: T2.1
   - Surface: sdk/src/tools/path-utils.ts
   - Fix: let resolveProjectPath containment be authority for absolute in-project paths.
   - Acceptance: absolute path inside project root reads; outside still denied
-  - Validate: bun test sdk/src/__tests__/path-utils.test.ts
+  - Validate: bun test sdk/src/**tests**/path-utils.test.ts
 
 ## Tier 3 — Throughput caps and edit-authorization friction
 
@@ -75,15 +76,17 @@ Ranked by (friction relieved / risk added). Highest-value, lowest-risk first.
 - [x] T3.2 Soften str_replace edit-authorization friction (MEDIUM) (non-draining success; limit 5; small-file stale strip) (limit 5 non-draining; small-file stale strip)
   - Surface: edit-read-state.ts, process-str-replace.ts, str-replace.ts
   - Acceptance: non-staleness failures do not force full re-read; circuit breaker drains on success
-  - Validate: bun test packages/agent-runtime/src/tools/handlers/tool/__tests__/str-replace-circuit-breaker.test.ts
+  - Validate: bun test packages/agent-runtime/src/tools/handlers/tool/**tests**/str-replace-circuit-breaker.test.ts
 
 ## Keep — real security value (do NOT weaken)
+
 SSRF host/IP/redirect revalidation; .env & private-key/credential/real-.tfstate
 denials; project-path containment; cap.v3 HMAC signing + scope binding;
 replace_range authority chain; plan-only terminal attenuation; force/delete/
 default-branch push gating; privilege-escalation/system-package/env-dump bans.
 
 ## Validation gates
+
 - Per-task bun test on named suites.
 - security-reviewer advisory before editing terminal-command-policy.ts,
   sensitive-paths.ts, path-utils.ts, spawn-agent-utils.ts.

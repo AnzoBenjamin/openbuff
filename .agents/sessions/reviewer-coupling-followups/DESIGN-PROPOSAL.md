@@ -64,7 +64,7 @@ Current mitigation: parity tests (`gate-reviewer-parity.test.ts`,
 `gate-paths-parity.test.ts`, `gate-repair-parity.test.ts`) use
 `extractInlineFunctionSource` / `loadInline*Helpers` to pull each inline copy
 out of the serialized generator and assert byte/behavior equivalence with the
-exported version. Drift is *detected*, not *prevented*, and the extraction is
+exported version. Drift is _detected_, not _prevented_, and the extraction is
 fragile (it string-parses the generator body).
 
 ### Options
@@ -274,7 +274,7 @@ reviewer-spawn-conditions e2e tests, and a regenerated
   first router call site sits at ~line 2199. Placing the hoisted block next to
   the function's declaration site (~line 6667) crashed every gate e2e at
   runtime with `Cannot access 'reliabilityCodeExtension' before
-  initialization` even though typecheck and the parity suite stayed green —
+initialization` even though typecheck and the parity suite stayed green —
   the parity harness rebuilds scope instead of executing the generator, and
   the file-change hooks only typecheck. Rule: any hoisted binding inside
   `handleSteps` goes at the very top of the generator body, keeping the consts

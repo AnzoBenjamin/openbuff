@@ -259,7 +259,6 @@ export const truncateFileTreeBasedOnTokenBudget = (params: {
   }
 }
 
-
 function pruneFileTokenScores(params: {
   fileTree: FileTreeNode[]
   fileTokenScores: Record<string, Record<string, number>>

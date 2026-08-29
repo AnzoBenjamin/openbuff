@@ -34,8 +34,8 @@ Goal: stop re-injecting identical proactive query_index results.
 - [ ] M2-T2 In agents/base2/base2.ts around the proactive query_index yield (~line 704): on cache hit with unchanged revision, yield an add_message pointer (<200 tokens) instead of the full tool call; on miss, run query_index and record the entry.
 - [ ] M2-T3 Invalidate cache on workspace revision change (advanceWorkspaceState) and on index markPathsChanged (packages/indexer/src/index-manager.ts).
 - [ ] M2-T4 Tighten classifyProactiveRetrieval (base2.ts:7893): remove/weight-down generic triggers (context, index, flow) so they alone do not fire; keep strong-intent words. Mirror the change in agents/general-agent/general-agent.ts shouldProactivelyQueryIndex.
-- [ ] M2-T5 Tests: extend agents/__tests__/base2.test.ts "base2 proactive index lookup" — assert second equivalent turn injects pointer not full result; assert generic-word prompt no longer triggers; assert invalidation after revision bump.
-- Validation: bun test agents/__tests__/base2.test.ts; typecheck agents.
+- [ ] M2-T5 Tests: extend agents/**tests**/base2.test.ts "base2 proactive index lookup" — assert second equivalent turn injects pointer not full result; assert generic-word prompt no longer triggers; assert invalidation after revision bump.
+- Validation: bun test agents/**tests**/base2.test.ts; typecheck agents.
 - Depends on: M1 (uses ledger tokens for assertions). Independent of M3/M4.
 
 ## Milestone 3 — Git delta helper (R4, AC3)
@@ -70,7 +70,7 @@ Goal: compact before the 190k emergency brake.
 - [ ] M5-T1 In packages/agent-runtime/src/run-agent-step.ts, compute getSemanticCompactionBudget(getEffectiveContextLimits(...)) for the active model and trigger semantic compaction at triggerBudgetTokens (not DEFAULT_MAX_CONTEXT_TOKENS). Keep maybePruneContext as the hard fallback.
 - [ ] M5-T2 Ensure pinned control-plane memory (extractPinnedContextBlocks) and fixed baseline stay outside the history budget.
 - [ ] M5-T3 Wire the LLM context-pruner (agents/context-pruner.ts) spawn to the budget trigger where smarter summarization is wanted; keep deterministic trim as fallback.
-- [ ] M5-T4 Tests: extend packages/agent-runtime/src/util/__tests__/context-pruning.test.ts and agents/e2e/context-pruning-threshold.e2e.test.ts — synthetic growing history triggers compaction at triggerBudgetTokens, before 190k; pinned blocks retained.
+- [ ] M5-T4 Tests: extend packages/agent-runtime/src/util/**tests**/context-pruning.test.ts and agents/e2e/context-pruning-threshold.e2e.test.ts — synthetic growing history triggers compaction at triggerBudgetTokens, before 190k; pinned blocks retained.
 - Validation: bun test packages/agent-runtime; e2e context-pruning tests.
 - Depends on: M1. Can run parallel to M2–M4.
 

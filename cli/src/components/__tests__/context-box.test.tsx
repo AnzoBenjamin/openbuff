@@ -12,7 +12,9 @@ initializeThemeStore()
 
 const theme = chatThemes.dark
 
-const makeBlock = (overrides: Partial<ContextContentBlock> = {}): ContextContentBlock => ({
+const makeBlock = (
+  overrides: Partial<ContextContentBlock> = {},
+): ContextContentBlock => ({
   type: 'context',
   ledgerText: 'Context ledger header\nSecond header line\nToken usage: 123/456',
   gateBudgetsText: 'Gate repair budgets\nbudget: 10\nGate budgets: 5',
@@ -36,21 +38,27 @@ describe('ContextBox', () => {
   })
 
   test('handles null ledgerText still renders gate', () => {
-    const markup = renderToStaticMarkup(<ContextBox block={makeBlock({ ledgerText: null })} />)
+    const markup = renderToStaticMarkup(
+      <ContextBox block={makeBlock({ ledgerText: null })} />,
+    )
     expect(markup).toContain('Context')
     expect(markup).toContain('Gate repair budgets')
     expect(markup).not.toContain('Token usage')
   })
 
   test('handles empty gateBudgetsText', () => {
-    const markup = renderToStaticMarkup(<ContextBox block={makeBlock({ gateBudgetsText: '' })} />)
+    const markup = renderToStaticMarkup(
+      <ContextBox block={makeBlock({ gateBudgetsText: '' })} />,
+    )
     expect(markup).toContain('Context')
     expect(markup).toContain('Context ledger header')
   })
 
   test('handles empty ledger lines boundary', () => {
     const markup = renderToStaticMarkup(
-      <ContextBox block={makeBlock({ ledgerText: '\n\n', gateBudgetsText: '\n' })} />,
+      <ContextBox
+        block={makeBlock({ ledgerText: '\n\n', gateBudgetsText: '\n' })}
+      />,
     )
     expect(markup).toContain('Context')
   })

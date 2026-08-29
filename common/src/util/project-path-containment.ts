@@ -357,9 +357,7 @@ async function resolveOwnedTempRealPathForFileSystem(
  * `realFullPath` is the exact string that `resolveOwnedTempRealPath`
  * validated — never a second, independently resolved realpath.
  */
-function ownedTempContainedPath(
-  fullPath: string,
-): ContainedProjectPath | null {
+function ownedTempContainedPath(fullPath: string): ContainedProjectPath | null {
   const realFullPath = resolveOwnedTempRealPath(fullPath)
   if (realFullPath === null) return null
   return {

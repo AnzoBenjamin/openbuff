@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'bun:test'
 
-import type { EditTransactionParams, ReplaceRangeParams } from '../../../../../agents/types/tools'
+import type {
+  EditTransactionParams,
+  ReplaceRangeParams,
+} from '../../../../../agents/types/tools'
 
 import { editTransactionParams } from '../tool/edit-transaction'
 import { replaceRangeParams } from '../tool/replace-range'
@@ -216,9 +219,9 @@ describe('range capability edit inputs', () => {
     }
 
     expect(rewriteSymbolParams.inputSchema.safeParse(direct).success).toBe(true)
-    expect(editTransactionParams.inputSchema.safeParse(transaction).success).toBe(
-      true,
-    )
+    expect(
+      editTransactionParams.inputSchema.safeParse(transaction).success,
+    ).toBe(true)
     expect(
       editTransactionParams.providerInputSchema.safeParse(transaction).success,
     ).toBe(true)

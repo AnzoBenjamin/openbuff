@@ -41,7 +41,10 @@ const ROOT_AGENT_IDS = new Set([
 // Bundled agents intentionally NOT spawnable: mechanical directory/glob work is exposed
 // directly as the list_directory and glob tools rather than model-backed wrapper agents
 // (see base-deep.ts spawnableAgents comment). Decision recorded under plan task M1.5.
-const INTENTIONALLY_NOT_SPAWNABLE = new Set(['directory-lister', 'glob-matcher'])
+const INTENTIONALLY_NOT_SPAWNABLE = new Set([
+  'directory-lister',
+  'glob-matcher',
+])
 
 // Non-orchestrator spawn edges (agents spawned by other non-root agents / patterns).
 const NON_ORCHESTRATOR_SPAWN_EDGES = new Set([
@@ -208,12 +211,16 @@ describe('intentional per-mode spawnable deltas (M3.2)', () => {
   const defaultSet = new Set(
     (createBase2('default').spawnableAgents ?? []) as string[],
   )
-  const fastSet = new Set((createBase2('fast').spawnableAgents ?? []) as string[])
+  const fastSet = new Set(
+    (createBase2('fast').spawnableAgents ?? []) as string[],
+  )
   const planSet = new Set(
-    (createBase2('default', { planOnly: true }).spawnableAgents ?? []) as string[],
+    (createBase2('default', { planOnly: true }).spawnableAgents ??
+      []) as string[],
   )
   const executePlanSet = new Set(
-    (createBase2('default', { executePlan: true }).spawnableAgents ?? []) as string[],
+    (createBase2('default', { executePlan: true }).spawnableAgents ??
+      []) as string[],
   )
 
   // The ONLY agents default mode has that fast mode does not. Fast implements
@@ -260,9 +267,7 @@ describe('intentional per-mode spawnable deltas (M3.2)', () => {
   })
 })
 
-function joinedModePrompts(
-  agent: ReturnType<typeof createBase2>,
-): string {
+function joinedModePrompts(agent: ReturnType<typeof createBase2>): string {
   return [agent.systemPrompt, agent.instructionsPrompt, agent.stepPrompt].join(
     '\n',
   )

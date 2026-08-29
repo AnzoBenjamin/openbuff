@@ -100,7 +100,10 @@ export function getUserMessage(
 }
 
 export function getSystemMessage(content: string | ContentBlock[]): ChatMessage
-export function getSystemMessage(blocks: ContentBlock[], legacyContent: string): ChatMessage
+export function getSystemMessage(
+  blocks: ContentBlock[],
+  legacyContent: string,
+): ChatMessage
 export function getSystemMessage(
   content: string | ContentBlock[],
   legacyContent?: string,
@@ -436,13 +439,7 @@ function preserveJournalTail(folded: JournalState): void {
   let tail: string
   try {
     const buffer = Buffer.alloc(tailLength)
-    const bytesRead = fs.readSync(
-      journalFd,
-      buffer,
-      0,
-      tailLength,
-      folded.size,
-    )
+    const bytesRead = fs.readSync(journalFd, buffer, 0, tailLength, folded.size)
     tail = buffer.toString('utf8', 0, bytesRead)
   } finally {
     fs.closeSync(journalFd)
@@ -766,9 +763,7 @@ export const loadMessageHistorySafe = (
       MESSAGE_HISTORY_UI_LOCK_MAX_ATTEMPTS,
     )
     if (degraded)
-      onUnavailable?.(
-        new Error('Message history could not be read completely'),
-      )
+      onUnavailable?.(new Error('Message history could not be read completely'))
     return history
   } catch (error) {
     logger.warn(
@@ -921,7 +916,10 @@ export const historyRetryNowMs = (): number => performance.now()
  * cooldown has not elapsed", so the session recovers immediately instead of
  * waiting out the discrepancy.
  */
-const historyRetryIdleMs = (state: HistoryRetryState, nowMs: number): number => {
+const historyRetryIdleMs = (
+  state: HistoryRetryState,
+  nowMs: number,
+): number => {
   const idleMs = nowMs - state.lastAttemptMs
   return idleMs < 0 ? Number.POSITIVE_INFINITY : idleMs
 }

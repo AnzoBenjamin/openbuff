@@ -116,7 +116,9 @@ const testAgent: AgentDefinition = {
         includeToolCall: false,
       } as any
 
-      const { stepsComplete } = (yield 'STEP' as any) as { stepsComplete: boolean }
+      const { stepsComplete } = (yield 'STEP' as any) as {
+        stepsComplete: boolean
+      }
       if (stepsComplete) break
     }
   },
@@ -144,8 +146,6 @@ const TOOL_PAIR_TOKENS = 550 // avg tokens for tool call + result every other ro
 const TOKENS_PER_ROUND = Math.ceil(
   (2 * LARGE_CONTENT_SIZE) / CHARS_PER_TOKEN + TOOL_PAIR_TOKENS,
 )
-
-
 
 function buildMessageHistory(targetApproxTokens: number): Message[] {
   const messages: Message[] = []
@@ -215,7 +215,8 @@ function detectPruning(
   const hasSummary = finalMessages.some((msg) => {
     if (msg.role !== 'user' || !Array.isArray(msg.content)) return false
     return msg.content.some(
-      (part) => isTextPart(part) && part.text.includes('<conversation_summary>'),
+      (part) =>
+        isTextPart(part) && part.text.includes('<conversation_summary>'),
     )
   })
 
@@ -237,8 +238,6 @@ function detectPruning(
 
   return { wasPruned, hasSummary, hasTrimFallback, messageReduction }
 }
-
-
 
 function collectText(messages: Message[]): string {
   return messages
@@ -271,10 +270,7 @@ describe('Context Pruning Threshold E2E', () => {
       const messages = buildMessageHistory(30_000)
 
       const client = new OpenbuffClient({
-        agentDefinitions: [
-          testAgent,
-          prunerAgent,
-        ],
+        agentDefinitions: [testAgent, prunerAgent],
       })
 
       const sessionState = await initialSessionState({})
@@ -370,10 +366,7 @@ describe('Context Pruning Threshold E2E', () => {
       )
 
       const client = new OpenbuffClient({
-        agentDefinitions: [
-          testAgent,
-          prunerAgent,
-        ],
+        agentDefinitions: [testAgent, prunerAgent],
       })
 
       const sessionState = await initialSessionState({})
@@ -426,7 +419,9 @@ describe('Context Pruning Threshold E2E', () => {
       expect(retainedText).toContain(requiredConstraint)
       expect(retainedText).toContain('(discovered by file-picker)')
       // Invariant: pruner preserves causality — constraint must remain causally prior to its discovery provenance.
-      expect(retainedText.indexOf(requiredConstraint)).toBeLessThan(retainedText.indexOf(requiredPath))
+      expect(retainedText.indexOf(requiredConstraint)).toBeLessThan(
+        retainedText.indexOf(requiredPath),
+      )
 
       // After pruning, the token count should be below the limit
       expect(tokenCount).toBeLessThan(50_000)
@@ -461,10 +456,7 @@ describe('Context Pruning Threshold E2E', () => {
       const messages = buildMessageHistory(TARGET_ESTIMATED_TOKENS)
 
       const client = new OpenbuffClient({
-        agentDefinitions: [
-          testAgent,
-          prunerAgent,
-        ],
+        agentDefinitions: [testAgent, prunerAgent],
       })
 
       // =========================================================================

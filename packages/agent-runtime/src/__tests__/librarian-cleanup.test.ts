@@ -27,7 +27,7 @@ describe('Librarian clone cleanup', () => {
     fs.mkdirSync(unowned)
     created.push(owned, unowned)
 
-    const output = await finalizeOwnedLibrarianClone({
+    const output = (await finalizeOwnedLibrarianClone({
       agentType: 'librarian',
       spawnParams: { repoUrl: 'https://github.com/acme/repo' },
       messageHistory: [
@@ -52,7 +52,7 @@ describe('Librarian clone cleanup', () => {
         },
       },
       logger,
-    }) as any
+    })) as any
 
     expect(fs.existsSync(owned)).toBe(false)
     expect(fs.existsSync(unowned)).toBe(true)
@@ -67,7 +67,7 @@ describe('Librarian clone cleanup', () => {
     fs.mkdirSync(owned)
     created.push(owned)
 
-    const output = await finalizeOwnedLibrarianClone({
+    const output = (await finalizeOwnedLibrarianClone({
       agentType: 'librarian',
       spawnParams: {
         repoUrl: 'https://github.com/acme/repo',
@@ -89,7 +89,7 @@ describe('Librarian clone cleanup', () => {
         value: { cloneDir: '/tmp/forged', cloneRetained: false },
       },
       logger,
-    }) as any
+    })) as any
 
     expect(fs.existsSync(owned)).toBe(true)
     expect(output.value).toMatchObject({

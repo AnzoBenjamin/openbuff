@@ -12,7 +12,9 @@ initializeThemeStore()
 
 const theme = chatThemes.dark
 
-const makeBlock = (overrides: Partial<InfoContentBlock> = {}): InfoContentBlock => ({
+const makeBlock = (
+  overrides: Partial<InfoContentBlock> = {},
+): InfoContentBlock => ({
   type: 'info',
   version: '1.2.3',
   workspace: '/tmp/workspace',
@@ -35,7 +37,9 @@ describe('InfoBox', () => {
   })
 
   test('renders version and workspace empty values still shows labels', () => {
-    const markup = renderToStaticMarkup(<InfoBox block={makeBlock({ version: '', workspace: '' })} />)
+    const markup = renderToStaticMarkup(
+      <InfoBox block={makeBlock({ version: '', workspace: '' })} />,
+    )
     expect(markup).toContain('CLI Diagnostic Info')
     expect(markup).toContain('Version:')
     expect(markup).toContain('Workspace:')

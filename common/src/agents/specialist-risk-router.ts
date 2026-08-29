@@ -57,7 +57,8 @@ export function selectSpecialistReviewers(params: {
     /\b(?:dependency|dependencies|lockfile|package manager|supply chain|license|vulnerabilit)/.test(
       requirements,
     )
-  ) selected.add('dependency-reviewer')
+  )
+    selected.add('dependency-reviewer')
   if (
     /(?:^|\/)(?:migrations?|schema|database|db)(?:\/|\.)|\.sql$|\b(?:migrations?|backfill|schema change|database compatibility|rollback)\b/.test(
       joined,
@@ -65,9 +66,16 @@ export function selectSpecialistReviewers(params: {
   )
     selected.add('migration-reviewer')
   if (
-    /\b(?:public api|backward compat|breaking change|deprecat\w*|serialization|persisted format|config contract|environment variable|cli flag)\b/.test(requirements) ||
-    files.some((file) => /(?:^|\/)(?:index|exports?|public-api)\.[^.]+$|(?:^|\/)(?:routes?|config|schemas?|types)\//.test(file))
-  ) selected.add('compatibility-reviewer')
+    /\b(?:public api|backward compat|breaking change|deprecat\w*|serialization|persisted format|config contract|environment variable|cli flag)\b/.test(
+      requirements,
+    ) ||
+    files.some((file) =>
+      /(?:^|\/)(?:index|exports?|public-api)\.[^.]+$|(?:^|\/)(?:routes?|config|schemas?|types)\//.test(
+        file,
+      ),
+    )
+  )
+    selected.add('compatibility-reviewer')
   const isAgentsSessionArtifact = (file: string) =>
     /(?:^|\/)\.agents\/sessions(?:\/|$)/.test(file)
 
@@ -102,21 +110,42 @@ export function selectSpecialistReviewers(params: {
     selected.add('reliability-reviewer')
   }
   if (
-    /\b(?:performance|latency|throughput|benchmark|profil\w*|allocation|hot path|load test|complexity)\b/.test(requirements) ||
+    /\b(?:performance|latency|throughput|benchmark|profil\w*|allocation|hot path|load test|complexity)\b/.test(
+      requirements,
+    ) ||
     files.some((file) => /(?:bench|perf|load-test|profil)/.test(file))
-  ) selected.add('performance-specialist')
+  )
+    selected.add('performance-specialist')
   const hasUiFiles = files.some((file) =>
     /(?:^|\/)(?:components?|pages?|views?|screens?|widgets?|layouts?|features?|ui|app)(?:\/|\.)|\.(?:tsx|jsx|vue|svelte|css|scss|html|astro|less|sass|styl)$/.test(
       file,
     ),
   )
-  if (hasUiFiles && /\b(?:accessibility|a11y|keyboard|focus|screen reader|aria|contrast|reduced motion)\b/.test(requirements))
+  if (
+    hasUiFiles &&
+    /\b(?:accessibility|a11y|keyboard|focus|screen reader|aria|contrast|reduced motion)\b/.test(
+      requirements,
+    )
+  )
     selected.add('accessibility-reviewer')
-  if (hasUiFiles && /\b(?:visual|layout|responsive|design system|spacing|hierarchy|screenshot|viewport|interaction)\b/.test(requirements))
+  if (
+    hasUiFiles &&
+    /\b(?:visual|layout|responsive|design system|spacing|hierarchy|screenshot|viewport|interaction)\b/.test(
+      requirements,
+    )
+  )
     selected.add('ux-visual-reviewer')
-  if (/\b(?:user-facing|acceptance criteria|product behavior|user flow|end-to-end|ux|onboarding)\b/.test(requirements))
+  if (
+    /\b(?:user-facing|acceptance criteria|product behavior|user flow|end-to-end|ux|onboarding)\b/.test(
+      requirements,
+    )
+  )
     selected.add('product-reviewer')
-  if (/\b(?:independent evaluat|score against|requirement coverage)\b/.test(requirements))
+  if (
+    /\b(?:independent evaluat|score against|requirement coverage)\b/.test(
+      requirements,
+    )
+  )
     selected.add('evaluator')
 
   const stableOrder: SpecialistReviewerAgent[] = [

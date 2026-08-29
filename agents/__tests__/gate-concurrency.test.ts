@@ -106,8 +106,7 @@ function extractInlineFunctionSource(
     if (declarationStart < 0) {
       throw new Error(`Unable to find inline ${functionName} declaration`)
     }
-    paramsOpenIndex =
-      declarationStart + `function ${functionName}(`.length - 1
+    paramsOpenIndex = declarationStart + `function ${functionName}(`.length - 1
   }
 
   // Close the parameter list with paren depth only — braces inside object
@@ -422,7 +421,10 @@ describe('runtime publishes selfMutatedPaths for concurrent isolation', () => {
 
   test('run-agent-step wires publishSelfMutatedPaths after processStream', () => {
     const source = readFileSync(
-      new URL('../../packages/agent-runtime/src/run-agent-step.ts', import.meta.url),
+      new URL(
+        '../../packages/agent-runtime/src/run-agent-step.ts',
+        import.meta.url,
+      ),
       'utf8',
     )
     expect(source).toContain('export function publishSelfMutatedPaths')

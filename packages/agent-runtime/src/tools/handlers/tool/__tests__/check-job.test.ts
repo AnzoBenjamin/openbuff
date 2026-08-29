@@ -114,14 +114,14 @@ describe('handleCheckJob', () => {
 
     // The trusted owner is ALWAYS stamped from agent/session state so the
     // SDK can assert it against the registry (never from model input).
-    expect(
-      (forwardedToolCall?.input as Record<string, unknown>).owner,
-    ).toEqual({
-      clientSessionId: 'client-1',
-      rootRunId: 'root-run',
-      parentRunId: 'parent-run',
-      parentAgentId: 'parent-agent',
-    })
+    expect((forwardedToolCall?.input as Record<string, unknown>).owner).toEqual(
+      {
+        clientSessionId: 'client-1',
+        rootRunId: 'root-run',
+        parentRunId: 'parent-run',
+        parentAgentId: 'parent-agent',
+      },
+    )
     expect(output[0].type).toBe('json')
   })
 })

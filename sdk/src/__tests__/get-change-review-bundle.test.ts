@@ -279,26 +279,26 @@ describe('getChangeReviewBundle', () => {
     fs.writeFileSync(path.join(cwd, 'source.txt'), 'changed\n')
 
     const before = await getChangeReviewBundle({ cwd })
-    const beforeValue = (before[0]!.type === 'json'
-      ? before[0]!.value
-      : {}) as { snapshotId: string; files: string[] }
+    const beforeValue = (
+      before[0]!.type === 'json' ? before[0]!.value : {}
+    ) as { snapshotId: string; files: string[] }
 
     // (a) creating a session plan artifact must not change the snapshot id.
     const sessionDir = path.join(cwd, '.agents', 'sessions', 'my-slug')
     fs.mkdirSync(sessionDir, { recursive: true })
     fs.writeFileSync(path.join(sessionDir, 'PLAN.md'), '# plan\n')
     const afterCreate = await getChangeReviewBundle({ cwd })
-    const afterCreateValue = (afterCreate[0]!.type === 'json'
-      ? afterCreate[0]!.value
-      : {}) as { snapshotId: string; files: string[] }
+    const afterCreateValue = (
+      afterCreate[0]!.type === 'json' ? afterCreate[0]!.value : {}
+    ) as { snapshotId: string; files: string[] }
     expect(afterCreateValue.snapshotId).toBe(beforeValue.snapshotId)
 
     // Modifying an existing session artifact also must not change the id.
     fs.writeFileSync(path.join(sessionDir, 'PLAN.md'), '# plan updated\n')
     const afterModify = await getChangeReviewBundle({ cwd })
-    const afterModifyValue = (afterModify[0]!.type === 'json'
-      ? afterModify[0]!.value
-      : {}) as { snapshotId: string; files: string[] }
+    const afterModifyValue = (
+      afterModify[0]!.type === 'json' ? afterModify[0]!.value : {}
+    ) as { snapshotId: string; files: string[] }
     expect(afterModifyValue.snapshotId).toBe(beforeValue.snapshotId)
 
     // (c) the returned files array omits the session artifact path.
@@ -310,9 +310,9 @@ describe('getChangeReviewBundle', () => {
     // (b) a real tracked source change still changes the snapshot id.
     fs.writeFileSync(path.join(cwd, 'source.txt'), 'changed again\n')
     const afterSource = await getChangeReviewBundle({ cwd })
-    const afterSourceValue = (afterSource[0]!.type === 'json'
-      ? afterSource[0]!.value
-      : {}) as { snapshotId: string }
+    const afterSourceValue = (
+      afterSource[0]!.type === 'json' ? afterSource[0]!.value : {}
+    ) as { snapshotId: string }
     expect(afterSourceValue.snapshotId).not.toBe(beforeValue.snapshotId)
   })
 

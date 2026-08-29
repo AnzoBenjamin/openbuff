@@ -14,10 +14,7 @@ import {
 import { getProjectRoot } from '../project-files'
 import { formatAge, pluralizeEntries } from '../utils/format-helpers'
 
-import type {
-  TaskMemoryPruneOutcome,
-  WorkspaceMoveRecord,
-} from '@openbuff/sdk'
+import type { TaskMemoryPruneOutcome, WorkspaceMoveRecord } from '@openbuff/sdk'
 
 export type MemoryCommandDeps = {
   getRootDir: () => string
@@ -134,7 +131,9 @@ async function getPruneOutcome(deps: MemoryCommandDeps) {
   })
 }
 
-function memoryBlockToString(block: import('../types/chat').MemoryContentBlock): string {
+function memoryBlockToString(
+  block: import('../types/chat').MemoryContentBlock,
+): string {
   switch (block.state) {
     case 'empty':
       return [

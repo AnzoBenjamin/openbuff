@@ -695,7 +695,11 @@ export function runTerminalCommand({
     })
 
     const part = commandResult[0]
-    if (part?.type !== 'json' || !part.value || typeof part.value !== 'object') {
+    if (
+      part?.type !== 'json' ||
+      !part.value ||
+      typeof part.value !== 'object'
+    ) {
       return commandResult
     }
     const dirtyAfter = await listDirtyPaths(gitRoot, signal)

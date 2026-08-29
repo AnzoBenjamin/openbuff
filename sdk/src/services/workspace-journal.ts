@@ -21,7 +21,10 @@ type WorkspaceJournalRecord = LocalHarnessRecord & {
 
 function fallbackIdentity(cwd: string) {
   const canonical = path.resolve(cwd)
-  const digest = createHash('sha256').update(canonical).digest('hex').slice(0, 24)
+  const digest = createHash('sha256')
+    .update(canonical)
+    .digest('hex')
+    .slice(0, 24)
   return { repositoryId: digest, workspaceId: digest }
 }
 

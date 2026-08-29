@@ -407,7 +407,9 @@ describe('researcher-web agent', () => {
               : undefined
           expect(queryInput).toBeDefined()
           if (queryInput === undefined) {
-            throw new Error('expected a retry query after empty deep-mode results')
+            throw new Error(
+              'expected a retry query after empty deep-mode results',
+            )
           }
           expect(queryInput.split(' ').length).toBeLessThanOrEqual(5)
           expect(queryInput.length).toBeLessThan(
@@ -472,16 +474,18 @@ describe('researcher-web agent', () => {
       ]) {
         const calls = collectToolCalls(ssrfPrompt)
         expect(calls.filter((c) => c.input.url)).toHaveLength(0)
-        expect(calls.filter((c) => c.input.query).length).toBeGreaterThanOrEqual(
-          1,
-        )
+        expect(
+          calls.filter((c) => c.input.query).length,
+        ).toBeGreaterThanOrEqual(1)
       }
     })
 
     test('SSRF guard rejects short IPv4 loopback 127.1 before url-mode search', () => {
       const calls = collectToolCalls('https://127.1/admin')
       expect(calls.filter((c) => c.input.url)).toHaveLength(0)
-      expect(calls.filter((c) => c.input.query).length).toBeGreaterThanOrEqual(1)
+      expect(calls.filter((c) => c.input.query).length).toBeGreaterThanOrEqual(
+        1,
+      )
     })
 
     test('SSRF guard rejects expanded IPv6 loopback and hex-mapped IPv4', () => {
@@ -492,9 +496,9 @@ describe('researcher-web agent', () => {
       ]) {
         const calls = collectToolCalls(ssrfPrompt)
         expect(calls.filter((c) => c.input.url)).toHaveLength(0)
-        expect(calls.filter((c) => c.input.query).length).toBeGreaterThanOrEqual(
-          1,
-        )
+        expect(
+          calls.filter((c) => c.input.query).length,
+        ).toBeGreaterThanOrEqual(1)
       }
     })
   })

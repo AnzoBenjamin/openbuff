@@ -272,12 +272,12 @@ describe('RunTerminalCommandComponent', () => {
       expect(
         (runningResult.content as RenderContentElement).props.isRunning,
       ).toBe(true)
-      expect(
-        (runningResult.content as RenderContentElement).props.status,
-      ).toBe('running')
-      expect(
-        (runningResult.content as RenderContentElement).props.jobId,
-      ).toBe('job-live')
+      expect((runningResult.content as RenderContentElement).props.status).toBe(
+        'running',
+      )
+      expect((runningResult.content as RenderContentElement).props.jobId).toBe(
+        'job-live',
+      )
 
       // After job_update settles the card, frozen JSON still says "running",
       // but lifecycle-driven status must flip so the UI is not stuck.
@@ -295,9 +295,9 @@ describe('RunTerminalCommandComponent', () => {
       expect(
         (settledResult.content as RenderContentElement).props.isRunning,
       ).toBe(false)
-      expect(
-        (settledResult.content as RenderContentElement).props.status,
-      ).toBe('completed')
+      expect((settledResult.content as RenderContentElement).props.status).toBe(
+        'completed',
+      )
     })
   })
 

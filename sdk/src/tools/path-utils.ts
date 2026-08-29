@@ -143,7 +143,9 @@ async function getOwnedTempComparisonRootsForFileSystemFsAware(
 ): Promise<string[]> {
   const roots = getOwnedTempRoots()
   const realRoots = await Promise.all(
-    roots.map((root) => realpathOrLexicalForFileSystemFsAware(root, fileSystem)),
+    roots.map((root) =>
+      realpathOrLexicalForFileSystemFsAware(root, fileSystem),
+    ),
   )
   return [...new Set([...roots, ...realRoots])]
 }

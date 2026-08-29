@@ -56,6 +56,7 @@
   settlement tombstone that persists until acknowledged — not just a state read.
 
 <!-- update_plan_status:appended -->
+
 ## Closure lessons — 2026-08-02T10:30:15.314Z
 
 ### Deviations accepted at closure (2026-08-02)

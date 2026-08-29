@@ -121,7 +121,11 @@ type TruncationScanState = {
 
 /** Single pass over the raw argument string tracking string/escape/brace depth. */
 function scanTruncationState(input: string): TruncationScanState | undefined {
-  if (typeof input !== 'string' || input.length === 0 || input.length > MAX_TRUNCATION_SCAN_LENGTH) {
+  if (
+    typeof input !== 'string' ||
+    input.length === 0 ||
+    input.length > MAX_TRUNCATION_SCAN_LENGTH
+  ) {
     return undefined
   }
   let depth = 0
@@ -156,7 +160,10 @@ export function detectTransportTruncation(
   const balancedClosed =
     state.depth === 0 && !state.inString && !state.escapedData
   if (balancedClosed) return false
-  if (parseError !== undefined && /unexpected end of json input/i.test(parseError)) {
+  if (
+    parseError !== undefined &&
+    /unexpected end of json input/i.test(parseError)
+  ) {
     return true
   }
   return state.inString || state.depth > 0 || state.escapedData
@@ -818,7 +825,10 @@ const TRANSACTION_EDIT_TYPE_SET = new Set<string>(TRANSACTION_EDIT_TYPES)
 
 function canonicalizeTransactionEditType(rawType: unknown): string | undefined {
   if (typeof rawType !== 'string') return undefined
-  const normalized = rawType.trim().toLowerCase().replace(/[\s-]+/g, '_')
+  const normalized = rawType
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
   return TRANSACTION_EDIT_TYPE_SET.has(normalized) ? normalized : undefined
 }
 

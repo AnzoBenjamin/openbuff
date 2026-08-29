@@ -155,17 +155,18 @@ const providerInputSchema = z.object({
   atomic: z.boolean().optional().default(false),
   replacements: z
     .array(
-      z.object({
-        oldString: z.string().min(1),
-        newString: z.string(),
-        allowMultiple: z.boolean().optional().default(false),
-        occurrenceIndex: z.number().int().min(1).optional(),
-        basedOnRead: canonicalBasedOnReadSchema,
-        skipIfMissing: z
-          .boolean()
-          .optional()
-          .describe(skipIfMissingCanonicalDescription),
-      })
+      z
+        .object({
+          oldString: z.string().min(1),
+          newString: z.string(),
+          allowMultiple: z.boolean().optional().default(false),
+          occurrenceIndex: z.number().int().min(1).optional(),
+          basedOnRead: canonicalBasedOnReadSchema,
+          skipIfMissing: z
+            .boolean()
+            .optional()
+            .describe(skipIfMissingCanonicalDescription),
+        })
         // The declared provider surface must reject exactly what the input
         // schema rejects, so it never advertises skipIfMissing with a non-empty
         // newString as a valid combination. Both go through the same shared

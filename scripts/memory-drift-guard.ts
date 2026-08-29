@@ -338,13 +338,21 @@ export function checkStaleness(root: string): Finding[] {
       candidates.map((c) => c.projectPath),
     )
     const plainSrcPaths = [
-      ...new Set(candidates.filter((c) => c.topic === '').map((c) => c.srcRelative)),
+      ...new Set(
+        candidates.filter((c) => c.topic === '').map((c) => c.srcRelative),
+      ),
     ]
     const knowledgePaths = [...new Set(candidates.map((c) => c.projectPath))]
     const plainSrcEpochs = batchLastCommitEpochs(root, plainSrcPaths)
     const mdEpochs = batchLastCommitEpochs(root, knowledgePaths)
     const topicEpochs = new Map<string, number | null>()
-    const topicKeys = [...new Set(candidates.filter((c) => c.topic !== '').map((c) => `${c.srcRelative}\0${c.topic}`))]
+    const topicKeys = [
+      ...new Set(
+        candidates
+          .filter((c) => c.topic !== '')
+          .map((c) => `${c.srcRelative}\0${c.topic}`),
+      ),
+    ]
     for (const key of topicKeys) {
       const separator = key.indexOf('\0')
       const srcRel = key.slice(0, separator)
@@ -394,11 +402,15 @@ function batchLastCommitEpochs(
 function batchDirtySet(root: string, pathspecs: string[]): Set<string> {
   if (pathspecs.length === 0) return new Set()
   try {
-    const stdout = execFileSync('git', ['status', '--porcelain', '--', ...pathspecs], {
-      cwd: root,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
+    const stdout = execFileSync(
+      'git',
+      ['status', '--porcelain', '--', ...pathspecs],
+      {
+        cwd: root,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    )
     const dirty = new Set<string>()
     for (const line of stdout.split('\n')) {
       if (!line.trim()) continue
@@ -635,8 +647,7 @@ export function checkCommand(root: string): Finding[] {
           // `bun run <script>` without --cwd. Accept root when the nearest
           // package was only inferred — never when the author explicitly
           // targeted another package via --cwd or cd.
-          const rootPkg =
-            subdir === '.' ? pkg : loadPackageJson(root, '.')
+          const rootPkg = subdir === '.' ? pkg : loadPackageJson(root, '.')
           if (
             !explicitCwd &&
             subdir !== '.' &&

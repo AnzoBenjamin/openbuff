@@ -11,10 +11,7 @@ import {
 } from '../memory-command'
 
 import type { MemoryCommandDeps } from '../memory-command'
-import type {
-  TaskMemoryPruneOutcome,
-  WorkspaceMoveRecord,
-} from '@openbuff/sdk'
+import type { TaskMemoryPruneOutcome, WorkspaceMoveRecord } from '@openbuff/sdk'
 import type {
   TaskMemoryEvidenceV1,
   TaskMemoryV1,
@@ -371,8 +368,12 @@ describe('/memory command', () => {
 describe('/memory blocks', () => {
   test('STALE_PATHS_SHOWN is 5 and PRUNE_FAILURE_CAUSES covers all reasons', () => {
     expect(STALE_PATHS_SHOWN).toBe(5)
-    expect(PRUNE_FAILURE_CAUSES['invalid-record']).toContain('schema validation')
-    expect(PRUNE_FAILURE_CAUSES['concurrent-write']).toContain('changed while pruning')
+    expect(PRUNE_FAILURE_CAUSES['invalid-record']).toContain(
+      'schema validation',
+    )
+    expect(PRUNE_FAILURE_CAUSES['concurrent-write']).toContain(
+      'changed while pruning',
+    )
     expect(PRUNE_FAILURE_CAUSES['write-failed']).toContain('atomic renames')
     expect(Object.keys(PRUNE_FAILURE_CAUSES).sort()).toEqual([
       'concurrent-write',
@@ -386,7 +387,9 @@ describe('/memory blocks', () => {
     expect(formatAge(30 * 1_000)).toBe('30s')
     expect(formatAge(5 * 60 * 1_000)).toBe('5m')
     expect(formatAge(3 * 60 * 60 * 1_000 + 7 * 60 * 1_000)).toBe('3h 7m')
-    expect(formatAge(2 * 24 * 60 * 60 * 1_000 + 5 * 60 * 60 * 1_000)).toBe('2d 5h')
+    expect(formatAge(2 * 24 * 60 * 60 * 1_000 + 5 * 60 * 60 * 1_000)).toBe(
+      '2d 5h',
+    )
   })
 
   test('empty state block when no record has been persisted yet', async () => {
@@ -546,7 +549,12 @@ describe('/memory blocks', () => {
 
     const block = await handleMemoryCommandBlocks('prune', deps)
 
-    expect(block).toEqual({ type: 'memory', state: 'pruned', removed: 2, remaining: 5 })
+    expect(block).toEqual({
+      type: 'memory',
+      state: 'pruned',
+      removed: 2,
+      remaining: 5,
+    })
   })
 
   test('pruned block via buildMemoryContentBlock alias', async () => {
@@ -556,7 +564,12 @@ describe('/memory blocks', () => {
 
     const block = await buildMemoryContentBlock('prune', deps)
 
-    expect(block).toEqual({ type: 'memory', state: 'pruned', removed: 1, remaining: 0 })
+    expect(block).toEqual({
+      type: 'memory',
+      state: 'pruned',
+      removed: 1,
+      remaining: 0,
+    })
   })
 
   test('nothing-to-prune block when removed is zero', async () => {
@@ -566,7 +579,11 @@ describe('/memory blocks', () => {
 
     const block = await handleMemoryCommandBlocks('prune', deps)
 
-    expect(block).toEqual({ type: 'memory', state: 'nothing-to-prune', remaining: 4 })
+    expect(block).toEqual({
+      type: 'memory',
+      state: 'nothing-to-prune',
+      remaining: 4,
+    })
   })
 
   test('no-record block when store has no persisted memory', async () => {
@@ -579,7 +596,12 @@ describe('/memory blocks', () => {
 
   test('failed block for invalid-record carries cause and unchanged counts', async () => {
     const { deps } = createDeps({
-      pruneOutcome: { status: 'failed', reason: 'invalid-record', removed: 3, remaining: 2 },
+      pruneOutcome: {
+        status: 'failed',
+        reason: 'invalid-record',
+        removed: 3,
+        remaining: 2,
+      },
     })
 
     const block = await handleMemoryCommandBlocks('prune', deps)
@@ -595,7 +617,12 @@ describe('/memory blocks', () => {
 
   test('failed block for concurrent-write carries cause and unchanged counts', async () => {
     const { deps } = createDeps({
-      pruneOutcome: { status: 'failed', reason: 'concurrent-write', removed: 1, remaining: 0 },
+      pruneOutcome: {
+        status: 'failed',
+        reason: 'concurrent-write',
+        removed: 1,
+        remaining: 0,
+      },
     })
 
     const block = await handleMemoryCommandBlocks('prune', deps)
@@ -610,7 +637,12 @@ describe('/memory blocks', () => {
 
   test('failed block for write-failed carries cause and unchanged counts', async () => {
     const { deps } = createDeps({
-      pruneOutcome: { status: 'failed', reason: 'write-failed', removed: 5, remaining: 1 },
+      pruneOutcome: {
+        status: 'failed',
+        reason: 'write-failed',
+        removed: 5,
+        remaining: 1,
+      },
     })
 
     const block = await handleMemoryCommandBlocks('prune', deps)
@@ -624,11 +656,9 @@ describe('/memory blocks', () => {
   })
 
   test('failed blocks never collapse to no-record or nothing-to-prune', async () => {
-    const reasons: Array<'invalid-record' | 'concurrent-write' | 'write-failed'> = [
-      'invalid-record',
-      'concurrent-write',
-      'write-failed',
-    ]
+    const reasons: Array<
+      'invalid-record' | 'concurrent-write' | 'write-failed'
+    > = ['invalid-record', 'concurrent-write', 'write-failed']
     for (const reason of reasons) {
       const { deps } = createDeps({
         pruneOutcome: { status: 'failed', reason, removed: 2, remaining: 1 },
@@ -654,7 +684,11 @@ describe('/memory blocks', () => {
 
   test('error state block for status when journal moves throw', async () => {
     const memory = makeMemory()
-    const { deps } = createDeps({ memory, reconciled: memory, movesThrow: true })
+    const { deps } = createDeps({
+      memory,
+      reconciled: memory,
+      movesThrow: true,
+    })
 
     const block = await handleMemoryCommandBlocks('status', deps)
 
@@ -706,7 +740,11 @@ describe('/memory blocks', () => {
       evidence: [makeEvidence({ id: 'ev-moved', path: 'old.ts' })],
     })
     const moves = [{ from: 'old.ts', to: 'nested/new.ts' }] as any
-    const { deps, calls } = createDeps({ memory, reconciled: memory, workspaceMoves: moves })
+    const { deps, calls } = createDeps({
+      memory,
+      reconciled: memory,
+      workspaceMoves: moves,
+    })
 
     await handleMemoryCommandBlocks('status', deps)
 

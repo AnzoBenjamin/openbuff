@@ -18,6 +18,14 @@ const escapeForRegExp = (value: string): string =>
   value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
+ * Inline segments render as `<span>`, not `<text>`: OpenTUI's
+ * TextNodeRenderable only accepts inline children, so a nested `<text>` throws
+ * at commit and takes the whole app down (see text-nesting.test.tsx). Whole
+ * report rows are still `<text>` elements, so segment matchers accept either.
+ */
+const SEGMENT_TAG = '(?:text|span)'
+
+/**
  * A whole rendered cell: one text element whose entire content is `content`.
  * Matching the whole cell keeps assertions specific to the segment under test
  * instead of any occurrence of its text anywhere in the markup.
@@ -41,7 +49,7 @@ const sessionRow = (session: PlanSessionSummary): RegExp => {
   const row = formatPlanSessionListRow(session)
   return new RegExp(
     [row.activeMarker, `${row.badge} `, row.label]
-      .map((cell) => `<text[^>]*>${escapeForRegExp(cell)}</text>`)
+      .map((cell) => `<span[^>]*>${escapeForRegExp(cell)}</span>`)
       .join(''),
   )
 }
@@ -65,7 +73,7 @@ const countMatches = (markup: string, pattern: RegExp): number =>
  */
 const styleOfSegment = (markup: string, content: string): string => {
   const match = markup.match(
-    new RegExp(`<text[^>]*>\\s*${escapeForRegExp(content)}`),
+    new RegExp(`<${SEGMENT_TAG}[^>]*>\\s*${escapeForRegExp(content)}`),
   )
   expect(
     match,
@@ -168,9 +176,9 @@ describe('PlanStatusBox', () => {
     // The badge is not at index 0, so this takes the `before`-non-empty branch:
     // leading text, badge, and trailing text render as separate segments.
     expect(styleOfSegment(markup, '[paused]')).toContain(theme.warning)
-    expect(markup).toContain('>session foo </text>')
+    expect(markup).toContain('>session foo </span>')
     expect(styleOfSegment(markup, 'session foo')).toContain(theme.foreground)
-    expect(markup).toContain('> 0/2 done</text>')
+    expect(markup).toContain('> 0/2 done</span>')
   })
 
   /**
@@ -189,7 +197,7 @@ describe('PlanStatusBox', () => {
     )
 
     expect(styleOfSegment(markup, '[paused]')).toContain(theme.warning)
-    expect(markup).toContain('>waiting until the </text>')
+    expect(markup).toContain('>waiting until the </span>')
   })
 
   test('smoke renders list mode title Plan sessions and sessions', () => {

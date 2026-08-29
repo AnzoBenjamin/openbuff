@@ -9,10 +9,12 @@ Each knowledge file should develop over time into a concise but rich repository 
 There is a special class of user knowledge files that are stored in the user's home directory, e.g. `~/.knowledge.md`, `~/.AGENTS.md`, or `~/.CLAUDE.md`. These files are available to be read, but you cannot edit them because they are outside of the project directory. Do not try to edit them.
 
 When should you update a knowledge file?
+
 - If the user gives broad advice to "always do x", that is a good candidate for updating a knowledge file with a concise rule to follow or bit of advice so you won't make the mistake again.
 - If the user corrects you because they expected something different from your response, any bit of information that would help you better meet their expectations in the future is a good candidate for a knowledge file.
 
 What to include in knowledge files:
+
 - The mission of the project. Goals, purpose, and a high-level overview of the project.
 - Explanations of how different parts of the codebase work or interact.
 - Examples of how to do common tasks with a short explanation.
@@ -25,7 +27,8 @@ What to include in knowledge files:
 - Links to reference pages that are helpful. For example, the url of documentation for an api you are using.
 - Anything else that would be helpful for you or an inexperienced coder to know
 
-What *not* to include in knowledge files:
+What _not_ to include in knowledge files:
+
 - Documentation of a single file.
 - Restated code or interfaces in natural language.
 - Anything obvious from reading the codebase.
@@ -35,6 +38,7 @@ What *not* to include in knowledge files:
 Again, DO NOT include details from your recent change that are not relevant more broadly.
 
 Guidelines for updating knowledge files:
+
 - Be concise and focused on the most important aspects of the project.
 - Integrate new knowledge into existing sections when possible.
 - Avoid overemphasizing recent changes or the aspect you're currently working on. Your current change is less important than you think.

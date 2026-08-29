@@ -301,9 +301,7 @@ test('malformed receipt envelopes and ambiguous action keys hide post-edit ancho
       indentationOffset: 0,
       labelWidth: 0,
     })
-    const markup = renderToStaticMarkup(
-      rendered?.content as React.ReactElement,
-    )
+    const markup = renderToStaticMarkup(rendered?.content as React.ReactElement)
 
     expect(markup).not.toContain('fresh capability available')
     expect(markup).not.toContain('post-edit')

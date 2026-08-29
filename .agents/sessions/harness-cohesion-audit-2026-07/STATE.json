@@ -9,10 +9,7 @@
     "phase": "validation",
     "passed": true,
     "summary": "M3.2 resolved reviewer blocker RF-1/RF-2-6e7bf5ad: documented intentional per-mode spawnable deltas inline in base2.ts + added test-asserted delta block to roster-drift.test.ts (browser-use unconditional across all modes; fast delta = default-only editor family + thinker; plan delta = implementation-only mutation agents). roster-drift 7 pass, all typechecks green.",
-    "receiptIds": [
-      "hqcVDZOlRfU",
-      "hqYwB06XYSs"
-    ],
+    "receiptIds": ["hqcVDZOlRfU", "hqYwB06XYSs"],
     "recordedAt": "2026-07-21T21:49:00.880Z"
   },
   "createdAt": "2026-07-21T20:48:18.665Z",

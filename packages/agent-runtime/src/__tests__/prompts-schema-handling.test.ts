@@ -35,7 +35,9 @@ describe('Schema handling error recovery', () => {
   test('security-reviewer exposes its canonical required params before spawn', () => {
     expect(securityReviewer.spawnerPrompt).toContain('`changed_files`')
     expect(securityReviewer.spawnerPrompt).toContain('`snapshot_fingerprint`')
-    expect(securityReviewer.spawnerPrompt).toContain('`snapshot_id` is not accepted')
+    expect(securityReviewer.spawnerPrompt).toContain(
+      '`snapshot_id` is not accepted',
+    )
     expect(securityReviewer.inputSchema?.params).toMatchObject({
       required: ['changed_files', 'snapshot_fingerprint'],
     })
@@ -688,7 +690,8 @@ describe('Schema handling error recovery', () => {
           return false
         }
         return Object.entries(value as Record<string, unknown>).some(
-          ([key, child]) => key === 'description' || containsDescriptionKey(child),
+          ([key, child]) =>
+            key === 'description' || containsDescriptionKey(child),
         )
       }
       const schemaJson = (tool: unknown): unknown =>

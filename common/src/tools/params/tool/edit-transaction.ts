@@ -490,9 +490,11 @@ export const editTransactionResultSchema = z.union([
         id: z.string().optional(),
         path: z.string(),
         errorMessage: z.string(),
-        basedOnRead: basedOnReadSchema.optional().describe(
-          'Ready-to-paste whole-file or recovery capability echoed on residual failures.',
-        ),
+        basedOnRead: basedOnReadSchema
+          .optional()
+          .describe(
+            'Ready-to-paste whole-file or recovery capability echoed on residual failures.',
+          ),
         failureKind: z
           .enum([
             'capability_stale',
@@ -535,9 +537,11 @@ export const editTransactionResultSchema = z.union([
           'change_edit_strategy',
         ]),
         requiresFreshRead: z.boolean(),
-        paths: z.array(z.string()).describe(
-          'All unique transaction paths that must be re-read before rebuilding the whole aborting transaction.',
-        ),
+        paths: z
+          .array(z.string())
+          .describe(
+            'All unique transaction paths that must be re-read before rebuilding the whole aborting transaction.',
+          ),
         failedEditIndex: z.number().int().min(0).optional(),
         failedReplacementIndex: z.number().int().min(0).optional(),
         preferredStrategy: z

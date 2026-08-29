@@ -752,7 +752,9 @@ function assertExtractedRegularFile(extractionDir, filePath) {
   const root = path.resolve(extractionDir)
   const resolved = path.resolve(filePath)
   if (resolved === root || !resolved.startsWith(`${root}${path.sep}`)) {
-    throw new Error(`Release archive entry escapes extraction directory: ${filePath}`)
+    throw new Error(
+      `Release archive entry escapes extraction directory: ${filePath}`,
+    )
   }
 
   let stat
@@ -801,11 +803,7 @@ async function downloadBinary(version, options = {}) {
   try {
     let expectedChecksum
     try {
-      expectedChecksum = await getExpectedChecksum(
-        version,
-        fileName,
-        httpGetFn,
-      )
+      expectedChecksum = await getExpectedChecksum(version, fileName, httpGetFn)
     } catch (error) {
       trackUpdateFailed(error.message, version, { stage: 'checksum_manifest' })
       throw error
@@ -939,7 +937,9 @@ async function downloadBinary(version, options = {}) {
 function printInstallFailureGuidance(resolveProxyUrl, logError) {
   logError('Please check your internet connection and try again')
   if (!resolveProxyUrl()) {
-    logError('If you are behind a proxy, set the HTTPS_PROXY environment variable')
+    logError(
+      'If you are behind a proxy, set the HTTPS_PROXY environment variable',
+    )
   }
 }
 
@@ -990,8 +990,7 @@ async function ensureBinaryExists(options = {}) {
   }
 
   const version =
-    requestedVersion ||
-    (await (options.getLatestVersion || getLatestVersion)())
+    requestedVersion || (await (options.getLatestVersion || getLatestVersion)())
   if (!version) {
     logError('❌ Failed to determine latest version')
     printInstallFailureGuidance(resolveProxyUrl, logError)
@@ -1017,9 +1016,7 @@ async function checkForUpdates(options = {}) {
       options.currentVersion === undefined
         ? getCurrentVersion()
         : options.currentVersion
-    const latestVersion = await (
-      options.getLatestVersion || getLatestVersion
-    )()
+    const latestVersion = await (options.getLatestVersion || getLatestVersion)()
     if (!latestVersion) return
 
     if (

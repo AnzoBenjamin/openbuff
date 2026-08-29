@@ -27,7 +27,13 @@ const getBorderColor = (theme: ChatTheme, tone: HarnessTone): string => {
 }
 
 export const HarnessBox = memo(
-  ({ tone = 'secondary', title, gap = 1, paddingBottom = 1, children }: HarnessBoxProps) => {
+  ({
+    tone = 'secondary',
+    title,
+    gap = 1,
+    paddingBottom = 1,
+    children,
+  }: HarnessBoxProps) => {
     const theme = useTheme()
     const borderColor = getBorderColor(theme, tone)
     return (

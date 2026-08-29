@@ -172,7 +172,11 @@ Again: Do not call any tools or write anything else other than the chosen file p
       for (const part of toolResult ?? []) {
         if (part.type !== 'json') continue
         const value = part.value
-        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        if (
+          typeof value !== 'object' ||
+          value === null ||
+          Array.isArray(value)
+        ) {
           continue
         }
         if (!('results' in value) || !Array.isArray(value.results)) {
@@ -180,7 +184,11 @@ Again: Do not call any tools or write anything else other than the chosen file p
         }
 
         for (const item of value.results) {
-          if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+          if (
+            typeof item !== 'object' ||
+            item === null ||
+            Array.isArray(item)
+          ) {
             continue
           }
           if (
@@ -212,8 +220,7 @@ Again: Do not call any tools or write anything else other than the chosen file p
     }
     const isWithinDirectory = (path: string): boolean =>
       directories.some(
-        (directory) =>
-          path === directory || path.startsWith(`${directory}/`),
+        (directory) => path === directory || path.startsWith(`${directory}/`),
       )
     const rankFilePaths = (paths: string[]): string[] => {
       const keywords = Array.from(

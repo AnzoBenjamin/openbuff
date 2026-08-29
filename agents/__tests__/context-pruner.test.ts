@@ -675,7 +675,9 @@ describe('context-pruner handleSteps', () => {
 
     expect(knowledgeMemory).toContain('src/committed.ts: edit_transaction')
     expect(knowledgeMemory).not.toContain('src/failed.ts: edit_transaction')
-    expect(knowledgeMemory).not.toContain('src/uncommitted.ts: edit_transaction')
+    expect(knowledgeMemory).not.toContain(
+      'src/uncommitted.ts: edit_transaction',
+    )
     expect(knowledgeMemory).not.toContain('src/mismatched.ts: edit_transaction')
   })
 
@@ -735,7 +737,9 @@ describe('context-pruner handleSteps', () => {
       content.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
       ''
 
-    expect(knowledgeMemory).not.toContain('src/adversarial.ts: edit_transaction')
+    expect(knowledgeMemory).not.toContain(
+      'src/adversarial.ts: edit_transaction',
+    )
   })
 
   test('persists edits from a standalone canonical commit receipt', () => {
@@ -764,7 +768,9 @@ describe('context-pruner handleSteps', () => {
     }
     const messages = [
       createMessage('user', 'Apply the edit'),
-      createToolCallMessage('call-standalone', 'edit_transaction', { edits: [] }),
+      createToolCallMessage('call-standalone', 'edit_transaction', {
+        edits: [],
+      }),
       createToolResultMessage('call-standalone', 'edit_transaction', receipt),
     ]
 
@@ -821,12 +827,10 @@ describe('context-pruner handleSteps', () => {
     const malformedToken = 'cap.v3.malformed-token'
     const mismatchedHashToken = 'cap.v3.mismatched-hash-token'
     const unmatchedToken = 'cap.v3.unmatched-token'
-    const unmatched = makeResult(
-      'unmatched',
-      'applied',
-      'applied',
-      { ...validAnchor, readCapability: unmatchedToken },
-    )
+    const unmatched = makeResult('unmatched', 'applied', 'applied', {
+      ...validAnchor,
+      readCapability: unmatchedToken,
+    })
     unmatched.authorityReceipt.operationId = 'different-operation'
 
     const calls: Array<[string, any]> = [
@@ -1862,8 +1866,7 @@ describe('context-pruner handleSteps', () => {
   })
 
   test('preserves successful read_files windows as Files Inspected after compaction', () => {
-    const inspectedPath =
-      'packages/agent-runtime/src/tools/tool-executor.ts'
+    const inspectedPath = 'packages/agent-runtime/src/tools/tool-executor.ts'
     const firstMessages = [
       createMessage('user', 'Inspect the tool executor via read_files windows'),
       createToolCallMessage('call-rb', 'read_files', {
@@ -1889,8 +1892,9 @@ describe('context-pruner handleSteps', () => {
     })
     const firstContent = firstResults[0].input.messages[0].content[0].text
     const firstKnowledgeMemory =
-      firstContent.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
-      ''
+      firstContent.match(
+        /<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/,
+      )?.[1] ?? ''
 
     expect(firstKnowledgeMemory).toContain('Files Inspected:')
     expect(firstKnowledgeMemory).toContain(inspectedPath)
@@ -1906,8 +1910,9 @@ describe('context-pruner handleSteps', () => {
     )
     const secondContent = secondResults[0].input.messages[0].content[0].text
     const secondKnowledgeMemory =
-      secondContent.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
-      ''
+      secondContent.match(
+        /<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/,
+      )?.[1] ?? ''
 
     expect(secondKnowledgeMemory).toContain(inspectedPath)
     expect(secondContent.match(/<knowledge_memory>/g)).toHaveLength(1)
@@ -2401,10 +2406,8 @@ describe('context-pruner spawn_agents with prompt and params', () => {
   test('keeps discovery-linked user constraint causally prior to file-picker facts when the live prompt is ephemeral', () => {
     const constraint =
       'CONSTRAINT_CONTEXT_RECALL: preserve semantic compaction before mechanical trimming.'
-    const discoveredPath =
-      'packages/agent-runtime/src/run-agent-step.ts'
-    const implementRequest =
-      `Implement the context lifecycle fix. ${constraint}`
+    const discoveredPath = 'packages/agent-runtime/src/run-agent-step.ts'
+    const implementRequest = `Implement the context lifecycle fix. ${constraint}`
     const livePrompt: Message = {
       ...createMessage('user', 'Say "DONE" and nothing else.'),
       tags: ['USER_PROMPT'],
@@ -2454,10 +2457,8 @@ describe('context-pruner spawn_agents with prompt and params', () => {
   test('keeps discovery-linked constraint prior to file-picker facts when the live prompt is an SDK-wrapped ephemeral+params blob', () => {
     const constraint =
       'CONSTRAINT_CONTEXT_RECALL: preserve semantic compaction before mechanical trimming.'
-    const discoveredPath =
-      'packages/agent-runtime/src/run-agent-step.ts'
-    const implementRequest =
-      `Implement the context lifecycle fix. ${constraint}`
+    const discoveredPath = 'packages/agent-runtime/src/run-agent-step.ts'
+    const implementRequest = `Implement the context lifecycle fix. ${constraint}`
     const livePrompt: Message = {
       ...createMessage(
         'user',
@@ -3734,9 +3735,9 @@ describe('context-pruner threshold behavior', () => {
         },
       ]),
     ])
-    const firstMemory = (firstSummary.content[0] as { text: string }).text.match(
-      /<knowledge_memory>[\s\S]*?<\/knowledge_memory>/,
-    )?.[0]
+    const firstMemory = (
+      firstSummary.content[0] as { text: string }
+    ).text.match(/<knowledge_memory>[\s\S]*?<\/knowledge_memory>/)?.[0]
     expect(firstMemory).toContain(blocker)
     expect(firstMemory).toContain(unrelatedBlocker)
 
@@ -3752,9 +3753,9 @@ describe('context-pruner threshold behavior', () => {
         findings: [],
       }),
     ])
-    const secondMemory = (secondSummary.content[0] as { text: string }).text.match(
-      /<knowledge_memory>[\s\S]*?<\/knowledge_memory>/,
-    )?.[0]
+    const secondMemory = (
+      secondSummary.content[0] as { text: string }
+    ).text.match(/<knowledge_memory>[\s\S]*?<\/knowledge_memory>/)?.[0]
     expect(secondMemory).not.toContain(blocker)
     expect(secondMemory).toContain(unrelatedBlocker)
     expect(secondMemory).toContain(
@@ -3768,9 +3769,9 @@ describe('context-pruner threshold behavior', () => {
       secondSummary,
       createMessage('assistant', 'Continue after reviewer clearance.'),
     ])
-    const thirdMemory = (thirdSummary.content[0] as { text: string }).text.match(
-      /<knowledge_memory>[\s\S]*?<\/knowledge_memory>/,
-    )?.[0]
+    const thirdMemory = (
+      thirdSummary.content[0] as { text: string }
+    ).text.match(/<knowledge_memory>[\s\S]*?<\/knowledge_memory>/)?.[0]
     expect(thirdMemory).not.toContain(blocker)
     expect(thirdMemory).toContain(unrelatedBlocker)
     expect(thirdMemory).toContain(

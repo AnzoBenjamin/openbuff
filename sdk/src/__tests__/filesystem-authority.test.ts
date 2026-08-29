@@ -261,9 +261,7 @@ describe('FilesystemAuthority capabilities, snapshots, and receipts', () => {
         conditionalMove: async () => ({ applied: true }),
       },
     })
-    expect(detectFilesystemCapabilities(cooperativeFs).tier).toBe(
-      'cooperative',
-    )
+    expect(detectFilesystemCapabilities(cooperativeFs).tier).toBe('cooperative')
 
     const undeclaredFs = makeFileSystem({
       capabilities: {

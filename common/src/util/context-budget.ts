@@ -49,18 +49,14 @@ export function formatLedgerForCli(ledger: ContextBudgetLedger): string {
   for (const category of categories) {
     const tokens = sanitizeLedgerNumber(byCategory[category])
     const percent =
-      windowTokens > 0
-        ? ((tokens / windowTokens) * 100).toFixed(1)
-        : '0.0'
+      windowTokens > 0 ? ((tokens / windowTokens) * 100).toFixed(1) : '0.0'
     lines.push(
       `${category.padEnd(labelWidth)}  ${String(tokens).padStart(tokenWidth)}  ${percent.padStart(5)}%`,
     )
   }
 
   const totalPercent =
-    windowTokens > 0
-      ? ((totalTokens / windowTokens) * 100).toFixed(1)
-      : '0.0'
+    windowTokens > 0 ? ((totalTokens / windowTokens) * 100).toFixed(1) : '0.0'
   lines.push(
     `${'total'.padEnd(labelWidth)}  ${String(totalTokens).padStart(tokenWidth)}  ${totalPercent.padStart(5)}%`,
   )

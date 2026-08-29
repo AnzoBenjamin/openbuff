@@ -654,11 +654,9 @@ export const handleStrReplace = (async (
       firstResult.value &&
       typeof firstResult.value === 'object'
     ) {
-      ;(firstResult.value as Record<string, unknown>).errorCode =
-        maybeErrorCode
+      ;(firstResult.value as Record<string, unknown>).errorCode = maybeErrorCode
       if (maybeRecovery !== undefined) {
-        ;(firstResult.value as Record<string, unknown>).recovery =
-          maybeRecovery
+        ;(firstResult.value as Record<string, unknown>).recovery = maybeRecovery
       }
     }
   }

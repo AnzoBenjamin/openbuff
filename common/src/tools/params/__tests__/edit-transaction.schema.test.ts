@@ -165,9 +165,7 @@ describe('editTransactionParams inputSchema transform — whole-file readCapabil
     ).toBe(true)
     expect(
       editTransactionParams.inputSchema.safeParse(
-        replacement(
-          'cap.v2.1.4.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-        ),
+        replacement('cap.v2.1.4.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'),
       ).success,
     ).toBe(false)
     expect(
@@ -188,9 +186,7 @@ describe('editTransactionParams inputSchema transform — whole-file readCapabil
           {
             type: 'str_replace' as const,
             path,
-            replacements: [
-              { [oldKey]: 'line 1', [newKey]: 'updated line 1' },
-            ],
+            replacements: [{ [oldKey]: 'line 1', [newKey]: 'updated line 1' }],
           },
         ],
       }
@@ -206,9 +202,9 @@ describe('editTransactionParams inputSchema transform — whole-file readCapabil
           },
         ])
       }
-      expect(editTransactionParams.providerInputSchema.safeParse(input).success).toBe(
-        false,
-      )
+      expect(
+        editTransactionParams.providerInputSchema.safeParse(input).success,
+      ).toBe(false)
     }
   })
 
@@ -229,7 +225,9 @@ describe('editTransactionParams inputSchema transform — whole-file readCapabil
       ],
     }
 
-    expect(editTransactionParams.inputSchema.safeParse(input).success).toBe(false)
+    expect(editTransactionParams.inputSchema.safeParse(input).success).toBe(
+      false,
+    )
   })
 
   it('rejects redundant authority fields on str_replace replacements at both schema boundaries', () => {
@@ -252,11 +250,12 @@ describe('editTransactionParams inputSchema transform — whole-file readCapabil
       { readCapability: wholeFileCap },
       { wholeFileCapabilityHash: wholeFileHash },
     ]) {
-      expect(editTransactionParams.inputSchema.safeParse(input(extra)).success).toBe(
-        false,
-      )
       expect(
-        editTransactionParams.providerInputSchema.safeParse(input(extra)).success,
+        editTransactionParams.inputSchema.safeParse(input(extra)).success,
+      ).toBe(false)
+      expect(
+        editTransactionParams.providerInputSchema.safeParse(input(extra))
+          .success,
       ).toBe(false)
     }
   })

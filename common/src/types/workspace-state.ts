@@ -34,7 +34,9 @@ function stableHash(text: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
-export function createInitialWorkspaceState(now = Date.now()): WorkspaceStateV1 {
+export function createInitialWorkspaceState(
+  now = Date.now(),
+): WorkspaceStateV1 {
   return {
     schemaVersion: 1,
     revision: 0,

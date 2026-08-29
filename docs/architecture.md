@@ -237,7 +237,7 @@ are code-default (no config fields); the high-level wiring is:
   compacted to an "unchanged" note instead of re-sending the full
   status/diff/branch payload.
 - **M4 progressive prompt disclosure.** `createBase2({
-  progressivePromptDisclosure })` (default on) replaces verbose advisory
+progressivePromptDisclosure })` (default on) replaces verbose advisory
   prompt sections with `read_files` pointers to `agents/guides/*.md`. It is
   option-only — no environment variable participates — so an explicit
   `progressivePromptDisclosure: false` is the only opt-out.

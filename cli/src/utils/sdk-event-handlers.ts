@@ -335,13 +335,18 @@ const handleSpawnAgentsToolCall = (
   state: EventHandlerState,
   event: PrintModeToolCall,
 ) => {
-  const agents: unknown[] = Array.isArray((event.input as { agents?: unknown })?.agents)
+  const agents: unknown[] = Array.isArray(
+    (event.input as { agents?: unknown })?.agents,
+  )
     ? (event.input as { agents: unknown[] }).agents
     : []
 
   agents.forEach((agent: unknown, index: number) => {
     const tempAgentId = `${event.toolCallId}-${index}`
-    const agentType = isRecord(agent) && typeof agent.agent_type === 'string' ? agent.agent_type : 'unknown'
+    const agentType =
+      isRecord(agent) && typeof agent.agent_type === 'string'
+        ? agent.agent_type
+        : 'unknown'
     state.streaming.streamRefs.setters.setSpawnAgentInfo(tempAgentId, {
       index,
       agentType,
@@ -355,16 +360,26 @@ const handleSpawnAgentsToolCall = (
       : undefined
 
     const newAgentBlocks: ContentBlock[] = agents
-      .map((agent: unknown, originalIndex: number) => ({ agent, originalIndex }))
+      .map((agent: unknown, originalIndex: number) => ({
+        agent,
+        originalIndex,
+      }))
       .filter(({ agent }) => {
-        const agentType = isRecord(agent) && typeof agent.agent_type === 'string' ? agent.agent_type : ''
+        const agentType =
+          isRecord(agent) && typeof agent.agent_type === 'string'
+            ? agent.agent_type
+            : ''
         return !shouldHideAgent(agentType)
       })
       .map(({ agent, originalIndex }) => {
         const record = isRecord(agent) ? agent : {}
-        const agentType = typeof record.agent_type === 'string' ? record.agent_type : ''
-        const prompt = typeof record.prompt === 'string' ? record.prompt : undefined
-        const params = isRecord(record.params) ? (record.params as Record<string, unknown>) : undefined
+        const agentType =
+          typeof record.agent_type === 'string' ? record.agent_type : ''
+        const prompt =
+          typeof record.prompt === 'string' ? record.prompt : undefined
+        const params = isRecord(record.params)
+          ? (record.params as Record<string, unknown>)
+          : undefined
         return createAgentBlock({
           agentId: `${event.toolCallId}-${originalIndex}`,
           agentType,
@@ -471,7 +486,9 @@ const handleToolStart = (
         // Avoid creating a new agent block ref when nothing changed (shallow reference check to avoid node:util and O(N^2)).
         if (
           updatedBlocks.length === block.blocks.length &&
-          updatedBlocks.every((updated, index) => updated === block.blocks![index])
+          updatedBlocks.every(
+            (updated, index) => updated === block.blocks![index],
+          )
         ) {
           return block
         }
@@ -489,7 +506,9 @@ const handleToolStart = (
  * this id so out-of-order subagent_start blocks can still receive final output.
  */
 const getSpawnResultAgentId = (result: unknown): string | undefined =>
-  isRecord(result) && typeof result.agentId === 'string' && result.agentId.trim()
+  isRecord(result) &&
+  typeof result.agentId === 'string' &&
+  result.agentId.trim()
     ? result.agentId
     : undefined
 
@@ -685,7 +704,12 @@ const handleSpawnAgentsResult = (
   )
 
   results.forEach((result: unknown, index: number) => {
-    if (isRecord(result) && isRecord(result.value) && result.value.background === true) return
+    if (
+      isRecord(result) &&
+      isRecord(result.value) &&
+      result.value.background === true
+    )
+      return
     const agentId = `${toolCallId}-${index}`
     updateStreamingAgents(state, { remove: agentId })
   })
@@ -729,8 +753,8 @@ const updateBackgroundAgentCard = (
         (value.result as { agentReceipt?: unknown }).agentReceipt &&
         typeof (value.result as { agentReceipt?: unknown }).agentReceipt ===
           'object'
-          ? ((value.result as { agentReceipt: { status?: unknown } })
-              .agentReceipt)
+          ? (value.result as { agentReceipt: { status?: unknown } })
+              .agentReceipt
           : undefined
       const receiptStatus =
         resultReceipt && typeof resultReceipt.status === 'string'
@@ -824,7 +848,10 @@ const handleToolResult = (
   state: EventHandlerState,
   event: PrintModeToolResult,
 ) => {
-  const askUserResult = event.output?.[0]?.type === 'json' ? (event.output[0] as { type: 'json'; value: unknown }).value : undefined
+  const askUserResult =
+    event.output?.[0]?.type === 'json'
+      ? (event.output[0] as { type: 'json'; value: unknown }).value
+      : undefined
   state.message.updater.updateAiMessageBlocks((blocks) =>
     transformAskUserBlocks(blocks, {
       toolCallId: event.toolCallId,
@@ -833,10 +860,15 @@ const handleToolResult = (
   )
 
   const firstOutput = event.output?.[0]
-  const firstOutputValue = firstOutput?.type === 'json' ? firstOutput.value : undefined
+  const firstOutputValue =
+    firstOutput?.type === 'json' ? firstOutput.value : undefined
   const isSpawnAgentsResult =
     Array.isArray(firstOutputValue) &&
-    firstOutputValue.some((v: unknown) => isRecord(v) && (typeof v.agentName === 'string' || typeof v.agentType === 'string'))
+    firstOutputValue.some(
+      (v: unknown) =>
+        isRecord(v) &&
+        (typeof v.agentName === 'string' || typeof v.agentType === 'string'),
+    )
 
   if (isSpawnAgentsResult && Array.isArray(firstOutputValue)) {
     handleSpawnAgentsResult(state, event.toolCallId, firstOutputValue)
@@ -937,7 +969,7 @@ const trimTextBlocksToCap = (
 ): ContentBlock[] => {
   const totalTextLen = blocks
     .filter((b) => b.type === 'text')
-    .reduce((sum, b) => sum + (((b as TextContentBlock).content?.length) ?? 0), 0)
+    .reduce((sum, b) => sum + ((b as TextContentBlock).content?.length ?? 0), 0)
   if (totalTextLen <= cap) return blocks
   let remaining = cap
   const trimmed: ContentBlock[] = []
@@ -1186,7 +1218,9 @@ const handleJobUpdate = (
     return block
   }
 
-  state.message.updater.updateAiMessageBlocks((blocks) => blocks.map(updateBlock))
+  state.message.updater.updateAiMessageBlocks((blocks) =>
+    blocks.map(updateBlock),
+  )
 }
 
 const handlePhase = (state: EventHandlerState, event: PrintModePhase) => {

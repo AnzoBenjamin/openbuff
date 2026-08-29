@@ -105,56 +105,56 @@ function confirmedMutationOutput(
         }
       }
   )
-  const actions: SyntheticAction[] = changes.map((change: any, index: number) => {
-    const action =
-      change.type === 'delete' || change.type === 'move'
-        ? change.type
-        : change.expectedHash === null
-          ? 'create'
-          : 'update'
-    const finalPath = change.destinationPath ?? change.path
-    const finalContent =
-      action === 'delete' ? undefined : expectedContentByPath[finalPath]
-    if (action !== 'delete' && finalContent === undefined) {
-      throw new Error(`Missing expected post-edit content for ${finalPath}`)
-    }
-    const endLine = finalContent
-      ?.replace(/\r\n?/g, '\n')
-      .split('\n').length
-    const editAnchor =
-      finalContent === undefined
-        ? undefined
-        : {
-            startLine: 1,
-            endLine: endLine!,
-            contentHash: getContentHash(finalContent),
-            readCapability: encodeReadCapabilityToken({
+  const actions: SyntheticAction[] = changes.map(
+    (change: any, index: number) => {
+      const action =
+        change.type === 'delete' || change.type === 'move'
+          ? change.type
+          : change.expectedHash === null
+            ? 'create'
+            : 'update'
+      const finalPath = change.destinationPath ?? change.path
+      const finalContent =
+        action === 'delete' ? undefined : expectedContentByPath[finalPath]
+      if (action !== 'delete' && finalContent === undefined) {
+        throw new Error(`Missing expected post-edit content for ${finalPath}`)
+      }
+      const endLine = finalContent?.replace(/\r\n?/g, '\n').split('\n').length
+      const editAnchor =
+        finalContent === undefined
+          ? undefined
+          : {
               startLine: 1,
               endLine: endLine!,
-              hash: getContentHash(finalContent),
-              scope: {
-                projectId: scope.projectId,
-                path: finalPath,
-                runId: scope.runId,
-              },
-            }),
-          }
-    return {
-      actionId: `${operationId}:${index}`,
-      index,
-      action,
-      path: change.path,
-      ...(change.destinationPath
-        ? { destinationPath: change.destinationPath }
-        : {}),
-      beforeHash: change.expectedHash ?? null,
-      afterHash:
-        action === 'delete' ? null : getExactContentHash(finalContent!),
-      ...(finalContent === undefined
-        ? {}
-        : { afterContent: finalContent, editAnchor }),
-    } as SyntheticAction
-  })
+              contentHash: getContentHash(finalContent),
+              readCapability: encodeReadCapabilityToken({
+                startLine: 1,
+                endLine: endLine!,
+                hash: getContentHash(finalContent),
+                scope: {
+                  projectId: scope.projectId,
+                  path: finalPath,
+                  runId: scope.runId,
+                },
+              }),
+            }
+      return {
+        actionId: `${operationId}:${index}`,
+        index,
+        action,
+        path: change.path,
+        ...(change.destinationPath
+          ? { destinationPath: change.destinationPath }
+          : {}),
+        beforeHash: change.expectedHash ?? null,
+        afterHash:
+          action === 'delete' ? null : getExactContentHash(finalContent!),
+        ...(finalContent === undefined
+          ? {}
+          : { afterContent: finalContent, editAnchor }),
+      } as SyntheticAction
+    },
+  )
   const receipt = {
     kind: 'commit_receipt' as const,
     version: 1 as const,

@@ -28,7 +28,9 @@ export function makeLargeContent(prefix: string, size: number): string {
   return prefix + WORD_FILLER.repeat(repeats).slice(0, size - prefix.length)
 }
 
-export function isTextPart(part: unknown): part is { type: 'text'; text: string } {
+export function isTextPart(
+  part: unknown,
+): part is { type: 'text'; text: string } {
   return (
     typeof part === 'object' &&
     part !== null &&
@@ -88,11 +90,7 @@ function buildMockAgentTemplate(params: {
   }
 }
 
-const MOCK_TOOL_NAMES = [
-  'get_weather',
-  'execute_sql',
-  'fetch_api',
-] as const
+const MOCK_TOOL_NAMES = ['get_weather', 'execute_sql', 'fetch_api'] as const
 type MockToolName = (typeof MOCK_TOOL_NAMES)[number]
 
 function getMessageText(message: Message): string {
@@ -477,11 +475,15 @@ async function promptAiSdkStructuredMock<T>(
   // Previously this parsed {} and ignored input; now we synthesize candidate values from
   // the prompt/file context and the schema shape, then return the first that validates.
   const allText = getAllText(params.messages as unknown as Message[])
-  const latestUserText = getLatestUserText(params.messages as unknown as Message[])
+  const latestUserText = getLatestUserText(
+    params.messages as unknown as Message[],
+  )
   const promptText = getPromptText(latestUserText, allText)
 
   const fileRegex = /\b([\w][\w./-]*\.(?:ts|tsx|js|jsx|json|md))\b/g
-  const promptFiles = [...new Set([...allText.matchAll(fileRegex)].map((m) => m[1]))]
+  const promptFiles = [
+    ...new Set([...allText.matchAll(fileRegex)].map((m) => m[1])),
+  ]
     .filter((f) => f.length < 80 && !f.includes('node_modules'))
     .slice(0, 5)
 
@@ -523,26 +525,32 @@ async function promptAiSdkStructuredMock<T>(
       const vals = def.values ?? Object.values(def.entries ?? {})
       return vals[0]
     }
-    if (typeName === 'ZodLiteral') return def?.value ?? def?.values?.[0] ?? 'mock'
+    if (typeName === 'ZodLiteral')
+      return def?.value ?? def?.values?.[0] ?? 'mock'
     if (typeName === 'ZodArray' && (def?.element ?? def?.type)) {
       const el = def.element ?? def.type
       // Use at least 2 elements to satisfy non-empty and minLength constraints; respect explicit minLength if present
       const explicitMin =
         (def as { minLength?: { value?: number } })?.minLength?.value ??
-        (def as { checks?: Array<{ kind?: string; value?: number }> })?.checks?.find(
-          (c) => c.kind === 'min',
-        )?.value
+        (
+          def as { checks?: Array<{ kind?: string; value?: number }> }
+        )?.checks?.find((c) => c.kind === 'min')?.value
       const count = Math.min(3, Math.max(2, explicitMin ?? 2))
       return Array.from({ length: count }, () => synthesizeFromSchema(el, hint))
     }
     if (typeName === 'ZodObject' && def?.shape) {
       const shape = typeof def.shape === 'function' ? def.shape() : def.shape
       const obj: Record<string, unknown> = {}
-      for (const [key, subSchema] of Object.entries(shape as Record<string, unknown>)) {
-        const keyHint = key.toLowerCase().includes('path') && promptFiles.length > 0 ? promptFiles[0]
-          : key.toLowerCase().includes('summary') || key.toLowerCase().includes('description')
-            ? `mock ${key} for ${promptText.slice(0, 40)}`
-            : hint
+      for (const [key, subSchema] of Object.entries(
+        shape as Record<string, unknown>,
+      )) {
+        const keyHint =
+          key.toLowerCase().includes('path') && promptFiles.length > 0
+            ? promptFiles[0]
+            : key.toLowerCase().includes('summary') ||
+                key.toLowerCase().includes('description')
+              ? `mock ${key} for ${promptText.slice(0, 40)}`
+              : hint
         obj[key] = synthesizeFromSchema(subSchema, keyHint as string)
       }
       return obj
@@ -556,7 +564,8 @@ async function promptAiSdkStructuredMock<T>(
           promptFiles.length >= 2
             ? promptFiles.slice(0, 2).map((f) => f.split('/').pop() ?? f)
             : []
-        const keys = derivedKeys.length >= 2 ? derivedKeys : ['file.ts', 'file2.ts']
+        const keys =
+          derivedKeys.length >= 2 ? derivedKeys : ['file.ts', 'file2.ts']
         const obj: Record<string, unknown> = {}
         for (const k of keys.slice(0, 2)) {
           obj[k] = synthesizeFromSchema(valType, hint)
@@ -590,7 +599,12 @@ async function promptAiSdkStructuredMock<T>(
   // Fallback: try with file-aware object for common file-list schemas
   if (promptFiles.length > 0) {
     const fileCandidates = [
-      { files: promptFiles.map((p) => ({ path: p, summary: `relevant to ${promptText.slice(0, 40)}` })) },
+      {
+        files: promptFiles.map((p) => ({
+          path: p,
+          summary: `relevant to ${promptText.slice(0, 40)}`,
+        })),
+      },
       { files: promptFiles },
       { path: promptFiles[0] },
     ]
@@ -605,7 +619,9 @@ async function promptAiSdkStructuredMock<T>(
   parsed = params.schema.safeParse({})
   if (params.onCostCalculated) await params.onCostCalculated(0)
   if (parsed.success) return parsed.data
-  const details = !parsed.success ? JSON.stringify(parsed.error.issues ?? parsed.error)?.slice(0, 500) : ''
+  const details = !parsed.success
+    ? JSON.stringify(parsed.error.issues ?? parsed.error)?.slice(0, 500)
+    : ''
   throw new Error(
     `promptAiSdkStructuredMock: unable to synthesize valid data for schema (candidate: ${JSON.stringify(candidate)?.slice(0, 500)}; error: ${details})`,
   )
@@ -630,12 +646,12 @@ export function setupE2eMocks(): void {
   spyOn(databaseModule, 'fetchAgentFromDatabase').mockImplementation(
     async ({ parsedAgentId }) => buildMockAgentTemplate(parsedAgentId),
   )
-  spyOn(databaseModule, 'startAgentRun').mockImplementation(
-    async () => nextE2eMockId('mock-run'),
+  spyOn(databaseModule, 'startAgentRun').mockImplementation(async () =>
+    nextE2eMockId('mock-run'),
   )
   spyOn(databaseModule, 'finishAgentRun').mockImplementation(async () => {})
-  spyOn(databaseModule, 'addAgentStep').mockImplementation(
-    async () => nextE2eMockId('mock-step'),
+  spyOn(databaseModule, 'addAgentStep').mockImplementation(async () =>
+    nextE2eMockId('mock-step'),
   )
 
   spyOn(llmModule, 'promptAiSdkStream').mockImplementation(
@@ -657,11 +673,7 @@ export function setupE2eMocks(): void {
         anthropic: {
           type: 'anthropic-compatible',
           baseURL: 'https://api.anthropic.com',
-          models: [
-            'claude-haiku-4.5',
-            'claude-sonnet-4-5',
-            'claude-opus-4-5',
-          ],
+          models: ['claude-haiku-4.5', 'claude-sonnet-4-5', 'claude-opus-4-5'],
           compatibility: {
             stripCacheControl: false,
             stringifyTextContent: false,
@@ -703,23 +715,19 @@ export function setupE2eMocks(): void {
     sourceFilePaths: ['mock-e2e-provider-config'],
     sourceFiles: {},
     diagnostics: [],
-  } as unknown as ReturnType<
-    typeof providerConfigModule.loadProviderConfigSync
-  >
+  } as unknown as ReturnType<typeof providerConfigModule.loadProviderConfigSync>
   spyOn(providerConfigModule, 'loadProviderConfigSync').mockImplementation(
     () => mockLoadedConfig,
   )
-  spyOn(
-    modelProviderModule,
-    'resolveModelContextWindow',
-  ).mockImplementation(() => 200_000)
-  spyOn(
-    modelProviderModule,
-    'resolveModelContextWindows',
-  ).mockImplementation(() => ({
-    primary: 200_000,
-    failoverFloor: 200_000,
-  }))
+  spyOn(modelProviderModule, 'resolveModelContextWindow').mockImplementation(
+    () => 200_000,
+  )
+  spyOn(modelProviderModule, 'resolveModelContextWindows').mockImplementation(
+    () => ({
+      primary: 200_000,
+      failoverFloor: 200_000,
+    }),
+  )
 
   // OpenbuffClient.checkConnection() was removed when the hosted-backend
   // connection-poll path was pruned (local/BYOK mode is always connected).

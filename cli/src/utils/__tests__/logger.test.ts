@@ -158,7 +158,9 @@ describe('rotateLogIfNeeded', () => {
       expect(liveIno).not.toBe(originalIno)
     }
     expect(fs.statSync(`${livePath}.1`).ino).toBe(originalIno)
-    expect(fs.readFileSync(`${livePath}.1`, 'utf8')).toContain('pre-rotate-live')
+    expect(fs.readFileSync(`${livePath}.1`, 'utf8')).toContain(
+      'pre-rotate-live',
+    )
   })
 
   test('prod sequence closes the live dest before rotate so rename does not need unlink-of-open-fd', () => {
@@ -178,7 +180,9 @@ describe('rotateLogIfNeeded', () => {
     expect(() => rotateLogIfNeeded(livePath)).not.toThrow()
     expect(fs.existsSync(livePath)).toBe(false)
     expect(fs.existsSync(`${livePath}.1`)).toBe(true)
-    expect(fs.readFileSync(`${livePath}.1`, 'utf8')).toContain('pre-rotate-live')
+    expect(fs.readFileSync(`${livePath}.1`, 'utf8')).toContain(
+      'pre-rotate-live',
+    )
     if (originalIno !== 0) {
       expect(fs.statSync(`${livePath}.1`).ino).toBe(originalIno)
     }
@@ -239,7 +243,9 @@ describe('rotateLogIfNeeded', () => {
     expect(typeof getLivePinoDestinationFd()).toBe('number')
 
     expect(fs.existsSync(`${debugLog}.1`)).toBe(true)
-    expect(fs.readFileSync(`${debugLog}.1`, 'utf8')).toContain('pre-rotate-debug')
+    expect(fs.readFileSync(`${debugLog}.1`, 'utf8')).toContain(
+      'pre-rotate-debug',
+    )
     expect(fs.existsSync(debugLog)).toBe(true)
     expect(fs.statSync(debugLog).size).toBeLessThan(LOG_MAX_BYTES)
     fs.appendFileSync(debugLog, 'post-rotate-debug\n')

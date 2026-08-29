@@ -114,7 +114,10 @@ describe('pruner-budgets freshness', () => {
   test('every generated literal equals the canonical agent-runtime constant', () => {
     const region = requireRegion(prunerSource())
     const expected: Array<[string, number]> = [
-      ['DEFAULT_MAX_CONTEXT_LENGTH', DEFAULT_SEMANTIC_COMPACTION_TRIGGER_TOKENS],
+      [
+        'DEFAULT_MAX_CONTEXT_LENGTH',
+        DEFAULT_SEMANTIC_COMPACTION_TRIGGER_TOKENS,
+      ],
       [
         'DEFAULT_TARGET_CONTEXT_LENGTH',
         DEFAULT_SEMANTIC_COMPACTION_TARGET_TOKENS,
@@ -192,8 +195,7 @@ describe('pruner-budgets derivation & splice', () => {
   })
 
   test('regionIsFresh reflects region staleness and marker presence', () => {
-    const template =
-      `prefix-line\n${OPEN_MARKER}\nOLD\n${CLOSE_MARKER}\nsuffix-line`
+    const template = `prefix-line\n${OPEN_MARKER}\nOLD\n${CLOSE_MARKER}\nsuffix-line`
     const freshBlock = `${OPEN_MARKER}\n    const FRESH = 1\n${CLOSE_MARKER}`
 
     const freshText = spliceRegion(template, freshBlock)
@@ -229,9 +231,9 @@ describe('pruner-budgets derivation & splice', () => {
   })
 
   test('derivePrunerLocalName maps canonical names to pruner-local names', () => {
-    expect(
-      derivePrunerLocalName('MODEL_CONTEXT_MIN_RESERVED_TOKENS'),
-    ).toBe('MODEL_CONTEXT_MIN_RESERVED_TOKENS')
+    expect(derivePrunerLocalName('MODEL_CONTEXT_MIN_RESERVED_TOKENS')).toBe(
+      'MODEL_CONTEXT_MIN_RESERVED_TOKENS',
+    )
     expect(derivePrunerLocalName('SEMANTIC_COMPACTION_TARGET_FRACTION')).toBe(
       'SEMANTIC_TARGET_FRACTION',
     )
@@ -263,7 +265,10 @@ describe('pruner-budgets derivation & splice', () => {
       mirrors.find(
         ([canonical]) => canonical === 'SEMANTIC_COMPACTION_TRIGGER_FRACTION',
       ),
-    ).toEqual(['SEMANTIC_COMPACTION_TRIGGER_FRACTION', 'SEMANTIC_TRIGGER_FRACTION'])
+    ).toEqual([
+      'SEMANTIC_COMPACTION_TRIGGER_FRACTION',
+      'SEMANTIC_TRIGGER_FRACTION',
+    ])
     // DEFAULT_TRIGGER maps to DEFAULT_MAX_CONTEXT_LENGTH.
     expect(
       mirrors.find(

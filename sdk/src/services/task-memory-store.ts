@@ -229,7 +229,10 @@ async function hashFile(
   }
 }
 
-function isPathInsideRootLexical(rootDir: string, candidatePath: string): boolean {
+function isPathInsideRootLexical(
+  rootDir: string,
+  candidatePath: string,
+): boolean {
   const root = path.resolve(rootDir)
   const resolved = path.resolve(candidatePath)
   if (resolved === root) return true
@@ -261,10 +264,7 @@ async function isPathInsideRoot(
   fs: TaskMemoryStoreFs,
 ): Promise<boolean> {
   if (!isPathInsideRootLexical(rootDir, candidatePath)) return false
-  if (
-    typeof fs.lstat !== 'function' ||
-    typeof fs.realpath !== 'function'
-  ) {
+  if (typeof fs.lstat !== 'function' || typeof fs.realpath !== 'function') {
     return true
   }
   try {
@@ -434,7 +434,8 @@ async function commitMergedTaskMemory(params: {
     fs,
   })
   const basePrior =
-    persisted !== undefined && persisted.revision > (priorMemory?.revision ?? -1)
+    persisted !== undefined &&
+    persisted.revision > (priorMemory?.revision ?? -1)
       ? persisted
       : priorMemory
 
@@ -807,7 +808,12 @@ export async function pruneStaleTaskMemoryEvidence(params: {
         checksum,
       })
       if (!parsedRecord.success) {
-        return { status: 'failed', reason: 'invalid-record', removed, remaining }
+        return {
+          status: 'failed',
+          reason: 'invalid-record',
+          removed,
+          remaining,
+        }
       }
 
       const written = await writeRecordAtomically(
@@ -858,7 +864,8 @@ export function codebuffFsToNodePromises(
   const maybeLstat = (codebuffFs as { lstat?: FsModule['stat'] }).lstat
   const lstat: TaskMemoryStoreFs['lstat'] =
     typeof maybeLstat === 'function'
-      ? (p) => (maybeLstat as unknown as (p: string) => Promise<Stats>)(p as string)
+      ? (p) =>
+          (maybeLstat as unknown as (p: string) => Promise<Stats>)(p as string)
       : undefined
   const maybeRealpath = (
     codebuffFs as { realpath?: (p: string) => Promise<string> }

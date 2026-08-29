@@ -1199,7 +1199,10 @@ describe('codeSearch', () => {
 
     it('passes paths file targets to ripgrep instead of the whole tree', async () => {
       fs.mkdirSync(path.join(tmpDir, 'subdir'), { recursive: true })
-      fs.writeFileSync(path.join(tmpDir, 'subdir', 'file.ts'), 'export const x = 1')
+      fs.writeFileSync(
+        path.join(tmpDir, 'subdir', 'file.ts'),
+        'export const x = 1',
+      )
 
       const searchPromise = codeSearch({
         projectPath: tmpDir,
@@ -1207,7 +1210,11 @@ describe('codeSearch', () => {
         paths: ['subdir/file.ts'],
       })
 
-      const output = createRgJsonMatch('subdir/file.ts', 1, 'export const x = 1')
+      const output = createRgJsonMatch(
+        'subdir/file.ts',
+        1,
+        'export const x = 1',
+      )
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -1217,9 +1224,9 @@ describe('codeSearch', () => {
       expect(mockSpawn).toHaveBeenCalled()
       const spawnArgs = mockSpawn.mock.calls[0]![1] as string[]
       const pathArgs = spawnArgs.slice(spawnArgs.indexOf('--') + 2)
-      expect(pathArgs.some((p) => p.replace(/\\/g, '/').endsWith('subdir/file.ts'))).toBe(
-        true,
-      )
+      expect(
+        pathArgs.some((p) => p.replace(/\\/g, '/').endsWith('subdir/file.ts')),
+      ).toBe(true)
       expect(pathArgs).not.toContain('.')
     })
 
@@ -1243,9 +1250,9 @@ describe('codeSearch', () => {
       expect(mockSpawn).toHaveBeenCalled()
       const spawnArgs = mockSpawn.mock.calls[0]![1] as string[]
       const pathArgs = spawnArgs.slice(spawnArgs.indexOf('--') + 2)
-      expect(pathArgs.some((p) => p.replace(/\\/g, '/').endsWith('subdir'))).toBe(
-        true,
-      )
+      expect(
+        pathArgs.some((p) => p.replace(/\\/g, '/').endsWith('subdir')),
+      ).toBe(true)
       expect(pathArgs).not.toContain('.')
     })
 

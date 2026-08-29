@@ -55,7 +55,7 @@ function getCachedHomeDir(): string {
   try {
     cachedHomeDirValue = os.homedir()
   } catch {
-    cachedHomeDirValue = ""
+    cachedHomeDirValue = ''
   }
   return cachedHomeDirValue
 }
@@ -172,7 +172,10 @@ async function main(): Promise<void> {
     const cachedHomeDir = getCachedHomeDir()
     const redactSmokePath = (p: string): string => {
       const home = cachedHomeDir
-      let out = home && p.startsWith(home) ? `~${p.slice(home.length)}` : path.basename(p) || p
+      let out =
+        home && p.startsWith(home)
+          ? `~${p.slice(home.length)}`
+          : path.basename(p) || p
       // Keep only last 80 chars; prevents long user-specific paths leaking in logs.
       if (out.length > 80) out = `…${out.slice(-80)}`
       return out
@@ -268,9 +271,7 @@ async function main(): Promise<void> {
   // is never rejected as an unknown option (the other --smoke-* probes handle
   // their own flags pre-parse and exit; this one must continue to full boot).
   const smokeBootscreen = process.argv.includes('--smoke-bootscreen')
-  const cliArgv = process.argv.filter(
-    (arg) => arg !== '--smoke-bootscreen',
-  )
+  const cliArgv = process.argv.filter((arg) => arg !== '--smoke-bootscreen')
 
   let smokeBootscreenTimer: ReturnType<typeof setTimeout> | null = null
   let smokeBootscreenEmitted = false
@@ -412,7 +413,7 @@ async function main(): Promise<void> {
             pathDepth,
             isHomeDir: (() => {
               const h = getCachedHomeDir()
-              return h !== "" && newProjectPath === h
+              return h !== '' && newProjectPath === h
             })(),
           })
           saveRecentProject(newProjectPath)

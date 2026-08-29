@@ -616,7 +616,9 @@ describe('jobRegistry', () => {
 
       const snap = jobRegistry.snapshot(job.jobId, 0)!
       expect(snap.dropped).toBeGreaterThan(0)
-      expect(snap.events.length).toBeLessThanOrEqual(AGENT_JOB_EVENT_BUFFER_LIMIT)
+      expect(snap.events.length).toBeLessThanOrEqual(
+        AGENT_JOB_EVENT_BUFFER_LIMIT,
+      )
       // Keep the settled-TTL constant referenced so a silent export/rename
       // break is caught alongside the event-buffer default.
       expect(AGENT_JOB_SETTLED_TTL_MS).toBe(30 * 60 * 1000)
@@ -977,7 +979,9 @@ describe('jobRegistry', () => {
       jobRegistry.sweep(FAR_FUTURE)
 
       expect(jobRegistry.get(job.jobId)).toBeUndefined()
-      expect(jobRegistry.list().map((job) => job.jobId)).not.toContain(job.jobId)
+      expect(jobRegistry.list().map((job) => job.jobId)).not.toContain(
+        job.jobId,
+      )
     })
 
     it('drops cancelled jobs past the TTL', () => {
@@ -1026,9 +1030,9 @@ describe('jobRegistry', () => {
 
       jobRegistry.emit(job.jobId, out('late-output'))
 
-      expect(
-        outputData(jobRegistry.snapshot(job.jobId, 0)!.events),
-      ).toContain('late-output')
+      expect(outputData(jobRegistry.snapshot(job.jobId, 0)!.events)).toContain(
+        'late-output',
+      )
     })
 
     it('still buffers agent_chunk events after completion', () => {

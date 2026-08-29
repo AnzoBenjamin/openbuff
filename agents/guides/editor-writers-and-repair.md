@@ -6,23 +6,23 @@ This is the live public contract from the orchestrator gate and agent templates.
 
 ## Roster availability (mode gates)
 
-| Agent | Default implementation | Fast | Plan-only |
-| --- | --- | --- | --- |
-| `editor` | Spawnable | Not spawnable (inline `edit_transaction`) | Not spawnable |
-| `repair-editor` | Spawnable | Not spawnable | Not spawnable |
-| `test-writer` | Spawnable | Spawnable | Not spawnable |
-| `doc-writer` | Spawnable | Spawnable | Not spawnable |
+| Agent           | Default implementation | Fast                                      | Plan-only     |
+| --------------- | ---------------------- | ----------------------------------------- | ------------- |
+| `editor`        | Spawnable              | Not spawnable (inline `edit_transaction`) | Not spawnable |
+| `repair-editor` | Spawnable              | Not spawnable                             | Not spawnable |
+| `test-writer`   | Spawnable              | Spawnable                                 | Not spawnable |
+| `doc-writer`    | Spawnable              | Spawnable                                 | Not spawnable |
 
 Implementation modes that still run the automated validation/reviewer gate use the aux + repair paths below. Fast / no-validation / plan-only skip that automated gate; plan mode remains read-only for mutation agents.
 
 ## Role split
 
-| Agent | Owns | Does not own |
-| --- | --- | --- |
-| `editor` | Non-trivial **implementation** edits after discovery. Self-contained handoff only. Mutates via `edit_transaction`. | Validation, basher, review, git, todos, visual smoke, shell cleanup. Parent-only work stays with the orchestrator. |
-| `repair-editor` | **Finding-scoped** fixes: parseable validation diagnostics or stable reviewer finding IDs. Same edit surface as editor plus `read_subtree` for diagnosis. | Unrelated refactors, docs, feature work, or protocol/attestation failures (snapshot mismatch is not a source repair). |
-| `test-writer` | New/extended tests under existing test paths only (`*.test.*`, `*.spec.*`, `__tests__/`, `test/`, `tests/`). Mutates via `edit_transaction` (use `str_replace` / `create` / `write_file` edit *types* inside the transaction; never as standalone tools). Reports `requestedValidation` for the parent/basher. | Production source (except when a test is unobservable without a minimal source change — still not the default). Running terminals itself. |
-| `doc-writer` | Documentation paths only (`docs/**`, `README*`, `**/*.md`, `**/*.mdx`). Mutates via `edit_transaction` (use `str_replace` / `create` / `write_file` edit *types* inside the transaction; never as standalone tools). Verifies against source; never invents API behavior. | Production source edits. |
+| Agent           | Owns                                                                                                                                                                                                                                                                                                           | Does not own                                                                                                                              |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `editor`        | Non-trivial **implementation** edits after discovery. Self-contained handoff only. Mutates via `edit_transaction`.                                                                                                                                                                                             | Validation, basher, review, git, todos, visual smoke, shell cleanup. Parent-only work stays with the orchestrator.                        |
+| `repair-editor` | **Finding-scoped** fixes: parseable validation diagnostics or stable reviewer finding IDs. Same edit surface as editor plus `read_subtree` for diagnosis.                                                                                                                                                      | Unrelated refactors, docs, feature work, or protocol/attestation failures (snapshot mismatch is not a source repair).                     |
+| `test-writer`   | New/extended tests under existing test paths only (`*.test.*`, `*.spec.*`, `__tests__/`, `test/`, `tests/`). Mutates via `edit_transaction` (use `str_replace` / `create` / `write_file` edit _types_ inside the transaction; never as standalone tools). Reports `requestedValidation` for the parent/basher. | Production source (except when a test is unobservable without a minimal source change — still not the default). Running terminals itself. |
+| `doc-writer`    | Documentation paths only (`docs/**`, `README*`, `**/*.md`, `**/*.mdx`). Mutates via `edit_transaction` (use `str_replace` / `create` / `write_file` edit _types_ inside the transaction; never as standalone tools). Verifies against source; never invents API behavior.                                      | Production source edits.                                                                                                                  |
 
 All four use structured `set_output` receipts. Writers expose `status`, `completionKind` (`changed` \| `noop`), `changedFiles`, and `evidence`. The runtime accepts writer receipts only when status is `completed` and either:
 
@@ -62,12 +62,12 @@ Done-flags (`testWriterGateDone`, `docWriterGateDone`, …) reset only when the 
 
 ### Aux predicate truth table (when each aux gate fires)
 
-| Agent | Fires when (predicate) | Skips when | Example trigger file |
-| --- | --- | --- | --- |
-| `test-writer` | `selectTestWriterTargets` non-empty: non-test source with inferable `test_command` + prompt mentions `test`/`test coverage` | Prompt lacks test intent or no eligible source/command | `packages/<pkg>/src/bar.ts` |
-| `doc-writer` | `selectDocWriterTargets` non-empty: public-API source + prompt mentions `docs`/`documentation`/`readme`/`guide` | Prompt lacks docs intent or no public-API source | `packages/<pkg>/src/index.ts` |
-| `security-reviewer` | `matchesSecuritySensitiveGlob` matches pending path | No security-sensitive pending paths | `src/auth/*` |
-| specialists | `selectSpecialistReviewers` routes ≥1 specialist | No specialist routing match | `apps/web/src/payments/checkout.ts` |
+| Agent               | Fires when (predicate)                                                                                                      | Skips when                                             | Example trigger file                |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ----------------------------------- |
+| `test-writer`       | `selectTestWriterTargets` non-empty: non-test source with inferable `test_command` + prompt mentions `test`/`test coverage` | Prompt lacks test intent or no eligible source/command | `packages/<pkg>/src/bar.ts`         |
+| `doc-writer`        | `selectDocWriterTargets` non-empty: public-API source + prompt mentions `docs`/`documentation`/`readme`/`guide`             | Prompt lacks docs intent or no public-API source       | `packages/<pkg>/src/index.ts`       |
+| `security-reviewer` | `matchesSecuritySensitiveGlob` matches pending path                                                                         | No security-sensitive pending paths                    | `src/auth/*`                        |
+| specialists         | `selectSpecialistReviewers` routes ≥1 specialist                                                                            | No specialist routing match                            | `apps/web/src/payments/checkout.ts` |
 
 ### When automated `test-writer` runs
 
@@ -105,13 +105,13 @@ If docs are not required in the prompt or no public-API sources are pending, the
 
 ## Repair loops (after validation or review)
 
-| Trigger | Repair agent | Parallelism |
-| --- | --- | --- |
-| Parseable file-change hook failures | `repair-editor` with `VF-*` finding IDs | Sequential: hooks → repair → re-hooks |
-| Security-reviewer blockers | `repair-editor` on open security findings | After security aux; then re-validation + fresh security review |
-| Specialist blockers | `repair-editor` per specialist finding set | Specialists may have been batched; repair for a blocking specialist is sequential |
-| Code-reviewer blockers (code) | `repair-editor` | After final review; then hooks + re-review |
-| Code-reviewer blockers (all coverage) | `test-writer` | Same sequential repair → hooks → re-review path |
+| Trigger                               | Repair agent                               | Parallelism                                                                       |
+| ------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------- |
+| Parseable file-change hook failures   | `repair-editor` with `VF-*` finding IDs    | Sequential: hooks → repair → re-hooks                                             |
+| Security-reviewer blockers            | `repair-editor` on open security findings  | After security aux; then re-validation + fresh security review                    |
+| Specialist blockers                   | `repair-editor` per specialist finding set | Specialists may have been batched; repair for a blocking specialist is sequential |
+| Code-reviewer blockers (code)         | `repair-editor`                            | After final review; then hooks + re-review                                        |
+| Code-reviewer blockers (all coverage) | `test-writer`                              | Same sequential repair → hooks → re-review path                                   |
 
 Repair budgets may be unlimited by default or capped via createBase2 / env (`OPENBUFF_MAX_REPAIR_ROUNDS`, `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS`, `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS`). Incomplete receipts, crashes, or **no snapshot-visible progress** fail closed and stop automatic retry.
 
@@ -119,17 +119,17 @@ Repair budgets may be unlimited by default or capped via createBase2 / env (`OPE
 
 **Yes, with hard join rules:**
 
-| Combination | Allowed? | Notes |
-| --- | --- | --- |
-| Context agents (file-picker, code-searcher, researchers) in parallel | Yes | Bounded waves ≤8 per `spawn_agents` call; join before dependent edits. |
-| Multiple bashers for independent validation commands | Yes | Join all results before finalizing. Sequential if command B depends on A. |
+| Combination                                                            | Allowed?                                            | Notes                                                                                                                                                 |
+| ---------------------------------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Context agents (file-picker, code-searcher, researchers) in parallel   | Yes                                                 | Bounded waves ≤8 per `spawn_agents` call; join before dependent edits.                                                                                |
+| Multiple bashers for independent validation commands                   | Yes                                                 | Join all results before finalizing. Sequential if command B depends on A.                                                                             |
 | Static `code-reviewer` / specialists **with** validation still running | Only if review is explicitly validation-independent | Parallel approval is **not** final until validation completes. Prefer validation first for fragile harness/editor work, then review with the summary. |
-| Routed specialists in one `spawn_agents` batch | Yes (runtime-owned) | Gate batches selected specialists; attestation/retry is gate-owned. |
-| Aux `test-writer` then `doc-writer` then security | **No** (by design) | Sequential blocking yields so each sees a stable pending set. |
-| Aux + final `code-reviewer` | **No** (by design) | Final gate after aux; file-change hooks + `code-reviewer` run only after aux/specialists complete. |
-| `editor` and `test-writer` on the same change without a join | **No** | Implementation must land before coverage writers or coverage-repair can target real source. |
-| `editor` and `repair-editor` on the same findings | **No** | Repair owns open gate findings; do not race a second implementation editor over the same IDs. |
-| Root `edit_transaction` while repair-editor runs | Avoid | Fragile debug/fix loops should be read → one edit path → validation, sequential. |
+| Routed specialists in one `spawn_agents` batch                         | Yes (runtime-owned)                                 | Gate batches selected specialists; attestation/retry is gate-owned.                                                                                   |
+| Aux `test-writer` then `doc-writer` then security                      | **No** (by design)                                  | Sequential blocking yields so each sees a stable pending set.                                                                                         |
+| Aux + final `code-reviewer`                                            | **No** (by design)                                  | Final gate after aux; file-change hooks + `code-reviewer` run only after aux/specialists complete.                                                    |
+| `editor` and `test-writer` on the same change without a join           | **No**                                              | Implementation must land before coverage writers or coverage-repair can target real source.                                                           |
+| `editor` and `repair-editor` on the same findings                      | **No**                                              | Repair owns open gate findings; do not race a second implementation editor over the same IDs.                                                         |
+| Root `edit_transaction` while repair-editor runs                       | Avoid                                               | Fragile debug/fix loops should be read → one edit path → validation, sequential.                                                                      |
 
 General rule from the orchestrator: **parallelize context, independent tests, and static review only when they do not depend on each other.** During a fragile repair loop, stay sequential.
 

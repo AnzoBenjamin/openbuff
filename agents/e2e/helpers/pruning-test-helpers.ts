@@ -3,7 +3,11 @@ import { expect } from 'bun:test'
 import type { Message, ToolMessage } from '@openbuff/sdk'
 import type { ToolCallPart } from '@codebuff/common/types/messages/content-part'
 
-export { WORD_FILLER, makeLargeContent, isTextPart } from '../../../sdk/e2e/utils/e2e-mocks'
+export {
+  WORD_FILLER,
+  makeLargeContent,
+  isTextPart,
+} from '../../../sdk/e2e/utils/e2e-mocks'
 
 export function isToolCallPart(part: unknown): part is ToolCallPart {
   return (
@@ -16,8 +20,14 @@ export function isToolCallPart(part: unknown): part is ToolCallPart {
   )
 }
 
-export function isToolMessageWithId(msg: Message): msg is ToolMessage & { toolCallId: string } {
-  return msg.role === 'tool' && 'toolCallId' in msg && typeof msg.toolCallId === 'string'
+export function isToolMessageWithId(
+  msg: Message,
+): msg is ToolMessage & { toolCallId: string } {
+  return (
+    msg.role === 'tool' &&
+    'toolCallId' in msg &&
+    typeof msg.toolCallId === 'string'
+  )
 }
 
 export function verifyToolCallPairIntegrity(messages: Message[]): void {

@@ -12,10 +12,7 @@ import {
 
 import type { BackgroundJobOwner } from './background-jobs'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
-import type {
-  JobEvent,
-  JobState,
-} from '@codebuff/common/util/job-registry'
+import type { JobEvent, JobState } from '@codebuff/common/util/job-registry'
 import { jobRegistry } from '@codebuff/common/util/job-registry'
 
 const CHECK_JOB_OUTPUT_LIMIT = 50_000

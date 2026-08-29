@@ -44,9 +44,9 @@ describe('file-lister agent', () => {
     expect(queryCall.input).toMatchObject({
       pathPrefixes: ['frontend'],
     })
-    expect(
-      (generator.next(nextResult([])).value as ToolCall).toolName,
-    ).toBe('read_subtree')
+    expect((generator.next(nextResult([])).value as ToolCall).toolName).toBe(
+      'read_subtree',
+    )
 
     const result = generator.next(
       nextResult([
@@ -80,9 +80,9 @@ describe('file-lister agent', () => {
     })
 
     expect((generator.next().value as ToolCall).toolName).toBe('query_index')
-    expect(
-      (generator.next(nextResult([])).value as ToolCall).toolName,
-    ).toBe('read_subtree')
+    expect((generator.next(nextResult([])).value as ToolCall).toolName).toBe(
+      'read_subtree',
+    )
 
     const result = generator.next(
       nextResult([
@@ -185,9 +185,9 @@ describe('file-lister agent', () => {
     })
 
     expect((generator.next().value as ToolCall).toolName).toBe('query_index')
-    expect(
-      (generator.next(nextResult([])).value as ToolCall).toolName,
-    ).toBe('read_subtree')
+    expect((generator.next(nextResult([])).value as ToolCall).toolName).toBe(
+      'read_subtree',
+    )
 
     const result = generator.next(
       nextResult([
@@ -235,17 +235,7 @@ describe('file-lister agent', () => {
 
   test('uses at most 8 valid directories and ignores extras', () => {
     const definition = createFileLister()
-    const directories = [
-      'd1',
-      'd2',
-      'd3',
-      'd4',
-      'd5',
-      'd6',
-      'd7',
-      'd8',
-      'd9',
-    ]
+    const directories = ['d1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8', 'd9']
     const generator = definition.handleSteps!({
       agentState: createMockAgentState(),
       logger,
@@ -259,9 +249,11 @@ describe('file-lister agent', () => {
       pathPrefixes: ['d1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8'],
     })
     expect(
-      (definition.inputSchema?.params?.properties?.directories as {
-        description?: string
-      })?.description,
+      (
+        definition.inputSchema?.params?.properties?.directories as {
+          description?: string
+        }
+      )?.description,
     ).toContain('extra entries are ignored')
   })
 })

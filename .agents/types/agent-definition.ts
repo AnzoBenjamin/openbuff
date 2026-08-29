@@ -359,7 +359,6 @@ export interface AgentState {
    * This is updated on every agent step via the /api/v1/token-count endpoint.
    */
   contextTokenCount: number
-
 }
 
 /**

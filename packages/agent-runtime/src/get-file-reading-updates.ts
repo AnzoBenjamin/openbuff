@@ -16,7 +16,7 @@ function sanitizePartialRangeContent(content: string): string {
   if (!header.startsWith('[RANGE_BLOCK ')) return content
 
   const sanitizedHeader = header.replace(
-    /;\s*(?:rangeHash|readCapability|preferred block edit: replace_range|scoped str_replace: basedOnRead)\b[^\]]*(?=\])/, 
+    /;\s*(?:rangeHash|readCapability|preferred block edit: replace_range|scoped str_replace: basedOnRead)\b[^\]]*(?=\])/,
     '; rangeHash=omitted',
   )
   return headerEnd === -1
@@ -116,4 +116,3 @@ export async function getFileReadingUpdates(params: {
     }),
   )
 }
-

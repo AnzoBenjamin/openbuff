@@ -101,9 +101,9 @@ function extractStringArrayFromSource(
  * values the parity test asserts against production).
  */
 function buildConstantsPreamble(): string {
-  const globsBody = SECURITY_SENSITIVE_GLOBS.map(
-    (glob) => `  '${glob}',`,
-  ).join('\n')
+  const globsBody = SECURITY_SENSITIVE_GLOBS.map((glob) => `  '${glob}',`).join(
+    '\n',
+  )
   const substrsBody = SECURITY_SENSITIVE_NAME_SUBSTRINGS.map(
     (substr) => `'${substr}'`,
   ).join(', ')
@@ -165,13 +165,17 @@ function loadInlineWriterTargetHelpers(): WriterTargetHelpers {
   // and the transpile-to-JS step is unnecessary here. Do not "normalize" this
   // call site to match the others without verifying it still extracts correctly.
   const helperSource = names
-    .map((functionName) => extractInlineFunctionSource(base2Source, functionName))
+    .map((functionName) =>
+      extractInlineFunctionSource(base2Source, functionName),
+    )
     .join('\n\n')
   const transpiler = new Bun.Transpiler({ loader: 'ts', target: 'bun' })
   const combinedJs = transpiler.transformSync(
     `${constantsPreamble}\n${helperSource}\nreturn {\n  selectTestWriterTargets,\n  selectDocWriterTargets,\n  selectAuxRelevantFiles,\n  testWriterScopePatterns,\n  docWriterScopePatterns,\n  isNonTestSourceFile,\n  isPublicApiSourceFile,\n  inferPackageTestCommand,\n}`,
   )
-  const buildHelpers = new Function(`"use strict";\n${combinedJs}`) as () => WriterTargetHelpers
+  const buildHelpers = new Function(
+    `"use strict";\n${combinedJs}`,
+  ) as () => WriterTargetHelpers
   return buildHelpers()
 }
 
@@ -537,10 +541,7 @@ describe('base2 writer request predicates and sequential aux gates', () => {
       'cd agents && bun run typecheck && bun test',
     )
     expect(testWriterSpawn.input.handoff.permissions.writablePaths).toEqual(
-      expect.arrayContaining([
-        'agents/**/*.test.*',
-        'agents/**/__tests__/**',
-      ]),
+      expect.arrayContaining(['agents/**/*.test.*', 'agents/**/__tests__/**']),
     )
     // Inline spawn is sequential/blocking; writers are not launched via
     // spawn_agents batching that would run in parallel with each other.
@@ -668,8 +669,7 @@ describe('editor / repair-editor / test-writer cohesion', () => {
     expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
     const prompt = String(reviewCall.input.agents[0].prompt ?? '')
     const fingerprint =
-      prompt.match(/Snapshot fingerprint \(echo exactly\): ([^\n]+)/)?.[1] ??
-      ''
+      prompt.match(/Snapshot fingerprint \(echo exactly\): ([^\n]+)/)?.[1] ?? ''
     const afterReview = gen.next({
       toolResult: [
         {
@@ -733,8 +733,7 @@ describe('editor / repair-editor / test-writer cohesion', () => {
     } as any).value as any
     const prompt = String(reviewCall.input.agents[0].prompt ?? '')
     const fingerprint =
-      prompt.match(/Snapshot fingerprint \(echo exactly\): ([^\n]+)/)?.[1] ??
-      ''
+      prompt.match(/Snapshot fingerprint \(echo exactly\): ([^\n]+)/)?.[1] ?? ''
     gen.next({
       toolResult: [
         {

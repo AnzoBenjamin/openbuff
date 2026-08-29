@@ -159,7 +159,7 @@ describe('message history compaction', () => {
     '  sleep(50)',
     '}',
     'console.error(',
-    "  `child append never persisted ${process.env.MH_MESSAGE}` +",
+    '  `child append never persisted ${process.env.MH_MESSAGE}` +',
     "    '; final history: ' + JSON.stringify(loadMessageHistory()),",
     ')',
     'process.exit(1)',
@@ -372,9 +372,9 @@ describe('message history compaction', () => {
       `${JSON.stringify('old-journal')}\n`,
     )
     saveMessageHistory(['a', 'b', 'c'])
-    expect(JSON.parse(fs.readFileSync(getMessageHistoryPath(), 'utf8'))).toEqual(
-      ['a', 'b', 'c'],
-    )
+    expect(
+      JSON.parse(fs.readFileSync(getMessageHistoryPath(), 'utf8')),
+    ).toEqual(['a', 'b', 'c'])
     expect(fs.readFileSync(getMessageHistoryJournalPath(), 'utf8')).toBe('')
   })
 
@@ -390,7 +390,10 @@ describe('message history compaction', () => {
 
   test('handles malformed legacy JSON file gracefully', () => {
     fs.writeFileSync(getMessageHistoryPath(), '{ not valid json')
-    fs.writeFileSync(getMessageHistoryJournalPath(), `${JSON.stringify('valid')}\n`)
+    fs.writeFileSync(
+      getMessageHistoryJournalPath(),
+      `${JSON.stringify('valid')}\n`,
+    )
     const loaded = loadMessageHistory()
     // Malformed snapshot ignored, journal still loaded
     expect(loaded).toEqual(['valid'])
@@ -471,12 +474,7 @@ describe('message history compaction', () => {
     ) => {
       if (String(target) === lockPath) {
         lockStatCalls += 1
-        Atomics.wait(
-          new Int32Array(new SharedArrayBuffer(4)),
-          0,
-          0,
-          slowStatMs,
-        )
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, slowStatMs)
       }
       return realStatSync(target)
     }) as typeof fs.statSync)
@@ -553,9 +551,9 @@ describe('message history compaction', () => {
     ).toBe(4)
     // Focused entry gone from a shorter list: clamp into range so the very next
     // keypress moves instead of silently no-opping.
-    expect(reconcileHistoryIndex(4, ['a', 'b', 'c', 'd', 'e'], ['a', 'b'])).toBe(
-      1,
-    )
+    expect(
+      reconcileHistoryIndex(4, ['a', 'b', 'c', 'd', 'e'], ['a', 'b']),
+    ).toBe(1)
     // Stale index that was already out of range for the previous list.
     expect(reconcileHistoryIndex(7, ['a', 'b', 'c'], ['a', 'b', 'c'])).toBe(2)
     // Verbatim repeats: the newest occurrence is the one navigation walks back
@@ -665,7 +663,9 @@ describe('message history compaction', () => {
         reported = error
       }),
     ).toEqual(['from-journal'])
-    expect((reported as Error).message).toContain('could not be read completely')
+    expect((reported as Error).message).toContain(
+      'could not be read completely',
+    )
 
     // A readable, genuinely empty history reports no unavailability.
     fs.rmSync(getMessageHistoryPath(), { recursive: true })
@@ -884,9 +884,7 @@ describe('message history compaction', () => {
       }).unpersisted
     }
     expect(pending).toHaveLength(MESSAGE_HISTORY_MAX_UNPERSISTED)
-    expect(pending.at(-1)).toBe(
-      `failed-${MESSAGE_HISTORY_MAX_UNPERSISTED + 4}`,
-    )
+    expect(pending.at(-1)).toBe(`failed-${MESSAGE_HISTORY_MAX_UNPERSISTED + 4}`)
   })
 
   test('duplicated memory-only prompts resolve the same way on both read paths', () => {
@@ -898,7 +896,9 @@ describe('message history compaction', () => {
       unpersisted: ['dup', 'dup'],
     })
     // Degraded path, same persisted view: entry-for-entry the fold's result.
-    expect(resolveDegradedMessageHistory([], ['on-disk'], ['dup', 'dup'])).toEqual(
+    expect(
+      resolveDegradedMessageHistory([], ['on-disk'], ['dup', 'dup']),
+    ).toEqual(
       foldUnpersistedMessageHistory(['on-disk'], ['dup', 'dup']).history,
     )
     // And a degraded read that saw nothing new keeps both repeats too, instead
@@ -912,7 +912,9 @@ describe('message history compaction', () => {
     ).toEqual(['on-disk', 'dup', 'dup'])
     // Both paths still retire a repeat whose text is on disk without
     // duplicating it.
-    expect(foldUnpersistedMessageHistory(['dup', 'extra'], ['dup', 'dup'])).toEqual({
+    expect(
+      foldUnpersistedMessageHistory(['dup', 'extra'], ['dup', 'dup']),
+    ).toEqual({
       history: ['dup', 'extra'],
       unpersisted: [],
     })
@@ -1534,9 +1536,9 @@ describe('message history compaction', () => {
       ),
     )
     appendMessageHistory('below-threshold')
-    expect(
-      fs.readFileSync(getMessageHistoryJournalPath(), 'utf8'),
-    ).toContain('"below-threshold"')
+    expect(fs.readFileSync(getMessageHistoryJournalPath(), 'utf8')).toContain(
+      '"below-threshold"',
+    )
     expect(fs.existsSync(getMessageHistoryPath())).toBe(false)
 
     // Just past the threshold: the same append path now compacts.
@@ -1652,9 +1654,9 @@ describe('message history compaction', () => {
     const loaded = loadMessageHistory()
     expect(loaded).toContain('concurrent-a')
     expect(loaded).toContain('concurrent-b')
-    expect(
-      fs.existsSync(path.join(tempDir, 'message-history.lock')),
-    ).toBe(false)
+    expect(fs.existsSync(path.join(tempDir, 'message-history.lock'))).toBe(
+      false,
+    )
   })
 
   test('lock release verifies inode identity and preserves a successor lock installed mid-operation', async () => {
@@ -1963,7 +1965,10 @@ describe('message history compaction', () => {
         // Untagged line: it replays on top of whatever snapshot exists.
         fs.unlinkSync(lockPath)
         fs.writeFileSync(lockPath, 'successor-lock')
-        fs.appendFileSync(journalPath, `${JSON.stringify('successor-prompt')}\n`)
+        fs.appendFileSync(
+          journalPath,
+          `${JSON.stringify('successor-prompt')}\n`,
+        )
       }
     }) as typeof fs.renameSync)
 

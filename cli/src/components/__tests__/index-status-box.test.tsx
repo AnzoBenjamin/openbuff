@@ -12,7 +12,9 @@ initializeThemeStore()
 
 const theme = chatThemes.dark
 
-const makeBlock = (overrides: Partial<IndexStatusContentBlock> = {}): IndexStatusContentBlock => ({
+const makeBlock = (
+  overrides: Partial<IndexStatusContentBlock> = {},
+): IndexStatusContentBlock => ({
   type: 'index-status',
   statusLine: 'Index status: ready.',
   messageLine: 'Index ready.',
@@ -55,7 +57,12 @@ describe('IndexStatusBox', () => {
 
   test('renders coverageLine with warning color', () => {
     const markup = renderToStaticMarkup(
-      <IndexStatusBox block={makeBlock({ coverageLine: 'Coverage: partial at 100 files; skipped 5 under vendor.' })} />,
+      <IndexStatusBox
+        block={makeBlock({
+          coverageLine:
+            'Coverage: partial at 100 files; skipped 5 under vendor.',
+        })}
+      />,
     )
     expect(markup).toContain('Coverage: partial')
     expect(markup).toContain(theme.warning)
@@ -64,7 +71,12 @@ describe('IndexStatusBox', () => {
   test('renders diagnosticsLines with header and muted lines', () => {
     const markup = renderToStaticMarkup(
       <IndexStatusBox
-        block={makeBlock({ diagnosticsLines: ['Diagnostics: 2 parser issues.', '- src/bad.ts (parse): syntax error'] })}
+        block={makeBlock({
+          diagnosticsLines: [
+            'Diagnostics: 2 parser issues.',
+            '- src/bad.ts (parse): syntax error',
+          ],
+        })}
       />,
     )
     expect(markup).toContain('Diagnostics (2)')
@@ -78,7 +90,8 @@ describe('IndexStatusBox', () => {
       <IndexStatusBox
         block={makeBlock({
           statusLine: 'Index status: disabled in openbuff.json.',
-          messageLine: 'Use read_subtree, glob, or code_search for live discovery.',
+          messageLine:
+            'Use read_subtree, glob, or code_search for live discovery.',
           corpusLine: '',
           ageLine: '',
           vectorLine: '',
@@ -96,13 +109,21 @@ describe('IndexStatusBox', () => {
   })
 
   test('deriveTitle handles empty statusLine fallback', () => {
-    const markup = renderToStaticMarkup(<IndexStatusBox block={makeBlock({ statusLine: '' })} />)
+    const markup = renderToStaticMarkup(
+      <IndexStatusBox block={makeBlock({ statusLine: '' })} />,
+    )
     expect(markup).toContain('Index status')
   })
 
   test('omits hint/coverage/diagnostics when absent', () => {
     const markup = renderToStaticMarkup(
-      <IndexStatusBox block={makeBlock({ hintLine: '', coverageLine: undefined, diagnosticsLines: [] })} />,
+      <IndexStatusBox
+        block={makeBlock({
+          hintLine: '',
+          coverageLine: undefined,
+          diagnosticsLines: [],
+        })}
+      />,
     )
     expect(markup).toContain('Index status: ready')
     expect(markup).not.toContain('Coverage: partial')

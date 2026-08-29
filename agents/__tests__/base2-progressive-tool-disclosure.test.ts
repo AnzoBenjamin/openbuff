@@ -14,10 +14,7 @@ import { TEST_USER_ID } from '@codebuff/common/old-constants'
 import { createTestAgentRuntimeParams } from '@codebuff/common/testing/fixtures/agent-runtime'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { promptSuccess } from '@codebuff/common/util/error'
-import {
-  assistantMessage,
-  userMessage,
-} from '@codebuff/common/util/messages'
+import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
 
 import { createBase2 } from '../base2/base2'
 import {
@@ -302,12 +299,7 @@ describe('tier resolution helpers (M1-T3)', () => {
       includeMessageHistory: true,
       inheritParentSystemPrompt: false,
       mcpServers: {},
-      toolNames: [
-        'spawn_agents',
-        'read_files',
-        'edit_transaction',
-        'kill_job',
-      ],
+      toolNames: ['spawn_agents', 'read_files', 'edit_transaction', 'kill_job'],
       spawnableAgents: [],
       systemPrompt: 'Test system prompt',
       instructionsPrompt: 'Test instructions prompt',

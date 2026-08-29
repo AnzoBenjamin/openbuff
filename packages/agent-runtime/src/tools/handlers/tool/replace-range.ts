@@ -123,15 +123,10 @@ export const handleReplaceRange = (async (params) => {
   if (hadStoredWholeFileAuthorization) {
     await loadCurrentContent()
   }
-  const contentForAuth =
-    currentContent === undefined ? null : currentContent
+  const contentForAuth = currentContent === undefined ? null : currentContent
   const hadFreshWholeFileAuthorization =
     typeof contentForAuth === 'string' &&
-    isWholeFileReadAuthorizationFresh(
-      fileProcessingState,
-      path,
-      contentForAuth,
-    )
+    isWholeFileReadAuthorizationFresh(fileProcessingState, path, contentForAuth)
   if (hadStoredWholeFileAuthorization && !hadFreshWholeFileAuthorization) {
     revokeWholeFileReadAuthorization(fileProcessingState, path)
   }
@@ -201,8 +196,7 @@ export const handleReplaceRange = (async (params) => {
         ],
       }
     }
-    const authStart =
-      toolCall.input.capabilityStartLine ?? recoveryStartLine
+    const authStart = toolCall.input.capabilityStartLine ?? recoveryStartLine
     const authEnd = toolCall.input.capabilityEndLine ?? recoveryEndLine
     const resolved = resolveOccurrenceRangeInCapabilityRange({
       content: occurrenceContent,

@@ -104,10 +104,7 @@ type ConfirmedAppliedActionV1 = ReturnType<
   typeof getConfirmedAppliedActionsV1
 >[number]
 
-function collectEnvelopes(
-  value: unknown,
-  out: FileMutationResultV1[],
-): void {
+function collectEnvelopes(value: unknown, out: FileMutationResultV1[]): void {
   walkToolOutput(value, (node) => {
     if (typeof node !== 'object') return 'skip'
     const parsed = fileMutationResultV1Schema.safeParse(node)
@@ -151,7 +148,8 @@ function getPositiveApplicationEvidence(
       const targetPath = action.destinationPath ?? action.path
       const actionRecord = action as unknown as Record<string, unknown>
       const anchor = actionRecord.editAnchor
-      if (!anchor || typeof anchor !== 'object' || Array.isArray(anchor)) continue
+      if (!anchor || typeof anchor !== 'object' || Array.isArray(anchor))
+        continue
       const record = anchor as Record<string, unknown>
       const content = wholeFileContentByPath?.get(targetPath)
       const readCapability = record.readCapability
@@ -167,7 +165,11 @@ function getPositiveApplicationEvidence(
         record.contentHash === getContentHash(content) &&
         decoded !== null &&
         typeof decoded !== 'string' &&
-        readCapabilityMatchesScope(decoded, { projectId, path: targetPath, runId }) &&
+        readCapabilityMatchesScope(decoded, {
+          projectId,
+          path: targetPath,
+          runId,
+        }) &&
         decoded.startLine === record.startLine &&
         decoded.endLine === record.endLine &&
         decoded.hash === record.contentHash
@@ -573,7 +575,8 @@ export async function coordinateEditApplication<T extends ToolName>(params: {
     confirmedAnchorsByPath,
     projectId: params.projectId,
     runId: params.runId,
-    preserveRereadRequirementsForPaths: params.preserveRereadRequirementsForPaths,
+    preserveRereadRequirementsForPaths:
+      params.preserveRereadRequirementsForPaths,
   })
   params.onApplied?.()
   // Surface the granted post-edit capabilities to the model: this output array

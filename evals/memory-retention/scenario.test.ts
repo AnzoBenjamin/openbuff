@@ -24,7 +24,10 @@ import {
   saveMergedTaskMemory,
 } from '@openbuff/sdk/services/task-memory-store'
 
-import type { TaskMemoryEvidenceV1, TaskMemoryV1 } from '@codebuff/common/types/task-memory'
+import type {
+  TaskMemoryEvidenceV1,
+  TaskMemoryV1,
+} from '@codebuff/common/types/task-memory'
 
 function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex')
@@ -53,7 +56,11 @@ function makeMemory(overrides: Partial<TaskMemoryV1>): TaskMemoryV1 {
 
 const metrics: Record<string, unknown>[] = []
 
-function evidenceFor(id: string, file: string, content: string): TaskMemoryEvidenceV1 {
+function evidenceFor(
+  id: string,
+  file: string,
+  content: string,
+): TaskMemoryEvidenceV1 {
   return {
     id,
     kind: 'read',
@@ -155,6 +162,10 @@ describe('memory retention scenario', () => {
     })
     expect(rebound.evidence[0]!.stale).toBe(false)
     expect(rebound.evidence[0]!.path).toBe('lib/helper.ts')
-    metrics.push({ scenario: 'S4-rename', rebound: 1, orphanedWithoutJournal: 1 })
+    metrics.push({
+      scenario: 'S4-rename',
+      rebound: 1,
+      orphanedWithoutJournal: 1,
+    })
   })
 })

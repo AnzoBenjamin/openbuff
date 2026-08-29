@@ -266,12 +266,7 @@ describe('openbuff-owned OS temp namespace exception', () => {
     test('accepts a nested file beneath an mkdtemp-created directory', () => {
       expect(
         isOwnedTempPath(
-          path.join(
-            tempRoot,
-            'openbuff-read-logs-AbC123',
-            'inner',
-            'file.log',
-          ),
+          path.join(tempRoot, 'openbuff-read-logs-AbC123', 'inner', 'file.log'),
         ),
       ).toBe(true)
     })
@@ -292,10 +287,7 @@ describe('openbuff-owned OS temp namespace exception', () => {
 
   describe('resolveProjectPath owned-temp fallback', () => {
     test('returns the absolute resolved path as relativePath', () => {
-      const ownedLog = path.join(
-        tempRoot,
-        `openbuff-job-${uniqueSuffix()}.log`,
-      )
+      const ownedLog = path.join(tempRoot, `openbuff-job-${uniqueSuffix()}.log`)
 
       const result = resolveProjectPath('/some/project', ownedLog)
 
@@ -311,10 +303,7 @@ describe('openbuff-owned OS temp namespace exception', () => {
       // Consumers must branch on `scope`, not on `path.isAbsolute(relativePath)`:
       // the absoluteness of `relativePath` is an artifact of the owned-temp
       // fallback, while `scope` is the documented discriminator.
-      const ownedLog = path.join(
-        tempRoot,
-        `openbuff-job-${uniqueSuffix()}.log`,
-      )
+      const ownedLog = path.join(tempRoot, `openbuff-job-${uniqueSuffix()}.log`)
       const ownedResult = resolveProjectPath('/some/project', ownedLog)
       const projectResult = resolveProjectPath('/some/project', 'src/a.ts')
 

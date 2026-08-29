@@ -89,9 +89,9 @@ describe('gate-reviewer helpers — inline copies match canonical exports', () =
     ]
 
     for (const input of inputs) {
-      expect(
-        inlineHelpers.isTestCoverageReviewerFinding(input as string),
-      ).toBe(isTestCoverageReviewerFinding(input as string))
+      expect(inlineHelpers.isTestCoverageReviewerFinding(input as string)).toBe(
+        isTestCoverageReviewerFinding(input as string),
+      )
     }
   })
 })
@@ -131,12 +131,10 @@ describe('gate-reviewer helpers — canonical export behavior', () => {
   })
 
   test('isTestCoverageReviewerFinding rejects non-string inputs', () => {
-    expect(
-      isTestCoverageReviewerFinding(undefined as unknown as string),
-    ).toBe(false)
-    expect(isTestCoverageReviewerFinding(null as unknown as string)).toBe(
+    expect(isTestCoverageReviewerFinding(undefined as unknown as string)).toBe(
       false,
     )
+    expect(isTestCoverageReviewerFinding(null as unknown as string)).toBe(false)
     expect(isTestCoverageReviewerFinding(42 as unknown as string)).toBe(false)
   })
 })

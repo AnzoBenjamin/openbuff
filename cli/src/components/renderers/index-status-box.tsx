@@ -19,35 +19,43 @@ export const IndexStatusBox = memo(({ block }: IndexStatusBoxProps) => {
   return (
     <HarnessBox tone="secondary" title={title} gap={1} paddingBottom={1}>
       {block.messageLine ? (
-        <text style={{ wrapMode: 'word', fg: theme.foreground }}>{block.messageLine}</text>
+        <text style={{ wrapMode: 'word', fg: theme.foreground }}>
+          {block.messageLine}
+        </text>
       ) : null}
       {block.corpusLine?.trim() ? (
         <text style={{ wrapMode: 'word', fg: theme.foreground }}>
-          <text style={{ fg: theme.secondary }}>Corpus:</text>
-          <text style={{ fg: theme.foreground }}>{` ${block.corpusLine}`}</text>
+          <span style={{ fg: theme.secondary }}>Corpus:</span>
+          <span style={{ fg: theme.foreground }}>{` ${block.corpusLine}`}</span>
         </text>
       ) : null}
       {block.ageLine?.trim() ? (
         <text style={{ wrapMode: 'word', fg: theme.foreground }}>
-          <text style={{ fg: theme.secondary }}>Age:</text>
-          <text style={{ fg: theme.foreground }}>{` ${block.ageLine}`}</text>
+          <span style={{ fg: theme.secondary }}>Age:</span>
+          <span style={{ fg: theme.foreground }}>{` ${block.ageLine}`}</span>
         </text>
       ) : null}
       {block.vectorLine?.trim() ? (
         <text style={{ wrapMode: 'word', fg: theme.foreground }}>
-          <text style={{ fg: theme.secondary }}>Vector:</text>
-          <text style={{ fg: theme.foreground }}>{` ${block.vectorLine}`}</text>
+          <span style={{ fg: theme.secondary }}>Vector:</span>
+          <span style={{ fg: theme.foreground }}>{` ${block.vectorLine}`}</span>
         </text>
       ) : null}
       {block.hintLine ? (
-        <text style={{ wrapMode: 'word', fg: theme.muted }}>{block.hintLine}</text>
+        <text style={{ wrapMode: 'word', fg: theme.muted }}>
+          {block.hintLine}
+        </text>
       ) : null}
       {block.coverageLine ? (
-        <text style={{ wrapMode: 'word', fg: theme.warning }}>{block.coverageLine}</text>
+        <text style={{ wrapMode: 'word', fg: theme.warning }}>
+          {block.coverageLine}
+        </text>
       ) : null}
       {diagnostics.length > 0 ? (
         <box style={{ flexDirection: 'column', gap: 0 }}>
-          <text style={{ wrapMode: 'word', fg: theme.secondary }}>{`Diagnostics (${diagnostics.length})`}</text>
+          <text
+            style={{ wrapMode: 'word', fg: theme.secondary }}
+          >{`Diagnostics (${diagnostics.length})`}</text>
           {(() => {
             const seen = new Map<string, number>()
             return diagnostics.map((line) => {

@@ -9,10 +9,7 @@
     "phase": "validation",
     "passed": true,
     "summary": "Circuit breaker non-draining success; 6 pass; security-reviewer LOOKS_GOOD after CB-DRAIN fix",
-    "receiptIds": [
-      "k0yZKaIADXE",
-      "k1H1MlKhSNo"
-    ],
+    "receiptIds": ["k0yZKaIADXE", "k1H1MlKhSNo"],
     "recordedAt": "2026-07-24T08:57:24.242Z"
   },
   "createdAt": "2026-07-24T07:35:25.152Z",

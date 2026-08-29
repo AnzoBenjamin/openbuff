@@ -374,7 +374,9 @@ describe('visitToolValue', () => {
     const value = {
       type: 'json',
       value: {
-        nested: [{ toolName: 'write_file', input: { path: 'src/envelope.ts' } }],
+        nested: [
+          { toolName: 'write_file', input: { path: 'src/envelope.ts' } },
+        ],
       },
     }
     expect(collectVisited(value)).toEqual([])

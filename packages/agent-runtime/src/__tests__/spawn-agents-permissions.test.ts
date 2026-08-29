@@ -317,7 +317,11 @@ describe('Spawn Agents Permissions', () => {
     const derived = deriveSpawnTemplateCapabilities({
       agentTemplate: childAgent,
       parentAgentTemplate: parentAgent,
-      handoff: createVersionedHandoff(['edit_transaction', 'code_search', 'glob']),
+      handoff: createVersionedHandoff([
+        'edit_transaction',
+        'code_search',
+        'glob',
+      ]),
       projectRoot: mockFileContext.projectRoot,
     })
 

@@ -45,10 +45,12 @@ Single milestone: close all six reviewer findings, re-validate, pass a fresh rev
   - Acceptance: GATE: PASSED; all six RF records cleared.
 
 ## Execution notes (execute mode)
+
 - Edit through `repair-editor` with the full handoff contract (schemaVersion, taskId, role='repair-editor', objective, requirements[] one per RF ID, acceptanceCriteria[] one per RF ID, context: [], nonGoals, findings[] with files + snapshotFingerprint, permissions{readablePaths, writablePaths, allowedTools}). A previous repair-editor spawn failed validation because only a prose prompt was sent — always include the structured `handoff` object and cite finding IDs (RF-1-4391b95f, RF-2-327c10c4, RF-3-fa741f2a, RF-4-7b925458, RF-5-e9fa653a, RF-6-7a8c09df). Use the full snapshot fingerprint from the harness state at execute time (prefix `v3:7fa30d019b80a…`).
 - Sequential discipline: read fresh → one repair transaction → run policy tests → end turn. No parallel reviewer during repair.
 - Preserve unrelated dirty work: `scripts/measure-context-baseline.ts`, `agents/base2/*`, `docs/*`, `.agents/sessions/context-baseline-25k/` are not ours — do not stage or edit them.
 
 ## Risks / open questions
+
 - Fail-closed `?? true` could over-deny exotic-but-safe tmux commands whose segment parse returns undefined (e.g. `tmux new-session -d && tmux ls` — currently parsed, fine; substitution forms already denied by hasActiveCommandSubstitution). Existing tmux-test allow tests will surface any regression in T5.
 - RF-3 is labeled "Optional consistency" by the reviewer, but it is open-BLOCKING in the gate, so it must be resolved (align or explicit intentional-deny test).

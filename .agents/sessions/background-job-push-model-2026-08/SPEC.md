@@ -101,15 +101,15 @@ jobs were never wired into that push rail for the agent.
 - packages/agent-runtime/src/util/messages.ts (`expireMessages`, agentStep TTL).
 - packages/agent-runtime/src/run-programmatic-step.ts
   (`formatProgrammaticToolResultMessage`).
-- Tests: common/src/util/__tests__/job-registry.test.ts,
-  sdk/src/__tests__/check-job.test.ts (asserts readNewJobOutput semantics — will
+- Tests: common/src/util/**tests**/job-registry.test.ts,
+  sdk/src/**tests**/check-job.test.ts (asserts readNewJobOutput semantics — will
   need rework), packages/agent-runtime/.../check-job.test.ts (asserts dropped:0).
 
 ## Risks
 
 - Switching `startBackgroundJob` stdio from `['ignore', outFd, outFd]` to a pipe
   touches the most safety-critical detach/quota/kill code.
-- sdk/src/__tests__/check-job.test.ts asserts `readNewJobOutput` output directly
+- sdk/src/**tests**/check-job.test.ts asserts `readNewJobOutput` output directly
   and will need rework, not just extension.
 - The digest is a new context consumer landing on top of in-flight
   `context-budget.ts` / `measure-context-baseline.ts` work; needs a MEASURED

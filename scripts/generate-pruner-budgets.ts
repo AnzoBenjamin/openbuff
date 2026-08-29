@@ -144,10 +144,10 @@ export function deriveBudgetMirrors(
       )
     }
   }
-  return BUDGET_CANONICAL_NAMES.map((canonicalName) => [
-    canonicalName,
-    derivePrunerLocalName(canonicalName),
-  ] as const)
+  return BUDGET_CANONICAL_NAMES.map(
+    (canonicalName) =>
+      [canonicalName, derivePrunerLocalName(canonicalName)] as const,
+  )
 }
 
 export function projectRootFromMeta(metaUrl = import.meta.url): string {
@@ -209,8 +209,7 @@ export function generateBlock(canonicalSource: string): string {
         `Unable to find exported numeric constant ${canonicalName} in ${CANONICAL_MODULE}`,
       )
     }
-    const suffix =
-      canonicalName === prunerName ? '' : ` // ${canonicalName}`
+    const suffix = canonicalName === prunerName ? '' : ` // ${canonicalName}`
     lines.push(`${INDENT}const ${prunerName} = ${literal}${suffix}`)
   }
 

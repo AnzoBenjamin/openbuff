@@ -307,7 +307,8 @@ describe('edit application coordinator', () => {
       ...applicationScope,
       paths: ['a.ts'],
       wholeFileContentByPath: new Map(),
-      apply: async () => canonicalAppliedOutput('a.ts', 'forged content') as any,
+      apply: async () =>
+        canonicalAppliedOutput('a.ts', 'forged content') as any,
     })
 
     expect(result.status).toBe('applied')
@@ -561,11 +562,7 @@ describe('edit application coordinator', () => {
         paths: ['a.ts'],
         wholeFileContentByPath: new Map([['a.ts', 'new content']]),
         apply: async () =>
-          canonicalAppliedOutput(
-            'a.ts',
-            'new content',
-            capabilityScope,
-          ) as any,
+          canonicalAppliedOutput('a.ts', 'new content', capabilityScope) as any,
         onApplied: () => {
           committed = true
         },
@@ -830,7 +827,8 @@ describe('edit application coordinator', () => {
       ...applicationScope,
       paths: ['a.ts'],
       wholeFileContentByPath: new Map([['a.ts', 'deleted snapshot']]),
-      apply: async () => canonicalAppliedOutput('a.ts', 'deleted snapshot') as any,
+      apply: async () =>
+        canonicalAppliedOutput('a.ts', 'deleted snapshot') as any,
     })
 
     expect(result.status).toBe('applied')
@@ -858,7 +856,8 @@ describe('edit application coordinator', () => {
       ...applicationScope,
       paths: ['a.ts'],
       wholeFileContentByPath: new Map(),
-      apply: async () => canonicalAppliedOutput('a.ts', 'forged content') as any,
+      apply: async () =>
+        canonicalAppliedOutput('a.ts', 'forged content') as any,
       onApplied: () => {
         committed = true
       },
@@ -918,8 +917,7 @@ describe('edit application coordinator', () => {
           {
             type: 'json',
             value: {
-              errorMessage:
-                'client rejected: expected hash / content changed',
+              errorMessage: 'client rejected: expected hash / content changed',
             },
           },
         ] as any,
@@ -1184,9 +1182,7 @@ describe('edit application coordinator', () => {
     // The allowMultiple apply keeps the reread marker (write_file stays blocked).
     expect(blindState.failedEditRequiresReadByPath['a.ts']).toBe(true)
     // The minted anchor is still stored for the applied path.
-    expect(
-      blindState.confirmedPostEditAnchorsByPath?.['a.ts'],
-    ).toMatchObject({
+    expect(blindState.confirmedPostEditAnchorsByPath?.['a.ts']).toMatchObject({
       contentHash: getContentHash('replaced all'),
       readCapability: expect.stringMatching(/^cap\.v3\./),
     })
@@ -1209,9 +1205,7 @@ describe('edit application coordinator', () => {
 
     expect(uniqueResult.status).toBe('applied')
     expect(uniqueState.failedEditRequiresReadByPath['a.ts']).toBeUndefined()
-    expect(
-      uniqueState.confirmedPostEditAnchorsByPath?.['a.ts'],
-    ).toMatchObject({
+    expect(uniqueState.confirmedPostEditAnchorsByPath?.['a.ts']).toMatchObject({
       contentHash: getContentHash('replaced once'),
       readCapability: expect.stringMatching(/^cap\.v3\./),
     })

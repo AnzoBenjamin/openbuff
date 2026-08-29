@@ -95,6 +95,7 @@ through a hosted Openbuff/Codebuff service in this primary flow.
      has not read must read it first — see the lockfile rollback in
      `agents/dependency-manager/dependency-manager.ts`, which reads the
      created lockfiles before deleting them.
+
 6. **Action handlers** stream provider output back to the CLI:
    - `response-chunk` → streams text to the CLI
    - `subagent-response-chunk` → streams subagent output
@@ -327,7 +328,7 @@ Breaking change in v2:
 
 - `rollbackReceipt.deletedCreatedFiles` now lists **only** the lockfile deletes
   whose `edit_transaction` delete actually applied. In v1 the same field listed
-  every delete the rollback *attempted*, including refused or unauthorized
+  every delete the rollback _attempted_, including refused or unauthorized
   ones, so a v1 consumer treating it as "files that no longer exist" could be
   wrong.
 - The new `rollbackReceipt.undeletedCreatedFiles` carries the remainder: deletes

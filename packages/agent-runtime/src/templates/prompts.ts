@@ -42,9 +42,7 @@ function promptNamesParamKey(prompt: string, key: string): boolean {
   if (prompt.includes('params.' + key)) return true
   // Identifier form only: object/JSON key (`command:` or `"searchQueries":`),
   // never a bare English word such as "manager" or "directories".
-  return new RegExp(
-    '\\b' + escapeRegExp(key) + '[\'"]?\\s*:',
-  ).test(prompt)
+  return new RegExp('\\b' + escapeRegExp(key) + '[\'"]?\\s*:').test(prompt)
 }
 
 /**

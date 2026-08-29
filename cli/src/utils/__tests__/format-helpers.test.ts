@@ -49,9 +49,9 @@ describe('formatAge', () => {
 
   test('day branch intentionally drops minutes for coarse granularity', () => {
     // Minutes are truncated at day scale (documented in formatAge).
-    expect(
-      formatAge(86_400_000 * 2 + 3_600_000 * 5 + 58 * 60_000),
-    ).toBe('2d 5h')
+    expect(formatAge(86_400_000 * 2 + 3_600_000 * 5 + 58 * 60_000)).toBe(
+      '2d 5h',
+    )
     expect(formatAge(86_400_000 * 10)).toBe('10d 0h')
   })
 })

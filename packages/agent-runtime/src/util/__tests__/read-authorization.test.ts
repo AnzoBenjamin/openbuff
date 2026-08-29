@@ -188,7 +188,10 @@ describe('remintConfirmedPostEditAnchors', () => {
         '': wellFormedSameScope,
         'src/bad-start.ts': { ...wellFormedSameScope, startLine: 2 },
         'src/bad-end.ts': { ...wellFormedSameScope, endLine: 0 },
-        'src/bad-hash.ts': { ...wellFormedSameScope, contentHash: 'not-a-hash' },
+        'src/bad-hash.ts': {
+          ...wellFormedSameScope,
+          contentHash: 'not-a-hash',
+        },
         'src/missing-cap.ts': {
           startLine: 1,
           endLine: 2,

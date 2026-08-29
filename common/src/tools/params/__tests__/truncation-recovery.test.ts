@@ -30,7 +30,9 @@ describe('transport-truncation helpers (F1/F3)', () => {
 
     it('returns undefined for a complete (balanced) payload', () => {
       expect(
-        tryRecoverTruncatedToolArguments('{"edits":[{"type":"delete","path":"a.ts"}]}'),
+        tryRecoverTruncatedToolArguments(
+          '{"edits":[{"type":"delete","path":"a.ts"}]}',
+        ),
       ).toBeUndefined()
     })
 

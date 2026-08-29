@@ -150,9 +150,7 @@ const spawnAgentEntryFields = {
           directoryPaths: z
             .array(z.string())
             .optional()
-            .describe(
-              'Relevant directory paths to inventory (general-agent)',
-            ),
+            .describe('Relevant directory paths to inventory (general-agent)'),
           directories: z
             .array(z.string())
             .optional()
@@ -164,7 +162,9 @@ const spawnAgentEntryFields = {
           owned_paths: z
             .array(z.string())
             .optional()
-            .describe('Exact task-owned paths eligible for staging (git-committer)'),
+            .describe(
+              'Exact task-owned paths eligible for staging (git-committer)',
+            ),
           branch_name: z
             .string()
             .optional()
@@ -172,7 +172,9 @@ const spawnAgentEntryFields = {
           branch_switch: z
             .boolean()
             .optional()
-            .describe('Create and switch to branch_name when true (git-committer)'),
+            .describe(
+              'Create and switch to branch_name when true (git-committer)',
+            ),
           allow_dirty_branch: z
             .boolean()
             .optional()
@@ -182,7 +184,9 @@ const spawnAgentEntryFields = {
           push: z
             .boolean()
             .optional()
-            .describe('Push the resulting feature branch when authorized (git-committer)'),
+            .describe(
+              'Push the resulting feature branch when authorized (git-committer)',
+            ),
           remote: z
             .string()
             .optional()
@@ -190,7 +194,9 @@ const spawnAgentEntryFields = {
           snapshot_id: z
             .string()
             .optional()
-            .describe('Assigned gate snapshot fingerprint (reviewer specialists)'),
+            .describe(
+              'Assigned gate snapshot fingerprint (reviewer specialists)',
+            ),
           changed_files: z
             .array(z.string())
             .optional()
@@ -202,11 +208,15 @@ const spawnAgentEntryFields = {
           manager: z
             .string()
             .optional()
-            .describe('Package manager selected from repository manifests (dependency-manager)'),
+            .describe(
+              'Package manager selected from repository manifests (dependency-manager)',
+            ),
           operation: z
             .string()
             .optional()
-            .describe('Dependency operation: add, remove, sync, restore, or update (dependency-manager)'),
+            .describe(
+              'Dependency operation: add, remove, sync, restore, or update (dependency-manager)',
+            ),
           packages: z
             .array(z.string())
             .optional()
@@ -222,7 +232,9 @@ const spawnAgentEntryFields = {
           retainClone: z
             .boolean()
             .optional()
-            .describe('Retain the owned /tmp clone after completion (librarian)'),
+            .describe(
+              'Retain the owned /tmp clone after completion (librarian)',
+            ),
           patterns: z
             .array(z.string())
             .optional()
@@ -278,9 +290,11 @@ export function buildSpawnAgentsProviderInputSchema(
   }
 
   return buildSpawnAgentsProviderSchema(
-    z.enum(uniqueValues as [string, ...string[]]).describe(
-      `Agent to spawn from the live catalog: ${uniqueValues.join(', ')}. Must be a name from the live "You can spawn the following agents" catalog (hyphenated ids; underscores accepted).`,
-    ),
+    z
+      .enum(uniqueValues as [string, ...string[]])
+      .describe(
+        `Agent to spawn from the live catalog: ${uniqueValues.join(', ')}. Must be a name from the live "You can spawn the following agents" catalog (hyphenated ids; underscores accepted).`,
+      ),
   )
 }
 

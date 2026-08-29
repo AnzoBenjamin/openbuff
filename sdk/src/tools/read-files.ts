@@ -1060,4 +1060,3 @@ export async function getFilesStructuredFromOverride(params: {
   const raw = await override({ filePaths, ranges })
   return normalizeReadFilesOverrideResult({ filePaths, ranges, raw })
 }
-

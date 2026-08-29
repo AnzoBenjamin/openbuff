@@ -29,12 +29,12 @@ function errorResult(file: string, message: string) {
  * fall back to the same heuristic slicer used by read_files(symbols).
  */
 export const handleRewriteSymbol = (async (params: {
-    previousToolCallFinished: Promise<void>
-    toolCall: any
-    requestOptionalFile: RequestOptionalFileFn
-    fileProcessingState: FileProcessingState
-    fileContext: ProjectFileContext
-    runId: string
+  previousToolCallFinished: Promise<void>
+  toolCall: any
+  requestOptionalFile: RequestOptionalFileFn
+  fileProcessingState: FileProcessingState
+  fileContext: ProjectFileContext
+  runId: string
 }): Promise<{ output: any }> => {
   const { previousToolCallFinished, toolCall, requestOptionalFile } = params
   const {

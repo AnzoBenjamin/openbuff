@@ -69,9 +69,8 @@ type ReadLogsValue = {
   errorMessage?: string
 }
 
-const value = (
-  output: Awaited<ReturnType<typeof readLogs>>,
-): ReadLogsValue => output[0].value as ReadLogsValue
+const value = (output: Awaited<ReturnType<typeof readLogs>>): ReadLogsValue =>
+  output[0].value as ReadLogsValue
 
 afterEach(() => {
   __clearJobsForTest()
@@ -251,7 +250,12 @@ describe('readLogs', () => {
     fs.symlinkSync(secretLog, logFile)
 
     const result = value(
-      await readLogs({ cwd, jobId: job.jobId, lines: 10, owner: TRUSTED_OWNER }),
+      await readLogs({
+        cwd,
+        jobId: job.jobId,
+        lines: 10,
+        owner: TRUSTED_OWNER,
+      }),
     )
 
     expect(result.errorMessage).toContain('Path is not a regular file')
@@ -292,7 +296,12 @@ describe('readLogs', () => {
     __registerJobForTest(job)
 
     const result = value(
-      await readLogs({ cwd, jobId: job.jobId, lines: 10, owner: FOREIGN_OWNER }),
+      await readLogs({
+        cwd,
+        jobId: job.jobId,
+        lines: 10,
+        owner: FOREIGN_OWNER,
+      }),
     )
 
     expect(result.errorMessage).toContain(

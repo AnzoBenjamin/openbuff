@@ -1,10 +1,6 @@
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 
-const READ_TOOLS = new Set([
-  'read_files',
-  'read_outline',
-  'read_subtree',
-])
+const READ_TOOLS = new Set(['read_files', 'read_outline', 'read_subtree'])
 
 const EDIT_TOOLS = new Set([
   'apply_patch',

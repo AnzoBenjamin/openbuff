@@ -12,7 +12,9 @@ import { __clearJobsForTest } from '../tools/background-jobs'
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
 import type { ListJobsViewRow } from '@codebuff/common/util/list-jobs-view'
 
-const makeRow = (overrides: Partial<ListJobsViewRow> = {}): ListJobsViewRow => ({
+const makeRow = (
+  overrides: Partial<ListJobsViewRow> = {},
+): ListJobsViewRow => ({
   jobId: 'job-1',
   kind: 'process',
   command: 'bun dev',
@@ -185,18 +187,22 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
         seedRunningJob(promptId)
 
         results.push(
-          (await requestToolCall({
-            userInputId: promptId,
-            toolName: 'list_jobs',
-            input: {},
-          })).output,
+          (
+            await requestToolCall({
+              userInputId: promptId,
+              toolName: 'list_jobs',
+              input: {},
+            })
+          ).output,
         )
         results.push(
-          (await requestToolCall({
-            userInputId: promptId,
-            toolName: 'list_jobs',
-            input: {},
-          })).output,
+          (
+            await requestToolCall({
+              userInputId: promptId,
+              toolName: 'list_jobs',
+              input: {},
+            })
+          ).output,
         )
 
         await sendAction({
@@ -207,7 +213,10 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
             output: { type: 'lastMessage', value: [] },
           },
         })
-        return { sessionState, output: { type: 'lastMessage' as const, value: [] } }
+        return {
+          sessionState,
+          output: { type: 'lastMessage' as const, value: [] },
+        }
       },
     )
 
@@ -239,11 +248,13 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
         const jobId = seedRunningJob(promptId)
 
         results.push(
-          (await requestToolCall({
-            userInputId: promptId,
-            toolName: 'list_jobs',
-            input: {},
-          })).output,
+          (
+            await requestToolCall({
+              userInputId: promptId,
+              toolName: 'list_jobs',
+              input: {},
+            })
+          ).output,
         )
 
         // Change the fingerprint: complete the job (status + completedAt change).
@@ -254,11 +265,13 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
         })
 
         results.push(
-          (await requestToolCall({
-            userInputId: promptId,
-            toolName: 'list_jobs',
-            input: {},
-          })).output,
+          (
+            await requestToolCall({
+              userInputId: promptId,
+              toolName: 'list_jobs',
+              input: {},
+            })
+          ).output,
         )
 
         await sendAction({
@@ -269,7 +282,10 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
             output: { type: 'lastMessage', value: [] },
           },
         })
-        return { sessionState, output: { type: 'lastMessage' as const, value: [] } }
+        return {
+          sessionState,
+          output: { type: 'lastMessage' as const, value: [] },
+        }
       },
     )
 
@@ -297,18 +313,22 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
 
         const outputs: ToolResultOutput[][] = []
         outputs.push(
-          (await requestToolCall({
-            userInputId: promptId,
-            toolName: 'list_jobs',
-            input: {},
-          })).output,
+          (
+            await requestToolCall({
+              userInputId: promptId,
+              toolName: 'list_jobs',
+              input: {},
+            })
+          ).output,
         )
         outputs.push(
-          (await requestToolCall({
-            userInputId: promptId,
-            toolName: 'list_jobs',
-            input: {},
-          })).output,
+          (
+            await requestToolCall({
+              userInputId: promptId,
+              toolName: 'list_jobs',
+              input: {},
+            })
+          ).output,
         )
         runResults.push(outputs)
 
@@ -320,7 +340,10 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
             output: { type: 'lastMessage', value: [] },
           },
         })
-        return { sessionState, output: { type: 'lastMessage' as const, value: [] } }
+        return {
+          sessionState,
+          output: { type: 'lastMessage' as const, value: [] },
+        }
       },
     )
 

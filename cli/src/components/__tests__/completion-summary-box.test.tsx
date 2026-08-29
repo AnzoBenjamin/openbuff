@@ -175,7 +175,9 @@ describe('CompletionSummaryBox deriveTone', () => {
   })
 
   test('renders hooks section', () => {
-    const markup = renderSummary(makeSummary({ hooksPassed: 1, hooksFailed: 1 }))
+    const markup = renderSummary(
+      makeSummary({ hooksPassed: 1, hooksFailed: 1 }),
+    )
     expect(markup).toContain('Hooks')
     expect(markup).toContain('passed')
     expect(markup).toContain('failed')

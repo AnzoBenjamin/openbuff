@@ -70,8 +70,8 @@ Not sure where to start? Here are some great ways to jump in:
 1. **Fork and branch** - Create a fork and a new branch
 2. **Follow style guidelines** - See below
 3. **Test** - Write tests for new features, run `bun test`
-5. **Type check** - Run `bun run typecheck`
-6. **CI-local early gates** - Run `bun run check:ci-local` (tool-definition drift vs git HEAD — staged changes included — plus memory-drift + config sync + full agents/common test suites). Optional: `bun run install:pre-push` installs a local-only pre-push hook. Each step can be capped with `OPENBUFF_CI_LOCAL_STEP_TIMEOUT_MS` (ms; unset/`0` = no timeout). If a run crashes and leaves `.openbuff/ci-local.lock` behind, the file records the holder PID (`ps -p <pid>` to verify) — delete it once no run is active.
+4. **Type check** - Run `bun run typecheck`
+5. **CI-local early gates** - Run `bun run check:ci-local` (tool-definition drift vs git HEAD — staged changes included — plus memory-drift + config sync + full agents/common test suites). Optional: `bun run install:pre-push` installs a local-only pre-push hook. Each step can be capped with `OPENBUFF_CI_LOCAL_STEP_TIMEOUT_MS` (ms; unset/`0` = no timeout). If a run crashes and leaves `.openbuff/ci-local.lock` behind, the file records the holder PID (`ps -p <pid>` to verify) — delete it once no run is active.
 6. **Submit a PR** - Clear description of changes
 
 Small PRs merge faster.

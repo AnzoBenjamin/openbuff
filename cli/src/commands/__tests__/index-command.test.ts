@@ -180,7 +180,11 @@ describe('buildIndexStatusContentBlock prefix parsing', () => {
       semantic: 'ready' as const,
       totalIndexed: 99,
       indexAge: 61_000,
-      diagnostics: [] as Array<{ filePath: string; stage: string; message: string }>,
+      diagnostics: [] as Array<{
+        filePath: string
+        stage: string
+        message: string
+      }>,
       message: 'Index ready.',
     },
   })
@@ -293,8 +297,15 @@ describe('handleIndexCommandBlocks disabled vs status/rebuild', () => {
 
   test('status parses same as buildIndexStatusContentBlock', async () => {
     const { deps, manager } = createDeps()
-    const expected = buildIndexStatusContentBlock(manager.query(), manager.isSemanticReady(), true)
-    const block = (await handleIndexCommandBlocks('status', deps)) as import('../../types/chat').IndexStatusContentBlock
+    const expected = buildIndexStatusContentBlock(
+      manager.query(),
+      manager.isSemanticReady(),
+      true,
+    )
+    const block = (await handleIndexCommandBlocks(
+      'status',
+      deps,
+    )) as import('../../types/chat').IndexStatusContentBlock
 
     expect(block.statusLine).toBe(expected.statusLine)
     expect(block.corpusLine).toBe(expected.corpusLine)
@@ -304,7 +315,10 @@ describe('handleIndexCommandBlocks disabled vs status/rebuild', () => {
 
   test('rebuild prefixes message and lines', async () => {
     const { deps } = createDeps()
-    const block = (await handleIndexCommandBlocks('rebuild', deps)) as import('../../types/chat').IndexStatusContentBlock
+    const block = (await handleIndexCommandBlocks(
+      'rebuild',
+      deps,
+    )) as import('../../types/chat').IndexStatusContentBlock
 
     expect(block.messageLine).toContain('Index refresh requested')
     expect(block.messageLine).toContain('\n')

@@ -24,26 +24,26 @@ The result is a single JSON value in one of two shapes.
 The normal digest lists up to 10 jobs (`LIST_JOBS_MAX_ROWS`), preferring
 running/non-terminal jobs and then most-recent `startedAt`.
 
-| Field | Type | Notes |
-| --- | --- | --- |
-| `jobs` | array, required | Selected job rows (see below). |
-| `note` | string, required | Always `No action required unless you need this output.` — declarative; no action required unless you need the output. |
-| `truncatedCount` | number, optional | How many rows were capped off when more than 10 jobs matched. Omitted when nothing was truncated. |
+| Field            | Type             | Notes                                                                                                                  |
+| ---------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `jobs`           | array, required  | Selected job rows (see below).                                                                                         |
+| `note`           | string, required | Always `No action required unless you need this output.` — declarative; no action required unless you need the output. |
+| `truncatedCount` | number, optional | How many rows were capped off when more than 10 jobs matched. Omitted when nothing was truncated.                      |
 
 Each entry in `jobs`:
 
-| Field | Type | Notes |
-| --- | --- | --- |
-| `jobId` | string, required | User-facing id; pass to `check_job`/`read_logs`/`kill_job` (process) or `check_background_agent` (agent). |
-| `kind` | `'process' \| 'agent'`, required | Shell job vs background agent. |
-| `command` | string, required | Human label for the job. |
-| `status` | enum, required | One of `queued`, `running`, `stopping`, `completed`, `error`, `stopped`, `lost`, `cancelled`. |
-| `startedAt` | number, required | Start timestamp (ms). |
-| `completedAt` | number, optional | Settle timestamp, present only for terminal jobs. |
-| `pending` | enum, required | Bucketed pending process/log lines relative to the last `check_job` consumer cursor: `none`, `<10`, `<100`, `<1k`, `1k+`. Agent jobs usually show `none`. |
-| `gap` | boolean, required | `true` when events were truncated from the ring buffer; then `pending` is a lower bound counted from only the retained (non-truncated) events. A flooded job may show `pending: 'none'` alongside `gap: true`. |
-| `exitCode` | number \| null, optional | Present for terminal jobs that report an exit code. |
-| `tail` | array of string, optional | Last ≤10 output lines, only for terminal jobs (terminal peek). |
+| Field         | Type                             | Notes                                                                                                                                                                                                          |
+| ------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jobId`       | string, required                 | User-facing id; pass to `check_job`/`read_logs`/`kill_job` (process) or `check_background_agent` (agent).                                                                                                      |
+| `kind`        | `'process' \| 'agent'`, required | Shell job vs background agent.                                                                                                                                                                                 |
+| `command`     | string, required                 | Human label for the job.                                                                                                                                                                                       |
+| `status`      | enum, required                   | One of `queued`, `running`, `stopping`, `completed`, `error`, `stopped`, `lost`, `cancelled`.                                                                                                                  |
+| `startedAt`   | number, required                 | Start timestamp (ms).                                                                                                                                                                                          |
+| `completedAt` | number, optional                 | Settle timestamp, present only for terminal jobs.                                                                                                                                                              |
+| `pending`     | enum, required                   | Bucketed pending process/log lines relative to the last `check_job` consumer cursor: `none`, `<10`, `<100`, `<1k`, `1k+`. Agent jobs usually show `none`.                                                      |
+| `gap`         | boolean, required                | `true` when events were truncated from the ring buffer; then `pending` is a lower bound counted from only the retained (non-truncated) events. A flooded job may show `pending: 'none'` alongside `gap: true`. |
+| `exitCode`    | number \| null, optional         | Present for terminal jobs that report an exit code.                                                                                                                                                            |
+| `tail`        | array of string, optional        | Last ≤10 output lines, only for terminal jobs (terminal peek).                                                                                                                                                 |
 
 ### Suppressed variant
 

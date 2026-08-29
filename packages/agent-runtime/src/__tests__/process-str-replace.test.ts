@@ -1146,12 +1146,13 @@ function test3() {
     const priorTranspiler = (
       globalThis as unknown as { Bun: { Transpiler: unknown } }
     ).Bun.Transpiler
-    ;(globalThis as unknown as { Bun: { Transpiler: unknown } }).Bun.Transpiler =
-      class {
-        constructor() {
-          throw new Error('Bun.Transpiler unavailable in this runtime')
-        }
+    ;(
+      globalThis as unknown as { Bun: { Transpiler: unknown } }
+    ).Bun.Transpiler = class {
+      constructor() {
+        throw new Error('Bun.Transpiler unavailable in this runtime')
       }
+    }
     try {
       const result = await processStrReplace({
         path: 'test.ts',
@@ -1173,8 +1174,9 @@ function test3() {
         ).toBe(true)
       }
     } finally {
-      ;(globalThis as unknown as { Bun: { Transpiler: unknown } }).Bun.Transpiler =
-        priorTranspiler
+      ;(
+        globalThis as unknown as { Bun: { Transpiler: unknown } }
+      ).Bun.Transpiler = priorTranspiler
     }
   })
 
@@ -1371,17 +1373,21 @@ function test3() {
       expect(result.error).toContain('No useful candidate ranges found')
       expect(result.error).toContain('re-read the current file/range')
       expect(result.error).toContain('replace_range with its readCapability')
-      expect(result.error).toContain('Do not reconstruct huge blocks from memory')
+      expect(result.error).toContain(
+        'Do not reconstruct huge blocks from memory',
+      )
       expect(result.error).not.toContain('Candidate 1: lines')
     }
   })
 
   it('nudges replace_range for large no-match oldString blocks', async () => {
-    const initialContent = Array.from({ length: 20 }, (_, index) =>
-      `const line${index} = ${index};`,
+    const initialContent = Array.from(
+      { length: 20 },
+      (_, index) => `const line${index} = ${index};`,
     ).join('\n')
-    const oldStr = Array.from({ length: 45 }, (_, index) =>
-      `const missingBlockLine${index} = ${index};`,
+    const oldStr = Array.from(
+      { length: 45 },
+      (_, index) => `const missingBlockLine${index} = ${index};`,
     ).join('\n')
 
     const result = await processStrReplace({
@@ -1402,7 +1408,9 @@ function test3() {
       expect(result.error).toContain('not an exact contiguous match')
       expect(result.error).toContain('replace_range with its readCapability')
       expect(result.error).toContain('smaller unique oldString')
-      expect(result.error).toContain('Do not reconstruct huge blocks from memory')
+      expect(result.error).toContain(
+        'Do not reconstruct huge blocks from memory',
+      )
     }
   })
 
@@ -1545,7 +1553,9 @@ function test3() {
     // wrongly claims the text changed/was removed and loops the model into
     // re-reading the same window).
     const lines = Array.from({ length: 1_001 }, (_, index) =>
-      index === 1_000 ? 'export const target = 1' : `const filler${index} = ${index};`,
+      index === 1_000
+        ? 'export const target = 1'
+        : `const filler${index} = ${index};`,
     )
     const initialContent = lines.join('\n')
     // Lines 1-10 are fresh, but the target lives at line 1001.
@@ -1599,7 +1609,9 @@ function test3() {
 
   it('still reports the ordinary no-match diagnostic for a genuine anchored miss', async () => {
     const lines = Array.from({ length: 1_001 }, (_, index) =>
-      index === 1_000 ? 'export const target = 1' : `const filler${index} = ${index};`,
+      index === 1_000
+        ? 'export const target = 1'
+        : `const filler${index} = ${index};`,
     )
     const initialContent = lines.join('\n')
     const windowContent = lines.slice(0, 10).join('\n')
@@ -1639,7 +1651,9 @@ function test3() {
     // that the genuine no-match beside it still needs, and a mixed batch must
     // not be classified as a scope mismatch (which would narrow invalidation).
     const lines = Array.from({ length: 1_001 }, (_, index) =>
-      index === 1_000 ? 'export const target = 1' : `const filler${index} = ${index};`,
+      index === 1_000
+        ? 'export const target = 1'
+        : `const filler${index} = ${index};`,
     )
     const initialContent = lines.join('\n')
     const windowContent = lines.slice(0, 10).join('\n')
@@ -1720,7 +1734,8 @@ function test3() {
       replacements: [
         {
           oldString: oldStr,
-          newString: 'export function computeInvoiceTotal(order: Order) {\n  return 0\n}',
+          newString:
+            'export function computeInvoiceTotal(order: Order) {\n  return 0\n}',
           allowMultiple: false,
           basedOnRead: token,
         },
@@ -1841,10 +1856,14 @@ function test3() {
       // authorization off failureKind.startsWith('capability').
       expect(result.failureKind).toBe('capability_scope')
       expect(result.error).toContain('different project, path, or agent run')
-      expect(result.error).toContain('Cross-path and cross-run capability replay')
+      expect(result.error).toContain(
+        'Cross-path and cross-run capability replay',
+      )
       expect(result.error).not.toContain('may refer to content that changed')
       expect(result.error).not.toContain('content may have been removed')
-      expect(result.error).not.toContain('Before attempting another str_replace')
+      expect(result.error).not.toContain(
+        'Before attempting another str_replace',
+      )
     }
   })
 
@@ -2939,9 +2958,9 @@ function test3() {
     expect('error' in result).toBe(false)
     if (!('error' in result)) {
       expect(result.content).toContain('const y = 3;')
-      expect(result.messages.some((msg) => msg.includes('stale basedOnRead'))).toBe(
-        true,
-      )
+      expect(
+        result.messages.some((msg) => msg.includes('stale basedOnRead')),
+      ).toBe(true)
     }
   })
 
@@ -3010,13 +3029,14 @@ function test3() {
         'Anchored str_replace scope mismatch for small.ts',
       )
       expect(result.error).toContain('covers lines 1-1')
-      expect(result.error).toContain('oldString currently occurs at line(s): 3-3')
+      expect(result.error).toContain(
+        'oldString currently occurs at line(s): 3-3',
+      )
       expect(result.failureKind).toBe('anchor_scope_mismatch')
       expect(result.error).not.toContain('anchor_scope_mismatch')
       expect(result.error).not.toContain('is not an exact contiguous match')
     }
   })
-
 
   describe('successful edit authority', () => {
     it('does not mint pre-confirmation authority after a scoped large-file edit', async () => {

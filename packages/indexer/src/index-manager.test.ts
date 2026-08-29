@@ -266,23 +266,17 @@ describe('IndexManager.indexMutationEpoch', () => {
   test('starts at 0 and the getter returns a number', () => {
     // Disabled config keeps this hermetic (no filesystem walk/build), and a
     // unique instance key guarantees a fresh epoch.
-    const mgr = IndexManager.getInstance(
-      '/tmp/openbuff-indexer-test-epoch-1',
-      {
-        enabled: false,
-      },
-    )
+    const mgr = IndexManager.getInstance('/tmp/openbuff-indexer-test-epoch-1', {
+      enabled: false,
+    })
     expect(typeof mgr.indexMutationEpoch).toBe('number')
     expect(mgr.indexMutationEpoch).toBe(0)
   })
 
   test('increments on every markStale call', () => {
-    const mgr = IndexManager.getInstance(
-      '/tmp/openbuff-indexer-test-epoch-2',
-      {
-        enabled: false,
-      },
-    )
+    const mgr = IndexManager.getInstance('/tmp/openbuff-indexer-test-epoch-2', {
+      enabled: false,
+    })
     mgr.markStale()
     expect(mgr.indexMutationEpoch).toBe(1)
     mgr.markStale()
@@ -290,12 +284,9 @@ describe('IndexManager.indexMutationEpoch', () => {
   })
 
   test('increments on markPathsChanged and markStale alike', () => {
-    const mgr = IndexManager.getInstance(
-      '/tmp/openbuff-indexer-test-epoch-3',
-      {
-        enabled: false,
-      },
-    )
+    const mgr = IndexManager.getInstance('/tmp/openbuff-indexer-test-epoch-3', {
+      enabled: false,
+    })
     mgr.markPathsChanged({
       changedPaths: ['src/auth.ts'],
       complete: true,

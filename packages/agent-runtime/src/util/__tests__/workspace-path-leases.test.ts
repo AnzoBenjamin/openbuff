@@ -49,7 +49,9 @@ describe('workspace path leases', () => {
     })
 
     releaseWorkspacePathLease(state, first)
-    expect(state.workspacePathLeases?.find((lease) => lease.leaseId === first)).toMatchObject({
+    expect(
+      state.workspacePathLeases?.find((lease) => lease.leaseId === first),
+    ).toMatchObject({
       status: 'released',
     })
     expect(() =>

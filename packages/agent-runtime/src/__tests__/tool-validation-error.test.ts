@@ -803,9 +803,7 @@ describe('tool validation error handling', () => {
         'Truncated handoffs cannot be repaired safely',
       )
       expect(result.error).toContain('Keep evidence compact')
-      expect(result.formattedInput).toContain(
-        'invalid handoff payload omitted',
-      )
+      expect(result.formattedInput).toContain('invalid handoff payload omitted')
       expect(result.formattedInput).not.toContain(
         'authority-bearing-secret-fragment',
       )
@@ -2255,7 +2253,9 @@ describe('tool validation error handling', () => {
       message = error instanceof Error ? error.message : String(error)
     }
 
-    expect(message).toContain('Exact params contract (from the child agent schema)')
+    expect(message).toContain(
+      'Exact params contract (from the child agent schema)',
+    )
     expect(message).toContain('"required":["source_path"]')
     expect(message).toContain('"source_path":{"type":"string"}')
     expect(message).toContain('"retry_count":{"type":"integer"')
@@ -2295,21 +2295,20 @@ describe('tool validation error handling', () => {
     expect(message).toContain('will fail attestation')
     // Must not tell the caller to source the attestation token from the bare
     // bundle snapshotId (evidence-only).
-    expect(message).not.toMatch(
-      /fingerprint from get_change_review_bundle/i,
-    )
+    expect(message).not.toMatch(/fingerprint from get_change_review_bundle/i)
   })
 
   it('validateAgentInput accepts attestable v3 snapshot_id and rejects bare hex', async () => {
     const { validateAgentInput } =
       await import('../tools/handlers/tool/spawn-agent-utils')
-    const attestableSnapshotId = z
-      .string()
-      .regex(/^v3:[a-f0-9]{64}$/)
+    const attestableSnapshotId = z.string().regex(/^v3:[a-f0-9]{64}$/)
     const v3Snapshot = 'v3:' + 'a'.repeat(64)
     const bareHex = 'a'.repeat(64)
 
-    for (const id of ['reliability-reviewer', 'compatibility-reviewer'] as const) {
+    for (const id of [
+      'reliability-reviewer',
+      'compatibility-reviewer',
+    ] as const) {
       const agentTemplate = {
         ...testAgentTemplate,
         id,
@@ -2419,8 +2418,12 @@ describe('tool validation error handling', () => {
     expect(message).toContain(
       '"required":["changed_files","snapshot_fingerprint"]',
     )
-    expect(message).toContain('Exact params contract (from the child agent schema)')
-    expect(message).toContain('replace params.snapshot_id with params.snapshot_fingerprint')
+    expect(message).toContain(
+      'Exact params contract (from the child agent schema)',
+    )
+    expect(message).toContain(
+      'replace params.snapshot_id with params.snapshot_fingerprint',
+    )
     expect(message).toContain('Retain params.changed_files')
     expect(message).toContain('Preserve params field names exactly.')
   })
@@ -2514,9 +2517,7 @@ describe('tool validation error handling', () => {
       toolName: 'spawn_agents',
       toolCallId: 'basher-missing-command-tool-call-id',
     })
-    const toolResultEvent = events.find(
-      (event) => event.type === 'tool_result',
-    )
+    const toolResultEvent = events.find((event) => event.type === 'tool_result')
     expect(toolResultEvent).toMatchObject({
       type: 'tool_result',
       toolName: 'spawn_agents',
@@ -3328,7 +3329,10 @@ describe('custom tool project-root escape backstop', () => {
 
   it('never echoes secret custom input values in containment errors', async () => {
     const secret = 'super-secret-token-should-never-appear'
-    const events = await runCustomFsTool({ path: '../escape.txt', metadata: { requestedPath: secret } })
+    const events = await runCustomFsTool({
+      path: '../escape.txt',
+      metadata: { requestedPath: secret },
+    })
     const error = events.find(
       (event): event is Extract<PrintModeEvent, { type: 'error' }> =>
         event.type === 'error',
@@ -3499,7 +3503,10 @@ describe('executeToolCall queued → running transition', () => {
     previousToolCallFinished: Promise<void>
     onResponseChunk: (chunk: unknown) => void
   }): Parameters<typeof executeToolCall>[0] {
-    const agentRuntimeImpl = { ...TEST_AGENT_RUNTIME_IMPL, sendAction: () => {} }
+    const agentRuntimeImpl = {
+      ...TEST_AGENT_RUNTIME_IMPL,
+      sendAction: () => {},
+    }
     const sessionState = getInitialSessionState(mockFileContext)
     return {
       ...agentRuntimeImpl,

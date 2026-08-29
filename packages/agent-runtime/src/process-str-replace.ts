@@ -1581,7 +1581,9 @@ function formatClosestMatchDiagnostics(
     bestSimilarity < MIN_USEFUL_DIAGNOSTIC_SIMILARITY
   const largeOldString = typeof oldStr === 'string' && isLargeOldString(oldStr)
   const strategyNudge =
-    lowSimilarity || largeOldString ? LARGE_OR_LOW_SIMILARITY_STRATEGY_NUDGE : ''
+    lowSimilarity || largeOldString
+      ? LARGE_OR_LOW_SIMILARITY_STRATEGY_NUDGE
+      : ''
 
   if (usefulMatches.length === 0) {
     if (bestSimilarity === undefined) {
@@ -1611,7 +1613,9 @@ function formatClosestMatchDiagnostics(
     })
     .join('\n\n')
 
-  return strategyNudge ? `${candidateBlock}\n\n${strategyNudge}` : candidateBlock
+  return strategyNudge
+    ? `${candidateBlock}\n\n${strategyNudge}`
+    : candidateBlock
 }
 
 function getOccurrenceLineRanges(params: {
@@ -1727,9 +1731,7 @@ function isResultDelimiterBalanced(
 // util/preflight-syntax-validation.ts (`typeof Bun === 'undefined' ||
 // !Bun?.Transpiler` -> skip) so that Node behavior is EXACTLY as before.
 declare const Bun: {
-  Transpiler: new (options: {
-    loader: 'js' | 'jsx' | 'ts' | 'tsx'
-  }) => {
+  Transpiler: new (options: { loader: 'js' | 'jsx' | 'ts' | 'tsx' }) => {
     transformSync: (content: string) => string
   }
 }
@@ -2150,7 +2152,12 @@ const tryMatchOldStr = (params: {
    */
   anchoredRange?: { startLine: number; endLine: number }
 }):
-  | { success: true; oldStr: string; message?: string; hadAutoCorrect?: boolean }
+  | {
+      success: true
+      oldStr: string
+      message?: string
+      hadAutoCorrect?: boolean
+    }
   | { success: false; error: string } => {
   const {
     path,

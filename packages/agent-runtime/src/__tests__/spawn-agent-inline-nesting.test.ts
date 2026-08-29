@@ -748,9 +748,7 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
     })
 
     expect(receipt.status).toBe('completed')
-    expect(receipt.changedFiles.map((f) => f.path)).toEqual([
-      'src/fixed.ts',
-    ])
+    expect(receipt.changedFiles.map((f) => f.path)).toEqual(['src/fixed.ts'])
     expect(receipt.output).toMatchObject({
       type: 'structuredOutput',
       value: {
