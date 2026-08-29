@@ -13,18 +13,23 @@ export const InfoBox = memo(({ block }: InfoBoxProps) => {
   const theme = useTheme()
 
   return (
-    <HarnessBox tone="secondary" title="CLI Diagnostic Info" gap={0} paddingBottom={1}>
+    <HarnessBox
+      tone="secondary"
+      title="CLI Diagnostic Info"
+      gap={0}
+      paddingBottom={1}
+    >
       <text style={{ wrapMode: 'word', fg: theme.foreground }}>
-        <text style={{ fg: theme.secondary }}>Version:</text>
-        <text style={{ fg: theme.foreground }}>{` ${block.version}`}</text>
+        <span style={{ fg: theme.secondary }}>Version:</span>
+        <span style={{ fg: theme.foreground }}>{` ${block.version}`}</span>
       </text>
       <text style={{ wrapMode: 'word', fg: theme.foreground }}>
-        <text style={{ fg: theme.secondary }}>Workspace:</text>
-        <text style={{ fg: theme.foreground }}>{` ${block.workspace}`}</text>
+        <span style={{ fg: theme.secondary }}>Workspace:</span>
+        <span style={{ fg: theme.foreground }}>{` ${block.workspace}`}</span>
       </text>
       <text style={{ wrapMode: 'word', fg: theme.foreground }}>
-        <text style={{ fg: theme.secondary }}>Auth:</text>
-        <text style={{ fg: theme.foreground }}> Local/BYOK Mode</text>
+        <span style={{ fg: theme.secondary }}>Auth:</span>
+        <span style={{ fg: theme.foreground }}> Local/BYOK Mode</span>
       </text>
     </HarnessBox>
   )

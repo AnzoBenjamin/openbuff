@@ -17,7 +17,10 @@ const STATUS_BADGE_COLOR: Record<string, string> = {
   archived: 'muted',
 }
 
-const getBadgeColor = (status: string, theme: ReturnType<typeof useTheme>): string => {
+const getBadgeColor = (
+  status: string,
+  theme: ReturnType<typeof useTheme>,
+): string => {
   const tone = STATUS_BADGE_COLOR[status] ?? 'secondary'
   if (tone === 'success') return theme.success
   if (tone === 'warning') return theme.warning
@@ -41,11 +44,16 @@ export const PlanStatusBox = memo(({ block }: PlanStatusBoxProps) => {
             const row = formatPlanSessionListRow(session)
             const badgeColor = getBadgeColor(session.status, theme)
             return (
-              <text key={session.slug} style={{ wrapMode: 'word', fg: theme.foreground }}>
-                <text style={{ fg: theme.muted }}>{row.activeMarker}</text>
-                <text style={{ fg: badgeColor }}>{`${row.badge} `}</text>
-                <text style={{ fg: theme.foreground }}>{row.label}</text>
-                {row.current ? <text style={{ fg: theme.muted }}>{row.current}</text> : null}
+              <text
+                key={session.slug}
+                style={{ wrapMode: 'word', fg: theme.foreground }}
+              >
+                <span style={{ fg: theme.muted }}>{row.activeMarker}</span>
+                <span style={{ fg: badgeColor }}>{`${row.badge} `}</span>
+                <span style={{ fg: theme.foreground }}>{row.label}</span>
+                {row.current ? (
+                  <span style={{ fg: theme.muted }}>{row.current}</span>
+                ) : null}
               </text>
             )
           })}
@@ -53,7 +61,9 @@ export const PlanStatusBox = memo(({ block }: PlanStatusBoxProps) => {
       ) : (
         <box style={{ flexDirection: 'column', gap: 0 }}>
           {lines.map((line, idx) => {
-            const badgeMatch = line.match(/\[(active|paused|completed|archived)\]/)
+            const badgeMatch = line.match(
+              /\[(active|paused|completed|archived)\]/,
+            )
             if (badgeMatch) {
               const status = badgeMatch[1]
               const badgeColor = getBadgeColor(status, theme)
@@ -62,10 +72,17 @@ export const PlanStatusBox = memo(({ block }: PlanStatusBoxProps) => {
               const before = line.slice(0, badgeIndex)
               const after = line.slice(badgeIndex + badge.length)
               return (
-                <text key={`line-${idx}`} style={{ wrapMode: 'word', fg: theme.foreground }}>
-                  {before ? <text style={{ fg: theme.foreground }}>{before}</text> : null}
-                  <text style={{ fg: badgeColor }}>{badge}</text>
-                  {after ? <text style={{ fg: theme.foreground }}>{after}</text> : null}
+                <text
+                  key={`line-${idx}`}
+                  style={{ wrapMode: 'word', fg: theme.foreground }}
+                >
+                  {before ? (
+                    <span style={{ fg: theme.foreground }}>{before}</span>
+                  ) : null}
+                  <span style={{ fg: badgeColor }}>{badge}</span>
+                  {after ? (
+                    <span style={{ fg: theme.foreground }}>{after}</span>
+                  ) : null}
                 </text>
               )
             }
@@ -73,7 +90,10 @@ export const PlanStatusBox = memo(({ block }: PlanStatusBoxProps) => {
             return (
               <text
                 key={`line-${idx}`}
-                style={{ wrapMode: 'word', fg: isCurrentTask ? theme.muted : theme.foreground }}
+                style={{
+                  wrapMode: 'word',
+                  fg: isCurrentTask ? theme.muted : theme.foreground,
+                }}
               >
                 {line.length > 0 ? line : ' '}
               </text>

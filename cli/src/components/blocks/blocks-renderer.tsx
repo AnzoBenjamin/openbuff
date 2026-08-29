@@ -1,4 +1,4 @@
-import React, { memo, useMemo, useRef } from 'react'
+import React, { memo, useMemo, useRef, type ReactNode } from 'react'
 
 import { AgentBlockGrid } from './agent-block-grid'
 import { AgentBranchWrapper } from './agent-branch-wrapper'
@@ -7,10 +7,12 @@ import { ImplementorGroup } from './implementor-row'
 import { SingleBlock } from './single-block'
 import { ThinkingBlock } from './thinking-block'
 import { ToolBlockGroup } from './tool-block-group'
+import { useTheme } from '../../hooks/use-theme'
 import {
   processBlocks,
   type BlockProcessorHandlers,
 } from '../../utils/block-processor'
+import { ErrorBoundary } from '../error-boundary'
 
 import type { ContentBlock } from '../../types/chat'
 import type { MarkdownPalette } from '../../utils/markdown-renderer'
@@ -48,6 +50,42 @@ interface BlocksRendererPropsRef {
   contentToCopy?: string
   lastTextBlockIndex: number
 }
+
+/** Stands in for a block whose render threw. */
+const BlockRenderFallback = memo(({ label }: { label: string }) => {
+  const theme = useTheme()
+  return (
+    <text
+      style={{ wrapMode: 'word', fg: theme.error }}
+    >{`Could not render this ${label} block.`}</text>
+  )
+})
+
+/**
+ * Wrap one rendered block (or block group) so a render throw stays local.
+ *
+ * OpenTUI rejects some element nestings when it commits the tree — a `<text>`
+ * inside a `<text>`, for example — and a throw that reaches `@opentui/react`'s
+ * root error boundary replaces the WHOLE app with that boundary's fallback,
+ * which a production React build paints as nothing at all: the terminal goes
+ * blank, message list, status line and input bar included. Blocks are persisted
+ * to chat-messages.json and re-rendered when the session is reopened, so one bad
+ * block would blank that session permanently. A boundary per block degrades the
+ * same failure to a single visible line while the rest of the app keeps working.
+ */
+const isolateBlock = (
+  key: string,
+  label: string,
+  node: ReactNode,
+): ReactNode => (
+  <ErrorBoundary
+    key={key}
+    componentName={`BlocksRenderer(${label})`}
+    fallback={<BlockRenderFallback label={label} />}
+  >
+    {node}
+  </ErrorBoundary>
+)
 
 export const BlocksRenderer = memo(
   ({
@@ -97,37 +135,35 @@ export const BlocksRenderer = memo(
       () => ({
         onReasoningGroup: (reasoningBlocks, startIndex) => {
           const p = propsRef.current
-          return (
+          return isolateBlock(
+            reasoningBlocks[0]?.thinkingId ??
+              `${p.messageId}-thinking-${startIndex}`,
+            'thinking',
             <ThinkingBlock
-              key={
-                reasoningBlocks[0]?.thinkingId ??
-                `${p.messageId}-thinking-${startIndex}`
-              }
               blocks={reasoningBlocks}
               onToggleCollapsed={p.onToggleCollapsed}
               availableWidth={p.availableWidth}
               isNested={false}
               isMessageComplete={p.isComplete ?? false}
-            />
+            />,
           )
         },
 
         onImageBlock: (block, index) => {
           const p = propsRef.current
-          return (
-            <ImageBlock
-              key={`${p.messageId}-image-${index}`}
-              block={block}
-              availableWidth={p.availableWidth}
-            />
+          return isolateBlock(
+            `${p.messageId}-image-${index}`,
+            'image',
+            <ImageBlock block={block} availableWidth={p.availableWidth} />,
           )
         },
 
         onToolGroup: (toolBlocks, startIndex, nextIndex) => {
           const p = propsRef.current
-          return (
+          return isolateBlock(
+            `${p.messageId}-tool-group-${startIndex}`,
+            'tool',
             <ToolBlockGroup
-              key={`${p.messageId}-tool-group-${startIndex}`}
               toolBlocks={toolBlocks}
               keyPrefix={p.messageId}
               startIndex={startIndex}
@@ -136,27 +172,29 @@ export const BlocksRenderer = memo(
               availableWidth={p.availableWidth}
               onToggleCollapsed={p.onToggleCollapsed}
               markdownPalette={p.markdownPalette}
-            />
+            />,
           )
         },
 
         onImplementorGroup: (implementors, startIndex) => {
           const p = propsRef.current
-          return (
+          return isolateBlock(
+            `${p.messageId}-implementor-group-${startIndex}`,
+            'implementor',
             <ImplementorGroup
-              key={`${p.messageId}-implementor-group-${startIndex}`}
               implementors={implementors}
               siblingBlocks={p.sourceBlocks}
               availableWidth={p.availableWidth}
-            />
+            />,
           )
         },
 
         onAgentGroup: (agentBlocks, startIndex) => {
           const p = propsRef.current
-          return (
+          return isolateBlock(
+            `${p.messageId}-agent-grid-${startIndex}`,
+            'agent',
             <AgentBlockGrid
-              key={`${p.messageId}-agent-grid-${startIndex}`}
               agentBlocks={agentBlocks}
               keyPrefix={`${p.messageId}-agent-grid-${startIndex}`}
               availableWidth={p.availableWidth}
@@ -173,15 +211,16 @@ export const BlocksRenderer = memo(
                   isLastMessage={p.isLastMessage}
                 />
               )}
-            />
+            />,
           )
         },
 
         onSingleBlock: (block, index) => {
           const p = propsRef.current
-          return (
+          return isolateBlock(
+            `${p.messageId}-block-${index}`,
+            block.type,
             <SingleBlock
-              key={`${p.messageId}-block-${index}`}
               block={block}
               idx={index}
               messageId={p.messageId}
@@ -199,7 +238,7 @@ export const BlocksRenderer = memo(
               contentToCopy={
                 index === p.lastTextBlockIndex ? p.contentToCopy : undefined
               }
-            />
+            />,
           )
         },
       }),

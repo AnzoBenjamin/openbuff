@@ -245,6 +245,30 @@ The key insight: during resize, there's a timing window where the old structure 
 
 OpenTUI expects plain text content or the `content` prop - it does not handle JSX expressions within text elements.
 
+### A `<text>` May Only Contain Inline Children
+
+`TextNodeRenderable.add()` accepts strings, `TextNodeRenderable` instances and `StyledText` — nothing else. OpenTUI maps only `span`, `b`, `i`, `u`, `strong`, `em`, `br` and `a` onto text nodes; every other element (`box`, `text` itself, custom block renderables) throws during the reconciler's commit phase.
+
+That throw is not local. `@opentui/react`'s `createRoot` installs one root error boundary whose fallback replaces the entire tree, and a production React build paints that fallback as nothing — the terminal goes blank, message list, status line and input bar included. Typed content blocks persist to `chat-messages.json` and are replayed on reload, so one bad block blanks that session permanently.
+
+```tsx
+// ❌ WRONG: nested <text> throws at commit → whole app blanks
+<text style={{ fg: theme.foreground }}>
+  <text style={{ fg: theme.muted }}>{label}</text>
+  {value}
+</text>
+
+// ✅ CORRECT: inline segments are <span>
+<text style={{ fg: theme.foreground }}>
+  <span style={{ fg: theme.muted }}>{label}</span>
+  <span>{value}</span>
+</text>
+```
+
+`cli/src/components/__tests__/text-nesting.test.tsx` guards this with a TypeScript-AST scan of every `cli/src/**/*.tsx`, so it keeps running under the package's `NODE_ENV=production` test script (where `@opentui/react/test-utils` cannot be imported at all — it needs react's `act`, absent from the production build). Reconciler-backed confirmations in the same file use the repo's `renderTest` skip convention.
+
+Note that `renderToStaticMarkup` accepts the invalid nesting silently: per-renderer markup tests cannot catch it, only the real reconciler or the static guard can.
+
 ## Interactive Clickable Elements and Text Selection
 
 When building interactive UI in the CLI, text inside clickable areas should **not** be selectable. Otherwise users accidentally highlight text when clicking buttons, which creates a poor UX.
@@ -876,5 +900,6 @@ Streaming markdown renders as plain text until the message or agent finishes. Th
 - `spawn_agents` tool results may surface a nested `agentReceipt` (including `status: 'partial'`). `cli/src/utils/sdk-event-handlers.ts` narrows that receipt without `any` and marks the corresponding agent block partial even when only the receipt is present, so incomplete specialist turns stay visible in the TUI.
 - BACKGROUND terminal cards wire `backgroundJobId` from the launch `tool_result` so live `job_update` events settle lifecycle/output in place without a `check_job` poll; keep frozen JSON status from being treated as authoritative after settle.
 - `cli/src/utils/create-run-config.ts` and regenerated agent type sources track content-search/glob `cwd` ergonomics (file-as-cwd coercion, paths param, flag allowlist). After public tool schema changes, regenerate `cli/src/data/initial-agent-type-sources.generated.ts` via the root tool-definition generator.
+- `cli/src/components/blocks/blocks-renderer.tsx` wraps every block and block group in its own nested `ErrorBoundary` (`isolateBlock`), with the React key on the boundary. Keep new block handlers routed through it: `@opentui/react`'s root boundary is app-wide, so an unguarded render throw in one persisted block blanks the whole session on every reload.
 
 - _Knowledge refresh 2026-08-23: add `/memory` (alias `/mem`) slash command; staleness guard touch._
