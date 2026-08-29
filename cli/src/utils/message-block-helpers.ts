@@ -33,9 +33,108 @@ const GATE_STATE_STATUSES: ReadonlySet<GateStateStatus> =
   new Set<GateStateStatus>(['pending', 'passed', 'failed', 'skipped'])
 
 /**
+ * Parse the inner text of a gate-state block as a JSON object. Returns null
+ * when the text is not valid JSON or is not a plain object, so callers can
+ * fall back to the legacy `key: value` line form.
+ */
+const tryParseJsonObject = (text: string): UnknownRecord | null => {
+  try {
+    const parsed: unknown = JSON.parse(text)
+    return isRecordValue(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Normalize reviewer-authored gate-state text. Order matters: collapse
+ * whitespace FIRST so tabs/newlines become spaces, then strip the remaining
+ * C0/DEL control bytes. The text flows verbatim into the opentui `<text>`
+ * renderer, so a surviving ESC could corrupt or spoof terminal output.
+ */
+const sanitizeGateStateText = (value: string): string =>
+  value
+    .replace(/\s+/g, ' ')
+    .replace(/[\x00-\x1f\x7f]/g, '')
+    .trim()
+
+/**
+ * Producer bounds mirrored from base2's `formatGateStateBlock`, which caps the
+ * emitted advisory list at 8 entries and each entry at 240 characters. The
+ * parser reads arbitrary assistant text, so it enforces the same bounds: a
+ * non-base2 or malformed `<gate-state>` payload cannot render an unbounded
+ * advisory list in the CLI.
+ */
+const MAX_GATE_STATE_ADVISORIES = 8
+const MAX_GATE_STATE_ADVISORY_LENGTH = 240
+
+/**
+ * Accept advisories only when they are an array of non-empty strings within the
+ * producer's bounds. Anything else (not an array, empty entries, mixed types,
+ * more than MAX_GATE_STATE_ADVISORIES entries, or an entry longer than
+ * MAX_GATE_STATE_ADVISORY_LENGTH) is dropped whole so the renderer never
+ * receives malformed or unbounded data.
+ *
+ * Each entry is sanitized BEFORE the non-empty and length checks, so an entry
+ * made only of control characters becomes empty and drops the whole list under
+ * the existing strictness rule.
+ */
+const parseGateStateAdvisories = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return []
+  if (value.length > MAX_GATE_STATE_ADVISORIES) return []
+  const advisories = value.map((entry) =>
+    typeof entry === 'string' ? sanitizeGateStateText(entry) : '',
+  )
+  return advisories.every(
+    (entry) =>
+      entry.length > 0 && entry.length <= MAX_GATE_STATE_ADVISORY_LENGTH,
+  )
+    ? advisories
+    : []
+}
+
+/**
+ * Build a gate-state block from an already-parsed JSON payload whose `gate` is
+ * a non-empty string. Returns null when the status is not one of the pinned
+ * statuses, keeping the JSON form exactly as strict as the line form.
+ */
+const buildGateStateFromJson = (
+  payload: UnknownRecord,
+  gate: string,
+): GateStateContentBlock | null => {
+  const status =
+    typeof payload.status === 'string'
+      ? (payload.status.trim().toLowerCase() as GateStateStatus)
+      : undefined
+  if (!status || !GATE_STATE_STATUSES.has(status)) return null
+
+  const details =
+    typeof payload.details === 'string'
+      ? sanitizeGateStateText(payload.details)
+      : ''
+  const origin = typeof payload.origin === 'string' ? payload.origin.trim() : ''
+  const advisories = parseGateStateAdvisories(payload.advisories)
+
+  return {
+    type: 'gate-state',
+    gate,
+    gateStatus: status,
+    ...(details ? { details } : {}),
+    ...(advisories.length > 0 ? { advisories } : {}),
+    origin: origin || 'Base2',
+  }
+}
+
+/**
  * Parse the pinned Base2 gate-state shape from a message buffer.
  *
- * Recognized shape (case-insensitive on keys/status, narrow on purpose):
+ * Base2 emits a JSON payload, which is tried first:
+ *
+ *   <gate-state>{"gate":"validation/reviewer","status":"passed",
+ *   "details":"...","origin":"Base2","advisories":["..."]}</gate-state>
+ *
+ * The legacy line form remains supported (case-insensitive on keys/status,
+ * narrow on purpose):
  *
  *   <gate-state>
  *   gate: <name>
@@ -48,6 +147,29 @@ const GATE_STATE_STATUSES: ReadonlySet<GateStateStatus> =
  * block. If multiple gate-state blocks are present, only the first is parsed.
  * The parser is intentionally strict so ordinary prose mentioning "gate" or
  * "status" never produces a false positive.
+ *
+ * Delimiter contract: the producer escapes `</` as `<\/` (a legal JSON string
+ * escape) before emitting the block, so reviewer-authored `details`/`advisories`
+ * text containing a literal `</gate-state>` cannot terminate the block early and
+ * JSON.parse restores it byte-for-byte here. This parser deliberately does NOT
+ * retry longer matches for an unescaped delimiter: such a payload stays unparsed
+ * (fail closed) rather than weakening the strictness above.
+ *
+ * Parse/render contract (pinned in
+ * cli/src/utils/__tests__/message-block-helpers.test.ts):
+ * - Both pre-existing forms keep their exact behavior: the legacy `key: value`
+ *   line form and the JSON payload form agree on gate/status/details/origin.
+ * - `advisories` is a JSON-payload-only field. The line form never carried it,
+ *   so an `advisories:` line stays an unrecognized key and yields no advisories.
+ * - Advisories are admitted only within the producer's bounds
+ *   (MAX_GATE_STATE_ADVISORIES entries, MAX_GATE_STATE_ADVISORY_LENGTH chars per
+ *   entry); an out-of-bounds or otherwise malformed list is dropped whole and
+ *   never widens the rendered output.
+ * - JSON-payload `details` and every advisory are sanitized (whitespace
+ *   collapsed, then C0/DEL control bytes stripped) BEFORE those bounds checks,
+ *   so a hand-authored payload carrying ANSI escapes cannot bypass the
+ *   producer, and an advisory made only of control characters becomes empty and
+ *   drops the whole list.
  */
 export const parseGateStateBlock = (
   buffer: string,
@@ -55,8 +177,15 @@ export const parseGateStateBlock = (
   const match = buffer.match(GATE_STATE_BLOCK_RE)
   if (!match) return null
 
+  const inner = match[1].trim()
+  const payload = tryParseJsonObject(inner)
+  const jsonGate = typeof payload?.gate === 'string' ? payload.gate.trim() : ''
+  if (payload && jsonGate) {
+    return buildGateStateFromJson(payload, jsonGate)
+  }
+
   const fields: Record<string, string> = {}
-  for (const rawLine of match[1].split('\n')) {
+  for (const rawLine of inner.split('\n')) {
     const line = rawLine.trim()
     if (!line) continue
     const sep = line.indexOf(':')
@@ -1200,8 +1329,7 @@ export const updateToolBlockWithOutput = (
   options: UpdateToolBlockOptions,
 ): ContentBlock[] => {
   const { toolCallId, toolOutput } = options
-  const backgroundJobId =
-    getBackgroundShellJobIdFromToolOutput(toolOutput)
+  const backgroundJobId = getBackgroundShellJobIdFromToolOutput(toolOutput)
 
   return blocks.map((block) => {
     if (block.type === 'tool' && block.toolCallId === toolCallId) {

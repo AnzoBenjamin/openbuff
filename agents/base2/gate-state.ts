@@ -42,6 +42,14 @@ export type Base2ReviewReceipt = {
     correctionTruncated?: boolean
   }>
   findingCount?: number
+  /**
+   * Non-blocking observations: recorded and displayed, never repair targets.
+   * Stored verbatim; the `<gate-state>` emitter escapes `</` as `<\/` (a legal
+   * JSON string escape) so advisory text containing the literal closing
+   * delimiter cannot truncate that tag-delimited block for its readers.
+   */
+  advisories?: string[]
+  advisoryCount?: number
   requirementCoverage: Array<{
     requirement: string
     status: string
@@ -91,10 +99,12 @@ export type Base2GateState = {
   lastReviewerGateSkipReason: string
   /**
    * Durable one-line mid-turn gate-progress note (e.g. "gate: validation
-   * passed; reviewer code-reviewer running"). Written only through the inline
-   * setGateProgress helper in base2.ts and rendered by
-   * buildPinnedActiveWorkMessage as a "Gate progress:" line in the existing
-   * pinned active-work message — no new yield/add_message is introduced.
+   * passed; reviewer code-reviewer running"). Written through the inline
+   * setGateProgress helper in base2.ts, except on the gate-pass path, which
+   * resets the field directly. Rendered by buildPinnedActiveWorkMessage as a
+   * "Gate progress:" line in the pinned active-work message; when it is the
+   * only change since the last emitted pinned block, base2.ts yields a
+   * delta-only add_message carrying just that line instead of the full block.
    * Reset to '' when the gate passes so the next edit cycle starts fresh.
    * Backward-compatible: older serialized state lacks this field (treated as
    * unset).
@@ -127,9 +137,33 @@ export type Base2ActiveWorkState = Base2GateState & {
    * reviewer → repair → re-review loop converges instead of looping forever
    * on the same NON_BLOCKING architectural commentary. Reset when the gate
    * passes. Backward-compatible: older serialized state lacks this field
-   * (treated as empty). MUST stay a plain JSON-serializable array.
+   * (treated as empty). Bounded to the most recent 200 entries at every write
+   * site (like `reviewReceipts`) so durable state cannot grow without bound
+   * across default-unlimited repair rounds. MUST stay a plain
+   * JSON-serializable array.
    */
   condonedFindingTexts?: string[]
+  /**
+   * T1.5: condone keys of the form `<verdictClass>::text:<strippedText>` and
+   * `<verdictClass>::id:<reviewerSuppliedId>`, where verdictClass is
+   * `NON_BLOCKING`, `BLOCKING`, or `*` for a text that carries no verdict
+   * prefix (legacy serialized state only — every reviewer path now stores the
+   * prefixed blocker string). Matching is per class with ONE-DIRECTIONAL
+   * de-escalation: a `*` entry condones only another `*` finding, a `BLOCKING`
+   * entry ALSO condones a `NON_BLOCKING` re-raise of the same identity (a
+   * de-escalated re-raise carries no new information, so the reviewer → repair
+   * → re-review loop still converges instead of spawning a repair round whose
+   * already-applied repair trips the no-progress guard), and a `NON_BLOCKING`
+   * entry NEVER condones a `BLOCKING` re-raise. `condonedFindingTexts` alone
+   * strips the prefix before comparing, so a nit condoned as NON_BLOCKING was
+   * silently swallowed when a later review re-raised the SAME text as BLOCKING;
+   * an escalation is new information and must reopen the gate. Reset when the
+   * gate passes. Backward-compatible: older serialized state lacks this field,
+   * and the legacy text path is consulted only while this list is empty (fail
+   * closed). Bounded to the most recent 200 entries at every write site (like
+   * `reviewReceipts`). MUST stay a plain JSON-serializable array.
+   */
+  condonedFindingKeys?: string[]
   /**
    * Reviewer family that must re-attest after a runtime-attested repair changes
    * the workspace and validation passes. Missing legacy provenance fails closed

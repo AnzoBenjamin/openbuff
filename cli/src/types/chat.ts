@@ -1,6 +1,7 @@
 import type { ChatTheme } from './theme-system'
 import type { ToolName } from '@openbuff/sdk'
 import type { ReactNode } from 'react'
+import type { CompletionSummary } from '../utils/completion-summary'
 
 /**
  * isCollapsed/userOpened are duplicated across block types intentionally - each UI
@@ -148,6 +149,25 @@ export type GateStateContentBlock = {
   details?: string
   /** Optional human label for the gate origin (e.g. "Base2"). */
   origin?: string
+  /**
+   * Non-blocking reviewer observations reported alongside the gate result.
+   * Advisories never change the gate status: they are surfaced for awareness
+   * only. Omitted when the producer reported none.
+   *
+   * Bounded by contract: base2's `formatGateStateBlock` emits at most 8 entries
+   * of at most 240 characters each, and the CLI parser
+   * (`parseGateStateAdvisories`) enforces the same bounds, dropping the whole
+   * list when arbitrary assistant text exceeds them. Entries are stored
+   * verbatim and may legitimately contain the literal `</gate-state>` text: the
+   * producer escapes `</` as `<\/` (a legal JSON string escape) so payload text
+   * cannot terminate the tag-delimited block early.
+   */
+  advisories?: string[]
+}
+
+export type CompletionSummaryContentBlock = {
+  type: 'completion-summary'
+  summary: CompletionSummary
 }
 
 export type AskUserContentBlock = {
@@ -211,14 +231,123 @@ export type FileAttachment = {
   note?: string
 }
 
+export type ContextContentBlock = {
+  type: 'context'
+  ledgerText: string | null
+  gateBudgetsText: string
+}
+
+export type InfoContentBlock = {
+  type: 'info'
+  version: string
+  workspace: string
+}
+
+export type DoctorContentBlock = {
+  type: 'doctor'
+  projectRoot: string
+  agentsTrusted: boolean
+  skillsTrusted: boolean
+  skillCount: number
+  mcpCount: number
+  diagnostics: Array<{ filePath?: string; agentId?: string; message: string }>
+  providerStatus: string
+}
+
+export type IndexStatusContentBlock = {
+  type: 'index-status'
+  statusLine: string
+  messageLine: string
+  corpusLine: string
+  ageLine: string
+  vectorLine: string
+  hintLine: string
+  coverageLine?: string
+  diagnosticsLines?: string[]
+  lines: string[]
+}
+
+export type PlanStatusContentBlock = {
+  type: 'plan-status' | 'plan-status-list'
+  mode: 'status' | 'list'
+  reportText: string
+  sessions?: import('../commands/plan-artifacts').PlanSessionSummary[]
+  isStatusReport: boolean
+}
+
+export type MemoryContentBlock =
+  | {
+      type: 'memory'
+      state: 'empty'
+    }
+  | {
+      type: 'memory'
+      state: 'status'
+      revision: number
+      updatedAt: number
+      goal: string | null
+      goalPreview: string
+      isGoalTruncated: boolean
+      counts: {
+        decisions: number
+        requirements: number
+        editsMade: number
+        validationResults: number
+        blockers: number
+        nextActions: number
+      }
+      evidence: {
+        fresh: number
+        stale: number
+        total: number
+      }
+      stalePaths: string[]
+      totalStaleCount: number
+    }
+  | {
+      type: 'memory'
+      state: 'pruned'
+      removed: number
+      remaining: number
+    }
+  | {
+      type: 'memory'
+      state: 'nothing-to-prune'
+      remaining: number
+    }
+  | {
+      type: 'memory'
+      state: 'no-record'
+    }
+  | {
+      type: 'memory'
+      state: 'failed'
+      reason: 'invalid-record' | 'concurrent-write' | 'write-failed'
+      cause: string
+      removed: number
+      remaining: number
+    }
+  | {
+      type: 'memory'
+      state: 'error'
+      message: string
+    }
+
 export type ContentBlock =
   | AgentContentBlock
   | AgentListContentBlock
   | AskUserContentBlock
+  | CompletionSummaryContentBlock
+  | ContextContentBlock
+  | DoctorContentBlock
   | GateStateContentBlock
   | HtmlContentBlock
   | ImageContentBlock
+  | IndexStatusContentBlock
+  | InfoContentBlock
+  | MemoryContentBlock
   | ModeDividerContentBlock
+  | PlanStatusContentBlock
   | TextContentBlock
   | ToolContentBlock
   | PlanContentBlock
@@ -320,4 +449,44 @@ export function isGateStateBlock(
   block: ContentBlock,
 ): block is GateStateContentBlock {
   return block.type === 'gate-state'
+}
+
+export function isCompletionSummaryBlock(
+  block: ContentBlock,
+): block is CompletionSummaryContentBlock {
+  return block.type === 'completion-summary'
+}
+
+export function isMemoryBlock(
+  block: ContentBlock,
+): block is MemoryContentBlock {
+  return block.type === 'memory'
+}
+
+export function isContextBlock(
+  block: ContentBlock,
+): block is ContextContentBlock {
+  return block.type === 'context'
+}
+
+export function isInfoBlock(block: ContentBlock): block is InfoContentBlock {
+  return block.type === 'info'
+}
+
+export function isDoctorBlock(
+  block: ContentBlock,
+): block is DoctorContentBlock {
+  return block.type === 'doctor'
+}
+
+export function isIndexStatusBlock(
+  block: ContentBlock,
+): block is IndexStatusContentBlock {
+  return block.type === 'index-status'
+}
+
+export function isPlanStatusBlock(
+  block: ContentBlock,
+): block is PlanStatusContentBlock {
+  return block.type === 'plan-status' || block.type === 'plan-status-list'
 }

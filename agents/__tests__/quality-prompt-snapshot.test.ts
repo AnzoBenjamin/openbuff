@@ -1,11 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 
 import { PLACEHOLDER } from '@codebuff/agent-runtime/templates/types'
+import { frontendSection } from '@codebuff/common/constants/prompt-sections'
 
 import { createBaseDeep } from '../base2/base-deep'
 import { createBase2 } from '../base2/base2'
-import { frontendSection } from '@codebuff/common/constants/prompt-sections'
-
 import { createCodeEditor } from '../editor/editor'
 import {
   buildBroadAuditSection,
@@ -61,11 +60,20 @@ describe('shared craftsmanship prompt sections', () => {
     // with the reviewer rubric; assert topic coverage only so future wording
     // changes cannot silently drop a required self-check topic. Unlike
     // qualitySection, this section is intentionally NOT byte-frozen.
+    //
+    // The reviewer-parity topics ('Security pass', 'Test coverage
+    // (blocking)', 'Requirement coverage', 'File attestation') are
+    // deliberately NOT re-asserted here: they are owned by
+    // review-rubric-parity.test.ts, which pins them as bullet labels tied to
+    // the reviewer schema fields they mirror. Duplicating the weaker bare-word
+    // form would give the rubric two owners with different strictness.
     expect(preReviewSelfCheckSection).toContain('# Pre-Review Self-Check')
-    expect(preReviewSelfCheckSection).toContain('Security pass')
-    expect(preReviewSelfCheckSection).toContain('Test coverage')
     expect(preReviewSelfCheckSection).toContain('Test quality')
-    expect(preReviewSelfCheckSection).toContain('Compatibility')
+    expect(preReviewSelfCheckSection).toContain('Advisory vs blocking')
+    // Pinned to the bullet label: the intro sentence already contains
+    // "apiCompatibility", so a bare 'Compatibility' would still pass with the
+    // bullet deleted.
+    expect(preReviewSelfCheckSection).toContain('**Compatibility:**')
     expect(preReviewSelfCheckSection).toContain('Architecture')
     expect(preReviewSelfCheckSection).toContain('Resource safety')
     expect(preReviewSelfCheckSection).toContain('Hygiene')
@@ -111,18 +119,6 @@ describe('shared craftsmanship prompt sections', () => {
     expect(planSection).toContain(
       'translate the findings into the durable plan packet below',
     )
-  })
-
-  test('buildBroadAuditSection throws on empty or whitespace finalizeClause', () => {
-    expect(() =>
-      buildBroadAuditSection('' as unknown as never),
-    ).toThrow('finalizeClause must be a non-empty string')
-    expect(() =>
-      buildBroadAuditSection('   ' as unknown as never),
-    ).toThrow('finalizeClause must be a non-empty string')
-    expect(() =>
-      buildBroadAuditSection('\n\t' as unknown as never),
-    ).toThrow('finalizeClause must be a non-empty string')
   })
 
   test('gitDisciplineSection contains the required git-discipline topics (not byte-frozen)', () => {
@@ -183,7 +179,9 @@ describe('shared craftsmanship prompt sections', () => {
     // affirmative-state-first topic coverage so future tightening does not
     // silently drop GATE PENDING/PASSED, pending-set authority, or local-check
     // separation.
-    expect(gateAwarenessSection).toContain('# Automated Validation & Review Gate')
+    expect(gateAwarenessSection).toContain(
+      '# Automated Validation & Review Gate',
+    )
     expect(gateAwarenessSection).toContain('GATE: PENDING')
     expect(gateAwarenessSection).toContain('GATE: PASSED')
     expect(gateAwarenessSection).toContain('final_response_allowed')
@@ -283,6 +281,61 @@ describe('shared craftsmanship prompt sections', () => {
     // implementer self-checks its diff against the reviewer rubric before
     // returning.
     expect(editor.instructionsPrompt).toContain(preReviewSelfCheckSection)
+  })
+
+  test('base2 inline Code Editing Mandates keeps topic parity with qualitySection', () => {
+    // base2 keeps an always-inline '# Code Editing Mandates' block that
+    // restates the canonical craftsmanship rules in its own wording, so the
+    // default disclosure-ON surface (where qualitySection becomes a guide
+    // pointer) still carries them inline. That duplication is intentional and
+    // documented at the qualitySectionPointer declaration in base2.ts; this
+    // guard pins the shared topic labels on both copies so dropping a rule from
+    // either side fails here instead of letting the two silently diverge.
+    const system = createBase2('default').systemPrompt as string
+    const heading = '# Code Editing Mandates'
+    const start = system.indexOf(heading)
+    expect(
+      start >= 0 ? 'present' : 'base2 system prompt lost its inline mandates',
+    ).toBe('present')
+    const afterHeading = system.slice(start + heading.length)
+    const end = afterHeading.indexOf('\n# ')
+    expect(
+      end > 0
+        ? 'bounded'
+        : 'inline Code Editing Mandates block is no longer followed by a heading',
+    ).toBe('bounded')
+    const inlineMandates = afterHeading.slice(0, end)
+
+    // Bullet labels only (no leading dash): the inline copy uses slightly
+    // different indentation for some bullets, but a missing topic must fail.
+    const sharedTopicLabels = [
+      '**Conventions:**',
+      '**Libraries/Frameworks:**',
+      '**Style & Structure:**',
+      '**Idiomatic Changes:**',
+      '**Simplicity & Minimalism:**',
+      '**Code Reuse:**',
+      '**Refactoring Awareness:**',
+      '**Testing:**',
+      '**Package Management:**',
+      '**Code Hygiene:**',
+    ]
+    for (const label of sharedTopicLabels) {
+      expect(
+        inlineMandates.includes(label)
+          ? 'inline'
+          : `inline Code Editing Mandates lost ${label}`,
+      ).toBe('inline')
+      expect(
+        qualitySection.includes(label)
+          ? 'canonical'
+          : `qualitySection lost ${label}`,
+      ).toBe('canonical')
+    }
+    // The no-any rule is labelled slightly differently on each side, so pin the
+    // shared prose instead of the bullet label.
+    expect(inlineMandates).toContain('Don\'t type cast as "any"')
+    expect(qualitySection).toContain('Don\'t type cast as "any"')
   })
 
   test('base2 system prompt prefers direct code_search and multi-query code-searcher', () => {

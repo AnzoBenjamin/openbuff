@@ -146,7 +146,7 @@ describe('runProgrammaticStep', () => {
   afterEach(() => {
     mock.restore()
     // Clear the generator cache between tests
-    clearAgentGeneratorCache({ logger })
+    clearAgentGeneratorCache()
   })
 
   describe('generator lifecycle', () => {

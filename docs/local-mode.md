@@ -58,6 +58,28 @@ attached to a TUI session via PlanLink. The available slash commands are:
 - `/plan-status` — print the current task/milestone status from
   `STATUS.md`.
 - `/lessons` — append or review lesson notes captured during the plan.
+- `/plans` (alias `/plan-ls`) — list every durable plan session found
+  under `.agents/sessions/`, one row per session: active marker,
+  `[status]` badge, slug, `N/M done` progress, and the current task.
+  Only directories holding at least one known plan artifact (`SPEC.md`,
+  `PLAN.md`, `STATUS.md`, `LESSONS.md`) are listed. It takes no
+  arguments, runs entirely locally, and never sends a prompt to the
+  agent.
+- `/plan-use <slug>` (aliases `/plan-active`, `/use-plan`) — point
+  `.agents/ACTIVE_SESSION` at a session. Accepts a bare slug or the
+  `.agents/sessions/<slug>` path form; with no argument it opens the
+  shared plan-session picker like the other plan commands. It fails
+  closed without writing the pointer when the target resolves outside
+  the project root, resolves outside `.agents/sessions/`, is a nested
+  path under a session directory, is not a valid slug, does not exist
+  on disk, or holds no known plan artifact. The pointer file stores the
+  bare slug.
+
+`/plans` derives the active session from the rows it scanned, so when
+`.agents/ACTIVE_SESSION` names a slug that `/plans` does not list (the
+directory was deleted, or it has no plan artifacts) it prints a
+`Stale active session: <slug> ...` note pointing at `/plan-use <slug>`
+instead of silently omitting the `Active session:` line.
 
 For agent-driven updates, prefer `update_plan_status` for incremental
 `STATUS.md` and lesson-note edits (it preserves user prose), and reserve

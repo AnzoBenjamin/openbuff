@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from 'node:util'
 import { match } from 'ts-pattern'
 
 import {
@@ -42,10 +41,7 @@ import {
   destinationFromChunkEvent,
   processTextChunk,
 } from './stream-chunk-processor'
-import {
-  computeCompletionSummary,
-  formatCompletionSummary,
-} from './completion-summary'
+import { computeCompletionSummary } from './completion-summary'
 
 import type { AgentMode } from './constants'
 import type { MessageUpdater } from './message-updater'
@@ -54,6 +50,7 @@ import type { StreamStatus } from '../hooks/use-message-queue'
 import type {
   AgentContentBlock,
   ContentBlock,
+  TextContentBlock,
   ToolContentBlock,
 } from '../types/chat'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
@@ -132,6 +129,9 @@ export type EventHandlerState = {
 }
 
 type TextDelta = { type: 'text' | 'reasoning'; text: string }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
 
 const hiddenToolNames = new Set<ToolName | 'spawn_agent_inline'>([
   'spawn_agent_inline',
@@ -335,13 +335,16 @@ const handleSpawnAgentsToolCall = (
   state: EventHandlerState,
   event: PrintModeToolCall,
 ) => {
-  const agents = Array.isArray(event.input?.agents) ? event.input?.agents : []
+  const agents: unknown[] = Array.isArray((event.input as { agents?: unknown })?.agents)
+    ? (event.input as { agents: unknown[] }).agents
+    : []
 
-  agents.forEach((agent: any, index: number) => {
+  agents.forEach((agent: unknown, index: number) => {
     const tempAgentId = `${event.toolCallId}-${index}`
+    const agentType = isRecord(agent) && typeof agent.agent_type === 'string' ? agent.agent_type : 'unknown'
     state.streaming.streamRefs.setters.setSpawnAgentInfo(tempAgentId, {
       index,
-      agentType: agent.agent_type || 'unknown',
+      agentType,
     })
   })
 
@@ -352,24 +355,31 @@ const handleSpawnAgentsToolCall = (
       : undefined
 
     const newAgentBlocks: ContentBlock[] = agents
-      .map((agent: any, originalIndex: number) => ({ agent, originalIndex }))
-      .filter(({ agent }) => !shouldHideAgent(agent.agent_type || ''))
-      .map(({ agent, originalIndex }) =>
-        createAgentBlock({
+      .map((agent: unknown, originalIndex: number) => ({ agent, originalIndex }))
+      .filter(({ agent }) => {
+        const agentType = isRecord(agent) && typeof agent.agent_type === 'string' ? agent.agent_type : ''
+        return !shouldHideAgent(agentType)
+      })
+      .map(({ agent, originalIndex }) => {
+        const record = isRecord(agent) ? agent : {}
+        const agentType = typeof record.agent_type === 'string' ? record.agent_type : ''
+        const prompt = typeof record.prompt === 'string' ? record.prompt : undefined
+        const params = isRecord(record.params) ? (record.params as Record<string, unknown>) : undefined
+        return createAgentBlock({
           agentId: `${event.toolCallId}-${originalIndex}`,
-          agentType: agent.agent_type || '',
-          prompt: agent.prompt,
-          params: agent.params,
+          agentType,
+          prompt,
+          params,
           spawnToolCallId: event.toolCallId,
           spawnIndex: originalIndex,
           parentAgentType,
-        }),
-      )
+        })
+      })
 
     return [...blocks, ...newAgentBlocks]
   })
 
-  agents.forEach((_: any, index: number) => {
+  agents.forEach((_: unknown, index: number) => {
     updateStreamingAgents(state, { add: `${event.toolCallId}-${index}` })
   })
 }
@@ -458,8 +468,11 @@ const handleToolStart = (
         return { ...block, queued: false, lifecycle: 'running' as const }
       } else if (block.type === 'agent' && block.blocks) {
         const updatedBlocks = flipQueued(block.blocks)
-        // Avoid creating a new agent block ref when nothing changed.
-        if (isDeepStrictEqual(block.blocks, updatedBlocks)) {
+        // Avoid creating a new agent block ref when nothing changed (shallow reference check to avoid node:util and O(N^2)).
+        if (
+          updatedBlocks.length === block.blocks.length &&
+          updatedBlocks.every((updated, index) => updated === block.blocks![index])
+        ) {
           return block
         }
         return { ...block, blocks: updatedBlocks }
@@ -475,16 +488,16 @@ const handleToolStart = (
  * available. Older reports only had spawn index metadata; current reports carry
  * this id so out-of-order subagent_start blocks can still receive final output.
  */
-const getSpawnResultAgentId = (result: any): string | undefined =>
-  typeof result?.agentId === 'string' && result.agentId.trim()
+const getSpawnResultAgentId = (result: unknown): string | undefined =>
+  isRecord(result) && typeof result.agentId === 'string' && result.agentId.trim()
     ? result.agentId
     : undefined
 
 const getSpawnResultForBlock = (
   block: AgentContentBlock,
   toolCallId: string,
-  results: any[],
-): any | undefined => {
+  results: unknown[],
+): unknown | undefined => {
   if (block.spawnToolCallId === toolCallId && block.spawnIndex !== undefined) {
     return results[block.spawnIndex]
   }
@@ -548,28 +561,30 @@ const mapReceiptStatusToAgentStatus = (
 
 const applySpawnAgentResultToBlock = (
   block: AgentContentBlock,
-  result: any,
+  result: unknown,
 ): ContentBlock => {
   const receipt = readSpawnAgentReceipt(result)
-  const hasValue = result?.value != null
+  const record = isRecord(result) ? result : null
+  const hasValue = record?.value != null
   const hasReceipt =
-    result?.agentReceipt != null && typeof result.agentReceipt === 'object'
+    record?.agentReceipt != null && typeof record.agentReceipt === 'object'
 
   // Receipt-only results still need status applied (e.g. partial with empty value).
   if (!hasValue && !hasReceipt) {
     return block
   }
 
+  const valueRecord = record && isRecord(record.value) ? record.value : null
   const backgroundJobId =
     hasValue &&
-    result.value?.background === true &&
-    typeof result.value?.jobId === 'string'
-      ? result.value.jobId
+    valueRecord?.background === true &&
+    typeof valueRecord.jobId === 'string'
+      ? (valueRecord.jobId as string)
       : undefined
 
   const existingBlocks = block.blocks ?? []
   const { content, hasError } = hasValue
-    ? extractSpawnAgentResultContent(result.value)
+    ? extractSpawnAgentResultContent(record.value)
     : { content: '', hasError: false }
   // Check if the agent already streamed text content (e.g., basher).
   // Agents like thinker return all output at the end via lastMessage,
@@ -631,7 +646,7 @@ const applySpawnAgentResultToBlock = (
 const updateSpawnAgentBlocks = (
   blocks: ContentBlock[],
   toolCallId: string,
-  results: any[],
+  results: unknown[],
 ): ContentBlock[] => {
   return blocks.map((block) => {
     if (block.type !== 'agent') {
@@ -662,15 +677,15 @@ const updateSpawnAgentBlocks = (
 const handleSpawnAgentsResult = (
   state: EventHandlerState,
   toolCallId: string,
-  results: any[],
+  results: unknown[],
 ) => {
   // Replace placeholder spawn agent blocks with their final text/status output.
   state.message.updater.updateAiMessageBlocks((blocks) =>
     updateSpawnAgentBlocks(blocks, toolCallId, results),
   )
 
-  results.forEach((result, index: number) => {
-    if (result?.value?.background === true) return
+  results.forEach((result: unknown, index: number) => {
+    if (isRecord(result) && isRecord(result.value) && result.value.background === true) return
     const agentId = `${toolCallId}-${index}`
     updateStreamingAgents(state, { remove: agentId })
   })
@@ -809,7 +824,7 @@ const handleToolResult = (
   state: EventHandlerState,
   event: PrintModeToolResult,
 ) => {
-  const askUserResult = (event.output?.[0] as any)?.value
+  const askUserResult = event.output?.[0]?.type === 'json' ? (event.output[0] as { type: 'json'; value: unknown }).value : undefined
   state.message.updater.updateAiMessageBlocks((blocks) =>
     transformAskUserBlocks(blocks, {
       toolCallId: event.toolCallId,
@@ -818,11 +833,10 @@ const handleToolResult = (
   )
 
   const firstOutput = event.output?.[0]
-  const firstOutputValue =
-    firstOutput && 'value' in firstOutput ? firstOutput.value : undefined
+  const firstOutputValue = firstOutput?.type === 'json' ? firstOutput.value : undefined
   const isSpawnAgentsResult =
     Array.isArray(firstOutputValue) &&
-    firstOutputValue.some((v: any) => v?.agentName || v?.agentType)
+    firstOutputValue.some((v: unknown) => isRecord(v) && (typeof v.agentName === 'string' || typeof v.agentType === 'string'))
 
   if (isSpawnAgentsResult && Array.isArray(firstOutputValue)) {
     handleSpawnAgentsResult(state, event.toolCallId, firstOutputValue)
@@ -901,6 +915,56 @@ const handleToolResult = (
 
 /** Max accumulated live output kept on a background tool card (tail-bounded). */
 const JOB_OUTPUT_CHAR_CAP = 50_000
+
+/** Tail-slice without cutting surrogate pairs (e.g. emoji). */
+const safeTailSlice = (str: string, cap: number): string => {
+  if (str.length <= cap) return str
+  let start = str.length - cap
+  // If start lands on a low surrogate, advance to avoid splitting a pair.
+  if (start > 0 && start < str.length) {
+    const cu = str.charCodeAt(start)
+    if (cu >= 0xdc00 && cu <= 0xdfff) {
+      const prev = str.charCodeAt(start - 1)
+      if (prev >= 0xd800 && prev <= 0xdbff) start += 1
+    }
+  }
+  return str.slice(start)
+}
+
+const trimTextBlocksToCap = (
+  blocks: ContentBlock[],
+  cap = JOB_OUTPUT_CHAR_CAP,
+): ContentBlock[] => {
+  const totalTextLen = blocks
+    .filter((b) => b.type === 'text')
+    .reduce((sum, b) => sum + (((b as TextContentBlock).content?.length) ?? 0), 0)
+  if (totalTextLen <= cap) return blocks
+  let remaining = cap
+  const trimmed: ContentBlock[] = []
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i]
+    if (b.type !== 'text') {
+      trimmed.unshift(b)
+      continue
+    }
+    const content = (b as TextContentBlock).content ?? ''
+    if (content.length <= remaining) {
+      trimmed.unshift(b)
+      remaining -= content.length
+    } else {
+      trimmed.unshift({
+        ...b,
+        content: safeTailSlice(content, remaining),
+      } as ContentBlock)
+      remaining = 0
+      for (let j = i - 1; j >= 0; j--) {
+        if (blocks[j].type !== 'text') trimmed.unshift(blocks[j])
+      }
+      break
+    }
+  }
+  return trimmed
+}
 
 /**
  * Maps a job-registry lifecycle state to the tool block's lifecycle vocabulary
@@ -1019,7 +1083,7 @@ const handleJobUpdate = (
           : withDelta
       const nextOutput =
         event.outputDelta !== undefined || errorText !== undefined
-          ? combined.slice(-JOB_OUTPUT_CHAR_CAP)
+          ? safeTailSlice(combined, JOB_OUTPUT_CHAR_CAP)
           : block.output
       // Prefer flag true when this update appends error text, even if the
       // lifecycle is running/queued. Never clear the flag while event.error is
@@ -1043,33 +1107,71 @@ const handleJobUpdate = (
     if (block.type === 'agent') {
       if (block.backgroundJobId === event.jobId) {
         const status = jobStateToAgentStatus(event.state, state.logger)
+        const hasDelta = event.outputDelta !== undefined
+        let nextBlocks = block.blocks ?? []
+        if (hasDelta) {
+          const deltaText = event.outputDelta as string
+          const last = nextBlocks[nextBlocks.length - 1]
+          if (last && last.type === 'text' && last.textType === 'text') {
+            const combined = (last.content ?? '') + deltaText
+            const cappedCombined =
+              combined.length > JOB_OUTPUT_CHAR_CAP
+                ? safeTailSlice(combined, JOB_OUTPUT_CHAR_CAP)
+                : combined
+            nextBlocks = [
+              ...nextBlocks.slice(0, -1),
+              { ...last, content: cappedCombined } as ContentBlock,
+            ]
+          } else {
+            const cappedDelta =
+              deltaText.length > JOB_OUTPUT_CHAR_CAP
+                ? safeTailSlice(deltaText, JOB_OUTPUT_CHAR_CAP)
+                : deltaText
+            nextBlocks = [
+              ...nextBlocks,
+              {
+                type: 'text',
+                textType: 'text',
+                content: cappedDelta,
+              } as ContentBlock,
+            ]
+          }
+          nextBlocks = trimTextBlocksToCap(nextBlocks)
+        }
         if (errorText !== undefined) {
           const truncatedError = errorText.split('\n').slice(0, 6).join('\n')
-          const existingBlocks = block.blocks ?? []
           // Mirror the tool-block flag-based dedup: track whether the error has
           // already been appended via an explicit flag rather than comparing the
           // last text block's content, so a genuinely new identical error is not
           // suppressed when the prior block coincidentally matches.
           const alreadyAppended = block.jobErrorAppended === true
+          if (!alreadyAppended) {
+            nextBlocks = [
+              ...nextBlocks,
+              {
+                type: 'text',
+                textType: 'text',
+                content: truncatedError,
+              } as ContentBlock,
+            ]
+            nextBlocks = trimTextBlocksToCap(nextBlocks)
+            return {
+              ...block,
+              status,
+              blocks: nextBlocks,
+              jobErrorAppended: true,
+            }
+          }
           return {
             ...block,
             status,
-            blocks: alreadyAppended
-              ? existingBlocks
-              : [
-                  ...existingBlocks,
-                  {
-                    type: 'text',
-                    textType: 'text',
-                    content: truncatedError,
-                  } as ContentBlock,
-                ],
-            ...(alreadyAppended ? {} : { jobErrorAppended: true }),
+            blocks: hasDelta ? nextBlocks : block.blocks,
           }
         }
         return {
           ...block,
           status,
+          blocks: hasDelta ? nextBlocks : block.blocks,
           // Mirror the tool-block recovery reset: a non-terminal transition
           // (recovery back to running) clears the append flag so a genuinely
           // new error reported after recovery is still surfaced. The terminal
@@ -1150,23 +1252,17 @@ const handleFinish = (state: EventHandlerState, event: PrintModeFinish) => {
     state.onTotalCost(event.totalCost)
   }
 
-  // Compute and append a completion summary as a text block.
   const settledIds = new Set<string>()
   state.message.updater.updateAiMessageBlocks((blocks) => {
     const settledBlocks = settleOrphanedForegroundAgents(blocks, settledIds)
-    // Walk the accumulated blocks to tally what happened
     const summary = computeCompletionSummary(settledBlocks)
     if (!summary) return settledBlocks
-
-    const formatted = formatCompletionSummary(summary)
-    if (!formatted) return settledBlocks
 
     return [
       ...settledBlocks,
       {
-        type: 'text' as const,
-        textType: 'text' as const,
-        content: formatted,
+        type: 'completion-summary' as const,
+        summary,
       },
     ]
   })

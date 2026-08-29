@@ -1,10 +1,9 @@
 import { memo } from 'react'
 
 import { useTheme } from '../../hooks/use-theme'
-import { BORDER_CHARS } from '../../utils/ui-constants'
+import { HarnessBox } from './harness-box'
 
 import type { GateStateContentBlock, GateStateStatus } from '../../types/chat'
-import type { ChatTheme } from '../../types/theme-system'
 
 interface GateStateBoxProps {
   block: GateStateContentBlock
@@ -24,40 +23,28 @@ const STATUS_ICON: Record<GateStateStatus, string> = {
   skipped: '–',
 }
 
-const statusColor = (status: GateStateStatus, theme: ChatTheme): string => {
-  switch (status) {
-    case 'passed':
-      return theme.success
-    case 'failed':
-      return theme.error
-    case 'pending':
-      return theme.warning
-    case 'skipped':
-      return theme.warning
-  }
+const STATUS_TONE: Record<
+  GateStateStatus,
+  'success' | 'error' | 'warning' | 'secondary'
+> = {
+  pending: 'warning',
+  passed: 'success',
+  failed: 'error',
+  skipped: 'secondary',
 }
 
 export const GateStateBox = memo(({ block }: GateStateBoxProps) => {
   const theme = useTheme()
-  const color = statusColor(block.gateStatus, theme)
-  const heading = `${STATUS_ICON[block.gateStatus]} ${block.origin ?? 'Gate'} · ${block.gate} · ${STATUS_LABEL[block.gateStatus]}`
+  const color = theme[STATUS_TONE[block.gateStatus]]
+  const heading = `${STATUS_ICON[block.gateStatus]} ${block.origin?.trim() || 'Gate'} · ${block.gate} · ${STATUS_LABEL[block.gateStatus]}`
 
   return (
-    <box
-      style={{
-        flexDirection: 'column',
-        gap: 0,
-        width: '100%',
-        borderStyle: 'single',
-        borderColor: color,
-        customBorderChars: BORDER_CHARS,
-        paddingLeft: 1,
-        paddingRight: 1,
-        paddingTop: 0,
-        paddingBottom: 0,
-      }}
+    <HarnessBox
+      tone={STATUS_TONE[block.gateStatus]}
+      title={heading}
+      gap={0}
+      paddingBottom={0}
     >
-      <text style={{ fg: color }}>{heading}</text>
       {block.gateStatus === 'skipped' ? (
         <text
           style={{
@@ -78,6 +65,29 @@ export const GateStateBox = memo(({ block }: GateStateBoxProps) => {
           {block.details}
         </text>
       ) : null}
-    </box>
+      {block.advisories && block.advisories.length > 0 ? (
+        <>
+          <text
+            style={{
+              wrapMode: 'word',
+              fg: theme.secondary,
+            }}
+          >
+            Advisory (non-blocking):
+          </text>
+          {block.advisories.map((advisory, index) => (
+            <text
+              key={`${index}-${advisory}`}
+              style={{
+                wrapMode: 'word',
+                fg: theme.secondary,
+              }}
+            >
+              {`• ${advisory}`}
+            </text>
+          ))}
+        </>
+      ) : null}
+    </HarnessBox>
   )
 })

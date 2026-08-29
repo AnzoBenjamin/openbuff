@@ -22,6 +22,18 @@ const placeholderNames = [
   'GIT_CHANGES_PROMPT',
   'INITIAL_AGENT_PROMPT',
   'KNOWLEDGE_FILES_CONTENTS',
+  // T1.4d guide recovery: ONE placeholder per relocated guide, so a mode that
+  // deliberately omits a pointer (plan mode omits git-discipline) omits its
+  // recovery too. The broad-audit body is clause-parameterized, so it has one
+  // placeholder per finalize clause; base2 emits the one whose clause it
+  // actually disclosed.
+  'ON_DEMAND_GUIDE_FALLBACK_CODE_CRAFTSMANSHIP',
+  'ON_DEMAND_GUIDE_FALLBACK_PRE_REVIEW_SELF_CHECK',
+  'ON_DEMAND_GUIDE_FALLBACK_GIT_DISCIPLINE',
+  'ON_DEMAND_GUIDE_FALLBACK_SECURITY_REVIEW',
+  'ON_DEMAND_GUIDE_FALLBACK_SPECIALIST_ROUTING',
+  'ON_DEMAND_GUIDE_FALLBACK_BROAD_AUDIT',
+  'ON_DEMAND_GUIDE_FALLBACK_BROAD_AUDIT_PLAN',
   'PROJECT_ROOT',
   'ROUTED_KNOWLEDGE_FILES',
   'PATTERNS_INDEX',

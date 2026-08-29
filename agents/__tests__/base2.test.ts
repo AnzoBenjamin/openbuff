@@ -21,6 +21,7 @@ import {
 } from '../base2/base2'
 import { normalizeGateFilePath } from '../base2/gate-paths'
 import type { Base2ActiveWorkState } from '../base2/gate-state'
+import { extractInlineFunctionSource } from './helpers/extract-inline-function-source'
 
 import type { AgentTemplate } from '@codebuff/agent-runtime/templates/types'
 
@@ -57,6 +58,9 @@ function looksGoodWithParentOwnedRequirements(
   agentType: string,
   snapshotFingerprint: string,
   files: string[],
+  // Optional non-blocking advisories: the specialist parent-owned-only pass
+  // displays them alongside the ignored process requirements.
+  advisories: string[] = [],
 ) {
   return feedJson({
     agentType,
@@ -67,6 +71,7 @@ function looksGoodWithParentOwnedRequirements(
       snapshotFingerprint,
       reviewedFiles: files,
       findings: [],
+      ...(advisories.length > 0 ? { advisories } : {}),
       coverage: 'covered',
       dimensions: {},
       requirementCoverage: [
@@ -152,6 +157,7 @@ function parseGateStateBlock(text: string):
       details: string
       repairRound?: number
       maxRepairRounds?: number
+      advisories?: string[]
     }
   | undefined {
   const match = text.match(/<gate-state>([\s\S]*?)<\/gate-state>/)
@@ -168,6 +174,13 @@ function parseGateStateBlock(text: string):
       ...(typeof parsed.maxRepairRounds === 'number'
         ? { maxRepairRounds: parsed.maxRepairRounds }
         : {}),
+      // Reviewer advisories reach the user only through this block, so the
+      // bounded payload has to be assertable from a driven lifecycle.
+      ...(Array.isArray(parsed.advisories)
+        ? {
+            advisories: parsed.advisories.map((advisory) => String(advisory)),
+          }
+        : {}),
     }
   } catch {
     return undefined
@@ -175,7 +188,7 @@ function parseGateStateBlock(text: string):
 }
 
 function buildFingerprint(
-  entries: Array<{ file: string; statusLine?: string; contentMarker: string }>,
+  entries: Array<{ file: string; contentMarker: string }>,
   validationSummary: string,
 ): string {
   // Mirror the runtime's content-only fingerprint (files-v4). The volatile
@@ -186,9 +199,7 @@ function buildFingerprint(
       file: normalizeGateFilePath(entry.file),
     }))
     .sort((a, b) => a.file.localeCompare(b.file))
-  const parts = sorted.map(
-    (entry) => `${entry.file}\t${entry.contentMarker}`,
-  )
+  const parts = sorted.map((entry) => `${entry.file}\t${entry.contentMarker}`)
   const details = `files-v4\n${parts.join('\n')}\n--\n${validationSummary}`
   return `v3:${createHash('sha256').update(details).digest('hex')}`
 }
@@ -196,8 +207,14 @@ function buildFingerprint(
 function attestedReviewerResult(
   reviewCall: any,
   verdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING' = 'LOOKS_GOOD',
-  findings: string[] = [],
+  // Object findings (a reviewer-supplied stable `id` plus `summary`) are
+  // accepted alongside plain strings so a test can exercise the id half of the
+  // condone key, which only exists for a non-minted reviewer-supplied id.
+  findings: Array<string | Record<string, unknown>> = [],
   coverage: 'covered' | 'missing' | 'n/a' = 'covered',
+  // Optional non-blocking advisories: the gate persists and displays them, so a
+  // lifecycle test needs to emit them from a real reviewer receipt.
+  advisories: string[] = [],
 ) {
   const prompt = String(reviewCall?.input?.agents?.[0]?.prompt ?? '')
   const fingerprint =
@@ -219,6 +236,7 @@ function attestedReviewerResult(
             snapshotFingerprint: fingerprint,
             reviewedFiles: files,
             findings,
+            ...(advisories.length > 0 ? { advisories } : {}),
             coverage,
             dimensions: {
               correctness: 'pass',
@@ -324,33 +342,6 @@ function buildDurablePassAgentState(tmpFile: string, fingerprint: string) {
 
 type ParseGitStatusLine = (line: string) => string
 
-function extractInlineFunctionSource(
-  source: string,
-  functionName: string,
-): string {
-  const declarationStart = source.indexOf(`function ${functionName}(`)
-  if (declarationStart < 0) {
-    throw new Error(`Unable to find inline ${functionName} declaration`)
-  }
-
-  const bodyStart = source.indexOf('{', declarationStart)
-  if (bodyStart < 0) {
-    throw new Error(`Unable to find inline ${functionName} body`)
-  }
-
-  let depth = 0
-  for (let index = bodyStart; index < source.length; index += 1) {
-    const character = source[index]
-    if (character === '{') depth += 1
-    if (character === '}') depth -= 1
-    if (depth === 0) {
-      return source.slice(declarationStart, index + 1)
-    }
-  }
-
-  throw new Error(`Unable to find end of inline ${functionName} declaration`)
-}
-
 // parseGitStatusLine lives inside the serialized handleSteps generator, so it
 // cannot be exported as a module symbol. Extracting its source tests the actual
 // inline implementation reconstructed by the runtime.
@@ -373,10 +364,56 @@ function loadInlineParseGitStatusLine(): ParseGitStatusLine {
   return buildHelper()
 }
 
-type RepairEditorReadablePaths = (
-  paths: string[],
-  texts?: string[],
-) => string[]
+type RepairEditorReadablePaths = (paths: string[], texts?: string[]) => string[]
+
+type InlineCondoneHelpers = {
+  condonedKeyMatches: (
+    condonedKeys: Set<string>,
+    verdictClass: string,
+    strippedText: string,
+    id?: string,
+  ) => boolean
+  legacyCondonedTextMatches: (
+    condonedTexts: Set<string>,
+    text: string,
+  ) => boolean
+  boundCondonedEntries: (values: string[]) => string[]
+  correlateReviewerFindingRecord: (
+    blockerText: string,
+    records: Array<{ id: string; text: string }>,
+  ) => { id: string; text: string } | undefined
+}
+
+// The condone helpers live inside the serialized handleSteps generator, so they
+// cannot be imported. Reconstruct them together with the helpers they close over
+// (stripReviewerVerdictPrefix / isMintedReviewerFindingId /
+// condonedFindingKeysFor) so the class-matching, legacy-fallback, bounding, and
+// record-correlation rules can be asserted directly instead of only through a
+// full gate lifecycle.
+function loadInlineCondoneHelpers(): InlineCondoneHelpers {
+  const base2Source = readFileSync(
+    new URL('../base2/base2.ts', import.meta.url),
+    'utf8',
+  )
+  // handleSteps helpers are TypeScript; transpile before new Function (plain JS).
+  const transpiler = new Bun.Transpiler({ loader: 'ts', target: 'bun' })
+  const combinedTs = [
+    extractInlineFunctionSource(base2Source, 'stripReviewerVerdictPrefix'),
+    extractInlineFunctionSource(base2Source, 'isMintedReviewerFindingId'),
+    extractInlineFunctionSource(base2Source, 'condonedFindingKeysFor'),
+    extractInlineFunctionSource(base2Source, 'condonedKeyMatches'),
+    extractInlineFunctionSource(base2Source, 'legacyCondonedTextMatches'),
+    extractInlineFunctionSource(base2Source, 'boundCondonedEntries'),
+    extractInlineFunctionSource(base2Source, 'correlateReviewerFindingRecord'),
+    'return { condonedKeyMatches, legacyCondonedTextMatches, boundCondonedEntries, correlateReviewerFindingRecord }',
+  ].join('\n')
+  const combinedJs = transpiler.transformSync(combinedTs)
+  const buildHelpers = new Function(
+    `"use strict";\n${combinedJs}`,
+  ) as () => InlineCondoneHelpers
+
+  return buildHelpers()
+}
 
 // repairEditorReadablePaths lives inside the serialized handleSteps generator.
 // Reconstruct it with the normalizeGateFilePath + inferWorkspaceRootFromPath
@@ -396,7 +433,9 @@ function loadInlineRepairEditorReadablePaths(): RepairEditorReadablePaths {
     'return repairEditorReadablePaths',
   ].join('\n')
   const combinedJs = transpiler.transformSync(combinedTs)
-  const buildHelper = new Function(`"use strict";\n${combinedJs}`) as () => RepairEditorReadablePaths
+  const buildHelper = new Function(
+    `"use strict";\n${combinedJs}`,
+  ) as () => RepairEditorReadablePaths
 
   return buildHelper()
 }
@@ -441,9 +480,12 @@ describe('base2 inline repairEditorReadablePaths', () => {
   })
 
   test('skips URL-like tokens, node_modules, and .env paths from free-text extraction', () => {
-    const paths = repairEditorReadablePaths(['src/a.ts'], [
-      'See https://example.com/src/schema.ts and node_modules/pkg/index.ts and .env.local',
-    ])
+    const paths = repairEditorReadablePaths(
+      ['src/a.ts'],
+      [
+        'See https://example.com/src/schema.ts and node_modules/pkg/index.ts and .env.local',
+      ],
+    )
     expect(paths).toEqual(expect.arrayContaining(['src/a.ts', 'src/**/*']))
     expect(paths.some((p) => p.includes('node_modules'))).toBe(false)
     expect(paths.some((p) => p.includes('.env'))).toBe(false)
@@ -459,6 +501,164 @@ describe('base2 inline repairEditorReadablePaths', () => {
     const paths = repairEditorReadablePaths(['README.md'])
     expect(paths).toEqual(['README.md'])
     expect(paths).not.toEqual(expect.arrayContaining(['*', '**/*']))
+  })
+})
+
+describe('base2 inline condone helpers', () => {
+  const {
+    condonedKeyMatches,
+    legacyCondonedTextMatches,
+    boundCondonedEntries,
+    correlateReviewerFindingRecord,
+  } = loadInlineCondoneHelpers()
+  const findingText = 'Minor style suggestion.'
+  const findingId = 'code-reviewer:correctness:minor-style'
+
+  // RF-1: de-escalation is condonable, one-directionally. A stored BLOCKING key
+  // must condone a NON_BLOCKING re-raise of the SAME identity, or the blocker
+  // list stays non-empty, another repair-editor is spawned, and the
+  // already-applied repair trips the no-progress guard.
+  test('a stored BLOCKING key condones a NON_BLOCKING re-raise of the same identity', () => {
+    const keys = new Set([
+      `BLOCKING::text:${findingText}`,
+      `BLOCKING::id:${findingId}`,
+    ])
+    expect(
+      condonedKeyMatches(keys, 'NON_BLOCKING', findingText, findingId),
+    ).toBe(true)
+    // The text half alone is enough: a record-less finding has no stable id.
+    expect(
+      condonedKeyMatches(
+        new Set([`BLOCKING::text:${findingText}`]),
+        'NON_BLOCKING',
+        findingText,
+      ),
+    ).toBe(true)
+    // The id half alone is enough too, for a differently-worded re-raise.
+    expect(
+      condonedKeyMatches(
+        new Set([`BLOCKING::id:${findingId}`]),
+        'NON_BLOCKING',
+        'Reworded nit text.',
+        findingId,
+      ),
+    ).toBe(true)
+  })
+
+  test('a stored NON_BLOCKING key never condones a BLOCKING re-raise', () => {
+    const keys = new Set([
+      `NON_BLOCKING::text:${findingText}`,
+      `NON_BLOCKING::id:${findingId}`,
+    ])
+    // Escalation is new information: the gate must reopen.
+    expect(condonedKeyMatches(keys, 'BLOCKING', findingText, findingId)).toBe(
+      false,
+    )
+    // Same class still condones.
+    expect(
+      condonedKeyMatches(keys, 'NON_BLOCKING', findingText, findingId),
+    ).toBe(true)
+  })
+
+  test('a legacy prefix-less key stays class-exact in both directions', () => {
+    const legacyKeys = new Set([`*::text:${findingText}`])
+    expect(condonedKeyMatches(legacyKeys, '*', findingText)).toBe(true)
+    expect(condonedKeyMatches(legacyKeys, 'NON_BLOCKING', findingText)).toBe(
+      false,
+    )
+    expect(condonedKeyMatches(legacyKeys, 'BLOCKING', findingText)).toBe(false)
+    // A BLOCKING entry does not condone a prefix-less `*` re-raise either: the
+    // de-escalation allowance is NON_BLOCKING-only.
+    expect(
+      condonedKeyMatches(
+        new Set([`BLOCKING::text:${findingText}`]),
+        '*',
+        findingText,
+      ),
+    ).toBe(false)
+  })
+
+  // RF-6: the pre-T1.5 legacy text fallback is one helper, so all three call
+  // sites accept both the stripped text and the raw prefixed blocker.
+  test('the legacy text fallback matches both stripped and raw prefixed blockers', () => {
+    const strippedOnly = new Set([findingText])
+    expect(
+      legacyCondonedTextMatches(strippedOnly, `NON_BLOCKING: ${findingText}`),
+    ).toBe(true)
+    expect(legacyCondonedTextMatches(strippedOnly, findingText)).toBe(true)
+    const rawOnly = new Set([`BLOCKING: ${findingText}`])
+    expect(legacyCondonedTextMatches(rawOnly, `BLOCKING: ${findingText}`)).toBe(
+      true,
+    )
+    expect(legacyCondonedTextMatches(rawOnly, 'A different nit.')).toBe(false)
+  })
+
+  // RF-4: the durable condone lists are bounded like reviewReceipts.
+  test('boundCondonedEntries dedupes and keeps only the most recent 200 entries', () => {
+    const bounded = boundCondonedEntries(
+      Array.from({ length: 250 }, (_unused, index) => `key-${index}`),
+    )
+    expect(bounded).toHaveLength(200)
+    expect(bounded[0]).toBe('key-50')
+    expect(bounded).toContain('key-249')
+    expect(bounded).not.toContain('key-49')
+    // Duplicates collapse before the slice, so a repeatedly re-raised finding
+    // does not evict distinct entries.
+    expect(boundCondonedEntries(['a', 'b', 'a'])).toEqual(['a', 'b'])
+  })
+
+  // RF-3: a substring relationship between two finding texts must never attach
+  // the wrong record id, because the resulting `<class>::id:<id>` key would
+  // condone an unrelated finding.
+  test('correlateReviewerFindingRecord prefers [id], then exact text, and refuses ambiguous substrings', () => {
+    const shortRecord = { id: 'r-short', text: 'Null check missing.' }
+    const longRecord = {
+      id: 'r-long',
+      text: 'Null check missing. Also bounds check missing.',
+    }
+    const records = [shortRecord, longRecord]
+    // The explicit marker wins even when another record's text matches exactly.
+    expect(
+      correlateReviewerFindingRecord(
+        `NON_BLOCKING: [${longRecord.id}] ${shortRecord.text}`,
+        records,
+      ),
+    ).toBe(longRecord)
+    // Exact stripped-text match, not "first record whose text is contained".
+    expect(
+      correlateReviewerFindingRecord(
+        `NON_BLOCKING: ${longRecord.text}`,
+        records,
+      ),
+    ).toBe(longRecord)
+    expect(
+      correlateReviewerFindingRecord(
+        `NON_BLOCKING: ${shortRecord.text}`,
+        records,
+      ),
+    ).toBe(shortRecord)
+    // The `[id] text` blocker form is an exact match too.
+    expect(
+      correlateReviewerFindingRecord(
+        `NON_BLOCKING: [${shortRecord.id}] ${shortRecord.text}`,
+        [shortRecord],
+      ),
+    ).toBe(shortRecord)
+    // A synthesized blocker that merely CONTAINS both texts is ambiguous, so no
+    // id is attached; the text key still carries convergence.
+    expect(
+      correlateReviewerFindingRecord(
+        `BLOCKING: requirement missing: ${longRecord.text}`,
+        records,
+      ),
+    ).toBeUndefined()
+    // A single unambiguous containment still correlates.
+    expect(
+      correlateReviewerFindingRecord(
+        `BLOCKING: requirement missing: ${shortRecord.text}`,
+        [shortRecord],
+      ),
+    ).toBe(shortRecord)
   })
 })
 
@@ -565,9 +765,7 @@ describe('base2 validation/reviewer coordination prompts', () => {
     // disclosure these lines live in agents/guides/specialist-routing.md;
     // assert the guide pointer here and the verbatim text on the
     // explicit-off surface (base2DisclosureOff).
-    expect(base2.systemPrompt).toContain(
-      'agents/guides/specialist-routing.md',
-    )
+    expect(base2.systemPrompt).toContain('agents/guides/specialist-routing.md')
     expect(base2DisclosureOff.systemPrompt).toContain(
       'Do not manually re-spawn them after edits, after compaction',
     )
@@ -1092,9 +1290,9 @@ describe('base2 proactive index lookup', () => {
     expect(firstYield('fix it')).toMatchObject({ toolName: 'git_status' })
 
     // Continuation prompts start at git_status.
-    expect(
-      firstYield('continue working on the previous task'),
-    ).toMatchObject({ toolName: 'git_status' })
+    expect(firstYield('continue working on the previous task')).toMatchObject({
+      toolName: 'git_status',
+    })
   })
 
   test('starts codebase-oriented Q&A prompts at git_status', () => {
@@ -1173,9 +1371,9 @@ describe('base2 proactive index lookup', () => {
     expect(firstYield('show me the index')).toMatchObject({
       toolName: 'git_status',
     })
-    expect(
-      firstYield('refactor the authentication module code'),
-    ).toMatchObject({ toolName: 'git_status' })
+    expect(firstYield('refactor the authentication module code')).toMatchObject(
+      { toolName: 'git_status' },
+    )
     expect(
       firstYield('How does the authentication module work in this codebase?'),
     ).toMatchObject({ toolName: 'git_status' })
@@ -1315,8 +1513,9 @@ describe('base2 verification and reviewer gates', () => {
 
       expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
       expect(
-        gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
-          .value,
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: '' } }],
+        } as any).value,
       ).toMatchObject({
         toolName: 'spawn_agent_inline',
       })
@@ -1459,8 +1658,9 @@ describe('base2 verification and reviewer gates', () => {
 
       expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
       expect(
-        gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
-          .value,
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: '' } }],
+        } as any).value,
       ).toMatchObject({
         toolName: 'spawn_agent_inline',
       })
@@ -1607,8 +1807,9 @@ describe('base2 verification and reviewer gates', () => {
 
       expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
       expect(
-        gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
-          .value,
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: '' } }],
+        } as any).value,
       ).toMatchObject({
         toolName: 'spawn_agent_inline',
       })
@@ -1732,12 +1933,10 @@ describe('base2 verification and reviewer gates', () => {
         [
           {
             file: gateFileA,
-            statusLine: ` M ${fileA}`,
             contentMarker: buildContentMarker(fileA),
           },
           {
             file: gateFileB,
-            statusLine: ` M ${fileB}`,
             contentMarker: buildContentMarker(fileB),
           },
         ],
@@ -1847,7 +2046,6 @@ describe('base2 verification and reviewer gates', () => {
         [
           {
             file: gateFile,
-            statusLine: ` M ${tmpFile}`,
             contentMarker: buildContentMarker(tmpFile),
           },
         ],
@@ -1959,9 +2157,7 @@ describe('base2 verification and reviewer gates', () => {
       expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
       expect(
         gen.next({
-          toolResult: [
-            { type: 'json', value: { status: ` M ${tmpFile}` } },
-          ],
+          toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
         } as any).value,
       ).toMatchObject({
         toolName: 'spawn_agent_inline',
@@ -2211,7 +2407,8 @@ describe('base2 verification and reviewer gates', () => {
           currentPhase: 'final_response_allowed',
           latestWorkSummary: '',
           openReviewerBlockers: [],
-          lastValidationSummary: 'Configured file-change hooks passed: typecheck.',
+          lastValidationSummary:
+            'Configured file-change hooks passed: typecheck.',
           nextRequiredAction: '',
           lastPinnedStateMessage: '',
           gatePassedFiles: [gateFile],
@@ -2247,7 +2444,9 @@ describe('base2 verification and reviewer gates', () => {
 
       // Only the never-validated agent-touched dirty reviewable file B is
       // published; the gate-passed file A and the untouched file C are excluded.
-      expect((agentState as any).uncommittedUnvalidatedFiles).toEqual(['src/b.ts'])
+      expect((agentState as any).uncommittedUnvalidatedFiles).toEqual([
+        'src/b.ts',
+      ])
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }
@@ -2408,9 +2607,9 @@ describe('base2 verification and reviewer gates', () => {
         expect.arrayContaining(['src/b.ts']),
       )
       expect((agentState as any).canSuggestFollowups).toBe(false)
-      expect(
-        (agentState as any).base2ActiveWork.latestWorkSummary,
-      ).toMatch(/Unreviewed dirty reviewable files reopened the gate/)
+      expect((agentState as any).base2ActiveWork.latestWorkSummary).toMatch(
+        /Unreviewed dirty reviewable files reopened the gate/,
+      )
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }
@@ -2730,7 +2929,6 @@ describe('base2 verification and reviewer gates', () => {
       agentState,
       prompt: 'Make the requested change now please',
       params: {},
-
     } as any)
 
     expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
@@ -2922,9 +3120,7 @@ describe('base2 verification and reviewer gates', () => {
       expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
       expect(
         gen.next({
-          toolResult: [
-            { type: 'json', value: { status: ` M ${gateFile}` } },
-          ],
+          toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
         } as any).value,
       ).toMatchObject({
         toolName: 'spawn_agent_inline',
@@ -3846,7 +4042,8 @@ describe('base2 verification and reviewer gates', () => {
         lastValidationSummary: 'typecheck passed for src/a.ts',
         nextRequiredAction: '',
         lastPinnedStateMessage: '',
-        gateProgressLine: 'gate: validation passed; reviewer code-reviewer running',
+        gateProgressLine:
+          'gate: validation passed; reviewer code-reviewer running',
       },
     }
     const gen = base2.handleSteps!({
@@ -3917,8 +4114,12 @@ describe('base2 verification and reviewer gates', () => {
     expect(text).not.toContain('Gate progress:')
   })
 
-  test('gate-state type round-trips gateProgressLine through JSON and is optional on older state', () => {
-    const state: Base2ActiveWorkState = {
+  test('legacy gate state without gateProgressLine renders the pinned block with no Gate progress line', () => {
+    // Older serialized state lacks the optional field entirely; the type usage
+    // here (no gateProgressLine key) is what asserts optionality, and the
+    // assertions below are behavioral: the pinned block must still render and
+    // must not carry a Gate progress line.
+    const legacyState: Base2ActiveWorkState = {
       pendingGateFiles: ['src/a.ts'],
       gatePassedFiles: [],
       gatePassedPendingFiles: [],
@@ -3934,37 +4135,158 @@ describe('base2 verification and reviewer gates', () => {
       lastValidationSummary: '',
       nextRequiredAction: '',
       lastPinnedStateMessage: '',
-      gateProgressLine: 'gate: reviewer verdict LOOKS_GOOD; finalizing',
     }
-    const roundTripped = JSON.parse(
-      JSON.stringify(state),
-    ) as Base2ActiveWorkState
-    expect(roundTripped.gateProgressLine).toBe(
-      'gate: reviewer verdict LOOKS_GOOD; finalizing',
+    const base2 = createBase2('default')
+    const gen = base2.handleSteps!({
+      agentState: { agentId: 'base2', base2ActiveWork: legacyState },
+      prompt: 'Finish the previous response.',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    const pinned = gen.next()
+    expect(pinned.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    const text = (pinned.value as any).input.content as string
+    expect(text).toContain('Harness pinned active-work state')
+    expect(text).toContain('GATE: PENDING')
+    expect(text).not.toContain('Gate progress:')
+  })
+
+  // Win 4a delta-only pinned state: after the first full pinned block, a step
+  // whose only change is gate progress emits just the progress diff.
+  test('second pinned emission is delta-only when only gateProgressLine changed', () => {
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2',
+      base2ActiveWork: {
+        changedFiles: ['src/a.ts'],
+        touchedFiles: ['src/a.ts'],
+        pendingGateFiles: ['src/a.ts'],
+        currentPhase: 'awaiting_validation',
+        latestWorkSummary: '',
+        openReviewerBlockers: [],
+        lastValidationSummary: 'typecheck passed for src/a.ts',
+        nextRequiredAction: '',
+        lastPinnedStateMessage: '',
+        gateProgressLine: 'gate: validation hooks running for 1 file(s)',
+      },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Finish the previous response.',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    const firstPinned = gen.next()
+    const firstText = (firstPinned.value as any).input.content as string
+    expect(firstText).toContain('Harness pinned active-work state')
+    expect(firstText).toContain(
+      'Gate progress: gate: validation hooks running for 1 file(s)',
     )
 
-    // Older serialized state lacks the field entirely; it stays optional/absent.
-    const olderState: Base2ActiveWorkState = {
-      pendingGateFiles: ['src/a.ts'],
-      gatePassedFiles: [],
-      gatePassedPendingFiles: [],
-      gatePassedReviewerVerdict: '',
-      gatePassedValidationSummary: '',
-      gatePassedFingerprint: '',
-      lastReviewerGateSkipReason: '',
-      touchedFiles: ['src/a.ts'],
-      changedFiles: ['src/a.ts'],
-      currentPhase: 'awaiting_validation',
-      latestWorkSummary: '',
-      openReviewerBlockers: [],
-      lastValidationSummary: '',
-      nextRequiredAction: '',
-      lastPinnedStateMessage: '',
+    expect(gen.next().value).toBe('STEP')
+    // Simulate a mid-turn setGateProgress write: the progress line changes and
+    // lastPinnedStateMessage is reset to '' by markActiveWorkStateChanged. The
+    // delta path must key off the last EMITTED block, not that sentinel.
+    agentState.base2ActiveWork.gateProgressLine =
+      'gate: validation passed; reviewer code-reviewer running'
+    agentState.base2ActiveWork.lastPinnedStateMessage = ''
+
+    expect(gen.next({ stepsComplete: false } as any).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    const secondPinned = gen.next()
+    expect(secondPinned.value).toMatchObject({
+      toolName: 'add_message',
+      input: {
+        role: 'user',
+        content:
+          'Gate progress: gate: validation passed; reviewer code-reviewer running',
+      },
+    })
+  })
+
+  test('second pinned emission re-emits the full block when reviewer blockers change', () => {
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2',
+      base2ActiveWork: {
+        changedFiles: ['src/a.ts'],
+        touchedFiles: ['src/a.ts'],
+        pendingGateFiles: ['src/a.ts'],
+        currentPhase: 'awaiting_validation',
+        latestWorkSummary: '',
+        openReviewerBlockers: [] as string[],
+        lastValidationSummary: 'typecheck passed for src/a.ts',
+        nextRequiredAction: '',
+        lastPinnedStateMessage: '',
+        gateProgressLine: 'gate: validation hooks running for 1 file(s)',
+      },
     }
-    const olderRoundTripped = JSON.parse(
-      JSON.stringify(olderState),
-    ) as Base2ActiveWorkState
-    expect(olderRoundTripped.gateProgressLine).toBeUndefined()
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Finish the previous response.',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    const firstText = (gen.next().value as any).input.content as string
+    expect(firstText).toContain('Harness pinned active-work state')
+
+    expect(gen.next().value).toBe('STEP')
+    // A reviewer blocker plus a next required action is not a progress-only
+    // change, so the whole pinned block must be re-emitted.
+    agentState.base2ActiveWork.openReviewerBlockers = [
+      'BLOCKING: add a test for the delta path',
+    ]
+    agentState.base2ActiveWork.nextRequiredAction =
+      'Repair the reviewer blocker before finalizing.'
+    agentState.base2ActiveWork.gateProgressLine =
+      'gate: reviewer code-reviewer reported blockers'
+    agentState.base2ActiveWork.lastPinnedStateMessage = ''
+
+    expect(gen.next({ stepsComplete: false } as any).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    const secondPinned = gen.next()
+    expect(secondPinned.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    const secondText = (secondPinned.value as any).input.content as string
+    expect(secondText).toContain('Harness pinned active-work state')
+    expect(secondText).toContain('BLOCKING: add a test for the delta path')
+    expect(secondText).toContain(
+      'Next required action: Repair the reviewer blocker before finalizing.',
+    )
+    expect(secondText).toContain(
+      'Gate progress: gate: reviewer code-reviewer reported blockers',
+    )
   })
 
   // Uses a real project-scoped scratch file whose bytes genuinely change
@@ -4396,6 +4718,140 @@ describe('base2 verification and reviewer gates', () => {
     }
   })
 
+  // A repair loop can also oscillate: round 1 writes content B, round 2 writes
+  // the ORIGINAL content A again. Every round changes bytes, so the
+  // no-progress guard never fires, but the turn is going in circles. The
+  // turn-scoped cycle guard must fail closed on the revisited fingerprint.
+  test('reviewer repair that oscillates A->B->A trips the cycle guard', () => {
+    const tmpDir = makeProjectTempDir('base2-repair-cycle-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      const contentA = 'export const value = 1\n'
+      const contentB = 'export const value = 2\n'
+      writeFileSync(tmpFile, contentA)
+      const base2 = createBase2('default')
+      const agentState = { agentId: 'base2' }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Make the requested change now please',
+        params: {},
+      } as any)
+
+      const dirtyStatus = {
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any
+      const passingHooks = { toolResult: [{ type: 'json', value: [] }] } as any
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: '' } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      expect(gen.next().value).toBe('STEP')
+      expect(
+        gen.next({
+          stepsComplete: true,
+          toolResult: [{ type: 'json', value: editReceipt(gateFile) }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(gen.next(dirtyStatus).value).toMatchObject({
+        toolName: 'run_file_change_hooks',
+      })
+      expect(gen.next(passingHooks).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      const firstReviewCall = gen.next(dirtyStatus).value
+      expect(firstReviewCall).toMatchObject({ toolName: 'spawn_agents' })
+      expect(
+        gen.next(
+          attestedReviewerResult(firstReviewCall, 'BLOCKING', [
+            'Fix the edge case.',
+          ]) as any,
+        ).value,
+      ).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+      const firstFindingIds = (
+        agentState as any
+      ).base2ActiveWork.openReviewerFindings.map((finding: any) => finding.id)
+      // Round 1 really changes bytes (A -> B), so the no-progress guard stays
+      // quiet and the loop re-enters validation + review.
+      writeFileSync(tmpFile, contentB)
+      expect(
+        gen.next(completedRepairReceipt(firstFindingIds, [gateFile]) as any)
+          .value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(gen.next(dirtyStatus).value).toMatchObject({
+        toolName: 'run_file_change_hooks',
+      })
+      expect((agentState as any).base2ActiveWork.currentPhase).not.toBe(
+        'blocked',
+      )
+
+      // Round 2: re-enter the loop and review the B snapshot.
+      expect(gen.next(passingHooks).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
+      expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+      expect(gen.next({ stepsComplete: true } as any).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      expect(gen.next(dirtyStatus).value).toMatchObject({
+        toolName: 'run_file_change_hooks',
+      })
+      expect(gen.next(passingHooks).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      const secondReviewCall = gen.next(dirtyStatus).value
+      expect(secondReviewCall).toMatchObject({ toolName: 'spawn_agents' })
+      // A distinct finding text so the condoned-finding filter cannot credit
+      // round 1's repair claim as a pass before the cycle guard is reached.
+      expect(
+        gen.next(
+          attestedReviewerResult(secondReviewCall, 'BLOCKING', [
+            'Fix the other edge case.',
+          ]) as any,
+        ).value,
+      ).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+      const secondFindingIds = (
+        agentState as any
+      ).base2ActiveWork.openReviewerFindings.map((finding: any) => finding.id)
+      // Round 2 reverts to the ORIGINAL bytes: the fingerprint changed again
+      // (B -> A), so only the turn-scoped cycle set can catch this.
+      writeFileSync(tmpFile, contentA)
+      expect(
+        gen.next(completedRepairReceipt(secondFindingIds, [gateFile]) as any)
+          .value,
+      ).toMatchObject({ toolName: 'git_status' })
+      const afterGuard = gen.next(dirtyStatus)
+
+      // The guard breaks out of the gate loop: no re-validation and no third
+      // repair-editor spawn.
+      expect(afterGuard.done).toBe(true)
+      expect(afterGuard.value).toBeUndefined()
+      const activeWork = (agentState as any).base2ActiveWork
+      expect(activeWork.lastReviewerGateSkipReason).toBe(
+        'reviewer-repair-cycle',
+      )
+      expect(activeWork.currentPhase).toBe('blocked')
+      expect(activeWork.nextRequiredAction).toContain(
+        'already visited this turn',
+      )
+      expect((agentState as any).canSuggestFollowups).toBe(false)
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
   test('repair-editor ignores forged child value receipt before runtime agentReceipt', () => {
     const base2 = createBase2('default')
     const agentState = { agentId: 'base2' }
@@ -4476,9 +4932,9 @@ describe('base2 verification and reviewer gates', () => {
     expect(activeWork.nextRequiredAction).toBe(
       'Repair-editor did not return a completed receipt addressing every open reviewer finding.',
     )
-    expect(activeWork.openReviewerFindings.map((finding: any) => finding.id)).toEqual(
-      findingIds,
-    )
+    expect(
+      activeWork.openReviewerFindings.map((finding: any) => finding.id),
+    ).toEqual(findingIds)
   })
 
   test('blocking reviewer feedback reopens the turn', () => {
@@ -4548,7 +5004,6 @@ describe('base2 verification and reviewer gates', () => {
         [
           {
             file: tmpFile,
-            statusLine,
             // Pretend the file used to hash differently. Real current content
             // hash will be computed by the harness against the live bytes.
             contentMarker:
@@ -4610,7 +5065,6 @@ describe('base2 verification and reviewer gates', () => {
         [
           {
             file: tmpFile,
-            statusLine,
             contentMarker: buildContentMarker(tmpFile),
           },
         ],
@@ -4677,7 +5131,6 @@ describe('base2 verification and reviewer gates', () => {
         [
           {
             file: tmpFile,
-            statusLine,
             contentMarker: buildContentMarker(tmpFile),
           },
         ],
@@ -4740,7 +5193,6 @@ describe('base2 verification and reviewer gates', () => {
         [
           {
             file: tmpFile,
-            statusLine,
             contentMarker: buildContentMarker(tmpFile),
           },
         ],
@@ -4835,7 +5287,9 @@ describe('base2 verification and reviewer gates', () => {
       input: { agent_type: 'security-reviewer' },
     })
     const prompt = (securityReview.value as any).input.prompt as string
-    const snapshotFingerprint = prompt.split('Snapshot fingerprint: ')[1].split('\n')[0]
+    const snapshotFingerprint = prompt
+      .split('Snapshot fingerprint: ')[1]
+      .split('\n')[0]
     const blockerMessage = gen.next({
       toolResult: [
         {
@@ -4883,6 +5337,115 @@ describe('base2 verification and reviewer gates', () => {
       toolName: 'spawn_agents',
       input: { agents: [{ agent_type: 'repair-editor' }] },
     })
+  })
+
+  // RF-4-928ca2ea: gate-level coverage for the SECURITY-reviewer call site of
+  // collectParentOwnedRequirementBlockers. A LOOKS_GOOD security receipt whose
+  // only requirementCoverage gaps are parent-owned process duties (including
+  // one that is parent-owned only via evidence) must credit the security gate
+  // without spawning repair-editor.
+  test('credits a LOOKS_GOOD security review whose only requirement gaps are parent-owned', () => {
+    const base2 = createBase2('default')
+    const agentState = { agentId: 'base2' }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Update sdk/src/policy/terminal-command-policy.ts.',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+        .value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    expect(gen.next().value).toBe('STEP')
+    expect(
+      gen.next({
+        stepsComplete: true,
+        toolResult: [
+          {
+            type: 'json',
+            value: editReceipt('sdk/src/policy/terminal-command-policy.ts'),
+          },
+        ],
+      } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    const securityReview = gen.next({
+      toolResult: [
+        {
+          type: 'json',
+          value: { status: ' M sdk/src/policy/terminal-command-policy.ts' },
+        },
+      ],
+    } as any)
+    expect(securityReview.value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'security-reviewer' },
+    })
+    const securityPrompt = (securityReview.value as any).input.prompt as string
+    const snapshotFingerprint = securityPrompt
+      .split('Snapshot fingerprint: ')[1]
+      .split('\n')[0]
+    const afterSecurityPass = gen.next({
+      toolResult: [
+        {
+          type: 'json',
+          value: {
+            schemaVersion: 1,
+            verdict: 'LOOKS_GOOD',
+            snapshotFingerprint,
+            reviewedFiles: ['sdk/src/policy/terminal-command-policy.ts'],
+            findings: [],
+            coverage: 'covered',
+            dimensions: {
+              inputBoundaries: 'pass',
+              authorization: 'pass',
+              secretHandling: 'pass',
+              resourceSafety: 'pass',
+              failureMode: 'pass',
+            },
+            requirementCoverage: [
+              { requirement: 'Commit and push', status: 'missing' },
+              { requirement: 'Confirm CI/CD is green', status: 'uncertain' },
+              // Parent-owned only via evidence; the requirement text alone is
+              // in-scope, so the security call site must consult the structured
+              // evidence exactly like finalization does.
+              {
+                requirement: 'Ship remaining workflow steps',
+                status: 'missing',
+                evidence: [
+                  'parent must run full validation gate after this specialist',
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    } as any)
+
+    // No repair round was opened for the parent-owned process gaps: the gate
+    // credited security review and re-entered the loop instead.
+    const afterValue = afterSecurityPass.value as any
+    expect(
+      afterValue?.toolName === 'spawn_agents' &&
+        (afterValue?.input?.agents ?? []).some(
+          (agent: { agent_type?: string }) =>
+            agent?.agent_type === 'repair-editor',
+        ),
+    ).toBe(false)
+    expect((agentState as any).base2ActiveWork).toMatchObject({
+      securityReviewGateDone: true,
+      preEditSecurityReviewDone: true,
+      securityReviewGateFingerprint: snapshotFingerprint,
+    })
+    expect((agentState as any).base2ActiveWork.openReviewerBlockers).toEqual([])
+    expect((agentState as any).base2ActiveWork.openReviewerFindings).toEqual([])
+    expect((agentState as any).base2ActiveWork.currentPhase).not.toBe(
+      'repair_loop',
+    )
+    expect((agentState as any).base2ActiveWork.currentPhase).not.toBe('blocked')
   })
 
   test('security repair revalidates with security-reviewer before finalization', () => {
@@ -5144,7 +5707,9 @@ describe('base2 verification and reviewer gates', () => {
       input: { agent_type: 'security-reviewer' },
     })
 
-    const blocked = gen.next({ toolResult: [{ type: 'json', value: {} }] } as any)
+    const blocked = gen.next({
+      toolResult: [{ type: 'json', value: {} }],
+    } as any)
     expect(blocked.value).toMatchObject({
       toolName: 'add_message',
       input: { role: 'user' },
@@ -5283,8 +5848,9 @@ describe('base2 verification and reviewer gates', () => {
 
       expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
       expect(
-        gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
-          .value,
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: '' } }],
+        } as any).value,
       ).toMatchObject({
         toolName: 'spawn_agent_inline',
       })
@@ -5658,7 +6224,9 @@ describe('base2 verification and reviewer gates', () => {
       findingsAddressed: [],
       requestedValidation: [],
       completionKind: 'changed',
-      evidence: ['agents/__tests__/base2.test.ts covers the gate behavior change.'],
+      evidence: [
+        'agents/__tests__/base2.test.ts covers the gate behavior change.',
+      ],
     }
     const basherValidation = gen.next({
       toolResult: [
@@ -5693,9 +6261,7 @@ describe('base2 verification and reviewer gates', () => {
         } as any).value as any
       } else {
         const toolResult =
-          hookStep.toolName === 'git_status'
-            ? { status: dirtyStatus }
-            : {}
+          hookStep.toolName === 'git_status' ? { status: dirtyStatus } : {}
         hookStep = gen.next({
           toolResult: [{ type: 'json', value: toolResult }],
         } as any).value as any
@@ -5860,9 +6426,9 @@ describe('base2 verification and reviewer gates', () => {
     expect((agentState as any).base2ActiveWork.currentPhase).not.toBe(
       'final_response_allowed',
     )
-    expect((agentState as any).base2ActiveWork.gatePassedReviewerVerdict).not.toBe(
-      'NON_BLOCKING',
-    )
+    expect(
+      (agentState as any).base2ActiveWork.gatePassedReviewerVerdict,
+    ).not.toBe('NON_BLOCKING')
     const repairSpawn = gen.next().value as any
     expect(repairSpawn).toMatchObject({
       toolName: 'spawn_agents',
@@ -5921,13 +6487,14 @@ describe('base2 verification and reviewer gates', () => {
     return { gen, agentState, reviewCall, tmpDir, tmpFile, gateFile }
   }
 
-  // Feeds the first NON_BLOCKING reviewer result and the repair-editor
-  // completion receipt, landing on the second (re-review) spawn_agents call.
-  // Mirrors the yield sequence of the BLOCKING repair/re-review test above:
-  // after the repair receipt the generator yields git_status ->
-  // run_file_change_hooks -> spawn_agent_inline (the re-review code-reviewer)
-  // -> add_message (pinned active-work, phase awaiting_review) -> STEP, then
-  // the next loop iteration drives git_status -> list_jobs ->
+  // Feeds the first reviewer result (NON_BLOCKING by default, or BLOCKING when
+  // `firstVerdict` is passed so the de-escalation direction can be exercised)
+  // and the repair-editor completion receipt, landing on the second (re-review)
+  // spawn_agents call. Both verdict classes take the same repair path, so the
+  // yield sequence is identical: after the repair receipt the generator yields
+  // git_status -> run_file_change_hooks -> spawn_agent_inline (the re-review
+  // code-reviewer) -> add_message (pinned active-work, phase awaiting_review) ->
+  // STEP, then the next loop iteration drives git_status -> list_jobs ->
   // run_file_change_hooks -> git_status -> spawn_agents (the second review).
   function driveThroughRepairToSecondReview(
     gen: any,
@@ -5935,11 +6502,17 @@ describe('base2 verification and reviewer gates', () => {
     reviewCall: any,
     tmpFile: string,
     gateFile: string,
-    findingSummary: string,
+    findingSummary:
+      | string
+      | Record<string, unknown>
+      | Array<string | Record<string, unknown>>,
+    firstVerdict: 'NON_BLOCKING' | 'BLOCKING' = 'NON_BLOCKING',
   ) {
-    const firstReview = attestedReviewerResult(reviewCall, 'NON_BLOCKING', [
-      findingSummary,
-    ])
+    const firstReview = attestedReviewerResult(
+      reviewCall,
+      firstVerdict,
+      Array.isArray(findingSummary) ? findingSummary : [findingSummary],
+    )
     const afterFirst = gen.next(firstReview as any)
     expect(afterFirst.value).toMatchObject({
       toolName: 'add_message',
@@ -5953,9 +6526,9 @@ describe('base2 verification and reviewer gates', () => {
     // The gate mints RF-<n>-<hash> finding ids via buildReviewerFindingId; read
     // them from state (do NOT reuse the reviewer-output id) and make the
     // repair's byte change real so the no-progress fingerprint guard passes.
-    const findingIds = (agentState as any).base2ActiveWork.openReviewerFindings.map(
-      (finding: any) => finding.id,
-    )
+    const findingIds = (
+      agentState as any
+    ).base2ActiveWork.openReviewerFindings.map((finding: any) => finding.id)
     writeFileSync(tmpFile, 'export const value = 2 // repaired\n')
     expect(
       gen.next(completedRepairReceipt(findingIds, [gateFile]) as any).value,
@@ -6051,15 +6624,653 @@ describe('base2 verification and reviewer gates', () => {
       expect((gatePassed.value as any).input.content).toMatch(
         /reviewer gate passed with LOOKS_GOOD/i,
       )
-      expect(
-        (agentState as any).base2ActiveWork.currentPhase,
-      ).toBe('final_response_allowed')
-      expect(
-        (agentState as any).base2ActiveWork.openReviewerBlockers,
-      ).toEqual([])
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+        'final_response_allowed',
+      )
+      expect((agentState as any).base2ActiveWork.openReviewerBlockers).toEqual(
+        [],
+      )
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }
+  })
+
+  // RF-1-2ffc3f6b: behavioral coverage for the advisory wiring. A LOOKS_GOOD
+  // receipt carrying advisories must (a) persist them (plus advisoryCount) on
+  // the durable review receipt and (b) surface the SAME bounded list in the
+  // emitted <gate-state> payload, which is the only user-visible advisory
+  // surface. Every bound is exercised: a >240-char entry is truncated with
+  // '...', inner whitespace is collapsed, empty entries are dropped, and only
+  // the first 8 entries survive.
+  test('a LOOKS_GOOD receipt with advisories persists and surfaces bounded advisories', () => {
+    const { gen, agentState, reviewCall, tmpDir, gateFile } =
+      driveToFirstReview()
+    try {
+      const ansiAdvisory = 'advisory \u001b[31m8\u0000 visible\u007f'
+      const advisories = [
+        'x'.repeat(300),
+        '  spaced\n   advisory  ',
+        '',
+        'advisory 3',
+        'advisory 4',
+        'advisory 5',
+        'advisory 6',
+        'advisory 7',
+        // Carries an ANSI escape plus NUL/DEL: the emitter must strip the
+        // control bytes while keeping the surrounding visible text.
+        ansiAdvisory,
+        'advisory 9 dropped',
+        'advisory 10 dropped',
+      ]
+      expect(
+        gen.next(
+          attestedReviewerResult(
+            reviewCall,
+            'LOOKS_GOOD',
+            [],
+            'covered',
+            advisories,
+          ) as any,
+        ).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      const gatePassed = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any)
+      expect(gatePassed.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      // The durable receipt keeps the reviewer's bytes (the persistence path is
+      // unchanged); only the emitted <gate-state> text strips control bytes.
+      const expectedReceiptAdvisories = [
+        `${'x'.repeat(237)}...`,
+        'spaced advisory',
+        'advisory 3',
+        'advisory 4',
+        'advisory 5',
+        'advisory 6',
+        'advisory 7',
+        ansiAdvisory,
+      ]
+      const expectedGateStateAdvisories = [
+        ...expectedReceiptAdvisories.slice(0, 7),
+        'advisory [31m8 visible',
+      ]
+      const receipt = (agentState as any).base2ActiveWork.reviewReceipts[0]
+      expect(receipt.advisories).toEqual(expectedReceiptAdvisories)
+      expect(receipt.advisoryCount).toBe(expectedReceiptAdvisories.length)
+      const gateState = parseGateStateBlock(
+        (gatePassed.value as any).input.content as string,
+      )
+      expect(gateState).toMatchObject({
+        gate: 'validation/reviewer',
+        status: 'passed',
+      })
+      expect(gateState!.advisories).toEqual(expectedGateStateAdvisories)
+      for (const advisory of gateState!.advisories ?? []) {
+        expect(/[\u0000-\u001f\u007f]/.test(advisory)).toBe(false)
+      }
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // Advisories must also reach the user on the NON-gate-pass paths. On the
+  // blocker/repair path no receipt exists yet (recordSuccessfulReviewReceipt
+  // only runs once a finalization verdict exists), so the displayed list comes
+  // from the shared collector and must apply the same bounds as <gate-state>.
+  test('a blocking reviewer round displays bounded advisories without turning them into blockers', () => {
+    const { gen, agentState, reviewCall, tmpDir } = driveToFirstReview()
+    try {
+      const ansiAdvisory = 'advisory \u001b[31m7\u0000 visible\u007f'
+      const advisories = [
+        'y'.repeat(300),
+        '  spaced\n   advisory  ',
+        '',
+        'advisory 3',
+        'advisory 4',
+        'advisory 5',
+        'advisory 6',
+        ansiAdvisory,
+        'advisory 8',
+        'advisory 9 dropped',
+        'advisory 10 dropped',
+      ]
+      const afterReview = gen.next(
+        attestedReviewerResult(
+          reviewCall,
+          'BLOCKING',
+          ['Fix the edge case.'],
+          'covered',
+          advisories,
+        ) as any,
+      )
+      expect(afterReview.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const content = (afterReview.value as any).input.content as string
+      expect(content).toContain('BLOCKING: Fix the edge case.')
+      const lines = content.split('\n')
+      const headerIndex = lines.indexOf(
+        'Advisories (non-blocking; no change required):',
+      )
+      expect(headerIndex).toBeGreaterThan(-1)
+      const advisoryLines = lines
+        .slice(headerIndex + 1)
+        .filter((line) => line.startsWith('- '))
+      // Exactly 8 bounded lines: the >240-char entry is truncated, inner
+      // whitespace is collapsed, the empty entry is dropped, control bytes are
+      // stripped, and everything past the 8th entry is discarded.
+      expect(advisoryLines).toEqual([
+        `- ${'y'.repeat(237)}...`,
+        '- spaced advisory',
+        '- advisory 3',
+        '- advisory 4',
+        '- advisory 5',
+        '- advisory 6',
+        '- advisory [31m7 visible',
+        '- advisory 8',
+      ])
+      for (const line of advisoryLines) {
+        expect(/[\u0000-\u001f\u007f]/.test(line)).toBe(false)
+      }
+      expect(content).not.toContain('advisory 9 dropped')
+      // Purely informational: advisories never enter the blocker/finding
+      // ledgers, so they cannot drive a repair round or a branch.
+      const active = (agentState as any).base2ActiveWork
+      const ledgerTexts = [
+        ...((active.openReviewerBlockers ?? []) as string[]),
+        ...((active.openReviewerFindings ?? []) as Array<{ text: string }>).map(
+          (finding) => finding.text,
+        ),
+      ]
+      expect(active.openReviewerBlockers).toEqual([
+        'BLOCKING: Fix the edge case.',
+      ])
+      for (const text of ledgerTexts) {
+        expect(text).not.toContain('advisory')
+        expect(text).not.toContain('y'.repeat(20))
+      }
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a blocking reviewer round with no advisories keeps the blocker message byte-identical', () => {
+    const { gen, reviewCall, tmpDir } = driveToFirstReview()
+    try {
+      const afterReview = gen.next(
+        attestedReviewerResult(reviewCall, 'BLOCKING', [
+          'Fix the edge case.',
+        ]) as any,
+      )
+      expect(afterReview.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const content = (afterReview.value as any).input.content as string
+      // No header, no extra blank line: the empty advisory list adds nothing.
+      expect(content).toBe(
+        [
+          'Reviewer gate: code-reviewer returned blocking feedback. The harness will send these exact findings to repair-editor:',
+          '',
+          'BLOCKING: Fix the edge case.',
+          '',
+          'These findings remain open until targeted validation and a fresh matching reviewer pass clear them.',
+        ].join('\n'),
+      )
+      expect(content).not.toContain('Advisories')
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // T1.5: condoning is keyed on (verdict class, finding identity), not text
+  // alone. Under the old text-only key the stored condone entry stripped the
+  // NON_BLOCKING/BLOCKING prefix, so re-raising the SAME text at a HIGHER
+  // verdict class was swallowed by the condone filter and the gate finalized on
+  // an escalation it never repaired.
+  test('re-raising a condoned NON_BLOCKING text as BLOCKING is not condoned', () => {
+    const findingText = 'Minor style suggestion.'
+    const { gen, agentState, reviewCall, tmpDir, tmpFile, gateFile } =
+      driveToFirstReview()
+    try {
+      const secondReviewCall = driveThroughRepairToSecondReview(
+        gen,
+        agentState,
+        reviewCall,
+        tmpFile,
+        gateFile,
+        findingText,
+      )
+      const active = (agentState as any).base2ActiveWork
+      // The repair round condoned the NON_BLOCKING class only.
+      expect(active.condonedFindingKeys).toContain(
+        `NON_BLOCKING::text:${findingText}`,
+      )
+      expect(active.condonedFindingKeys).not.toContain(
+        `BLOCKING::text:${findingText}`,
+      )
+      // Same text, escalated verdict class: new information, must stay open.
+      const secondReview = attestedReviewerResult(
+        secondReviewCall,
+        'BLOCKING',
+        [findingText],
+      )
+      const afterSecond = gen.next(secondReview as any)
+      expect(afterSecond.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      expect((afterSecond.value as any).input.content).toContain(
+        `BLOCKING: ${findingText}`,
+      )
+      expect(active.openReviewerBlockers).toContain(`BLOCKING: ${findingText}`)
+      expect(active.currentPhase).not.toBe('final_response_allowed')
+      expect(gen.next().value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // Same-class re-raise: a NON_BLOCKING finding already reported as addressed
+  // and re-raised as NON_BLOCKING carries no new information, so the loop must
+  // converge. (The de-escalation direction is the separate test below.)
+  test('a condoned finding re-raised at the same class still converges', () => {
+    const findingText = 'Minor style suggestion.'
+    const { gen, agentState, reviewCall, tmpDir, tmpFile, gateFile } =
+      driveToFirstReview()
+    try {
+      const secondReviewCall = driveThroughRepairToSecondReview(
+        gen,
+        agentState,
+        reviewCall,
+        tmpFile,
+        gateFile,
+        findingText,
+      )
+      const secondReview = attestedReviewerResult(
+        secondReviewCall,
+        'NON_BLOCKING',
+        [findingText],
+      )
+      const afterSecond = gen.next(secondReview as any)
+      const active = (agentState as any).base2ActiveWork
+      expect(active.currentPhase).not.toBe('repair_loop')
+      expect(active.currentPhase).not.toBe('blocked')
+      // Condoned pass: finalization, not another repair spawn.
+      expect(afterSecond.value).toMatchObject({ toolName: 'git_status' })
+      const gatePassed = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any)
+      expect((gatePassed.value as any).input.content).toMatch(
+        /reviewer gate passed with LOOKS_GOOD/i,
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // RF-1/RF-2/RF-8: de-escalation is the mirror of the escalation case above and
+  // IS condonable, one-directionally. A finding condoned at BLOCKING and
+  // re-raised as a NON_BLOCKING nit carries no new information; if it were not
+  // condoned the blocker list would stay non-empty, another repair-editor would
+  // be spawned, and the already-applied repair would trip the no-progress guard,
+  // leaving the gate 'blocked' instead of converging.
+  test('a finding condoned at BLOCKING and re-raised as NON_BLOCKING still converges', () => {
+    const findingText = 'Minor style suggestion.'
+    const { gen, agentState, reviewCall, tmpDir, tmpFile, gateFile } =
+      driveToFirstReview()
+    try {
+      const secondReviewCall = driveThroughRepairToSecondReview(
+        gen,
+        agentState,
+        reviewCall,
+        tmpFile,
+        gateFile,
+        findingText,
+        'BLOCKING',
+      )
+      const active = (agentState as any).base2ActiveWork
+      // The repair round condoned the BLOCKING class only; the NON_BLOCKING key
+      // is never written, so convergence relies on the de-escalation allowance
+      // rather than on a same-class key.
+      expect(active.condonedFindingKeys).toContain(
+        `BLOCKING::text:${findingText}`,
+      )
+      expect(active.condonedFindingKeys).not.toContain(
+        `NON_BLOCKING::text:${findingText}`,
+      )
+      // Same identity, DE-ESCALATED verdict class: still condoned.
+      const secondReview = attestedReviewerResult(
+        secondReviewCall,
+        'NON_BLOCKING',
+        [findingText],
+      )
+      const afterSecond = gen.next(secondReview as any)
+      expect(active.currentPhase).not.toBe('repair_loop')
+      expect(active.currentPhase).not.toBe('blocked')
+      // Condoned pass: git_status -> gate-passed add_message, no repair spawn.
+      expect(afterSecond.value).toMatchObject({ toolName: 'git_status' })
+      const gatePassed = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any)
+      expect(gatePassed.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      expect((gatePassed.value as any).input.content).toMatch(
+        /reviewer gate passed with LOOKS_GOOD/i,
+      )
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+        'final_response_allowed',
+      )
+      // The first round's BLOCKING blocker string is cleared by the
+      // condoned-pass cleanup rather than left looking open.
+      expect((agentState as any).base2ActiveWork.openReviewerBlockers).toEqual(
+        [],
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // RF-3: the id half of the condone key only exists for a reviewer-supplied
+  // (non-minted) finding id, so a suite that only feeds plain-string findings
+  // never executes that push branch. An object finding carrying a stable id
+  // must produce `NON_BLOCKING::id:<id>`, a re-raise of that id at BLOCKING
+  // must stay open, and a co-reported record-less finding (minted `RF-...` id)
+  // must contribute no `::id:` key at all.
+  test('an object finding with a stable id records an id-keyed condone key and stays open when re-raised as BLOCKING', () => {
+    const findingId = 'code-reviewer:correctness:minor-style'
+    const findingText = 'Minor style suggestion.'
+    const blockerText = `[${findingId}] ${findingText}`
+    const plainFindingText = 'A plain-string nit with no id'
+    const objectFinding = {
+      id: findingId,
+      summary: findingText,
+      severity: 'low',
+      dimension: 'correctness',
+      evidence: ['a.ts uses the expected behavior.'],
+      correction: 'Optional naming cleanup.',
+    }
+    const { gen, agentState, reviewCall, tmpDir, tmpFile, gateFile } =
+      driveToFirstReview()
+    try {
+      const secondReviewCall = driveThroughRepairToSecondReview(
+        gen,
+        agentState,
+        reviewCall,
+        tmpFile,
+        gateFile,
+        [objectFinding, plainFindingText],
+      )
+      const active = (agentState as any).base2ActiveWork
+      const condonedKeys = active.condonedFindingKeys as string[]
+      // (a) the reviewer-supplied id produced an id-keyed condone entry.
+      expect(condonedKeys).toContain(`NON_BLOCKING::id:${findingId}`)
+      expect(condonedKeys).toContain(`NON_BLOCKING::text:${blockerText}`)
+      // (c) the record-less finding got a minted RF-... id, which is positional
+      // and therefore never keyed on.
+      expect(condonedKeys).toContain(`NON_BLOCKING::text:${plainFindingText}`)
+      expect(condonedKeys.filter((key) => key.includes('::id:'))).toEqual([
+        `NON_BLOCKING::id:${findingId}`,
+      ])
+      expect(
+        condonedKeys.some((key) => /::id:RF-\d+-[0-9a-f]{8}$/.test(key)),
+      ).toBe(false)
+      // (b) the same identity re-raised at BLOCKING is new information.
+      const secondReview = attestedReviewerResult(
+        secondReviewCall,
+        'BLOCKING',
+        [objectFinding, plainFindingText],
+      )
+      const afterSecond = gen.next(secondReview as any)
+      expect(afterSecond.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      expect((afterSecond.value as any).input.content).toContain(
+        `BLOCKING: ${blockerText}`,
+      )
+      expect(active.openReviewerBlockers).toContain(`BLOCKING: ${blockerText}`)
+      expect(
+        (
+          active.openReviewerFindings as Array<{
+            id: string
+            status: string
+          }>
+        ).find((finding) => finding.id === findingId)?.status,
+      ).toBe('open')
+      expect(active.currentPhase).not.toBe('final_response_allowed')
+      expect(gen.next().value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // RF-1: the condoned-pass cleanup used to filter openReviewerBlockers by
+  // STRIPPED TEXT only. mergeReviewerFindings retains other families' blockers,
+  // so a security-reviewer `BLOCKING: <same text>` blocker that was never
+  // condoned was silently dropped when the code-reviewer round credited a
+  // condoned pass. The cleanup must key on (verdict class, identity) like every
+  // other condone decision.
+  test('condoned pass keeps another reviewer BLOCKING blocker that shares the condoned text', () => {
+    const findingText = 'Minor style suggestion.'
+    const securityBlocker = `BLOCKING: ${findingText}`
+    const tmpDir = makeProjectTempDir('base2-condoned-cleanup-')
+    const tmpFile = join(tmpDir, 'a.ts')
+    const gateFile = normalizeGateFilePath(tmpFile)
+    writeFileSync(tmpFile, 'export const value = 1\n')
+    try {
+      const base2 = createBase2('default')
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          touchedFiles: [gateFile],
+          changedFiles: [gateFile],
+          pendingGateFiles: [gateFile],
+          currentPhase: 'awaiting_validation',
+          latestWorkSummary: '',
+          // Security-reviewer blocker whose text matches the condoned
+          // code-reviewer nit byte-for-byte, at the higher verdict class.
+          openReviewerBlockers: [securityBlocker],
+          openReviewerFindings: [
+            {
+              id: 'security-reviewer:containment:same-text',
+              gateId: 'security-reviewer:prior-snapshot',
+              text: securityBlocker,
+              status: 'open',
+              files: [gateFile],
+              snapshotFingerprint: 'prior-snapshot',
+              reviewer: 'security-reviewer',
+              createdAt: '2025-01-01T00:00:00.000Z',
+            },
+          ],
+          lastValidationSummary: '',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [],
+          gatePassedPendingFiles: [],
+          gatePassedReviewerVerdict: '',
+          gatePassedValidationSummary: '',
+          gatePassedFingerprint: '',
+          lastReviewerGateSkipReason: '',
+          reviewReceipts: [],
+          // A prior code-reviewer repair round condoned the NON_BLOCKING nit.
+          condonedFindingTexts: [findingText],
+          condonedFindingKeys: [`NON_BLOCKING::text:${findingText}`],
+          // Keep the aux gates out of this turn; only the final gate matters.
+          testWriterGateDone: true,
+          docWriterGateDone: true,
+          securityReviewGateDone: true,
+          preEditSecurityReviewDone: true,
+          specialistReviewGatesDone: [],
+          auxGatesLastPendingFiles: [gateFile],
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the pending review.',
+        params: {},
+      } as any)
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      const maybePinned = gen.next().value
+      if (maybePinned !== 'STEP') {
+        expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+      expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect(
+        gen.next({ toolResult: [{ type: 'json', value: [] }] } as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      const reviewCall = gen.next(feedJson({ status: ` M ${gateFile}` }))
+        .value as any
+      expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+      // Every collected blocker is condoned, so the round credits a condoned
+      // pass and runs the cleanup instead of spawning repair-editor.
+      const afterReview = gen.next(
+        attestedReviewerResult(reviewCall, 'NON_BLOCKING', [
+          findingText,
+        ]) as any,
+      )
+      expect(afterReview.value).toMatchObject({ toolName: 'git_status' })
+      const active = (agentState as any).base2ActiveWork
+      // The never-condoned security blocker survives the cleanup.
+      expect(active.openReviewerBlockers).toContain(securityBlocker)
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // RF-2: the security/specialist record shape used to store the UNPREFIXED
+  // record text, so reviewerVerdictClass returned the `*` wildcard and a repair
+  // round recorded `*::text:` / `*::id:` keys. With the old wildcard match those
+  // condoned ANY later class, so a security nit re-raised as BLOCKING was
+  // swallowed. The record now stores the prefixed blocker string and `*` matches
+  // only `*`, so the escalation stays open.
+  test('a security finding re-raised at BLOCKING is not condoned by a class-agnostic condone key', () => {
+    const findingId = 'security-reviewer:containment:fixture-path'
+    const findingText = 'Reject nested fixture paths.'
+    const securityFile = 'sdk/src/policy/terminal-command-policy.ts'
+    const blocker = `BLOCKING: [${findingId}] ${findingText}`
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2',
+      base2ActiveWork: {
+        touchedFiles: [],
+        changedFiles: [],
+        pendingGateFiles: [],
+        currentPhase: 'idle',
+        latestWorkSummary: '',
+        openReviewerBlockers: [],
+        openReviewerFindings: [],
+        lastValidationSummary: '',
+        nextRequiredAction: '',
+        lastPinnedStateMessage: '',
+        gatePassedFiles: [],
+        gatePassedPendingFiles: [],
+        gatePassedReviewerVerdict: '',
+        gatePassedValidationSummary: '',
+        gatePassedFingerprint: '',
+        lastReviewerGateSkipReason: '',
+        reviewReceipts: [],
+        // A prior repair round condoned this finding as a NON_BLOCKING nit.
+        // Both the class-keyed entries and the legacy class-agnostic `*`
+        // entries (what the pre-fix security path recorded from its unprefixed
+        // record text) are seeded; neither may condone a BLOCKING re-raise.
+        condonedFindingTexts: [findingText, `[${findingId}] ${findingText}`],
+        condonedFindingKeys: [
+          `NON_BLOCKING::text:[${findingId}] ${findingText}`,
+          `NON_BLOCKING::id:${findingId}`,
+          `*::text:[${findingId}] ${findingText}`,
+          `*::text:${findingText}`,
+          `*::id:${findingId}`,
+        ],
+      },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: `Update ${securityFile}.`,
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+        .value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    expect(gen.next().value).toBe('STEP')
+    expect(
+      gen.next({
+        stepsComplete: true,
+        toolResult: [{ type: 'json', value: editReceipt(securityFile) }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    const securityReview = gen.next({
+      toolResult: [{ type: 'json', value: { status: ` M ${securityFile}` } }],
+    } as any)
+    expect(securityReview.value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'security-reviewer' },
+    })
+    const snapshotFingerprint = (
+      (securityReview.value as any).input.prompt as string
+    )
+      .split('Snapshot fingerprint: ')[1]
+      .split('\n')[0]
+    const blockerMessage = gen.next({
+      toolResult: [
+        {
+          type: 'json',
+          value: {
+            schemaVersion: 1,
+            verdict: 'BLOCKING',
+            snapshotFingerprint,
+            reviewedFiles: [securityFile],
+            findings: [{ id: findingId, summary: findingText }],
+            coverage: 'covered',
+            dimensions: {},
+            requirementCoverage: [],
+          },
+        },
+      ],
+    } as any)
+
+    expect(blockerMessage.value).toMatchObject({ toolName: 'add_message' })
+    const active = (agentState as any).base2ActiveWork
+    expect(active.openReviewerBlockers).toContain(blocker)
+    const escalated = (
+      active.openReviewerFindings as Array<{
+        id: string
+        text: string
+        status: string
+      }>
+    ).find((finding) => finding.id === findingId)
+    // The record carries the PREFIXED blocker string, so the derived class is
+    // BLOCKING rather than the class-agnostic `*`.
+    expect(escalated?.text).toBe(blocker)
+    expect(escalated?.status).toBe('open')
+    expect(active.currentPhase).toBe('repair_loop')
+    expect(gen.next().value).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'repair-editor' }] },
+    })
   })
 
   test('genuinely NEW finding on re-review still blocks and spawns repair-editor', () => {
@@ -6109,8 +7320,9 @@ describe('base2 verification and reviewer gates', () => {
       driveToFirstReview()
     try {
       // Reviewer returns only a parent-owned requirementCoverage gap (commit
-      // and push), which must be filtered out by isParentOwnedRequirementBlocker
-      // and must NOT produce a blocker or a repair spawn.
+      // and push), which must be filtered out via
+      // collectParentOwnedRequirementBlockers and must NOT produce a blocker or
+      // a repair spawn.
       const prompt = String(reviewCall?.input?.agents?.[0]?.prompt ?? '')
       const fingerprint =
         prompt.match(/Snapshot fingerprint \(echo exactly\): ([^\n]+)/)?.[1] ??
@@ -6143,33 +7355,188 @@ describe('base2 verification and reviewer gates', () => {
       const afterReview = gen.next(review as any)
       const active = (agentState as any).base2ActiveWork
       // The parent-owned requirementCoverage gap (commit and push) is filtered
-      // out by isParentOwnedRequirementBlocker, so it is NOT elevated as a
-      // blocker. The only blocker present is the synthetic NON_BLOCKING
-      // empty-findings placeholder from collectReviewerBlockers, which is
-      // expected because the reviewer returned NON_BLOCKING with zero findings.
+      // out by collectParentOwnedRequirementBlockers, so it is never elevated as
+      // a blocker. Because a parent-owned row is not repair fuel,
+      // collectReviewerBlockers still emits the synthetic NON_BLOCKING
+      // empty-findings placeholder, and THAT survives the filter: NON_BLOCKING
+      // is not a finalization credit, so an empty surviving list would leave the
+      // gate with no repair target and a misdiagnosed no-verdict loop.
       const blockers = (active.openReviewerBlockers ?? []) as string[]
-      // The parent-owned requirementCoverage gap (commit and push) is filtered
-      // out by isParentOwnedRequirementBlocker, and because the reviewer
-      // returned NON_BLOCKING with zero findings, no synthetic placeholder is
-      // elevated either. The blockers list is empty.
       expect(
         blockers.some((blocker: string) =>
           /BLOCKING:\s*requirement\s+missing:\s*commit and push/i.test(blocker),
         ),
       ).toBe(false)
-      expect(blockers).toHaveLength(0)
-      // The parent-owned filter removed the only gap, so no repair-editor
-      // spawn follows. The NON_BLOCKING verdict itself is not a finalization
-      // credit (LOOKS_GOOD only), so the gate continues the reviewer loop
-      // rather than finalizing; this test only asserts the parent-owned
-      // requirement gap never became a blocker or a repair spawn.
-      const nextYield = afterReview.value as any
-      const isRepairSpawn =
-        nextYield &&
-        typeof nextYield === 'object' &&
-        nextYield.toolName === 'spawn_agents' &&
-        nextYield.input?.agents?.[0]?.agent_type === 'repair-editor'
-      expect(isRepairSpawn).toBe(false)
+      expect(blockers).toEqual([
+        'NON_BLOCKING: reviewer returned non-blocking nits without findings; re-address and re-review until LOOKS_GOOD',
+      ])
+      // The surviving placeholder is not a coverage finding, so the gate drives
+      // the ordinary repair-editor round instead of burning the no-verdict
+      // budget with zero repair targets.
+      expect(afterReview.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      expect((afterReview.value as any).input.content).toContain(
+        'NON_BLOCKING: reviewer returned non-blocking nits without findings',
+      )
+      expect(gen.next().value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // T0.2: condone credit is orchestrator-owned evidence, not reviewer/repair
+  // self-report. A receipt that lists finding ids but is not `completed` (or
+  // changed no files) must not condone anything, so the finding stays open and
+  // the next re-review re-elevates it.
+  test('blocked repair receipt does not condone the findings it claims to have addressed', () => {
+    const findingText = 'Minor style suggestion.'
+    const { gen, agentState, reviewCall, tmpDir, tmpFile, gateFile } =
+      driveToFirstReview()
+    try {
+      const firstReview = attestedReviewerResult(reviewCall, 'NON_BLOCKING', [
+        findingText,
+      ])
+      expect(gen.next(firstReview as any).value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      expect(gen.next().value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+      const findingIds = (
+        agentState as any
+      ).base2ActiveWork.openReviewerFindings.map((finding: any) => finding.id)
+      // Real byte change so the no-progress fingerprint guard does not fire for
+      // an unrelated reason; the receipt status is what must block condoning.
+      writeFileSync(tmpFile, 'export const value = 2 // partially repaired\n')
+      const blockedReceipt = repairSpawnReport({
+        receiptId: 'repair-blocked-claiming-findings',
+        status: 'blocked',
+        changedFiles: [{ path: gateFile }],
+        findingsAddressed: findingIds,
+        value: {
+          status: 'blocked',
+          changedFiles: [{ path: gateFile }],
+          findingsAddressed: findingIds,
+        },
+      })
+      expect(gen.next(blockedReceipt as any).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      // The claim was rejected: nothing is condoned, so the finding stays open.
+      expect(
+        (agentState as any).base2ActiveWork.condonedFindingTexts ?? [],
+      ).toEqual([])
+      // Drive the re-review and confirm the same finding still blocks.
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect(
+        gen.next({
+          toolResult: [
+            {
+              type: 'json',
+              value: [{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }],
+            },
+          ],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+      expect(
+        gen.next({ stepsComplete: true, toolResult: [] } as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect(
+        gen.next({ toolResult: [{ type: 'json', value: [] }] } as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      const secondReviewCall = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any).value as any
+      expect(secondReviewCall).toMatchObject({ toolName: 'spawn_agents' })
+      const secondReview = attestedReviewerResult(
+        secondReviewCall,
+        'NON_BLOCKING',
+        [findingText],
+      )
+      const afterSecond = gen.next(secondReview as any)
+      expect(afterSecond.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      expect((afterSecond.value as any).input.content).toContain(
+        `NON_BLOCKING: ${findingText}`,
+      )
+      expect(
+        (agentState as any).base2ActiveWork.openReviewerBlockers,
+      ).toContain(`NON_BLOCKING: ${findingText}`)
+      expect(gen.next().value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('completed repair receipt with no changed files does not condone its findings', () => {
+    const findingText = 'Minor style suggestion.'
+    const { gen, agentState, reviewCall, tmpDir, gateFile } =
+      driveToFirstReview()
+    try {
+      const firstReview = attestedReviewerResult(reviewCall, 'NON_BLOCKING', [
+        findingText,
+      ])
+      expect(gen.next(firstReview as any).value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      expect(gen.next().value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+      const findingIds = (
+        agentState as any
+      ).base2ActiveWork.openReviewerFindings.map((finding: any) => finding.id)
+      // status: 'completed' and every id claimed, but zero changed files: the
+      // receipt has no positive evidence, so the claim is rejected.
+      const noChangeReceipt = repairSpawnReport({
+        receiptId: 'repair-completed-no-changes',
+        status: 'completed',
+        changedFiles: [],
+        findingsAddressed: findingIds,
+        value: {
+          status: 'completed',
+          changedFiles: [],
+          findingsAddressed: findingIds,
+        },
+      })
+      expect(gen.next(noChangeReceipt as any).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      expect(
+        (agentState as any).base2ActiveWork.condonedFindingTexts ?? [],
+      ).toEqual([])
+      // The repair changed no bytes, so the no-progress guard blocks the gate
+      // instead of crediting a condoned pass.
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any)
+      const active = (agentState as any).base2ActiveWork
+      expect(active.condonedFindingTexts ?? []).toEqual([])
+      expect(active.currentPhase).not.toBe('final_response_allowed')
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }
@@ -6431,9 +7798,7 @@ describe('base2 gate-passed credit ledger (Option A)', () => {
       ).toMatchObject({ toolName: 'git_status' })
       expect(
         gen.next({
-          toolResult: [
-            { type: 'json', value: { status: ` M ${gateFile}` } },
-          ],
+          toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
         } as any).value,
       ).toMatchObject({
         toolName: 'run_file_change_hooks',
@@ -6444,18 +7809,14 @@ describe('base2 gate-passed credit ledger (Option A)', () => {
         } as any).value,
       ).toMatchObject({ toolName: 'git_status' })
       const reviewCall = gen.next({
-        toolResult: [
-          { type: 'json', value: { status: ` M ${gateFile}` } },
-        ],
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
       } as any).value
       expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
       expect(
         gen.next(attestedReviewerResult(reviewCall) as any).value,
       ).toMatchObject({ toolName: 'git_status' })
       const gatePassed = gen.next({
-        toolResult: [
-          { type: 'json', value: { status: ` M ${gateFile}` } },
-        ],
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
       } as any)
 
       expect(gatePassed.value).toMatchObject({ toolName: 'add_message' })
@@ -6839,9 +8200,7 @@ describe('base2 gate-passed credit ledger (Option A)', () => {
 
       // Current marker is not 'missing' (the file reads as unreadable/error),
       // so the stale stored-'missing' credit is evicted and republished.
-      expect(
-        (agentState as any).base2ActiveWork.gatePassedFiles,
-      ).toEqual([])
+      expect((agentState as any).base2ActiveWork.gatePassedFiles).toEqual([])
       expect((agentState as any).base2ActiveWork.currentPhase).toBe(
         'awaiting_validation',
       )
@@ -6932,7 +8291,9 @@ describe('base2 validation-first reviewer snapshots', () => {
       toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
     } as any)
     const validation = validationJobs
-    expect(validation.value).toMatchObject({ toolName: 'run_file_change_hooks' })
+    expect(validation.value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
 
     const postValidationStatus = gen.next({
       toolResult: [{ type: 'json', value: [] }],
@@ -6945,7 +8306,9 @@ describe('base2 validation-first reviewer snapshots', () => {
       toolName: 'spawn_agents',
       input: { agents: [{ agent_type: 'code-reviewer' }] },
     })
-    expect((review.value as any).input.agents[0]).not.toHaveProperty('background')
+    expect((review.value as any).input.agents[0]).not.toHaveProperty(
+      'background',
+    )
   })
 })
 
@@ -7008,7 +8371,8 @@ describe('base2 repair-loop gate-state telemetry (M6.4)', () => {
     ).toEqual(expect.arrayContaining(['src/a.ts', 'src/**/*']))
     expect(
       new Set(
-        repairSpawn.input.agents[0].handoff.permissions.readablePaths as string[],
+        repairSpawn.input.agents[0].handoff.permissions
+          .readablePaths as string[],
       ),
     ).toEqual(new Set(['src/a.ts', 'src/**/*']))
     expect(
@@ -7183,9 +8547,7 @@ describe('base2 test-writer aux-gate completion path', () => {
     const basherValidation = validReceipt.value as any
     expect(basherValidation).toMatchObject({ toolName: 'spawn_agents' })
     gen.next({ toolResult: [{ type: 'json', value: [] }] } as any)
-    expect(
-      (agentState as any).base2ActiveWork.testWriterGateDone,
-    ).toBe(true)
+    expect((agentState as any).base2ActiveWork.testWriterGateDone).toBe(true)
     // After the test-writer gate completes, the generator continues the loop
     // and reaches run_file_change_hooks (the final validation/reviewer gate).
     // It may yield a spawn_agents (basher validation command from the test
@@ -7196,7 +8558,10 @@ describe('base2 test-writer aux-gate completion path', () => {
     let guard = 0
     while (
       step &&
-      !(step.toolName === 'run_file_change_hooks' || step.toolName === 'git_status') &&
+      !(
+        step.toolName === 'run_file_change_hooks' ||
+        step.toolName === 'git_status'
+      ) &&
       guard++ < 10
     ) {
       step = gen.next({ toolResult: [{ type: 'json', value: {} }] } as any)
@@ -7261,12 +8626,10 @@ describe('base2 test-writer aux-gate completion path', () => {
     const afterInvalid = gen.next({
       toolResult: [{ type: 'json', value: {} }],
     } as any)
-    expect(
-      (agentState as any).base2ActiveWork.testWriterGateDone,
-    ).toBe(true)
-    expect(
-      (agentState as any).base2ActiveWork.validationAssurance,
-    ).toBe('reduced')
+    expect((agentState as any).base2ActiveWork.testWriterGateDone).toBe(true)
+    expect((agentState as any).base2ActiveWork.validationAssurance).toBe(
+      'reduced',
+    )
     // The gate must not re-spawn the test-writer; it proceeds past the aux
     // gate. The next yield may be another aux gate (e.g. doc-writer) but must
     // not be a test-writer re-spawn.
@@ -7899,9 +9262,129 @@ describe('base2 content-based reviewer finding correlation', () => {
     expect(findings[0].text).toBe(
       'BLOCKING: A synthesized-style finding with no id',
     )
-    // The object-finding blocker correlates by [id] to its real record.
+    // The object-finding blocker correlates by [id] to its real record, and the
+    // stored text is the PREFIXED blocker string so reviewerVerdictClass can
+    // derive the finding's verdict class for condone keying.
     expect(findings[1].id).toBe('security-reviewer:containment:real')
-    expect(findings[1].text).toBe('Reject nested fixture paths.')
+    expect(findings[1].text).toBe(
+      'BLOCKING: [security-reviewer:containment:real] Reject nested fixture paths.',
+    )
+  })
+
+  test('code-reviewer object findings keep their reviewer-supplied id', () => {
+    // T1.3: the final code-reviewer path used to mint a content-hash `RF-...`
+    // id for EVERY blocker, so a re-raised finding got a fresh id each round
+    // while the security and specialist paths already correlated by
+    // reviewer-supplied id. An object finding carrying `id` must keep it; a
+    // record-less string finding must still fall back to a minted id. The
+    // stored text must stay the prefixed blocker string (including the `[id] `
+    // segment) because the condone filter and the carried/new derivation both
+    // key on it.
+    const base2 = createBase2('default')
+    const agentState = { agentId: 'base2' }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Make the requested change now please',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: { status: '' } }] } as any)
+        .value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    const maybePinned = gen.next().value
+    if (maybePinned !== 'STEP') {
+      expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+    }
+    expect(
+      gen.next({
+        stepsComplete: true,
+        toolResult: [{ type: 'json', value: editReceipt('src/a.ts') }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+      } as any).value,
+    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    expect(
+      gen.next({ toolResult: [{ type: 'json', value: [] }] } as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    const reviewCall = gen.next({
+      toolResult: [{ type: 'json', value: { status: ' M src/a.ts' } }],
+    } as any).value
+    expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+
+    // Attest from the spawn prompt exactly like attestedReviewerResult does,
+    // but with an OBJECT finding, which that helper cannot express.
+    const reviewPrompt = String(
+      (reviewCall as any)?.input?.agents?.[0]?.prompt ?? '',
+    )
+    const fingerprint =
+      reviewPrompt.match(
+        /Snapshot fingerprint \(echo exactly\): ([^\n]+)/,
+      )?.[1] ?? ''
+    const reviewedFiles =
+      reviewPrompt
+        .match(/(?:Gate-scope|Pending) changed files: ([^\n]+)/)?.[1]
+        ?.split(',')
+        .map((file: string) => file.trim())
+        .filter((file: string) => file && file !== '(unknown)') ?? []
+    const reviewerId = 'code-reviewer:src/a.ts:guard'
+    const afterReview = gen.next({
+      toolResult: [
+        {
+          type: 'json',
+          value: [
+            {
+              schemaVersion: 1,
+              verdict: 'NON_BLOCKING',
+              snapshotFingerprint: fingerprint,
+              reviewedFiles,
+              findings: [
+                {
+                  id: reviewerId,
+                  text: 'Tighten the early-return guard.',
+                  severity: 'low',
+                  dimension: 'correctness',
+                },
+                'A plain-string finding with no id',
+              ],
+              coverage: 'covered',
+              dimensions: {
+                correctness: 'pass',
+                security: 'pass',
+                tests: 'pass',
+                apiCompatibility: 'pass',
+                performance: 'pass',
+              },
+              requirementCoverage: [],
+            },
+          ],
+        },
+      ],
+    } as any)
+    expect(afterReview.value).toMatchObject({ toolName: 'add_message' })
+
+    const codeReviewerFindings = (agentState as any).base2ActiveWork
+      .openReviewerFindings as Array<{ id: string; text: string }>
+    expect(codeReviewerFindings).toHaveLength(2)
+    const correlated = codeReviewerFindings.find((finding) =>
+      finding.text.includes('Tighten the early-return guard.'),
+    )
+    expect(correlated?.id).toBe(reviewerId)
+    expect(correlated?.text).toBe(
+      `NON_BLOCKING: [${reviewerId}] Tighten the early-return guard.`,
+    )
+    const uncorrelated = codeReviewerFindings.find((finding) =>
+      finding.text.includes('A plain-string finding with no id'),
+    )
+    expect(uncorrelated?.id).toMatch(/^RF-/)
+    expect(uncorrelated?.text).toBe(
+      'NON_BLOCKING: A plain-string finding with no id',
+    )
   })
 })
 
@@ -7958,7 +9441,10 @@ describe('base2 specialist parent-owned LOOKS_GOOD credit', () => {
         params: {},
       } as any)
 
-      expect(gen.next().value).toMatchObject({ toolName: 'git_status', input: {} })
+      expect(gen.next().value).toMatchObject({
+        toolName: 'git_status',
+        input: {},
+      })
       expect(
         gen.next(feedJson({ status: ` M ${gateFile}` })).value,
       ).toMatchObject({
@@ -8008,6 +9494,10 @@ describe('base2 specialist parent-owned LOOKS_GOOD credit', () => {
           'reliability-reviewer',
           fingerprint,
           [gateFile],
+          // The specialist harness supports advisories directly, so this case
+          // covers the specialist parent-owned-only pass path (the security
+          // pass path is the analogue and is covered by its own gate wiring).
+          ['z'.repeat(300), 'specialist advisory 1'],
         ),
       )
       const afterValue = after.value as any
@@ -8015,6 +9505,20 @@ describe('base2 specialist parent-owned LOOKS_GOOD credit', () => {
         afterValue?.toolName === 'spawn_agents' &&
         afterValue?.input?.agents?.[0]?.agent_type === 'repair-editor'
       expect(isRepairEditorSpawn).toBe(false)
+
+      expect(afterValue).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const parentOwnedContent = afterValue.input.content as string
+      expect(parentOwnedContent).toContain(
+        'parent-owned process requirements were ignored',
+      )
+      expect(parentOwnedContent).toContain(
+        'Advisories (non-blocking; no change required):',
+      )
+      expect(parentOwnedContent).toContain(`- ${'z'.repeat(237)}...`)
+      expect(parentOwnedContent).toContain('- specialist advisory 1')
 
       let creditYield = after
       if (
@@ -8045,5 +9549,1063 @@ describe('base2 specialist parent-owned LOOKS_GOOD credit', () => {
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('base2 specialist attestation tolerance', () => {
+  // RF-1: a pending path that is DELETED on disk carries a `missing` content
+  // marker and cannot be read by the specialist, so it must be
+  // attested-by-absence exactly like the final code-reviewer path. Without the
+  // deleted set at the specialist call sites the omitted deleted path is a
+  // coverage gap, which combined with a stale-snapshot finding escalates to the
+  // bundle-refresh retry and then the terminal `could not attest` block.
+  test('credits a routed specialist that omits a deleted pending file from reviewedFiles', () => {
+    const tmpDir = makeProjectTempDir('base2-specialist-deleted-')
+    try {
+      const stateDir = join(tmpDir, 'state')
+      mkdirSync(stateDir, { recursive: true })
+      const presentAbsolute = join(stateDir, 'session.ts')
+      writeFileSync(presentAbsolute, 'export const session = "v1"\n')
+      const deletedAbsolute = join(stateDir, 'legacy-session.ts')
+      writeFileSync(deletedAbsolute, 'export const legacy = "gone"\n')
+      rmSync(deletedAbsolute, { force: true })
+      const presentFile = normalizeGateFilePath(presentAbsolute)
+      const deletedFile = normalizeGateFilePath(deletedAbsolute)
+      const pendingFiles = [presentFile, deletedFile]
+      const status = ` M ${presentFile}\n D ${deletedFile}`
+      const base2 = createBase2('default')
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          changedFiles: pendingFiles,
+          touchedFiles: pendingFiles,
+          pendingGateFiles: pendingFiles,
+          currentPhase: 'awaiting_validation',
+          openReviewerBlockers: [],
+          openReviewerFindings: [],
+          lastValidationSummary: '',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [],
+          gatePassedPendingFiles: [],
+          gatePassedReviewerVerdict: '',
+          gatePassedValidationSummary: '',
+          gatePassedFingerprint: '',
+          lastReviewerGateSkipReason: '',
+          reviewReceipts: [],
+          testWriterGateDone: true,
+          docWriterGateDone: true,
+          securityReviewGateDone: true,
+          preEditSecurityReviewDone: true,
+          specialistReviewGatesDone: [],
+          auxGatesLastPendingFiles: pendingFiles,
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Please finish the pending reliability finding.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({
+        toolName: 'git_status',
+        input: {},
+      })
+      expect(gen.next(feedJson({ status })).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+        input: { agent_type: 'context-pruner' },
+      })
+      expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+      expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+        toolName: 'git_status',
+        input: {},
+      })
+      const bundle = gen.next(feedJson({ status }))
+      expect(bundle.value).toMatchObject({
+        toolName: 'get_change_review_bundle',
+        input: {},
+      })
+      const spawn = gen.next(
+        feedJson({ snapshotId: 'unit-spec-snap-deleted', files: pendingFiles }),
+      )
+      expect(spawn.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      })
+      const fingerprint = String(
+        (spawn.value as any).input.agents[0].params?.snapshot_id ?? '',
+      )
+      expect(fingerprint).toMatch(/^v3:[a-f0-9]{64}$/)
+
+      // LOOKS_GOOD attesting ONLY the readable file, plus a stale-snapshot
+      // finding record. Pre-fix the omitted deleted path was a coverage gap and
+      // the stale record escalated to the bundle-refresh retry; now the
+      // deletion is attested-by-absence, so the gate credits the specialist and
+      // re-enters the loop at context pruning.
+      const afterSpecialist = gen.next(
+        feedJson({
+          agentType: 'reliability-reviewer',
+          value: {
+            schemaVersion: 1,
+            family: 'reviewer',
+            verdict: 'LOOKS_GOOD',
+            snapshotFingerprint: fingerprint,
+            reviewedFiles: [presentFile],
+            findings: [
+              {
+                id: 'reliability-reviewer:correctness:stale-snapshot',
+                summary: 'The supplied snapshot is stale and does not match.',
+                evidence: ['The current review bundle has a newer snapshot.'],
+              },
+            ],
+            coverage: 'covered',
+            dimensions: {},
+            requirementCoverage: [],
+          },
+        }),
+      )
+      expect(afterSpecialist.value).not.toMatchObject({
+        toolName: 'get_change_review_bundle',
+      })
+      expect(afterSpecialist.value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+        input: { agent_type: 'context-pruner' },
+      })
+      const activeWork = (agentState as any).base2ActiveWork
+      expect(activeWork.specialistReviewGatesDone).toContain(
+        'reliability-reviewer',
+      )
+      expect(activeWork.currentPhase).not.toBe('blocked')
+      expect(activeWork.openReviewerBlockers).toEqual([])
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // RF-2: the specialist path tolerates a coverage-complete review whose
+  // well-formed v3 fingerprint does not match the expected snapshot; that
+  // tolerated drift must be RECORDED (gate telemetry with dedicated
+  // reported/expected keys) rather than accepted silently.
+  test('records fingerprint drift for a coverage-complete routed specialist review', () => {
+    const tmpDir = makeProjectTempDir('base2-specialist-drift-')
+    const telemetry: Array<Record<string, unknown>> = []
+    const originalInfo = console.info
+    console.info = (...args: unknown[]) => {
+      const [first] = args
+      if (typeof first === 'string' && first.includes('"base2.gate"')) {
+        telemetry.push(JSON.parse(first) as Record<string, unknown>)
+      }
+    }
+    try {
+      const stateDir = join(tmpDir, 'state')
+      mkdirSync(stateDir, { recursive: true })
+      const absoluteFile = join(stateDir, 'session.ts')
+      writeFileSync(absoluteFile, 'export const session = "v1"\n')
+      const gateFile = normalizeGateFilePath(absoluteFile)
+      const driftFingerprint = `v3:${'e'.repeat(64)}`
+      const base2 = createBase2('default')
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          changedFiles: [gateFile],
+          touchedFiles: [gateFile],
+          pendingGateFiles: [gateFile],
+          currentPhase: 'awaiting_validation',
+          openReviewerBlockers: [],
+          openReviewerFindings: [],
+          lastValidationSummary: '',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [],
+          gatePassedPendingFiles: [],
+          gatePassedReviewerVerdict: '',
+          gatePassedValidationSummary: '',
+          gatePassedFingerprint: '',
+          lastReviewerGateSkipReason: '',
+          reviewReceipts: [],
+          testWriterGateDone: true,
+          docWriterGateDone: true,
+          securityReviewGateDone: true,
+          preEditSecurityReviewDone: true,
+          specialistReviewGatesDone: [],
+          auxGatesLastPendingFiles: [gateFile],
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Please finish the pending reliability finding.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({
+        toolName: 'git_status',
+        input: {},
+      })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({
+        toolName: 'spawn_agent_inline',
+        input: { agent_type: 'context-pruner' },
+      })
+      expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+      expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+        toolName: 'git_status',
+        input: {},
+      })
+      const bundle = gen.next(feedJson({ status: ` M ${gateFile}` }))
+      expect(bundle.value).toMatchObject({
+        toolName: 'get_change_review_bundle',
+        input: {},
+      })
+      const spawn = gen.next(
+        feedJson({ snapshotId: 'unit-spec-snap-drift', files: [gateFile] }),
+      )
+      expect(spawn.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      })
+      const expectedFingerprint = String(
+        (spawn.value as any).input.agents[0].params?.snapshot_id ?? '',
+      )
+      expect(expectedFingerprint).toMatch(/^v3:[a-f0-9]{64}$/)
+      expect(expectedFingerprint).not.toBe(driftFingerprint)
+
+      const afterSpecialist = gen.next(
+        feedJson({
+          agentType: 'reliability-reviewer',
+          value: {
+            schemaVersion: 1,
+            family: 'reviewer',
+            verdict: 'LOOKS_GOOD',
+            snapshotFingerprint: driftFingerprint,
+            reviewedFiles: [gateFile],
+            findings: [],
+            coverage: 'covered',
+            dimensions: {},
+            requirementCoverage: [],
+          },
+        }),
+      )
+      // Drift is tolerated: the specialist is credited and the loop re-enters.
+      expect(afterSpecialist.value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+        input: { agent_type: 'context-pruner' },
+      })
+      expect(
+        (agentState as any).base2ActiveWork.specialistReviewGatesDone,
+      ).toContain('reliability-reviewer')
+
+      const driftEvents = telemetry.filter(
+        (event) => event.reviewerStatus === 'attestation-fingerprint-drift',
+      )
+      expect(driftEvents).toHaveLength(1)
+      expect(driftEvents[0]).toMatchObject({
+        event: 'base2.gate',
+        reviewer: 'reliability-reviewer',
+        reportedFingerprint: driftFingerprint,
+        expectedFingerprint,
+        pendingFiles: [gateFile],
+      })
+      expect(driftEvents[0]!.reuseReason).toBeUndefined()
+    } finally {
+      console.info = originalInfo
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('base2 reviewer round-findings telemetry', () => {
+  // One `round-findings` event per code-reviewer round. new-vs-carried is
+  // derived from the PERSISTED openReviewerFindings ledger (read before
+  // mergeReviewerFindings overwrites it), so a repeated finding text is
+  // reported as carried rather than new. The shadow-mode suppression fields
+  // are logged only: the gate still blocks and spawns repair.
+  test('emits one round-findings event per round and carries repeated finding text', () => {
+    const tmpDir = makeProjectTempDir('base2-round-findings-')
+    const tmpFile = join(tmpDir, 'a.ts')
+    const gateFile = normalizeGateFilePath(tmpFile)
+    writeFileSync(tmpFile, 'export const value = 1\n')
+    const findingText = 'Minor style suggestion.'
+    const telemetry: Array<Record<string, unknown>> = []
+    const originalInfo = console.info
+    console.info = (...args: unknown[]) => {
+      const [first] = args
+      if (typeof first === 'string' && first.includes('"base2.gate"')) {
+        telemetry.push(JSON.parse(first) as Record<string, unknown>)
+      }
+    }
+    try {
+      const base2 = createBase2('default')
+      const agentState = { agentId: 'base2-custom' }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Make the requested change now please',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
+      expect(gen.next().value).toBe('STEP')
+      expect(
+        gen.next(finishStepWithToolResult(editReceipt(gateFile))).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect(gen.next(feedJson([])).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      const firstReviewCall = gen.next(feedJson({ status: ` M ${gateFile}` }))
+        .value as any
+      expect(firstReviewCall).toMatchObject({ toolName: 'spawn_agents' })
+
+      // Round 1: one NON_BLOCKING finding with nothing persisted yet.
+      expect(
+        gen.next(
+          attestedReviewerResult(firstReviewCall, 'NON_BLOCKING', [
+            findingText,
+          ]) as any,
+        ).value,
+      ).toMatchObject({ toolName: 'add_message' })
+      const firstRoundEvents = telemetry.filter(
+        (event) => event.reviewerStatus === 'round-findings',
+      )
+      expect(firstRoundEvents).toHaveLength(1)
+      expect(firstRoundEvents[0]).toMatchObject({
+        event: 'base2.gate',
+        reviewer: 'code-reviewer',
+        repairRound: 1,
+        findingCount: 1,
+        rawFindingCount: 1,
+        newFindingCount: 1,
+        carriedFindingCount: 0,
+        pendingFileCount: 1,
+        // Shadow mode: a threshold that dropped every suppressible finding
+        // would have passed this round. Logged only — see the blocker
+        // assertion below.
+        suppressibleFindingCount: 1,
+        wouldPassAtThisRound: true,
+      })
+      expect(
+        Number(firstRoundEvents[0]!.newFindingCount) +
+          Number(firstRoundEvents[0]!.carriedFindingCount),
+      ).toBe(Number(firstRoundEvents[0]!.findingCount))
+      // Observation only: the shadow fields did not unblock the gate.
+      expect(
+        (agentState as any).base2ActiveWork.openReviewerBlockers,
+      ).toContain(`NON_BLOCKING: ${findingText}`)
+
+      expect(gen.next().value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+      // Progress-only receipt: real bytes change (so the no-progress guard
+      // passes) but no finding id is claimed, so nothing is condoned and the
+      // same text legitimately returns as CARRIED next round.
+      writeFileSync(tmpFile, 'export const value = 2 // touched\n')
+      expect(
+        gen.next(progressOnlyRepairReceipt([gateFile]) as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect(
+        gen.next(
+          feedJson([{ hookName: 'typecheck', exitCode: 0, stdout: 'ok' }]),
+        ).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+      expect(
+        gen.next({ stepsComplete: true, toolResult: [] } as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect(gen.next(feedJson([])).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      const secondReviewCall = gen.next(feedJson({ status: ` M ${gateFile}` }))
+        .value as any
+      expect(secondReviewCall).toMatchObject({ toolName: 'spawn_agents' })
+
+      // Round 2 returns the SAME finding text: the comparison reads the
+      // persisted round-1 records, so it is CARRIED, not new.
+      expect(
+        gen.next(
+          attestedReviewerResult(secondReviewCall, 'NON_BLOCKING', [
+            findingText,
+          ]) as any,
+        ).value,
+      ).toMatchObject({ toolName: 'add_message' })
+      const roundEvents = telemetry.filter(
+        (event) => event.reviewerStatus === 'round-findings',
+      )
+      expect(roundEvents).toHaveLength(2)
+      expect(roundEvents[1]).toMatchObject({
+        reviewer: 'code-reviewer',
+        repairRound: 2,
+        findingCount: 1,
+        newFindingCount: 0,
+      })
+      expect(
+        Number(roundEvents[1]!.carriedFindingCount),
+      ).toBeGreaterThanOrEqual(1)
+      expect(
+        Number(roundEvents[1]!.newFindingCount) +
+          Number(roundEvents[1]!.carriedFindingCount),
+      ).toBe(Number(roundEvents[1]!.findingCount))
+    } finally {
+      console.info = originalInfo
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+})
+
+// T1.2(c): the reviewer is stateless across repair rounds, so a re-review
+// packet carries a ledger of the findings a prior round already reported as
+// addressed. Built only from already-persisted state
+// (reviewerRepairRoundCount / openReviewerFindings).
+describe('base2 reviewer re-review round ledger', () => {
+  /** Seeded gate state parked right before the final code-reviewer spawn. */
+  function seededReviewState(
+    gateFile: string,
+    overrides: Partial<Record<string, unknown>>,
+  ) {
+    return {
+      touchedFiles: [gateFile],
+      changedFiles: [gateFile],
+      pendingGateFiles: [gateFile],
+      currentPhase: 'awaiting_validation',
+      latestWorkSummary: '',
+      openReviewerBlockers: [],
+      openReviewerFindings: [],
+      lastValidationSummary: '',
+      nextRequiredAction: '',
+      lastPinnedStateMessage: '',
+      gatePassedFiles: [],
+      gatePassedPendingFiles: [],
+      gatePassedReviewerVerdict: '',
+      gatePassedValidationSummary: '',
+      gatePassedFingerprint: '',
+      lastReviewerGateSkipReason: '',
+      reviewReceipts: [],
+      // Keep the aux gates out of the way: only the final gate matters here.
+      testWriterGateDone: true,
+      docWriterGateDone: true,
+      securityReviewGateDone: true,
+      preEditSecurityReviewDone: true,
+      specialistReviewGatesDone: [],
+      auxGatesLastPendingFiles: [gateFile],
+      ...overrides,
+    }
+  }
+
+  /** Drive a seeded turn to the final code-reviewer spawn and return its prompt. */
+  function driveSeededStateToReviewPrompt(
+    gateFile: string,
+    activeWork: Record<string, unknown>,
+  ): string {
+    const base2 = createBase2('default')
+    const gen = base2.handleSteps!({
+      agentState: { agentId: 'base2-custom', base2ActiveWork: activeWork },
+      prompt: 'Finish the pending review.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    const maybePinned = gen.next().value
+    if (maybePinned !== 'STEP') {
+      expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+    }
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+    })
+    expect(
+      gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    expect(gen.next(feedJson([])).value).toMatchObject({
+      toolName: 'git_status',
+    })
+    const reviewCall = gen.next(feedJson({ status: ` M ${gateFile}` }))
+      .value as any
+    expect(reviewCall).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'code-reviewer' }] },
+    })
+    return String(reviewCall.input.agents[0].prompt)
+  }
+
+  function codeReviewerFinding(text: string, index: number) {
+    return {
+      id: `RF-${index + 1}-0000000${index}`,
+      gateId: 'code-reviewer:prior-snapshot',
+      text,
+      status: 'open' as const,
+      files: ['src/a.ts'],
+      snapshotFingerprint: 'prior-snapshot',
+      reviewer: 'code-reviewer' as const,
+      createdAt: '2025-01-01T00:00:00.000Z',
+    }
+  }
+
+  test('round 0 (first review) adds no ledger at all', () => {
+    const base2 = createBase2('default')
+    const gen = base2.handleSteps!({
+      agentState: { agentId: 'base2-custom' },
+      prompt: 'Make the requested change now please',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    expect(gen.next().value).toBe('STEP')
+    expect(
+      gen.next(finishStepWithToolResult(editReceipt('src/a.ts'))).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(gen.next(feedJson({ status: ' M src/a.ts' })).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
+    expect(gen.next(feedJson([])).value).toMatchObject({
+      toolName: 'git_status',
+    })
+    const reviewCall = gen.next(feedJson({ status: ' M src/a.ts' }))
+      .value as any
+    const prompt = String(reviewCall.input.agents[0].prompt)
+
+    expect(prompt).not.toContain('Repair round:')
+    expect(prompt).not.toContain('This is a re-review')
+    expect(prompt).not.toContain('repeated VERBATIM')
+    // No stray blank line either: the validation summary is immediately
+    // followed by the bounded-read instruction, exactly as before.
+    expect(prompt).toContain(
+      'Validation gate summary: No configured file-change hooks ran.\nRead large files via read_files windows',
+    )
+  })
+
+  test('a re-review emits the round line, the verbatim re-raise rule, and its own findings verbatim', () => {
+    const tmpDir = makeProjectTempDir('base2-ledger-rereview-')
+    try {
+      const gateFile = normalizeGateFilePath(join(tmpDir, 'a.ts'))
+      writeFileSync(join(tmpDir, 'a.ts'), 'export const value = 1\n')
+      const codeFindings = [
+        codeReviewerFinding('NON_BLOCKING: Tighten the early-return guard.', 0),
+        codeReviewerFinding(
+          'BLOCKING: [code-reviewer:tests:missing-case] Add a case for the empty payload.',
+          1,
+        ),
+      ]
+      const securityFinding = {
+        id: 'security-reviewer:containment:fixture-path',
+        gateId: 'security-reviewer:prior-snapshot',
+        text: 'BLOCKING: [security-reviewer:containment:fixture-path] Reject nested fixture paths.',
+        status: 'open' as const,
+        files: [gateFile],
+        snapshotFingerprint: 'prior-snapshot',
+        reviewer: 'security-reviewer' as const,
+        createdAt: '2025-01-01T00:00:00.000Z',
+      }
+      const prompt = driveSeededStateToReviewPrompt(
+        gateFile,
+        seededReviewState(gateFile, {
+          reviewerRepairRoundCount: 2,
+          // Code-reviewer records first so the rehydrated owed-set keeps the
+          // final block on the code-reviewer family.
+          openReviewerFindings: [...codeFindings, securityFinding],
+        }),
+      )
+
+      expect(prompt).toContain('Repair round: 2. This is a re-review.')
+      expect(prompt).toContain(
+        'Findings raised earlier and reported addressed are listed below. Verify each is genuinely fixed and cite the line that fixes it. If a fix is wrong or incomplete, re-raise the finding with its ORIGINAL text repeated VERBATIM and put your reason on a separate line: the gate matches re-raises by exact text (and by stable finding id when you supplied one), so a reworded re-raise is treated as a brand-new finding and the repair loop cannot converge.',
+      )
+      // Verbatim rendering: the NON_BLOCKING:/BLOCKING: prefix and the `[id] `
+      // segment are exactly what the condone matcher compares against.
+      expect(prompt).toContain(
+        '  - NON_BLOCKING: Tighten the early-return guard.',
+      )
+      expect(prompt).toContain(
+        '  - BLOCKING: [code-reviewer:tests:missing-case] Add a case for the empty payload.',
+      )
+      // Another reviewer family's finding must not leak into this packet.
+      expect(prompt).not.toContain('Reject nested fixture paths.')
+      expect(prompt).not.toContain('more earlier findings omitted')
+      // The ledger sits immediately after the validation summary line.
+      const lines = prompt.split('\n')
+      const summaryIndex = lines.findIndex((line) =>
+        line.startsWith('Validation gate summary: '),
+      )
+      expect(lines[summaryIndex + 1]).toBe(
+        'Repair round: 2. This is a re-review.',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('caps the ledger at 12 entries and reports how many were omitted', () => {
+    const tmpDir = makeProjectTempDir('base2-ledger-cap-')
+    try {
+      const gateFile = normalizeGateFilePath(join(tmpDir, 'a.ts'))
+      writeFileSync(join(tmpDir, 'a.ts'), 'export const value = 1\n')
+      const openReviewerFindings = Array.from(
+        { length: 14 },
+        (_unused, index) =>
+          codeReviewerFinding(`NON_BLOCKING: Finding number ${index}.`, index),
+      )
+      const prompt = driveSeededStateToReviewPrompt(
+        gateFile,
+        seededReviewState(gateFile, {
+          reviewerRepairRoundCount: 3,
+          openReviewerFindings,
+        }),
+      )
+
+      const bullets = prompt
+        .split('\n')
+        .filter((line) => line.startsWith('  - '))
+      // 12 findings plus the single omitted-count bullet.
+      expect(bullets).toHaveLength(13)
+      expect(bullets[0]).toBe('  - NON_BLOCKING: Finding number 0.')
+      expect(bullets[11]).toBe('  - NON_BLOCKING: Finding number 11.')
+      expect(bullets[12]).toBe('  - (+2 more earlier findings omitted)')
+      expect(prompt).not.toContain('Finding number 12.')
+      expect(prompt).not.toContain('Finding number 13.')
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('emits only the round line when no finding belongs to this reviewer', () => {
+    const tmpDir = makeProjectTempDir('base2-ledger-empty-')
+    try {
+      const gateFile = normalizeGateFilePath(join(tmpDir, 'a.ts'))
+      writeFileSync(join(tmpDir, 'a.ts'), 'export const value = 1\n')
+      const prompt = driveSeededStateToReviewPrompt(
+        gateFile,
+        seededReviewState(gateFile, {
+          reviewerRepairRoundCount: 1,
+          openReviewerFindings: [
+            {
+              id: 'security-reviewer:containment:fixture-path',
+              gateId: 'security-reviewer:prior-snapshot',
+              text: 'BLOCKING: Reject nested fixture paths.',
+              status: 'open' as const,
+              files: [gateFile],
+              snapshotFingerprint: 'prior-snapshot',
+              reviewer: 'security-reviewer' as const,
+              createdAt: '2025-01-01T00:00:00.000Z',
+            },
+          ],
+        }),
+      )
+
+      expect(prompt).toContain('Repair round: 1. This is a re-review.')
+      expect(prompt).not.toContain('repeated VERBATIM')
+      expect(prompt.split('\n').some((line) => line.startsWith('  - '))).toBe(
+        false,
+      )
+      expect(prompt).not.toContain('Reject nested fixture paths.')
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('base2 emitGateTelemetry durable sink recorder', () => {
+  /**
+   * Drive a gate-disabled turn to its skip diagnostic (which emits telemetry).
+   *
+   * Mirrors the drive sequence and handleSteps argument shape of the passing
+   * test 'fast/no-validation mode skips file-change hooks and reviewer after
+   * edits', with the single difference that the caller-supplied `params` is
+   * passed instead of `params: {}`. In particular NO `config` key is passed:
+   * createBase2('fast').programmaticConfig carries `hasNoValidation: false`,
+   * and handleSteps prefers an explicit boolean `config.hasNoValidation` over
+   * the `base2-fast` agentId allowlist, so supplying the config would turn the
+   * validation/reviewer gate back ON and never reach the skip diagnostic.
+   */
+  function driveDisabledGateTurn(params: Record<string, unknown>) {
+    const base2 = createBase2('fast')
+    const agentState = { agentId: 'base2-fast' }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Make the requested change now please',
+      params,
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    expect(gen.next().value).toBe('STEP')
+    expect(
+      gen.next(finishStepWithToolResult(editReceipt('src/a.ts'))).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    return gen.next(feedJson({ status: ' M src/a.ts' }))
+  }
+
+  test('forwards the same undefined-stripped payload to the injected recorder and console.info', () => {
+    const recorded: Array<Record<string, unknown>> = []
+    const logged: string[] = []
+    const originalInfo = console.info
+    console.info = (...args: unknown[]) => {
+      const [first] = args
+      if (typeof first === 'string' && first.includes('"base2.gate"')) {
+        logged.push(first)
+      }
+    }
+    try {
+      const skipDiagnostic = driveDisabledGateTurn({
+        orchestrationControlPlane: {
+          recordGateTelemetry: (payload: Record<string, unknown>) => {
+            recorded.push(payload)
+          },
+        },
+      })
+
+      expect(skipDiagnostic.value).toMatchObject({ toolName: 'add_message' })
+      expect(recorded).toHaveLength(1)
+      // Keys/values verified against the gates-disabled skip site in
+      // agents/base2/base2.ts (currentPhase/pendingFileCount/pendingFiles/
+      // reviewerStatus/validationStatus/skipReason) plus the `event:
+      // 'base2.gate'` key emitGateTelemetry prepends.
+      expect(recorded[0]).toMatchObject({
+        event: 'base2.gate',
+        pendingFiles: ['src/a.ts'],
+        pendingFileCount: 1,
+        reviewerStatus: 'skipped',
+        validationStatus: 'skipped',
+        skipReason: 'validation-and-reviewer-gates-disabled',
+      })
+      // Undefined-stripped: keys whose value was undefined never appear.
+      expect(
+        Object.values(recorded[0]).every((value) => value !== undefined),
+      ).toBe(true)
+      // console.info still logs, and it logs the SAME object.
+      expect(logged).toHaveLength(1)
+      expect(JSON.parse(logged[0])).toEqual(recorded[0])
+    } finally {
+      console.info = originalInfo
+    }
+  })
+
+  test('behaves exactly as before when no recorder is injected', () => {
+    const logged: string[] = []
+    const originalInfo = console.info
+    console.info = (...args: unknown[]) => {
+      const [first] = args
+      if (typeof first === 'string' && first.includes('"base2.gate"')) {
+        logged.push(first)
+      }
+    }
+    try {
+      const skipDiagnostic = driveDisabledGateTurn({})
+      expect(skipDiagnostic.value).toMatchObject({ toolName: 'add_message' })
+      expect(logged).toHaveLength(1)
+      expect(JSON.parse(logged[0])).toMatchObject({
+        event: 'base2.gate',
+        skipReason: 'validation-and-reviewer-gates-disabled',
+      })
+    } finally {
+      console.info = originalInfo
+    }
+  })
+
+  test('a throwing recorder never throws out of the gate loop', () => {
+    const logged: string[] = []
+    const originalInfo = console.info
+    console.info = (...args: unknown[]) => {
+      const [first] = args
+      if (typeof first === 'string' && first.includes('"base2.gate"')) {
+        logged.push(first)
+      }
+    }
+    try {
+      const skipDiagnostic = driveDisabledGateTurn({
+        orchestrationControlPlane: {
+          recordGateTelemetry: () => {
+            throw new Error('sink exploded')
+          },
+        },
+      })
+      // The gate continued to its skip diagnostic instead of surfacing the
+      // error.
+      expect(skipDiagnostic.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      expect((skipDiagnostic.value as any).input.content).toContain(
+        'validation-and-reviewer-gates-disabled',
+      )
+      // The pre-existing console.info channel survives a throwing sink.
+      expect(logged).toHaveLength(1)
+      expect(JSON.parse(logged[0])).toMatchObject({
+        event: 'base2.gate',
+        skipReason: 'validation-and-reviewer-gates-disabled',
+      })
+    } finally {
+      console.info = originalInfo
+    }
+  })
+
+  test('a failing console emit still reaches the durable sink', () => {
+    const recorded: Array<Record<string, unknown>> = []
+    const originalInfo = console.info
+    // Stands in for every way the console leg can fail — a host console that
+    // throws, or a JSON.stringify that throws on a circular/BigInt payload.
+    // Narrowed to the gate line so unrelated console.info callers on the drive
+    // path are unaffected.
+    console.info = (...args: unknown[]) => {
+      const [first] = args
+      if (typeof first === 'string' && first.includes('"base2.gate"')) {
+        throw new Error('console exploded')
+      }
+    }
+    try {
+      const skipDiagnostic = driveDisabledGateTurn({
+        orchestrationControlPlane: {
+          recordGateTelemetry: (payload: Record<string, unknown>) => {
+            recorded.push(payload)
+          },
+        },
+      })
+
+      expect(skipDiagnostic.value).toMatchObject({ toolName: 'add_message' })
+      // The durable sink line is preserved even though the console leg failed.
+      expect(recorded).toHaveLength(1)
+      expect(recorded[0]).toMatchObject({
+        event: 'base2.gate',
+        skipReason: 'validation-and-reviewer-gates-disabled',
+      })
+    } finally {
+      console.info = originalInfo
+    }
+  })
+})
+
+type InlineEmitGateTelemetry = (payload: Record<string, unknown>) => void
+
+// emitGateTelemetry lives inside the serialized handleSteps generator and is
+// only reachable through the gate loop, whose call sites never pass an `event`
+// key. Reconstruct it with stub `params` / `mutableAgentState` bindings so the
+// after-the-copy-loop discriminator guard can be asserted directly (the
+// analogous `recordedAt` guard is covered by
+// common/src/util/__tests__/gate-telemetry.test.ts).
+function loadInlineEmitGateTelemetry(
+  recordGateTelemetry: (payload: Record<string, unknown>) => void,
+  transitionBase2Gate?: (input: { current: unknown; phase: string }) => unknown,
+): InlineEmitGateTelemetry {
+  const base2Source = readFileSync(
+    new URL('../base2/base2.ts', import.meta.url),
+    'utf8',
+  )
+  // handleSteps helpers are TypeScript; transpile before new Function (plain JS).
+  const transpiler = new Bun.Transpiler({ loader: 'ts', target: 'bun' })
+  const combinedJs = transpiler.transformSync(
+    [
+      extractInlineFunctionSource(base2Source, 'emitGateTelemetry'),
+      'return emitGateTelemetry',
+    ].join('\n'),
+  )
+  const buildHelper = new Function(
+    'params',
+    'mutableAgentState',
+    `"use strict";\n${combinedJs}`,
+  ) as (
+    params: unknown,
+    mutableAgentState: Record<string, unknown>,
+  ) => InlineEmitGateTelemetry
+
+  return buildHelper(
+    {
+      orchestrationControlPlane: {
+        recordGateTelemetry,
+        ...(transitionBase2Gate ? { transitionBase2Gate } : {}),
+      },
+    },
+    {},
+  )
+}
+
+describe('base2 inline emitGateTelemetry discriminator guard', () => {
+  test('a payload key named `event` cannot override the base2.gate discriminator', () => {
+    const recorded: Array<Record<string, unknown>> = []
+    const logged: string[] = []
+    const emitGateTelemetry = loadInlineEmitGateTelemetry((payload) => {
+      recorded.push(payload)
+    })
+    const originalInfo = console.info
+    console.info = (...args: unknown[]) => {
+      const [first] = args
+      if (typeof first === 'string' && first.includes('"base2.gate"')) {
+        logged.push(first)
+      }
+    }
+    try {
+      emitGateTelemetry({
+        event: 'attacker-supplied',
+        skipReason: 'inline-discriminator-guard',
+        reviewerStatus: undefined,
+      })
+    } finally {
+      console.info = originalInfo
+    }
+
+    // `safePayload.event` is assigned AFTER the undefined-stripping copy loop,
+    // so the payload key is overridden instead of winning.
+    expect(recorded).toHaveLength(1)
+    expect(recorded[0].event).toBe('base2.gate')
+    expect(recorded[0].skipReason).toBe('inline-discriminator-guard')
+    // Undefined-stripping still applies to the rest of the payload.
+    expect('reviewerStatus' in recorded[0]).toBe(false)
+    // console.info logs the SAME overridden discriminator.
+    expect(logged).toHaveLength(1)
+    expect(JSON.parse(logged[0])).toEqual(recorded[0])
+  })
+})
+
+describe('base2 inline emitGateTelemetry transition isolation', () => {
+  test('a rejected phase transition still records the payload and logs it', () => {
+    const recorded: Array<Record<string, unknown>> = []
+    const logged: string[] = []
+    // base2GateWorkflowV1 throws on an illegal transition (e.g. 'repair_loop'
+    // from the default 'idle'). That throw must not cost us the telemetry for
+    // the very event that reported the illegal phase.
+    const emitGateTelemetry = loadInlineEmitGateTelemetry(
+      (payload) => {
+        recorded.push(payload)
+      },
+      () => {
+        throw new Error('illegal transition: idle -> repair_loop')
+      },
+    )
+    const originalInfo = console.info
+    console.info = (...args: unknown[]) => {
+      const [first] = args
+      if (typeof first === 'string' && first.includes('"base2.gate"')) {
+        logged.push(first)
+      }
+    }
+    try {
+      emitGateTelemetry({
+        currentPhase: 'repair_loop',
+        skipReason: 'inline-transition-throw',
+      })
+    } finally {
+      console.info = originalInfo
+    }
+
+    expect(recorded).toHaveLength(1)
+    expect(recorded[0]).toMatchObject({
+      event: 'base2.gate',
+      currentPhase: 'repair_loop',
+      skipReason: 'inline-transition-throw',
+    })
+    // The pre-existing console.info channel survives the throw too, and both
+    // channels still share one payload object.
+    expect(logged).toHaveLength(1)
+    expect(JSON.parse(logged[0])).toEqual(recorded[0])
+  })
+})
+
+type InlineGateStateBlockHelpers = {
+  formatGateStateBlock: (
+    gate: 'validation' | 'reviewer' | 'validation/reviewer',
+    status: 'passed' | 'failed' | 'skipped',
+    details: string,
+    repairRound?: number,
+    advisories?: string[],
+  ) => string
+  extractGateStateBlocksFromMessage: (message: unknown) => Array<{
+    gate: string
+    status: string
+    details: string
+    repairRound?: number
+    maxRepairRounds?: number
+  }>
+}
+
+// Both helpers live inside the serialized handleSteps generator, so reconstruct
+// them (plus collectMessageText, which the reader walks messages with) with a
+// stub MAX_REPAIR_ROUNDS binding. That pairs the PRODUCER with base2's OWN
+// conversation-gate-reuse READER, which is what a truncated block would break.
+function loadInlineGateStateBlockHelpers(): InlineGateStateBlockHelpers {
+  const base2Source = readFileSync(
+    new URL('../base2/base2.ts', import.meta.url),
+    'utf8',
+  )
+  const transpiler = new Bun.Transpiler({ loader: 'ts', target: 'bun' })
+  const combinedJs = transpiler.transformSync(
+    [
+      extractInlineFunctionSource(base2Source, 'formatGateStateBlock'),
+      // formatGateStateBlock bounds its advisories through this shared helper,
+      // which the reviewer/security/specialist add_message surfaces also call.
+      // Reconstructing the producer without it throws at call time.
+      extractInlineFunctionSource(base2Source, 'boundAdvisoryLines'),
+      extractInlineFunctionSource(
+        base2Source,
+        'extractGateStateBlocksFromMessage',
+      ),
+      extractInlineFunctionSource(base2Source, 'collectMessageText'),
+      'return { formatGateStateBlock, extractGateStateBlocksFromMessage }',
+    ].join('\n'),
+  )
+  const buildHelpers = new Function(
+    'MAX_REPAIR_ROUNDS',
+    `"use strict";\n${combinedJs}`,
+  ) as (maxRepairRounds: number) => InlineGateStateBlockHelpers
+
+  return buildHelpers(Number.POSITIVE_INFINITY)
+}
+
+describe('base2 inline formatGateStateBlock delimiter safety', () => {
+  test('reviewer-authored text carrying the closing delimiter cannot truncate the block', () => {
+    const { formatGateStateBlock, extractGateStateBlocksFromMessage } =
+      loadInlineGateStateBlockHelpers()
+    const hostileAdvisory =
+      'advisory quoting </gate-state> from the persisted format'
+    const block = formatGateStateBlock(
+      'validation/reviewer',
+      'passed',
+      'reviewer quoted </gate-state> in details; pending files: a.ts',
+      0,
+      [hostileAdvisory],
+    )
+
+    // Exactly one closing delimiter survives in the emitted bytes: the real
+    // terminator at the very end. The payload copies are escaped as `<\/`.
+    expect(block.split('</gate-state>')).toHaveLength(2)
+    expect(block.endsWith('</gate-state>')).toBe(true)
+    expect(block).toContain('<\\/gate-state>')
+
+    // base2's own conversation-gate-reuse reader still sees the whole record,
+    // and JSON.parse restores the quoted delimiter byte-for-byte.
+    const states = extractGateStateBlocksFromMessage({
+      role: 'user',
+      content: block,
+    })
+    expect(states).toHaveLength(1)
+    expect(states[0]!).toMatchObject({
+      gate: 'validation/reviewer',
+      status: 'passed',
+      repairRound: 0,
+    })
+    expect(states[0]!.details).toContain('</gate-state>')
+
+    // The same bytes round-trip through the CLI-facing parse shape too.
+    const parsed = parseGateStateBlock(block)
+    expect(parsed?.advisories).toEqual([hostileAdvisory])
   })
 })

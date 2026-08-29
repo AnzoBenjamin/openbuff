@@ -34,7 +34,7 @@ describe('loopAgentSteps abort signal handling', () => {
   >
 
   afterEach(() => {
-    clearAgentGeneratorCache(runtimeParams)
+    clearAgentGeneratorCache()
     mock.restore()
   })
 

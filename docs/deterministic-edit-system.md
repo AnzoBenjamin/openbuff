@@ -41,11 +41,11 @@ authorization for each touched path before accepting an edit:
 There are three tiers of read authorization, and confusing them is the most
 common cause of "I already read this file, why is my edit blocked?":
 
-1. **Whole-file authorization (reusable).** A *complete* whole-file read mints
+1. **Whole-file authorization (reusable).** A _complete_ whole-file read mints
    a per-path authorization the runtime remembers, so later exact-match edits
    on that path proceed without a capability. Only complete whole-file reads
    register this.
-2. **Scoped capability (per-edit).** A *range* or *symbol* read mints a
+2. **Scoped capability (per-edit).** A _range_ or _symbol_ read mints a
    `readCapability` bound to the exact project, path, line bounds, content
    hash, and run. It authorizes only edits inside those bounds and must be
    passed explicitly on the edit (`basedOnRead` / `readCapability`); it does
@@ -133,7 +133,7 @@ common cause of "I already read this file, why is my edit blocked?":
   content; an external modification (hash mismatch) fails closed and requires
   a fresh read. A `move`'s destination path needs no read authorization — its
   safety is enforced by the lifecycle preflight, which blocks `Move destination
-  already exists`. The client-echoed anchor is preferred when valid but is
+already exists`. The client-echoed anchor is preferred when valid but is
   never itself trusted to authorize — it is only reused after passing the
   7-point verification.
 - A `ConfirmedPostEditAnchor` (recorded in `confirmedPostEditAnchorsByPath`)
@@ -316,8 +316,8 @@ On those aborts the model-visible result is additive and machine-readable:
 - `failures[].failureKind`: `capability_*`, `no_match`, `preflight_failed`, or
   `generic`
 - `recovery`: `{ action: 'rebuild_whole_transaction', requiresFreshRead, paths,
-  failedEditIndex?, failedReplacementIndex?, preferredStrategy?, tool:
-  'read_files', input: { paths } }`
+failedEditIndex?, failedReplacementIndex?, preferredStrategy?, tool:
+'read_files', input: { paths } }`
 
 Correct next step: one multi-path `read_files` (or range/symbol selectors) over
 `recovery.paths`, copy exact live text into new `oldString`s / use
@@ -542,6 +542,21 @@ TUI through PlanLink slash commands:
 - `/plan-status` — print the current task/milestone status, derived from
   `STATUS.md`.
 - `/lessons` — append or review lesson notes captured during the plan.
+- `/plans` (alias `/plan-ls`) — list every plan session under
+  `.agents/sessions/` that holds at least one known plan artifact
+  (`SPEC.md`, `PLAN.md`, `STATUS.md`, `LESSONS.md`), one row per session
+  with active marker, `[status]` badge, slug, `N/M done` progress, and
+  current task. Takes no arguments and runs locally without prompting
+  the agent. When `.agents/ACTIVE_SESSION` names a slug it does not
+  list, it prints a `Stale active session: <slug> ...` note.
+- `/plan-use <slug>` (aliases `/plan-active`, `/use-plan`) — point
+  `.agents/ACTIVE_SESSION` at a session, given a bare slug or the
+  `.agents/sessions/<slug>` path form; with no argument it opens the
+  plan-session picker. It fails closed without writing the pointer for a
+  target that escapes the project root, resolves outside
+  `.agents/sessions/`, nests under a session directory, is not a valid
+  slug, is missing on disk, or holds no known plan artifact. The pointer
+  stores the bare slug.
 
 For mutations to plan artifacts:
 

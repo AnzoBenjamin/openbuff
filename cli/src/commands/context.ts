@@ -4,7 +4,23 @@ import { formatGateRepairBudgetsForCli } from '@codebuff/common/util/gate-repair
 import { useChatStore } from '../state/chat-store'
 import { getSystemMessage } from '../utils/message-history'
 
+import type { ContextContentBlock } from '../types/chat'
 import type { PostUserMessageFn } from '../types/contracts/send-message'
+
+export function buildContextContentBlock(): ContextContentBlock {
+  const ledger =
+    useChatStore.getState().runState?.sessionState?.mainAgentState
+      .contextBudgetLedger
+
+  const gateBudgetsText = formatGateRepairBudgetsForCli()
+  const ledgerText = ledger ? formatLedgerForCli(ledger) : null
+
+  return {
+    type: 'context',
+    ledgerText,
+    gateBudgetsText,
+  }
+}
 
 /**
  * Handles the /context command — displays the per-turn context token budget
@@ -19,19 +35,16 @@ import type { PostUserMessageFn } from '../types/contracts/send-message'
 export function handleContextCommand(): {
   postUserMessage: PostUserMessageFn
 } {
-  const ledger =
-    useChatStore.getState().runState?.sessionState?.mainAgentState
-      .contextBudgetLedger
-
-  const gateBudgets = formatGateRepairBudgetsForCli()
-  const content = ledger
-    ? `${formatLedgerForCli(ledger)}\n\n${gateBudgets}`
+  const block = buildContextContentBlock()
+  const gateBudgets = block.gateBudgetsText
+  const content = block.ledgerText
+    ? `${block.ledgerText}\n\n${gateBudgets}`
     : gateBudgets
 
-  const postUserMessage: PostUserMessageFn = (prev) => [
-    ...prev,
-    getSystemMessage(content),
-  ]
+  const postUserMessage: PostUserMessageFn = (prev) => {
+    const msg = getSystemMessage([block], content)
+    return [...prev, msg]
+  }
 
   return { postUserMessage }
 }

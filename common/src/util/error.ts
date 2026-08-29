@@ -105,6 +105,21 @@ export function failure(error: unknown): Failure<ErrorObject> {
 }
 
 /**
+ * String `code` of an unknown throw, when it carries one (Node filesystem
+ * errors, and anything else following that shape).
+ *
+ * `getErrorObject` narrows the same field, but only for `Error` instances and
+ * only as part of building a full `ErrorObject`; callers that just need to key
+ * on the failure mode of an arbitrary caught value use this.
+ */
+export function errorCode(err: unknown): string | undefined {
+  if (typeof err !== 'object' || err === null || !('code' in err)) {
+    return undefined
+  }
+  return typeof err.code === 'string' ? err.code : undefined
+}
+
+/**
  * Create a successful prompt result.
  */
 export function promptSuccess<T>(value: T): PromptSuccess<T> {

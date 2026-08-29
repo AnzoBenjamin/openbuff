@@ -5,6 +5,7 @@ import {
   resolveMaxReviewerRepairRounds,
   resolveMaxSpecialistRepairRounds,
 } from '@codebuff/common/util/gate-repair-budgets'
+import { FALLBACK_GUIDES } from '@codebuff/common/util/guides'
 
 import type {
   Base2ActiveWorkPhase,
@@ -14,6 +15,7 @@ import type {
   Base2ReviewReceipt,
 } from './gate-state'
 import {
+  type BroadAuditFinalizeClause,
   buildBroadAuditSection,
   gateAwarenessSection,
   gitDisciplineSection,
@@ -26,16 +28,192 @@ import { resolveModelToolNames, type UnlockedToolTier } from './tool-tiers'
 import { publisher } from '../constants'
 import {
   PLACEHOLDER,
+  type PlaceholderValue,
   type SecretAgentDefinition,
 } from '../types/secret-agent-definition'
 
 /**
- * Default for progressive prompt disclosure when the caller omits the
- * `progressivePromptDisclosure` option. Post-flip (M2): ON by default. There is
- * no env canary; an explicit `progressivePromptDisclosure: false` is the only
- * way to opt out.
+ * Default when the option is omitted: ON (post-M2 flip). No env canary — an
+ * explicit `progressivePromptDisclosure: false` is the only opt-out.
  */
 const DEFAULT_PROGRESSIVE_PROMPT_DISCLOSURE: boolean = true
+
+/**
+ * Pointers emitted in place of the relocated sections while disclosure is on.
+ * Every pointer must keep its "If that guide is unavailable" clause: the guides
+ * are plain repo files, so an embedder whose workspace lacks `agents/guides/`
+ * degrades to the inline summary instead of losing the section to a failed
+ * read. The full bodies are additionally recovered at prompt-format time by the
+ * `ON_DEMAND_GUIDE_FALLBACK` placeholder below, whose provider detects the
+ * missing guides against the caller's workspace root (T1.4d; table and
+ * detection live in `common/src/util/guides.ts`).
+ */
+const broadAuditPointer =
+  'Broad audit / many-file / coverage-sweep request → read_files `agents/guides/broad-audit.md` before sharding. If that guide is unavailable, still scope first: measure breadth, dispatch one file-picker/code-searcher pair per subsystem in bounded waves, and machine-check coverage before synthesizing — never a single codesearch.'
+/** Finalize clause whose section body `GUIDE_POINTER_TABLE` pins. */
+const BROAD_AUDIT_ROW_CLAUSE: BroadAuditFinalizeClause =
+  'proceed to implementation or the answer'
+/**
+ * Per-clause tail appended to `broadAuditPointer`: only plan mode carries the
+ * "do not implement" sentence. Keyed by `BroadAuditFinalizeClause` so a new
+ * clause is a compile error rather than a silently missing tail.
+ */
+const BROAD_AUDIT_POINTER_TAILS: Record<BroadAuditFinalizeClause, string> = {
+  'proceed to implementation or the answer': '',
+  'translate the findings into the durable plan packet below':
+    ' In plan mode, do not implement — translate the findings into the durable plan packet instead.',
+}
+const specialistRoutingPointer =
+  'Choosing a specialist agent → read_files `agents/guides/specialist-routing.md`. If that guide is unavailable, route only on a crossed risk boundary (architecture, requirements, performance, reliability, migration, compatibility, accessibility, dependencies), pass the gate-assigned `params.snapshot_id`, and never substitute a specialist for the runtime-owned final gate.'
+const gitDisciplinePointer =
+  'Before any git commit/branch/push → read_files `agents/guides/git-discipline.md`. If that guide is unavailable, apply the standard git rules: delegate to `git-committer` with `params.owned_paths`, commit only after GATE: PASSED, never push or alter git config unless explicitly asked, and never commit secrets.'
+// The named guide is advisory routing only (when to ask for a pre-edit
+// security review), so the degraded clause mirrors that routing rule rather
+// than restating the reviewer rubric's input-validation/fail-closed bullet,
+// which `preReviewSelfCheckPointer` already owns.
+const securityReviewPointer =
+  'Editing security-sensitive files (auth/crypto/secrets/payment/permissions) → read_files `agents/guides/security-review.md` before editing. If that guide is unavailable, apply the standard routing rule: consider an advisory (non-blocking) `security-reviewer` pre-edit review before the editor runs, skip it for trivial edits such as typos or comments, and remember the automated post-edit validation/reviewer gate still runs regardless.'
+// The always-inline `# Code Editing Mandates` block below intentionally
+// restates these rules in base2's own wording: it is the minimum always-on
+// editing contract, so it must survive both this pointer and a workspace with
+// no `agents/guides/`. quality-prompt-snapshot.test.ts pins the shared topic
+// labels on BOTH copies so the duplication cannot silently drift.
+const qualitySectionPointer =
+  'Code craftsmanship standards (conventions, minimal-change, reuse, no-any, hygiene) → read_files `agents/guides/code-craftsmanship.md` before editing code. If that guide is unavailable, apply the standard craftsmanship rules: follow existing project conventions, verify a library is already used before adopting it, make the minimal change, reuse existing helpers, avoid `any` casts, and leave no dead code or missing imports.'
+const preReviewSelfCheckPointer =
+  'Before finishing implementation work → read_files `agents/guides/pre-review-self-check.md` (security, requirement coverage, test coverage, compatibility, resource safety, hygiene). If that guide is unavailable, apply the standard self-check rules: name the exact test file and case covering every behavior change, map each requirement to satisfied/missing/uncertain (uncertain blocks like missing), account for every changed file, and re-verify security, compatibility, resource safety, and hygiene before returning.'
+
+/**
+ * Workspace-relative guide paths shared by the table and every call site.
+ *
+ * Aliased from the canonical table in `@codebuff/common/util/guides`, which
+ * also keys the recovery bodies the fallback placeholders inline, so the
+ * pointers here and those bodies cannot drift apart.
+ */
+const GUIDE_PATHS = FALLBACK_GUIDES
+/** Exported so callers/tests key guide-scoped lookups by the same union. */
+export type GuidePath = (typeof GUIDE_PATHS)[keyof typeof GUIDE_PATHS]
+
+/** One relocated section's wiring, minus the guide path that keys it. */
+type GuidePointerRow = {
+  /** Exported-constant name, used in test failure messages. */
+  sectionName: string
+  /** Verbose section body the pointer replaces while disclosure is on. */
+  section: string
+  /** Compact pointer emitted in the section's place. */
+  pointer: string
+  /**
+   * Placeholder that recovers THIS section's body when the guide is missing
+   * under the embedder's workspace root. One placeholder per pointer, so a mode
+   * that deliberately omits a pointer omits its recovery too (plan mode is
+   * read-only: it emits neither the git-discipline pointer nor its body, so it
+   * must not get commit/push guidance back through recovery either).
+   */
+  fallbackPlaceholder: PlaceholderValue
+  /** Authored surface the pointer is emitted into. */
+  surface: 'system' | 'instructions'
+}
+
+/**
+ * Single source of truth for the relocated-section → guide → pointer wiring.
+ * Prompt assembly resolves both halves through `discloseGuide` (or its
+ * `discloseBroadAudit` wrapper), so a relocated section cannot exist without a
+ * row here. Keying by `GuidePath` makes "exactly one row per guide" a
+ * compile-time property.
+ */
+const GUIDE_POINTER_TABLE: Record<GuidePath, GuidePointerRow> = {
+  [GUIDE_PATHS.codeCraftsmanship]: {
+    sectionName: 'qualitySection',
+    section: qualitySection,
+    pointer: qualitySectionPointer,
+    fallbackPlaceholder:
+      PLACEHOLDER.ON_DEMAND_GUIDE_FALLBACK_CODE_CRAFTSMANSHIP,
+    surface: 'system',
+  },
+  [GUIDE_PATHS.preReviewSelfCheck]: {
+    sectionName: 'preReviewSelfCheckSection',
+    section: preReviewSelfCheckSection,
+    pointer: preReviewSelfCheckPointer,
+    fallbackPlaceholder:
+      PLACEHOLDER.ON_DEMAND_GUIDE_FALLBACK_PRE_REVIEW_SELF_CHECK,
+    surface: 'system',
+  },
+  [GUIDE_PATHS.gitDiscipline]: {
+    sectionName: 'gitDisciplineSection',
+    section: gitDisciplineSection,
+    pointer: gitDisciplinePointer,
+    fallbackPlaceholder: PLACEHOLDER.ON_DEMAND_GUIDE_FALLBACK_GIT_DISCIPLINE,
+    surface: 'system',
+  },
+  [GUIDE_PATHS.securityReview]: {
+    sectionName: 'securityReviewSection',
+    section: securityReviewSection,
+    pointer: securityReviewPointer,
+    fallbackPlaceholder: PLACEHOLDER.ON_DEMAND_GUIDE_FALLBACK_SECURITY_REVIEW,
+    surface: 'system',
+  },
+  [GUIDE_PATHS.specialistRouting]: {
+    sectionName: 'specialistRoutingSection',
+    section: specialistRoutingSection,
+    pointer: specialistRoutingPointer,
+    fallbackPlaceholder:
+      PLACEHOLDER.ON_DEMAND_GUIDE_FALLBACK_SPECIALIST_ROUTING,
+    surface: 'system',
+  },
+  [GUIDE_PATHS.broadAudit]: {
+    sectionName: `buildBroadAuditSection('${BROAD_AUDIT_ROW_CLAUSE}')`,
+    // The body is clause-parameterized; the guide documents the implementation
+    // variant, so this row pins that one clause's body. `discloseBroadAudit`
+    // rebuilds the body for the clause it is asked for, which for
+    // `BROAD_AUDIT_ROW_CLAUSE` is byte-identical to this string.
+    section: buildBroadAuditSection(BROAD_AUDIT_ROW_CLAUSE),
+    pointer: broadAuditPointer,
+    // Clause-parameterized recovery: this row pins the IMPLEMENTATION clause,
+    // matching the body the guide documents. Plan mode substitutes
+    // `ON_DEMAND_GUIDE_FALLBACK_BROAD_AUDIT_PLAN` so a recovered body can never
+    // contradict the finalize clause that surface's pointer emitted.
+    fallbackPlaceholder: PLACEHOLDER.ON_DEMAND_GUIDE_FALLBACK_BROAD_AUDIT,
+    surface: 'instructions',
+  },
+}
+
+/** Flattened view of `GUIDE_POINTER_TABLE` in `GUIDE_PATHS` declaration order. */
+export const GUIDE_POINTERS: ReadonlyArray<
+  GuidePointerRow & {
+    /** Workspace-relative guide path, exactly as the pointer text emits it. */
+    guide: GuidePath
+  }
+> = Object.values(GUIDE_PATHS).map((guide) => ({
+  guide,
+  ...GUIDE_POINTER_TABLE[guide],
+}))
+
+/** Pointer while disclosure is on, the verbose section body when it is off. */
+function discloseGuide(
+  guide: GuidePath,
+  progressiveDisclosure: boolean,
+): string {
+  const { section, pointer } = GUIDE_POINTER_TABLE[guide]
+  return progressiveDisclosure ? pointer : section
+}
+
+/**
+ * Broad-audit disclosure: the one relocated section whose body is
+ * clause-parameterized. The pointer half resolves through the row and appends
+ * the clause's tail; the explicit-off half rebuilds the body for the requested
+ * clause, which for `BROAD_AUDIT_ROW_CLAUSE` is byte-identical to the section
+ * the row pins.
+ */
+function discloseBroadAudit(
+  finalizeClause: BroadAuditFinalizeClause,
+  progressiveDisclosure: boolean,
+): string {
+  if (progressiveDisclosure) {
+    const { pointer } = GUIDE_POINTER_TABLE[GUIDE_PATHS.broadAudit]
+    return `${pointer}${BROAD_AUDIT_POINTER_TAILS[finalizeClause]}`
+  }
+  return buildBroadAuditSection(finalizeClause)
+}
 
 export {
   DEFAULT_MAX_REPAIR_ROUNDS,
@@ -135,24 +313,72 @@ export function createBase2(
   // agents[agentId] -> defaultModel -> explicit model -> hard error; see
   // docs/configuration.md and docs/local-mode.md).
 
-  const progressiveDisclosure = progressivePromptDisclosure
-  // M4 progressive prompt disclosure (default ON; opt out with an explicit
-  // `progressivePromptDisclosure: false`): when enabled, relocate verbose
-  // advisory sections out of the always-on prompt and replace each with a
-  // compact pointer to an on-demand guide file. When disabled, disclose()
-  // returns the full section verbatim so the assembled prompt is byte-identical.
-  const disclose = (fullSection: string, pointer: string): string =>
-    progressiveDisclosure ? pointer : fullSection
-  const specialistRoutingPointer =
-    'Choosing a specialist agent → read_files `agents/guides/specialist-routing.md`.'
-  const gitDisciplinePointer =
-    'Before any git commit/branch/push → read_files `agents/guides/git-discipline.md`.'
-  const securityReviewPointer =
-    'Editing security-sensitive files (auth/crypto/secrets/payment/permissions) → read_files `agents/guides/security-review.md` before editing.'
-  const qualitySectionPointer =
-    'Code craftsmanship standards (conventions, minimal-change, reuse, no-any, hygiene) → read_files `agents/guides/code-craftsmanship.md` before editing code.'
-  const preReviewSelfCheckPointer =
-    'Before finishing implementation work → apply the pre-review self-check rubric from `agents/base2/quality-prompt-section.ts` (preReviewSelfCheckSection): security pass, test coverage, compatibility, resource safety, hygiene.'
+  // Disclosure ON relocates each verbose advisory section to its pointer; OFF
+  // keeps the section body verbatim so the prompt matches the pre-M4 surface.
+  const disclose = (guide: GuidePath): string =>
+    discloseGuide(guide, progressivePromptDisclosure)
+  // Recovery placeholder for one disclosed pointer. Only reached from the
+  // disclosure-gated branch below: with disclosure off the bodies are inline, so
+  // no recovery is emitted at all.
+  const recover = (guide: GuidePath): PlaceholderValue =>
+    GUIDE_POINTER_TABLE[guide].fallbackPlaceholder
+
+  // Assembled as a list so every gap stays exactly one blank line and
+  // `buildArray` drops plan mode's git-discipline entry without leaving a
+  // double gap. The heading is disclosure-only: bare pointer sentences would
+  // otherwise read as a continuation of `# Repository state`.
+  const guideSections = buildArray(
+    progressivePromptDisclosure && '# On-demand guides',
+    disclose(GUIDE_PATHS.codeCraftsmanship),
+    disclose(GUIDE_PATHS.preReviewSelfCheck),
+    !planOnly && disclose(GUIDE_PATHS.gitDiscipline),
+    disclose(GUIDE_PATHS.securityReview),
+    disclose(GUIDE_PATHS.specialistRouting),
+    // T1.4d guide fallback, ADDITIVE: it FOLLOWS the pointers above instead of
+    // replacing them, so the pointer-presence assertions and the >=25%
+    // authored-reduction metric in
+    // agents/__tests__/base2-progressive-disclosure.test.ts stay meaningful
+    // rather than vacuous. Disclosure-off must not emit it: the six bodies are
+    // already inline there, so a fallback copy would duplicate them. The
+    // pointers keep their "If that guide is unavailable" clause regardless — it
+    // is unverified that every embedder entry point runs injectPlaceholders, so
+    // that clause remains the last line of defense.
+    //
+    // ONE placeholder per pointer actually emitted, so recovery mirrors the
+    // mode's exclusions instead of regrowing all six bodies: plan mode omits
+    // git-discipline here exactly as it omits the pointer above, and takes the
+    // plan-clause broad-audit body. broadAudit's pointer lives in the
+    // instructions prompt while its body arrives through this system-prompt
+    // block, because a provider cannot tell which surface it is injected into.
+    //
+    // Concatenated into a SINGLE entry with no separator: each provider emits
+    // its own trailing blank line, so the recovered blocks stay one blank line
+    // apart and the in-repo surface (every provider collapsing to '') keeps no
+    // stray blank lines at all.
+    progressivePromptDisclosure &&
+      buildArray(
+        recover(GUIDE_PATHS.codeCraftsmanship),
+        recover(GUIDE_PATHS.preReviewSelfCheck),
+        !planOnly && recover(GUIDE_PATHS.gitDiscipline),
+        recover(GUIDE_PATHS.securityReview),
+        recover(GUIDE_PATHS.specialistRouting),
+        planOnly
+          ? PLACEHOLDER.ON_DEMAND_GUIDE_FALLBACK_BROAD_AUDIT_PLAN
+          : recover(GUIDE_PATHS.broadAudit),
+      ).join(''),
+  ).join('\n\n')
+
+  // Tail of `# Spawning agents guidelines`, assembled as a list for the same
+  // reason as `guideSections`: the gate contract is conditional, so
+  // interpolating it bare would run `# Automated Validation & Review Gate` onto
+  // the preceding bullet and its last bullet onto
+  // `# Openbuff Meta-information`. `buildArray` also drops the entry without
+  // leaving a double blank line on the surfaces that omit it (plan-only /
+  // `fast`).
+  const spawnGuidelinesTail = buildArray(
+    "- **Never spawn the context-pruner agent:** This agent is spawned automatically for you and you don't need to spawn it yourself.",
+    isDefault && !planOnly && gateAwarenessSection,
+  ).join('\n\n')
 
   // Model-visible surface, narrowed when the caller passes `unlockedTiers`.
   const modelToolNames = resolveModelToolNames({
@@ -420,8 +646,8 @@ ${
       ? '- **Do not omit context for isolated agents:** Many agents inherit conversation history and can be brief. Thinker has includeMessageHistory:false and cannot see the parent conversation, so pass a self-contained decision packet plus optional params.depth / params.outputSchemaHint.'
       : '- **Do not omit context for isolated agents:** Many agents inherit conversation history and can be brief. Isolated agents that do not inherit conversation history need a self-contained handoff.'
 }
-- **Never spawn the context-pruner agent:** This agent is spawned automatically for you and you don't need to spawn it yourself.
-${isDefault && !planOnly ? gateAwarenessSection : ''}
+${spawnGuidelinesTail}
+
 # Openbuff Meta-information
 
 ${modelOverride !== undefined ? `You are running on the ${modelOverride} model.` : 'You are running on the model configured via openbuff.json (defaultModel / modes / agents — see docs/local-mode.md) — the `model` field is not a fallback.'}
@@ -512,20 +738,15 @@ ${PLACEHOLDER.SYSTEM_INFO_PROMPT}
 
 The runtime injects a fresh, compact Git-status observation before coding work and after model steps. Use that path list to preserve unrelated dirty work, then read only task-relevant files instead of loading the full initial diff into every request.
 
-${disclose(qualitySection, qualitySectionPointer)}
-${disclose(preReviewSelfCheckSection, preReviewSelfCheckPointer)}
-
 ${PLACEHOLDER.FRONTEND_SECTION}
 
-${!planOnly ? disclose(gitDisciplineSection, gitDisciplinePointer) : ''}
-
-${disclose(securityReviewSection, securityReviewPointer)}
-
-${disclose(specialistRoutingSection, specialistRoutingPointer)}
+${guideSections}
 `,
 
     instructionsPrompt: planOnly
-      ? buildPlanOnlyInstructionsPrompt({ progressiveDisclosure })
+      ? buildPlanOnlyInstructionsPrompt({
+          progressiveDisclosure: progressivePromptDisclosure,
+        })
       : executePlan
         ? buildExecutePlanInstructionsPrompt({
             isFast,
@@ -533,7 +754,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
 
             hasNoValidation,
             noAskUser,
-            progressiveDisclosure,
+            progressiveDisclosure: progressivePromptDisclosure,
           })
         : buildImplementationInstructionsPrompt({
             isFast,
@@ -541,7 +762,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
 
             hasNoValidation,
             noAskUser,
-            progressiveDisclosure,
+            progressiveDisclosure: progressivePromptDisclosure,
           }),
     stepPrompt: planOnly
       ? buildPlanOnlyStepPrompt({})
@@ -935,6 +1156,10 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
       // converges instead of looping forever on the same NON_BLOCKING
       // architectural commentary. Reset when the gate passes.
       activeWorkState.condonedFindingTexts ??= []
+      // T1.5 companion: (verdict class, finding identity) condone keys. Legacy
+      // serialized state lacks this field, which is what makes the
+      // condonedFindingTexts fallback below conditional on it being empty.
+      activeWorkState.condonedFindingKeys ??= []
       if (activeWorkState.openReviewerFindings.length > 0) {
         // Rehydrate the owed set from EVERY open finding, not just findings[0]:
         // serialized state can carry open findings from several reviewers and
@@ -1210,6 +1435,28 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           rearmGateForUnreviewedDirty(unreviewedAtTurnStart)
         }
       }
+      // Turn-scoped CYCLE detection for the two repair loops below. These are
+      // deliberately turn-scoped LOCALS and NOT persisted gate state (they must
+      // not be added to gate-state.ts): a fingerprint cycle is only meaningful
+      // within one turn's repair loop, and a later turn must stay free to
+      // revisit an earlier workspace state. The existing no-progress guards
+      // only compare against the IMMEDIATELY PRECEDING fingerprint, so an
+      // A→B→A oscillation changes the fingerprint every round and never trips
+      // them; these sets catch a fingerprint that CHANGED but was already
+      // visited this turn. Two separate sets on purpose: the reviewer loop
+      // hashes buildGateSnapshotDetails(pending, validationSummary) while the
+      // specialist loop hashes buildGateSnapshotDetails(pending, ''), so one
+      // shared set would conflate two different fingerprint spaces.
+      const seenReviewerRepairFingerprints = new Set<string>()
+      const seenSpecialistRepairFingerprints = new Set<string>()
+      // Win 4a delta-only baseline: the last pinned block actually EMITTED
+      // this turn. Deliberately separate from
+      // activeWorkState.lastPinnedStateMessage, which doubles as the ''
+      // cache-invalidation sentinel (markActiveWorkStateChanged clears it on
+      // every gate-state write, including every setGateProgress call) and so
+      // can never report what the model last saw. Turn-scoped local, not
+      // persisted state: a resumed turn re-emits the full block once.
+      let lastEmittedPinnedStateMessage = ''
       while (true) {
         yield {
           toolName: 'spawn_agent_inline',
@@ -1287,44 +1534,46 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           pinnedStateMessage &&
           pinnedStateMessage !== activeWorkState.lastPinnedStateMessage
         ) {
-          const previousPinned = activeWorkState.lastPinnedStateMessage ?? ''
-          // Win 4a delta-only: emit full Harness pinned block once; subsequent STEPS when
-          // openReviewerBlockers/nextRequiredAction unchanged only emit Gate progress diff.
-          // Stripping Gate progress line lets us detect when only progress changed.
+          // Win 4a delta-only: the full Harness pinned block is emitted once
+          // per turn; a later step whose ONLY change is the gate-progress line
+          // emits just that line. The baseline is the last EMITTED block, never
+          // activeWorkState.lastPinnedStateMessage — markActiveWorkStateChanged
+          // resets that field to '' on every gate-state write (including every
+          // setGateProgress call), so using it here would make this branch
+          // unreachable and re-emit the whole block every step.
+          const previousPinned = lastEmittedPinnedStateMessage
+          const gateProgressLine = activeWorkState.gateProgressLine ?? ''
+          // Sections are joined with '\n\n', so removing the progress line
+          // leaves a longer blank-line run behind. Collapsing over-long runs
+          // keeps the stripped forms comparable across the line's first
+          // appearance and its disappearance, not only across value changes.
           const stripGateProgress = (msg: string): string =>
-            msg.replace(/\nGate progress:[^\n]*/g, '').trim()
-          const prevStripped = stripGateProgress(previousPinned)
-          const nextStripped = stripGateProgress(pinnedStateMessage)
+            msg
+              .replace(/\nGate progress:[^\n]*/g, '')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim()
+          // An empty gateProgressLine has no delta to send: the pinned block
+          // renders `Gate progress: <line>` only for a non-empty line. The
+          // explicit emptiness check keeps a stray "Gate progress: " substring
+          // inside reviewer blocker text from producing an empty delta.
           const isOnlyGateProgressChange =
             previousPinned !== '' &&
-            prevStripped === nextStripped &&
-            pinnedStateMessage.includes('Gate progress:')
-          if (isOnlyGateProgressChange) {
-            const gateProgressLine = activeWorkState.gateProgressLine ?? ''
-            if (gateProgressLine) {
-              activeWorkState.lastPinnedStateMessage = pinnedStateMessage
-              yield {
-                toolName: 'add_message',
-                input: {
-                  role: 'user',
-                  content: `Gate progress: ${gateProgressLine}`,
-                },
-                includeToolCall: false,
-              } as any
-            } else {
-              activeWorkState.lastPinnedStateMessage = pinnedStateMessage
-            }
-          } else {
-            activeWorkState.lastPinnedStateMessage = pinnedStateMessage
-            yield {
-              toolName: 'add_message',
-              input: {
-                role: 'user',
-                content: pinnedStateMessage,
-              },
-              includeToolCall: false,
-            } as any
-          }
+            gateProgressLine !== '' &&
+            stripGateProgress(previousPinned) ===
+              stripGateProgress(pinnedStateMessage) &&
+            pinnedStateMessage.includes(`Gate progress: ${gateProgressLine}`)
+          activeWorkState.lastPinnedStateMessage = pinnedStateMessage
+          lastEmittedPinnedStateMessage = pinnedStateMessage
+          yield {
+            toolName: 'add_message',
+            input: {
+              role: 'user',
+              content: isOnlyGateProgressChange
+                ? `Gate progress: ${gateProgressLine}`
+                : pinnedStateMessage,
+            },
+            includeToolCall: false,
+          } as any
         }
 
         // No per-step tier bookkeeping: progressiveToolDisclosure is pinned
@@ -1410,13 +1659,16 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         const gitStatusFiles = extractGitStatusFiles(
           (currentGitStatus as any)?.toolResult,
         )
+        // A real git_status payload (it carries a `status` field) gates both the
+        // mid-turn dirty-snapshot refresh below and the committed-file pruning
+        // branch further down, so compute it once.
+        const isRealGitStatusResult =
+          (currentGitStatus as any)?.toolResult?.[0]?.value?.status !==
+          undefined
         // Refresh the mid-turn dirty snapshot whenever git_status returns a
         // real status payload so top-of-loop P0 re-arm and P3 publication see
         // live dirtiness rather than only the turn-start snapshot.
-        const isRealGitStatusForDirtySnapshot =
-          (currentGitStatus as any)?.toolResult?.[0]?.value?.status !==
-          undefined
-        if (isRealGitStatusForDirtySnapshot) {
+        if (isRealGitStatusResult) {
           latestDirtyFiles = gitStatusFiles
         }
         // Prune pending gate files that were previously observed as dirty in
@@ -1427,9 +1679,6 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         // Only prune when the git_status result is a real response (has a
         // `status` field) and we have previously confirmed files dirty, to
         // avoid false pruning from mock/empty results in tests.
-        const isRealGitStatusResult =
-          (currentGitStatus as any)?.toolResult?.[0]?.value?.status !==
-          undefined
         if (
           isRealGitStatusResult &&
           gitStatusObservedDirty &&
@@ -2025,11 +2274,17 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           const securityCrash = detectReviewerCrash(securityToolResult)
           // Parent-owned process RF strings are not repair targets for security.
           // Pass toolResult so evidence-only parent ownership matches finalization.
-          const securityBlockers = collectReviewerBlockers(
-            securityToolResult,
-          ).filter(
-            (blocker: string) =>
-              !isParentOwnedRequirementBlocker(blocker, securityToolResult),
+          const rawSecurityBlockers =
+            collectReviewerBlockers(securityToolResult)
+          // One structured walk for the whole list: the per-blocker helper
+          // re-collects the structured reviewer outputs on every call.
+          const parentOwnedSecurityBlockers =
+            collectParentOwnedRequirementBlockers(
+              rawSecurityBlockers,
+              securityToolResult,
+            )
+          const securityBlockers = rawSecurityBlockers.filter(
+            (blocker: string) => !parentOwnedSecurityBlockers.has(blocker),
           )
           const securityAttestationIssues = collectReviewerAttestationIssues(
             securityToolResult,
@@ -2044,14 +2299,20 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             securityAttestationIssues.length > 0 ||
             !securityVerdict
           if (securityBlockers.length > 0) {
-            const records = collectReviewerFindingRecordsInline(securityToolResult)
+            const records = collectReviewerFindingRecords(securityToolResult)
             const securityFindingRecords = securityBlockers.map(
               (text: string, index: number) => {
                 const record = correlateReviewerFindingRecord(text, records)
                 return {
                   id: record?.id ?? buildReviewerFindingId(text, index),
                   gateId: `security-reviewer:${securitySnapshotFingerprint}`,
-                  text: record?.text ?? text,
+                  // The PREFIXED blocker string, like the code-reviewer path:
+                  // `reviewerVerdictClass` derives the condone key's verdict
+                  // class from this text, so storing the record's unprefixed
+                  // text made every security finding class-agnostic (`*`) and a
+                  // nit condoned as NON_BLOCKING silently swallowed its own
+                  // BLOCKING re-raise. Only the id is adopted from the record.
+                  text,
                   status: 'open' as const,
                   files: securityChangedFiles,
                   snapshotFingerprint: securitySnapshotFingerprint,
@@ -2279,6 +2540,24 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               validationStatus: 'passed',
               reuseReason: 'aux-gate:security-reviewer',
             })
+            // Non-empty only: a passing security gate stays silent exactly as
+            // before whenever the receipt carries no advisories.
+            const securityAdvisories = boundAdvisoryLines(
+              collectReviewerAdvisories(securityToolResult),
+            )
+            if (securityAdvisories.length > 0) {
+              yield {
+                toolName: 'add_message',
+                input: {
+                  role: 'user',
+                  content: [
+                    'Advisories (non-blocking; no change required):',
+                    ...securityAdvisories.map((advisory) => `- ${advisory}`),
+                  ].join('\n'),
+                },
+                includeToolCall: false,
+              } as any
+            }
           }
           activeWorkState.securityReviewGateDone = true
           activeWorkState.preEditSecurityReviewDone = true
@@ -2354,6 +2633,16 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               ),
               '',
             ),
+          )
+          // Deleted pending files (a `missing` content marker in the files-v4
+          // snapshot details) are attested-by-absence: a specialist cannot read
+          // them, so they are not required in its reviewedFiles. Computed once
+          // from the specialist pending snapshot and reused by both specialist
+          // attestation call sites, matching the final code-reviewer path — a
+          // deleted pending path must never produce a coverage gap that can
+          // escalate to the terminal `could not attest` branch.
+          const specialistDeletedFiles = collectDeletedFilesFromSnapshotDetails(
+            buildGateSnapshotDetails(specialistPendingFiles, ''),
           )
           const baseRoutedSpecialists = selectSpecialistReviewersInline({
             files: specialistPendingFiles,
@@ -2494,6 +2783,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                   result,
                   specialistCreditFingerprint,
                   specialistPendingFiles,
+                  specialistDeletedFiles,
                 )
                 return (
                   attestationIssues.length > 0 &&
@@ -2587,6 +2877,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                       specialistToolResult,
                       expectedSnapshotId,
                       specialistPendingFiles,
+                      specialistDeletedFiles,
                     )
                   // Fingerprint-only drift on a fully-attesting review is NOT a
                   // terminal protocol failure: only a FILE-COVERAGE gap or a
@@ -2622,19 +2913,47 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                     specialistTerminalFailure = true
                     break
                   }
+                  // Attestation tolerates a coverage-complete specialist review
+                  // whose well-formed v3 fingerprint drifted from the expected
+                  // snapshot; record that drift instead of accepting it
+                  // silently, so a specialist review of possibly-stale file
+                  // content that passed the gate stays auditable (same contract
+                  // as the final code-reviewer gate).
+                  if (attestsEverything) {
+                    const specialistFingerprintDrift =
+                      collectReviewerFingerprintDrift(
+                        specialistToolResult,
+                        expectedSnapshotId,
+                      )
+                    if (specialistFingerprintDrift) {
+                      emitGateTelemetry({
+                        currentPhase: activeWorkState.currentPhase,
+                        pendingFileCount: specialistPendingFiles.length,
+                        pendingFiles: specialistPendingFiles,
+                        reviewerStatus: 'attestation-fingerprint-drift',
+                        reviewer: agentType,
+                        reportedFingerprint: specialistFingerprintDrift,
+                        expectedFingerprint: expectedSnapshotId,
+                      })
+                    }
+                  }
                   const crash = detectReviewerCrash(specialistToolResult)
                   const rawBlockers =
                     collectReviewerBlockers(specialistToolResult)
                   // Defense in depth: parent-owned process RF strings must not
-                  // alone force a specialist repair-editor spawn. Pass
-                  // toolResult so evidence-only parent ownership matches
+                  // alone force a specialist repair-editor spawn. Classify the
+                  // whole list in ONE structured walk (the per-blocker helper
+                  // re-collects the structured outputs on every call) so
+                  // evidence-only parent ownership still matches
                   // getReviewerFinalizationVerdict.
+                  const parentOwnedSpecialistBlockers =
+                    collectParentOwnedRequirementBlockers(
+                      rawBlockers,
+                      specialistToolResult,
+                    )
                   const blockers = rawBlockers.filter(
                     (blocker: string) =>
-                      !isParentOwnedRequirementBlocker(
-                        blocker,
-                        specialistToolResult,
-                      ),
+                      !parentOwnedSpecialistBlockers.has(blocker),
                   )
                   const parentOwnedOnlyBlockers =
                     rawBlockers.length > 0 && blockers.length === 0
@@ -2670,6 +2989,9 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                     }
                     clearOwedReviewer(agentType)
                     markActiveWorkStateChanged()
+                    const parentOwnedPassAdvisories = boundAdvisoryLines(
+                      collectReviewerAdvisories(specialistToolResult),
+                    )
                     yield {
                       toolName: 'add_message',
                       input: {
@@ -2678,6 +3000,15 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                           `${agentType} returned LOOKS_GOOD; parent-owned process requirements were ignored for the specialist gate (not repair targets):`,
                           '',
                           ...rawBlockers,
+                          ...(parentOwnedPassAdvisories.length > 0
+                            ? [
+                                '',
+                                'Advisories (non-blocking; no change required):',
+                                ...parentOwnedPassAdvisories.map(
+                                  (advisory) => `- ${advisory}`,
+                                ),
+                              ]
+                            : []),
                         ].join('\n'),
                       },
                       includeToolCall: false,
@@ -2686,7 +3017,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                   }
                   if (blockers.length > 0) {
                     const records =
-                      collectReviewerFindingRecordsInline(specialistToolResult)
+                      collectReviewerFindingRecords(specialistToolResult)
                     const specialistFindingRecords = blockers.map(
                       (text: string, index: number) => {
                         const record = correlateReviewerFindingRecord(
@@ -2697,7 +3028,10 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                           id:
                             record?.id ?? buildReviewerFindingId(text, index),
                           gateId: `${agentType}:${expectedSnapshotId}`,
-                          text: record?.text ?? text,
+                          // Prefixed blocker string for the same reason as the
+                          // security path above: the condone key's verdict class
+                          // is derived from this text.
+                          text,
                           status: 'open' as const,
                           files: specialistPendingFiles,
                           snapshotFingerprint: expectedSnapshotId,
@@ -2801,6 +3135,10 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                     const preRepairFingerprint = hashGateSnapshotDetails(
                       buildGateSnapshotDetails(Array.from(pendingGateFiles), ''),
                     )
+                    // Recording the BASELINE (not just post-repair states) is
+                    // what makes A→B→A trip: round 1 records A, post B is new;
+                    // round 2 records B, post A is already in the set.
+                    seenSpecialistRepairFingerprints.add(preRepairFingerprint)
                     const specialistOpenFindings = (
                       activeWorkState.openReviewerFindings ?? []
                     ).filter((finding) => finding.reviewer === agentType)
@@ -2993,6 +3331,42 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                       specialistRepairExit = true
                       break
                     }
+                    // Turn-scoped CYCLE detection. The equality guard above
+                    // already handled an UNCHANGED fingerprint, so reaching
+                    // here means the bytes changed — but this exact workspace
+                    // state was already visited earlier in this turn's repair
+                    // loop, i.e. the repairs are oscillating (A→B→A). Re-firing
+                    // the specialist could only repeat an earlier verdict, so
+                    // fail closed on demonstrated non-progress instead of
+                    // waiting for a guessed repair budget.
+                    if (
+                      seenSpecialistRepairFingerprints.has(
+                        postRepairFingerprint,
+                      )
+                    ) {
+                      if (!activeWorkState.lastReviewerGateSkipReason) {
+                        activeWorkState.lastReviewerGateSkipReason =
+                          'specialist-repair-cycle'
+                      }
+                      activeWorkState.currentPhase = 'blocked'
+                      activeWorkState.nextRequiredAction = `The ${agentType} repair loop returned the workspace to a state it already visited this turn; retrying will not converge. Stop retrying and inspect the finding or handoff.`
+                      activeWorkState.latestWorkSummary = `${agentType} repair loop revisited an earlier workspace fingerprint (repair cycle).`
+                      mutableAgentState.canSuggestFollowups = false
+                      finalResponseGateOpen = false
+                      markActiveWorkStateChanged()
+                      emitGateTelemetry({
+                        currentPhase: 'blocked',
+                        pendingFileCount: currentPendingGateFiles.length,
+                        pendingFiles: currentPendingGateFiles,
+                        reviewerStatus: 'failed',
+                        validationStatus: 'passed',
+                        repairRound: specialistRepairRound,
+                        skipReason: 'specialist-repair-cycle',
+                      })
+                      specialistRepairExit = true
+                      break
+                    }
+                    seenSpecialistRepairFingerprints.add(postRepairFingerprint)
                     // Leave agentType in the owed set: it must re-attest
                     // against the post-repair bytes before finalization.
                     activeWorkState.currentPhase = 'awaiting_validation'
@@ -3084,6 +3458,26 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                       agentType,
                       expectedSnapshotId,
                     )
+                    // Non-empty only: a passing specialist gate stays silent
+                    // exactly as before when the receipt carries no advisories.
+                    const specialistAdvisories = boundAdvisoryLines(
+                      collectReviewerAdvisories(specialistToolResult),
+                    )
+                    if (specialistAdvisories.length > 0) {
+                      yield {
+                        toolName: 'add_message',
+                        input: {
+                          role: 'user',
+                          content: [
+                            'Advisories (non-blocking; no change required):',
+                            ...specialistAdvisories.map(
+                              (advisory) => `- ${advisory}`,
+                            ),
+                          ].join('\n'),
+                        },
+                        includeToolCall: false,
+                      } as any
+                    }
                   }
                   activeWorkState.specialistReviewGatesDone = Array.from(
                     new Set([
@@ -3977,6 +4371,11 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                     'Snapshot details (read for file membership; do not echo):',
                     reviewSnapshotDetails,
                     `Validation gate summary: ${validationSummary}`,
+                    // Re-review ledger; empty on round 0 so no stray heading or
+                    // blank line appears in the first review's prompt.
+                    ...buildReviewerRoundLedgerLines(
+                      requiredReviewerAgentType,
+                    ),
                     'Read large files via read_files windows (bounded block reads) instead of whole-file reads so your accumulated read context stays bounded; still attest to every pending file in reviewedFiles.',
                     '',
                     'Return the required structured review object. Echo snapshotFingerprint exactly, list every pending changed file in reviewedFiles (including tests), evaluate all review dimensions, and map every user requirement to evidence. Changed tests are first-class review targets and may also be cited as coverage evidence. Use coverage: missing only when no covering test exists in the changed files or elsewhere in the repo.',
@@ -4074,12 +4473,45 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             break
           }
           activeWorkState.reviewerProtocolRetryCount = 0
+          // Attestation tolerates a coverage-complete review whose well-formed
+          // v3 fingerprint drifted from the expected snapshot; record that drift
+          // instead of accepting it silently, so a review of possibly-stale file
+          // content that passed the gate stays auditable.
+          const reviewerFingerprintDrift = collectReviewerFingerprintDrift(
+            reviewerToolResult,
+            reviewSnapshotFingerprint,
+          )
+          if (reviewerFingerprintDrift) {
+            emitGateTelemetry({
+              currentPhase: activeWorkState.currentPhase,
+              pendingFileCount: reviewableGateScopeFiles.length,
+              pendingFiles: reviewableGateScopeFiles,
+              reviewerStatus: 'attestation-fingerprint-drift',
+              reviewer: requiredReviewerAgentType,
+              reportedFingerprint: reviewerFingerprintDrift,
+              expectedFingerprint: reviewSnapshotFingerprint,
+            })
+          }
           // Parent-owned process RF strings are not repair targets; filter at
           // the consumer so raw collectReviewerBlockers can still surface them.
-          // Pass toolResult so evidence-only parent ownership matches finalization.
-          const collectedBlockers = collectReviewerBlockers(reviewerToolResult).filter(
-            (blocker: string) =>
-              !isParentOwnedRequirementBlocker(blocker, reviewerToolResult),
+          // ONE structured walk of the tool-result tree classifies BOTH blocker
+          // lists (the per-blocker helper re-walks it on every call): every
+          // hard-rule string is byte-identical to an entry in
+          // rawCollectedBlockers (asserted by the gate-reviewer parity test), so
+          // classifying rawCollectedBlockers alone covers rawHardBlockers too.
+          // Passing the toolResult keeps evidence-only parent ownership in step
+          // with finalization.
+          const rawCollectedBlockers =
+            collectReviewerBlockers(reviewerToolResult)
+          const rawHardBlockers =
+            collectReviewerHardBlockers(reviewerToolResult)
+          const parentOwnedRequirementBlockers =
+            collectParentOwnedRequirementBlockers(
+              rawCollectedBlockers,
+              reviewerToolResult,
+            )
+          const collectedBlockers = rawCollectedBlockers.filter(
+            (blocker: string) => !parentOwnedRequirementBlockers.has(blocker),
           )
           // Stale-finding suppression: filter out any blocker whose text
           // matches a previously-condoned finding text (a finding the
@@ -4087,29 +4519,87 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           // The reviewer re-derives findings from scratch and may return the
           // same NON_BLOCKING architectural commentary; without this filter
           // the loop never converges. Condoned texts are cleared on gate pass.
+          // T1.3/T1.5: reviewer-supplied finding records, collected ONCE for
+          // the whole round. The condone filter below needs them to key on the
+          // reviewer's stable finding id, and the record builds further down
+          // reuse the same list so a re-raised finding keeps its reviewer id
+          // instead of being re-minted as a content-hash `RF-...` id.
+          const reviewerFindingRecords =
+            collectReviewerFindingRecords(reviewerToolResult)
+          // T1.5: (verdict class, identity) keys are authoritative. The legacy
+          // text list is consulted ONLY while no keys exist (state serialized
+          // before this field), because a legacy entry carries no class and
+          // trusting it alongside keys would restore the escalation swallow.
+          const condonedKeys: Set<string> = new Set<string>(
+            activeWorkState.condonedFindingKeys ?? [],
+          )
           const condonedTexts: Set<string> = new Set<string>(
             activeWorkState.condonedFindingTexts ?? [],
           )
+          // Gate-derived hard rules (coverage missing, failed dimension, in-scope
+          // requirement missing/uncertain) are NOT condonable: they are derived by the
+          // gate from the reviewer's structured fields, not reviewer prose a repair
+          // round can "address". Letting the condone filter suppress them empties the
+          // blocker list and reaches the condoned-pass branch below, which sets the
+          // verdict directly and so bypasses getReviewerFinalizationVerdict — the only
+          // enforcement of coverage: 'missing' and in-scope requirement gaps.
+          // Parent-owned requirement gaps are filtered out the same way they are for
+          // collectedBlockers, so a process-only gap never becomes permanent.
+          const hardBlockers: Set<string> = new Set<string>(
+            rawHardBlockers.filter(
+              (blocker: string) => !parentOwnedRequirementBlockers.has(blocker),
+            ),
+          )
           const blockers: string[] = collectedBlockers.filter(
             (blocker: string) => {
+              // Hard rules are exempt from condoning. The strings are
+              // byte-identical across the two collectors, so exact membership
+              // works with no prefix parsing.
+              if (hardBlockers.has(blocker)) return true
+              const verdictClass = reviewerVerdictClass(blocker)
               // Strip the NON_BLOCKING/BLOCKING prefix for text comparison since
               // the condoned text is the raw finding text without the prefix.
-              const rawText = blocker.replace(
-                /^(?:NON_BLOCKING|BLOCKING):\s*/,
-                '',
-              )
-              return !condonedTexts.has(rawText) && !condonedTexts.has(blocker)
+              const rawText = stripReviewerVerdictPrefix(blocker)
+              if (condonedKeys.size > 0) {
+                return !condonedKeyMatches(
+                  condonedKeys,
+                  verdictClass,
+                  rawText,
+                  correlateReviewerFindingRecord(
+                    blocker,
+                    reviewerFindingRecords,
+                  )?.id,
+                )
+              }
+              return !legacyCondonedTextMatches(condonedTexts, blocker)
             },
           )
           // Record any newly-condoned texts (collected but filtered out) so
           // they persist across rounds and in the pinned state display.
           if (blockers.length < collectedBlockers.length) {
-            const newlyCondoned: string[] = collectedBlockers
-              .filter((b: string) => !blockers.includes(b))
-              .map((b: string) => b.replace(/^(?:NON_BLOCKING|BLOCKING):\s*/, ''))
-            activeWorkState.condonedFindingTexts = Array.from(
-              new Set([...(activeWorkState.condonedFindingTexts ?? []), ...newlyCondoned]),
+            const suppressed: string[] = collectedBlockers.filter(
+              (b: string) => !blockers.includes(b),
             )
+            const newlyCondoned: string[] = suppressed.map((b: string) =>
+              stripReviewerVerdictPrefix(b),
+            )
+            activeWorkState.condonedFindingTexts = boundCondonedEntries([
+              ...(activeWorkState.condonedFindingTexts ?? []),
+              ...newlyCondoned,
+            ])
+            // Mirror the same suppressions into the class-keyed list so a
+            // suppression recorded on this path cannot later be re-read as
+            // class-agnostic.
+            activeWorkState.condonedFindingKeys = boundCondonedEntries([
+              ...(activeWorkState.condonedFindingKeys ?? []),
+              ...suppressed.flatMap((b: string) =>
+                condonedFindingKeysFor(
+                  reviewerVerdictClass(b),
+                  stripReviewerVerdictPrefix(b),
+                  correlateReviewerFindingRecord(b, reviewerFindingRecords)?.id,
+                ),
+              ),
+            ])
             markActiveWorkStateChanged()
           }
           // Condoned pass: the condoned filter suppressed every collected
@@ -4119,31 +4609,61 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           // reviewer -> repair -> re-review loop converges. The existing
           // finalization branch below still fires on this verdict.
           if (collectedBlockers.length > 0 && blockers.length === 0) {
-            reviewerFinalizationVerdict = 'LOOKS_GOOD'
-            recordSuccessfulReviewReceipt(
-              reviewerToolResult,
-              requiredReviewerAgentType,
-              reviewSnapshotFingerprint,
-            )
-            // Clear the now-condoned blocker strings so the pinned state and
-            // finalization no longer surface them as open. mergeReviewerFindings
-            // is not invoked on this path (no surviving blockers), so without
-            // this the first review's blocker strings would persist and the
-            // gate would look like it still has open feedback even though the
-            // findings were condoned. Only blockers whose stripped text is in
-            // condonedFindingTexts are removed; any unrelated blocker is kept.
-            const condonedSet: Set<string> = new Set<string>(
-              activeWorkState.condonedFindingTexts ?? [],
-            )
-            activeWorkState.openReviewerBlockers = (
-              activeWorkState.openReviewerBlockers ?? []
-            ).filter(
-              (blocker: string) =>
-                !condonedSet.has(
-                  blocker.replace(/^(?:NON_BLOCKING|BLOCKING):\s*/, ''),
-                ),
-            )
-            markActiveWorkStateChanged()
+            // The filter above exempts hard rules, so an empty surviving set means no
+            // hard rule fired. Re-assert it here from the receipt's own hard-rule set
+            // so a future filter change cannot silently restore the bypass: the
+            // condone path may suppress blockers but must never be verdict authority
+            // over coverage/requirement rules. When the receipt produced a hard rule
+            // it stays in `blockers` and drives the normal repair path, so nothing is
+            // credited and openReviewerBlockers is not cleared.
+            const receiptHasHardRule = hardBlockers.size > 0
+            if (!receiptHasHardRule) {
+              reviewerFinalizationVerdict = 'LOOKS_GOOD'
+              recordSuccessfulReviewReceipt(
+                reviewerToolResult,
+                requiredReviewerAgentType,
+                reviewSnapshotFingerprint,
+              )
+              // Clear the now-condoned blocker strings so the pinned state and
+              // finalization no longer surface them as open. mergeReviewerFindings
+              // is not invoked on this path (no surviving blockers), so without
+              // this the first review's blocker strings would persist and the
+              // gate would look like it still has open feedback even though the
+              // findings were condoned. Keyed on (verdict class, identity) like
+              // the condone filter above — NOT stripped text alone: this list
+              // retains other families' blockers (mergeReviewerFindings keeps
+              // them), so a text-only match could drop a security-reviewer
+              // `BLOCKING: <same text>` blocker that was never condoned. The
+              // sets are rebuilt here because the suppression recording above
+              // just appended to both lists. Legacy text fallback only while no
+              // keys exist, exactly as above.
+              const cleanupCondonedKeys: Set<string> = new Set<string>(
+                activeWorkState.condonedFindingKeys ?? [],
+              )
+              const cleanupCondonedTexts: Set<string> = new Set<string>(
+                activeWorkState.condonedFindingTexts ?? [],
+              )
+              activeWorkState.openReviewerBlockers = (
+                activeWorkState.openReviewerBlockers ?? []
+              ).filter((blocker: string) => {
+                if (cleanupCondonedKeys.size > 0) {
+                  return !condonedKeyMatches(
+                    cleanupCondonedKeys,
+                    reviewerVerdictClass(blocker),
+                    stripReviewerVerdictPrefix(blocker),
+                    correlateReviewerFindingRecord(
+                      blocker,
+                      reviewerFindingRecords,
+                    )?.id,
+                  )
+                }
+                return !legacyCondonedTextMatches(
+                  cleanupCondonedTexts,
+                  blocker,
+                )
+              })
+              markActiveWorkStateChanged()
+            }
           }
           if (blockers.length > 0) {
             // Coverage-style findings (a missing/uncertain test-coverage gap)
@@ -4158,9 +4678,8 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             const repairAgentLabel = allCoverageFindings
               ? 'Test-writer'
               : 'Repair-editor'
-            activeWorkState.reviewerRepairRoundCount = Number(
-              activeWorkState.reviewerRepairRoundCount ?? 0,
-            ) + 1
+            activeWorkState.reviewerRepairRoundCount =
+              Number(activeWorkState.reviewerRepairRoundCount ?? 0) + 1
             // Optional hard round cap for the reviewer -> repair -> re-review
             // loop when createBase2/env set a finite maxReviewerRepairRounds.
             // Default is unlimited; NON_BLOCKING findings still burn the counter
@@ -4176,7 +4695,9 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               // records are built below on the non-exhausted path).
               const budgetExhaustedRecords = blockers.map(
                 (text: string, index: number) => ({
-                  id: buildReviewerFindingId(text, index),
+                  id:
+                    correlateReviewerFindingRecord(text, reviewerFindingRecords)
+                      ?.id ?? buildReviewerFindingId(text, index),
                   gateId: `${requiredReviewerAgentType}:${reviewSnapshotFingerprint}`,
                   text,
                   status: 'open' as const,
@@ -4215,10 +4736,84 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               } as any
               break
             }
+            // New-vs-carried is derived from ALREADY-PERSISTED gate state:
+            // openReviewerFindings has rehydration wired, and reviewer round
+            // counts reset only on gate pass, so a round is expected to span a
+            // turn boundary. A locals-based comparison would report every
+            // finding as new exactly when the metric matters. Read BEFORE
+            // mergeReviewerFindings overwrites the ledger, filtered to this
+            // reviewer so another family's open findings cannot inflate carried,
+            // and with the condone filter's exact prefix regex so carried/new
+            // cannot disagree with condoning.
+            const priorOwnFindingTexts = new Set(
+              (activeWorkState.openReviewerFindings ?? [])
+                .filter(
+                  (finding) => finding.reviewer === requiredReviewerAgentType,
+                )
+                .map((finding) => stripReviewerVerdictPrefix(finding.text)),
+            )
+            const carriedFindingCount = blockers.filter((blocker: string) =>
+              priorOwnFindingTexts.has(stripReviewerVerdictPrefix(blocker)),
+            ).length
+            // SHADOW MODE — observation only: log what a severity threshold
+            // WOULD decide without acting on it. Nothing here may branch or
+            // touch blockers, the verdict, the repair spawn, or the phase
+            // (thresholding is evidence-gated Tier 2 work). Severity metadata
+            // does not exist yet, so every finding sits in one `unlabeled`
+            // bucket; when severity lands, replace this single predicate with
+            // per-severity buckets over the same list. Gate-derived hard rules
+            // are never suppressible, so reuse the hardBlockers set above.
+            const suppressibleFindings = blockers.filter(
+              (blocker: string) =>
+                blocker.startsWith('NON_BLOCKING:') &&
+                !hardBlockers.has(blocker),
+            )
+            // T1.5 evidence: blockers whose identity WAS condoned, but under
+            // the other verdict class. These are exactly the escalations the
+            // old text-only key swallowed; probing only the other class (never
+            // the `*` wildcard) keeps class-agnostic legacy entries out.
+            const escalatedFindings = blockers.filter((blocker: string) => {
+              const verdictClass = reviewerVerdictClass(blocker)
+              if (verdictClass === '*') return false
+              const otherClass =
+                verdictClass === 'BLOCKING' ? 'NON_BLOCKING' : 'BLOCKING'
+              return condonedFindingKeysFor(
+                otherClass,
+                stripReviewerVerdictPrefix(blocker),
+                correlateReviewerFindingRecord(blocker, reviewerFindingRecords)
+                  ?.id,
+              ).some((key) => condonedKeys.has(key))
+            })
+            // Emitted only on this non-exhausted path; an exhausted round is
+            // already covered by its own skipReason telemetry.
+            emitGateTelemetry({
+              currentPhase: activeWorkState.currentPhase,
+              reviewerStatus: 'round-findings',
+              reviewer: requiredReviewerAgentType,
+              repairRound: Number(activeWorkState.reviewerRepairRoundCount ?? 0),
+              findingCount: blockers.length,
+              rawFindingCount: rawCollectedBlockers.length,
+              newFindingCount: blockers.length - carriedFindingCount,
+              carriedFindingCount,
+              pendingFileCount: reviewableGateScopeFiles.length,
+              suppressibleFindingCount: suppressibleFindings.length,
+              escalatedFindingCount: escalatedFindings.length,
+              wouldPassAtThisRound:
+                suppressibleFindings.length === blockers.length &&
+                blockers.length > 0,
+            })
             const codeReviewerFindingRecords = blockers.map(
               (text: string, index: number) => ({
-                id: buildReviewerFindingId(text, index),
+                id:
+                  correlateReviewerFindingRecord(text, reviewerFindingRecords)
+                    ?.id ?? buildReviewerFindingId(text, index),
                 gateId: `${requiredReviewerAgentType}:${reviewSnapshotFingerprint}`,
+                // Deliberately the blocker string, NOT `record?.text` (which the
+                // security path uses): the condone filter and the carried/new
+                // derivation above both key on this text minus its
+                // NON_BLOCKING/BLOCKING prefix, and `record.text` omits the
+                // `[id] ` segment the blocker carries. Swapping it would make
+                // condoning and carried-count disagree. Only the id is adopted.
                 text,
                 status: 'open' as const,
                 files: Array.from(pendingGateFiles),
@@ -4242,6 +4837,12 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             activeWorkState.currentPhase = 'blocked'
             activeWorkState.latestWorkSummary = `Reviewer feedback is open for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`
             markActiveWorkStateChanged()
+            // Read through the shared collector, NOT a receipt:
+            // recordSuccessfulReviewReceipt only runs once a finalization
+            // verdict exists, so this round has written none yet.
+            const roundAdvisories = boundAdvisoryLines(
+              collectReviewerAdvisories(reviewerToolResult),
+            )
             yield {
               toolName: 'add_message',
               input: {
@@ -4250,6 +4851,13 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                   `Reviewer gate: ${reviewerAgentType} returned blocking feedback. The harness will send these exact findings to ${allCoverageFindings ? 'test-writer' : 'repair-editor'}:`,
                   '',
                   ...blockers,
+                  ...(roundAdvisories.length > 0
+                    ? [
+                        '',
+                        'Advisories (non-blocking; no change required):',
+                        ...roundAdvisories.map((advisory) => `- ${advisory}`),
+                      ]
+                    : []),
                   '',
                   'These findings remain open until targeted validation and a fresh matching reviewer pass clear them.',
                 ].join('\n'),
@@ -4269,6 +4877,10 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                 validationSummary,
               ),
             )
+            // Recording the BASELINE (not just post-repair states) is what
+            // makes A→B→A trip: round 1 records A, post B is new; round 2
+            // records B, post A is already in the set.
+            seenReviewerRepairFingerprints.add(preReviewerRepairFingerprint)
             const reviewerRepairSessionId =
               activeWorkState.repairSessionId ??
               `review-repair-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -4522,21 +5134,57 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             // repair-editor reported as addressed. If the fresh re-review
             // returns identical text, the blocker-elevation filter above
             // will suppress it as condoned, breaking the infinite loop.
+            //
+            // Condone credit is ORCHESTRATOR-OWNED evidence, not reviewer/repair
+            // self-report: a listed finding id is only condoned when the receipt
+            // claims completion AND actually changed at least one file. A rejected
+            // claim leaves the finding open, so the next re-review re-elevates it
+            // instead of silently converging on an unrepaired workspace.
+            // reviewerRepairHasProgress is the same non-empty changedFiles[].path
+            // predicate the loop-continuation guard above uses (that guard's break
+            // condition is deliberately unchanged — it governs whether the loop
+            // proceeds, which is a separate concern).
             const addressedFindings = (activeWorkState.openReviewerFindings ?? [])
               .filter((finding) =>
                 reviewerRepairReceipt!.findingsAddressed.includes(finding.id),
               )
-            if (addressedFindings.length > 0) {
-              const addressedTexts = addressedFindings.map(
-                (finding) => finding.text.replace(/^(?:NON_BLOCKING|BLOCKING):\s*/, ''),
+            const condoneEvidenceIsSufficient =
+              reviewerRepairReceipt!.status === 'completed' &&
+              reviewerRepairHasProgress
+            if (addressedFindings.length > 0 && condoneEvidenceIsSufficient) {
+              const addressedTexts = addressedFindings.map((finding) =>
+                stripReviewerVerdictPrefix(finding.text),
               )
-              activeWorkState.condonedFindingTexts = Array.from(
-                new Set([
-                  ...(activeWorkState.condonedFindingTexts ?? []),
-                  ...addressedTexts,
-                ]),
-              )
+              activeWorkState.condonedFindingTexts = boundCondonedEntries([
+                ...(activeWorkState.condonedFindingTexts ?? []),
+                ...addressedTexts,
+              ])
+              // T1.5: record the (verdict class, identity) key alongside the
+              // legacy text so a later review that RE-RAISES the same text at a
+              // higher verdict class is not condoned by it. The class comes from
+              // the stored finding text, which the code-reviewer path keeps
+              // prefixed for exactly this reason.
+              activeWorkState.condonedFindingKeys = boundCondonedEntries([
+                ...(activeWorkState.condonedFindingKeys ?? []),
+                ...addressedFindings.flatMap((finding) =>
+                  condonedFindingKeysFor(
+                    reviewerVerdictClass(finding.text),
+                    stripReviewerVerdictPrefix(finding.text),
+                    finding.id,
+                  ),
+                ),
+              ])
               markActiveWorkStateChanged()
+            } else if (addressedFindings.length > 0) {
+              emitGateTelemetry({
+                currentPhase: activeWorkState.currentPhase,
+                reviewerStatus: 'repair',
+                condoneClaimsRejected: addressedFindings.length,
+                condoneRejectReason:
+                  reviewerRepairReceipt!.status !== 'completed'
+                    ? 'receipt-not-completed'
+                    : 'no-changed-files',
+              })
             }
             const reviewerRepairStatus = yield {
               toolName: 'git_status',
@@ -4573,6 +5221,42 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
               markActiveWorkStateChanged()
               break
             }
+            // Turn-scoped CYCLE detection. The equality guard above already
+            // handled an UNCHANGED fingerprint, so reaching here means the
+            // bytes changed — but this exact workspace state was already
+            // visited earlier in this turn's repair loop, i.e. the repairs are
+            // oscillating (A→B→A). A fresh reviewer pass could only walk the
+            // same ring again, so fail closed on demonstrated non-progress
+            // instead of waiting for a guessed repair budget. NOTE: this
+            // fingerprint folds in validationSummary, so it is not a pure file
+            // content hash; a summary that reverts along with the bytes is
+            // still a genuine cycle and blocking is correct.
+            if (
+              seenReviewerRepairFingerprints.has(repairedSnapshotFingerprint)
+            ) {
+              activeWorkState.lastReviewerGateSkipReason =
+                'reviewer-repair-cycle'
+              activeWorkState.currentPhase = 'blocked'
+              activeWorkState.nextRequiredAction = `${repairAgentLabel} returned the workspace to a state it already visited this turn while addressing the reviewer findings; retrying will not converge. Stop retrying and inspect the finding or handoff.`
+              activeWorkState.latestWorkSummary =
+                'Reviewer repair loop revisited an earlier workspace fingerprint (repair cycle).'
+              mutableAgentState.canSuggestFollowups = false
+              finalResponseGateOpen = false
+              markActiveWorkStateChanged()
+              emitGateTelemetry({
+                currentPhase: 'blocked',
+                pendingFileCount: pendingGateFiles.size,
+                pendingFiles: Array.from(pendingGateFiles),
+                reviewerStatus: 'failed',
+                validationStatus: 'passed',
+                repairRound: Number(
+                  activeWorkState.reviewerRepairRoundCount ?? 0,
+                ),
+                skipReason: 'reviewer-repair-cycle',
+              })
+              break
+            }
+            seenReviewerRepairFingerprints.add(repairedSnapshotFingerprint)
             const reVerify = yield {
               toolName: 'run_file_change_hooks',
               input: { files: Array.from(pendingGateFiles) },
@@ -4815,17 +5499,20 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           }
           let activeWorkStateChanged = false
           if (passedPendingFiles.length > 0 && reviewerFinalizationVerdict) {
-            // Record the transient pass line, then immediately reset the
-            // durable progress line so a stale 'passed'/mid-gate line cannot
-            // persist into the next edit cycle.
-            setGateProgress('gate: passed')
+            // No pinned emission happens between here and the end of the gate,
+            // so a transient 'gate: passed' line could never be rendered.
+            // Reset the durable progress line directly (a stale mid-gate line
+            // must not persist into the next edit cycle) and invalidate the
+            // pinned cache once.
             activeWorkState.gateProgressLine = ''
+            markActiveWorkStateChanged()
             activeWorkState.openReviewerBlockers = []
             activeWorkState.openReviewerFindings = []
             // Clear condoned finding texts as well so they cannot leak into
             // the next edit cycle; they only suppress re-elevation within the
             // reviewer repair loop that produced them.
             activeWorkState.condonedFindingTexts = []
+            activeWorkState.condonedFindingKeys = []
             // Clear the owed SET, not just the legacy scalar: a leftover entry
             // would survive the pass and force a phantom re-attestation (or
             // resurrect the scalar via addOwedReviewer/clearOwedReviewer) on the
@@ -4897,6 +5584,24 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             passedPendingFiles.length > 0
               ? `reviewer verdict ${passVerdict}; ${validationHooksSkipped ? validationSummary : 'validation hooks ran'}; pending files: ${passedPendingFiles.join(', ')}`
               : `no edited files were detected; reviewer verdict ${passVerdict || 'n/a'}; hooks ran=${!validationHooksSkipped}`
+          // Advisories recorded on the receipt for this gate. They never
+          // entered openReviewerBlockers (no collector reads them), so the
+          // pass block is the only surface that shows them to the user. Read
+          // from the durable receipt just written rather than adding state.
+          //
+          // BOUND to THIS gate's receipt id (`${reviewer}:${fingerprint}`, the
+          // gateId recordSuccessfulReviewReceipt writes). reviewReceipts is
+          // DURABLE and keeps up to 24 entries across turns and reviewer
+          // families, so reading the LAST receipt could surface another
+          // family's or an earlier turn's advisories as this gate's (and count
+          // them in advisoryCount telemetry). A gate that finalized without a
+          // fresh receipt for this snapshot (durable/conversation pass reuse or
+          // an authorized bypass) matches none and shows no advisories.
+          const passReceiptGateId = `${requiredReviewerAgentType}:${reviewSnapshotFingerprint}`
+          const passAdvisories =
+            (activeWorkState.reviewReceipts ?? []).find(
+              (receipt) => receipt.gateId === passReceiptGateId,
+            )?.advisories ?? []
           emitGateTelemetry({
             currentPhase: 'final_response_allowed',
             pendingFileCount: passedPendingFiles.length,
@@ -4906,6 +5611,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             validationStatus: validationHooksSkipped ? 'skipped' : 'passed',
             reviewerVerdict: passVerdict,
             hooksRan: !validationHooksSkipped,
+            advisoryCount: passAdvisories.length,
           })
           yield {
             toolName: 'add_message',
@@ -4925,6 +5631,8 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
                   'validation/reviewer',
                   'passed',
                   passDetails,
+                  undefined,
+                  passAdvisories,
                 ),
               ].join('\n'),
             },
@@ -4994,15 +5702,60 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
 
       // Durable one-line mid-turn gate-progress note. Rendered by
       // buildPinnedActiveWorkMessage as a "Gate progress:" line inside the
-      // existing pinned active-work message — no new yield/add_message is
-      // introduced. Dedupes so repeated identical updates do not churn the
-      // pinned state. Self-contained inline helper (handleSteps is serialized
-      // via .toString() + new Function(...), so it must not reference
-      // module-scope imports).
+      // pinned active-work message. When that line is the only change since
+      // the last emitted pinned block, the top-of-loop emitter yields a
+      // delta-only add_message carrying just `Gate progress: <line>` instead
+      // of the full block. Most writes go through this helper (it dedupes so
+      // repeated identical updates do not churn the pinned state); the
+      // gate-pass path resets the field directly because that reset is never
+      // rendered. Self-contained inline helper (handleSteps is serialized via
+      // .toString() + new Function(...), so it must not reference module-scope
+      // imports).
       function setGateProgress(line: string): void {
         if (activeWorkState.gateProgressLine === line) return
         activeWorkState.gateProgressLine = line
         markActiveWorkStateChanged()
+      }
+
+      // T1.2(c) re-review ledger for the reviewer spawn packet. The reviewer is
+      // stateless across repair rounds, so without this it re-derives every
+      // finding from scratch instead of verifying the ones a repair round
+      // already reported as addressed. Returns [] on round 0 so the first
+      // review's prompt is byte-identical to the pre-ledger surface, and reads
+      // ONLY already-persisted state (openReviewerFindings /
+      // reviewerRepairRoundCount) — no new gate state.
+      //
+      // Findings are filtered to the spawned reviewer's own family:
+      // openReviewerFindings can hold security-reviewer and specialist records,
+      // and asking the code-reviewer to verify those would take it outside its
+      // scope. `finding.text` is rendered VERBATIM (keeping the
+      // NON_BLOCKING:/BLOCKING: prefix and any `[id] ` segment) because that is
+      // exactly the string the condone matcher compares a re-raise against.
+      // Inline because handleSteps is serialized via .toString() +
+      // new Function(...), so it must not reference module-scope imports.
+      function buildReviewerRoundLedgerLines(reviewer: string): string[] {
+        const repairRound = Number(
+          activeWorkState.reviewerRepairRoundCount ?? 0,
+        )
+        if (!(repairRound > 0)) return []
+        const lines = [`Repair round: ${repairRound}. This is a re-review.`]
+        const ownFindings = (activeWorkState.openReviewerFindings ?? []).filter(
+          (finding) => finding.reviewer === reviewer,
+        )
+        if (ownFindings.length === 0) return lines
+        lines.push(
+          'Findings raised earlier and reported addressed are listed below. Verify each is genuinely fixed and cite the line that fixes it. If a fix is wrong or incomplete, re-raise the finding with its ORIGINAL text repeated VERBATIM and put your reason on a separate line: the gate matches re-raises by exact text (and by stable finding id when you supplied one), so a reworded re-raise is treated as a brand-new finding and the repair loop cannot converge.',
+        )
+        const shown = ownFindings.slice(0, 12)
+        for (const finding of shown) {
+          lines.push(`  - ${finding.text}`)
+        }
+        if (ownFindings.length > shown.length) {
+          lines.push(
+            `  - (+${ownFindings.length - shown.length} more earlier findings omitted)`,
+          )
+        }
+        return lines
       }
 
       // Inline helpers for gate-state telemetry/diagnostics. Kept inside
@@ -5015,9 +5768,15 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         status: 'passed' | 'failed' | 'skipped',
         details: string,
         repairRound?: number,
+        advisories?: string[],
       ): string {
+        // Order matters: collapse whitespace FIRST so tabs/newlines/CRs become
+        // spaces, then strip the remaining C0/DEL control bytes (ESC, NUL,
+        // \x7f, ...). Reviewer-authored text renders verbatim in the CLI's
+        // <text> renderer, where a surviving ESC could corrupt or spoof output.
         const normalizedDetails = String(details ?? '')
           .replace(/\s+/g, ' ')
+          .replace(/[\x00-\x1f\x7f]/g, '')
           .trim()
         const payload: {
           gate: string
@@ -5025,6 +5784,7 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
           details: string
           repairRound?: number
           maxRepairRounds?: number
+          advisories?: string[]
         } = { gate, status, details: normalizedDetails }
         if (
           typeof repairRound === 'number' &&
@@ -5038,36 +5798,113 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
             payload.maxRepairRounds = MAX_REPAIR_ROUNDS
           }
         }
-        return `<gate-state>${JSON.stringify(payload)}</gate-state>`
+        // Reviewer advisories: non-blocking observations that no blocker
+        // collector reads. Bounded through the shared helper below so this
+        // block and the reviewer/security/specialist add_message surfaces stay
+        // byte-identical.
+        const boundedAdvisories = boundAdvisoryLines(advisories)
+        if (boundedAdvisories.length > 0) {
+          payload.advisories = boundedAdvisories
+        }
+        // Delimiter safety: this payload carries reviewer-authored text
+        // (`details`, `advisories`), so a literal `</gate-state>` inside it
+        // would terminate this tag-delimited block early and every non-greedy
+        // downstream reader (the CLI's parseGateStateBlock and this file's own
+        // extractGateStateBlocksFromMessage) would silently drop the record.
+        // `\/` is a legal JSON string escape, so escaping every `</` keeps the
+        // emitted text free of a premature closing delimiter while JSON.parse
+        // restores the original bytes — no reader has to loosen its parse.
+        return `<gate-state>${JSON.stringify(payload).replace(/<\//g, '<\\/')}</gate-state>`
+      }
+
+      // Shared by the <gate-state> emitter and the reviewer/security/specialist
+      // add_message paths so every advisory surface applies identical bounds and
+      // control-byte stripping. Collapse whitespace FIRST (so tabs/newlines become
+      // spaces rather than vanishing), then strip C0/DEL, then cap length, so the
+      // 240-char bound describes the text actually shown.
+      //
+      // `advisories` is an optional additive reviewer output field that only
+      // `code-reviewer` declares today, so the security/specialist families read
+      // back as an empty list and stay silent until one of them opts in.
+      function boundAdvisoryLines(advisories?: string[]): string[] {
+        return (advisories ?? [])
+          .map((advisory) =>
+            String(advisory ?? '')
+              .replace(/\s+/g, ' ')
+              .replace(/[\x00-\x1f\x7f]/g, '')
+              .trim(),
+          )
+          .filter((advisory) => advisory.length > 0)
+          .slice(0, 8)
+          .map((advisory) =>
+            advisory.length > 240
+              ? `${advisory.slice(0, 237).trimEnd()}...`
+              : advisory,
+          )
       }
 
       function emitGateTelemetry(payload: Record<string, unknown>): void {
         try {
           const phase = payload.currentPhase
-          const transition = (params as any)?.orchestrationControlPlane
-            ?.transitionBase2Gate
+          // Hoisted once: this is serialized handleSteps code, so repeating the
+          // cast per control-plane member is pure duplication.
+          const controlPlane = (params as any)?.orchestrationControlPlane
+          const transition = controlPlane?.transitionBase2Gate
           if (typeof phase === 'string' && typeof transition === 'function') {
-            mutableAgentState.workflowStates ??= {}
-            mutableAgentState.workflowStates['base2-gate-v1'] = transition({
-              current: mutableAgentState.workflowStates['base2-gate-v1'],
-              phase,
-            })
+            // Own try/catch: base2GateWorkflowV1 THROWS on an illegal
+            // transition (e.g. 'repair_loop' from the default 'idle'). Sharing
+            // the outer catch would drop both the durable sink line and the
+            // console.info line for exactly the event most worth recording, so
+            // a rejected phase transition must not suppress telemetry.
+            try {
+              mutableAgentState.workflowStates ??= {}
+              mutableAgentState.workflowStates['base2-gate-v1'] = transition({
+                current: mutableAgentState.workflowStates['base2-gate-v1'],
+                phase,
+              })
+            } catch {
+              // Leave the previous workflow state in place and still emit below.
+            }
           }
-          if (
-            typeof console !== 'object' ||
-            console === null ||
-            typeof (console as { info?: unknown }).info !== 'function'
-          ) {
-            return
-          }
-          const safePayload: Record<string, unknown> = { event: 'base2.gate' }
+          // Built BEFORE the console emit on purpose: both channels must share
+          // one payload object, and a runtime without console.info must still
+          // reach the sink.
+          const safePayload: Record<string, unknown> = {}
           for (const [key, value] of Object.entries(payload)) {
-            if (value === undefined) continue
+            // `event` is skipped EXPLICITLY, so the discard of a
+            // payload-supplied one is visible where it happens rather than
+            // implied by the assignment below. Unlike the sink's
+            // `droppedPayloadKeys`, this discard is intentionally unreported:
+            // every call site here is in-process and supplies no `event`.
+            if (key === 'event' || value === undefined) continue
             safePayload[key] = value
           }
-          ;(console as { info: (...args: unknown[]) => void }).info(
-            JSON.stringify(safePayload),
-          )
+          // The sink's discriminator, owned by this emitter the way
+          // gate-telemetry.ts owns its authoritative `recordedAt`.
+          safePayload.event = 'base2.gate'
+          // console.info FIRST, then the durable sink: the sink is injected by
+          // the runtime (base2's handleSteps is serialized and cannot import
+          // it), so it is absent on older runtimes and in tests that pass no
+          // control plane. Emitting the pre-existing log channel first means a
+          // throwing recorder falls into the outer catch with the console line
+          // already written, so no separate try/catch around `record` is needed
+          // to preserve both channels.
+          //
+          // Its OWN try/catch so the converse holds as well: a payload that is
+          // not JSON-serializable (circular reference, BigInt) or a host console
+          // that throws costs ONLY the console line, and the durable sink below
+          // still receives `safePayload`.
+          try {
+            if (typeof console?.info === 'function') {
+              console.info(JSON.stringify(safePayload))
+            }
+          } catch {
+            // Console channel only; the durable sink emit below still runs.
+          }
+          const record = controlPlane?.recordGateTelemetry
+          if (typeof record === 'function') {
+            record(safePayload)
+          }
         } catch {
           // Telemetry must never throw or block the loop.
         }
@@ -5176,6 +6013,117 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         return stored === fingerprint
       }
 
+      // T1.5: condoning is keyed on (verdict class, finding identity) rather
+      // than finding text alone. Text-only keying strips the
+      // NON_BLOCKING/BLOCKING prefix before comparing, so a nit condoned as
+      // NON_BLOCKING was silently swallowed when a later review re-raised the
+      // SAME text as BLOCKING — an escalation is new information and must
+      // reopen the gate. Inline because handleSteps is serialized via
+      // .toString() + new Function(...).
+      //
+      // `*` is the class for a text that carries no verdict prefix. Every gate
+      // path now stores the PREFIXED blocker string on its finding records
+      // (security/specialist included), so `*` only arises for legacy
+      // serialized state; `condonedKeyMatches` deliberately matches `*` against
+      // `*` ONLY, because a class-agnostic entry that matched any later class is
+      // exactly the escalation swallow this keying exists to close. The single
+      // cross-class allowance is DE-ESCALATION: a stored BLOCKING key also
+      // condones a NON_BLOCKING re-raise of the same identity (see
+      // `condonedKeyMatches`), never the reverse.
+      function reviewerVerdictClass(text: string): string {
+        if (text.startsWith('BLOCKING:')) return 'BLOCKING'
+        if (text.startsWith('NON_BLOCKING:')) return 'NON_BLOCKING'
+        return '*'
+      }
+
+      // Single strip site for the NON_BLOCKING/BLOCKING verdict prefix. Every
+      // condone/telemetry decision keys on (verdict class, stripped text), so
+      // the strip must stay in lockstep with `reviewerVerdictClass`; the regex
+      // was previously duplicated at ~6 call sites and could drift from it.
+      function stripReviewerVerdictPrefix(text: string): string {
+        return text.replace(/^(?:NON_BLOCKING|BLOCKING):\s*/, '')
+      }
+
+      // Minted ids (buildReviewerFindingId) embed the blocker's POSITION in the
+      // round's list, so identical text at a different index yields a different
+      // id: they are not a durable identity and must not be keyed on. Only a
+      // reviewer-supplied id (T1.3 object findings, contractually stable across
+      // rounds) is. The text key carries convergence for the rest.
+      function isMintedReviewerFindingId(id: string): boolean {
+        return /^RF-\d+-[0-9a-f]{8}$/.test(id)
+      }
+
+      function condonedFindingKeysFor(
+        verdictClass: string,
+        strippedText: string,
+        id?: string,
+      ): string[] {
+        const keys = [`${verdictClass}::text:${strippedText}`]
+        if (id && !isMintedReviewerFindingId(id)) {
+          keys.push(`${verdictClass}::id:${id}`)
+        }
+        return keys
+      }
+
+      function condonedKeyMatches(
+        condonedKeys: Set<string>,
+        verdictClass: string,
+        strippedText: string,
+        id?: string,
+      ): boolean {
+        // Same-class match first: a `*` (prefix-less, legacy) entry condones
+        // only another `*` finding, and a NON_BLOCKING entry never condones a
+        // BLOCKING re-raise of the same identity — an escalation is new
+        // information and must reopen the gate.
+        if (
+          condonedFindingKeysFor(verdictClass, strippedText, id).some((key) =>
+            condonedKeys.has(key),
+          )
+        ) {
+          return true
+        }
+        // DE-ESCALATION, accepted ONE-DIRECTIONALLY: a finding already reported
+        // as addressed at BLOCKING and re-raised as a NON_BLOCKING nit carries
+        // no new information. Without this, blockers stay non-empty, another
+        // repair-editor is spawned, and the already-applied repair trips the
+        // no-progress guard, parking the gate in 'blocked' instead of
+        // converging. The reverse direction is NOT accepted: only the same-class
+        // check above can condone a BLOCKING re-raise.
+        if (verdictClass === 'NON_BLOCKING') {
+          return condonedFindingKeysFor('BLOCKING', strippedText, id).some(
+            (key) => condonedKeys.has(key),
+          )
+        }
+        return false
+      }
+
+      // Single owner of the pre-T1.5 legacy text fallback, consulted only while
+      // no (verdict class, identity) keys exist. The gate blocker filter, the
+      // condoned-pass cleanup, and mergeReviewerFindings.isCondoned all route
+      // through this helper so state serialized before `condonedFindingKeys`
+      // existed behaves IDENTICALLY at all three sites: a legacy entry may have
+      // been recorded either stripped or as the raw prefixed blocker, so both
+      // shapes match.
+      function legacyCondonedTextMatches(
+        condonedTexts: Set<string>,
+        text: string,
+      ): boolean {
+        return (
+          condonedTexts.has(stripReviewerVerdictPrefix(text)) ||
+          condonedTexts.has(text)
+        )
+      }
+
+      // Bound the durable condone lists the way `reviewReceipts` is bounded.
+      // Each round can append up to 2 keys per suppressed finding plus one entry
+      // per repair-addressed finding, and both lists reset only on gate pass, so
+      // with default-unlimited repair rounds they would otherwise grow without
+      // bound inside serialized base2ActiveWork. Keeping the MOST RECENT entries
+      // preserves convergence for the findings the current rounds re-raise.
+      function boundCondonedEntries(values: string[]): string[] {
+        return Array.from(new Set(values)).slice(-200)
+      }
+
       // Merge one reviewer's blocking output into the open finding ledger
       // WITHOUT clobbering another reviewer's still-open findings. Blocker
       // strings carry no reviewer field, so the retained blocker set is the
@@ -5189,18 +6137,34 @@ ${disclose(specialistRoutingSection, specialistRoutingPointer)}
         records: NonNullable<Base2ActiveWorkState['openReviewerFindings']>,
         blockers: string[],
       ): void {
-        // Condoned-status override: an incoming record whose stripped finding
-        // text was already reported as addressed by a prior repair round is
-        // recorded as 'condoned' instead of 'open' so it neither blocks
-        // finalization nor re-triggers a repair spawn. Applies uniformly to
-        // every caller since it reads the path-agnostic condonedFindingTexts.
+        // Condoned-status override: an incoming record whose finding identity
+        // was already reported as addressed by a prior repair round is recorded
+        // as 'condoned' instead of 'open' so it neither blocks finalization nor
+        // re-triggers a repair spawn. Applies uniformly to every caller. Keyed
+        // on (verdict class, identity) like the gate's own condone filter, so a
+        // re-raised-at-HIGHER-class finding stays 'open' while a de-escalated
+        // re-raise stays 'condoned'; the legacy text list is consulted only
+        // while no keys exist (pre-T1.5 serialized state), through the shared
+        // `legacyCondonedTextMatches` helper so all three call sites agree.
+        const condonedKeys: Set<string> = new Set<string>(
+          activeWorkState.condonedFindingKeys ?? [],
+        )
         const condonedTexts: Set<string> = new Set<string>(
           activeWorkState.condonedFindingTexts ?? [],
         )
+        const isCondoned = (record: { text: string; id: string }): boolean => {
+          if (condonedKeys.size > 0) {
+            return condonedKeyMatches(
+              condonedKeys,
+              reviewerVerdictClass(record.text),
+              stripReviewerVerdictPrefix(record.text),
+              record.id,
+            )
+          }
+          return legacyCondonedTextMatches(condonedTexts, record.text)
+        }
         const mergedRecords = records.map((record) =>
-          condonedTexts.has(
-            record.text.replace(/^(?:NON_BLOCKING|BLOCKING):\s*/, ''),
-          )
+          isCondoned(record)
             ? { ...record, status: 'condoned' as const }
             : record,
         )
@@ -5366,6 +6330,7 @@ type ReviewerCoverage = 'covered' | 'missing' | 'n/a';
 type StructuredReviewerOutput = {
     verdict: ReviewerStructuredVerdict;
     findings: string[];
+    advisories?: string[];
     coverage?: ReviewerCoverage;
     dimensions?: Record<string, string>;
     requirementCoverage?: Array<{
@@ -5389,7 +6354,144 @@ type ReviewerFindingRecord = {
 };
 
 function collectReviewerFindingRecords(toolResult: unknown): ReviewerFindingRecord[] {
-    return collectStructuredReviewerOutputs(toolResult).flatMap((entry) => entry.findingRecords ?? []);
+    // Nested spawn/set_output wrappers can surface the same receipt twice; keep
+    // the FIRST record per id so `correlateReviewerFindingRecord` never sees
+    // duplicates (`collectReviewerBlockers` de-dupes its strings the same way).
+    const seen = new Set<string>();
+    const records: ReviewerFindingRecord[] = [];
+    for (const entry of collectStructuredReviewerOutputs(toolResult)) {
+        for (const record of entry.findingRecords ?? []) {
+            if (seen.has(record.id))
+                continue;
+            seen.add(record.id);
+            records.push(record);
+        }
+    }
+    return records;
+}
+
+/**
+ * Advisory observations from the LAST `schemaVersion`-shaped structured reviewer
+ * entry (the receipt the gate records). Recorded and displayed only: no blocker
+ * collector reads them, so an advisory never blocks and never re-enters the
+ * repair loop.
+ *
+ * Entry selection matches `resolveReviewerAttestation`'s shaped narrowing for
+ * the same reason: a reviewer that QUOTES the documented example receipt AFTER
+ * its real one must not have the example's advisories persisted and displayed as
+ * this review's. With no shaped entry at all the LAST entry is read verbatim,
+ * matching that helper's fallback.
+ *
+ * Non-test consumer: base2's `recordSuccessfulReviewReceipt` builds the durable
+ * receipt's `advisories` with this collector at runtime through the
+ * `<gate-helpers-generated>` copy emitted from this module, so the PERSISTED
+ * advisory semantics (last shaped entry, trimmed, exact-duplicate-free) are the
+ * tested ones instead of a second inline read of `result.advisories`.
+ *
+ * Reviewer-family symmetry: `advisories` is an OPTIONAL additive output field.
+ * Only code-reviewer declares it today; a family that omits it (security
+ * reviewer, routed specialists) reads back here as no advisories, so no other
+ * reviewer schema has to migrate and an older receipt keeps round-tripping.
+ *
+ * Advisory text is returned verbatim (trimmed only). Delimiter safety lives at
+ * the emitter: base2's `formatGateStateBlock` escapes `</` as `<\/` (a legal
+ * JSON string escape) before writing the tag-delimited `<gate-state>` block, so
+ * an advisory quoting the literal `</gate-state>` cannot truncate that block for
+ * the CLI renderer or base2's own conversation-gate-reuse reader.
+ */
+function collectReviewerAdvisories(toolResult: unknown): string[] {
+    const structured = collectStructuredReviewerOutputs(toolResult);
+    const shaped = structured.filter((entry) => entry.schemaVersion !== undefined);
+    const candidates = shaped.length > 0 ? shaped : structured;
+    const last = candidates[candidates.length - 1];
+    return dedupeExactStringsPreserveOrder(last?.advisories ?? []);
+}
+
+/** True when `value` is a canonical attestable `v3:<64 hex>` snapshot fingerprint. */
+function isAttestableV3Fingerprint(value: unknown): value is string {
+    return typeof value === 'string' && isAttestableSnapshotFingerprint(value);
+}
+
+/** The attestation fields `collectReviewerAttestationIssues` reads. */
+type ResolvedReviewerAttestation = {
+    schemaVersion?: number;
+    snapshotFingerprint?: string;
+    reviewedFiles: string[];
+};
+
+/**
+ * The attestation a receipt is read from, resolved ORDER-INDEPENDENTLY across
+ * its `schemaVersion`-carrying (`shaped`) entries, so a quoted example on
+ * EITHER side of the real receipt cannot steal the attestation and turn a
+ * well-behaved review into spurious fingerprint/coverage blockers (a terminal
+ * gate failure after base2's single `reviewer-protocol-attestation-failed`
+ * retry). `collectReviewerAttestationIssues` already requires the shaped
+ * verdicts to agree, so they describe ONE review.
+ *
+ * CANONICAL WHY for the entry selection; call sites carry pointers only.
+ *
+ * Resolution is PER FIELD, so the result is a COMPOSITE rather than one entry:
+ * `reviewedFiles` is the UNION of the shaped entries, `snapshotFingerprint` is
+ * the entry reporting `expectedFingerprint` else the first reporting an
+ * attestable v3 fingerprint else undefined, and `schemaVersion` is 1 only when
+ * EVERY shaped entry reports 1 (otherwise the first non-conforming version, so
+ * the caller's `!== 1` check rejects the whole receipt).
+ *
+ * ACCEPTED LOOSENING (pinned in agents/__tests__/gate-reviewer.test.ts): the
+ * spliced fields let a quoted example entry supply the fingerprint for a real
+ * entry that reported none, and — because the union is NOT restricted to the
+ * entry that contributed the credited fingerprint — a quoted example whose
+ * `reviewedFiles` path COLLIDES with a real pending path (the documented
+ * example literally shows `reviewedFiles: ["src/a.ts"]`) credits coverage the
+ * real entry never attested. Narrowing the union would not close the
+ * fingerprint half and WOULD reject the deletions-only receipt, which
+ * legitimately attests with an empty `reviewedFiles`. So the guarantee is the
+ * weaker one: a pending file NO entry reported at all still blocks.
+ *
+ * With no shaped entry at all the LAST entry is read verbatim, so a receipt that
+ * never attested still fails closed on the caller's schemaVersion check.
+ *
+ * CALLER PRECONDITION: `structured` is non-empty.
+ */
+function resolveReviewerAttestation(structured: StructuredReviewerOutput[], expectedFingerprint: string): ResolvedReviewerAttestation {
+    const shaped = structured.filter((entry) => entry.schemaVersion !== undefined);
+    if (shaped.length === 0) {
+        const last = structured[structured.length - 1];
+        return {
+            schemaVersion: last.schemaVersion,
+            snapshotFingerprint: last.snapshotFingerprint,
+            reviewedFiles: last.reviewedFiles ?? [],
+        };
+    }
+    let matching: StructuredReviewerOutput | undefined;
+    let attestable: StructuredReviewerOutput | undefined;
+    for (const entry of shaped) {
+        const fingerprint = entry.snapshotFingerprint ?? '';
+        if (fingerprint.length === 0)
+            continue;
+        if (fingerprint === expectedFingerprint) {
+            matching = entry;
+            break;
+        }
+        if (attestable === undefined && isAttestableV3Fingerprint(fingerprint)) {
+            attestable = entry;
+        }
+    }
+    const attesting = matching ?? attestable;
+    const reviewedFiles: string[] = [];
+    for (const entry of shaped) {
+        for (const file of entry.reviewedFiles ?? [])
+            reviewedFiles.push(file);
+    }
+    // Surfacing the FIRST non-conforming version (instead of the attesting
+    // entry's) is what makes the caller's `!== 1` check reject a receipt whose
+    // sibling entry claims another schema version.
+    const nonConforming = shaped.find((entry) => entry.schemaVersion !== 1);
+    return {
+        schemaVersion: nonConforming?.schemaVersion ?? 1,
+        snapshotFingerprint: attesting?.snapshotFingerprint,
+        reviewedFiles,
+    };
 }
 
 function collectReviewerAttestationIssues(toolResult: unknown, expectedFingerprint: string, pendingFiles: string[], deletedFiles?: string[]): string[] {
@@ -5404,11 +6506,27 @@ function collectReviewerAttestationIssues(toolResult: unknown, expectedFingerpri
             'BLOCKING: reviewer did not return the required structured snapshot attestation',
         ];
     }
-    const result = structured[structured.length - 1];
+    // CONFLICT CHECK (fail closed): a result carrying several receipts (e.g. a
+    // nested spawn plus set_output) could otherwise be attested from one entry
+    // while finalization credit came from another, so shaped entries that
+    // disagree on the verdict are rejected outright. Unshaped entries stay out:
+    // a QUOTED verdict-shaped example would otherwise park the gate in `blocked`
+    // (the UNNARROWED blocker collectors still elevate one into a repair round).
+    // Entry selection: see `resolveReviewerAttestation`.
+    const verdicts = new Set(structured
+        .filter((entry) => entry.schemaVersion !== undefined)
+        .map((entry) => entry.verdict));
+    if (verdicts.size > 1) {
+        return [
+            'BLOCKING: reviewer returned conflicting structured verdicts in one result',
+        ];
+    }
+    const result = resolveReviewerAttestation(structured, expectedFingerprint);
+    // 1 only when EVERY shaped entry conforms (see `resolveReviewerAttestation`).
     if (result.schemaVersion !== 1) {
         return ['BLOCKING: reviewer returned an invalid attestation schemaVersion'];
     }
-    const reviewed = new Set((result.reviewedFiles ?? [])
+    const reviewed = new Set(result.reviewedFiles
         .map((file) => normalizeGateFilePath(file))
         .filter((file) => file.length > 0));
     // Files deleted in the changeset carry a `missing` content marker and cannot
@@ -5423,31 +6541,68 @@ function collectReviewerAttestationIssues(toolResult: unknown, expectedFingerpri
         .map((file) => normalizeGateFilePath(file))
         .filter((file) => file.length > 0 && !reviewed.has(file) && !deleted.has(file));
     const issues: string[] = [];
-    // Fingerprint tolerance: a reviewer that attested to EVERY pending source
-    // file with a well-formed snapshot fingerprint is trusted even when the
-    // exact snapshot id advanced between its spawn and attestation (e.g. an
-    // unrelated plan-session .jsonl/.md or a git-status bundle bump). Only a
-    // FILE-COVERAGE gap, a missing/empty fingerprint, or a non-attestable
-    // sentinel fingerprint remains a hard blocker. This decouples transient
-    // snapshot drift from terminal reviewer failure while keeping genuine
-    // coverage gaps and malformed attestations fail-closed.
+    // Fingerprint tolerance: a coverage-complete review reporting a well-formed
+    // v3 fingerprint is trusted even when the exact snapshot id advanced between
+    // its spawn and attestation; only a FILE-COVERAGE gap or a missing /
+    // non-attestable fingerprint stays a hard blocker. The tolerance is not
+    // silent — every base2 caller records the drift via
+    // `collectReviewerFingerprintDrift`, whose docblock carries the rationale.
     const reportedFingerprint = result.snapshotFingerprint;
-    const fingerprintIsAttestable = typeof reportedFingerprint === 'string' &&
-        /^v3:[a-f0-9]{64}$/.test(reportedFingerprint);
-    const fingerprintMatches = fingerprintIsAttestable && reportedFingerprint === expectedFingerprint;
-    if (!fingerprintMatches && missing.length > 0) {
-        issues.push('BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree');
-    }
-    if (!fingerprintIsAttestable && missing.length === 0) {
-        // A review that covers every pending file but reports no attestable
-        // snapshot fingerprint cannot be safely credited; fail closed without a
-        // fingerprint at all.
+    const fingerprintIsAttestable = isAttestableV3Fingerprint(reportedFingerprint);
+    if (!fingerprintIsAttestable) {
+        // A missing / non-attestable fingerprint is never creditable, so report
+        // THAT instead of mislabelling an absent fingerprint as a mismatch. Both
+        // branches stay fail-closed; only the operator message differs.
         issues.push('BLOCKING: reviewer did not report an attestable snapshot fingerprint');
+    }
+    else if (reportedFingerprint !== expectedFingerprint &&
+        missing.length > 0) {
+        issues.push('BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree');
     }
     if (missing.length > 0) {
         issues.push(`BLOCKING: reviewer did not attest to every pending file: ${missing.join(', ')}`);
     }
     return issues;
+}
+
+/**
+ * The reported v3 snapshot fingerprint when a review echoed a well-formed
+ * fingerprint that does NOT match the expected snapshot, else ''.
+ *
+ * CALLER PRECONDITION: only call this for a review whose
+ * `collectReviewerAttestationIssues` came back clean. That check — not this
+ * function — is what establishes coverage-completeness (every pending file
+ * attested) and verdict agreement across the structured entries. This function
+ * inspects only the resolved attestation (the same one
+ * `collectReviewerAttestationIssues` reads, via `resolveReviewerAttestation`)
+ * and reports any well-formed non-matching v3 value, including one from a
+ * receipt with a file-coverage gap, so a caller that skips the attestation
+ * guard would report drift for a review that is already hard-blocked. Both
+ * base2 gate families guard correctly for reviews that reached attestation:
+ * the final code-reviewer gate and the routed specialist gates.
+ *
+ * CRASH-PATH EXEMPTION: a caller that forces `attestationIssues` to `[]`
+ * because `detectReviewerCrash` fired never ran attestation at all, and is
+ * exempt from the precondition. A crashed result normally carries no structured
+ * entry, so this function returns ''; if one does carry a drifted fingerprint,
+ * the resulting record is telemetry-only and credits the review with nothing —
+ * the gate still treats it as a crash.
+ *
+ * `collectReviewerAttestationIssues` deliberately tolerates that drift so an
+ * unrelated bundle bump cannot fail the gate; callers use this to RECORD the
+ * drift instead of accepting it silently, because a review of stale file
+ * content would otherwise pass the gate with no trace. '' means there is
+ * nothing to record: an exact match, or a missing/non-attestable fingerprint
+ * (both already hard blockers in the attestation issues).
+ */
+function collectReviewerFingerprintDrift(toolResult: unknown, expectedFingerprint: string): string {
+    const structured = collectStructuredReviewerOutputs(toolResult);
+    if (structured.length === 0)
+        return '';
+    const reported = resolveReviewerAttestation(structured, expectedFingerprint).snapshotFingerprint;
+    if (!isAttestableV3Fingerprint(reported))
+        return '';
+    return reported === expectedFingerprint ? '' : reported;
 }
 
 function stripReviewerPreamble(text: string): string {
@@ -5479,83 +6634,122 @@ function isTestCoverageReviewerFinding(text: string): boolean {
  * Process/orchestrator work a source specialist or code reviewer cannot satisfy
  * from diff/source evidence. Keep patterns specific so real source requirements
  * that merely mention "commit" or "validation" are not suppressed.
+ *
+ * Evidence is consulted ONLY for explicit ownership assertions (`parent must
+ * <process verb>`, `parent/operator`, ...). Every process cue must appear in
+ * the REQUIREMENT text: a reviewer that merely QUOTES process prose as
+ * evidence (e.g. `evidence: ['spec section: commit and push']` for "preserve
+ * CLI compatibility") would otherwise convert a genuine in-scope requirement
+ * gap into a credited LOOKS_GOOD with no surviving repair target.
  */
 function isParentOwnedOrOutOfScopeRequirement(requirement: string, evidence?: string[]): boolean {
     if (typeof requirement !== 'string')
         return false;
-    const text = [requirement, ...(evidence ?? [])]
+    // Process cues are read from the requirement text only (see above).
+    const requirementText = requirement.toLowerCase();
+    // Ownership assertions are honored from the requirement text or evidence.
+    const ownershipText = [requirement, ...(evidence ?? [])]
         .filter((part): part is string => typeof part === 'string')
         .join('\n')
         .toLowerCase();
-    if (!text.trim())
+    if (!ownershipText.trim())
         return false;
-    if (/\brewrite\b[^.\n]{0,40}\bgit\b[^.\n]{0,40}\bcommit(?:\s+messages?)?\b/.test(text) ||
-        /\bamend\b[^.\n]{0,40}\bgit\b[^.\n]{0,40}\bcommit(?:\s+messages?|\s+history)?\b/.test(text) ||
-        /\brewrite\b[^.\n]{0,40}\bcommit\s+messages?\b/.test(text) ||
-        /\bamend\b[^.\n]{0,40}\bcommit\s+(?:messages?|history)\b/.test(text)) {
+    if (/\brewrite\b[^.\n]{0,40}\bgit\b[^.\n]{0,40}\bcommit(?:\s+messages?)?\b/.test(requirementText) ||
+        /\bamend\b[^.\n]{0,40}\bgit\b[^.\n]{0,40}\bcommit(?:\s+messages?|\s+history)?\b/.test(requirementText) ||
+        /\brewrite\b[^.\n]{0,40}\bcommit\s+messages?\b/.test(requirementText) ||
+        /\bamend\b[^.\n]{0,40}\bcommit\s+(?:messages?|history)\b/.test(requirementText)) {
         return true;
     }
     // Only the full validation gate / CI process step is parent-owned.
     // Source requirements like "run validation of the new API" stay in-scope.
-    if (/\brun\b[^.\n]{0,24}\bfull\s+validation(?:\s+gate)?\b/.test(text)) {
+    if (/\brun\b[^.\n]{0,24}\bfull\s+validation(?:\s+gate)?\b/.test(requirementText)) {
         return true;
     }
-    if (/\bcommit\s+and\s+push\b/.test(text) ||
-        /\bpush\s+(?:the\s+)?changes\b/.test(text)) {
+    // Repository push only: domain text like "push changes to subscribers" is
+    // in-scope work, so a process push must name a repository target.
+    if (/\bcommit\s+and\s+push\b/.test(requirementText) ||
+        /\bpush\s+(?:the\s+)?changes\s+(?:upstream|to\s+(?:origin|remote|the\s+remote|the\s+upstream|the\s+branch))\b/.test(requirementText)) {
         return true;
     }
-    if (/\bconfirm\b[^.\n]{0,24}\bci\/?cd\b[^.\n]{0,24}\bgreen\b/.test(text) ||
-        /\bcheck\b[^.\n]{0,24}\bci(?:\/?cd)?\b[^.\n]{0,24}\bgreen\b/.test(text)) {
+    if (/\bconfirm\b[^.\n]{0,24}\bci\/?cd\b[^.\n]{0,24}\bgreen\b/.test(requirementText) ||
+        /\bcheck\b[^.\n]{0,24}\bci(?:\/?cd)?\b[^.\n]{0,24}\bgreen\b/.test(requirementText)) {
         return true;
     }
-    if (/\bparent\s+must\b/.test(text) ||
-        /\bparent\/?operator\b/.test(text) ||
-        /\bnot\s+performed\s+by\s+this\s+specialist\b/.test(text) ||
-        /\bspecialist\s+contract\s+forbids\s+basher\b/.test(text)) {
+    // `parent must <process verb>` only: "the parent must be validated before
+    // insert" is domain text, not a handoff of process work. These are ownership
+    // assertions, so reviewer evidence may establish them.
+    if (/\bparent\s+must\s+(?:also\s+|then\s+)?(?:run|commit|push|amend|rewrite|confirm|merge|deploy|release|revalidate)\b/.test(ownershipText) ||
+        /\bparent\/?operator\b/.test(ownershipText) ||
+        /\bnot\s+performed\s+by\s+this\s+specialist\b/.test(ownershipText) ||
+        /\bspecialist\s+contract\s+forbids\s+basher\b/.test(ownershipText)) {
         return true;
     }
     return false;
 }
 
 /**
- * True when a blocker string is only a parent-owned requirementCoverage gap.
+ * The subset of `blockers` that are only parent-owned requirementCoverage gaps.
  *
- * When `toolResult` is provided, re-check structured `requirementCoverage`
- * (requirement text + evidence) the same way `getReviewerFinalizationVerdict`
- * does. Without that, a LOOKS_GOOD receipt that is parent-owned only via
- * evidence can finalize yet still spawn repair-editor at call sites that only
- * see `BLOCKING: requirement missing|uncertain: <text>`.
+ * Classification: the structured `requirementCoverage` row whose
+ * `${status}\n${requirement}` matches the blocker decides via
+ * `isParentOwnedOrOutOfScopeRequirement` (requirement text + evidence), with
+ * the requirement text alone as the fallback when no row matches. The
+ * structured reviewer outputs are collected once per CALL, covering the whole
+ * blocker list; that is a readability convenience rather than a material
+ * saving, because every other gate collector (blockers, hard blockers,
+ * finalization verdict, finding records, attestation issues, fingerprint drift)
+ * re-walks the same reviewer result, and `visitForStructuredVerdict`'s depth-8
+ * cap is what bounds the cost.
  */
-function isParentOwnedRequirementBlocker(blocker: string, toolResult?: unknown): boolean {
-    if (typeof blocker !== 'string')
-        return false;
-    const match = blocker.match(/^BLOCKING:\s*requirement\s+(missing|uncertain):\s*(.+)$/i);
-    if (!match)
-        return false;
-    const status = match[1].toLowerCase();
-    const requirementText = match[2].trim();
+function collectParentOwnedRequirementBlockers(blockers: string[], toolResult?: unknown): Set<string> {
+    // Structured requirement rows keyed by `${status}\n${requirement.trim()}`;
+    // the value is true only when EVERY row with that key is parent-owned once
+    // its evidence is taken into account. The key is trimmed because the blocker
+    // string carries the RAW requirement text and the lookup below trims it.
+    const structuredRows = new Map<string, boolean>();
     if (toolResult !== undefined) {
-        const structured = collectStructuredReviewerOutputs(toolResult);
-        let sawStructuredRow = false;
-        for (const entry of structured) {
+        for (const entry of collectStructuredReviewerOutputs(toolResult)) {
             for (const requirement of entry.requirementCoverage ?? []) {
-                if (requirement.requirement !== requirementText ||
-                    (requirement.status !== 'missing' &&
-                        requirement.status !== 'uncertain') ||
-                    requirement.status !== status) {
-                    continue;
-                }
-                sawStructuredRow = true;
-                if (isParentOwnedOrOutOfScopeRequirement(requirement.requirement, requirement.evidence)) {
-                    return true;
+                const key = `${requirement.status}\n${requirement.requirement.trim()}`;
+                const parentOwnedRow = isParentOwnedOrOutOfScopeRequirement(requirement.requirement, requirement.evidence);
+                // In-scope precedence: getReviewerFinalizationVerdict blocks when ANY
+                // matching row is in-scope, so an in-scope row must overwrite a
+                // parent-owned row with the same status+text key. Otherwise the blocker
+                // would be filtered out while the verdict stayed '', closing the gate
+                // with no surviving repair target.
+                if (!parentOwnedRow || !structuredRows.has(key)) {
+                    structuredRows.set(key, parentOwnedRow);
                 }
             }
         }
-        // Structured row(s) matched: trust evidence-aware classification only.
-        if (sawStructuredRow)
-            return false;
     }
-    return isParentOwnedOrOutOfScopeRequirement(requirementText);
+    const parentOwnedBlockers = new Set<string>();
+    for (const blocker of blockers) {
+        if (typeof blocker !== 'string')
+            continue;
+        // `[\s\S]` (not `.`) so a multi-line requirement text is still parsed
+        // instead of skipped into text-only classification.
+        const match = blocker.match(/^BLOCKING:\s*requirement\s+(missing|uncertain):\s*([\s\S]+)$/i);
+        if (!match)
+            continue;
+        // `status` comes from the regex above, so it is already 'missing' or
+        // 'uncertain'; the row status is part of the key, so a row for the same
+        // requirement with a different status never matches.
+        const status = match[1].toLowerCase();
+        const requirementText = match[2].trim();
+        const structuredRow = structuredRows.get(`${status}\n${requirementText}`);
+        if (structuredRow === undefined) {
+            // No structured row matched: classify from the requirement text alone.
+            if (isParentOwnedOrOutOfScopeRequirement(requirementText)) {
+                parentOwnedBlockers.add(blocker);
+            }
+            continue;
+        }
+        // Structured row(s) matched: trust evidence-aware classification only.
+        if (structuredRow)
+            parentOwnedBlockers.add(blocker);
+    }
+    return parentOwnedBlockers;
 }
 
 function dedupeExactStringsPreserveOrder(values: string[]): string[] {
@@ -5570,6 +6764,19 @@ function dedupeExactStringsPreserveOrder(values: string[]): string[] {
     return out;
 }
 
+/**
+ * Every blocker string a reviewer result implies: BLOCKING prose findings,
+ * gate-derived hard rules (coverage missing, failed dimension, in-scope
+ * requirement missing/uncertain), NON_BLOCKING prose findings, and the
+ * synthetic empty-findings NON_BLOCKING placeholder.
+ *
+ * SYNC CONTRACT: the gate-derived hard-rule strings emitted here must stay
+ * byte-identical to the ones `collectReviewerHardBlockers` emits — base2's
+ * condone filter exempts hard rules via exact `Set.has` membership across the
+ * two collectors. The two functions are deliberately independent (so this
+ * function's byte output cannot shift); `agents/__tests__/gate-reviewer.test.ts`
+ * asserts the parity.
+ */
 function collectReviewerBlockers(toolResult: unknown): string[] {
     // First check for structured reviewer outputs (e.g. JSON with a
     // verdict field). BLOCKING and NON_BLOCKING both surface repair targets;
@@ -5585,30 +6792,45 @@ function collectReviewerBlockers(toolResult: unknown): string[] {
         }
         // Coverage-adequacy / dimension / requirement hard blockers first so we
         // know whether an empty NON_BLOCKING receipt already has repair fuel.
-        const hardBlockersBefore = structuredBlockers.length;
+        // Parent-owned requirement rows are deliberately NOT counted as repair
+        // fuel: every gate call site filters them away again, so counting them
+        // would suppress the synthetic placeholder below and leave the consumer
+        // with an empty blocker list — no repair target, no condoned pass, and a
+        // misdiagnosed "reviewer ran but returned no structured output" loop.
+        let entryHasHardBlocker = false;
         // Coverage-adequacy contract (M6.3): missing test coverage for a
         // behavior-changing edit is BLOCKING regardless of the text verdict.
         if (entry.coverage === 'missing') {
             structuredBlockers.push('BLOCKING: test coverage missing for changed behavior (add a case to the relevant *.test.ts)');
+            entryHasHardBlocker = true;
         }
+        // Reviewer dimensions follow the contract's "<word>: <clause>" style, so a
+        // blocking dimension arrives as `block: <clause>` (or `blocks:` /
+        // `blocking:` / `blocker(s):`). Match the leading word only: `blocked` is a
+        // different word (a state, not a verdict) and must NOT count as failing.
         for (const [dimension, status] of Object.entries(entry.dimensions ?? {})) {
-            if (status.toLowerCase() === 'block') {
+            if (/^block(?:s|ing|er|ers)?\b/.test(status.trim().toLowerCase())) {
                 structuredBlockers.push(`BLOCKING: ${dimension} review dimension failed`);
+                entryHasHardBlocker = true;
             }
         }
         // Keep parent-owned process requirement gaps in the raw blocker list so
         // consumers can credit LOOKS_GOOD via parentOwnedOnlyBlockers (filter at
-        // the call site; do not elevating-filter here).
+        // the call site; do not filter or elevate them here).
         for (const requirement of entry.requirementCoverage ?? []) {
             if (requirement.status === 'missing' ||
                 requirement.status === 'uncertain') {
                 // Requirement text only in the string; call-site parent-owned filters
                 // re-check structured requirementCoverage (+ evidence) via
-                // isParentOwnedRequirementBlocker(blocker, toolResult).
+                // collectParentOwnedRequirementBlockers(blockers, toolResult).
                 structuredBlockers.push(`BLOCKING: requirement ${requirement.status}: ${requirement.requirement}`);
+                // Only an IN-SCOPE gap is repair fuel, decided with the same predicate
+                // the call-site filter uses (requirement text + evidence).
+                if (!isParentOwnedOrOutOfScopeRequirement(requirement.requirement, requirement.evidence)) {
+                    entryHasHardBlocker = true;
+                }
             }
         }
-        const entryHasHardBlocker = structuredBlockers.length > hardBlockersBefore;
         // NON_BLOCKING is repair fuel, not a pass: elevate findings into the
         // same repair path used for BLOCKING until the reviewer returns LOOKS_GOOD.
         // Empty-findings synthetic is only needed when no hard blocker already
@@ -5636,6 +6858,49 @@ function collectReviewerBlockers(toolResult: unknown): string[] {
     return dedupeExactStringsPreserveOrder(texts
         .map((text) => stripReviewerPreamble(text))
         .filter((text) => hasReviewerLineVerdict(text, 'BLOCKING')));
+}
+
+/**
+ * ONLY the gate-derived hard rules the gate itself derives from the reviewer's
+ * structured fields: the coverage-missing string, one string per `block`
+ * dimension, and one string per in-scope requirement whose status is
+ * `missing`/`uncertain`. Reviewer prose findings (BLOCKING or NON_BLOCKING) and
+ * the synthetic empty-findings placeholder are deliberately excluded: they are
+ * the only blockers a repair round can legitimately "address", so only they are
+ * condonable.
+ *
+ * SYNC CONTRACT: these strings must stay byte-identical to the corresponding
+ * ones produced by `collectReviewerBlockers` — base2's condone filter compares
+ * them with exact `Set.has` membership, so a single-character divergence would
+ * silently stop exempting hard rules. The two functions are kept independent so
+ * `collectReviewerBlockers`' byte output cannot shift; the parity is asserted by
+ * `agents/__tests__/gate-reviewer.test.ts`.
+ */
+function collectReviewerHardBlockers(toolResult: unknown): string[] {
+    const structured = collectStructuredReviewerOutputs(toolResult);
+    const hardBlockers: string[] = [];
+    for (const entry of structured) {
+        if (entry.coverage === 'missing') {
+            hardBlockers.push('BLOCKING: test coverage missing for changed behavior (add a case to the relevant *.test.ts)');
+        }
+        // Same prefix rule as collectReviewerBlockers (kept independently): the
+        // trimmed, lowercased value starting with the word `block` (or
+        // `blocks`/`blocking`/`blocker`/`blockers`) fails, so `block: <clause>`,
+        // `blocks: <clause>` and `blocking: <clause>` count while `blocked` does
+        // not.
+        for (const [dimension, status] of Object.entries(entry.dimensions ?? {})) {
+            if (/^block(?:s|ing|er|ers)?\b/.test(status.trim().toLowerCase())) {
+                hardBlockers.push(`BLOCKING: ${dimension} review dimension failed`);
+            }
+        }
+        for (const requirement of entry.requirementCoverage ?? []) {
+            if (requirement.status === 'missing' ||
+                requirement.status === 'uncertain') {
+                hardBlockers.push(`BLOCKING: requirement ${requirement.status}: ${requirement.requirement}`);
+            }
+        }
+    }
+    return dedupeExactStringsPreserveOrder(hardBlockers);
 }
 
 /**
@@ -5686,12 +6951,17 @@ function findReviewerCrash(value: unknown, depth: number = 0): string | null {
     if (record.type === 'error' && typeof record.message === 'string') {
         return (record.message.trim() || 'reviewer agent reported an unspecified error');
     }
-    if (record.type === 'json' && 'value' in record) {
+    const jsonNode = record.type === 'json' && 'value' in record;
+    if (jsonNode) {
         const nested = findReviewerCrash(record.value, depth + 1);
         if (nested)
             return nested;
     }
-    for (const nested of Object.values(record)) {
+    for (const [key, nested] of Object.entries(record)) {
+        // The json recursion above already walked `value`; walking it again would
+        // double the work at every nesting level up to the depth cap.
+        if (jsonNode && key === 'value')
+            continue;
         const found = findReviewerCrash(nested, depth + 1);
         if (found)
             return found;
@@ -5730,17 +7000,24 @@ function isTransientReviewerCrash(message: string): boolean {
  * Coarse crash taxonomy for specialist/reviewer failures.
  * null/empty → none; rate-limit patterns → transient; optional protocol-ish
  * bare-hex / non-attestable / snapshot-attestation wording → protocol; else fatal.
+ *
+ * Non-test consumer: base2's specialist review gate branches on
+ * `classifyReviewerCrash(crash) === 'protocol'` / `'transient'` at runtime via
+ * the `<gate-helpers-generated>` copy emitted from this module, so this is the
+ * canonical source of that taxonomy rather than a dead public helper.
  */
 function classifyReviewerCrash(message: string | null): 'none' | 'transient' | 'protocol' | 'fatal' {
-    if (message == null)
-        return 'none';
     if (typeof message !== 'string' || !message.trim())
         return 'none';
     if (isTransientReviewerCrash(message))
         return 'transient';
     const lower = message.toLowerCase();
-    const hasBareHex = /(?:^|[^:])\b[a-f0-9]{64}\b/i.test(message) &&
-        !/\bv3:[a-f0-9]{64}\b/i.test(message);
+    // The `(?:^|[^:])` prefix already excludes a `v3:<64hex>` token's own hex (the
+    // character before the run may not be ':'), so a message that ALSO carries a
+    // well-formed v3 token still classifies as 'protocol' when it contains a
+    // separate bare 64-hex run. No extra v3 guard: it only suppressed genuine
+    // bare-hex detection.
+    const hasBareHex = /(?:^|[^:])\b[a-f0-9]{64}\b/i.test(message);
     if (hasBareHex ||
         lower.includes('non-attestable') ||
         lower.includes('snapshot attestation') ||
@@ -5769,9 +7046,24 @@ function getReviewerFinalizationVerdict(toolResult: unknown): ReviewerFinalizati
         !isParentOwnedOrOutOfScopeRequirement(requirement.requirement, requirement.evidence)))) {
         return '';
     }
+    // A failing review dimension (`block` / `block: <clause>` / `blocks:` /
+    // `blocking:` / `blocker(s): <clause>`) is a gate-derived hard blocker as
+    // well, so it blocks finalization alongside coverage-missing and in-scope
+    // requirement gaps instead of riding along with LOOKS_GOOD.
+    if (structured.some((entry) => Object.values(entry.dimensions ?? {}).some((status) => /^block(?:s|ing|er|ers)?\b/.test(status.trim().toLowerCase())))) {
+        return '';
+    }
     // Finalization credit is LOOKS_GOOD only. NON_BLOCKING findings are
     // elevated by collectReviewerBlockers into the repair loop.
-    for (const entry of structured) {
+    // The scan is restricted to the `schemaVersion`-carrying entries whenever the
+    // receipt carries any, so credit and collectReviewerAttestationIssues read
+    // the SAME entry set and an unshaped quoted LOOKS_GOOD example cannot credit
+    // a receipt whose real entry is BLOCKING. With no shaped entry the whole set
+    // is read, matching `resolveReviewerAttestation`'s verbatim fallback.
+    const creditable = structured.some((entry) => entry.schemaVersion !== undefined)
+        ? structured.filter((entry) => entry.schemaVersion !== undefined)
+        : structured;
+    for (const entry of creditable) {
         if (entry.verdict === 'LOOKS_GOOD')
             return 'LOOKS_GOOD';
     }
@@ -5791,19 +7083,24 @@ function collectStructuredReviewerOutputs(value: unknown): StructuredReviewerOut
     return out;
 }
 
-function visitForStructuredVerdict(value: unknown, out: StructuredReviewerOutput[]): void {
+function visitForStructuredVerdict(value: unknown, out: StructuredReviewerOutput[], depth: number = 0): void {
+    // Depth cap (same value findReviewerCrash uses on the same envelopes): 8 is
+    // well past any realistic agent-result envelope but stops pathological or
+    // self-referential recursion from blowing the stack.
+    if (depth > 8)
+        return;
     if (!value)
         return;
     if (Array.isArray(value)) {
         for (const item of value)
-            visitForStructuredVerdict(item, out);
+            visitForStructuredVerdict(item, out, depth + 1);
         return;
     }
     if (typeof value !== 'object')
         return;
     const record = value as Record<string, unknown>;
     if (record.type === 'json' && 'value' in record) {
-        visitForStructuredVerdict(record.value, out);
+        visitForStructuredVerdict(record.value, out, depth + 1);
         return;
     }
     const rawVerdict = record.verdict;
@@ -5812,6 +7109,18 @@ function visitForStructuredVerdict(value: unknown, out: StructuredReviewerOutput
         if (upper === 'LOOKS_GOOD' ||
             upper === 'NON_BLOCKING' ||
             upper === 'BLOCKING') {
+            // ONE normalizer for object findings so the human-readable `findings`
+            // strings and the structured `findingRecords` below cannot drift.
+            const normalizeObjectFinding = (finding: object) => {
+                const item = finding as Record<string, unknown>;
+                const id = typeof item.id === 'string' ? item.id.trim() : '';
+                const text = typeof item.summary === 'string'
+                    ? item.summary.trim()
+                    : typeof item.text === 'string'
+                        ? item.text.trim()
+                        : '';
+                return { id, text };
+            };
             const findings: string[] = [];
             const rawFindings = record.findings;
             if (typeof rawFindings === 'string') {
@@ -5825,17 +7134,23 @@ function visitForStructuredVerdict(value: unknown, out: StructuredReviewerOutput
                         findings.push(finding.trim());
                     }
                     else if (finding && typeof finding === 'object') {
-                        const findingRecord = finding as Record<string, unknown>;
-                        const id = typeof findingRecord.id === 'string'
-                            ? findingRecord.id.trim()
-                            : '';
-                        const summary = typeof findingRecord.summary === 'string'
-                            ? findingRecord.summary.trim()
-                            : typeof findingRecord.text === 'string'
-                                ? findingRecord.text.trim()
-                                : '';
-                        if (summary)
-                            findings.push(id ? `[${id}] ${summary}` : summary);
+                        const { id, text } = normalizeObjectFinding(finding);
+                        if (text)
+                            findings.push(id ? `[${id}] ${text}` : text);
+                    }
+                }
+            }
+            const advisories: string[] = [];
+            const rawAdvisories = record.advisories;
+            if (typeof rawAdvisories === 'string') {
+                const trimmed = rawAdvisories.trim();
+                if (trimmed)
+                    advisories.push(trimmed);
+            }
+            else if (Array.isArray(rawAdvisories)) {
+                for (const advisory of rawAdvisories) {
+                    if (typeof advisory === 'string' && advisory.trim()) {
+                        advisories.push(advisory.trim());
                     }
                 }
             }
@@ -5850,6 +7165,7 @@ function visitForStructuredVerdict(value: unknown, out: StructuredReviewerOutput
             out.push({
                 verdict: upper as ReviewerStructuredVerdict,
                 findings,
+                ...(advisories.length > 0 ? { advisories } : {}),
                 coverage,
                 dimensions: record.dimensions && typeof record.dimensions === 'object'
                     ? Object.fromEntries(Object.entries(record.dimensions as Record<string, unknown>).filter((entry): entry is [
@@ -5892,12 +7208,7 @@ function visitForStructuredVerdict(value: unknown, out: StructuredReviewerOutput
                         if (!finding || typeof finding !== 'object')
                             return [];
                         const item = finding as Record<string, unknown>;
-                        const id = typeof item.id === 'string' ? item.id.trim() : '';
-                        const text = typeof item.summary === 'string'
-                            ? item.summary.trim()
-                            : typeof item.text === 'string'
-                                ? item.text.trim()
-                                : '';
+                        const { id, text } = normalizeObjectFinding(finding);
                         if (!id || !text)
                             return [];
                         return [
@@ -5925,17 +7236,23 @@ function visitForStructuredVerdict(value: unknown, out: StructuredReviewerOutput
         }
     }
     for (const nested of Object.values(record)) {
-        visitForStructuredVerdict(nested, out);
+        visitForStructuredVerdict(nested, out, depth + 1);
     }
 }
 
 function hasReviewerLineVerdict(text: string, verdict: ReviewerStructuredVerdict): boolean {
-    return text
-        .split(/\r?\n/)
-        .some((line) => new RegExp(`^${verdict}\\b`, 'i').test(line.trim()));
+    // Compiled once per call: built inside the per-line `.some` callback it was
+    // recompiled for every line of every string collected from the tool result.
+    const linePattern = new RegExp(`^${verdict}\\b`, 'i');
+    return text.split(/\r?\n/).some((line) => linePattern.test(line.trim()));
 }
 
-function collectStrings(value: unknown, out: string[]): void {
+function collectStrings(value: unknown, out: string[], depth: number = 0): void {
+    // Depth cap (same value findReviewerCrash uses on the same envelopes): 8 is
+    // well past any realistic agent-result envelope but stops pathological or
+    // self-referential recursion from blowing the stack.
+    if (depth > 8)
+        return;
     if (typeof value === 'string') {
         out.push(value);
         return;
@@ -5944,13 +7261,13 @@ function collectStrings(value: unknown, out: string[]): void {
         return;
     if (Array.isArray(value)) {
         for (const item of value)
-            collectStrings(item, out);
+            collectStrings(item, out, depth + 1);
         return;
     }
     if (typeof value !== 'object')
         return;
     for (const nested of Object.values(value as Record<string, unknown>)) {
-        collectStrings(nested, out);
+        collectStrings(nested, out, depth + 1);
     }
 }
 
@@ -6862,24 +8179,24 @@ function hashGateSnapshotDetails(details: string): string {
         return { snapshotId: '', errorMessage: '', files: [] }
       }
 
-      function collectReviewerFindingRecordsInline(
-        toolResult: unknown,
-      ): Array<{ id: string; text: string }> {
-        return collectStructuredReviewerOutputs(toolResult).flatMap(
-          (entry) => entry.findingRecords ?? [],
-        )
-      }
-
       // Correlate a synthesized blocker string to the reviewer-supplied
       // finding record it came from by CONTENT, never by positional index.
       // collectReviewerBlockers can emit synthesized blockers (coverage
       // missing, dimension-block, requirement missing/uncertain) that have no
       // corresponding finding record and appear in a different order/count
-      // than collectReviewerFindingRecordsInline returns, so records[index]
-      // could attach the wrong id/text. Prefer an explicit `[id]` match, then
-      // fall back to an exact finding-text substring match. Self-contained
-      // inline helper (handleSteps is serialized via .toString() +
-      // new Function(...), so it must not reference module-scope imports).
+      // than collectReviewerFindingRecords returns, so records[index]
+      // could attach the wrong id/text. Self-contained inline helper
+      // (handleSteps is serialized via .toString() + new Function(...), so it
+      // must not reference module-scope imports).
+      //
+      // Matching is strongest-first: the explicit `[id]` marker, then an EXACT
+      // match against the stripped blocker text (or its `[id] text` form), and
+      // only then a substring match — and that last one solely when exactly one
+      // record matches. A bare `blockerText.includes(record.text)` attached the
+      // wrong record whenever one finding's text was a substring of another's,
+      // and the resulting `<class>::id:<id>` condone key then condoned an
+      // UNRELATED finding. Attaching no id is safe (the text key still carries
+      // convergence); attaching the wrong one is not.
       function correlateReviewerFindingRecord(
         blockerText: string,
         records: Array<{ id: string; text: string }>,
@@ -6889,12 +8206,20 @@ function hashGateSnapshotDetails(details: string): string {
             return record
           }
         }
+        const strippedText = stripReviewerVerdictPrefix(blockerText)
         for (const record of records) {
-          if (record.text && blockerText.includes(record.text)) {
+          if (!record.text) continue
+          if (
+            strippedText === record.text ||
+            (record.id && strippedText === `[${record.id}] ${record.text}`)
+          ) {
             return record
           }
         }
-        return undefined
+        const substringMatches = records.filter(
+          (record) => record.text && strippedText.includes(record.text),
+        )
+        return substringMatches.length === 1 ? substringMatches[0] : undefined
       }
 
       function isStaleSnapshotReviewerResult(toolResult: unknown): boolean {
@@ -7009,6 +8334,13 @@ function hashGateSnapshotDetails(details: string): string {
                 evidenceTruncated:
                   coverage.evidenceTruncated || coverage.evidence.length > 1,
               })),
+            ...(receipt.advisories && receipt.advisories.length > 0
+              ? {
+                  advisories: receipt.advisories
+                    .slice(0, 2)
+                    .map((advisory) => compactReceiptString(advisory, 180)),
+                }
+              : {}),
             receiptTruncated: true,
           }
           if (
@@ -7022,11 +8354,30 @@ function hashGateSnapshotDetails(details: string): string {
             findings: [],
             requirementCoverage: [],
             dimensions: {},
+            // advisoryCount survives so a consumer can still tell advisories
+            // existed even though the texts did not fit the storage bound.
+            advisories: undefined,
           }
         }
 
         const gateId = `${reviewer}:${expectedFingerprint}`
         const reviewedFiles = normalizeGateFileList(result.reviewedFiles ?? [])
+        // Advisories are the reviewer's non-blocking observations. They are
+        // recorded (and surfaced) but never become repair targets, which is
+        // what lets a LOOKS_GOOD verdict carry cosmetic notes instead of
+        // holding the turn open with findings that require no change.
+        const MAX_RECEIPT_ADVISORIES = 8
+        // Read through the shared collector (generated into this file's
+        // <gate-helpers-generated> region from agents/base2/gate-reviewer.ts)
+        // so the PERSISTED advisories are exactly the tested contract — last
+        // structured entry, trimmed, exact-duplicate-free — rather than a
+        // second inline read of `result.advisories` with different semantics.
+        const advisories = collectReviewerAdvisories(toolResult)
+          .map((advisory) =>
+            compactReceiptString(advisory, MAX_RECEIPT_TEXT_LENGTH),
+          )
+          .filter((advisory) => advisory.length > 0)
+          .slice(0, MAX_RECEIPT_ADVISORIES)
         const receipt: Base2ReviewReceipt = {
           gateId,
           reviewer,
@@ -7067,6 +8418,9 @@ function hashGateSnapshotDetails(details: string): string {
             }
           }),
           findingCount: (result.findingRecords ?? []).length,
+          ...(advisories.length > 0
+            ? { advisories, advisoryCount: advisories.length }
+            : {}),
           requirementCoverage: (result.requirementCoverage ?? []).map(
             (coverage) => ({
               requirement: compactReceiptString(
@@ -7152,6 +8506,10 @@ function hashGateSnapshotDetails(details: string): string {
           maxRepairRounds?: number
         }> = []
         for (const text of texts) {
+          // Non-greedy on purpose: formatGateStateBlock escapes `</` as `<\/`
+          // so payload text can never carry a premature closing delimiter, and
+          // an unescaped one stays fail-closed below (malformed JSON is
+          // ignored) instead of being recovered by a looser match.
           const matches = text.matchAll(/<gate-state>([\s\S]*?)<\/gate-state>/g)
           for (const match of matches) {
             try {
@@ -8610,11 +9968,7 @@ function buildImplementationInstructionsPrompt({
   const gateActive = !isFast && !hasNoValidation
   return `Act as a helpful assistant and freely respond to the user's request however would be most helpful to the user. Use your judgement to orchestrate the completion of the user's request using your specialized sub-agents and tools as needed. Take your time and be comprehensive. Don't surprise the user. For example, don't modify files if the user has not asked you to do so at least implicitly.
 
-${
-    progressiveDisclosure
-      ? 'Broad audit / many-file / coverage-sweep request → read_files `agents/guides/broad-audit.md` before sharding.'
-      : buildBroadAuditSection('proceed to implementation or the answer')
-  }
+${discloseBroadAudit('proceed to implementation or the answer', progressiveDisclosure)}
 
 ## Example response
 
@@ -8735,11 +10089,10 @@ function buildPlanOnlyInstructionsPrompt({
 
 You are in plan mode. Preserve short-answer behavior: if the user is asking a question, requesting an explanation, or asking for a small clarification, answer directly and do not create a plan packet.
 
-${
-  progressiveDisclosure
-    ? 'Broad audit / many-file / coverage-sweep request → read_files `agents/guides/broad-audit.md` before sharding.'
-    : buildBroadAuditSection('translate the findings into the durable plan packet below')
-}
+${discloseBroadAudit(
+  'translate the findings into the durable plan packet below',
+  progressiveDisclosure,
+)}
 
 For larger implementation, migration, debugging, or multi-step work, gather enough context to create a comprehensive, resumable plan packet. For non-trivial plans, create all four durable artifacts by default (SPEC.md, PLAN.md, STATUS.md, LESSONS.md); these are not optional or only "as needed". Normal users should not need to explicitly ask for STATUS or LESSONS artifacts. You may ask targeted clarifying questions with ask_user when the answer materially changes the plan. Avoid obvious questions and questions about details that can be adjusted later.
 
