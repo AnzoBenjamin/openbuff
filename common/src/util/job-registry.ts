@@ -333,7 +333,12 @@ interface PendingWaiter {
   predicate?: (event: JobEvent) => boolean
   timeoutMs?: number
   timer?: ReturnType<typeof setTimeout>
-  resolve: (result: WaitJobResult) => void
+  /**
+   * Accepts `undefined` because {@link JobRegistry.clear} resolves pending
+   * waiters with it — the same "job no longer exists" value {@link
+   * JobRegistry.wait} returns for an unknown job id.
+   */
+  resolve: (result: WaitJobResult | undefined) => void
 }
 
 interface PendingStream {
@@ -540,7 +545,7 @@ export class JobRegistry {
     const immediate = this.evaluateWait(record, cursor, options.predicate)
     if (immediate) return Promise.resolve(immediate)
 
-    return new Promise<WaitJobResult>((resolve) => {
+    return new Promise<WaitJobResult | undefined>((resolve) => {
       const waiter: PendingWaiter = {
         cursor,
         predicate: options.predicate,
@@ -666,12 +671,18 @@ export class JobRegistry {
 
   /** Remove every job, waiter, and stream subscriber. Test-only hook. */
   clear(): void {
-    for (const waiters of this.waiters.values()) {
-      for (const waiter of waiters) {
-        if (waiter.timer) clearTimeout(waiter.timer)
-      }
-    }
+    // Snapshot the waiters and detach the map before resolving: a pending
+    // wait() whose promise is dropped here would hang its caller forever.
+    // `undefined` is the "job no longer exists" resolution — the same value
+    // wait() gives an unknown job id — and after clear() the job is gone.
+    const pendingWaiters = [...this.waiters.values()].flatMap((waiters) => [
+      ...waiters,
+    ])
     this.waiters.clear()
+    for (const waiter of pendingWaiters) {
+      if (waiter.timer) clearTimeout(waiter.timer)
+      waiter.resolve(undefined)
+    }
     for (const subscribers of this.streamSubscribers.values()) {
       for (const subscriber of subscribers) {
         subscriber.finish()

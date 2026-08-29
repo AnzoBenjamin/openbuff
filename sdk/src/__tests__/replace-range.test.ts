@@ -309,6 +309,103 @@ describe('replaceRange', () => {
     expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe(original)
   })
 
+  test('re-anchors a capability whose bounds now exceed a shortened file', async () => {
+    // The capability observed line 5 of 'a\nb\nc\nd\ne\n'; the two lines above
+    // it have since been deleted, so its recorded endLine is past the file
+    // while the observed content still sits uniquely at line 3. Stale bounds
+    // alone must not pre-empt relocation.
+    const fs = createMockFs({
+      files: { '/repo/src/file.ts': 'c\nd\ne\n' },
+    })
+
+    const result = await replaceRange({
+      parameters: {
+        path: 'src/file.ts',
+        readCapability: capability({
+          startLine: 5,
+          endLine: 5,
+          content: 'e',
+        }),
+        newContent: 'updated e',
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+
+    expect(result[0]).toMatchObject({
+      type: 'json',
+      value: { kind: 'file_mutation_result', outcome: 'applied' },
+    })
+    expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe(
+      'c\nd\nupdated e\n',
+    )
+  })
+
+  test('reports stale bounds when the observed content is gone from a shortened file', async () => {
+    const original = 'c\nd\n'
+    const fs = createMockFs({ files: { '/repo/src/file.ts': original } })
+
+    const result = await replaceRange({
+      parameters: {
+        path: 'src/file.ts',
+        readCapability: capability({
+          startLine: 5,
+          endLine: 5,
+          content: 'e',
+        }),
+        newContent: 'updated e',
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+
+    expect(result[0]).toMatchObject({ type: 'json' })
+    const { errorMessage } = (result[0] as { value: { errorMessage: string } })
+      .value
+    // Relocation found nothing, so the bounds diagnostic is the actionable one.
+    expect(errorMessage).toContain(
+      'the capability-covered range 5-5 is beyond the current file length (2 lines)',
+    )
+    expect(errorMessage).toContain('Capability bounds may extend to line 3')
+    expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe(original)
+  })
+
+  test('fails closed for out-of-range bounds whose observed content is ambiguous', async () => {
+    // Two identical candidate spans, so relocation refuses to pick one; the
+    // stale bounds are the reported cause because they are also true and name
+    // the range to re-read.
+    const original = 'e\nd\ne\n'
+    const fs = createMockFs({ files: { '/repo/src/file.ts': original } })
+
+    const result = await replaceRange({
+      parameters: {
+        path: 'src/file.ts',
+        readCapability: capability({
+          startLine: 5,
+          endLine: 5,
+          content: 'e',
+        }),
+        newContent: 'updated e',
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+
+    expect(result[0]).toMatchObject({
+      type: 'json',
+      value: {
+        file: 'src/file.ts',
+        errorMessage: expect.stringContaining(
+          'the capability-covered range 5-5 is beyond the current file length (3 lines)',
+        ),
+      },
+    })
+    expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe(original)
+  })
+
   test('reports zero lines for an empty file without mutating it', async () => {
     const fs = createMockFs({ files: { '/repo/src/file.ts': '' } })
 

@@ -1331,6 +1331,43 @@ function isDiagnosticWriteTargetSafe(
 }
 
 /**
+ * One shared source for a diagnostic write-target token character: anything
+ * that neither whitespace nor a shell operator would end the token at. Both
+ * patterns below are composed from it so the two cannot drift into accepting
+ * different targets.
+ */
+const DIAGNOSTIC_WRITE_TARGET_TOKEN = String.raw`[^\s<>|;&]`
+
+/**
+ * `>`/`>>` writes and their target, for stripDiagnosticRedirections. The
+ * capture order is part of the replacer contract: group 1 is the leading
+ * boundary (re-emitted in place of the stripped redirection) and group 2 is the
+ * target.
+ *
+ * The target repeats `*`, not `+`, on purpose: a `>` with no target must still
+ * match so the EMPTY target reaches isDiagnosticWriteTargetSafe, whose first
+ * check (`target.length === 0`) rejects it. With `+` a bare `>` would not match
+ * at all and would slip through unchecked.
+ */
+const DIAGNOSTIC_WRITE_REDIRECTION_PATTERN = new RegExp(
+  String.raw`(^|\s)[012]?>>?(?![&0-9])\s*(${DIAGNOSTIC_WRITE_TARGET_TOKEN}*)`,
+  'g',
+)
+
+/**
+ * The single accepted heredoc shape (`cat > <target> <<'EOF'` … `EOF`). Group 1
+ * is the target, group 2 the quoted delimiter, and group 3 the body, so the
+ * `\2` backreference pins the terminator to the opening delimiter.
+ *
+ * The target repeats `+`, not `*`, on purpose: this is a full-string shape
+ * match with no target-safety callback to fail closed on an empty capture, so
+ * a `cat >` with no file must simply not match.
+ */
+const BOUNDED_DIAGNOSTIC_HEREDOC_PATTERN = new RegExp(
+  String.raw`^\s*cat\s+>\s*(${DIAGNOSTIC_WRITE_TARGET_TOKEN}+)\s*<<\s*'([A-Za-z_][A-Za-z0-9_]*)'\s*\r?\n([\s\S]*)\r?\n\2\s*$`,
+)
+
+/**
  * validation-diagnosis variant of stripSafeReadOnlyRedirections: on top of
  * the base /dev/null and descriptor redirects, it also strips heredoc
  * operators and `>`/`>>` writes whose targets are diagnostic output files
@@ -1349,7 +1386,7 @@ function stripDiagnosticRedirections(
   )
   let safe = true
   const withoutWrites = withoutHeredocs.replace(
-    /(^|\s)[012]?>>?(?![&0-9])\s*([^\s<>|;&]*)/g,
+    DIAGNOSTIC_WRITE_REDIRECTION_PATTERN,
     (match, leading: string, rawTarget: string) => {
       if (!isDiagnosticWriteTargetSafe(rawTarget, projectRoot)) {
         safe = false
@@ -1370,9 +1407,7 @@ function stripDiagnosticRedirections(
  * trailing command after the terminator.
  */
 function stripBoundedDiagnosticHeredoc(command: string): string | undefined {
-  const match = command.match(
-    /^\s*cat\s+>\s*([^\s<>|;&]+)\s*<<\s*'([A-Za-z_][A-Za-z0-9_]*)'\s*\r?\n([\s\S]*)\r?\n\2\s*$/,
-  )
+  const match = command.match(BOUNDED_DIAGNOSTIC_HEREDOC_PATTERN)
   if (
     !match ||
     match[3].length > 65_536 ||

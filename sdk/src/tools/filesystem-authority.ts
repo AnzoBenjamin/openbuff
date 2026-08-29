@@ -428,13 +428,7 @@ export class FilesystemAuthority {
       })),
       finalHashes,
     })
-    this.canonicalReceipts.push(receipt)
-    if (this.canonicalReceipts.length > MAX_COMMIT_RECEIPTS_PER_RUN) {
-      this.canonicalReceipts.splice(
-        0,
-        this.canonicalReceipts.length - MAX_COMMIT_RECEIPTS_PER_RUN,
-      )
-    }
+    this.recordCanonicalReceipt(receipt)
     return receipt
   }
 
@@ -459,10 +453,7 @@ export class FilesystemAuthority {
       })),
       finalHashes: {},
     })
-    this.canonicalReceipts.push(receipt)
-    if (this.canonicalReceipts.length > MAX_COMMIT_RECEIPTS_PER_RUN) {
-      this.canonicalReceipts.shift()
-    }
+    this.recordCanonicalReceipt(receipt)
     return receipt
   }
 
@@ -500,10 +491,7 @@ export class FilesystemAuthority {
       })),
       finalHashes,
     })
-    this.canonicalReceipts.push(receipt)
-    if (this.canonicalReceipts.length > MAX_COMMIT_RECEIPTS_PER_RUN) {
-      this.canonicalReceipts.shift()
-    }
+    this.recordCanonicalReceipt(receipt)
     return receipt
   }
 
@@ -765,6 +753,22 @@ export class FilesystemAuthority {
         fingerprint: fingerprintPath(item.portablePath),
       })),
       ...(error ? { error: { code: sanitizeCode(error) } } : {}),
+    }
+  }
+
+  /**
+   * Single append+trim path for the canonical receipt log, shared by every
+   * issue* method. The splice form drops however many entries are over the cap
+   * (a lone `shift()` drops exactly one and can leave the array over cap), so
+   * the log stays bounded by MAX_COMMIT_RECEIPTS_PER_RUN whatever the caller.
+   */
+  private recordCanonicalReceipt(receipt: CommitReceiptV1): void {
+    this.canonicalReceipts.push(receipt)
+    if (this.canonicalReceipts.length > MAX_COMMIT_RECEIPTS_PER_RUN) {
+      this.canonicalReceipts.splice(
+        0,
+        this.canonicalReceipts.length - MAX_COMMIT_RECEIPTS_PER_RUN,
+      )
     }
   }
 

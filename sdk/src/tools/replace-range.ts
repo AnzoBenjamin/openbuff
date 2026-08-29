@@ -179,22 +179,11 @@ export async function replaceRange(params: {
   const coordinates = getLineCoordinates(oldContent)
   const { normalized: normalizedOldContent, lines } = coordinates
 
-  if (
-    input.capabilityStartLine > coordinates.maxCapabilityLine ||
-    input.capabilityEndLine > coordinates.maxCapabilityLine
-  ) {
-    // `maxCapabilityLine` is one past the visible count when the content ends
-    // in a newline, so the diagnostic names both bounds.
-    const displayLineCount = coordinates.visibleLineCount
-    const maxCapabilityLine = coordinates.maxCapabilityLine
-    return errorResult(
-      relativePath,
-      `replace_range rejected: the capability-covered range ${input.capabilityStartLine}-${input.capabilityEndLine} is beyond the current file length (${displayLineCount} lines). Capability bounds may extend to line ${maxCapabilityLine}${maxCapabilityLine > displayLineCount ? ', the phantom final entry a read reports past the visible content' : ''}. Re-read the target range before editing.`,
-    )
-  }
-
-  // The schema contains the target inside the capability range and the guard
-  // above bounds that range, so no separate target length check is needed.
+  // The schema contains the target inside the capability range, and a
+  // successful re-anchor below proves that range sits inside the current file,
+  // so no separate target length check is needed. Computing the bounds here is
+  // safe even when they are stale: only the slicing and the raw span walk
+  // further down require in-range lines.
   let targetStartLine = input.startLine ?? input.capabilityStartLine
   let targetEndLine = input.endLine ?? input.capabilityEndLine
 
@@ -212,6 +201,23 @@ export async function replaceRange(params: {
     expectedHash: input.capabilityHash,
   })
   if (!reanchored.ok) {
+    // Stale bounds are only reported once relocation has also failed: a
+    // capability whose recorded span now lies past a shortened file is still
+    // recoverable while its observed content sits uniquely elsewhere, which is
+    // exactly what the transaction path does.
+    if (
+      input.capabilityStartLine > coordinates.maxCapabilityLine ||
+      input.capabilityEndLine > coordinates.maxCapabilityLine
+    ) {
+      // `maxCapabilityLine` is one past the visible count when the content ends
+      // in a newline, so the diagnostic names both bounds.
+      const displayLineCount = coordinates.visibleLineCount
+      const maxCapabilityLine = coordinates.maxCapabilityLine
+      return errorResult(
+        relativePath,
+        `replace_range rejected: the capability-covered range ${input.capabilityStartLine}-${input.capabilityEndLine} is beyond the current file length (${displayLineCount} lines). Capability bounds may extend to line ${maxCapabilityLine}${maxCapabilityLine > displayLineCount ? ', the phantom final entry a read reports past the visible content' : ''}. Re-read the target range before editing.`,
+      )
+    }
     return errorResult(
       relativePath,
       `replace_range rejected: ${relativePath} changed after the readCapability was issued (${describeReanchorFailure(reanchored)}). Re-read the exact target in this run and retry with the fresh cap.v3 token.`,

@@ -7,6 +7,7 @@ import {
   getLineCoordinates,
   getRangeSlice,
   isWholeFileCoveringRange,
+  MAX_REANCHOR_SCAN_LINE_PRODUCT,
   reanchorCapabilityRange,
   resolveLineRange,
 } from '../line-coordinates'
@@ -179,18 +180,54 @@ describe('reanchorCapabilityRange', () => {
     ).toEqual({ ok: false, reason: 'ambiguous', matchCount: 2 })
   })
 
+  // Both budget fixtures are derived from MAX_REANCHOR_SCAN_LINE_PRODUCT so
+  // raising it cannot silently stop covering either side of the boundary.
+  // `getLineCoordinates('x\n'.repeat(n))` yields n + 1 capability lines (the
+  // trailing entry past the final newline counts), so each fixture repeats one
+  // fewer line than the capability line count it targets. The over-budget count
+  // adds one more line so the product strictly exceeds the budget even when the
+  // division is exact.
+  const scanWindowLineCount = 700
+  const overBudgetLineCount =
+    Math.ceil(MAX_REANCHOR_SCAN_LINE_PRODUCT / scanWindowLineCount) + 1
+  const underBudgetLineCount = Math.floor(
+    MAX_REANCHOR_SCAN_LINE_PRODUCT / scanWindowLineCount,
+  )
+
   test('refuses a scan whose line product exceeds the budget', () => {
-    const coordinates = getLineCoordinates('x\n'.repeat(3000))
-    // 3001 lines x a 700-line window is above MAX_REANCHOR_SCAN_LINE_PRODUCT,
-    // so the scan is refused rather than partially run.
+    const coordinates = getLineCoordinates(
+      'x\n'.repeat(overBudgetLineCount - 1),
+    )
+    expect(coordinates.lines.length * scanWindowLineCount).toBeGreaterThan(
+      MAX_REANCHOR_SCAN_LINE_PRODUCT,
+    )
     expect(
       reanchorCapabilityRange({
         coordinates,
         startLine: 1,
-        endLine: 700,
+        endLine: scanWindowLineCount,
         expectedHash: getContentHash('something else'),
       }),
     ).toEqual({ ok: false, reason: 'over_budget' })
+  })
+
+  test('still scans a line product just under the budget', () => {
+    const coordinates = getLineCoordinates(
+      'x\n'.repeat(underBudgetLineCount - 1),
+    )
+    expect(coordinates.lines.length * scanWindowLineCount).toBeLessThanOrEqual(
+      MAX_REANCHOR_SCAN_LINE_PRODUCT,
+    )
+    // Under the budget the scan actually runs, so a missing span reports
+    // not_found rather than the refusal above.
+    expect(
+      reanchorCapabilityRange({
+        coordinates,
+        startLine: 1,
+        endLine: scanWindowLineCount,
+        expectedHash: getContentHash('something else'),
+      }),
+    ).toEqual({ ok: false, reason: 'not_found' })
   })
 })
 

@@ -800,6 +800,22 @@ describe('jobRegistry', () => {
       expect(result.timedOut).toBe(true)
       expect(result.matched).toBeUndefined()
     })
+
+    it('resolves a pending wait with undefined when the registry is cleared', async () => {
+      const job = createRunningJob()
+
+      const pending = jobRegistry.wait(job.jobId, {
+        predicate: () => false,
+        timeoutMs: 5_000,
+      })
+      await sleep(5)
+
+      jobRegistry.clear()
+
+      // After clear() the job genuinely no longer exists, so the waiter gets
+      // wait()'s unknown-job-id resolution instead of hanging forever.
+      expect(await pending).toBeUndefined()
+    })
   })
 
   describe('stream', () => {
