@@ -270,7 +270,6 @@ export type IndexStatusContentBlock = {
 export type PlanStatusContentBlock = {
   type: 'plan-status' | 'plan-status-list'
   mode: 'status' | 'list'
-  kind?: 'status' | 'list'
   reportText: string
   sessions?: import('../commands/plan-artifacts').PlanSessionSummary[]
   isStatusReport: boolean

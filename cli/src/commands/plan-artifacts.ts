@@ -126,6 +126,65 @@ export type PlanSessionSummary = {
   isActive: boolean
 }
 
+/**
+ * Width of the fixed-width `[status]` badge column, sized so the four common
+ * lifecycle badges line up. Longer statuses simply overflow the column.
+ */
+const PLAN_STATUS_BADGE_WIDTH = '[completed]'.length
+
+/** Fixed-width `[status]` badge for one session row. */
+function formatPlanStatusBadge(status: string): string {
+  return `[${status}]`.padEnd(PLAN_STATUS_BADGE_WIDTH)
+}
+
+/** The segments of one `/plans` list row, in render order. */
+export type PlanSessionListRow = {
+  /** `' * '` for the project-wide active session, blank padding otherwise. */
+  activeMarker: string
+  /** Fixed-width `[status]` badge. */
+  badge: string
+  /** Slug plus the optional `N/M done` progress suffix. */
+  label: string
+  /** `  current: "..."` suffix, or `''` when no current task is recorded. */
+  current: string
+}
+
+/**
+ * Canonical `/plans` row formatter. PlanStatusBox colors these segments
+ * individually while formatPlanListReport joins them for the text fallback, so
+ * the rendered and text forms of a session row cannot drift.
+ */
+export function formatPlanSessionListRow(
+  session: PlanSessionSummary,
+): PlanSessionListRow {
+  const progress =
+    session.progress.total > 0
+      ? ` ${session.progress.done}/${session.progress.total} done`
+      : ''
+  return {
+    activeMarker: session.isActive ? ' * ' : '   ',
+    badge: formatPlanStatusBadge(session.status),
+    label: `${session.slug}${progress}`,
+    current: session.currentTask ? `  current: "${session.currentTask}"` : '',
+  }
+}
+
+/** Single-line text form of a `/plans` row. */
+export function formatPlanSessionListRowText(
+  session: PlanSessionSummary,
+): string {
+  const { activeMarker, badge, label, current } =
+    formatPlanSessionListRow(session)
+  return `${activeMarker}${badge} ${label}${current}`
+}
+
+/**
+ * Canonical project-relative prefix every plan session directory lives under.
+ * The resolver below and the `/plan-use` containment check in
+ * command-registry.ts both derive from this constant so they cannot drift.
+ */
+export const PLAN_SESSIONS_DIR_PREFIX = '.agents/sessions/'
+
 type ResolveResult =
   | { ok: true; sessionDir: string; absSessionDir: string }
   | { ok: false; error: string }
@@ -140,7 +199,7 @@ function normalizeSessionInput(input: string): string {
   while (rel.startsWith('./')) rel = rel.slice(2)
   if (rel.endsWith('.md')) rel = path.posix.dirname(rel)
   if (!rel.includes('/') && rel.length > 0) {
-    rel = `.agents/sessions/${rel}`
+    rel = `${PLAN_SESSIONS_DIR_PREFIX}${rel}`
   }
   return rel
 }
@@ -177,6 +236,38 @@ export function resolvePlanSessionDir(input: string): ResolveResult {
 }
 
 /**
+ * Canonical artifact-presence rule: an artifact counts as present only when it
+ * exists as a regular file. Every caller (readPlanArtifacts, listPlanSessions
+ * and the `/plan-use` validation path) goes through this helper so the rule
+ * lives in exactly one place.
+ */
+function planArtifactExists(
+  absSessionDir: string,
+  name: PlanArtifactName,
+): boolean {
+  const artifactPath = path.join(absSessionDir, name)
+  return fs.existsSync(artifactPath) && fs.statSync(artifactPath).isFile()
+}
+
+/** Known plan artifacts present in an already-resolved session directory. */
+function listPresentPlanArtifacts(absSessionDir: string): PlanArtifactName[] {
+  return PLAN_ARTIFACT_NAMES.filter((name) =>
+    planArtifactExists(absSessionDir, name),
+  )
+}
+
+/**
+ * True when an already-resolved session directory holds at least one known plan
+ * artifact. Used on the `/plan-use` validation path so the slug is resolved
+ * exactly once and artifact bodies are not read just to test presence.
+ */
+export function hasPlanArtifactInDir(absSessionDir: string): boolean {
+  return PLAN_ARTIFACT_NAMES.some((name) =>
+    planArtifactExists(absSessionDir, name),
+  )
+}
+
+/**
  * Read whichever plan artifacts exist under the given session directory.
  * Returns `null` if the session directory does not exist on disk. Artifacts
  * larger than MAX_ARTIFACT_BYTES are truncated to keep prompts bounded.
@@ -192,22 +283,22 @@ export function readPlanArtifacts(input: string): PlanArtifacts | null {
   const truncated: PlanArtifactName[] = []
 
   for (const name of PLAN_ARTIFACT_NAMES) {
-    const abs = path.join(resolved.absSessionDir, name)
-    if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
-      const raw = fs.readFileSync(abs, 'utf8')
-      if (raw.length > MAX_ARTIFACT_BYTES) {
-        const head = raw.slice(0, MAX_ARTIFACT_BYTES)
-        const dropped = raw.length - head.length
-        files[name] =
-          `${head}\n\n[...truncated ${dropped} chars to keep prompt bounded; read the file directly for full contents...]`
-        truncated.push(name)
-      } else {
-        files[name] = raw
-      }
-      presentPaths[name] = `${resolved.sessionDir}/${name}`
-    } else {
+    if (!planArtifactExists(resolved.absSessionDir, name)) {
       missing.push(name)
+      continue
     }
+    const abs = path.join(resolved.absSessionDir, name)
+    const raw = fs.readFileSync(abs, 'utf8')
+    if (raw.length > MAX_ARTIFACT_BYTES) {
+      const head = raw.slice(0, MAX_ARTIFACT_BYTES)
+      const dropped = raw.length - head.length
+      files[name] =
+        `${head}\n\n[...truncated ${dropped} chars to keep prompt bounded; read the file directly for full contents...]`
+      truncated.push(name)
+    } else {
+      files[name] = raw
+    }
+    presentPaths[name] = `${resolved.sessionDir}/${name}`
   }
 
   return {
@@ -286,10 +377,7 @@ export function listPlanSessions(): PlanSessionSummary[] {
       if (!absSessionDir.startsWith(rootWithSep)) return null
       if (!isValidPlanSlug(entry.name)) return null
 
-      const artifacts = PLAN_ARTIFACT_NAMES.filter((name) => {
-        const artifactPath = path.join(absSessionDir, name)
-        return fs.existsSync(artifactPath) && fs.statSync(artifactPath).isFile()
-      })
+      const artifacts = listPresentPlanArtifacts(absSessionDir)
 
       if (artifacts.length === 0) return null
 
@@ -344,6 +432,37 @@ export function readPlanSessionState(slug: string): PlanSessionState | null {
  */
 export function getActivePlanSessionSlug(): string | null {
   return readActiveSessionPointer()
+}
+
+/**
+ * Point `.agents/ACTIVE_SESSION` at `slug`, resolving the project root through
+ * the same CLI resolver callers validate the session directory against.
+ *
+ * The shared `writeActiveSessionPointer` resolves the root again through its own
+ * module-level resolver, so a validated session directory and the written
+ * pointer could target different roots; writing here keeps the check and the
+ * write on one resolver. Returns false (never throws) when the project root is
+ * unavailable or the pointer cannot be written.
+ */
+export function writeActivePlanSessionPointer(slug: string): boolean {
+  if (!isValidPlanSlug(slug)) return false
+  try {
+    const pointerDir = path.join(getProjectRoot(), '.agents')
+    fs.mkdirSync(pointerDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(pointerDir, ACTIVE_SESSION_POINTER_FILENAME),
+      `${slug}\n`,
+      'utf8',
+    )
+    return true
+  } catch (err) {
+    console.debug(
+      `[plan-artifacts] writeActivePlanSessionPointer failed for ${slug}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    )
+    return false
+  }
 }
 
 /** Re-export the active-session pointer filename for callers (e.g. CLI banners). */

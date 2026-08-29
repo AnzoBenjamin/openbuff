@@ -1,6 +1,7 @@
 import { memo } from 'react'
 
 import { HarnessBox } from './harness-box'
+import { formatPlanSessionListRow } from '../../commands/plan-artifacts'
 import { useTheme } from '../../hooks/use-theme'
 
 import type { PlanStatusContentBlock } from '../../types/chat'
@@ -36,20 +37,15 @@ export const PlanStatusBox = memo(({ block }: PlanStatusBoxProps) => {
       {isList && sessions.length > 0 ? (
         <box style={{ flexDirection: 'column', gap: 0 }}>
           {sessions.map((session) => {
-            const badgeLabel = `[${session.status}]`
+            // Shared with the /plans text report so the two cannot drift.
+            const row = formatPlanSessionListRow(session)
             const badgeColor = getBadgeColor(session.status, theme)
-            const activeMarker = session.isActive ? ' * ' : '   '
-            const progress =
-              session.progress.total > 0
-                ? ` ${session.progress.done}/${session.progress.total} done`
-                : ''
-            const current = session.currentTask ? `  current: "${session.currentTask}"` : ''
             return (
               <text key={session.slug} style={{ wrapMode: 'word', fg: theme.foreground }}>
-                <text style={{ fg: theme.muted }}>{activeMarker}</text>
-                <text style={{ fg: badgeColor }}>{`${badgeLabel} `}</text>
-                <text style={{ fg: theme.foreground }}>{`${session.slug}${progress}`}</text>
-                {current ? <text style={{ fg: theme.muted }}>{current}</text> : null}
+                <text style={{ fg: theme.muted }}>{row.activeMarker}</text>
+                <text style={{ fg: badgeColor }}>{`${row.badge} `}</text>
+                <text style={{ fg: theme.foreground }}>{row.label}</text>
+                {row.current ? <text style={{ fg: theme.muted }}>{row.current}</text> : null}
               </text>
             )
           })}

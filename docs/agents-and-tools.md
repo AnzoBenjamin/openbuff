@@ -245,7 +245,7 @@ optional `params.target_files` array and an optional `params.test_command`.
 When `target_files` is present, the agent reads those source files before
 writing tests so it can match the changed public surface and edge cases.
 It mutates only through `edit_transaction` (with `str_replace` / `create` /
-`write_file` as edit *types* inside the transaction, not as standalone tools),
+`write_file` as edit _types_ inside the transaction, not as standalone tools),
 plus read/outline tools. It does **not** run terminal commands itself. If
 `test_command` is provided, the agent reports that command back for the parent
 or `basher` to run during validation.
@@ -1229,7 +1229,9 @@ dedicated tools:
   right tool for incremental status or lesson updates.
 
 These tools back the PlanLink slash commands (`/resume-plan`,
-`/update-plan`, `/plan-status`, `/lessons`). See
+`/update-plan`, `/plan-status`, `/lessons`); `/plans` and `/plan-use`
+select and inspect which session those tools operate on, with
+`/plan-use` writing the `.agents/ACTIVE_SESSION` pointer. See
 [Local Mode](./local-mode.md) for the user-facing command list.
 
 ### `git_branch`

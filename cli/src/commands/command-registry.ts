@@ -1,16 +1,11 @@
 import { existsSync } from 'node:fs'
 
 import { CHATGPT_OAUTH_ENABLED } from '@codebuff/common/constants/chatgpt-oauth'
-import {
-  isValidPlanSlug,
-  writeActiveSessionPointer,
-} from '@codebuff/common/util/plan-artifacts'
+import { isValidPlanSlug } from '@codebuff/common/util/plan-artifacts'
 
 import { registerPlanTimelineCommand } from './plan-timeline'
 import { handleContextCommand } from './context'
-import {
-  handleIndexCommandBlocks,
-} from './index-command'
+import { handleIndexCommandBlocks } from './index-command'
 import { handleHelpCommand } from './help'
 import { handleImageCommand } from './image'
 import { handleInfoCommand } from './info'
@@ -18,13 +13,19 @@ import { handleMemoryCommandBlocks } from './memory-command'
 import { handleInitializationFlowLocally } from './init'
 import { buildSafeGitCommand } from './git-command-args'
 import {
+  ACTIVE_SESSION_FILE_NAME,
   formatArtifactsForPrompt,
+  formatPlanSessionListRowText,
   getActivePlanSessionSlug,
   hasAnyArtifact,
+  hasPlanArtifactInDir,
   listPlanSessions,
   PLAN_ARTIFACT_NAMES,
+  PLAN_SESSIONS_DIR_PREFIX,
   readPlanArtifacts,
   resolvePlanSessionDir,
+  writeActivePlanSessionPointer,
+  type PlanSessionSummary,
 } from './plan-artifacts'
 import {
   buildInterviewPrompt,
@@ -210,12 +211,15 @@ const appendLocalBlocks = (
   params: RouterParams,
   blocksLike: ContentBlock[],
   userInput?: string,
+  legacyContent?: string,
 ) => {
   const input = userInput ?? params.inputValue.trim()
   params.setMessages((prev) => [
     ...prev,
     getUserMessage(input),
-    getSystemMessage(blocksLike),
+    legacyContent !== undefined
+      ? getSystemMessage(blocksLike, legacyContent)
+      : getSystemMessage(blocksLike),
   ])
 }
 
@@ -229,6 +233,17 @@ const showMissingArtifactsMessage = (
     `/${command}: no plan artifacts found under ${sessionDir}. Expected one of: ${PLAN_ARTIFACT_NAMES.join(', ')}.`,
   )
 }
+
+/**
+ * Agent state directory holding the active-session pointer file. The plan
+ * session prefix the `/plan-use` containment check uses is imported from
+ * plan-artifacts.ts (PLAN_SESSIONS_DIR_PREFIX) so the resolver and this check
+ * cannot drift.
+ */
+const AGENTS_DIR = '.agents'
+
+/** The active-session pointer path, as shown to the user. */
+const ACTIVE_SESSION_POINTER_PATH = `${AGENTS_DIR}/${ACTIVE_SESSION_FILE_NAME}`
 
 const openPlanSessionPicker = (
   params: RouterParams,
@@ -262,69 +277,110 @@ export const formatPlanStatusReport = (
   }
   const status = artifacts.files['STATUS.md']
   if (status) {
-    lines.push('', `STATUS.md:`, status.trimEnd())
+    lines.push('', 'STATUS.md:', status.trimEnd())
   }
   return lines.join('\n')
 }
 
-const STATUS_BADGE: Record<string, string> = {
-  active: '[active]   ',
-  paused: '[paused]   ',
-  completed: '[completed]',
-  archived: '[archived] ',
+/** The active row's slug plus the stale-pointer note for one `/plans` scan. */
+export type PlanListActiveState = {
+  activeSlug: string | null
+  staleNote: string | null
 }
 
-export const formatPlanListReport = (): string => {
-  const sessions = listPlanSessions()
-  if (sessions.length === 0) {
-    return [
-      'No plan sessions found under .agents/sessions/.',
-      'Use /plan <slug> to start one, or /plans for this list.',
-    ].join('\n')
+/**
+ * The active slug from the already-scanned rows, plus a note when the pointer
+ * names a session `/plans` does not list. The pointer stores bare slugs and is
+ * read only when no scanned row claims to be active.
+ */
+export const planListActiveState = (
+  sessions: PlanSessionSummary[],
+): PlanListActiveState => {
+  const activeSlug = sessions.find((session) => session.isActive)?.slug ?? null
+  const pointerSlug = activeSlug ? null : getActivePlanSessionSlug()
+  return {
+    activeSlug,
+    staleNote: pointerSlug
+      ? `Stale active session: ${pointerSlug} (no listed plan session matches ${ACTIVE_SESSION_POINTER_PATH}). Use /plan-use <slug> to point at an existing session.`
+      : null,
   }
-  const active = getActivePlanSessionSlug()
+}
+
+/**
+ * Text fallback for the `/plans` block, formatted from the already-scanned rows
+ * and the active state the handler derived once. `/plans` also carries
+ * `staleNote` as its own block when rows exist, because the rendered box shows
+ * the rows instead of this text then.
+ */
+export const formatPlanListReport = (
+  sessions: PlanSessionSummary[],
+  active: PlanListActiveState,
+): string => {
+  const { activeSlug, staleNote } = active
+
+  if (sessions.length === 0) {
+    const emptyLines = [
+      'No plan sessions found under .agents/sessions/.',
+      'Use /mode:plan to start one.',
+    ]
+    if (staleNote) {
+      emptyLines.push('', staleNote)
+    }
+    return emptyLines.join('\n')
+  }
+
   const lines: string[] = [`Plan sessions (${sessions.length}):`]
   for (const session of sessions) {
-    const badge = STATUS_BADGE[session.status] ?? `[${session.status}]`
-    const activeMarker = session.isActive ? ' * ' : '   '
-    const progress =
-      session.progress.total > 0
-        ? ` ${session.progress.done}/${session.progress.total} done`
-        : ''
-    const current = session.currentTask
-      ? `  current: "${session.currentTask}"`
-      : ''
-    lines.push(`${activeMarker}${badge} ${session.slug}${progress}${current}`)
+    lines.push(formatPlanSessionListRowText(session))
   }
-  if (active) {
-    lines.push('', `Active session: ${active}`)
+  if (activeSlug) {
+    lines.push('', `Active session: ${activeSlug}`)
+  } else if (staleNote) {
+    lines.push('', staleNote)
   }
   return lines.join('\n')
 }
 
-const setPlanUse = (slug: string): string => {
-  const trimmed = slug.trim()
-  if (!trimmed) {
-    return '/plan-use: missing session slug. Usage: /plan-use <slug>.'
-  }
-  if (!isValidPlanSlug(trimmed)) {
-    return `/plan-use: invalid slug "${trimmed}". Slugs may contain letters, digits, dots, underscores, and dashes.`
-  }
-  const resolved = resolvePlanSessionDir(trimmed)
+/**
+ * Point `.agents/ACTIVE_SESSION` at `input` — a bare slug or the
+ * `.agents/sessions/<slug>` path form — and return the message to show. The
+ * pointer stores bare slugs, so the resolved directory must be exactly
+ * `.agents/sessions/<slug>`.
+ */
+const setPlanUse = (input: string): string => {
+  const resolved = resolvePlanSessionDir(input)
   if (!resolved.ok) {
     return `/plan-use: ${resolved.error}`
   }
+  // resolvePlanSessionDir only guarantees the path stays inside the project
+  // root, so `src/foo` (or `.agents/sessions/../src/foo`) would otherwise be
+  // validated at src/foo while the pointer named `foo` — pointing at
+  // .agents/sessions/foo, the exact stale pointer the checks below prevent.
+  const slug = resolved.sessionDir.startsWith(PLAN_SESSIONS_DIR_PREFIX)
+    ? resolved.sessionDir.slice(PLAN_SESSIONS_DIR_PREFIX.length)
+    : null
+  if (slug === null || slug.includes('/')) {
+    return `/plan-use: ${resolved.sessionDir} is not a plan session directory. Use a bare slug or ${PLAN_SESSIONS_DIR_PREFIX}<slug>.`
+  }
+  if (!isValidPlanSlug(slug)) {
+    return `/plan-use: invalid slug "${slug}". Slugs may contain letters, digits, dots, underscores, and dashes.`
+  }
   // Reject slugs whose session directory does not exist on disk; otherwise the
   // active-session pointer becomes stale and the next agent run silently "uses"
-  // a session that has no artifacts.
+  // a session that does not exist.
   if (!existsSync(resolved.absSessionDir)) {
-    return `/plan-use: no plan session found at ${resolved.sessionDir}. Use /plans to list existing sessions, or /plan <slug> to start one.`
+    return `/plan-use: no plan session found at ${resolved.sessionDir}. Use /plans to list existing sessions, or /mode:plan to start one.`
   }
-  const written = writeActiveSessionPointer(trimmed)
+  // An existing but artifact-less directory is not listed by /plans, so pointing
+  // at it would leave a pointer naming a session the user cannot see.
+  if (!hasPlanArtifactInDir(resolved.absSessionDir)) {
+    return `/plan-use: no plan artifacts found under ${resolved.sessionDir}. Expected one of: ${PLAN_ARTIFACT_NAMES.join(', ')}. Use /plans to list existing sessions, or /mode:plan to start one.`
+  }
+  const written = writeActivePlanSessionPointer(slug)
   if (!written) {
     return '/plan-use: failed to write .agents/ACTIVE_SESSION (project root not set?).'
   }
-  return `Active session set to ${trimmed} (${resolved.sessionDir}).`
+  return `Active session set to ${slug} (${resolved.sessionDir}).`
 }
 
 const ALL_COMMANDS: CommandDefinition[] = [
@@ -946,11 +1002,10 @@ const ALL_COMMANDS: CommandDefinition[] = [
       const block: ContentBlock = {
         type: 'plan-status',
         mode: 'status',
-        kind: 'status',
         reportText,
         isStatusReport: true,
       }
-      appendLocalBlocks(params, [block])
+      appendLocalBlocks(params, [block], undefined, reportText)
       clearInput(params)
     },
   }),
@@ -959,17 +1014,32 @@ const ALL_COMMANDS: CommandDefinition[] = [
     aliases: ['plan-ls'],
     handler: (params) => {
       params.saveToHistory(params.inputValue.trim())
-      const reportText = formatPlanListReport()
       const sessions = listPlanSessions()
-      const block: ContentBlock = {
-        type: 'plan-status-list',
-        mode: 'list',
-        kind: 'list',
-        reportText,
-        sessions,
-        isStatusReport: false,
+      // One scan-derived active slug and one pointer read feed both the text
+      // report and the rendered note.
+      const active = planListActiveState(sessions)
+      const reportText = formatPlanListReport(sessions, active)
+      const blocks: ContentBlock[] = [
+        {
+          type: 'plan-status-list',
+          mode: 'list',
+          reportText,
+          sessions,
+          isStatusReport: false,
+        },
+      ]
+      // PlanStatusBox renders the block's `sessions` rows and ignores
+      // reportText whenever any session exists, so the stale-pointer note is
+      // carried as its own text block to stay visible in the rendered UI
+      // instead of only in the message content.
+      //
+      // With zero listed sessions the box falls back to rendering reportText,
+      // which formatPlanListReport already ends with the note, so an extra
+      // block would show the same note twice.
+      if (active.staleNote && sessions.length > 0) {
+        blocks.push({ type: 'text', content: active.staleNote })
       }
-      appendLocalBlocks(params, [block])
+      appendLocalBlocks(params, blocks, undefined, reportText)
       clearInput(params)
     },
   }),
@@ -979,13 +1049,12 @@ const ALL_COMMANDS: CommandDefinition[] = [
     handler: (params, args) => {
       params.saveToHistory(params.inputValue.trim())
       const trimmed = args.trim()
+      // A missing target opens the shared plan session picker, like every other
+      // plan command. The picker submits the `.agents/sessions/<slug>` path
+      // form, which setPlanUse accepts, and it only lists sessions that have
+      // plan artifacts — exactly the sessions setPlanUse allows.
       if (!trimmed) {
-        appendLocalMessage(
-          params,
-          '/plan-use: missing session slug. Usage: /plan-use <slug>.',
-        )
-        clearInput(params)
-        return
+        return openPlanSessionPicker(params, 'plan-use')
       }
       appendLocalMessage(params, setPlanUse(trimmed))
       clearInput(params)
