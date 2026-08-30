@@ -66,6 +66,7 @@ import {
 } from '@codebuff/common/tools/results/filesystem'
 import { countTokensJson } from './util/token-counter'
 import {
+  COMPACTION_NO_PROGRESS_FRACTION,
   DEFAULT_MAX_CONTEXT_TOKENS,
   getEffectiveContextLimits,
   getSemanticCompactionBudget,
@@ -1365,6 +1366,36 @@ export async function loopAgentSteps(
   }
   initialAgentState.runId = runId
 
+  // Agent/run correlation stamped on every compaction event this loop emits.
+  // `loopAgentSteps` runs for the root turn, for foreground subagents, and for
+  // inline agents, so a consumer that renders live compaction state as
+  // root-level UI needs to tell those apart: `ancestorRunIds` is empty only for
+  // the root run. Snapshotted once (and copied, since the loop mutates agent
+  // state in place) so every event of this run carries the same identity.
+  const compactionCorrelation = {
+    runId,
+    agentId: initialAgentState.agentId,
+    ancestorRunIds: [...initialAgentState.ancestorRunIds],
+  }
+
+  // Live compaction status is announced before a programmatic step and settled
+  // after the compaction branches. This flag is run-scoped rather than
+  // per-iteration so an exception between the two (a provider crash, a
+  // step-cap throw, a cancellation) can still report the terminal state on the
+  // way out, instead of leaving a consumer with a pending compaction card that
+  // its session persistence would replay forever. The settle carries this run's
+  // correlation, so it can only ever settle the pending state this run started.
+  let unsettledCompactionStart = false
+  const settleCompactionStatus = () => {
+    if (!unsettledCompactionStart) return
+    unsettledCompactionStart = false
+    onResponseChunk({
+      type: 'context_compaction_status',
+      state: 'settled',
+      ...compactionCorrelation,
+    })
+  }
+
   // Outer try/finally guarantees this run's in-memory programmatic-step state
   // is torn down on EVERY exit path after runId is assigned — including if the
   // prompt/tool setup below throws before the main loop's own try/catch is
@@ -1692,6 +1723,62 @@ export async function loopAgentSteps(
       }
     }
 
+    // Anti-thrash compaction telemetry, loop-local so each turn starts clean.
+    // `compactionCount` counts every compaction (semantic or mechanical) in
+    // this loop; a compaction is "no progress" when it reclaims less than
+    // COMPACTION_NO_PROGRESS_FRACTION of the previous compaction's
+    // post-compaction history size. We only report it (telemetry + an honest
+    // reason clause) — budgets are never silently lowered and pinned state is
+    // never dropped as a reaction.
+    let compactionCount = 0
+    let consecutiveNoProgressCompactions = 0
+    let previousPostCompactionHistoryTokens: number | undefined
+    let warnedCompactionNoProgress = false
+    const registerCompaction = (compaction: {
+      action: 'semantic_compaction' | 'mechanical_trim'
+      postCompactionHistoryTokens: number
+    }): {
+      compactionCount: number
+      consecutiveNoProgressCompactions: number
+      noProgress: boolean
+    } => {
+      const { action, postCompactionHistoryTokens } = compaction
+      compactionCount += 1
+      const previousTokens = previousPostCompactionHistoryTokens
+      if (previousTokens !== undefined) {
+        const reduction = previousTokens - postCompactionHistoryTokens
+        if (reduction < previousTokens * COMPACTION_NO_PROGRESS_FRACTION) {
+          consecutiveNoProgressCompactions += 1
+        } else {
+          consecutiveNoProgressCompactions = 0
+        }
+      }
+      previousPostCompactionHistoryTokens = postCompactionHistoryTokens
+      const noProgress =
+        consecutiveNoProgressCompactions >=
+        COMPACTION_NO_PROGRESS_STREAK_THRESHOLD
+      if (noProgress && !warnedCompactionNoProgress) {
+        warnedCompactionNoProgress = true
+        logger.warn(
+          {
+            action,
+            agentId: currentAgentState.agentId,
+            runId,
+            compactionCount,
+            consecutiveNoProgressCompactions,
+            previousPostCompactionHistoryTokens: previousTokens,
+            postCompactionHistoryTokens,
+          },
+          'Compaction is not reclaiming context space across consecutive compactions',
+        )
+      }
+      return {
+        compactionCount,
+        consecutiveNoProgressCompactions,
+        noProgress,
+      }
+    }
+
     try {
       while (true) {
         totalSteps++
@@ -1753,6 +1840,37 @@ export async function loopAgentSteps(
         currentAgentState.contextTokenCount = estimateContextTokensLocally()
         const contextTokensBeforeProgrammatic =
           currentAgentState.contextTokenCount
+
+        // Semantic compaction runs inside the programmatic step (the pruner
+        // agent), and its `context_compaction` result only lands afterwards.
+        // Announce the live state up front so the UI can show a compacting
+        // card instead of a silent stall. `getSemanticCompactionBudget` is pure
+        // in `contextWindowTokens`, so this single hoisted value is the one
+        // authoritative budget for both this emission and the semantic branch
+        // below.
+        //
+        // Deliberately NOT gated on an explicit maxContextLength override:
+        // only the window-derived trigger may announce a start, otherwise
+        // every step of an overridden run would emit a spurious one.
+        const semanticBudget = getSemanticCompactionBudget(
+          currentAgentState.contextWindowTokens,
+        )
+        const exceededSemanticTrigger =
+          contextTokensBeforeProgrammatic + 1_000 >
+          semanticBudget.triggerBudgetTokens
+        if (agentTemplate.handleSteps && exceededSemanticTrigger) {
+          unsettledCompactionStart = true
+          onResponseChunk({
+            type: 'context_compaction_status',
+            state: 'started',
+            ...compactionCorrelation,
+            contextTokens: contextTokensBeforeProgrammatic,
+            resolvedContextWindowTokens:
+              semanticBudget.resolvedContextWindowTokens,
+            triggerBudgetTokens: semanticBudget.triggerBudgetTokens,
+            targetBudgetTokens: semanticBudget.targetBudgetTokens,
+          })
+        }
 
         // 1. Run programmatic step first if it exists
         let n: number | undefined = undefined
@@ -1938,9 +2056,6 @@ export async function loopAgentSteps(
                 ),
             ),
         )
-        const semanticBudget = getSemanticCompactionBudget(
-          currentAgentState.contextWindowTokens,
-        )
         const activeContextLimits = getEffectiveContextLimits(
           currentAgentState.contextWindowTokens,
           maxContextLength,
@@ -1949,9 +2064,6 @@ export async function loopAgentSteps(
           activeContextLimits.providerSafeMessageLimit
         const activeContextWindowForStatus =
           activeContextLimits.statusWindowTokens
-        const exceededSemanticTrigger =
-          contextTokensBeforeProgrammatic + 1_000 >
-          semanticBudget.triggerBudgetTokens
         const hasExplicitMaxContextLength = maxContextLength !== undefined
         if (
           retainedSemanticMemory &&
@@ -1973,16 +2085,29 @@ export async function loopAgentSteps(
               categoriesAfterProgrammatic[category].tokens <
                 categoriesBeforeProgrammatic[category].tokens,
           )
+          const compactionTelemetry = registerCompaction({
+            action: 'semantic_compaction',
+            postCompactionHistoryTokens: historyTokensAfterProgrammatic,
+          })
+          const semanticReason = exceededSemanticTrigger
+            ? 'Total context exceeded the model-aware semantic trigger budget.'
+            : 'An explicit maxContextLength override allowed semantic compaction before the model-aware trigger budget.'
           onResponseChunk({
             type: 'context_compaction',
             action: 'semantic_compaction',
+            ...compactionCorrelation,
             resolvedContextWindowTokens:
               semanticBudget.resolvedContextWindowTokens,
             triggerBudgetTokens: semanticBudget.triggerBudgetTokens,
             targetBudgetTokens: semanticBudget.targetBudgetTokens,
-            reason: exceededSemanticTrigger
-              ? 'Total context exceeded the model-aware semantic trigger budget.'
-              : 'An explicit maxContextLength override allowed semantic compaction before the model-aware trigger budget.',
+            compactionCount: compactionTelemetry.compactionCount,
+            consecutiveNoProgressCompactions:
+              compactionTelemetry.consecutiveNoProgressCompactions,
+            reason: compactionTelemetry.noProgress
+              ? `${semanticReason} ${buildCompactionNoProgressClause(
+                  compactionTelemetry.consecutiveNoProgressCompactions,
+                )}`
+              : semanticReason,
             before: {
               tokens: historyTokensBeforeProgrammatic,
               messages: historyBeforeProgrammatic.length,
@@ -2023,16 +2148,32 @@ export async function loopAgentSteps(
           )
           currentAgentState.contextTokenCount = estimateContextTokensLocally()
           const report = pruningResult.report!
+          const compactionTelemetry = registerCompaction({
+            action: 'mechanical_trim',
+            postCompactionHistoryTokens: report.afterTokens,
+          })
+          const mechanicalReason =
+            'Total context remained above the provider-safe request budget after semantic compaction.'
           onResponseChunk({
             type: 'context_compaction',
             action: 'mechanical_trim',
+            ...compactionCorrelation,
             resolvedContextWindowTokens: currentAgentState.contextWindowTokens,
             triggerBudgetTokens:
               activeMaxContextLength ?? DEFAULT_MAX_CONTEXT_TOKENS,
             targetBudgetTokens:
               activeMaxContextLength ?? DEFAULT_MAX_CONTEXT_TOKENS,
-            reason:
-              'Total context remained above the provider-safe request budget after semantic compaction.',
+            compactionCount: compactionTelemetry.compactionCount,
+            consecutiveNoProgressCompactions:
+              compactionTelemetry.consecutiveNoProgressCompactions,
+            fitsBudget: report.fitsBudget,
+            shortfallTokens: report.shortfallTokens,
+            escalated: report.escalated,
+            reason: compactionTelemetry.noProgress
+              ? `${mechanicalReason} ${buildCompactionNoProgressClause(
+                  compactionTelemetry.consecutiveNoProgressCompactions,
+                )}`
+              : mechanicalReason,
             before: {
               tokens: report.beforeTokens,
               messages: report.beforeMessageCount,
@@ -2045,9 +2186,11 @@ export async function loopAgentSteps(
             },
             removedCategories: report.removedCategories,
             retainedKnowledgeMemory: report.retainedKnowledgeMemory,
-            recovery: report.retainedKnowledgeMemory
-              ? 'Resume from <knowledge_memory>; re-read exact live files before editing.'
-              : 'Re-gather exact constraints, files, and validation evidence before continuing.',
+            recovery: !report.fitsBudget
+              ? 'This request may still exceed the provider budget: reduce pinned state (fewer keepDuringTruncation blocks, or /compact) or start a fresh turn before retrying.'
+              : report.retainedKnowledgeMemory
+                ? 'Resume from <knowledge_memory>; re-read exact live files before editing.'
+                : 'Re-gather exact constraints, files, and validation evidence before continuing.',
           })
           compactedThisIteration = true
         }
@@ -2059,6 +2202,13 @@ export async function loopAgentSteps(
           // lose the newly synthesized recovery memory.
           maybeCheckpoint(currentAgentState, true)
         }
+
+        // Settle the live compacting state announced before the programmatic
+        // step. Harmless when a real `context_compaction` result already
+        // arrived (the consumer has nothing pending left to drop); its purpose
+        // is a pass that decided NOT to compact, which must never leave a
+        // pending state stuck on screen.
+        settleCompactionStatus()
 
         onResponseChunk({
           type: 'context_window',
@@ -2296,6 +2446,12 @@ export async function loopAgentSteps(
       }
     }
   } finally {
+    // A compaction start that no normal branch settled (a throw between
+    // `started` and the settle point, or a cancellation) still reports its
+    // terminal state here. Best-effort by design: a user-initiated abort makes
+    // the SDK drop post-abort events, which is why the CLI additionally treats
+    // a replayed pending compaction card as an interrupted pass.
+    settleCompactionStatus()
     // Always tear down this run's in-memory programmatic-step state. When a
     // generator yields STEP/STEP_ALL it is intentionally retained across loop
     // iterations; if a later LLM step throws or the run is aborted, control
@@ -2312,6 +2468,20 @@ const STEP_CAP_REACHED_MESSAGE = [
   'Current work and run state were preserved, so the task can resume safely on the next turn.',
   'Increase maxAgentSteps in openbuff.json if this workload routinely needs a larger step budget.',
 ].join(' ')
+
+/**
+ * How many consecutive unproductive compactions must occur before the emitted
+ * `reason` calls out compaction thrash. Telemetry only: the loop never reacts
+ * by lowering budgets or dropping pinned state.
+ */
+const COMPACTION_NO_PROGRESS_STREAK_THRESHOLD = 2
+
+const buildCompactionNoProgressClause = (
+  consecutiveNoProgressCompactions: number,
+): string =>
+  `Compaction is not reclaiming space: ${consecutiveNoProgressCompactions} consecutive compactions reclaimed under ${Math.round(
+    COMPACTION_NO_PROGRESS_FRACTION * 100,
+  )}%.`
 
 /**
  * How many steps before the cap the one-time near-cap checkpoint nudge fires.

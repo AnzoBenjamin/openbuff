@@ -62,6 +62,9 @@ export const SEMANTIC_COMPACTION_SMALL_WINDOW_MIN_HEADROOM_TOKENS = 2_000
 export const DEFAULT_SEMANTIC_COMPACTION_TRIGGER_TOKENS = 140_000
 export const DEFAULT_SEMANTIC_COMPACTION_TARGET_TOKENS = 100_000
 
+/** Reduction below this share of the previous post-compaction size counts as no progress. */
+export const COMPACTION_NO_PROGRESS_FRACTION = 0.05
+
 export type SemanticCompactionBudget = {
   resolvedContextWindowTokens?: number
   triggerBudgetTokens: number

@@ -121,6 +121,32 @@ describe('maybePruneContext', () => {
     expect(finalTokens).toBeLessThan(inputTokens)
   })
 
+  it('passes the fit-verification report fields through untouched', () => {
+    const longContent = 'x'.repeat(400_000)
+    const messages: Message[] = [
+      userMessage(longContent),
+      userMessage(longContent),
+      userMessage('recent short message'),
+    ]
+
+    const result = maybePruneContext({
+      messages,
+      systemTokens: 100,
+      contextTokenCount: 400_000,
+      maxTotalTokens: 190_000,
+      logger: logger as never,
+    })
+
+    expect(result.pruned).toBe(true)
+    const report = result.report!
+    // Nothing is pinned here, so the mechanical pass can reach the budget on
+    // its own: the report must say the trim fits and needed no escalation.
+    expect(report.fitsBudget).toBe(true)
+    expect(report.shortfallTokens).toBe(0)
+    expect(report.escalated).toBe(false)
+    expect(report.afterTokens).toBeLessThanOrEqual(190_000 - 100)
+  })
+
   it('uses DEFAULT_MAX_CONTEXT_TOKENS when maxTotalTokens is undefined', () => {
     const result = maybePruneContext({
       messages: [userMessage('test')],

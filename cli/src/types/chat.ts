@@ -170,6 +170,120 @@ export type CompletionSummaryContentBlock = {
   summary: CompletionSummary
 }
 
+export type CompactionCategoryDelta = {
+  category:
+    | 'toolResults'
+    | 'todos'
+    | 'fileReads'
+    | 'subagents'
+    | 'userAssistantMessages'
+  beforeTokens: number
+  afterTokens: number
+}
+
+/**
+ * Identifies the CLI process that produced a still-live block. Blocks are
+ * persisted to chat-messages.json and replayed on reload, and a live
+ * (`status: 'pending'`) compaction pass has no cleanup path when the user
+ * aborts the turn before it settles, so a replayed block would otherwise come
+ * back as a permanently "compacting" card. A restored block carries the id of
+ * the process that wrote it, which can never match the current one, so
+ * consumers render it as an interrupted pass instead. Opaque and
+ * diagnostic-only: nothing parses its contents.
+ */
+export const CLI_LIVE_SESSION_ID = `${process.pid}-${Date.now()}-${Math.random()
+  .toString(36)
+  .slice(2, 10)}`
+
+/**
+ * Plain-JSON record of one context-compaction pass. Blocks are persisted to
+ * chat-messages.json and replayed on reload, so every field is serializable
+ * (no functions, no class instances) and the renderer must tolerate missing or
+ * garbage values coming back from an older/partial session.
+ *
+ * Consumer-visible contract change: this typed block replaces the previous
+ * concatenated free-text `text` compaction notice. A replayed session that
+ * still holds the old notice keeps rendering as plain text. See
+ * `docs/agents-and-tools.md` under "Context-window-aware compaction budgets".
+ */
+export type CompactionContentBlock = {
+  type: 'compaction'
+  /**
+   * 'pending' while the pruner is still running: the result fields are not yet
+   * known and render as a live state. Absent or 'complete' is a finished pass,
+   * which is what every persisted/replayed block from before this field holds.
+   * 'interrupted' is the terminal state of a pass whose run ended before it
+   * reported a result (the user aborted mid-compaction, or the turn ended
+   * abnormally): the abort/teardown path rewrites 'pending' to it, so a block
+   * that reaches persistence never claims to still be running.
+   */
+  status?: 'pending' | 'complete' | 'interrupted'
+  /**
+   * Set to {@link CLI_LIVE_SESSION_ID} while `status: 'pending'` is live in the
+   * producing process. Absent on a completed pass, on an 'interrupted' one (the
+   * stamp is meaningless once the run is over) and on persisted blocks written
+   * by an older CLI, so an absent or foreign value marks a pending pass that
+   * this process cannot still be running (a crash that ran no teardown at all).
+   */
+  liveSessionId?: string
+  /**
+   * Agent run that produced this pass (`runId` on the compaction events). Only
+   * root-run passes are recorded as root-level blocks, but the id is retained
+   * so a `settled`/result event can only ever settle the card its own run
+   * started, never a concurrent or nested agent loop's. Absent on blocks
+   * persisted before the correlation existed; those pair with equally
+   * uncorrelated events.
+   */
+  runId?: string
+  action: 'semantic_compaction' | 'mechanical_trim'
+  beforeTokens: number
+  afterTokens: number
+  beforeMessages: number
+  afterMessages: number
+  /** Whole-percent reduction, 0..100, already clamped by the producer. */
+  reductionPercent: number
+  retainedKnowledgeMemory: boolean
+  recovery: string
+  /** Categories that shrank, with their before/after token counts. */
+  categoryDeltas: CompactionCategoryDelta[]
+  reason?: string
+  resolvedContextWindowTokens?: number
+  triggerBudgetTokens?: number
+  targetBudgetTokens?: number
+  compactionCount?: number
+  consecutiveNoProgressCompactions?: number
+  fitsBudget?: boolean
+  shortfallTokens?: number
+  escalated?: boolean
+}
+
+/**
+ * Canonical accumulated context-compaction notice for the current turn, or
+ * null when nothing has been compacted. Declared once here and reused by the
+ * SDK event handler that produces it, the status-bar chip selector, and the
+ * status-bar component, so a later additive field cannot go silently missing
+ * from one consumer.
+ *
+ * Turn-scoped and root-level: every agent loop (root, foreground subagents,
+ * inline agents) reports its own compaction events, so the producer counts a
+ * nested run's completed pass but only ever adopts the ROOT run's own
+ * `compactionCount` as the total, and only the root run's live pass sets
+ * `pending`.
+ */
+export type CompactionNotice = {
+  count: number
+  /**
+   * Action of the most recently COMPLETED pass. A pass that has only started
+   * leaves it untouched, so an aborted turn still labels the settled chip by
+   * what actually completed.
+   */
+  action: CompactionContentBlock['action']
+  /** The pass did not fit the budget, or stopped reclaiming space. */
+  degraded: boolean
+  /** A compaction pass is running right now in the root agent run. */
+  pending?: boolean
+}
+
 export type AskUserContentBlock = {
   type: 'ask-user'
   toolCallId: string
@@ -338,6 +452,7 @@ export type ContentBlock =
   | AgentListContentBlock
   | AskUserContentBlock
   | CompletionSummaryContentBlock
+  | CompactionContentBlock
   | ContextContentBlock
   | DoctorContentBlock
   | GateStateContentBlock
@@ -455,6 +570,12 @@ export function isCompletionSummaryBlock(
   block: ContentBlock,
 ): block is CompletionSummaryContentBlock {
   return block.type === 'completion-summary'
+}
+
+export function isCompactionBlock(
+  block: ContentBlock,
+): block is CompactionContentBlock {
+  return block.type === 'compaction'
 }
 
 export function isMemoryBlock(

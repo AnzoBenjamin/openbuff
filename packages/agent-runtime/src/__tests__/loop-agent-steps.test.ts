@@ -11,6 +11,7 @@ import thinker from '../../../../agents/thinker/thinker'
 import { loopAgentSteps } from '../run-agent-step'
 import { clearAgentGeneratorCache } from '../run-programmatic-step'
 import { PLACEHOLDER } from '../templates/types'
+import { countTokens } from '../util/token-counter'
 import { createToolCallChunk, mockFileContext } from './test-utils'
 
 import type { AgentTemplate } from '../templates/types'
@@ -319,6 +320,9 @@ describe('loopAgentSteps', () => {
         targetBudgetTokens: 100_000,
         reason: expect.stringContaining('explicit maxContextLength override'),
         retainedKnowledgeMemory: true,
+        // First compaction of the turn, and it reclaimed space.
+        compactionCount: 1,
+        consecutiveNoProgressCompactions: 0,
       }),
     )
     expect(events).not.toContainEqual(
@@ -402,8 +406,224 @@ describe('loopAgentSteps', () => {
         triggerBudgetTokens: 16_800,
         targetBudgetTokens: 8_400,
         retainedKnowledgeMemory: true,
+        // The result carries the run correlation, so a consumer can pair it
+        // with the live status card this run opened. Root run: empty lineage.
+        // `agentId` is asserted as the EMITTER's id at the producer boundary;
+        // subagent forwarding may rewrite it downstream, which is why `runId`
+        // is the documented per-agent key.
+        runId: expect.any(String),
+        agentId: 'test-agent-id',
+        ancestorRunIds: [],
       }),
     )
+  })
+
+  // The runtime is the producer of `context_compaction_status`. The next cases
+  // pin that contract: exactly one run-correlated started/settled pair per
+  // announced pass, a settle for a pass that declines to compact, a settle from
+  // the outer `finally` when the programmatic step throws, and a lineage that
+  // identifies nested runs.
+  it('emits exactly one run-correlated compaction status pair for an announced pass', async () => {
+    setup()
+    const events: any[] = []
+    agentState.messageHistory = [
+      userMessage('small-window evidence '.repeat(8_000)),
+      userMessage('Continue from the retained goal.'),
+    ]
+    agentTemplate.handleSteps =
+      contextPruner.handleSteps as AgentTemplate['handleSteps']
+
+    await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      resolveModelContextWindow: mock(() => 32_000),
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    const statusEvents = events.filter(
+      (event) => event.type === 'context_compaction_status',
+    )
+    const started = statusEvents.filter((event) => event.state === 'started')
+    const settled = statusEvents.filter((event) => event.state === 'settled')
+    expect(started).toHaveLength(1)
+    expect(settled).toHaveLength(1)
+    // The pass is announced before the programmatic step and settled after the
+    // compaction branches, never the other way round.
+    expect(events.indexOf(started[0])).toBeLessThan(events.indexOf(settled[0]))
+
+    // Both halves of the pair share one run correlation, so a consumer can
+    // clear exactly the card this run opened.
+    const runId = started[0].runId
+    expect(typeof runId).toBe('string')
+    expect(runId.length).toBeGreaterThan(0)
+    expect(started[0]).toMatchObject({
+      runId,
+      agentId: 'test-agent-id',
+      // Root run: empty lineage, so root-level live UI may render it.
+      ancestorRunIds: [],
+      contextTokens: expect.any(Number),
+      resolvedContextWindowTokens: 32_000,
+      triggerBudgetTokens: 16_800,
+      targetBudgetTokens: 8_400,
+    })
+    expect(settled[0]).toMatchObject({
+      runId,
+      agentId: 'test-agent-id',
+      ancestorRunIds: [],
+    })
+
+    // The reported result is correlated to the same run as the status pair.
+    expect(
+      events.find(
+        (event) =>
+          event.type === 'context_compaction' &&
+          event.action === 'semantic_compaction',
+      ),
+    ).toMatchObject({ runId, agentId: 'test-agent-id', ancestorRunIds: [] })
+  })
+
+  it('settles the compaction status when a pass declines to compact', async () => {
+    setup()
+    const events: any[] = []
+    // A 64k window puts the semantic trigger at 39,200 tokens and the
+    // provider-safe mechanical ceiling at 56,000. Sizing the transcript with the
+    // live tokenizer lands the request inside that band, so the loop announces a
+    // pass while neither the semantic branch nor the mechanical brake reports a
+    // result.
+    const chunk = 'old evidence '.repeat(500)
+    const chunkTokens = countTokens(chunk)
+    agentState.messageHistory = [
+      userMessage(chunk.repeat(Math.ceil(42_000 / chunkTokens))),
+    ]
+    // A step that yields straight to the model never rewrites the transcript, so
+    // this announced pass compacts nothing.
+    agentTemplate.handleSteps = function* () {
+      yield 'STEP'
+    } as () => StepGenerator
+
+    await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      resolveModelContextWindow: mock(() => 64_000),
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    // No compaction was reported at all, yet the announced pass is still
+    // settled: a pending UI state can never be left stuck when the pruner
+    // declines to compact.
+    expect(
+      events.filter((event) => event.type === 'context_compaction'),
+    ).toHaveLength(0)
+    const statusEvents = events.filter(
+      (event) => event.type === 'context_compaction_status',
+    )
+    // A `yield 'STEP'` generator drives more than one loop iteration, and every
+    // over-trigger iteration announces and settles its own pass. The invariant
+    // is therefore one settle per announced pass rather than exactly one pass.
+    const started = statusEvents.filter((event) => event.state === 'started')
+    const settled = statusEvents.filter((event) => event.state === 'settled')
+    expect(started.length).toBeGreaterThanOrEqual(1)
+    expect(settled.length).toBe(started.length)
+    // No announced pass is left dangling: the run ends on a settle.
+    expect(statusEvents.at(-1)).toMatchObject({ state: 'settled' })
+    expect(started[0]).toMatchObject({
+      state: 'started',
+      runId: expect.any(String),
+      agentId: 'test-agent-id',
+      ancestorRunIds: [],
+      resolvedContextWindowTokens: 64_000,
+      triggerBudgetTokens: 39_200,
+      targetBudgetTokens: 19_600,
+    })
+  })
+
+  it('settles the compaction status from the outer finally when the step throws', async () => {
+    setup()
+    const events: any[] = []
+    agentState.messageHistory = [
+      userMessage('small-window evidence '.repeat(8_000)),
+      userMessage('Continue from the retained goal.'),
+    ]
+    // `started` is emitted before the programmatic step runs, so a step that
+    // throws never reaches the in-loop settle point that sits after the
+    // compaction branches: only the outer `finally` can settle the pass.
+    agentTemplate.handleSteps = function* () {
+      throw new Error('programmatic step exploded')
+    } as () => StepGenerator
+
+    // The failure may surface as a rejection or as an error-shaped result;
+    // neither is part of this contract, so assert on the emitted events only.
+    await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      resolveModelContextWindow: mock(() => 32_000),
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    }).catch(() => undefined)
+
+    const statusEvents = events.filter(
+      (event) => event.type === 'context_compaction_status',
+    )
+    expect(
+      statusEvents.filter((event) => event.state === 'started'),
+    ).toHaveLength(1)
+    // Settling is idempotent, so a second settle here would be a real
+    // regression rather than a harmless duplicate.
+    expect(
+      statusEvents.filter((event) => event.state === 'settled'),
+    ).toHaveLength(1)
+  })
+
+  it('stamps a nested run lineage on compaction status and result events', async () => {
+    setup()
+    const events: any[] = []
+    agentState.messageHistory = [
+      userMessage('small-window evidence '.repeat(8_000)),
+      userMessage('Continue from the retained goal.'),
+    ]
+    // A nested agent loop: its lineage is non-empty, so a consumer that renders
+    // root-level live UI must be able to tell it apart from a root run.
+    agentState.ancestorRunIds = ['parent-run']
+    agentTemplate.handleSteps =
+      contextPruner.handleSteps as AgentTemplate['handleSteps']
+
+    await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      resolveModelContextWindow: mock(() => 32_000),
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    const statusEvents = events.filter(
+      (event) => event.type === 'context_compaction_status',
+    )
+    const started = statusEvents.filter((event) => event.state === 'started')
+    const settled = statusEvents.filter((event) => event.state === 'settled')
+    expect(started).toHaveLength(1)
+    expect(settled).toHaveLength(1)
+    const runId = started[0].runId
+    expect(typeof runId).toBe('string')
+    expect(runId.length).toBeGreaterThan(0)
+    expect(started[0]).toMatchObject({
+      runId,
+      agentId: 'test-agent-id',
+      ancestorRunIds: ['parent-run'],
+    })
+    expect(settled[0]).toMatchObject({
+      runId,
+      agentId: 'test-agent-id',
+      ancestorRunIds: ['parent-run'],
+    })
+    expect(
+      events.find((event) => event.type === 'context_compaction'),
+    ).toMatchObject({
+      runId,
+      agentId: 'test-agent-id',
+      ancestorRunIds: ['parent-run'],
+    })
   })
 
   it('emits a recovery-rich event when emergency mechanical trim is required', async () => {
@@ -430,12 +650,74 @@ describe('loopAgentSteps', () => {
         targetBudgetTokens: 2_000,
         reason: expect.stringContaining('provider-safe request budget'),
         retainedKnowledgeMemory: false,
-        recovery: expect.stringContaining('Re-gather exact constraints'),
+        compactionCount: 1,
+        consecutiveNoProgressCompactions: 0,
+        // A 2k ceiling is below the system+tools baseline, so the trimmed
+        // request cannot fit: the event must say so instead of claiming a
+        // clean recovery.
+        fitsBudget: false,
+        shortfallTokens: expect.any(Number),
+        escalated: expect.any(Boolean),
+        recovery: expect.stringContaining(
+          'may still exceed the provider budget',
+        ),
       }),
     )
     expect(JSON.stringify(result.agentState.messageHistory)).toContain(
       '<mechanical_context_recovery>',
     )
+  })
+
+  it('reports compaction thrash in the reason after two unproductive compactions', async () => {
+    setup()
+    const events: any[] = []
+    const warn = mock((_data?: unknown, _message?: string) => {})
+    agentState.messageHistory = [
+      userMessage('old constraints '.repeat(2_000)),
+      assistantMessage('old evidence '.repeat(2_000)),
+    ]
+    // Keep the loop iterating so the mechanical brake runs repeatedly on an
+    // already-minimal history; each pass reclaims essentially nothing.
+    agentTemplate.handleSteps = function* () {
+      yield 'STEP'
+      yield 'STEP'
+      yield 'STEP'
+      yield 'STEP'
+    } as () => StepGenerator
+
+    await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      logger: { ...baseParams.logger, warn },
+      maxContextLength: 2_000,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    const compactionEvents = events.filter(
+      (event) => event.type === 'context_compaction',
+    )
+    expect(compactionEvents.length).toBeGreaterThanOrEqual(3)
+    expect(compactionEvents[0].compactionCount).toBe(1)
+    expect(compactionEvents[0].consecutiveNoProgressCompactions).toBe(0)
+    expect(compactionEvents[0].reason).not.toContain(
+      'Compaction is not reclaiming space',
+    )
+
+    const thrashEvent = compactionEvents.find(
+      (event) => event.consecutiveNoProgressCompactions >= 2,
+    )
+    expect(thrashEvent).toBeDefined()
+    expect(thrashEvent.reason).toContain(
+      'Compaction is not reclaiming space: 2 consecutive compactions reclaimed under 5%.',
+    )
+    expect(
+      warn.mock.calls.filter(
+        (call) =>
+          typeof call[1] === 'string' &&
+          call[1].includes('Compaction is not reclaiming context space'),
+      ),
+    ).toHaveLength(1)
   })
 
   it('uses the structured compaction envelope and newest pinned memory for /compact', async () => {

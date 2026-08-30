@@ -2,8 +2,11 @@ import stringWidth from 'string-width'
 
 import { formatElapsedTime } from './format-elapsed-time'
 
+import type { CompactionNotice } from '../types/chat'
+
 export type StatusBarChipId =
   | 'context'
+  | 'compaction'
   | 'index'
   | 'git'
   | 'model'
@@ -32,6 +35,17 @@ export type SelectStatusBarChipsInput = {
    * '!', so the label should lead with its subject (e.g. 'idx failed: …').
    */
   indexChip?: { label: string; tone: 'secondary' | 'warning' | 'error' } | null
+  /**
+   * Accumulated context-compaction notice for the current turn, or null when
+   * nothing has been compacted. `degraded` marks a compaction that did not fit
+   * the budget or that stopped reclaiming space, and `pending` marks a pass
+   * that is running right now (the chip renders even at `count: 0`). `pending`
+   * is only honored while `isActive`: an aborted turn never delivers the
+   * settling event, so an idle run must not keep claiming a live pass. The
+   * producer only sets `pending` for the root agent run, so a subagent's
+   * compaction never renders here as a live root-level pass.
+   */
+  compactionNotice?: CompactionNotice | null
   elapsedSeconds: number
   showTimer: boolean
   showStop: boolean
@@ -111,6 +125,16 @@ const contextTone = (pct: number): StatusBarChipTone => {
 /** Bare percent label, shared by the full labels and the overflow-shorten step. */
 const percentLabel = (pct: number): string => `${pct}%`
 
+/**
+ * 'sm' prefixes the percent so it is not mistaken for part of a neighbouring
+ * chip (a bare '48%' beside a git '~3 +1' chip reads ambiguously).
+ */
+const contextPercentLabel = (pct: number): string => `ctx ${pct}%`
+
+/** '<used>/<max>' prefix for the sizes wide enough to render token counts. */
+const contextCountsPrefix = (usage: { used: number; max: number }): string =>
+  `${formatStatusTokenCount(usage.used)}/${formatStatusTokenCount(usage.max)}`
+
 /** `pct` must already be clamped to 0..100 by the caller. */
 const buildUsageBar = (pct: number, length: number): string => {
   const filled = Math.round((pct / 100) * length)
@@ -136,33 +160,77 @@ const barPercentLabel = (
 }
 
 /**
+ * Usage percent at which a size that can render token counts starts doing so,
+ * or null for the sizes that never render them. 'md' waits until 80% (its bar
+ * is narrower, so the counts cost proportionally more of the row) while 'lg'
+ * shows them from 70%.
+ */
+const contextCountsThreshold = (
+  widthSize: StatusBarWidthSize,
+): number | null => {
+  if (widthSize === 'lg') return 70
+  if (widthSize === 'md') return 80
+  return null
+}
+
+/**
  * Progressively shorter context labels for the overflow loop, widest first, so
- * the lg token-count label gives up its counts before its bar instead of
- * collapsing straight to the bare percent. Sizes that render no bar have the
- * bare percent as their only form, so they return a single entry instead of
- * repeating it. The first entry is also the widest form buildContextLabel
- * renders, so the two cannot drift.
+ * a token-count label gives up its counts before its bar instead of collapsing
+ * straight to the bare percent. Sizes that render neither counts nor a bar have
+ * fewer entries rather than repeating one. The first entry is also the widest
+ * form buildContextLabel renders, so the two cannot drift.
  */
 const contextLabelFallbacks = (
   widthSize: StatusBarWidthSize,
+  usage: { used: number; max: number },
   pct: number,
-): [string, ...string[]] =>
-  contextBarLength(widthSize) == null
-    ? [percentLabel(pct)]
-    : [barPercentLabel(widthSize, pct), percentLabel(pct)]
+): [string, ...string[]] => {
+  const barPercent = barPercentLabel(widthSize, pct)
+  if (contextCountsThreshold(widthSize) != null) {
+    return [
+      `${contextCountsPrefix(usage)} ${barPercent}`,
+      barPercent,
+      percentLabel(pct),
+    ]
+  }
+  if (widthSize === 'sm') {
+    return [contextPercentLabel(pct), percentLabel(pct)]
+  }
+  return [percentLabel(pct)]
+}
 
 const buildContextLabel = (
   widthSize: StatusBarWidthSize,
   usage: { used: number; max: number },
   pct: number,
 ): string => {
-  const [barPercent] = contextLabelFallbacks(widthSize, pct)
+  const barPercent = barPercentLabel(widthSize, pct)
+  const countsThreshold = contextCountsThreshold(widthSize)
 
-  if (widthSize === 'lg' && pct >= 70) {
-    return `${formatStatusTokenCount(usage.used)}/${formatStatusTokenCount(usage.max)} ${barPercent}`
+  if (countsThreshold != null) {
+    return pct >= countsThreshold
+      ? `${contextCountsPrefix(usage)} ${barPercent}`
+      : barPercent
   }
 
-  return barPercent
+  return widthSize === 'sm' ? contextPercentLabel(pct) : barPercent
+}
+
+/**
+ * Compaction notice label: the count alone at the narrow sizes, and a worded
+ * form at 'md'/'lg' that distinguishes a semantic compaction from an emergency
+ * mechanical trim. A pass that is still running reports the live state instead
+ * of a count, which may still be 0 when nothing has completed yet.
+ */
+const buildCompactionLabel = (
+  widthSize: StatusBarWidthSize,
+  notice: Pick<CompactionNotice, 'count' | 'action' | 'pending'>,
+): string => {
+  const narrow = widthSize === 'xs' || widthSize === 'sm'
+  if (notice.pending) return narrow ? '⇲ …' : '⇲ compacting…'
+  if (narrow) return `⇲ ${notice.count}`
+  const verb = notice.action === 'mechanical_trim' ? 'trimmed' : 'compacted'
+  return `⇲ ${verb} ×${notice.count}`
 }
 
 /**
@@ -248,6 +316,7 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
     modelName,
     diffStats,
     indexChip,
+    compactionNotice,
     elapsedSeconds,
     showTimer,
     showStop,
@@ -256,6 +325,7 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
 
   const chips: StatusBarChip[] = []
   let contextPct: number | null = null
+  let contextUsage: { used: number; max: number } | null = null
 
   const hasIndexError = indexChip?.tone === 'error'
   const omitContextForIndexError = widthSize === 'xs' && hasIndexError
@@ -278,6 +348,28 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
       id: 'context',
       label: buildContextLabel(widthSize, contextWindowUsage, contextPct),
       tone: contextTone(contextPct),
+    })
+    contextUsage = contextWindowUsage
+  }
+
+  // A pending pass can only be live while the run is: an abort mid-compaction
+  // never delivers `settled` or a result, so once the run is idle the chip
+  // falls back to the settled form instead of reporting a compaction that is
+  // no longer running. A notice that never counted a completed pass then has
+  // nothing to report and is dropped entirely rather than rendering '⇲ 0'.
+  const compactionPending = compactionNotice?.pending === true && isActive
+  if (compactionNotice && (compactionPending || compactionNotice.count > 0)) {
+    chips.push({
+      id: 'compaction',
+      label: buildCompactionLabel(widthSize, {
+        count: compactionNotice.count,
+        action: compactionNotice.action,
+        pending: compactionPending,
+      }),
+      // A live pass reads as in-progress, not as a failed one: a degraded
+      // earlier pass only tones the chip red once it has settled.
+      tone:
+        compactionNotice.degraded && !compactionPending ? 'error' : 'warning',
     })
   }
 
@@ -335,15 +427,21 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
     if (removeChip(chips, 'model')) continue
     if (removeChip(chips, 'git')) continue
 
+    // Mid-priority: the compaction notice is worth less than the context usage
+    // and the index readiness chip, but more than the model/cost/git chips.
+    if (removeChip(chips, 'compaction')) continue
+
     const contextChip = chips.find((chip) => chip.id === 'context')
-    if (contextChip && contextPct != null) {
+    if (contextChip && contextPct != null && contextUsage != null) {
       // Step down one rendered form at a time (token counts first, then the
       // bar) so an intermediate label that would still fit is not skipped.
       // Compared by rendered width instead of scanning for bar glyphs so
       // shortening keeps working if the bar characters change.
-      const shorter = contextLabelFallbacks(widthSize, contextPct).find(
-        (label) => stringWidth(label) < stringWidth(contextChip.label),
-      )
+      const shorter = contextLabelFallbacks(
+        widthSize,
+        contextUsage,
+        contextPct,
+      ).find((label) => stringWidth(label) < stringWidth(contextChip.label))
       if (shorter != null) {
         contextChip.label = shorter
         continue
@@ -391,8 +489,8 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
     break
   }
 
-  // Chips are pushed in render order (context, index, git, model, cost, timer)
-  // and the overflow loop only removes or shortens them, so the array is
-  // already ordered here.
+  // Chips are pushed in render order (context, compaction, index, git, model,
+  // cost, timer) and the overflow loop only removes or shortens them, so the
+  // array is already ordered here.
   return { chips }
 }

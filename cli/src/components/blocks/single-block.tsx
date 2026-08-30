@@ -9,6 +9,7 @@ import { ContentWithMarkdown } from './content-with-markdown'
 import { ImageBlock } from './image-block'
 import { UserBlockTextWithInlineCopy } from './user-content-copy'
 import { useTheme } from '../../hooks/use-theme'
+import { CompactionBox } from '../renderers/compaction-box'
 import { CompletionSummaryBox } from '../renderers/completion-summary-box'
 import { ContextBox } from '../renderers/context-box'
 import { DoctorBox } from '../renderers/doctor-box'
@@ -143,6 +144,14 @@ export const SingleBlock = memo(
             style={{ width: '100%' }}
           >
             <CompletionSummaryBox block={block} />
+          </box>
+        )
+      }
+
+      case 'compaction': {
+        return (
+          <box key={`${messageId}-compaction-${idx}`} style={{ width: '100%' }}>
+            <CompactionBox block={block} />
           </box>
         )
       }

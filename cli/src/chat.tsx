@@ -100,6 +100,7 @@ import type { MultilineInputHandle } from './components/multiline-input'
 import type { MatchedSlashCommand } from './hooks/use-suggestion-engine'
 import { AGENT_MODE_TO_ID, type AgentMode } from './utils/constants'
 import type { FileTreeNode } from '@codebuff/common/util/file'
+import type { CompactionNotice } from './utils/sdk-event-handlers'
 import type { ScrollBoxRenderable } from '@opentui/core'
 
 export const Chat = ({
@@ -391,6 +392,12 @@ export const Chat = ({
     max: number
   } | null>(null)
 
+  // Accumulated context-compaction notice for the turn in progress (reset to
+  // null when a new run starts, inside useSendMessage). Drives the status-bar
+  // compaction chip.
+  const [compactionNotice, setCompactionNotice] =
+    useState<CompactionNotice | null>(null)
+
   // M9.3: Session-cost accumulator (sum of per-turn cost in cents from
   // onTotalCost callbacks). Model name + git diff-stats for the status bar.
   const [sessionCostCents, setSessionCostCents] = useState<number>(0)
@@ -474,6 +481,7 @@ export const Chat = ({
     isChainInProgressRef,
     setStreamStatus,
     setContextWindowUsage,
+    setCompactionNotice,
     setCanProcessQueue,
     abortControllerRef,
     agentId,
@@ -1735,6 +1743,7 @@ export const Chat = ({
             scrollToLatest={scrollToLatest}
             statusIndicatorState={statusIndicatorState}
             contextWindowUsage={contextWindowUsage}
+            compactionNotice={compactionNotice}
             sessionCostCents={sessionCostCents}
             modelName={modelName}
             diffStats={diffStats}

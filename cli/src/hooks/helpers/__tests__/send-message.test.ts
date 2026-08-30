@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import type { ChatMessage } from '../../../types/chat'
+import type { ChatMessage, CompactionContentBlock } from '../../../types/chat'
 import type { SendMessageTimerController } from '../../../utils/send-message-timer'
 import type { StreamStatus } from '../../use-message-queue'
 
@@ -33,6 +33,9 @@ const {
 } = await import('../send-message')
 const { createBatchedMessageUpdater } =
   await import('../../../utils/message-updater')
+const { markPendingCompactionInterrupted } =
+  await import('../../../utils/message-block-helpers')
+const { CLI_LIVE_SESSION_ID } = await import('../../../types/chat')
 import type { RunState } from '@openbuff/sdk'
 import type { PendingFileAttachment } from '../../../types/store'
 
@@ -76,6 +79,43 @@ const createBaseMessages = (): ChatMessage[] => [
     timestamp: 'now',
   },
 ]
+
+const pendingCompactionBlock = (): CompactionContentBlock => ({
+  type: 'compaction',
+  status: 'pending',
+  liveSessionId: CLI_LIVE_SESSION_ID,
+  runId: 'root-run',
+  action: 'semantic_compaction',
+  beforeTokens: 152_000,
+  afterTokens: 0,
+  beforeMessages: 0,
+  afterMessages: 0,
+  reductionPercent: 0,
+  retainedKnowledgeMemory: false,
+  recovery: '',
+  categoryDeltas: [],
+  targetBudgetTokens: 70_000,
+})
+
+/**
+ * A settled pass: no live stamp, and no `status` key at all when none is
+ * passed (the shape of every block persisted before the field existed).
+ */
+const settledCompactionBlock = (
+  status?: 'complete' | 'interrupted',
+): CompactionContentBlock => {
+  const {
+    liveSessionId: _liveSessionId,
+    status: _status,
+    ...rest
+  } = pendingCompactionBlock()
+  return {
+    ...rest,
+    afterTokens: 60_000,
+    reductionPercent: 60,
+    ...(status === undefined ? {} : { status }),
+  }
+}
 
 describe('createRunOwnership', () => {
   test('superseding run owns persistence and stale owner release cannot clear it', () => {
@@ -441,6 +481,103 @@ describe('setupStreamingContext', () => {
       // Verify timer was started with correct message ID
       expect(timerController.startCalls).toContain('ai-1')
     })
+
+    test('abort terminates a still-running compaction block instead of leaving it pending', () => {
+      // A pending compaction card is only ever settled by a `settled`/result
+      // SDK event, and the SDK drops every post-abort event, so the abort
+      // listener is the last write before the turn is persisted.
+      let messages: ChatMessage[] = [
+        {
+          id: 'ai-1',
+          variant: 'ai',
+          content: 'Partial streamed content',
+          blocks: [
+            { type: 'text', content: 'Some text' },
+            pendingCompactionBlock(),
+          ],
+          timestamp: 'now',
+        },
+      ]
+      const streamRefs = createStreamController()
+      const timerController = createMockTimerController()
+      const abortControllerRef = { current: null as AbortController | null }
+
+      const { updater, abortController } = setupStreamingContext({
+        aiMessageId: 'ai-1',
+        timerController,
+        setMessages: (fn: any) => {
+          messages = fn(messages)
+        },
+        streamRefs,
+        abortControllerRef,
+        setStreamStatus: () => {},
+        setCanProcessQueue: () => {},
+        updateChainInProgress: () => {},
+        setIsRetrying: () => {},
+        setStreamingAgents: () => {},
+      })
+
+      abortController.abort()
+      updater.flush()
+
+      const blocks = messages.find((m) => m.id === 'ai-1')?.blocks ?? []
+      const compactionBlocks = blocks.filter(
+        (block) => block.type === 'compaction',
+      )
+      // Terminated in place: an honest interrupted record, never dropped and
+      // never still 'pending'.
+      expect(compactionBlocks).toHaveLength(1)
+      expect(compactionBlocks[0]).toMatchObject({
+        type: 'compaction',
+        status: 'interrupted',
+        runId: 'root-run',
+      })
+      // The live stamp is meaningless once the run is over.
+      expect(compactionBlocks[0]).not.toHaveProperty('liveSessionId')
+      // The pre-existing abort behavior is unchanged.
+      const lastBlock = blocks[blocks.length - 1]
+      expect(lastBlock?.type).toBe('text')
+      expect(
+        (lastBlock as { type: 'text'; content: string }).content,
+      ).toContain('[response interrupted]')
+    })
+  })
+})
+
+describe('markPendingCompactionInterrupted', () => {
+  test('rewrites a pending block and strips its live stamp', () => {
+    const blocks = [
+      { type: 'text' as const, content: 'Some text' },
+      pendingCompactionBlock(),
+    ]
+
+    const next = markPendingCompactionInterrupted(blocks)
+
+    expect(next).not.toBe(blocks)
+    expect(next[0]).toBe(blocks[0])
+    expect(next[1]).toMatchObject({
+      type: 'compaction',
+      status: 'interrupted',
+      runId: 'root-run',
+      beforeTokens: 152_000,
+      targetBudgetTokens: 70_000,
+    })
+    expect(next[1]).not.toHaveProperty('liveSessionId')
+  })
+
+  test('leaves complete, interrupted and status-less compaction blocks untouched by identity', () => {
+    // An absent status is a completed pass: that is every block persisted
+    // before the field existed and it must round-trip unchanged. An already
+    // terminated pass must not be rewritten again either.
+    const blocks = [
+      settledCompactionBlock('complete'),
+      settledCompactionBlock(),
+      settledCompactionBlock('interrupted'),
+    ]
+
+    // Nothing was pending, so the original array reference comes back and
+    // React skips a re-render.
+    expect(markPendingCompactionInterrupted(blocks)).toBe(blocks)
   })
 })
 

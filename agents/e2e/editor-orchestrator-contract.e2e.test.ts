@@ -57,6 +57,7 @@ function createCliContext() {
       setStreamingAgents: noop,
       setStreamStatus: noop,
       setContextWindowUsage: noop,
+      setCompactionNotice: noop,
     },
     message: {
       aiMessageId: 'ai-1',
