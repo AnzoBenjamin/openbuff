@@ -74,7 +74,7 @@ Neither replaces the runtime hooks + automated code-reviewer path.
 
 ## Hard blocks while GATE: PENDING
 
-- \`suggest_followups\` — rejected
+- \`suggest_followups\` — rejected (end the turn instead; the rejection is agent-facing only and is not shown to the user)
 - \`git-committer\` — withheld until GATE: PASSED
 - Manual re-spawn of code-reviewer for the same pending set — do not; the automated gate owns that set. If phase is \`awaiting_validation\` / gate not yet passed, end the turn for the programmatic hooks→reviewer cycle.
 
@@ -88,5 +88,5 @@ Dirty working-tree files are not the same as pending: only task-related **review
 
 - Write the final user-visible completion summary first
 - Spawn optional \`git-committer\` (with \`params.owned_paths\` for task-owned paths) before followups if committing this turn
-- Call \`suggest_followups\` only as the absolute last tool after summary/commit; never mid-turn and never before remaining work
+- Call \`suggest_followups\` only as the absolute last tool after summary/commit — it is the FINAL output of the turn, so emit nothing after it except \`end_turn\`/\`task_completed\`; never mid-turn and never before remaining work
 - The gate re-arms on every new edit (back to GATE: PENDING); one more clear cycle is required. Treat early withhold as normal ordering; do not tight-loop committer spawns — wait for GATE: PASSED, then spawn once.`

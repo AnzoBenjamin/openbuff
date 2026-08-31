@@ -1609,13 +1609,16 @@ const handleRuntimeError = (
   state: EventHandlerState,
   event: Extract<SDKEvent, { type: 'error' }>,
 ) => {
-  state.logger.error({ event }, 'SDK runtime error event')
   // Auto-recoverable model errors (e.g. a malformed tool call the model is
-  // already correcting) are agent-facing diagnostics, not user-facing errors:
-  // skip the visible error banner entirely.
+  // already correcting, or a runtime-enforced tool-ordering rejection) are
+  // agent-facing control-flow diagnostics, not user-facing errors: skip the
+  // visible error banner entirely, and log at debug rather than error so the
+  // log level matches their non-failure nature.
   if (event.autoRecovering === true) {
+    state.logger.debug({ event }, 'SDK auto-recovering runtime notice')
     return
   }
+  state.logger.error({ event }, 'SDK runtime error event')
   const concise = event.userMessage?.trim()
   if (concise) {
     state.message.updater.setError(concise)

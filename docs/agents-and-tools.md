@@ -728,6 +728,17 @@ is set on the allow path and cleared at the start of each base2 user turn.
 `GATE: PENDING` still rejects `suggest_followups`. Non-gated agents
 (`canSuggestFollowups` undefined) are unchanged.
 
+These ordering/gate rejections are agent-facing control-flow diagnostics, not
+user errors: the runtime emits them with a concise `userMessage` plus
+`autoRecovering: true`, so `handleRuntimeError` in
+`cli/src/utils/sdk-event-handlers.ts` returns early and no error banner is
+shown to the user, while the full `message` still reaches the model through the
+`TOOL_CALL_ERROR` path in `packages/agent-runtime/src/tools/stream-parser.ts`.
+The rejection wording states plainly that `suggest_followups` is the FINAL
+output of the turn: completion summary first, then `git-committer` if
+committing, then `suggest_followups` with nothing after it except
+`end_turn`/`task_completed`.
+
 ### Background shell jobs (`check_job` / `read_logs` / `kill_job` / `list_jobs`)
 
 Background jobs are unified behind a single `JobRegistry` (in the `common`

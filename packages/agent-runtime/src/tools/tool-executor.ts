@@ -1499,9 +1499,26 @@ function isFileChangingTool(toolName: string): boolean {
 }
 
 const POST_FOLLOWUPS_ERROR_MESSAGE =
-  'No tools are available after suggest_followups in the same step (except end_turn/task_completed). suggest_followups must be the absolute last actionable tool after the completion summary (and after git-committer if committing).'
+  'No tools are available after suggest_followups in the same step (except end_turn/task_completed). suggest_followups is the FINAL output of the turn: emit it only after your user-visible completion summary (and after git-committer if committing), then emit nothing further. Reorder so suggest_followups is your last tool call.'
 const ALREADY_EMITTED_FOLLOWUPS_ERROR_MESSAGE =
-  'suggest_followups already ended the actionable work for this turn. No more non-terminal tools are available after followups (except end_turn/task_completed).'
+  'suggest_followups already ended the actionable work for this turn. It is the FINAL output of the turn, so no further non-terminal tools may run (only end_turn/task_completed). End the turn now instead of calling more tools.'
+// Concise, calm summary for the followups ordering/gate rejections. These are
+// agent-facing control-flow diagnostics the model corrects on its own, so the
+// CLI suppresses the visible banner (see `autoRecovering` in
+// `common/src/types/print-mode.ts`); the full `message` still reaches the model.
+const FOLLOWUPS_ORDERING_USER_MESSAGE =
+  'The model called suggest_followups out of order and is correcting the ordering automatically. No action is needed.'
+// Concise, calm summary for the pre-gate git-committer withhold. Like the
+// followups ordering rejections, this is normal harness ordering the model
+// resolves by ending its turn, so the CLI suppresses the visible banner while
+// the full `message` still reaches the model.
+const GIT_COMMITTER_WITHHELD_USER_MESSAGE =
+  'Commit deferred until the validation/reviewer gate passes. No action is needed.'
+// Single source for the malformed-tool-call user summary shared by the native
+// (`executeToolCall`) and custom/MCP (`executeCustomToolCall`) parse-failure
+// paths, so the two stay in sync.
+const malformedToolCallUserMessage = (toolName: string): string =>
+  `The model sent a malformed \`${toolName}\` tool call and is correcting it automatically. No action is needed.`
 
 function isTerminalFollowupCompanion(name: string): boolean {
   return (
@@ -1966,7 +1983,7 @@ export async function executeToolCall<T extends ToolName>(
       type: 'error',
 
       message: `${toolCall.error}\n\n${inputLabel}:\n${formattedInput}`,
-      userMessage: `The model sent a malformed \`${toolName}\` tool call and is correcting it automatically. No action is needed.`,
+      userMessage: malformedToolCallUserMessage(toolName),
       autoRecovering: true,
     })
     logger.debug(
@@ -2090,6 +2107,8 @@ export async function executeToolCall<T extends ToolName>(
     onResponseChunk({
       type: 'error',
       message: postFollowupsBlockReason,
+      userMessage: FOLLOWUPS_ORDERING_USER_MESSAGE,
+      autoRecovering: true,
     })
     return abortablePreviousToolCallFinished
   }
@@ -2102,7 +2121,9 @@ export async function executeToolCall<T extends ToolName>(
       onResponseChunk({
         type: 'error',
         message:
-          'Tool `suggest_followups` is not available yet. GATE: PENDING (or final summary not written). End your turn so the runtime gate can clear; call this only after GATE: PASSED and a user-visible completion summary.',
+          'Tool `suggest_followups` is not available yet. GATE: PENDING (or final summary not written). End your turn so the runtime gate can clear. Call it only after GATE: PASSED, and only as the FINAL output of that turn: user-visible completion summary first, then git-committer if committing, then suggest_followups with nothing after it.',
+        userMessage: FOLLOWUPS_ORDERING_USER_MESSAGE,
+        autoRecovering: true,
       })
       return abortablePreviousToolCallFinished
     }
@@ -2169,6 +2190,8 @@ export async function executeToolCall<T extends ToolName>(
           type: 'error',
           message:
             'git-committer withheld: GATE: PENDING (need GATE: PASSED / phase=final_response_allowed). End your turn; do not retry or predict gate progress. Spawn git-committer once after GATE: PASSED.',
+          userMessage: GIT_COMMITTER_WITHHELD_USER_MESSAGE,
+          autoRecovering: true,
         })
         if (filteredAgents.length === 0) {
           return abortablePreviousToolCallFinished
@@ -3059,6 +3082,8 @@ export async function executeCustomToolCall(
     onResponseChunk({
       type: 'error',
       message: postFollowupsBlockReason,
+      userMessage: FOLLOWUPS_ORDERING_USER_MESSAGE,
+      autoRecovering: true,
     })
     return abortablePreviousToolCallFinished
   }
@@ -3112,7 +3137,7 @@ export async function executeCustomToolCall(
     onResponseChunk({
       type: 'error',
       message: `${toolCall.error}\n\n${inputLabel}:\n${formattedInput}`,
-      userMessage: `The model sent a malformed \`${toolName}\` tool call and is correcting it automatically. No action is needed.`,
+      userMessage: malformedToolCallUserMessage(toolName),
       autoRecovering: true,
     })
     logger.debug(
@@ -3169,14 +3194,16 @@ export async function executeCustomToolCall(
   // `previousToolCallFinished` here (the handler still awaits it internally).
   //
   // Reachability (RF-1): `queued` is threaded through `ExecuteToolCallParams`
-  // for any serialized same-path write, and custom/MCP tool paths can be
-  // queued when a per-path write barrier applies to a custom/unknown-path
-  // input — so this branch is genuinely reachable, not dead defensive code.
-  // It is rarer than the native write_file/edit_transaction path because most
-  // custom tools do not touch the project filesystem and therefore never hit
-  // the write barrier, but the runtime does not restrict `queued` to native
-  // tools. The downstream CLI flip is covered by the queued-block tool_start
-  // tests in sdk-event-handlers.test.ts (including the nested-agent case).
+  // for any serialized same-path write, and a custom/MCP tool has no statically
+  // determinable target path, so stream-parser.ts marks it `queued` whenever an
+  // outstanding write barrier or in-flight read exists — this branch is
+  // genuinely reachable, not dead defensive code. Pinned at the runtime level
+  // by 'emits tool_start for a custom/MCP tool queued behind an in-flight write
+  // (RF-1)' in __tests__/run-agent-step-tools.test.ts, which drives a custom
+  // tool through processStream behind a gated write_file and asserts the
+  // tool_start chunk for that call id. The downstream CLI flip is covered
+  // separately by the queued-block tool_start tests in
+  // sdk-event-handlers.test.ts (including the nested-agent case).
   if (queued === true) {
     abortablePreviousToolCallFinished.then(
       () => {

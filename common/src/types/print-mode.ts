@@ -13,13 +13,17 @@ export const printModeErrorSchema = z.object({
   type: z.literal('error'),
   message: z.string(),
   // Concise, calm summary for agent-recoverable errors (e.g. a malformed tool
-  // call the agent will auto-correct). When present, UIs should show this to
-  // the user instead of the full `message`, which carries detailed recovery
-  // context intended for the agent's message history.
+  // call the agent will auto-correct, or a runtime-enforced tool-ordering
+  // rejection the agent corrects by reordering). When present, UIs should show
+  // this to the user instead of the full `message`, which carries detailed
+  // recovery context intended for the agent's message history.
   userMessage: z.string().optional(),
-  // True when the runtime is already auto-correcting this error (e.g. a
-  // malformed tool call the model is retrying). UIs should not surface these
-  // as user-visible errors; the full `message` still flows to the agent.
+  // True when the runtime is already steering the agent out of this error and
+  // no user action is possible: a malformed tool call the model is retrying, or
+  // a control-flow/ordering rejection (e.g. `suggest_followups` called before
+  // the gate passed or after the turn's final tool) that the model resolves on
+  // its own. UIs must not surface these as user-visible errors; the full
+  // `message` still flows to the agent so it can correct itself.
   autoRecovering: z.boolean().optional(),
 })
 export type PrintModeError = z.infer<typeof printModeErrorSchema>

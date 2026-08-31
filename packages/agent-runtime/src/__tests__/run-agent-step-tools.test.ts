@@ -26,7 +26,12 @@ import {
 
 import { runAgentStep } from '../run-agent-step'
 import { clearAgentGeneratorCache } from '../run-programmatic-step'
-import { createToolCallChunk } from './test-utils'
+import { processStream } from '../tools/stream-parser'
+import {
+  createMockStreamWithToolCalls,
+  createToolCallChunk,
+  mockFileContext as sharedMockFileContext,
+} from './test-utils'
 import { asUserMessage } from '../util/messages'
 
 import type { AgentTemplate } from '../templates/types'
@@ -503,6 +508,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringContaining(
           'Tool `suggest_followups` is not available yet',
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -607,6 +613,7 @@ describe('runAgentStep - set_output tool', () => {
       expect.objectContaining({
         type: 'error',
         message: expect.stringContaining('git-committer withheld'),
+        autoRecovering: true,
       }),
     )
     // Pin the affirmative GATE vocabulary: withheld until GATE: PASSED /
@@ -704,6 +711,7 @@ describe('runAgentStep - set_output tool', () => {
       expect.objectContaining({
         type: 'error',
         message: expect.stringContaining('git-committer withheld'),
+        autoRecovering: true,
       }),
     )
     // The spawn_agents tool_call proceeds with only the helper agent.
@@ -1789,6 +1797,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringContaining(
           'Tool `suggest_followups` is not available yet',
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -2141,6 +2150,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringContaining(
           'Tool `suggest_followups` is not available yet',
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -2202,6 +2212,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringMatching(
           /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -2260,6 +2271,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringMatching(
           /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -2319,6 +2331,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringMatching(
           /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -2381,6 +2394,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringMatching(
           /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -2483,6 +2497,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringMatching(
           /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -2592,6 +2607,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringMatching(
           /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -3012,5 +3028,197 @@ describe('runAgentStep - set_output tool', () => {
     expect(resultAgentState.repeatedStepProgressCount).toBe(
       REPEATED_STEP_LOOP_LIMIT,
     )
+  })
+})
+
+describe('processStream queued custom/MCP tool tool_start', () => {
+  const customToolName = 'custom_queued_write'
+  const queuedFileContext: ProjectFileContext = {
+    ...sharedMockFileContext,
+    customToolDefinitions: {
+      [customToolName]: {
+        inputSchema: {
+          type: 'object',
+          properties: {
+            target: { type: 'string' },
+          },
+          required: ['target'],
+          additionalProperties: false,
+        },
+        endsAgentStep: false,
+        description: 'Custom tool used to pin the queued tool_start branch',
+      },
+    },
+  }
+  const customToolAgent: AgentTemplate = {
+    id: 'queued-custom-tool-agent',
+    displayName: 'Queued Custom Tool Agent',
+    spawnerPrompt: 'Drives a queued custom tool through processStream',
+    model: 'claude-3-5-sonnet-20241022',
+    inputSchema: {},
+    outputMode: 'last_message' as const,
+    includeMessageHistory: true,
+    inheritParentSystemPrompt: false,
+    mcpServers: {},
+    toolNames: ['write_file', customToolName, 'end_turn'],
+    spawnableAgents: [],
+    systemPrompt: 'Test system prompt',
+    instructionsPrompt: 'Test instructions prompt',
+    stepPrompt: 'Test step prompt',
+  }
+
+  type ToolEvent = {
+    type?: string
+    toolName?: string
+    toolCallId?: string
+    queued?: boolean
+  }
+  const asToolEvent = (chunk: unknown): ToolEvent => chunk as ToolEvent
+
+  it('emits tool_start for a custom/MCP tool queued behind an in-flight write (RF-1)', async () => {
+    // RF-1 reachability, pinned at the RUNTIME level: a custom/MCP tool has no
+    // statically determinable target path, so it serializes behind every
+    // outstanding write barrier. While a prior named-path write_file is still
+    // in flight, the custom tool is dispatched with `queued === true`, which is
+    // exactly the branch in executeCustomToolCall that emits `tool_start` once
+    // that barrier resolves. Deleting that emission makes this test fail.
+    const writePath = 'queued-custom-write.txt'
+    const chunks: unknown[] = []
+
+    let releaseWrite!: () => void
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve
+    })
+    let writeStarted!: () => void
+    const writeStart = new Promise<void>((resolve) => {
+      writeStarted = resolve
+    })
+    let customCallObserved!: () => void
+    const customCall = new Promise<void>((resolve) => {
+      customCallObserved = resolve
+    })
+
+    const agentRuntimeImpl: AgentRuntimeDeps & AgentRuntimeScopedDeps = {
+      ...TEST_AGENT_RUNTIME_IMPL,
+      sendAction: () => {},
+      requestFiles: async () => buildReadFilesResultV1([]),
+      requestOptionalFile: async () => null,
+      requestToolCall: async (toolCallParams) => {
+        if (toolCallParams.toolName === 'write_file') {
+          // Hold the per-path write barrier open so the following custom tool
+          // is dispatched while that write is still in flight.
+          writeStarted()
+          await writeGate
+          return { output: [] }
+        }
+        return { output: [{ type: 'json', value: { ok: true } }] }
+      },
+    }
+
+    const sessionState = getInitialSessionState(queuedFileContext)
+    // Pre-authorize the write path so write_file does not need a separate read.
+    sessionState.mainAgentState.readAuthorizationsByPath = {
+      [writePath]: true,
+    }
+
+    const stream = createMockStreamWithToolCalls([
+      {
+        toolName: 'write_file',
+        input: {
+          path: writePath,
+          instructions: 'hold the per-path write barrier',
+          content: 'first write',
+        },
+      },
+      { toolName: customToolName, input: { target: 'queued-custom-input' } },
+      { toolName: 'end_turn', input: {} },
+    ])
+
+    const processing = processStream({
+      ...agentRuntimeImpl,
+      agentContext: {},
+      agentState: sessionState.mainAgentState,
+      agentStepId: 'queued-custom-step-id',
+      agentTemplate: customToolAgent,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fileContext: queuedFileContext,
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { [customToolAgent.id]: customToolAgent },
+      messages: [],
+      prompt: 'Run a custom tool behind an in-flight write',
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      stream,
+      system: 'test system',
+      tools: {},
+      userId: TEST_USER_ID,
+      userInputId: 'test-input-id',
+      onCostCalculated: async () => {},
+      onResponseChunk: (chunk) => {
+        chunks.push(chunk)
+        const event = asToolEvent(chunk)
+        if (event.type === 'tool_call' && event.toolName === customToolName) {
+          customCallObserved()
+        }
+      },
+    })
+
+    await writeStart
+    await customCall
+
+    // The custom tool's tool_call is published immediately and carries the
+    // runtime `queued` signal, because the prior write still holds a barrier.
+    const customCallChunk = chunks
+      .map(asToolEvent)
+      .find(
+        (event) =>
+          event.type === 'tool_call' && event.toolName === customToolName,
+      )
+    expect(customCallChunk).toBeDefined()
+    expect(customCallChunk!.queued).toBe(true)
+    const customToolCallId = customCallChunk!.toolCallId
+    expect(typeof customToolCallId).toBe('string')
+
+    // No queued→running transition has fired yet for any call: every queued
+    // tool in this step is still waiting on the gated write.
+    expect(
+      chunks.map(asToolEvent).some((event) => event.type === 'tool_start'),
+    ).toBe(false)
+
+    releaseWrite()
+    await processing
+
+    // Once the write barrier resolves, executeCustomToolCall emits tool_start
+    // for the custom tool's own call id, ordered after its tool_call and before
+    // its tool_result.
+    const startIdx = chunks.findIndex((chunk) => {
+      const event = asToolEvent(chunk)
+      return (
+        event.type === 'tool_start' && event.toolCallId === customToolCallId
+      )
+    })
+    expect(startIdx).toBeGreaterThan(-1)
+    expect(chunks[startIdx]).toMatchObject({
+      type: 'tool_start',
+      toolCallId: customToolCallId,
+    })
+
+    const callIdx = chunks.findIndex((chunk) => {
+      const event = asToolEvent(chunk)
+      return event.type === 'tool_call' && event.toolCallId === customToolCallId
+    })
+    const resultIdx = chunks.findIndex((chunk) => {
+      const event = asToolEvent(chunk)
+      return (
+        event.type === 'tool_result' && event.toolCallId === customToolCallId
+      )
+    })
+    expect(callIdx).toBeGreaterThan(-1)
+    expect(callIdx).toBeLessThan(startIdx)
+    expect(resultIdx).toBeGreaterThan(startIdx)
   })
 })
