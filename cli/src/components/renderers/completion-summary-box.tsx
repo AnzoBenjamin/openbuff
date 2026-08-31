@@ -7,7 +7,30 @@ import type { CompletionSummaryContentBlock } from '../../types/chat'
 import type { ChatTheme } from '../../types/theme-system'
 import type { CompletionSummary } from '../../utils/completion-summary'
 
-type Tone = 'secondary' | 'success' | 'error' | 'warning' | 'info'
+type Tone = 'secondary' | 'success' | 'error' | 'warning'
+
+/**
+ * Row labels. The label column carries the noun, so the row values are bare
+ * descriptors ('2 edited') and no icon is needed to identify the row.
+ */
+const ROW_LABELS = {
+  files: 'Files',
+  hooks: 'Hooks',
+  review: 'Review',
+  tests: 'Tests',
+  agents: 'Agents',
+  errors: 'Errors',
+} as const
+
+/**
+ * Shared label column: the longest label plus a two-column gutter, so every
+ * value starts at the same offset. Derived rather than hardcoded so a longer
+ * label added later cannot silently misalign the column. `.length` is correct
+ * only because these labels are plain ASCII — a label with wide or combining
+ * characters would need rendered-width math instead.
+ */
+const LABEL_COLUMN_WIDTH =
+  Math.max(...Object.values(ROW_LABELS).map((label) => label.length)) + 2
 
 const deriveTone = (summary: CompletionSummary): Tone => {
   const isBlockingVerdict =
@@ -54,18 +77,32 @@ const statusColorForTone = (tone: Tone, theme: ChatTheme): string => {
       return theme.error
     case 'warning':
       return theme.warning
-    case 'info':
-      return theme.info
     default:
       return theme.secondary
   }
 }
 
-const reviewIcon = (verdict: string | null): string => {
-  if (verdict === 'BLOCKING' || verdict === 'NEEDS_WORK') return '🔴'
-  if (verdict === 'NON_BLOCKING') return '🟡'
-  if (verdict === 'LOOKS_GOOD' || verdict === 'APPROVED') return '🟢'
-  return '🟢'
+interface SummaryRowProps {
+  label: string
+  value: string
+  tone: Tone
+}
+
+/**
+ * One compact row: a muted, padded label column followed by the toned value.
+ * Exactly two inline spans inside a single `<text>` — OpenTUI rejects nested
+ * block elements inside text.
+ */
+const SummaryRow = ({ label, value, tone }: SummaryRowProps) => {
+  const theme = useTheme()
+  return (
+    <text style={{ wrapMode: 'word' }}>
+      <span style={{ fg: theme.muted }}>
+        {label.padEnd(LABEL_COLUMN_WIDTH)}
+      </span>
+      <span style={{ fg: statusColorForTone(tone, theme) }}>{value}</span>
+    </text>
+  )
 }
 
 interface CompletionSummaryBoxProps {
@@ -74,7 +111,6 @@ interface CompletionSummaryBoxProps {
 
 export const CompletionSummaryBox = memo(
   ({ block }: CompletionSummaryBoxProps) => {
-    const theme = useTheme()
     const summary = block.summary
     const tone = deriveTone(summary)
 
@@ -103,12 +139,11 @@ export const CompletionSummaryBox = memo(
     const testsTone: Tone = summary.testFailed > 0 ? 'error' : 'success'
     const auxTone: Tone = summary.auxiliaryFailed > 0 ? 'error' : 'success'
 
-    const filesText = (() => {
+    // Row values are built inside each guarded branch below, so a hidden row's
+    // string is never assembled.
+    const buildFilesText = (): string => {
       const parts: string[] = []
-      if (summary.filesEdited > 0)
-        parts.push(
-          `${summary.filesEdited} file${summary.filesEdited !== 1 ? 's' : ''} edited`,
-        )
+      if (summary.filesEdited > 0) parts.push(`${summary.filesEdited} edited`)
       if (summary.filesFailed > 0) parts.push(`${summary.filesFailed} failed`)
       if (summary.filesUnconfirmed > 0)
         parts.push(`${summary.filesUnconfirmed} unconfirmed`)
@@ -117,26 +152,25 @@ export const CompletionSummaryBox = memo(
       if (summary.rollbackIncomplete > 0)
         parts.push(`${summary.rollbackIncomplete} rollback incomplete`)
       return parts.join(', ')
-    })()
-    const hooksText = (() => {
+    }
+    const buildHooksText = (): string => {
       const parts: string[] = []
       if (summary.hooksPassed > 0) parts.push(`${summary.hooksPassed} passed`)
       if (summary.hooksFailed > 0) parts.push(`${summary.hooksFailed} failed`)
       if (summary.hooksSkipped > 0)
         parts.push(`${summary.hooksSkipped} skipped`)
-      return `Hooks: ${parts.join(', ')}`
-    })()
-    const testsText = (() => {
-      let part = 'Tests: '
-      if (summary.testPassed > 0) part += `${summary.testPassed} passed`
-      if (summary.testFailed > 0) {
-        if (summary.testPassed > 0) part += ', '
-        part += `${summary.testFailed} failed`
-      }
-      return part
-    })()
-    const auxText = `${summary.auxiliaryCompleted} auxiliary agent${summary.auxiliaryCompleted === 1 ? '' : 's'} completed${summary.auxiliaryFailed > 0 ? `, ${summary.auxiliaryFailed} failed` : ''}`
-    const errorsText = `${summary.errors} error${summary.errors !== 1 ? 's' : ''}`
+      return parts.join(', ')
+    }
+    const buildTestsText = (): string => {
+      const parts: string[] = []
+      if (summary.testPassed > 0) parts.push(`${summary.testPassed} passed`)
+      if (summary.testFailed > 0) parts.push(`${summary.testFailed} failed`)
+      return parts.join(', ')
+    }
+    const buildAuxText = (): string =>
+      `${summary.auxiliaryCompleted} completed${summary.auxiliaryFailed > 0 ? `, ${summary.auxiliaryFailed} failed` : ''}`
+    const buildErrorsText = (): string =>
+      `${summary.errors} error${summary.errors !== 1 ? 's' : ''}`
     const reviewTone: Tone =
       summary.reviewVerdict === 'BLOCKING' ||
       summary.reviewVerdict === 'NEEDS_WORK'
@@ -146,59 +180,48 @@ export const CompletionSummaryBox = memo(
           : 'success'
 
     return (
-      <HarnessBox tone={tone} gap={1} paddingBottom={1}>
+      <HarnessBox tone={tone} title="Run summary" gap={0} paddingBottom={0}>
         {hasFiles ? (
-          <text style={{ wrapMode: 'word', fg: theme.foreground }}>
-            <span style={{ fg: statusColorForTone(filesTone, theme) }}>
-              {filesTone === 'error'
-                ? '❌'
-                : filesTone === 'warning'
-                  ? '⚠️'
-                  : '✅'}
-            </span>
-            <span style={{ fg: theme.foreground }}>{` ${filesText}`}</span>
-          </text>
+          <SummaryRow
+            label={ROW_LABELS.files}
+            value={buildFilesText()}
+            tone={filesTone}
+          />
         ) : null}
         {hasHooks ? (
-          <text style={{ wrapMode: 'word', fg: theme.foreground }}>
-            <span style={{ fg: statusColorForTone(hooksTone, theme) }}>
-              {hooksTone === 'error' ? '❌' : '✅'}
-            </span>
-            <span style={{ fg: theme.foreground }}>{` ${hooksText}`}</span>
-          </text>
+          <SummaryRow
+            label={ROW_LABELS.hooks}
+            value={buildHooksText()}
+            tone={hooksTone}
+          />
         ) : null}
         {summary.reviewVerdict ? (
-          <text style={{ wrapMode: 'word', fg: theme.foreground }}>
-            <span style={{ fg: theme.foreground }}>Reviewed:</span>
-            <span
-              style={{ fg: statusColorForTone(reviewTone, theme) }}
-            >{` ${reviewIcon(summary.reviewVerdict)}`}</span>
-            <span
-              style={{ fg: theme.foreground }}
-            >{` ${summary.reviewVerdict}`}</span>
-          </text>
+          <SummaryRow
+            label={ROW_LABELS.review}
+            value={summary.reviewVerdict}
+            tone={reviewTone}
+          />
         ) : null}
         {hasTests ? (
-          <text style={{ wrapMode: 'word', fg: theme.foreground }}>
-            <span style={{ fg: statusColorForTone(testsTone, theme) }}>
-              {testsTone === 'error' ? '❌' : '✅'}
-            </span>
-            <span style={{ fg: theme.foreground }}>{` ${testsText}`}</span>
-          </text>
+          <SummaryRow
+            label={ROW_LABELS.tests}
+            value={buildTestsText()}
+            tone={testsTone}
+          />
         ) : null}
         {hasAux ? (
-          <text style={{ wrapMode: 'word', fg: theme.foreground }}>
-            <span style={{ fg: statusColorForTone(auxTone, theme) }}>
-              {auxTone === 'error' ? '⚠️' : '✅'}
-            </span>
-            <span style={{ fg: theme.foreground }}>{` ${auxText}`}</span>
-          </text>
+          <SummaryRow
+            label={ROW_LABELS.agents}
+            value={buildAuxText()}
+            tone={auxTone}
+          />
         ) : null}
         {summary.errors > 0 ? (
-          <text style={{ wrapMode: 'word', fg: theme.foreground }}>
-            <span style={{ fg: theme.error }}>❌</span>
-            <span style={{ fg: theme.foreground }}>{` ${errorsText}`}</span>
-          </text>
+          <SummaryRow
+            label={ROW_LABELS.errors}
+            value={buildErrorsText()}
+            tone="error"
+          />
         ) : null}
       </HarnessBox>
     )

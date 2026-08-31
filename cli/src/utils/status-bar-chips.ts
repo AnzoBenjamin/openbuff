@@ -35,6 +35,13 @@ export type SelectStatusBarChipsInput = {
    * '!', so the label should lead with its subject (e.g. 'idx failed: …').
    */
   indexChip?: { label: string; tone: 'secondary' | 'warning' | 'error' } | null
+  /** Whether the scroll-to-bottom button shares the row with the chips. */
+  showScrollButton?: boolean
+  /**
+   * Whether that button renders its compact (glyph-only) form, which is three
+   * columns instead of ten. Only consulted while `showScrollButton` is set.
+   */
+  scrollButtonCompact?: boolean
   /**
    * Accumulated context-compaction notice for the current turn, or null when
    * nothing has been compacted. `degraded` marks a compaction that did not fit
@@ -60,6 +67,21 @@ const WIDTH_BUDGET_RATIO = 0.4
 const MIN_WIDTH_BUDGET = 8
 /** Columns reserved for the stop-button hint rendered beside the chips. */
 export const STOP_BUTTON_WIDTH = 7
+/**
+ * Columns reserved for the scroll-to-bottom button rendered beside the chips.
+ * `SCROLL_BUTTON_WIDTH` in components/scroll-to-bottom-button.tsx is the source
+ * of truth ('↓ Bottom' plus one column of padding per side); duplicated here so
+ * this util does not import a component module.
+ */
+export const SCROLL_BUTTON_RESERVATION = 10
+/**
+ * Columns reserved for the compact (narrow-terminal) scroll-to-bottom button.
+ * `SCROLL_BUTTON_COMPACT_WIDTH` in components/scroll-to-bottom-button.tsx is the
+ * source of truth (the glyph plus one column of padding per side); duplicated
+ * here for the same reason as the expanded reservation, so reserving the wider
+ * form at 'xs'/'sm' cannot silently cost the chips seven columns.
+ */
+export const SCROLL_BUTTON_COMPACT_RESERVATION = 3
 /** Columns rendered between two adjacent chips. */
 const CHIP_SEPARATOR_WIDTH = 3
 /** Suffix appended to a truncated status chip label. */
@@ -278,22 +300,34 @@ export function statusBarClusterWidth(chips: StatusBarChip[]): number {
   return chips.reduce((sum, chip) => sum + stringWidth(chip.label), separators)
 }
 
-/** Columns available to the chip cluster for a given terminal width. */
+/**
+ * Columns available to the chip cluster for a given terminal width.
+ * `scrollButtonCompact` selects the narrow three-column reservation, matching
+ * the form the button actually renders at 'xs'/'sm'.
+ */
 export function statusBarChipBudget(
   terminalWidth: number,
   showStop: boolean,
+  showScrollButton = false,
+  scrollButtonCompact = false,
 ): number {
-  const stopReservation = showStop ? STOP_BUTTON_WIDTH : 0
+  const scrollReservation = !showScrollButton
+    ? 0
+    : scrollButtonCompact
+      ? SCROLL_BUTTON_COMPACT_RESERVATION
+      : SCROLL_BUTTON_RESERVATION
+  const reservedColumns = (showStop ? STOP_BUTTON_WIDTH : 0) + scrollReservation
   const available =
-    Math.floor(terminalWidth * WIDTH_BUDGET_RATIO) - stopReservation
-  // The floor applies after the stop-hint reservation so one chip still fits in
-  // a narrow terminal, then the result is clamped to the columns actually left
-  // beside the stop hint so the cluster can never overflow the real row width.
+    Math.floor(terminalWidth * WIDTH_BUDGET_RATIO) - reservedColumns
+  // The floor applies after the stop-hint and scroll-button reservations so one
+  // chip still fits in a narrow terminal, then the result is clamped to the
+  // columns actually left beside those two controls so the cluster can never
+  // overflow the real row width.
   return Math.max(
     0,
     Math.min(
       Math.max(MIN_WIDTH_BUDGET, available),
-      terminalWidth - stopReservation,
+      terminalWidth - reservedColumns,
     ),
   )
 }
@@ -320,6 +354,8 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
     elapsedSeconds,
     showTimer,
     showStop,
+    showScrollButton,
+    scrollButtonCompact,
     isActive,
   } = input
 
@@ -420,7 +456,12 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
     })
   }
 
-  const budget = statusBarChipBudget(terminalWidth, showStop)
+  const budget = statusBarChipBudget(
+    terminalWidth,
+    showStop,
+    showScrollButton,
+    scrollButtonCompact,
+  )
 
   while (statusBarClusterWidth(chips) > budget) {
     if (removeChip(chips, 'cost')) continue
