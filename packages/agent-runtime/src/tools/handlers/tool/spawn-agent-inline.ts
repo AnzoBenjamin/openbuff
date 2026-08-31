@@ -15,7 +15,7 @@ import {
 } from './spawn-agent-utils'
 import { appendOrchestrationEvent } from '../../../util/orchestration-ledger'
 import { selectAgentAttempt } from '../../../orchestration/select-agent-attempt'
-import { isContextPrunerAgentId } from '../../../util/runtime-semantic-compaction'
+import { isContextPrunerAgentId } from '../../../util/context-pruner-identity'
 import {
   acquireWorkspacePathLease,
   releaseWorkspacePathLease,

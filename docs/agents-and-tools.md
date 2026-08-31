@@ -1464,7 +1464,11 @@ extraction remains authoritative across repeated compaction.
 
 The SDK's request-time brake (`getMessagesForModelContext`) subtracts this
 request's counted system-prompt and tool-schema tokens from the resolved message
-limit, so its `cache_emergency_trim` log and analytics payload separate the two
+limit. Tool names, descriptions, and plain JSON Schemas are counted exactly,
+while an opaque Zod/Standard Schema `inputSchema` is converted to a real JSON
+Schema and counted from that projection, clamped between a per-tool floor and a
+per-tool ceiling and falling back to the floor when the conversion is not
+possible. Its `cache_emergency_trim` log and analytics payload separate the two
 budgets explicitly: `maxTotalTokens` is the resolved _request_ budget,
 `systemTokens` is the counted overhead, and `effectiveMessageBudgetTokens` is
 the message-only budget actually applied. `triggerBudgetTokens` and

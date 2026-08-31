@@ -15,7 +15,7 @@ import {
   getSemanticCompactionBudget,
 } from './util/context-pruning'
 import { remintConfirmedPostEditAnchors } from './util/read-authorization'
-import { isContextPrunerAgentId } from './util/runtime-semantic-compaction'
+import { isContextPrunerAgentId } from './util/context-pruner-identity'
 import { createWarnLatch } from './util/warn-latch'
 
 import type { FileProcessingState } from './tools/handlers/tool/write-file'

@@ -1,10 +1,10 @@
-import {
-  normalizeAgentIdForLookup,
-  parseAgentId,
-} from '@codebuff/common/util/agent-id-parsing'
 import { mapValues } from 'lodash'
 
 import { getAgentTemplate } from '../templates/agent-registry'
+import {
+  CONTEXT_PRUNER_AGENT_ID,
+  isContextPrunerAgentId,
+} from './context-pruner-identity'
 
 import type { executeSubagent } from '../tools/handlers/tool/spawn-agent-utils'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
@@ -12,32 +12,6 @@ import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type { AgentState } from '@codebuff/common/types/session-state'
 import type { ToolSet } from 'ai'
-
-const CONTEXT_PRUNER_AGENT_ID = 'context-pruner'
-
-/**
- * Canonical pruner-identity check, shared by both pruner spawn paths.
- *
- * A consumer may declare the pruner bare (`context-pruner`),
- * publisher-qualified (`acme/context-pruner`), or version-pinned
- * (`acme/context-pruner@1.2.3`), and the spawn-permission contract resolves the
- * agent type to whatever was declared. Every pruner-specific decision — the
- * recursion guard here, and the anti-thrash advisory, transcript write-back and
- * silent-output contract on the `spawn_agent_inline` path — must compare agent
- * IDs through this helper instead of string-equality against the bare literal,
- * otherwise a declared publisher/version pin silently changes behavior.
- */
-export function isContextPrunerAgentId(
-  agentId: string | null | undefined,
-): boolean {
-  if (!agentId) {
-    return false
-  }
-  const { agentId: bareAgentId } = parseAgentId(
-    normalizeAgentIdForLookup(agentId),
-  )
-  return bareAgentId === CONTEXT_PRUNER_AGENT_ID
-}
 
 /**
  * Runtime-driven semantic context compaction for prompt-only agent templates.
@@ -50,6 +24,12 @@ export function isContextPrunerAgentId(
  * never declared `context-pruner` in `spawnableAgents` never pays for the pass.
  * The pass is strictly best-effort — it may never abort the agent turn,
  * because the mechanical emergency brake downstream is the real guarantee.
+ *
+ * The caller owns the `suppressSemanticCompaction` anti-thrash gate:
+ * `run-agent-step.ts` excludes a suppressed iteration before calling this
+ * helper (a suppressed iteration announces no semantic pass either), so this
+ * helper deliberately does not re-check suppression and must not be called
+ * from an un-gated site.
  */
 export async function runRuntimeSemanticCompaction(
   params: {
@@ -78,7 +58,7 @@ export async function runRuntimeSemanticCompaction(
     | 'spawnParams'
     | 'userInputId'
   >,
-): Promise<{ ran: boolean }> {
+): Promise<void> {
   const {
     agentState: parentAgentState,
     agentTemplate,
@@ -98,18 +78,7 @@ export async function runRuntimeSemanticCompaction(
     isContextPrunerAgentId(agentTemplate.id) ||
     isContextPrunerAgentId(parentAgentState.agentType)
   ) {
-    return { ran: false }
-  }
-
-  // Same transient, loop-owned anti-thrash advisory the inline pruner spawn
-  // honors: consecutive semantic passes measurably reclaimed no space, so stop
-  // paying for another one this turn. Never authoritative across turns.
-  if (parentAgentState.suppressSemanticCompaction === true) {
-    logger.debug(
-      { agentType: CONTEXT_PRUNER_AGENT_ID, runId },
-      'Skipped runtime semantic compaction: semantic compaction is suppressed for this turn',
-    )
-    return { ran: false }
+    return
   }
 
   try {
@@ -148,7 +117,7 @@ export async function runRuntimeSemanticCompaction(
         },
         'Skipped runtime semantic compaction: context-pruner is not declared in the parent template spawnableAgents',
       )
-      return { ran: false }
+      return
     }
 
     // Spawn exactly what the consumer declared. `getMatchingSpawn` grants
@@ -166,7 +135,7 @@ export async function runRuntimeSemanticCompaction(
         { agentType: prunerAgentId, runId },
         'Skipped runtime semantic compaction: context-pruner template could not be resolved',
       )
-      return { ran: false }
+      return
     }
 
     // Mirrors the pruner-specific inline setup: the context editor needs the
@@ -214,7 +183,6 @@ export async function runRuntimeSemanticCompaction(
     // Only the transcript propagates back, exactly like the inline path's
     // `editsParentMessageHistory` branch.
     parentAgentState.messageHistory = result.agentState.messageHistory
-    return { ran: true }
   } catch (error) {
     // Non-fatal by design: a pruner failure must never abort the agent turn.
     // The deterministic mechanical brake still runs downstream.
@@ -222,6 +190,6 @@ export async function runRuntimeSemanticCompaction(
       { error, agentType: CONTEXT_PRUNER_AGENT_ID, runId },
       'Runtime-driven semantic compaction failed (non-fatal)',
     )
-    return { ran: false }
+    return
   }
 }

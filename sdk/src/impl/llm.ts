@@ -11,6 +11,7 @@ import { convertCbToModelMessages } from '@codebuff/common/util/messages'
 import { isExplicitlyDefinedModel } from '@codebuff/common/util/model-utils'
 import { StopSequenceHandler } from '@codebuff/common/util/stop-sequence'
 import {
+  asSchema,
   streamText,
   generateText,
   generateObject,
@@ -60,10 +61,7 @@ import type { OpenRouterProviderOptions } from '@codebuff/internal/openrouter-ai
 import type { GenerateObjectResult, LanguageModel } from 'ai'
 import type z from 'zod/v4'
 import { trimMessagesToFitTokenLimit } from '@codebuff/agent-runtime/util/messages'
-import {
-  DEFAULT_MAX_CONTEXT_TOKENS,
-  getModelContextMessageLimit,
-} from '@codebuff/agent-runtime/util/context-pruning'
+import { getModelContextMessageLimit } from '@codebuff/agent-runtime/util/context-pruning'
 import { countTokensJson } from '@codebuff/agent-runtime/util/token-counter'
 import type { Message } from '@codebuff/common/types/messages/codebuff-message'
 
@@ -386,17 +384,28 @@ const POST_STREAM_METADATA_TIMEOUT_MS = 500
 const MAX_TOOL_SCHEMA_PROBE_DEPTH = 12
 
 /**
- * Flat token estimate for a tool whose `inputSchema` is a validation-library
- * schema instance (`tool({ inputSchema: z.object({...}) })` — the canonical
- * form the published `promptAiSdkStream`/`promptAiSdk` param types accept)
- * rather than a plain JSON Schema. Such objects are not JSON data: they carry
- * functions and self-references, so serializing them either throws on a cycle
- * or emits library internals whose size bears no relation to the schema the
- * provider actually receives. A flat per-tool estimate keeps the overhead
- * figure in the right order of magnitude without reaching into any library's
- * internals.
+ * Floor for the per-tool reservation of an `inputSchema` that is a
+ * validation-library schema instance (`tool({ inputSchema: z.object({...}) })`
+ * — the canonical form the published `promptAiSdkStream`/`promptAiSdk` param
+ * types accept) rather than a plain JSON Schema. Such objects are not JSON
+ * data: they carry functions and self-references, so serializing them either
+ * throws on a cycle or emits library internals whose size bears no relation to
+ * the schema the provider actually receives. The schema is therefore converted
+ * to a real JSON Schema and counted from that projection (see
+ * {@link countOpaqueToolSchemaTokens}); this floor is what a tool reserves when
+ * the conversion is impossible or yields something smaller, so a failed
+ * conversion never reserves less than the previous flat estimate did.
  */
-const OPAQUE_TOOL_SCHEMA_TOKENS = 120
+const OPAQUE_TOOL_SCHEMA_FALLBACK_TOKENS = 120
+
+/**
+ * Per-tool ceiling on the converted schema count above. Counting the real JSON
+ * Schema keeps a large tool surface from being materially under-reserved, but
+ * `getMessagesForModelContext` subtracts this overhead from the message budget
+ * one-for-one, so a single absurd schema must not be able to collapse that
+ * budget to nothing.
+ */
+const MAX_COUNTED_TOOL_SCHEMA_TOKENS = 8_000
 
 /**
  * True when `value` is plain JSON data that `JSON.stringify` reproduces
@@ -442,6 +451,43 @@ function getPlainToolInputSchema(inputSchema: unknown): unknown {
 }
 
 /**
+ * Size-aware token reservation for a tool whose `inputSchema` is an opaque
+ * validation-library schema instance. The instance itself is never
+ * `JSON.stringify`-ed: it is converted to a real JSON Schema with the AI SDK's
+ * `asSchema` helper, validated with {@link isJsonData}, counted from that
+ * projection, and clamped into
+ * `[OPAQUE_TOOL_SCHEMA_FALLBACK_TOKENS, MAX_COUNTED_TOOL_SCHEMA_TOKENS]`.
+ *
+ * Conversion is best-effort and can never propagate a failure out of
+ * {@link countRequestOverheadTokens}: a non-schema or self-referential object
+ * makes `asSchema` (or reading its `jsonSchema` property) throw, and any result
+ * that is not plain JSON data — a `Promise`, a wrapper, an absent property — is
+ * treated as a failed conversion. Both cases fall back to the floor instead of
+ * charging library internals against the message budget.
+ */
+function countOpaqueToolSchemaTokens(inputSchema: unknown): number {
+  let counted = 0
+  try {
+    const { jsonSchema } = asSchema(
+      inputSchema as Parameters<typeof asSchema>[0],
+    ) as { jsonSchema?: unknown }
+    if (isJsonData(jsonSchema)) {
+      // `isJsonData` returns a plain boolean rather than a type predicate, so
+      // narrow explicitly. It has already proven this is JSON data, and only a
+      // non-null object or primitive reaches `countTokensJson`.
+      counted = countTokensJson(jsonSchema as string | object)
+    }
+  } catch {
+    // Any conversion failure (non-schema input, cycle, throwing getter) leaves
+    // `counted` at 0 so the clamp below reserves the flat floor.
+  }
+  return Math.max(
+    OPAQUE_TOOL_SCHEMA_FALLBACK_TOKENS,
+    Math.min(MAX_COUNTED_TOOL_SCHEMA_TOKENS, counted),
+  )
+}
+
+/**
  * Token cost of the tool surface of a request, counted from a JSON-safe
  * projection of the caller-supplied `tools` rather than from the object
  * itself. The projection mirrors the Anthropic-shaped `toolsForTokenCount`
@@ -467,7 +513,7 @@ function countToolSurfaceTokens(tools: unknown): number {
       ...(inputSchema !== undefined && { input_schema: inputSchema }),
     })
     if (inputSchema === undefined && definition.inputSchema !== undefined) {
-      total += OPAQUE_TOOL_SCHEMA_TOKENS
+      total += countOpaqueToolSchemaTokens(definition.inputSchema)
     }
   }
   return total
@@ -488,10 +534,16 @@ function countToolSurfaceTokens(tools: unknown): number {
  * Schema) instance. Counting those by `JSON.stringify` would throw on a
  * self-reference and, when it did not throw, would charge library internals
  * against the message budget and collapse it. Names, descriptions, and plain
- * JSON Schemas are counted exactly; an opaque schema instance contributes the
- * bounded {@link OPAQUE_TOOL_SCHEMA_TOKENS} estimate instead. Absent fields
- * count 0 rather than counting `undefined`, and `includeTools` is false when
- * the provider-compatibility layer strips tools from the request.
+ * JSON Schemas are counted exactly; an opaque schema instance is instead
+ * converted to a real JSON Schema with the AI SDK's `asSchema` helper and
+ * counted from that projection, clamped into
+ * `[OPAQUE_TOOL_SCHEMA_FALLBACK_TOKENS, MAX_COUNTED_TOOL_SCHEMA_TOKENS]` so the
+ * reservation is size-aware without being pathological. That conversion never
+ * throws out of this function: a non-schema or self-referential `inputSchema`
+ * falls back to the floor. Absent fields count 0 rather than counting
+ * `undefined` — a tool with no `inputSchema` at all reserves nothing for a
+ * schema — and `includeTools` is false when the provider-compatibility layer
+ * strips tools from the request.
  */
 export function countRequestOverheadTokens(params: {
   system?: unknown

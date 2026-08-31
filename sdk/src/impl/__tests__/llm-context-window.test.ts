@@ -2,7 +2,7 @@ import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
 import { userMessage } from '@codebuff/common/util/messages'
 import { COMPACTED_CONTEXT_POINTER } from '@codebuff/agent-runtime/util/messages'
 import { countTokensJson } from '@codebuff/agent-runtime/util/token-counter'
-import { describe, expect, mock, spyOn, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 
 import z from 'zod/v4'
 
@@ -334,8 +334,10 @@ describe('getMessagesForModelContext', () => {
       includeTools: true,
     })
 
-    // Bounded: a two-tool Zod surface must not be charged the thousands of
-    // tokens that serializing the schema instances' internals would produce.
+    // Bounded: the schemas are converted to JSON Schema and counted (clamped
+    // between the per-tool floor and ceiling), so a two-tool surface of small
+    // schemas is still nowhere near the thousands of tokens that serializing
+    // the schema instances' internals would produce.
     expect(overhead).toBeGreaterThan(0)
     expect(overhead).toBeLessThan(1_000)
 
@@ -350,6 +352,147 @@ describe('getMessagesForModelContext', () => {
         logger,
       }),
     ).toBe(messages)
+  })
+
+  test('reserves materially more for a large Zod schema than a small one', () => {
+    // The reservation is size-aware: a flat per-tool estimate under-reserved a
+    // large tool surface, which made the request-time brake believe more
+    // message budget was available than really was. Assert the relationship,
+    // not a token count.
+    const smallOverhead = countRequestOverheadTokens({
+      tools: {
+        tiny_tool: {
+          description: 'A tool with one small field',
+          inputSchema: z.object({ path: z.string() }),
+        },
+      },
+      includeTools: true,
+    })
+    const largeOverhead = countRequestOverheadTokens({
+      tools: {
+        tiny_tool: {
+          description: 'A tool with one small field',
+          inputSchema: z.object({
+            path: z.string().describe('Absolute or project-relative file path'),
+            startLine: z.number().describe('First line to read, 1-indexed'),
+            endLine: z.number().describe('Last line to read, inclusive'),
+            encoding: z.string().describe('Text encoding of the file'),
+            includeHidden: z.boolean().describe('Include dot-prefixed entries'),
+            maxBytes: z.number().describe('Hard cap on bytes read'),
+            glob: z.string().describe('Glob filter applied to matches'),
+            exclude: z.array(z.string()).describe('Glob patterns to skip'),
+            followSymlinks: z.boolean().describe('Resolve symbolic links'),
+            recursive: z.boolean().describe('Walk nested directories'),
+            sortBy: z.string().describe('Sort key for the returned entries'),
+            limit: z.number().describe('Maximum number of entries returned'),
+          }),
+        },
+      },
+      includeTools: true,
+    })
+
+    expect(largeOverhead).toBeGreaterThan(smallOverhead)
+  })
+
+  test('counts a Zod schema in the same ballpark as its JSON-Schema equivalent', () => {
+    // Conversion output is not byte-identical to a hand-written schema, so the
+    // parity claim is a ballpark one: the Zod surface must no longer be charged
+    // a token order of magnitude less than the plain JSON Schema it compiles to.
+    const zodOverhead = countRequestOverheadTokens({
+      tools: {
+        read_file: {
+          description: 'Read a file',
+          inputSchema: z.object({
+            path: z.string().describe('File path'),
+            startLine: z.number().describe('First line to read'),
+            endLine: z.number().describe('Last line to read'),
+            encoding: z.string().describe('Text encoding'),
+          }),
+        },
+      },
+      includeTools: true,
+    })
+    const jsonSchemaOverhead = countRequestOverheadTokens({
+      tools: {
+        read_file: {
+          description: 'Read a file',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'File path' },
+              startLine: { type: 'number', description: 'First line to read' },
+              endLine: { type: 'number', description: 'Last line to read' },
+              encoding: { type: 'string', description: 'Text encoding' },
+            },
+            required: ['path', 'startLine', 'endLine', 'encoding'],
+          },
+        },
+      },
+      includeTools: true,
+    })
+
+    expect(zodOverhead).toBeGreaterThanOrEqual(
+      Math.floor(jsonSchemaOverhead / 2),
+    )
+  })
+
+  test('reserves at least the fallback floor for an unconvertible schema', () => {
+    // An `inputSchema` that is neither plain JSON data nor convertible to JSON
+    // Schema still has to reserve something, or the brake would silently treat
+    // an opaque tool surface as free.
+    class OpaqueSchema {
+      readonly kind = 'opaque'
+      validate(): boolean {
+        return true
+      }
+    }
+
+    const withoutSchema = countRequestOverheadTokens({
+      tools: { opaque_tool: { description: 'Opaque schema' } },
+      includeTools: true,
+    })
+    const withOpaqueSchema = countRequestOverheadTokens({
+      tools: {
+        opaque_tool: {
+          description: 'Opaque schema',
+          inputSchema: new OpaqueSchema(),
+        },
+      },
+      includeTools: true,
+    })
+
+    // A tool with no `inputSchema` at all reserves nothing for a schema.
+    expect(withoutSchema).toBe(
+      countTokensJson({ name: 'opaque_tool', description: 'Opaque schema' }),
+    )
+    // The floor is today's flat estimate, so behavior never regresses below it.
+    expect(withOpaqueSchema - withoutSchema).toBeGreaterThanOrEqual(120)
+  })
+
+  test('clamps an absurdly large schema to the per-tool ceiling', () => {
+    // Size-awareness must not let one pathological schema collapse the message
+    // budget: the counted reservation is capped per tool (8_000 tokens).
+    const shape: Record<string, z.ZodType> = {}
+    for (let index = 0; index < 1_500; index++) {
+      shape[`field_${index}`] = z
+        .string()
+        .describe(`Description of field number ${index} on this absurd schema`)
+    }
+
+    const overhead = countRequestOverheadTokens({
+      tools: {
+        absurd_tool: {
+          description: 'A tool with a pathologically large schema',
+          inputSchema: z.object(shape),
+        },
+      },
+      includeTools: true,
+    })
+
+    // Materially size-aware (far above the 120-token floor) but still bounded
+    // by the ceiling plus the exactly-counted name/description.
+    expect(overhead).toBeGreaterThan(1_000)
+    expect(overhead).toBeLessThan(8_100)
   })
 
   test('counts plain JSON Schema tool surfaces exactly', () => {
@@ -387,6 +530,10 @@ describe('getMessagesForModelContext', () => {
   test('never serializes a self-referential tool schema', () => {
     const cyclic: Record<string, unknown> = { type: 'object' }
     cyclic.self = cyclic
+
+    // A cyclic non-schema object cannot be converted to JSON Schema, so the
+    // conversion attempt must be swallowed and the tool must fall back to the
+    // flat floor rather than throwing out of countRequestOverheadTokens.
 
     expect(() =>
       countRequestOverheadTokens({
