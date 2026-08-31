@@ -11,10 +11,17 @@ import {
 } from 'bun:test'
 
 import {
+  configureExternalReadRoots,
+  ensureExternalReadRootsConfigured,
+  getExternalReadRoots,
   getOwnedTempRoots,
+  isExternalReadPath,
   isOwnedTempPath,
   isPathInsideProject,
+  resetExternalReadRootsForTesting,
   resolveProjectPath,
+  resolveProjectPathForFileSystemRead,
+  resolveProjectPathForRead,
 } from '../project-path-containment'
 
 describe('isPathInsideProject', () => {
@@ -482,6 +489,368 @@ describe('openbuff-owned OS temp namespace exception', () => {
         resolveProjectPath(projectDir, path.join(projectDir, 'evil.ts')),
       ).toBeNull()
       expect(isPathInsideProject(projectDir, 'evil.ts')).toBe(false)
+    })
+  })
+})
+
+describe('external read root allowlist', () => {
+  const projectRoot = '/repo'
+  let allowedRoot: string
+  let siblingRoot: string
+  let outsideDir: string
+  let allowedFile: string
+
+  const cleanupPaths: string[] = []
+  const removeTracked = () => {
+    for (const target of cleanupPaths.splice(0)) {
+      // `rmSync` unlinks symlinks rather than following them, so a link that
+      // points outside the temp dirs can never be traversed during cleanup.
+      fs.rmSync(target, { force: true, recursive: true })
+    }
+  }
+
+  beforeEach(() => {
+    // Mandatory: the registry is module state, so an unreset configuration
+    // would leave an open read boundary for every later test in the process.
+    resetExternalReadRootsForTesting()
+
+    allowedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'external-read-'))
+    cleanupPaths.push(allowedRoot)
+    // Sibling directory sharing the allowlisted root's prefix.
+    siblingRoot = `${allowedRoot}-evil`
+    fs.mkdirSync(siblingRoot)
+    cleanupPaths.push(siblingRoot)
+    outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'external-outside-'))
+    cleanupPaths.push(outsideDir)
+
+    allowedFile = path.join(allowedRoot, 'notes.txt')
+    fs.writeFileSync(allowedFile, 'notes\n')
+    fs.writeFileSync(path.join(siblingRoot, 'file.txt'), 'sibling\n')
+    fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'secret\n')
+  })
+
+  afterEach(() => {
+    resetExternalReadRootsForTesting()
+    removeTracked()
+  })
+
+  describe('default-closed posture', () => {
+    test('is unconfigured and refuses outside paths', () => {
+      expect(getExternalReadRoots()).toEqual([])
+      expect(isExternalReadPath(allowedFile)).toBe(false)
+      expect(resolveProjectPathForRead(projectRoot, allowedFile)).toBeNull()
+    })
+
+    test('read resolver still behaves exactly like the write resolver in-project', () => {
+      const readResult = resolveProjectPathForRead(projectRoot, 'src/a.ts')
+      const writeResult = resolveProjectPath(projectRoot, 'src/a.ts')
+      expect(readResult).toEqual(writeResult)
+      expect(readResult!.scope).toBe('project')
+    })
+  })
+
+  describe('once configured', () => {
+    beforeEach(() => {
+      configureExternalReadRoots([allowedRoot])
+    })
+
+    test('stores the resolved root and returns a defensive copy', () => {
+      expect(getExternalReadRoots()).toEqual([path.resolve(allowedRoot)])
+      const copy = getExternalReadRoots()
+      copy.push('/mutated')
+      expect(getExternalReadRoots()).toEqual([path.resolve(allowedRoot)])
+    })
+
+    test('resolves a file strictly inside the root with scope "external-read"', () => {
+      expect(isExternalReadPath(allowedFile)).toBe(true)
+
+      const result = resolveProjectPathForRead(projectRoot, allowedFile)
+      expect(result).not.toBeNull()
+      expect(result!.scope).toBe('external-read')
+      // Outside the project, so `relativePath` is the absolute resolved path.
+      expect(result!.relativePath).toBe(path.resolve(allowedFile))
+      expect(result!.fullPath).toBe(path.resolve(allowedFile))
+      expect(path.isAbsolute(result!.relativePath)).toBe(true)
+    })
+
+    test('resolves a nested file inside the root', () => {
+      const nestedDir = path.join(allowedRoot, 'nested')
+      fs.mkdirSync(nestedDir)
+      const nestedFile = path.join(nestedDir, 'deep.txt')
+      fs.writeFileSync(nestedFile, 'deep\n')
+
+      expect(isExternalReadPath(nestedFile)).toBe(true)
+      const nested = resolveProjectPathForRead(projectRoot, nestedFile)
+      expect(nested).not.toBeNull()
+      expect(nested!.scope).toBe('external-read')
+    })
+
+    test('rejects the allowlisted root itself (strictly-inside rule)', () => {
+      expect(isExternalReadPath(allowedRoot)).toBe(false)
+      expect(resolveProjectPathForRead(projectRoot, allowedRoot)).toBeNull()
+    })
+
+    test('rejects a sibling-prefix directory (naive startsWith would admit it)', () => {
+      const siblingFile = path.join(siblingRoot, 'file.txt')
+      expect(isExternalReadPath(siblingFile)).toBe(false)
+      expect(resolveProjectPathForRead(projectRoot, siblingFile)).toBeNull()
+    })
+
+    test('rejects a raw .. input even when it collapses back inside the root', () => {
+      // Built by concatenation so the `..` segment survives into the input.
+      const collapsing = `${allowedRoot}/nested/../notes.txt`
+      expect(isExternalReadPath(collapsing)).toBe(false)
+      expect(resolveProjectPathForRead(projectRoot, collapsing)).toBeNull()
+
+      const escaping = `${allowedRoot}/../${path.basename(outsideDir)}/secret.txt`
+      expect(isExternalReadPath(escaping)).toBe(false)
+      expect(resolveProjectPathForRead(projectRoot, escaping)).toBeNull()
+    })
+
+    test('rejects a symlink inside the root that dereferences outside it', () => {
+      const link = path.join(allowedRoot, 'escape.txt')
+      let symlinkSupported = true
+      try {
+        fs.symlinkSync(path.join(outsideDir, 'secret.txt'), link)
+      } catch {
+        // Some platforms (e.g. Windows without privileges) refuse symlinks.
+        symlinkSupported = false
+      }
+      if (!symlinkSupported) return
+
+      expect(isExternalReadPath(link)).toBe(false)
+      expect(resolveProjectPathForRead(projectRoot, link)).toBeNull()
+    })
+
+    test('refuses credentials.json inside the root at the resolver (fail-closed)', () => {
+      const credentials = path.join(allowedRoot, 'credentials.json')
+      fs.writeFileSync(credentials, '{"apiKey":"redacted"}\n')
+
+      // Pinned on BOTH the predicate and the resolver, so a handler cannot be
+      // the only thing standing between an allowlisted config root and the
+      // stored OAuth tokens.
+      expect(isExternalReadPath(credentials)).toBe(false)
+      expect(resolveProjectPathForRead(projectRoot, credentials)).toBeNull()
+
+      // A non-sensitive neighbour in the same root stays readable.
+      expect(isExternalReadPath(allowedFile)).toBe(true)
+    })
+
+    test('WRITE-PATH INVARIANT: resolveProjectPath never reaches an allowlisted external root', () => {
+      // The load-bearing separation: the resolvers used by change_file /
+      // replace_range / filesystem-authority must stay blind to the read
+      // allowlist even while it is configured.
+      expect(resolveProjectPath(projectRoot, allowedFile)).toBeNull()
+      expect(isPathInsideProject(projectRoot, allowedFile)).toBe(false)
+      // ...while the read-only entry point does reach it.
+      expect(resolveProjectPathForRead(projectRoot, allowedFile)).not.toBeNull()
+    })
+
+    test('async read resolver agrees with the sync resolver', async () => {
+      const allowed = await resolveProjectPathForFileSystemRead(
+        projectRoot,
+        allowedFile,
+        fs.promises,
+      )
+      expect(allowed).not.toBeNull()
+      expect(allowed!.scope).toBe('external-read')
+      expect(allowed!.relativePath).toBe(path.resolve(allowedFile))
+
+      const denied = await resolveProjectPathForFileSystemRead(
+        projectRoot,
+        path.join(siblingRoot, 'file.txt'),
+        fs.promises,
+      )
+      expect(denied).toBeNull()
+    })
+
+    test('async read resolver applies the sensitive refusal too', async () => {
+      const credentials = path.join(allowedRoot, 'credentials.json')
+      fs.writeFileSync(credentials, '{"apiKey":"redacted"}\n')
+
+      expect(
+        await resolveProjectPathForFileSystemRead(
+          projectRoot,
+          credentials,
+          fs.promises,
+        ),
+      ).toBeNull()
+    })
+
+    test('re-configuring with an equivalent set is a no-op', () => {
+      configureExternalReadRoots([allowedRoot])
+      // Same set, different spelling/order still resolves identically.
+      configureExternalReadRoots([`${allowedRoot}${path.sep}`, '  '])
+      expect(getExternalReadRoots()).toEqual([path.resolve(allowedRoot)])
+    })
+
+    test('re-configuring with a different set throws', () => {
+      expect(() => configureExternalReadRoots([siblingRoot])).toThrow(Error)
+      // The original boundary is untouched by the refused attempt.
+      expect(getExternalReadRoots()).toEqual([path.resolve(allowedRoot)])
+      expect(isExternalReadPath(path.join(siblingRoot, 'file.txt'))).toBe(false)
+    })
+  })
+
+  describe('configuration entry filtering', () => {
+    test('skips a filesystem-root entry', () => {
+      const filesystemRoot = path.resolve('/')
+      configureExternalReadRoots([filesystemRoot, allowedRoot])
+
+      expect(getExternalReadRoots()).toEqual([path.resolve(allowedRoot)])
+      // Allowlisting `/` would have made the whole filesystem readable.
+      expect(isExternalReadPath('/etc/hosts')).toBe(false)
+      expect(isExternalReadPath(allowedFile)).toBe(true)
+    })
+
+    test('skips an entry containing a raw .. segment', () => {
+      configureExternalReadRoots([`${allowedRoot}/../elsewhere`, allowedRoot])
+
+      expect(getExternalReadRoots()).toEqual([path.resolve(allowedRoot)])
+      const skipped = path.join(path.dirname(allowedRoot), 'elsewhere', 'x')
+      expect(isExternalReadPath(skipped)).toBe(false)
+    })
+
+    test('drops empty entries and stays closed when nothing survives', () => {
+      configureExternalReadRoots(['', '   ', path.resolve('/')])
+
+      expect(getExternalReadRoots()).toEqual([])
+      expect(isExternalReadPath(allowedFile)).toBe(false)
+      expect(resolveProjectPathForRead(projectRoot, allowedFile)).toBeNull()
+    })
+  })
+
+  describe('ensureExternalReadRootsConfigured', () => {
+    test('reports "configured" for the first successful configuration', () => {
+      const result = ensureExternalReadRootsConfigured([allowedRoot])
+
+      expect(result.status).toBe('configured')
+      expect(result.roots).toEqual([path.resolve(allowedRoot)])
+      expect(isExternalReadPath(allowedFile)).toBe(true)
+    })
+
+    test('reports "unchanged" for an equivalent second call', () => {
+      expect(ensureExternalReadRootsConfigured([allowedRoot]).status).toBe(
+        'configured',
+      )
+
+      // Same set, different spelling/order, plus a dropped blank entry.
+      const result = ensureExternalReadRootsConfigured([
+        `${allowedRoot}${path.sep}`,
+        '  ',
+      ])
+      expect(result.status).toBe('unchanged')
+      expect(result.roots).toEqual([path.resolve(allowedRoot)])
+    })
+
+    test('reports "refused-changed" without throwing and keeps the earlier boundary', () => {
+      ensureExternalReadRootsConfigured([allowedRoot])
+
+      // A mid-session edit to openbuff.json must not crash the turn, and must
+      // not widen a boundary earlier reads were already validated against.
+      const result = ensureExternalReadRootsConfigured([siblingRoot])
+
+      expect(result.status).toBe('refused-changed')
+      expect(result.roots).toEqual([path.resolve(allowedRoot)])
+      if (result.status === 'refused-changed') {
+        expect(result.attempted).toEqual([path.resolve(siblingRoot)])
+      }
+      // The registry itself is untouched by the refused attempt.
+      expect(getExternalReadRoots()).toEqual([path.resolve(allowedRoot)])
+      expect(isExternalReadPath(allowedFile)).toBe(true)
+      expect(isExternalReadPath(path.join(siblingRoot, 'file.txt'))).toBe(false)
+    })
+
+    test('a first configuration whose entries are all skipped still reports "configured"', () => {
+      // Every entry is refused by normalization, so the stored value is `[]` —
+      // which must not be misreported as an already-configured "unchanged".
+      const result = ensureExternalReadRootsConfigured([path.resolve('/'), ' '])
+
+      expect(result.status).toBe('configured')
+      expect(result.roots).toEqual([])
+      // ...and a later differing set is refused rather than applied.
+      expect(ensureExternalReadRootsConfigured([allowedRoot]).status).toBe(
+        'refused-changed',
+      )
+      expect(isExternalReadPath(allowedFile)).toBe(false)
+    })
+  })
+
+  describe('projectRoot owner (ER-5)', () => {
+    // The registry is process-global while `cwd` is per-run, so the boundary is
+    // tagged with the project it belongs to: a genuine project switch must
+    // REPLACE the boundary instead of being refused, which would otherwise
+    // leave project A's roots readable while project B's never applied.
+    const projectA = path.resolve('/project-a')
+    const projectB = path.resolve('/project-b')
+
+    test('a different owner REPLACES the boundary', () => {
+      expect(
+        ensureExternalReadRootsConfigured([allowedRoot], projectA).status,
+      ).toBe('configured')
+      expect(isExternalReadPath(allowedFile)).toBe(true)
+
+      const switched = ensureExternalReadRootsConfigured(
+        [siblingRoot],
+        projectB,
+      )
+
+      expect(switched.status).toBe('configured')
+      expect(switched.roots).toEqual([path.resolve(siblingRoot)])
+      expect(getExternalReadRoots()).toEqual([path.resolve(siblingRoot)])
+      // The new project's boundary is the one in force, not project A's.
+      expect(isExternalReadPath(path.join(siblingRoot, 'file.txt'))).toBe(true)
+      expect(isExternalReadPath(allowedFile)).toBe(false)
+    })
+
+    test('the SAME owner with a different set is still refused', () => {
+      configureExternalReadRoots([allowedRoot], projectA)
+
+      // Same project mid-run: this is the configure-once violation the registry
+      // exists to prevent, owner or not.
+      expect(() =>
+        configureExternalReadRoots([siblingRoot], projectA),
+      ).toThrow(Error)
+      expect(getExternalReadRoots()).toEqual([path.resolve(allowedRoot)])
+
+      const refused = ensureExternalReadRootsConfigured([siblingRoot], projectA)
+      expect(refused.status).toBe('refused-changed')
+      expect(refused.roots).toEqual([path.resolve(allowedRoot)])
+      expect(isExternalReadPath(path.join(siblingRoot, 'file.txt'))).toBe(false)
+    })
+
+    test('an equivalent call adopts an owner the first call did not supply', () => {
+      // First call has no owner, so the registry has no project to compare a
+      // later switch against.
+      expect(ensureExternalReadRootsConfigured([allowedRoot]).status).toBe(
+        'configured',
+      )
+
+      // Equivalent set WITH an owner: reported as unchanged, but the owner is
+      // adopted...
+      expect(
+        ensureExternalReadRootsConfigured([allowedRoot], projectA).status,
+      ).toBe('unchanged')
+
+      // ...so this genuine switch is detected and replaces the boundary rather
+      // than being refused as an unknown-owner reconfiguration.
+      const switched = ensureExternalReadRootsConfigured(
+        [siblingRoot],
+        projectB,
+      )
+      expect(switched.status).toBe('configured')
+      expect(getExternalReadRoots()).toEqual([path.resolve(siblingRoot)])
+    })
+
+    test('without an adopted owner a later switch is refused', () => {
+      // Contrast case for the adoption above: no owner is ever recorded, so a
+      // second project cannot be distinguished from a mid-run re-point.
+      ensureExternalReadRootsConfigured([allowedRoot])
+
+      const refused = ensureExternalReadRootsConfigured([siblingRoot], projectB)
+
+      expect(refused.status).toBe('refused-changed')
+      expect(getExternalReadRoots()).toEqual([path.resolve(allowedRoot)])
     })
   })
 })

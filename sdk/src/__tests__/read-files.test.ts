@@ -1,6 +1,10 @@
 import * as projectFileTree from '@codebuff/common/project-file-tree'
 import { createNodeError } from '@codebuff/common/testing/errors'
-import { getOwnedTempRoots } from '@codebuff/common/util/project-path-containment'
+import {
+  configureExternalReadRoots,
+  getOwnedTempRoots,
+  resetExternalReadRootsForTesting,
+} from '@codebuff/common/util/project-path-containment'
 import {
   decodeReadCapabilityToken,
   getContentHash,
@@ -1050,6 +1054,86 @@ describe('getFilesStructured', () => {
       })
       expect(transformed).not.toHaveProperty('capabilityHash')
       expect(transformed).not.toHaveProperty('expectedHash')
+    })
+  })
+})
+
+describe('getFilesStructured — allowlisted external read roots', () => {
+  // Synthetic absolute root: every filesystem call in these cases goes through
+  // the mock filesystem, and the name deliberately avoids the `openbuff-`
+  // owned-temp patterns so an allow here can only come from the external read
+  // allowlist.
+  const externalRoot = path.resolve('/external-read-root')
+  const externalFile = path.join(externalRoot, 'notes.txt')
+  const externalCredentials = path.join(externalRoot, 'credentials.json')
+
+  beforeEach(() => {
+    resetExternalReadRootsForTesting()
+    configureExternalReadRoots([externalRoot])
+  })
+
+  afterEach(() => {
+    // The registry is module state: reset unconditionally so no later test
+    // inherits an open external read boundary.
+    resetExternalReadRootsForTesting()
+  })
+
+  test('reads a file inside an allowlisted root', async () => {
+    const result = await getFilesStructured({
+      filePaths: [externalFile],
+      cwd: '/project',
+      fs: createMockFs({ files: { [externalFile]: { content: 'notes\n' } } }),
+    })
+
+    expect(result.results[0]).toMatchObject({
+      selector: 'file',
+      status: 'ok',
+      complete: true,
+      content: 'notes\n',
+    })
+  })
+
+  test('refuses credentials.json inside an allowlisted root', async () => {
+    const result = await getFilesStructured({
+      filePaths: [externalCredentials],
+      cwd: '/project',
+      fs: createMockFs({
+        files: { [externalCredentials]: { content: '{"apiKey":"x"}\n' } },
+      }),
+      // An allow-everything host filter proves the refusal comes from the
+      // resolver's fail-closed mandatory-sensitive check (which returns no
+      // resolution at all, hence `outside_project`), not from host policy.
+      fileFilter: () => ({ status: 'allow' }),
+    })
+
+    expect(result.results[0]).toMatchObject({
+      status: 'error',
+      error: { code: 'outside_project' },
+    })
+  })
+
+  test('applies a host fileFilter to the external-read policy alias', async () => {
+    // external-read results carry an ABSOLUTE relativePath, exactly like
+    // owned-temp, so without the alias a host filter written against
+    // project-relative globs would silently stop applying — a fail-open.
+    const blockedAliases: string[] = []
+    const result = await getFilesStructured({
+      filePaths: [externalFile],
+      cwd: '/project',
+      fs: createMockFs({ files: { [externalFile]: { content: 'notes\n' } } }),
+      fileFilter: (candidate) => {
+        if (candidate === 'external-read/notes.txt') {
+          blockedAliases.push(candidate)
+          return { status: 'blocked' }
+        }
+        return { status: 'allow' }
+      },
+    })
+
+    expect(blockedAliases).toEqual(['external-read/notes.txt'])
+    expect(result.results[0]).toMatchObject({
+      status: 'error',
+      error: { code: 'blocked' },
     })
   })
 })

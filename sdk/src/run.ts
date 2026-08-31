@@ -29,14 +29,16 @@ import { advanceWorkspaceState } from '@codebuff/common/types/workspace-state'
 import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
 import { extractApiErrorDetails } from '@codebuff/common/util/error'
 import { jobRegistry } from '@codebuff/common/util/job-registry'
+import { ensureExternalReadRootsConfigured } from '@codebuff/common/util/project-path-containment'
 import { stableHash } from '@codebuff/common/util/stable-hash'
 import type { TaskMemoryV1 } from '@codebuff/common/types/task-memory'
 import { cloneDeep } from 'lodash'
 
 import { getErrorStatusCode } from './error-utils'
 import { createJobUpdateForwarder } from './job-update-forwarder'
-import { getHarnessStateDir } from './credentials'
+import { getHarnessStateDir, getConfigDir } from './credentials'
 import { getAgentRuntimeImpl } from './impl/agent-runtime'
+import { loadProviderConfigSync } from './provider-config'
 import { initialSessionState, applyOverridesToSessionState } from './run-state'
 import {
   codebuffFsToNodePromises,
@@ -133,6 +135,7 @@ import { listJobs } from './tools/list-jobs'
 
 import type { ListJobsViewRow } from '@codebuff/common/util/list-jobs-view'
 import { fingerprintListJobsRows } from '@codebuff/common/util/list-jobs-view'
+import { getSystemProcessEnv } from './env'
 
 /**
  * Wraps content for user messages, ensuring text is wrapped in <user_message> tags.
@@ -338,6 +341,74 @@ const createAbortError = (signal?: AbortSignal) => {
   return error
 }
 
+/**
+ * `path.relative`-based containment, the convention used throughout this
+ * codebase. `startsWith` is treated as a bug here: a sibling directory such as
+ * `<configDir>-evil` shares the prefix but is NOT contained.
+ */
+function isPathInsideDirectory(directory: string, candidate: string): boolean {
+  const relative = path.relative(
+    path.resolve(directory),
+    path.resolve(candidate),
+  )
+  return (
+    relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)
+  )
+}
+
+/** Outcome of the ER-1 `readableRoots` trust gate. */
+export type TrustedReadableRootsSelection = {
+  /** Roots that may be registered with the external read allowlist. */
+  trusted: string[]
+  /**
+   * How many ABSOLUTE roots were dropped for untrusted provenance. Reported as
+   * a count only, never as paths: a user's home-directory paths are mildly
+   * sensitive and the warning that carries this may be shared.
+   */
+  untrustedCount: number
+}
+
+/**
+ * ER-1 trust gate for `readableRoots`, extracted as a PURE function so the
+ * decision that lets a cloned repository allowlist credential directories is
+ * directly testable (see `sdk/src/__tests__/model-provider.test.ts`).
+ *
+ * TRUSTED: the root's declaring config file lives inside `configDir`
+ *   (user-owned). Always registered.
+ * UNTRUSTED: declared anywhere else (project or ancestor `openbuff.json`), or
+ *   with no recorded provenance at all — fail CLOSED and drop it unless
+ *   `trustProjectRoots` (OPENBUFF_TRUST_PROJECT_READABLE_ROOTS=1) is set.
+ *
+ * Relative entries are dropped rather than guessed — the declaring config may
+ * be a global file loaded from an unrelated directory, so anchoring to
+ * `process.cwd()` could allowlist something the user never intended — and they
+ * are NOT counted as untrusted, since nothing was refused on trust grounds.
+ */
+export function selectTrustedReadableRoots(params: {
+  roots: readonly string[]
+  sources: Record<string, string>
+  configDir: string
+  trustProjectRoots: boolean
+}): TrustedReadableRootsSelection {
+  const { roots, sources, configDir, trustProjectRoots } = params
+  const trusted: string[] = []
+  let untrustedCount = 0
+  for (const root of roots) {
+    if (!path.isAbsolute(root)) continue
+    const sourceFile = sources[path.resolve(root)]
+    if (sourceFile && isPathInsideDirectory(configDir, sourceFile)) {
+      trusted.push(root)
+      continue
+    }
+    if (trustProjectRoots) {
+      trusted.push(root)
+      continue
+    }
+    untrustedCount++
+  }
+  return { trusted, untrustedCount }
+}
+
 async function executeOverride<TInput, TV0Output, TV1Output>({
   override,
   input,
@@ -522,6 +593,109 @@ async function runOnce({
   resumeInterruptedTurn,
 }: RunExecutionOptions): Promise<RunState> {
   const resolvedHarnessStateDir = harnessStateDir ?? getHarnessStateDir(env)
+  // Read-only external root allowlist. Configured HERE, strictly before any
+  // tool can dispatch, so the first read of an allowlisted path in a process
+  // cannot fail confusingly while later ones succeed. Two sources:
+  //   1. the openbuff config directory, which is what makes "read my logs/state
+  //      from the config dir" work by default (sensitive files there, notably
+  //      credentials.json, stay refused by the resolver itself);
+  //   2. absolute `readableRoots` entries from openbuff.json, subject to the
+  //      ER-1 trust gate below (only roots declared by a config file inside the
+  //      config dir are registered without an explicit opt-in). Relative
+  //      entries are dropped rather than guessed: that config may be a global
+  //      file loaded from an unrelated directory, so anchoring to process.cwd()
+  //      could allowlist something the user never intended.
+  // Best-effort: if this block throws (e.g. a malformed config), no external
+  // roots are configured and every read outside the project stays refused.
+  try {
+    // loadProviderConfigSync is module-cached but still on a hot path; called
+    // exactly once per run here, never per path or per tool.
+    const loadedProviderConfig = loadProviderConfigSync(env ? { env } : {})
+    const loadedReadableRoots = loadedProviderConfig.config.readableRoots
+    const readableRootsSources =
+      loadedProviderConfig.readableRootsSources ?? {}
+    const configDir = getConfigDir(env)
+    // ER-1 trust gate. `readableRoots` is the only config key that grants
+    // filesystem authority rather than influencing model routing, so a value
+    // supplied by a cloned repository must not silently allowlist directories
+    // like `~/.config/gh` or `~/.docker`: config resolution includes
+    // `<cwd>/openbuff.json` (the first ancestor entry), and a non-empty
+    // project value WINS the merge. A repo-supplied value therefore needs the
+    // same explicit acknowledgement this codebase already requires for
+    // ancestor `apiKeyEnv` providers.
+    //
+    // TRUSTED: the root's declaring config file lives inside the openbuff
+    //   config dir (user-owned). Always registered.
+    // UNTRUSTED: declared anywhere else (project or ancestor `openbuff.json`),
+    //   or with no recorded provenance at all — fail CLOSED and drop it unless
+    //   the user opted in.
+    //
+    // The opt-in env var is read through the same accessor
+    // `getAncestorProviderConfigPaths` uses for
+    // OPENBUFF_TRUST_ANCESTOR_CONFIG, so both trust switches behave alike.
+    const trustProjectReadableRoots =
+      (getSystemProcessEnv().OPENBUFF_TRUST_PROJECT_READABLE_ROOTS ?? '') ===
+      '1'
+    const {
+      trusted: trustedReadableRoots,
+      untrustedCount: untrustedRootCount,
+    } = selectTrustedReadableRoots({
+      roots: loadedReadableRoots,
+      sources: readableRootsSources,
+      configDir,
+      trustProjectRoots: trustProjectReadableRoots,
+    })
+    if (untrustedRootCount > 0) {
+      // Counts only, never the raw paths: a user's home-directory paths are
+      // mildly sensitive and this log may be shared.
+      logger?.warn(
+        {
+          untrustedRootCount,
+          trustedRootCount: trustedReadableRoots.length,
+        },
+        'Ignored readableRoots entries that were not declared by a config file ' +
+          'inside the openbuff config directory (a project or ancestor ' +
+          'openbuff.json, or an entry with no recorded provenance). A ' +
+          'repository-supplied allowlist can expose credential directories ' +
+          'outside the project. Set ' +
+          'OPENBUFF_TRUST_PROJECT_READABLE_ROOTS=1 to acknowledge and register ' +
+          'them.',
+      )
+    }
+    const externalReadResult = ensureExternalReadRootsConfigured(
+      [
+        // The config dir root is seeded by the runtime, not by config, so it is
+        // always trusted and stays unconditional. Narrowing it is out of scope.
+        configDir,
+        ...trustedReadableRoots,
+      ],
+      // ER-5: the registry is process-global but `cwd` is per-run, so the
+      // boundary is tagged with the project it belongs to. Without an owner, a
+      // second project configured in the same process (after
+      // `switchProjectContext`) looks identical to a mid-run attempt to
+      // re-point the boundary: the strict primitive would refuse it, leaving
+      // project A's roots readable while project B's own allowlist never
+      // applied. Supplying the owner makes a genuine switch REPLACE the
+      // boundary instead, which is strictly safer.
+      cwd,
+    )
+    if (externalReadResult.status === 'refused-changed') {
+      // Counts only, never the raw paths: a user's home-directory paths are
+      // mildly sensitive and this log may be shared.
+      logger?.warn(
+        {
+          effectiveRootCount: externalReadResult.roots.length,
+          attemptedRootCount: externalReadResult.attempted.length,
+        },
+        'External read roots changed since process start; keeping the boundary configured earlier in this process. Restart openbuff to apply the new readableRoots.',
+      )
+    }
+  } catch (error) {
+    logger?.warn(
+      { error },
+      'External read roots could not be configured; reads outside the project stay refused for this run',
+    )
+  }
   let fs: CodebuffFileSystem
   if (fsSource !== undefined) {
     const fsSourceValue = typeof fsSource === 'function' ? fsSource() : fsSource
@@ -2036,12 +2210,15 @@ export async function handleToolCall({
     } else if (toolName === 'read_logs') {
       const readLogsInput = input as Omit<
         Parameters<typeof readLogs>[0],
-        'cwd' | 'owner'
+        'cwd' | 'owner' | 'fileFilter'
       >
       result = await readLogs({
         ...readLogsInput,
         cwd: requireCwd(cwd, 'read_logs'),
         owner: trustedJobOwner,
+        // ER-4: host read policy is runtime-injected, exactly like the
+        // read_image / list_directory branches; model input cannot supply it.
+        fileFilter,
       })
     } else if (toolName === 'list_jobs') {
       // Any model-supplied `input.owner` is ignored entirely; scoping always

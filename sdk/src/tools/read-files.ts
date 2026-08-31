@@ -21,8 +21,10 @@ import {
 } from '@codebuff/common/util/sensitive-paths'
 
 import {
+  getScopedReadPolicyAliases,
   isSafeProjectRelativePath,
   resolveFilePathForFileSystemOperation,
+  resolveFilePathForFileSystemReadOperation,
 } from './path-utils'
 
 import type { FileLineRange } from '@codebuff/common/types/contracts/client'
@@ -173,7 +175,10 @@ async function authorizeReadTarget(params: {
     }
   }
 
-  const resolved = await resolveFilePathForFileSystemOperation(
+  // Read-only resolver: in-project and owned-temp paths behave exactly as
+  // before, plus paths strictly inside an explicitly allowlisted external read
+  // root. The write path keeps using resolveFilePathForFileSystemOperation.
+  const resolved = await resolveFilePathForFileSystemReadOperation(
     cwd,
     requestedPath,
     fs,
@@ -195,19 +200,18 @@ async function authorizeReadTarget(params: {
     resolved.relativePath,
     canonicalRelative || resolved.relativePath,
   )
-  if (resolved.scope === 'owned-temp') {
-    // Owned-temp results carry an ABSOLUTE `relativePath`, so a host filter
-    // written against project-relative globs never matches it and would
-    // silently fail open. The basename and the stable `owned-temp/<basename>`
-    // key are what a host policy can target for these paths. The mandatory
-    // sensitive-path blocklist below is basename-driven and unaffected.
-    const ownedTempBasename = path.basename(resolved.operationPath)
-    for (const alias of uniquePolicyAliases(
-      ownedTempBasename,
-      `owned-temp/${ownedTempBasename}`,
-    )) {
-      if (!aliases.includes(alias)) aliases.push(alias)
-    }
+  // Non-project scopes (owned-temp AND external-read) carry an ABSOLUTE
+  // `relativePath`, so a host filter written against project-relative globs
+  // never matches it and would silently fail OPEN. `getScopedReadPolicyAliases`
+  // is the CANONICAL builder for those keys (`owned-temp/notes.txt`,
+  // `external-read/notes.txt`), shared with read-logs / read-image /
+  // list-directory so the four read tools cannot drift on the key a host
+  // fileFilter must target; it returns nothing for scope 'project'. The
+  // mandatory sensitive-path blocklist below is basename-driven and unaffected.
+  for (const alias of uniquePolicyAliases(
+    ...getScopedReadPolicyAliases(resolved.scope, resolved.operationPath),
+  )) {
+    if (!aliases.includes(alias)) aliases.push(alias)
   }
   if (aliases.some(isMandatorySensitiveReadPath)) {
     return {

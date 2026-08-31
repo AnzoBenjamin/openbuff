@@ -24,7 +24,10 @@ import {
 } from '@codebuff/common/tools/metadata'
 import { isAbortError } from '@codebuff/common/util/error'
 import { jsonToolResult } from '@codebuff/common/util/messages'
-import { isOwnedTempPath } from '@codebuff/common/util/project-path-containment'
+import {
+  isExternalReadPath,
+  isOwnedTempPath,
+} from '@codebuff/common/util/project-path-containment'
 import { generateCompactId } from '@codebuff/common/util/string'
 import { cloneDeep } from 'lodash'
 import z from 'zod/v4'
@@ -1614,6 +1617,20 @@ export function getFilesystemToolPaths(
     return { access: 'read', paths: strings(input.path) }
   }
   if (toolName === 'glob' || toolName === 'code_search') {
+    return {
+      access: 'read',
+      paths: [
+        ...strings(input.cwd ?? '.'),
+        // code_search additionally accepts an explicit `paths` list whose
+        // entries may be absolute, so those must be backstopped too. `glob`
+        // has no `paths` input, so its behavior is unchanged.
+        ...(toolName === 'code_search' ? strings(input.paths) : []),
+      ],
+    }
+  }
+  if (toolName === 'find_files_matching_content') {
+    // Previously fell through and returned undefined, so this tool got NO
+    // backstop at all while still resolving an arbitrary absolute cwd.
     return { access: 'read', paths: strings(input.cwd ?? '.') }
   }
   if (toolName === 'edit_transaction') {
@@ -1697,6 +1714,25 @@ function normalizedEscapesProject(normalized: string): boolean {
     path.isAbsolute(normalized)
   )
 }
+
+// Tools whose SDK handler is the authoritative containment layer for the
+// owned-temp / allowlisted-external READ relaxation in executeToolCall.
+//
+// INVARIANT: a tool belongs here ONLY if its SDK handler resolves every
+// caller-supplied path through `resolveFilePathForRead*Operation` (the
+// read-only containment resolvers in `sdk/src/tools/path-utils.ts`). This
+// backstop is deliberately NOT the authoritative containment layer — it defers
+// to the handler — so exempting a tool whose handler does not contain removes
+// the only check that exists for it. `code_search` and
+// `find_files_matching_content` are deliberately absent: they resolve an
+// arbitrary caller `cwd` and spawn ripgrep there with no containment
+// resolution at all.
+const EXTERNAL_READ_EXEMPT_TOOLS = new Set([
+  'read_files',
+  'read_logs',
+  'read_image',
+  'list_directory',
+])
 
 const MAX_CUSTOM_INPUT_SCAN_DEPTH = 6
 const MAX_CUSTOM_INPUT_SCAN_STRINGS = 1000
@@ -2025,45 +2061,61 @@ export async function executeToolCall<T extends ToolName>(
           // lexical scope for missing paths so create operations still work.
         }
       }
-      // READ-ONLY owned-temp exception. The SDK deliberately permits reads
-      // under the openbuff-owned OS temp namespace (see read-files.ts
-      // `authorizeReadTarget` and read-logs.ts): that is how a parent agent
-      // reads back tmux capture evidence and background-job logs. This
-      // backstop has no notion of that namespace, so without the exception it
-      // refuses reads the SDK allows.
+      // READ-ONLY owned-temp and external-read exceptions. The SDK
+      // deliberately permits reads under the openbuff-owned OS temp namespace
+      // (see read-files.ts `authorizeReadTarget` and read-logs.ts): that is how
+      // a parent agent reads back tmux capture evidence and background-job
+      // logs. It equally permits reads strictly inside a root the user
+      // explicitly allowlisted (the openbuff config directory for logs/state,
+      // plus any `readableRoots` entry in openbuff.json). This backstop has no
+      // notion of either namespace, so without the exceptions it refuses reads
+      // the SDK is designed to allow.
       //
-      // Deliberately access-scoped, never tool-scoped: a WRITE to an
-      // owned-temp path keeps hard-blocking here, because the (narrower)
-      // owned-temp mutation policy is owned by the SDK's
+      // The SDK read handlers of the EXEMPT tools (see
+      // EXTERNAL_READ_EXEMPT_TOOLS) remain AUTHORITATIVE for both: they run
+      // the real containment resolution (symlink dereferencing,
+      // strictly-inside checks, and the fail-closed mandatory-sensitive
+      // refusal that keeps `credentials.json` unreadable inside an allowlisted
+      // config root). This layer only stops pre-dispatch refusal of paths
+      // those handlers will validate themselves, so a tool whose handler does
+      // NOT contain (e.g. code_search) is never exempted.
+      //
+      // Access-scoped AND tool-scoped. Access: a WRITE to an owned-temp or
+      // allowlisted-external path keeps hard-blocking here. The
+      // (narrower) owned-temp mutation policy is owned by the SDK's
       // filesystem-authority.ts `ownedTempMutationRefusal` — tmux captures are
-      // verification evidence a subagent must not be able to forge, so this
-      // layer must not pre-authorize any mutation of them.
+      // verification evidence a subagent must not be able to forge — and the
+      // external allowlist is READ-only by construction (there is no
+      // `external-write` scope), so this layer must not pre-authorize any
+      // mutation of either.
       //
-      // `isOwnedTempPath` gets the RAW caller path: it resolves its own input
+      // Both predicates get the RAW caller path: each resolves its own input
       // and refuses any raw `..` segment itself, which is exactly the guard we
       // want. The project-relative `normalized` form would be a meaningless
       // `../..`-style string here.
-      const ownedTempRead =
-        filesystemAccess.access === 'read' && isOwnedTempPath(rawPath)
+      const externalReadAllowed =
+        filesystemAccess.access === 'read' &&
+        EXTERNAL_READ_EXEMPT_TOOLS.has(toolName) &&
+        (isOwnedTempPath(rawPath) || isExternalReadPath(rawPath))
       // A path "escapes" the project when it traverses above the root or is
       // absolute (either lexically or after canonicalization). Escapes are the
       // real containment boundary: an agent must never read or write outside
       // the project, so these are always hard-blocked regardless of access —
-      // except for the owned-temp read above.
+      // except for the owned-temp / allowlisted-external reads above.
       const escapesProject =
-        !ownedTempRead &&
+        !externalReadAllowed &&
         (normalizedEscapesProject(normalized) ||
           normalizedEscapesProject(canonical))
       // An in-project path is a scope mismatch when it stays inside the project
       // but does not match the agent's declared filesystemScope patterns. Only
       // meaningful when the agent declared a scope for this access type. An
-      // owned-temp read is not in-project, so it is never pattern-matched
-      // against filesystemScope globs: it is neither hard-blocked above nor
-      // spuriously warned about below.
+      // owned-temp or allowlisted-external read is not in-project, so it is
+      // never pattern-matched against filesystemScope globs: it is neither
+      // hard-blocked above nor spuriously warned about below.
       const scopeMismatch =
         allowedPatterns !== undefined &&
         !escapesProject &&
-        !ownedTempRead &&
+        !externalReadAllowed &&
         !allowedPatterns.some(
           (pattern) =>
             scopePatternMatches(normalized, pattern) &&

@@ -19,6 +19,7 @@ import {
 import {
   PROVIDER_CONFIG_ENV_VAR,
   OPENBUFF_PROVIDER_PRESETS,
+  clearProviderConfigCacheForTest,
   createProviderPresetConfig,
   formatModelCapabilitiesSummary,
   getAncestorProviderConfigPaths,
@@ -42,6 +43,7 @@ import {
   setModelDiscoveryCachePathForTest,
 } from '../model-discovery'
 import type { ModelDiscoveryFetch } from '../model-discovery'
+import { selectTrustedReadableRoots } from '../run'
 
 const originalEnv = { ...process.env }
 const originalCwd = process.cwd()
@@ -129,6 +131,26 @@ describe('model-provider', () => {
       if (result.success) {
         expect(result.data.maxAgentSteps).toBe(-1)
       }
+    })
+
+    test('defaults readableRoots to an empty array and flows entries through the transform', () => {
+      // `.default([])` means downstream code (the run-start external read
+      // registry wiring) never has to handle `undefined`.
+      expect(providerConfigFileSchema.parse({}).readableRoots).toEqual([])
+
+      const parsed = providerConfigFileSchema.parse({
+        readableRoots: ['/opt/notes', 'relative/notes'],
+      })
+      // The schema keeps entries verbatim; run.ts is what drops relative ones.
+      expect(parsed.readableRoots).toEqual(['/opt/notes', 'relative/notes'])
+
+      expect(
+        providerConfigFileSchema.safeParse({ readableRoots: [''] }).success,
+      ).toBe(false)
+      expect(
+        providerConfigFileSchema.safeParse({ readableRoots: '/opt/notes' })
+          .success,
+      ).toBe(false)
     })
 
     test('rejects zero as an ambiguous maxAgentSteps value', () => {
@@ -412,6 +434,7 @@ describe('model-provider', () => {
               semantic: { enabled: false },
             },
             fileChangeHooks: [],
+            readableRoots: [],
             providers: {
               'opencode-go': {
                 type: 'openai-compatible',
@@ -558,6 +581,7 @@ describe('model-provider', () => {
               semantic: { enabled: false },
             },
             fileChangeHooks: [],
+            readableRoots: [],
             providers: {
               custom: {
                 type: 'openai-compatible',
@@ -606,6 +630,7 @@ describe('model-provider', () => {
             semantic: { enabled: false },
           },
           fileChangeHooks: [],
+          readableRoots: [],
           providers: {},
         },
       }
@@ -650,6 +675,7 @@ describe('model-provider', () => {
             semantic: { enabled: false },
           },
           fileChangeHooks: [],
+          readableRoots: [],
           providers: {},
         },
       }
@@ -687,6 +713,7 @@ describe('model-provider', () => {
                 semantic: { enabled: false },
               },
               fileChangeHooks: [],
+              readableRoots: [],
               providers: {
                 'opencode-go': {
                   type: 'openai-compatible',
@@ -833,6 +860,7 @@ describe('model-provider', () => {
               semantic: { enabled: false },
             },
             fileChangeHooks: [],
+            readableRoots: [],
             providers: {
               freemodel: {
                 type: 'anthropic-compatible',
@@ -879,6 +907,7 @@ describe('model-provider', () => {
                 semantic: { enabled: false },
               },
               fileChangeHooks: [],
+              readableRoots: [],
               providers: {
                 freemodel: {
                   type: 'anthropic-compatible',
@@ -2786,5 +2815,170 @@ describe('getAncestorProviderConfigPaths — bounded ancestor walk (C1.3)', () =
     // The last config dir's parent should be the filesystem root (dirname === itself).
     const lastDir = path.dirname(paths[paths.length - 1])
     expect(path.dirname(lastDir)).toBe(lastDir)
+  })
+})
+
+describe('readableRoots provenance (ER-1)', () => {
+  const tempDirs: string[] = []
+
+  const makeTempDir = (prefix: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+    tempDirs.push(dir)
+    return dir
+  }
+
+  beforeEach(() => {
+    resetEnv()
+    delete process.env[PROVIDER_CONFIG_ENV_VAR]
+    clearProviderConfigCacheForTest()
+  })
+
+  afterEach(() => {
+    process.chdir(originalCwd)
+    resetEnv()
+    clearProviderConfigCacheForTest()
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('records the config-dir file that declared a readable root', () => {
+    const configDir = makeTempDir('openbuff-config-dir-')
+    process.env.OPENBUFF_CONFIG_DIR = configDir
+    const configFile = path.join(configDir, 'openbuff.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({ readableRoots: ['/opt/global-notes'] }),
+    )
+    process.chdir(makeTempDir('openbuff-project-'))
+
+    const loaded = loadProviderConfigSync()
+
+    expect(loaded.config.readableRoots).toEqual(['/opt/global-notes'])
+    // The trust gate in run.ts registers this root unconditionally precisely
+    // because its source file lives inside the openbuff config directory.
+    expect(loaded.readableRootsSources?.[path.resolve('/opt/global-notes')]).toBe(
+      configFile,
+    )
+  })
+
+  test('records the project openbuff.json that declared a readable root', () => {
+    // Config dir exists but declares nothing, so the only readableRoots value
+    // comes from the project file a cloned repository can ship.
+    process.env.OPENBUFF_CONFIG_DIR = makeTempDir('openbuff-config-dir-')
+    process.chdir(makeTempDir('openbuff-project-'))
+    // Read back through process.cwd(): the config walk starts there, and on
+    // macOS the temp dir is reached through a symlink.
+    const projectDir = process.cwd()
+    const projectConfigFile = path.join(projectDir, 'openbuff.json')
+    fs.writeFileSync(
+      projectConfigFile,
+      JSON.stringify({ readableRoots: ['/opt/project-notes'] }),
+    )
+
+    const loaded = loadProviderConfigSync()
+
+    expect(loaded.config.readableRoots).toEqual(['/opt/project-notes'])
+    // Untrusted provenance: run.ts drops this root unless
+    // OPENBUFF_TRUST_PROJECT_READABLE_ROOTS=1.
+    expect(
+      loaded.readableRootsSources?.[path.resolve('/opt/project-notes')],
+    ).toBe(projectConfigFile)
+  })
+})
+
+describe('selectTrustedReadableRoots (ER-1 trust gate)', () => {
+  // `readableRoots` is the only config key that grants filesystem authority, so
+  // this gate decides whether a cloned repository can allowlist credential
+  // directories like `~/.config/gh` or `~/.docker`. Exercised directly on the
+  // pure helper `run.ts` uses, with provenance shaped exactly as
+  // `loadProviderConfigSync` records it above.
+  const configDir = path.resolve('/home/user/.config/openbuff')
+  const configDirFile = path.join(configDir, 'openbuff.json')
+  const projectFile = path.resolve('/repo/openbuff.json')
+  const globalRoot = path.resolve('/opt/global-notes')
+  const projectRoot = path.resolve('/opt/project-notes')
+
+  test('registers a root declared by a config file inside the config dir', () => {
+    expect(
+      selectTrustedReadableRoots({
+        roots: [globalRoot],
+        sources: { [globalRoot]: configDirFile },
+        configDir,
+        trustProjectRoots: false,
+      }),
+    ).toEqual({ trusted: [globalRoot], untrustedCount: 0 })
+  })
+
+  test('drops a root declared by a project openbuff.json', () => {
+    // The fail-closed case: a repository ships `readableRoots` and the project
+    // value wins the config merge, so without this gate a clone could expose
+    // credential directories outside the project.
+    expect(
+      selectTrustedReadableRoots({
+        roots: [projectRoot],
+        sources: { [projectRoot]: projectFile },
+        configDir,
+        trustProjectRoots: false,
+      }),
+    ).toEqual({ trusted: [], untrustedCount: 1 })
+  })
+
+  test('registers a project-declared root with the explicit opt-in', () => {
+    // `run.ts` derives `trustProjectRoots` from
+    // OPENBUFF_TRUST_PROJECT_READABLE_ROOTS=1.
+    expect(
+      selectTrustedReadableRoots({
+        roots: [projectRoot],
+        sources: { [projectRoot]: projectFile },
+        configDir,
+        trustProjectRoots: true,
+      }),
+    ).toEqual({ trusted: [projectRoot], untrustedCount: 0 })
+  })
+
+  test('drops a root with no recorded provenance', () => {
+    // Provenance is optional metadata, so "unknown source" must fail CLOSED
+    // rather than be treated as config-dir owned.
+    expect(
+      selectTrustedReadableRoots({
+        roots: [globalRoot],
+        sources: {},
+        configDir,
+        trustProjectRoots: false,
+      }),
+    ).toEqual({ trusted: [], untrustedCount: 1 })
+  })
+
+  test('drops a relative entry without counting it as untrusted', () => {
+    // A relative entry is never anchored to process.cwd(): the declaring config
+    // may be a global file loaded from an unrelated directory. Nothing was
+    // refused on trust grounds, so it does not inflate the warning count.
+    expect(
+      selectTrustedReadableRoots({
+        roots: ['notes', globalRoot],
+        sources: {
+          [path.resolve('notes')]: configDirFile,
+          [globalRoot]: configDirFile,
+        },
+        configDir,
+        trustProjectRoots: false,
+      }),
+    ).toEqual({ trusted: [globalRoot], untrustedCount: 0 })
+  })
+
+  test('keeps a sibling directory of the config dir untrusted', () => {
+    // `path.relative`-based containment: `<configDir>-evil` shares the prefix
+    // but is not inside the config dir, so a naive startsWith would trust it.
+    expect(
+      selectTrustedReadableRoots({
+        roots: [globalRoot],
+        sources: {
+          [globalRoot]: path.join(`${configDir}-evil`, 'openbuff.json'),
+        },
+        configDir,
+        trustProjectRoots: false,
+      }),
+    ).toEqual({ trusted: [], untrustedCount: 1 })
   })
 })

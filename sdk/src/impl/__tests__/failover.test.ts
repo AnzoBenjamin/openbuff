@@ -41,6 +41,7 @@ function makeLoadedConfig(
         semantic: { enabled: false, model: undefined },
       },
       fileChangeHooks: [],
+      readableRoots: [],
       failoverModels,
     },
     sourceFilePaths: [],

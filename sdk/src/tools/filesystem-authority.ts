@@ -701,6 +701,16 @@ export class FilesystemAuthority {
     operation: FilesystemOperationKind,
     phase: FilesystemPolicyPhase,
   ): Promise<PathAuthorizationResult> {
+    // Fail closed on the read-only `external-read` scope: this authority only
+    // covers the project tree and the openbuff-owned temp namespace, which are
+    // the only scopes the operation resolvers
+    // (`resolveFilePathFor*Operation`) can produce. The check keeps
+    // `AuthorizedFilesystemPath.scope` narrow instead of widening a
+    // mutation-side type with a read-only scope.
+    if (resolved.scope === 'external-read') {
+      return { allowed: false, code: 'external_read_scope_unsupported' }
+    }
+    const scope = resolved.scope
     const portablePath = toPortablePath(resolved.relativePath)
     const canonicalParentPath = path.dirname(resolved.operationPath)
     const decision = await this.policy.evaluate({
@@ -722,7 +732,7 @@ export class FilesystemAuthority {
         portablePath,
         operationPath: resolved.operationPath,
         redactPath: decision.redactPath === true,
-        scope: resolved.scope,
+        scope,
       },
     }
   }

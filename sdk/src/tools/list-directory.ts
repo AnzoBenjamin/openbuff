@@ -3,7 +3,10 @@ import * as path from 'path'
 import { MAX_LIST_DIRECTORY_ENTRIES } from '@codebuff/common/tools/params/tool/list-directory'
 
 import { readBoundedEntries } from './bounded-readdir'
-import { resolveFilePathForFileSystemOperation } from './path-utils'
+import {
+  getScopedReadPolicyAliases,
+  resolveFilePathForFileSystemReadOperation,
+} from './path-utils'
 import { isReadPathBlocked } from './read-policy'
 
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
@@ -27,7 +30,8 @@ export async function listDirectory(params: {
     // Reuse the shared containment helper so list_directory gets the same
     // lexical + symlink-resolved protection as read_files; a bare
     // `startsWith(projectPath)` prefix check admits siblings like /project-evil.
-    const resolved = await resolveFilePathForFileSystemOperation(
+    // list_directory only reads, so it uses the read-only resolver.
+    const resolved = await resolveFilePathForFileSystemReadOperation(
       projectPath,
       directoryPath,
       fs,
@@ -72,7 +76,16 @@ export async function listDirectory(params: {
         resolved.relativePath.replace(/\\/g, '/'),
         entry.name,
       )
-      if (isReadPathBlocked(relativeEntryPath, fileFilter)) continue
+      // A non-'project' resolution has an ABSOLUTE relativePath (and therefore
+      // an absolute relativeEntryPath), so the scoped `<scope>/<basename>`
+      // aliases are added for the host fileFilter; without them a filter
+      // written against project-relative globs would silently fail open.
+      const policyAliases = [
+        relativeEntryPath,
+        ...getScopedReadPolicyAliases(resolved.scope, entry.name),
+      ]
+      if (policyAliases.some((alias) => isReadPathBlocked(alias, fileFilter)))
+        continue
       if (entry.isDirectory()) {
         directories.push(entry.name)
       } else if (entry.isFile()) {

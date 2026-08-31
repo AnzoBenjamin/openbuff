@@ -1,17 +1,35 @@
 import * as fs from 'fs'
 import * as path from 'path'
 
+import { FILE_READ_STATUS } from '@codebuff/common/old-constants'
 import { jobRegistry } from '@codebuff/common/util/job-registry'
 
 import { getBackgroundJob, safeOpenJobLogForRead } from './background-jobs'
-import { resolveFilePathForOperation } from './path-utils'
+import {
+  getScopedReadPolicyAliases,
+  resolveFilePathForReadOperation,
+} from './path-utils'
+import { isReadPathBlocked } from './read-policy'
 
 import type { BackgroundJobOwner } from './background-jobs'
+import type { FileFilter } from './read-files'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 
 const DEFAULT_LINES = 200
 const DEFAULT_MAX_CHARS = 20_000
 const READ_CHUNK_BYTES = 64 * 1024
+/**
+ * ER-6: multiplier bounding the backward tail scan by BYTES as well as lines.
+ * `lines` alone cannot bound it — a file with NO newlines never increments
+ * `lineCount`, so the loop would accumulate the entire file into one growing
+ * JS string regardless of the `lines` / `max_chars` caps (which only bound the
+ * returned slice). The scan therefore stops once it has accumulated a small
+ * multiple of `maxChars`, which is always more than enough to fill the
+ * returned tail (at most `maxChars`) while keeping a pathological single-line
+ * file bounded. Floored at one chunk so a tiny `max_chars` still reads the
+ * last chunk in a single pass.
+ */
+const MAX_TAIL_SCAN_CHARS_MULTIPLE = 8
 /**
  * Exact file shape produced by `getBackgroundJobFilePath`
  * (`openbuff-<jobId>.log` / `.json` in the OS temp dir). The path branch can
@@ -36,6 +54,12 @@ type ReadLogsParams = {
    * (never from model/tool input). Only consulted on the jobId branch.
    */
   owner: BackgroundJobOwner
+  /**
+   * ER-4: host read policy, injected by the run dispatch site exactly like
+   * read_files / read_image / list_directory. Only consulted on the `path`
+   * branch (see the filter block below).
+   */
+  fileFilter?: FileFilter
 }
 
 export async function readLogs(
@@ -122,9 +146,11 @@ export async function readLogs(
 
   const requested = params.path
   // Canonical containment check: in-project paths (including openbuff-owned
-  // OS temp namespaces such as background-job logs and tmux captures) pass;
-  // traversal, sibling-prefix and escaping-symlink paths are refused.
-  const resolved = resolveFilePathForOperation(params.cwd, requested)
+  // OS temp namespaces such as background-job logs and tmux captures, and
+  // paths strictly inside an explicitly allowlisted external read root) pass;
+  // traversal, sibling-prefix and escaping-symlink paths are refused. This is a
+  // read-only tool, so it uses the read-only resolver.
+  const resolved = resolveFilePathForReadOperation(params.cwd, requested)
   if (!resolved) {
     return [
       {
@@ -132,6 +158,34 @@ export async function readLogs(
         value: {
           path: requested,
           errorMessage: `Path is outside the project directory: ${requested}`,
+        },
+      },
+    ]
+  }
+
+  // ER-4: host read policy for the resolved target, applied before the
+  // ownership gate and before any file content is opened. A non-'project'
+  // resolution ('owned-temp' / 'external-read') carries an ABSOLUTE
+  // `relativePath`, so a fileFilter written against project-relative globs
+  // would never match it and would silently fail OPEN; the scoped
+  // `<scope>/<basename>` aliases are what a host policy can actually target.
+  // The basename comes from the dereferenced `operationPath`, exactly like
+  // read-image.ts, so both tools present the same key to a host policy.
+  // Only this `path` branch needs filtering: the jobId branch resolves an
+  // openbuff-owned artifact under its own ownership gate.
+  const policyAliases = [
+    resolved.relativePath,
+    ...getScopedReadPolicyAliases(resolved.scope, resolved.operationPath),
+  ]
+  if (
+    policyAliases.some((alias) => isReadPathBlocked(alias, params.fileFilter))
+  ) {
+    return [
+      {
+        type: 'json',
+        value: {
+          path: requested,
+          errorMessage: FILE_READ_STATUS.IGNORED,
         },
       },
     ]
@@ -208,9 +262,16 @@ function readTail(
 
   const { fd, size } = opened
   try {
+    const maxScanChars = Math.max(
+      READ_CHUNK_BYTES,
+      maxChars * MAX_TAIL_SCAN_CHARS_MULTIPLE,
+    )
     let collected = ''
     let lineCount = 0
     let offset = size
+    // Set when the scan stopped on the ER-6 byte bound rather than the line
+    // bound, so earlier file content was deliberately never read.
+    let stoppedOnByteBound = false
     while (offset > 0 && lineCount <= lines) {
       const length = Math.min(READ_CHUNK_BYTES, offset)
       offset -= length
@@ -219,6 +280,11 @@ function readTail(
       const chunk = buf.toString('utf8')
       collected = chunk + collected
       lineCount = (collected.match(/\n/g) ?? []).length
+      if (collected.length >= maxScanChars) {
+        // Only a real truncation when bytes before this point stayed unread.
+        stoppedOnByteBound = offset > 0
+        break
+      }
     }
 
     const endsWithNewline = collected.endsWith('\n')
@@ -230,7 +296,7 @@ function readTail(
     const tail =
       selectedLines.join('\n') +
       (endsWithNewline && selectedLines.length > 0 ? '\n' : '')
-    let truncated = false
+    let truncated = stoppedOnByteBound
     let content = tail
     if (content.length > maxChars) {
       content = content.slice(content.length - maxChars)

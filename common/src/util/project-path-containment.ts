@@ -2,6 +2,8 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
+import { isMandatorySensitiveReadPath } from './sensitive-paths'
+
 import type { CodebuffFileSystem } from '../types/filesystem'
 
 /**
@@ -13,16 +15,23 @@ import type { CodebuffFileSystem } from '../types/filesystem'
  * - `relativePath` is the project-relative form of the path, with OS-native
  *   separators (i.e. whatever `path.relative` produces). Callers can use it
  *   as a lookup key into a project file tree built with the same
- *   convention. For the owned-temp exception it is the ABSOLUTE resolved
- *   path instead; branch on `scope` to tell the two apart rather than
- *   inferring from absoluteness.
+ *   convention. For the owned-temp exception — and, identically, for the
+ *   read-only `external-read` exception — it is the ABSOLUTE resolved path
+ *   instead, because a project-relative form for a path outside the project
+ *   would be a meaningless traversal string. Consumers must branch on `scope`
+ *   rather than inferring from absoluteness.
  */
 export type ContainedProjectPath = {
   fullPath: string
   realFullPath: string
   relativePath: string
-  /** 'project' for in-project paths; 'owned-temp' for the openbuff-owned OS temp namespace exception. */
-  scope: 'project' | 'owned-temp'
+  /**
+   * 'project' for in-project paths; 'owned-temp' for the openbuff-owned OS
+   * temp namespace exception; 'external-read' for a path inside an explicitly
+   * allowlisted read-only root outside the project (reachable only through
+   * `resolveProjectPathForRead` / `resolveProjectPathForFileSystemRead`).
+   */
+  scope: 'project' | 'owned-temp' | 'external-read'
 }
 
 /**
@@ -391,6 +400,412 @@ async function ownedTempContainedPathForFileSystem(
   }
 }
 
+// Read-only allowlist of roots outside the project that path-taking READ tools
+// may reach. Deliberately module-level and configure-once: the agent runtime
+// backstop and the SDK read handlers must agree on one identical set, and a
+// mutable per-call parameter threaded through every read handler would let one
+// caller widen the boundary the other enforces.
+let externalReadRoots: string[] | undefined
+let externalReadComparisonRoots: string[] | undefined
+// The project root the stored boundary belongs to, when the configuring caller
+// supplied one. WHY it is tracked: the registry is process-global, so without
+// an owner a second project configured in the same process (e.g. after
+// `switchProjectContext`) is indistinguishable from a mid-run attempt to
+// re-point the boundary — the strict primitive would refuse it and project A's
+// roots would stay in force while project B's never applied.
+let externalReadRootsOwner: string | undefined
+
+/**
+ * Canonical normalization for external read root entries: `path.resolve`,
+ * empty/whitespace-only entries dropped, deduped and sorted so the stored value
+ * is order-independent.
+ *
+ * Two entry shapes are REFUSED (skipped, not thrown):
+ * - a filesystem root (`path.dirname(resolved) === resolved`): allowlisting
+ *   `/` or `C:\` would make the entire filesystem readable, which is the exact
+ *   opposite of an allowlist;
+ * - an entry containing a raw `..` segment: the same rule the owned-temp
+ *   exception applies to inputs, applied to the boundary definition itself.
+ *
+ * Shared by `configureExternalReadRoots` and
+ * `ensureExternalReadRootsConfigured` so the `attempted` set the wrapper
+ * reports can never describe a different boundary than the one the strict
+ * primitive evaluated.
+ */
+function normalizeExternalReadRoots(roots: readonly string[]): string[] {
+  return [
+    ...new Set(
+      roots
+        .filter((root) => root.trim() !== '')
+        .filter((root) => !hasTraversalSegment(root))
+        .map((root) => path.resolve(root))
+        .filter((resolved) => path.dirname(resolved) !== resolved),
+    ),
+  ].sort()
+}
+
+/**
+ * Configure the read-only external root allowlist.
+ *
+ * Entries are normalized by `normalizeExternalReadRoots` (see there for the
+ * refused entry shapes).
+ *
+ * Idempotent for an equivalent set. Calling it with a DIFFERENT set for the
+ * SAME (or an unknown) owning project THROWS: silently re-pointing a security
+ * boundary mid-run is precisely the failure mode this registry exists to
+ * prevent, and a late widening would apply to reads already validated against
+ * the earlier set.
+ *
+ * `projectRoot` is the project the boundary belongs to. Supplying a DIFFERENT
+ * project root than the stored owner REPLACES the boundary instead of refusing
+ * it: that is a legitimate project switch, and replacing is strictly safer than
+ * keeping a boundary that belongs to another project (which would leave project
+ * A's roots readable while project B's own allowlist never applied). Omitting
+ * `projectRoot` keeps the historical configure-once-per-process behavior, so
+ * existing callers and tests are unaffected.
+ *
+ * Callers that run on EVERY run (rather than exactly once) must use
+ * `ensureExternalReadRootsConfigured` instead of catching this throw
+ * themselves.
+ */
+export function configureExternalReadRoots(
+  roots: readonly string[],
+  projectRoot?: string,
+): void {
+  const normalized = normalizeExternalReadRoots(roots)
+  const owner =
+    projectRoot === undefined ? undefined : path.resolve(projectRoot)
+
+  if (externalReadRoots) {
+    // A different KNOWN owner means a project switch, which replaces the
+    // boundary below. Anything else keeps the strict configure-once semantics.
+    const projectSwitched =
+      owner !== undefined &&
+      externalReadRootsOwner !== undefined &&
+      owner !== externalReadRootsOwner
+    if (!projectSwitched) {
+      const unchanged =
+        externalReadRoots.length === normalized.length &&
+        externalReadRoots.every((root, index) => root === normalized[index])
+      if (unchanged) {
+        // Adopt an owner the first caller did not supply, so a later genuine
+        // project switch is still detectable.
+        externalReadRootsOwner ??= owner
+        return
+      }
+      throw new Error(
+        `External read roots are already configured with ${externalReadRoots.length} root(s); ` +
+          `refusing to reconfigure with a different set of ${normalized.length} root(s). ` +
+          'The external read boundary is configure-once per process.',
+      )
+    }
+  }
+
+  externalReadRoots = normalized
+  externalReadRootsOwner = owner ?? externalReadRootsOwner
+  // The comparison roots memoize a realpath-dereferenced view of the value
+  // being replaced here, so they must be invalidated whenever it changes —
+  // otherwise the first configuration wins for the life of the process.
+  externalReadComparisonRoots = undefined
+}
+
+/**
+ * The configured external read roots, as a defensive copy. An empty array when
+ * unconfigured: the default posture is closed, so every external-read helper
+ * behaves as if the feature does not exist until someone configures it.
+ */
+export function getExternalReadRoots(): string[] {
+  return [...(externalReadRoots ?? [])]
+}
+
+/**
+ * Outcome of `ensureExternalReadRootsConfigured`.
+ *
+ * - `'configured'`: this call performed the one configuration for the process,
+ *   OR it replaced the boundary because `projectRoot` named a different project
+ *   than the stored owner (a legitimate project switch — see
+ *   `configureExternalReadRoots`).
+ * - `'unchanged'`: the registry was already set to an equivalent value.
+ * - `'refused-changed'`: the strict primitive rejected a DIFFERENT set. `roots`
+ *   is the still-effective boundary; `attempted` is the normalized set that was
+ *   refused. Callers MUST NOT treat this as success.
+ */
+export type ExternalReadConfigurationResult =
+  | { status: 'configured'; roots: string[] }
+  | { status: 'unchanged'; roots: string[] }
+  | { status: 'refused-changed'; roots: string[]; attempted: string[] }
+
+/**
+ * Non-throwing wrapper around `configureExternalReadRoots` for wiring that runs
+ * on EVERY run rather than exactly once (see `sdk/src/run.ts`).
+ *
+ * WHY this exists: the boundary stays configure-once per process, but the
+ * caller does not. A user who edits `openbuff.json` mid-session to add a
+ * `readableRoots` entry would make the next run call the strict primitive with
+ * a different set, and the raw throw would crash that turn. So a mid-session
+ * change is deliberately NOT applied: keeping the earlier (narrower or equal)
+ * boundary is the fail-safe choice, because reads already validated in this
+ * process were validated against that earlier boundary, and widening it
+ * retroactively would mean earlier decisions no longer describe the boundary in
+ * force. Callers surface a "restart to apply" warning instead.
+ *
+ * `'refused-changed'` is NOT success: nothing was applied, and the returned
+ * `roots` are the pre-existing boundary.
+ */
+export function ensureExternalReadRootsConfigured(
+  roots: readonly string[],
+  projectRoot?: string,
+): ExternalReadConfigurationResult {
+  // Read the registry's own "has it been configured?" state rather than
+  // comparing before/after snapshots: a first configuration whose entries are
+  // all skipped (e.g. only a filesystem root) stores `[]`, which is
+  // indistinguishable from the unconfigured snapshot and would be misreported
+  // as `'unchanged'`.
+  const alreadyConfigured = externalReadRoots !== undefined
+  // Captured BEFORE configuring: a project switch replaces the boundary, so it
+  // is reported as `'configured'` rather than `'unchanged'`.
+  const owner =
+    projectRoot === undefined ? undefined : path.resolve(projectRoot)
+  const projectSwitched =
+    owner !== undefined &&
+    externalReadRootsOwner !== undefined &&
+    owner !== externalReadRootsOwner
+  try {
+    configureExternalReadRoots(roots, projectRoot)
+  } catch {
+    // The strict primitive only throws for a differing set, and it throws
+    // BEFORE mutating anything, so the earlier boundary is still in force.
+    return {
+      status: 'refused-changed',
+      roots: getExternalReadRoots(),
+      attempted: normalizeExternalReadRoots(roots),
+    }
+  }
+  return {
+    status: alreadyConfigured && !projectSwitched ? 'unchanged' : 'configured',
+    roots: getExternalReadRoots(),
+  }
+}
+
+/**
+ * Clear the external read registry. Exists ONLY for test isolation — the
+ * registry is module state, so a test that configures it would otherwise leave
+ * an open boundary for every later test importing this module. Must not be
+ * called from production code paths; the configure-once throw is the intended
+ * production behavior.
+ */
+export function resetExternalReadRootsForTesting(): void {
+  externalReadRoots = undefined
+  externalReadComparisonRoots = undefined
+  // The owner must be cleared too, or a later suite configuring for a different
+  // project would be treated as a project switch against a stale owner.
+  externalReadRootsOwner = undefined
+}
+
+/**
+ * Configured external read roots in both lexical and symlink-dereferenced
+ * form, mirroring `getOwnedTempComparisonRoots`: a configured root may itself
+ * be a symlink (e.g. a home directory on macOS), so a file's realpath only
+ * lands under the dereferenced root.
+ */
+function getExternalReadComparisonRoots(): string[] {
+  if (!externalReadComparisonRoots) {
+    const roots = getExternalReadRoots()
+    externalReadComparisonRoots = [
+      ...new Set([...roots, ...roots.map(realpathCachedForRoot)]),
+    ]
+  }
+  return externalReadComparisonRoots
+}
+
+/**
+ * Async counterpart of `getExternalReadComparisonRoots`. The dereferenced form
+ * comes from the injected filesystem and is memoized per filesystem in
+ * `projectRootFileSystemRealpathCache`, matching
+ * `getOwnedTempComparisonRootsForFileSystem`.
+ */
+async function getExternalReadComparisonRootsForFileSystem(
+  fileSystem: CodebuffFileSystem,
+): Promise<string[]> {
+  const roots = getExternalReadRoots()
+  const realRoots = await Promise.all(
+    roots.map((root) => realpathCachedForFileSystemRoot(root, fileSystem)),
+  )
+  return [...new Set([...roots, ...realRoots])]
+}
+
+/**
+ * True when `target` is STRICTLY inside one of `roots`. The root itself is
+ * refused: it is not a readable file, and admitting it would silently widen
+ * later directory-listing consumers to the root entry itself.
+ *
+ * Containment goes through `escapesRoot`, which is `path.relative`-based, so a
+ * sibling-prefix directory like `<root>-evil` is correctly refused where a
+ * naive `startsWith` check would admit it.
+ */
+function isInsideExternalReadRoot(target: string, roots: string[]): boolean {
+  return roots.some((root) => {
+    const relative = path.relative(root, target)
+    return relative !== '' && !escapesRoot(root, target)
+  })
+}
+
+/**
+ * Resolve the ALREADY-RESOLVED absolute `fullPath` to the ONE real path that
+ * is both validated here and used by callers for the actual read. Returns
+ * `null` when the path is not strictly inside a configured external read root
+ * — including whenever the registry is unconfigured, since the comparison root
+ * list is then empty.
+ *
+ * The raw-input `..` policy is enforced by the entry points (see
+ * `hasTraversalSegment`), never here: this function only ever sees collapsed
+ * paths.
+ *
+ * The real path is dereferenced EXACTLY ONCE: validating one realpath and then
+ * handing callers a second, independently resolved one leaves a TOCTOU window
+ * where a symlink swapped in between the two resolutions redirects the read to
+ * an arbitrary target. Requiring the dereferenced path to satisfy containment
+ * too closes the symlink escape — a file inside an allowlisted root that
+ * points at `/etc/shadow`.
+ */
+function resolveExternalReadRealPath(fullPath: string): string | null {
+  const roots = getExternalReadComparisonRoots()
+  if (!isInsideExternalReadRoot(fullPath, roots)) return null
+
+  const realFullPath = realpathOrLexical(fullPath)
+  if (!isInsideExternalReadRoot(realFullPath, roots)) return null
+
+  // Fail-closed sensitive refusal, checked on BOTH the lexical and the
+  // dereferenced basename (a benign-looking name may link to `credentials.json`
+  // and vice versa).
+  //
+  // This lives in the resolver rather than in individual read handlers so every
+  // current and future external-read consumer inherits it: the primary thing an
+  // allowlisted config root would otherwise expose is
+  // `<configDir>/credentials.json`, and a handler that forgot the check would
+  // leak provider OAuth tokens and the default API key. This is why
+  // `credentials.json` had to be added to the sensitive basenames first.
+  //
+  // The FULL paths are passed (not just the basenames) so the path-aware
+  // credential carriers `isMandatorySensitiveReadPath` recognizes —
+  // `.kube/config`, `.docker/config.json`, `gh/hosts.yml`, `.aws/config` —
+  // are refused too. Those basenames are far too generic to block on their own,
+  // so a basename-only call would silently expose them inside an allowlisted
+  // home-directory root.
+  if (
+    isMandatorySensitiveReadPath(fullPath) ||
+    isMandatorySensitiveReadPath(realFullPath)
+  ) {
+    return null
+  }
+
+  return realFullPath
+}
+
+/** Async counterpart of `resolveExternalReadRealPath` for injected filesystems. */
+async function resolveExternalReadRealPathForFileSystem(
+  fullPath: string,
+  fileSystem: CodebuffFileSystem,
+): Promise<string | null> {
+  const roots = await getExternalReadComparisonRootsForFileSystem(fileSystem)
+  if (!isInsideExternalReadRoot(fullPath, roots)) return null
+
+  // Resolved once, exactly like the sync helper: the validated string is the
+  // string callers read from.
+  const realFullPath = await realpathOrLexicalForFileSystem(
+    fullPath,
+    fileSystem,
+  )
+  if (!isInsideExternalReadRoot(realFullPath, roots)) return null
+
+  // Identical fail-closed sensitive refusal as the sync resolver, on the same
+  // FULL paths; the two must never disagree about `credentials.json` or about a
+  // path-aware carrier like `.docker/config.json`.
+  if (
+    isMandatorySensitiveReadPath(fullPath) ||
+    isMandatorySensitiveReadPath(realFullPath)
+  ) {
+    return null
+  }
+
+  return realFullPath
+}
+
+/**
+ * Resolve a caller input to an absolute path the same way the containment
+ * resolvers do: absolute inputs as given, relative inputs against the project
+ * root (never `process.cwd()`).
+ */
+function resolveAgainstRoot(projectRoot: string, input: string): string {
+  return path.isAbsolute(input)
+    ? path.resolve(input)
+    : path.resolve(path.resolve(projectRoot), input)
+}
+
+/**
+ * True when `input` resolves strictly inside a configured external read root
+ * and is not a mandatory-sensitive file. Returns `false` whenever the registry
+ * is unconfigured.
+ *
+ * Contract: a raw input containing a `..` segment is refused outright, even
+ * when it would collapse back inside an allowlisted root — the check must live
+ * here, above `path.resolve`. `resolveProjectPathForRead` and
+ * `resolveProjectPathForFileSystemRead` apply the same rule, so all three
+ * agree on any given input.
+ */
+export function isExternalReadPath(input: string): boolean {
+  if (!input || hasTraversalSegment(input)) return false
+  return resolveExternalReadRealPath(path.resolve(input)) !== null
+}
+
+/**
+ * Build the containment result for an external read path. `relativePath` is the
+ * absolute resolved path: allowlisted roots live outside the project, so a
+ * project-relative form would be meaningless (and would look like a traversal
+ * escape).
+ *
+ * Takes the ALREADY-RESOLVED absolute path from the caller: re-resolving the
+ * raw input here would resolve a relative input against `process.cwd()`
+ * instead of the caller's project root.
+ *
+ * `realFullPath` is the exact string that `resolveExternalReadRealPath`
+ * validated — never a second, independently resolved realpath.
+ */
+function externalReadContainedPath(
+  fullPath: string,
+): ContainedProjectPath | null {
+  const realFullPath = resolveExternalReadRealPath(fullPath)
+  if (realFullPath === null) return null
+  return {
+    fullPath,
+    realFullPath,
+    relativePath: fullPath,
+    scope: 'external-read',
+  }
+}
+
+/**
+ * Async counterpart of `externalReadContainedPath`. Also takes the
+ * already-resolved absolute path, and like the sync variant uses the single
+ * validated resolution as `realFullPath`.
+ */
+async function externalReadContainedPathForFileSystem(
+  fullPath: string,
+  fileSystem: CodebuffFileSystem,
+): Promise<ContainedProjectPath | null> {
+  const realFullPath = await resolveExternalReadRealPathForFileSystem(
+    fullPath,
+    fileSystem,
+  )
+  if (realFullPath === null) return null
+  return {
+    fullPath,
+    realFullPath,
+    relativePath: fullPath,
+    scope: 'external-read',
+  }
+}
+
 /**
  * Resolve `input` against `projectRoot` and verify it stays inside the
  * project. Returns `null` when:
@@ -497,6 +912,61 @@ export async function resolveProjectPathForFileSystem(
     relativePath: path.relative(resolvedRoot, fullPath),
     scope: 'project',
   }
+}
+
+/**
+ * READ-ONLY containment resolver: `resolveProjectPath` first, then the
+ * configured external read allowlist as a fallback.
+ *
+ * `resolveProjectPath` and `resolveProjectPathForFileSystem` are DELIBERATELY
+ * LEFT UNCHANGED. They are the resolvers the write path uses
+ * (`sdk/src/tools/change-file.ts`, `sdk/src/tools/replace-range.ts`,
+ * `sdk/src/tools/filesystem-authority.ts`), so keeping the external-read
+ * widening in separate, differently-named read-only entry points means a write
+ * cannot reach an allowlisted root even by mistake — a write handler would have
+ * to be edited to call this function instead. Any future caller of this
+ * resolver MUST be a read-only operation.
+ *
+ * All existing project and owned-temp behavior is identical by construction:
+ * a non-null delegate result is returned unchanged, and the external-read
+ * branch is only consulted when the delegate returns `null`. That branch
+ * refuses a raw `..` first, exactly like the owned-temp fallback, so
+ * `isExternalReadPath` and this resolver agree on every input.
+ */
+export function resolveProjectPathForRead(
+  projectRoot: string,
+  input: string,
+): ContainedProjectPath | null {
+  const contained = resolveProjectPath(projectRoot, input)
+  if (contained !== null) return contained
+  if (!input || hasTraversalSegment(input)) return null
+  // Anchored on the project root exactly like the owned-temp fallback, so a
+  // relative input never depends on `process.cwd()`.
+  return externalReadContainedPath(resolveAgainstRoot(projectRoot, input))
+}
+
+/**
+ * Async counterpart of `resolveProjectPathForRead`, for operations executed
+ * through an injected filesystem. Same read-only contract, and the same reason
+ * `resolveProjectPathForFileSystem` is left unchanged: it is the write path's
+ * resolver.
+ */
+export async function resolveProjectPathForFileSystemRead(
+  projectRoot: string,
+  input: string,
+  fileSystem: CodebuffFileSystem,
+): Promise<ContainedProjectPath | null> {
+  const contained = await resolveProjectPathForFileSystem(
+    projectRoot,
+    input,
+    fileSystem,
+  )
+  if (contained !== null) return contained
+  if (!input || hasTraversalSegment(input)) return null
+  return externalReadContainedPathForFileSystem(
+    resolveAgainstRoot(projectRoot, input),
+    fileSystem,
+  )
 }
 
 /**

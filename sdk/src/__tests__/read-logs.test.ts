@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
 import {
+  configureExternalReadRoots,
   isOwnedTempPath,
+  resetExternalReadRootsForTesting,
   resolveProjectPath,
   resolveProjectPathForFileSystem,
 } from '@codebuff/common/util/project-path-containment'
@@ -66,6 +68,8 @@ type ReadLogsValue = {
   status?: string
   resolvedPath?: string
   content?: string
+  lines?: number
+  truncated?: boolean
   errorMessage?: string
 }
 
@@ -425,6 +429,134 @@ describe('readLogs', () => {
 
     expect(result.errorMessage).toContain('No background job found')
     expect(result.content).toBeUndefined()
+  })
+
+  test('bounds the backward scan for a newline-free file larger than the byte ceiling', async () => {
+    const cwd = makeTempDir()
+    // One head line followed by a single newline-free run far larger than the
+    // byte ceiling. Before ER-6 the backward scan read the WHOLE file into one
+    // growing JS string, because `lineCount` never advanced past `lines` for
+    // newline-free input and the `lines`/`max_chars` caps only bound the
+    // returned slice.
+    fs.writeFileSync(
+      path.join(cwd, 'huge.log'),
+      `HEADMARKER\n${'x'.repeat(300_000)}`,
+    )
+
+    const result = value(
+      await readLogs({ cwd, path: 'huge.log', owner: TRUSTED_OWNER }),
+    )
+
+    expect(result.errorMessage).toBeUndefined()
+    expect(result.truncated).toBe(true)
+    // The default max_chars (20_000) bounds the returned slice...
+    expect(result.content?.length).toBe(20_000)
+    // ...and the byte-bounded scan never reached the head of the file, so the
+    // reported line count describes only the bounded region it actually read.
+    expect(result.content).not.toContain('HEADMARKER')
+    expect(result.lines).toBe(1)
+  })
+})
+
+describe('readLogs — allowlisted external read roots', () => {
+  beforeEach(() => {
+    // The registry is configure-once per PROCESS, and `run.ts` legitimately
+    // configures it (with the openbuff config dir) as soon as any suite in this
+    // process exercises a run. Reset BEFORE configuring, or the strict
+    // `configureExternalReadRoots` throws on the differing set and this test
+    // passes in isolation while failing in a full-directory run.
+    resetExternalReadRootsForTesting()
+  })
+
+  afterEach(() => {
+    // Module state: reset unconditionally so no later test inherits an open
+    // external read boundary.
+    resetExternalReadRootsForTesting()
+  })
+
+  test('reads a log inside an allowlisted external root', async () => {
+    const cwd = makeTempDir()
+    const externalRoot = makeTempDir()
+    const externalLog = path.join(externalRoot, 'external.log')
+    fs.writeFileSync(externalLog, 'one\ntwo\nthree\n')
+
+    configureExternalReadRoots([externalRoot])
+
+    const result = value(
+      await readLogs({
+        cwd,
+        path: externalLog,
+        lines: 2,
+        max_chars: 1_000,
+        owner: TRUSTED_OWNER,
+      }),
+    )
+
+    expect(result.errorMessage).toBeUndefined()
+    // Compared against the realpath: on macOS `os.tmpdir()` is a symlinked
+    // `/var/folders/...` path.
+    expect(result.resolvedPath).toBe(fs.realpathSync(externalLog))
+    expect(result.content).toBe('two\nthree\n')
+  })
+
+  test('refuses the same log while the registry is unconfigured', async () => {
+    const cwd = makeTempDir()
+    const externalRoot = makeTempDir()
+    const externalLog = path.join(externalRoot, 'external.log')
+    fs.writeFileSync(externalLog, 'one\ntwo\nthree\n')
+
+    const result = value(
+      await readLogs({ cwd, path: externalLog, owner: TRUSTED_OWNER }),
+    )
+
+    expect(result.errorMessage).toContain('outside the project directory')
+    expect(result.content).toBeUndefined()
+  })
+
+  test('a host fileFilter blocks a log inside an allowlisted external root', async () => {
+    const cwd = makeTempDir()
+    const externalRoot = makeTempDir()
+    const externalLog = path.join(externalRoot, 'external.log')
+    fs.writeFileSync(externalLog, 'one\ntwo\nthree\n')
+
+    configureExternalReadRoots([externalRoot])
+
+    // An 'external-read' resolution carries an ABSOLUTE `relativePath`, so the
+    // host policy is targeted through the scoped `external-read/<basename>`
+    // alias — the same alias shape read_files / read_image present.
+    const blocked = value(
+      await readLogs({
+        cwd,
+        path: externalLog,
+        lines: 2,
+        max_chars: 1_000,
+        owner: TRUSTED_OWNER,
+        fileFilter: (filePath: string) => ({
+          status:
+            filePath === 'external-read/external.log'
+              ? ('blocked' as const)
+              : ('allow' as const),
+        }),
+      }),
+    )
+
+    expect(blocked.errorMessage).toBe('[BLOCKED]')
+    expect(blocked.content).toBeUndefined()
+
+    // Without a filter the very same log still reads, so the refusal above is
+    // the host policy and not the containment boundary.
+    const allowed = value(
+      await readLogs({
+        cwd,
+        path: externalLog,
+        lines: 2,
+        max_chars: 1_000,
+        owner: TRUSTED_OWNER,
+      }),
+    )
+
+    expect(allowed.errorMessage).toBeUndefined()
+    expect(allowed.content).toBe('two\nthree\n')
   })
 })
 

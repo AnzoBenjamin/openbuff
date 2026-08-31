@@ -6,6 +6,8 @@ import {
   OWNED_TEMP_SEGMENT_PATTERNS,
   resolveProjectPath,
   resolveProjectPathForFileSystem,
+  resolveProjectPathForFileSystemRead,
+  resolveProjectPathForRead,
   type ContainedProjectPath,
 } from '@codebuff/common/util/project-path-containment'
 
@@ -51,6 +53,29 @@ export {
 
 export type ResolvedOperationPath = ContainedProjectPath & {
   operationPath: string
+}
+
+/**
+ * Extra host-policy alias keys for a read path resolved under a non-'project'
+ * scope.
+ *
+ * WHY: an 'owned-temp' or 'external-read' resolution carries an ABSOLUTE
+ * `relativePath`, so a host `fileFilter` written against project-relative globs
+ * never matches it and would silently fail OPEN. The basename and the stable
+ * `<scope>/<basename>` key (`owned-temp/job.log`, `external-read/notes.png`)
+ * are what a host policy can actually target for those paths — the same alias
+ * shape `read-files.ts` builds in `authorizeReadTarget`.
+ *
+ * Returns an empty list for `scope === 'project'`, where the project-relative
+ * path is already the key a host policy targets.
+ */
+export function getScopedReadPolicyAliases(
+  scope: ContainedProjectPath['scope'],
+  pathOrName: string,
+): string[] {
+  if (scope === 'project') return []
+  const basename = path.posix.basename(pathOrName.replace(/\\/g, '/'))
+  return [...new Set([basename, `${scope}/${basename}`])]
 }
 
 /**
@@ -258,4 +283,55 @@ export async function resolveFilePathForFileSystemOperation(
   )
   if (!operationPath) return null
   return { ...resolved, operationPath }
+}
+
+/**
+ * READ-ONLY twin of `resolveFilePathForOperation`.
+ *
+ * Delegates to `resolveProjectPathForRead`, so in addition to project and
+ * owned-temp paths it also resolves a path strictly inside an explicitly
+ * allowlisted external read root (`scope: 'external-read'`, with an ABSOLUTE
+ * `relativePath` — consumers must branch on `scope`).
+ *
+ * ANY caller of this function MUST be a read-only operation. The write path
+ * (`change-file.ts`, `replace-range.ts`, `filesystem-authority.ts`,
+ * `3d-assets.ts`) keeps calling `resolveFilePathForOperation`, which is blind
+ * to the external read allowlist — so reaching an allowlisted root from a write
+ * would require someone to edit a write handler to call this differently-named
+ * read-only resolver.
+ *
+ * This is the FOLLOW-SYMLINK read shape ONLY: there is deliberately no
+ * `followFinalSymlink: false` option. That option exists for unlink-style
+ * operations (deleting the link rather than its target), which are mutations
+ * and must never reach an external root.
+ */
+export function resolveFilePathForReadOperation(
+  projectRoot: string,
+  input: string,
+): ResolvedOperationPath | null {
+  const resolved = resolveProjectPathForRead(projectRoot, input)
+  if (!resolved) return null
+  return { ...resolved, operationPath: resolved.realFullPath }
+}
+
+/**
+ * Filesystem-aware counterpart of `resolveFilePathForReadOperation`, used
+ * whenever the read itself runs through an injected CodebuffFileSystem.
+ *
+ * Same read-only contract, and the same deliberate omission of
+ * `followFinalSymlink: false`: unlink-style resolution is for mutations, which
+ * must never reach an allowlisted external root.
+ */
+export async function resolveFilePathForFileSystemReadOperation(
+  projectRoot: string,
+  input: string,
+  fileSystem: CodebuffFileSystem,
+): Promise<ResolvedOperationPath | null> {
+  const resolved = await resolveProjectPathForFileSystemRead(
+    projectRoot,
+    input,
+    fileSystem,
+  )
+  if (!resolved) return null
+  return { ...resolved, operationPath: resolved.realFullPath }
 }

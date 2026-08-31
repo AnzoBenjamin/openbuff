@@ -7,7 +7,11 @@ import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-run
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { promptSuccess } from '@codebuff/common/util/error'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
-import { getOwnedTempRoots } from '@codebuff/common/util/project-path-containment'
+import {
+  configureExternalReadRoots,
+  getOwnedTempRoots,
+  resetExternalReadRootsForTesting,
+} from '@codebuff/common/util/project-path-containment'
 
 import { handleWriteTodos } from '../tools/handlers/tool/write-todos'
 import {
@@ -2260,6 +2264,407 @@ describe('runAgentStep - set_output tool', () => {
         toolName: 'read_files',
       }),
     )
+  })
+
+  it('does not hard-block reads of an allowlisted external path', async () => {
+    // The SDK read handlers deliberately allow reads strictly inside a root the
+    // user explicitly allowlisted (the openbuff config dir, plus openbuff.json
+    // `readableRoots`), so this runtime backstop must not refuse them. The SDK
+    // resolvers stay authoritative — including the fail-closed
+    // mandatory-sensitive refusal — this layer only stops pre-dispatch refusal.
+    const externalRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'external-read-backstop-'),
+    )
+    const externalRead = path.join(externalRoot, 'notes.txt')
+    fs.writeFileSync(externalRead, 'notes\n')
+    // Module state: reset before configuring so a differing set from an earlier
+    // test can never make the configure-once primitive throw here.
+    resetExternalReadRootsForTesting()
+    configureExternalReadRoots([externalRoot])
+
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('read_files', {
+        paths: [externalRead],
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['read_files', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    try {
+      await runAgentStep({
+        ...runAgentStepBaseParams,
+        agentType: 'unscoped-agent',
+        localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+        agentTemplate: unscopedAgent,
+        agentState,
+        prompt: 'Read a file inside an allowlisted external root',
+      })
+
+      // No read-scope error chunk...
+      expect(chunks).not.toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          message: expect.stringContaining('filesystem read scope'),
+        }),
+      )
+      // ...and the read is published as a tool call.
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call',
+          toolName: 'read_files',
+        }),
+      )
+    } finally {
+      // Unconditional reset in both the success and failure paths: an
+      // unreset registry would leave an open read boundary for every later
+      // test in this process.
+      resetExternalReadRootsForTesting()
+      fs.rmSync(externalRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('still hard-blocks writes to an allowlisted external path', async () => {
+    // The external allowlist is READ-only by construction (there is no
+    // external-write scope), so this backstop must never pre-authorize a write
+    // there — the exception stays gated on access === 'read'.
+    const externalRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'external-read-backstop-write-'),
+    )
+    const externalWrite = path.join(externalRoot, 'notes.txt')
+    fs.writeFileSync(externalWrite, 'notes\n')
+    resetExternalReadRootsForTesting()
+    configureExternalReadRoots([externalRoot])
+
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('write_file', {
+        path: externalWrite,
+        instructions: 'Write into an allowlisted read-only root',
+        content: 'export const blocked = true\n',
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['write_file', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    try {
+      await runAgentStep({
+        ...runAgentStepBaseParams,
+        agentType: 'unscoped-agent',
+        localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+        agentTemplate: unscopedAgent,
+        agentState,
+        prompt: 'Write into the allowlisted external root',
+      })
+
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          message: expect.stringContaining(
+            'was blocked by the unscoped-agent filesystem write scope',
+          ),
+        }),
+      )
+      expect(chunks).not.toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call',
+          toolName: 'write_file',
+        }),
+      )
+    } finally {
+      resetExternalReadRootsForTesting()
+      fs.rmSync(externalRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('still hard-blocks reads of a non-allowlisted external sibling', async () => {
+    // Attribution guard: the allow above must come from the ALLOWLIST, not from
+    // "any absolute path outside the project". The sibling directory shares the
+    // allowlisted root's prefix, which a naive startsWith check would admit.
+    const externalRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'external-read-backstop-sibling-'),
+    )
+    const siblingRoot = `${externalRoot}-evil`
+    fs.mkdirSync(siblingRoot)
+    const siblingRead = path.join(siblingRoot, 'notes.txt')
+    fs.writeFileSync(siblingRead, 'sibling\n')
+    resetExternalReadRootsForTesting()
+    configureExternalReadRoots([externalRoot])
+
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('read_files', {
+        paths: [siblingRead],
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['read_files', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    try {
+      await runAgentStep({
+        ...runAgentStepBaseParams,
+        agentType: 'unscoped-agent',
+        localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+        agentTemplate: unscopedAgent,
+        agentState,
+        prompt: 'Read a non-allowlisted external sibling path',
+      })
+
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          message: expect.stringContaining(
+            'was blocked by the unscoped-agent filesystem read scope',
+          ),
+        }),
+      )
+      expect(chunks).not.toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call',
+          toolName: 'read_files',
+        }),
+      )
+    } finally {
+      resetExternalReadRootsForTesting()
+      fs.rmSync(externalRoot, { recursive: true, force: true })
+      fs.rmSync(siblingRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('still hard-blocks code_search with an absolute cwd inside an allowlisted external root', async () => {
+    // ER-3: the external-read relaxation is TOOL-scoped, not merely
+    // access-scoped. code_search's SDK handler performs NO containment (it
+    // realpaths the caller cwd and spawns ripgrep there), so it is absent from
+    // EXTERNAL_READ_EXEMPT_TOOLS and stays hard-blocked even for a configured
+    // allowlisted root — otherwise code_search({ cwd: '<configDir>/projects' })
+    // would recursively grep other projects' persisted transcripts.
+    const externalRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'external-read-code-search-'),
+    )
+    fs.writeFileSync(path.join(externalRoot, 'notes.txt'), 'notes\n')
+    resetExternalReadRootsForTesting()
+    configureExternalReadRoots([externalRoot])
+
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('code_search', {
+        pattern: 'apiKey',
+        cwd: externalRoot,
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['code_search', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    try {
+      await runAgentStep({
+        ...runAgentStepBaseParams,
+        agentType: 'unscoped-agent',
+        localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+        agentTemplate: unscopedAgent,
+        agentState,
+        prompt: 'Grep inside an allowlisted external root',
+      })
+
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          message: expect.stringContaining(
+            'was blocked by the unscoped-agent filesystem read scope',
+          ),
+        }),
+      )
+      expect(chunks).not.toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call',
+          toolName: 'code_search',
+        }),
+      )
+    } finally {
+      resetExternalReadRootsForTesting()
+      fs.rmSync(externalRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('still allows read_files for an absolute path inside an allowlisted external root', async () => {
+    // Attribution guard for the ER-3 fix: gating the relaxation on
+    // EXTERNAL_READ_EXEMPT_TOOLS must not be a blanket revert. read_files IS a
+    // migrated tool (its SDK handler resolves through the read-only containment
+    // resolvers), so the same configured root that code_search cannot reach
+    // stays readable here.
+    const externalRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'external-read-exempt-read-files-'),
+    )
+    const externalRead = path.join(externalRoot, 'notes.txt')
+    fs.writeFileSync(externalRead, 'notes\n')
+    resetExternalReadRootsForTesting()
+    configureExternalReadRoots([externalRoot])
+
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('read_files', {
+        paths: [externalRead],
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['read_files', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    try {
+      await runAgentStep({
+        ...runAgentStepBaseParams,
+        agentType: 'unscoped-agent',
+        localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+        agentTemplate: unscopedAgent,
+        agentState,
+        prompt: 'Read a file inside an allowlisted external root',
+      })
+
+      expect(chunks).not.toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          message: expect.stringContaining('filesystem read scope'),
+        }),
+      )
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call',
+          toolName: 'read_files',
+        }),
+      )
+    } finally {
+      resetExternalReadRootsForTesting()
+      fs.rmSync(externalRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('hard-blocks find_files_matching_content with an absolute cwd outside the project', async () => {
+    // ER-3: find_files_matching_content used to fall through
+    // getFilesystemToolPaths and return undefined, so it got NO backstop at all
+    // while still resolving an arbitrary absolute cwd. It now has a backstop
+    // entry, and (like code_search) is not exempt, so an out-of-project cwd is
+    // hard-blocked.
+    const outsideRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'ffmc-outside-project-'),
+    )
+    fs.writeFileSync(path.join(outsideRoot, 'notes.txt'), 'notes\n')
+    // The registry stays closed: nothing here is allowlisted.
+    resetExternalReadRootsForTesting()
+
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('find_files_matching_content', {
+        pattern: 'apiKey',
+        cwd: outsideRoot,
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['find_files_matching_content', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    try {
+      await runAgentStep({
+        ...runAgentStepBaseParams,
+        agentType: 'unscoped-agent',
+        localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+        agentTemplate: unscopedAgent,
+        agentState,
+        prompt: 'Search content outside the project root',
+      })
+
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          message: expect.stringContaining(
+            'was blocked by the unscoped-agent filesystem read scope',
+          ),
+        }),
+      )
+      expect(chunks).not.toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call',
+          toolName: 'find_files_matching_content',
+        }),
+      )
+    } finally {
+      resetExternalReadRootsForTesting()
+      fs.rmSync(outsideRoot, { recursive: true, force: true })
+    }
   })
 
   it('blocks suggest_followups after same-step rewrite_symbol edits when the gate started open', async () => {
