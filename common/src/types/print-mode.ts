@@ -279,12 +279,36 @@ export type PrintModeContextCompaction = z.infer<
  * `state: 'started'` is emitted immediately before a step that is likely to run
  * semantic compaction (the pruner agent runs inline and is hidden from the
  * CLI, so without this the user sees nothing until the result arrives).
+ *
+ * EMISSION GATE. The only trigger is the window-derived semantic compaction
+ * budget being exceeded by the pre-step context estimate. In particular:
+ *   - It is NOT gated on the agent having a `handleSteps` generator. An
+ *     orchestrator's generator spawns the pruner itself; a prompt-only
+ *     template instead gets an equivalent runtime-driven pass, and both
+ *     announce through this event. A consumer must therefore expect `started`
+ *     from prompt-only agents too.
+ *   - It IS suppressed for an iteration where the transient loop-owned
+ *     anti-thrash advisory is active (`suppressSemanticCompaction` on the
+ *     agent state, set after consecutive passes reclaimed no context space in
+ *     the current turn and reset at loop entry). A suppressed iteration runs
+ *     no pass and emits NEITHER half of the pair — it is not reported as a
+ *     `started`/`settled` no-op — so a consumer must not infer "the trigger
+ *     was never exceeded" from the absence of an event.
+ *   - It is deliberately NOT gated on an explicit `maxContextLength` override,
+ *     so an overridden run does not emit a `started` on every step.
+ *   - For the runtime-driven (prompt-only) pass, the ordinary spawn-permission
+ *     contract still applies AFTER the announcement: a template that does not
+ *     declare `context-pruner` in its `spawnableAgents` announces a pass that
+ *     then declines to spawn, so an announced pass is not a guarantee that any
+ *     compaction happened. The terminal `context_compaction` result remains
+ *     the only signal that context was actually reclaimed.
+ *
  * `state: 'settled'` is emitted after the compaction branches for every
  * `started` of the SAME `runId`, and again on that run's exit path when a step
- * throws before reaching them, so a pass that decides NOT to compact cannot
- * leave a live state stuck on screen. A run emits at most one unsettled
- * `started` at a time. Both budgets and the pre-step context size are optional
- * because they are informational only.
+ * throws or is cancelled before reaching them, so a pass that decides NOT to
+ * compact cannot leave a live state stuck on screen. A run emits at most one
+ * unsettled `started` at a time. Both budgets and the pre-step context size are
+ * optional because they are informational only.
  *
  * CONSUMER CONTRACT. Pair `started` with `settled` by `runId`: a `settled` from
  * one run never settles another run's `started`, so concurrent or nested loops

@@ -1386,11 +1386,19 @@ rather than blending into the orchestrator's turn.
 
 #### `context-pruner` silencing
 
-When `agent_type === 'context-pruner'`, the handler suppresses **all**
-forwarded chunks (including the child's `subagent_start` /
-`subagent_finish` emitted by `executeSubagent`), so the pruner runs
-silently and produces no TUI output. This is the existing behavior; the
-`TODO` in source notes a future option may make this configurable.
+When the resolved `agent_type` is the context-pruner, the handler suppresses
+**all** forwarded chunks (including the child's `subagent_start` /
+`subagent_finish` emitted by `executeSubagent`), so the pruner runs silently and
+produces no TUI output. Identity here is matched by **bare agent id** through
+`isContextPrunerAgentId`, not by exact string equality: `context-pruner`,
+`acme/context-pruner`, `acme/context-pruner@1.2.3`, and underscore aliases such
+as `context_pruner` all qualify and are silenced identically. That is a
+widening of the previous exact `agent_type === 'context-pruner'` rule — see
+"Spawned agents have three parent-history transfer modes" below for the rest of
+the contract the same match governs (full parent transcript, forced
+`inheritParentSystemPrompt`, transcript write-back, and the anti-thrash skip),
+and `sdk/CHANGELOG.md` for the consumer migration note. The `TODO` in source
+notes a future option may make the silencing configurable.
 
 #### Context-window-aware compaction budgets
 
@@ -1454,6 +1462,18 @@ telemetry and whether `<knowledge_memory>` survived. The existing pinned
 control-plane, blocker, validation, review-receipt, and high-value finding
 extraction remains authoritative across repeated compaction.
 
+The SDK's request-time brake (`getMessagesForModelContext`) subtracts this
+request's counted system-prompt and tool-schema tokens from the resolved message
+limit, so its `cache_emergency_trim` log and analytics payload separate the two
+budgets explicitly: `maxTotalTokens` is the resolved _request_ budget,
+`systemTokens` is the counted overhead, and `effectiveMessageBudgetTokens` is
+the message-only budget actually applied. `triggerBudgetTokens` and
+`targetBudgetTokens` — the pair consumers compare against message token counts,
+including the `trigger=`/`target=` numbers in the log line — report that same
+message-only budget, so no emitted field is ambiguous about which threshold
+fired. With no counted overhead the message-only budget equals
+`maxTotalTokens`, so those values are unchanged.
+
 `context_compaction` telemetry is additive on the public `handleEvent` surface.
 `resolvedContextWindowTokens`, `triggerBudgetTokens`, `targetBudgetTokens`,
 `compactionCount`, `consecutiveNoProgressCompactions`, `shortfallTokens`,
@@ -1511,9 +1531,18 @@ carries `state: 'started' | 'settled'`, the required agent/run correlation
 `runId` and `ancestorRunIds` (plus an optional `agentId`), and optional
 `contextTokens`, `resolvedContextWindowTokens`, `triggerBudgetTokens`, and
 `targetBudgetTokens`. `packages/agent-runtime/src/run-agent-step.ts` emits
-`started` immediately before the programmatic step when the agent has a
-`handleSteps` generator and the window-derived semantic trigger is exceeded; it
-is deliberately not emitted for an explicit `maxContextLength` override.
+`started` immediately before the programmatic step whenever the window-derived
+semantic trigger is exceeded, whether or not the agent has a `handleSteps`
+generator: an orchestrator's generator spawns the pruner itself, while a
+prompt-only template gets a runtime-driven pass
+(`packages/agent-runtime/src/util/runtime-semantic-compaction.ts`). Two
+additional gates apply, and both suppress the announcement as well as the pass:
+the transient loop-owned anti-thrash advisory (`suppressSemanticCompaction`,
+set after consecutive passes reclaim no space and reset at loop entry), and — for
+the runtime-driven pass only — the ordinary spawn-permission contract, so a
+prompt-only template that does not declare `context-pruner` in its
+`spawnableAgents` announces a pass that then declines to spawn. Emission is
+deliberately not gated on an explicit `maxContextLength` override.
 `settled` is emitted after both compaction branches whenever a `started` was
 emitted, and again on the run's exit path when a step throws or is cancelled
 before reaching them, so a pass that decides not to compact cannot leave a
@@ -1588,8 +1617,31 @@ Spawned agents have three parent-history transfer modes: `none`, `pinned`, and
 specialists default to the bounded `pinned` mode, which transfers only the
 newest `<pinned_active_work_state>` and `<knowledge_memory>` blocks. The
 context-pruner remains the explicit `full`-history exception because editing
-the parent transcript is its job. Custom history editors must opt in with both
-`messageHistoryMode: 'full'` and `propagateMessageHistoryChanges: true`.
+the parent transcript is its job, and `spawn_agent_inline` matches that
+exception by bare agent id rather than by exact string equality:
+`isContextPrunerAgentId` normalizes the declared `agent_type` and compares only
+the bare segment, so a publisher-qualified or version-pinned declaration —
+`acme/context-pruner`, `acme/context-pruner@1.2.3`, or an underscore alias — is
+treated identically to the bare `context-pruner`. Every agent that matches gets
+the whole pruner contract: the full parent transcript
+(`messageHistoryMode: 'full'`), forced `inheritParentSystemPrompt: true`, fully
+silenced child output, and write-back of the child's transcript over the
+parent's `messageHistory`. The operative pruner params the runtime injects into
+a serialized `handleSteps` are matched the same way (`isContextPrunerAgentId`
+over the template id and the resolved `agentType` in
+`packages/agent-runtime/src/run-programmatic-step.ts`): the model-aware
+`semanticBudget`, the parent's `taskMemory` and `workspaceState`, and the
+caller's `maxContextLength` clamped to the resolved model message limit. That
+injection is what lets the pruner's transactional `set_messages` publish a
+matching `expectedTaskMemoryRevision`; keying it off the bare literal instead
+would leave a pinned pruner on its embedded budget arithmetic and a `-1`
+revision, so `commitTaskMemory` would reject the transcript replacement for
+exactly the spellings documented as equivalent. The same match also governs the transient
+`suppressSemanticCompaction` anti-thrash skip, which declines a pruner spawn —
+after its input is validated — for the rest of a turn whose consecutive
+semantic passes reclaimed no context space. Custom history editors must opt in
+with both `messageHistoryMode: 'full'` and
+`propagateMessageHistoryChanges: true`.
 Ordinary inline children have independent system prompts, tools, and
 `agentContext`, and their private transcripts are never copied back into the
 parent. Structured handoffs and child results are bounded before entering the

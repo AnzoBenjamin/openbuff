@@ -56,14 +56,44 @@ const isLiveCompaction = (block: CompactionContentBlock): boolean =>
 /** Shown for a pass that ended before it reported a result. */
 const INTERRUPTED_TEXT = 'Interrupted before this pass reported a result.'
 
-const deriveTone = (block: CompactionContentBlock): Tone => {
+/**
+ * The pending/interrupted/unsettled triple that both the tone and every
+ * rendered line depend on.
+ */
+type CompactionPresentation = {
+  unsettled: boolean
+  pending: boolean
+  interrupted: boolean
+}
+
+/**
+ * Single source of truth for pending vs interrupted, consumed by both
+ * {@link deriveTone} and the render path so the chosen tone and the rendered
+ * lines cannot drift apart.
+ *
+ * `unsettled` covers a live pass, a terminated one and a replayed pending one:
+ * none has result fields, so the result lines stay suppressed for all. A
+ * pending block that is not live in THIS process (absent or foreign
+ * `liveSessionId`, i.e. a replayed transcript) is deliberately presented as
+ * interrupted — see {@link isLiveCompaction}.
+ */
+const derivePresentation = (
+  block: CompactionContentBlock,
+): CompactionPresentation => {
+  const unsettled = block.status === 'pending' || block.status === 'interrupted'
+  const pending = block.status === 'pending' && isLiveCompaction(block)
+  return { unsettled, pending, interrupted: unsettled && !pending }
+}
+
+const deriveTone = (
+  block: CompactionContentBlock,
+  presentation: CompactionPresentation,
+): Tone => {
   // A pass that is still running has no result to judge yet, so it always
   // reads as neutral regardless of `action`; a pass that never settled reads
   // as a warning.
-  if (block.status === 'interrupted') return 'warning'
-  if (block.status === 'pending') {
-    return isLiveCompaction(block) ? 'secondary' : 'warning'
-  }
+  if (presentation.interrupted) return 'warning'
+  if (presentation.pending) return 'secondary'
   if (block.fitsBudget === false) return 'error'
   const noProgress = block.consecutiveNoProgressCompactions
   if (
@@ -93,12 +123,8 @@ interface CompactionBoxProps {
 
 export const CompactionBox = memo(({ block }: CompactionBoxProps) => {
   const theme = useTheme()
-  const tone = deriveTone(block)
-  // `unsettled` covers a live pass, a terminated one and a replayed pending
-  // one: none has result fields, so the result lines stay suppressed for all.
-  const unsettled = block.status === 'pending' || block.status === 'interrupted'
-  const pending = block.status === 'pending' && isLiveCompaction(block)
-  const interrupted = unsettled && !pending
+  const { unsettled, pending, interrupted } = derivePresentation(block)
+  const tone = deriveTone(block, { unsettled, pending, interrupted })
   const title = pending
     ? 'Compacting context…'
     : interrupted

@@ -1321,27 +1321,30 @@ const findLastPendingCompactionIndex = (
 }
 
 /**
- * Drops still-running compaction blocks, returning the original array
- * reference when there was nothing to drop so React skips a re-render. Used by
- * the `settled` path only: a pass that reported no result never compacted
- * anything, so its card has nothing to report and should disappear entirely.
- * An abnormal turn end instead rewrites the block via
+ * Drops the still-running compaction blocks produced by `runId`, returning the
+ * original array reference when there was nothing to drop so React skips a
+ * re-render. Used by the `settled` path only: a pass that reported no result
+ * never compacted anything, so its card has nothing to report and should
+ * disappear entirely. An abnormal turn end instead rewrites the block via
  * {@link markPendingCompactionInterrupted}, which keeps an honest terminal
- * record. With a `runId` only that run's blocks are dropped, so one agent
- * loop's `settled` cannot clear another loop's live card; an uncorrelated
- * event (`undefined`) pairs with equally uncorrelated blocks. Root-level only:
- * compaction blocks are never nested under an agent block.
+ * record. Only that run's blocks are dropped, so one agent loop's `settled`
+ * cannot clear another loop's live card. `runId` is required on
+ * `printModeContextCompactionStatusSchema`, so unlike
+ * {@link findLastPendingCompactionIndex} — reached from the `context_compaction`
+ * result path, where the correlation fields are optional — there is no
+ * uncorrelated case to pair here. Root-level only: compaction blocks are never
+ * nested under an agent block.
  */
 const dropPendingCompactionBlocks = (
   blocks: ContentBlock[],
-  runId?: string,
+  runId: string,
 ): ContentBlock[] => {
   const next = blocks.filter(
     (block) =>
       !(
         block.type === 'compaction' &&
         block.status === 'pending' &&
-        (runId === undefined || block.runId === runId)
+        block.runId === runId
       ),
   )
   return next.length === blocks.length ? blocks : next

@@ -272,6 +272,22 @@ export type AgentState = {
    *     fullToolSurface when present.
    */
   unlockedToolTiers?: string[]
+  /**
+   * Transient, loop-owned advisory set by `loopAgentSteps` when consecutive
+   * semantic compaction passes measurably failed to reclaim context space in
+   * the current turn. While true, BOTH pruner spawn paths — the runtime-driven
+   * pass and `spawn_agent_inline` — skip spawning the `context-pruner` instead
+   * of paying for another pass that thrashes. Pruner identity is matched by
+   * agent id, so a bare `context-pruner`, a publisher-qualified
+   * (`acme/context-pruner`) and a version-pinned (`acme/context-pruner@1.2.3`)
+   * declaration are all skipped alike.
+   *
+   * NEVER authoritative across turns: `loopAgentSteps` resets it to
+   * `undefined` at loop entry, so a persisted or inherited `true` can never
+   * disable semantic compaction for a later, recoverable run. Budgets are not
+   * lowered and pinned state is not dropped by this advisory.
+   */
+  suppressSemanticCompaction?: boolean
   /** Ordered, resumable control-plane events that survive transcript compaction. */
   orchestrationLedger?: OrchestrationLedgerV1
   /** Spawn-bound writable path ownership used to prevent overlapping writers. */
