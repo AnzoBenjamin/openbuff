@@ -60,6 +60,8 @@ This package contains code shared across the Openbuff monorepo, especially the l
 
 - _Knowledge refresh 2026-08-31: additive `context_compaction_status` print-mode variant and the transient loop-owned `AgentState.suppressSemanticCompaction` anti-thrash advisory (bare-agent-id pruner matching) documented under the shared provider/message boundaries._
 
+- _Knowledge refresh 2026-08-31 (followups): `printModeErrorSchema` in `common/src/types/print-mode.ts` keeps `userMessage` and `autoRecovering` optional and additive; together they mark errors the runtime is already steering the agent out of — a malformed tool call being retried, or a control-flow/ordering rejection such as `suggest_followups` called before the gate passed or after the turn's final tool. UIs must treat those events as non-user-visible (log-only, no error banner) while the full `message` still flows to the agent, and consumers that ignore the optional fields keep the pre-existing visible-error behavior._
+
 ## Scope Notes
 
 Openbuff is CLI/SDK-focused and local/BYOK. Do not add new dependencies from `common/` to hosted web, billing, credit, subscription, or BigQuery product surfaces. Provider-owned billing, quota, token usage, and OAuth flows may still be documented when they refer to the user's configured provider rather than an Openbuff-hosted product.
