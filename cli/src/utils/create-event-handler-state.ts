@@ -2,6 +2,7 @@ import type { AgentMode } from './constants'
 import type { MessageUpdater } from './message-updater'
 import type {
   EventHandlerState,
+  SetCompactionNoticeFn,
   SetContextWindowUsageFn,
   SetStreamingAgentsFn,
   SetStreamStatusFn,
@@ -15,6 +16,7 @@ export type CreateEventHandlerStateParams = {
   setStreamingAgents: SetStreamingAgentsFn
   setStreamStatus: SetStreamStatusFn
   setContextWindowUsage: SetContextWindowUsageFn
+  setCompactionNotice: SetCompactionNoticeFn
   aiMessageId: string
   updater: MessageUpdater
   hasReceivedContentRef: MutableRefObject<boolean>
@@ -35,6 +37,7 @@ export const createEventHandlerState = (
     setStreamingAgents,
     setStreamStatus,
     setContextWindowUsage,
+    setCompactionNotice,
     aiMessageId,
     updater,
     hasReceivedContentRef,
@@ -53,6 +56,7 @@ export const createEventHandlerState = (
       setStreamingAgents,
       setStreamStatus,
       setContextWindowUsage,
+      setCompactionNotice,
     },
     message: {
       aiMessageId,

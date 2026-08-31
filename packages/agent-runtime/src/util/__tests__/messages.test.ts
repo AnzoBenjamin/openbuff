@@ -18,6 +18,7 @@ import {
   trimMessagesToFitTokenLimit,
   trimMessagesToFitTokenLimitWithReport,
   COMPACTED_CONTEXT_POINTER,
+  CONTEXT_EVICTION_PRIORITY,
   messagesWithSystem,
   expireMessages,
   getPreviouslyReadFiles,
@@ -1605,5 +1606,242 @@ describe('getPreviouslyReadFiles', () => {
 
     const result = getPreviouslyReadFiles({ messages, logger })
     expect(result).toEqual([])
+  })
+})
+
+describe('trimMessagesToFitTokenLimitWithReport eviction policy', () => {
+  // Tool payloads must dominate the history so a budget exists where dropping
+  // only the tool results satisfies the removal target; otherwise every
+  // optional message has to go and eviction order is unobservable.
+  const bigToolPayload = (marker: string) => marker.repeat(5_000)
+
+  /**
+   * Every surviving tool result must still have an assistant `tool-call` part,
+   * and every surviving assistant `tool-call` part must still have its result.
+   * Providers reject either kind of orphan with a 400.
+   */
+  function assertToolCallPairingIsValid(messages: Message[]): void {
+    const resultToolCallIds = new Set(
+      messages.flatMap((message) =>
+        message.role === 'tool' ? [message.toolCallId] : [],
+      ),
+    )
+    const callToolCallIds = new Set(
+      messages.flatMap((message) =>
+        message.role === 'assistant'
+          ? message.content.filter(isToolCallPart).map((p) => p.toolCallId)
+          : [],
+      ),
+    )
+    for (const toolCallId of resultToolCallIds) {
+      expect(callToolCallIds.has(toolCallId)).toBe(true)
+    }
+    for (const toolCallId of callToolCallIds) {
+      expect(resultToolCallIds.has(toolCallId)).toBe(true)
+    }
+  }
+
+  afterEach(() => {
+    mock.restore()
+  })
+
+  it('evicts fileReads and toolResults before user+assistant turns', () => {
+    spyOn(tokenCounter, 'countTokensJson').mockImplementation(
+      (value) => JSON.stringify(value).length,
+    )
+
+    expect(CONTEXT_EVICTION_PRIORITY).toEqual([
+      'fileReads',
+      'toolResults',
+      'subagents',
+      'todos',
+      'userAssistantMessages',
+    ])
+
+    const messages: Message[] = [
+      {
+        role: 'tool',
+        toolName: 'read_outline',
+        toolCallId: 'outline-1',
+        content: jsonToolResult({ outline: bigToolPayload('O') }),
+      },
+      userMessage('user turn that must survive'),
+      assistantMessage('assistant turn that must survive'),
+      {
+        role: 'tool',
+        toolName: 'write_file',
+        toolCallId: 'write-1',
+        content: jsonToolResult({
+          file: 'src/a.ts',
+          message: bigToolPayload('W'),
+        }),
+      },
+      userMessage({
+        content: 'pinned operational goal',
+        keepDuringTruncation: true,
+      }),
+    ]
+
+    const report = trimMessagesToFitTokenLimitWithReport({
+      messages,
+      systemTokens: 0,
+      maxTotalTokens: 6_000,
+      logger,
+    })
+
+    const rendered = JSON.stringify(report.messages)
+    expect(rendered).toContain('user turn that must survive')
+    expect(rendered).toContain('assistant turn that must survive')
+    expect(rendered).toContain('pinned operational goal')
+    expect(
+      report.messages.some(
+        (message) =>
+          message.role === 'tool' && message.toolName === 'read_outline',
+      ),
+    ).toBe(false)
+    expect(
+      report.messages.some(
+        (message) =>
+          message.role === 'tool' && message.toolName === 'write_file',
+      ),
+    ).toBe(false)
+    expect(report.removedCategories).toEqual(
+      expect.arrayContaining(['fileReads', 'toolResults']),
+    )
+    expect(report.removedCategories).not.toContain('userAssistantMessages')
+    expect(report.fitsBudget).toBe(true)
+    expect(report.shortfallTokens).toBe(0)
+    expect(report.escalated).toBe(false)
+  })
+
+  it('keeps tool-call pairing valid after a priority-ordered trim', () => {
+    spyOn(tokenCounter, 'countTokensJson').mockImplementation(
+      (value) => JSON.stringify(value).length,
+    )
+
+    const messages: Message[] = [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'call-outline',
+            toolName: 'read_outline',
+            input: { path: 'src/a.ts' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        toolName: 'read_outline',
+        toolCallId: 'call-outline',
+        content: jsonToolResult({ outline: bigToolPayload('O') }),
+      },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'call-write',
+            toolName: 'write_file',
+            input: { path: 'src/b.ts' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        toolName: 'write_file',
+        toolCallId: 'call-write',
+        content: jsonToolResult({
+          file: 'src/b.ts',
+          message: bigToolPayload('W'),
+        }),
+      },
+      userMessage('surviving conversation turn'),
+      userMessage({
+        content: 'pinned operational goal',
+        keepDuringTruncation: true,
+      }),
+    ]
+
+    const report = trimMessagesToFitTokenLimitWithReport({
+      messages,
+      systemTokens: 0,
+      maxTotalTokens: 6_000,
+      logger,
+    })
+
+    assertToolCallPairingIsValid(report.messages)
+    expect(report.messages.some((message) => message.role === 'tool')).toBe(
+      false,
+    )
+    expect(JSON.stringify(report.messages)).toContain(
+      'surviving conversation turn',
+    )
+    expect(JSON.stringify(report.messages)).toContain('pinned operational goal')
+    expect(report.messages.length).toBeLessThan(messages.length)
+  })
+
+  it('escalates and reports the shortfall honestly when the trim still does not fit', () => {
+    // Real tokenizer counts are not additive: a message measured on its own can
+    // cost far more than its marginal contribution to the whole request. This
+    // mock exaggerates that so the mechanical accounting believes it removed
+    // enough while the request is still over budget — exactly the case the
+    // escalation pass and fit verification must catch instead of reporting a
+    // successful trim.
+    spyOn(tokenCounter, 'countTokensJson').mockImplementation((value) =>
+      Array.isArray(value)
+        ? JSON.stringify(value).length
+        : JSON.stringify(value).length * 100,
+    )
+    const warn = spyOn(logger, 'warn').mockImplementation(() => {})
+
+    const messages: Message[] = [
+      {
+        role: 'tool',
+        toolName: 'read_outline',
+        toolCallId: 'outline-1',
+        content: jsonToolResult({ outline: bigToolPayload('O') }),
+      },
+      userMessage('U'.repeat(1_000)),
+      assistantMessage('S'.repeat(1_000)),
+      {
+        role: 'tool',
+        toolName: 'write_file',
+        toolCallId: 'write-1',
+        content: jsonToolResult({
+          file: 'src/a.ts',
+          message: bigToolPayload('W'),
+        }),
+      },
+      userMessage({
+        content: 'pinned operational goal',
+        keepDuringTruncation: true,
+      }),
+    ]
+
+    const report = trimMessagesToFitTokenLimitWithReport({
+      messages,
+      systemTokens: 0,
+      maxTotalTokens: 2_000,
+      logger,
+    })
+
+    // The escalation pass dropped the remaining optional tool result, in
+    // eviction-priority order, after the mechanical pass ran out of options.
+    expect(report.escalated).toBe(true)
+    expect(
+      report.messages.some(
+        (message) =>
+          message.role === 'tool' && message.toolName === 'write_file',
+      ),
+    ).toBe(false)
+    // Pinned state is never dropped, so the request can still exceed the
+    // budget — and the report must say so instead of claiming success.
+    expect(JSON.stringify(report.messages)).toContain('pinned operational goal')
+    expect(report.fitsBudget).toBe(false)
+    expect(report.shortfallTokens).toBe(report.afterTokens - 2_000)
+    expect(report.shortfallTokens).toBeGreaterThan(0)
+    expect(warn).toHaveBeenCalled()
   })
 })

@@ -66,6 +66,7 @@ import {
 } from '@codebuff/common/tools/results/filesystem'
 import { countTokensJson } from './util/token-counter'
 import {
+  COMPACTION_NO_PROGRESS_FRACTION,
   DEFAULT_MAX_CONTEXT_TOKENS,
   getEffectiveContextLimits,
   getSemanticCompactionBudget,
@@ -78,6 +79,7 @@ import {
   finalizeLedger,
 } from './util/context-budget'
 import { revokeImplicitReadAuthorizationsAfterCompaction } from './util/read-authorization'
+import { runRuntimeSemanticCompaction } from './util/runtime-semantic-compaction'
 import {
   commitTaskMemory,
   compileTaskMemoryContext,
@@ -1365,6 +1367,36 @@ export async function loopAgentSteps(
   }
   initialAgentState.runId = runId
 
+  // Agent/run correlation stamped on every compaction event this loop emits.
+  // `loopAgentSteps` runs for the root turn, for foreground subagents, and for
+  // inline agents, so a consumer that renders live compaction state as
+  // root-level UI needs to tell those apart: `ancestorRunIds` is empty only for
+  // the root run. Snapshotted once (and copied, since the loop mutates agent
+  // state in place) so every event of this run carries the same identity.
+  const compactionCorrelation = {
+    runId,
+    agentId: initialAgentState.agentId,
+    ancestorRunIds: [...initialAgentState.ancestorRunIds],
+  }
+
+  // Live compaction status is announced before a programmatic step and settled
+  // after the compaction branches. This flag is run-scoped rather than
+  // per-iteration so an exception between the two (a provider crash, a
+  // step-cap throw, a cancellation) can still report the terminal state on the
+  // way out, instead of leaving a consumer with a pending compaction card that
+  // its session persistence would replay forever. The settle carries this run's
+  // correlation, so it can only ever settle the pending state this run started.
+  let unsettledCompactionStart = false
+  const settleCompactionStatus = () => {
+    if (!unsettledCompactionStart) return
+    unsettledCompactionStart = false
+    onResponseChunk({
+      type: 'context_compaction_status',
+      state: 'settled',
+      ...compactionCorrelation,
+    })
+  }
+
   // Outer try/finally guarantees this run's in-memory programmatic-step state
   // is torn down on EVERY exit path after runId is assigned — including if the
   // prompt/tool setup below throws before the main loop's own try/catch is
@@ -1692,6 +1724,129 @@ export async function loopAgentSteps(
       }
     }
 
+    // Anti-thrash compaction telemetry, loop-local so each turn starts clean.
+    // `compactionCount` counts every compaction (semantic or mechanical) in
+    // this loop. Two independent signals are tracked:
+    //
+    //   - `consecutiveNoProgressCompactions` is the shipped reporting signal
+    //     carried on `context_compaction`: a compaction is "no progress" when
+    //     it reclaims less than COMPACTION_NO_PROGRESS_FRACTION of the
+    //     PREVIOUS compaction's post-compaction history size. Report-only
+    //     (telemetry + an honest reason clause); nothing is gated on it.
+    //   - `consecutiveUnproductiveSemanticPasses` is per-pass and
+    //     semantic-only: a pass is unproductive when it reclaimed less than
+    //     COMPACTION_NO_PROGRESS_FRACTION of its OWN pre-compaction history
+    //     size, which also covers an announced pass that returned the
+    //     transcript unchanged. Once it reaches
+    //     COMPACTION_NO_PROGRESS_STREAK_THRESHOLD the loop stops spawning the
+    //     semantic pruner for the rest of this turn.
+    //
+    // Budgets are still never silently lowered and pinned state is never
+    // dropped as a reaction: the only remediation is to stop paying for a
+    // pruner pass that has been measured not to reclaim space.
+    let compactionCount = 0
+    let consecutiveNoProgressCompactions = 0
+    let previousPostCompactionHistoryTokens: number | undefined
+    let warnedCompactionNoProgress = false
+    let consecutiveUnproductiveSemanticPasses = 0
+    let warnedSemanticCompactionSuppressed = false
+    // `suppressSemanticCompaction` is a transient, loop-owned advisory. Reset
+    // once here, before the loop, so a persisted or inherited `true` from an
+    // earlier turn can never leak in and deadlock a recoverable run.
+    initialAgentState.suppressSemanticCompaction = undefined
+    const registerUnproductiveSemanticPass = () => {
+      consecutiveUnproductiveSemanticPasses += 1
+      if (
+        consecutiveUnproductiveSemanticPasses <
+        COMPACTION_NO_PROGRESS_STREAK_THRESHOLD
+      ) {
+        return
+      }
+      // Advisory only: both pruner paths (an orchestrator's inline spawn and
+      // the runtime-driven pass) honor it for the rest of this loop, and a
+      // suppressed iteration announces no pass at all. No budget is lowered and
+      // no pinned state is dropped, and every announced pass still settles.
+      currentAgentState.suppressSemanticCompaction = true
+      if (warnedSemanticCompactionSuppressed) return
+      warnedSemanticCompactionSuppressed = true
+      logger.warn(
+        {
+          agentId: currentAgentState.agentId,
+          runId,
+          consecutiveUnproductiveSemanticPasses,
+        },
+        'Suppressing further semantic compaction for this turn after consecutive unproductive passes',
+      )
+    }
+    const registerCompaction = (compaction: {
+      action: 'semantic_compaction' | 'mechanical_trim'
+      preCompactionHistoryTokens: number
+      postCompactionHistoryTokens: number
+    }): {
+      compactionCount: number
+      consecutiveNoProgressCompactions: number
+      noProgress: boolean
+    } => {
+      const {
+        action,
+        preCompactionHistoryTokens,
+        postCompactionHistoryTokens,
+      } = compaction
+      compactionCount += 1
+      const previousTokens = previousPostCompactionHistoryTokens
+      if (previousTokens !== undefined) {
+        const reduction = previousTokens - postCompactionHistoryTokens
+        if (reduction < previousTokens * COMPACTION_NO_PROGRESS_FRACTION) {
+          consecutiveNoProgressCompactions += 1
+        } else {
+          consecutiveNoProgressCompactions = 0
+        }
+      }
+      previousPostCompactionHistoryTokens = postCompactionHistoryTokens
+
+      // Per-pass, semantic-only streak: compare this pass's reclaim against
+      // its OWN pre-compaction size, so a healthy long run whose passes each
+      // return history to roughly the same target is not misread as thrash.
+      // `mechanical_trim` registrations neither increment nor reset it.
+      if (action === 'semantic_compaction') {
+        const reclaimed =
+          preCompactionHistoryTokens - postCompactionHistoryTokens
+        if (
+          reclaimed <
+          preCompactionHistoryTokens * COMPACTION_NO_PROGRESS_FRACTION
+        ) {
+          registerUnproductiveSemanticPass()
+        } else {
+          consecutiveUnproductiveSemanticPasses = 0
+          currentAgentState.suppressSemanticCompaction = undefined
+        }
+      }
+
+      const noProgress =
+        consecutiveNoProgressCompactions >=
+        COMPACTION_NO_PROGRESS_STREAK_THRESHOLD
+      if (noProgress && !warnedCompactionNoProgress) {
+        warnedCompactionNoProgress = true
+        logger.warn(
+          {
+            action,
+            agentId: currentAgentState.agentId,
+            runId,
+            compactionCount,
+            consecutiveNoProgressCompactions,
+            previousPostCompactionHistoryTokens: previousTokens,
+            postCompactionHistoryTokens,
+          },
+          'Compaction is not reclaiming context space across consecutive compactions',
+        )
+      }
+      return {
+        compactionCount,
+        consecutiveNoProgressCompactions,
+        noProgress,
+      }
+    }
+
     try {
       while (true) {
         totalSteps++
@@ -1753,6 +1908,49 @@ export async function loopAgentSteps(
         currentAgentState.contextTokenCount = estimateContextTokensLocally()
         const contextTokensBeforeProgrammatic =
           currentAgentState.contextTokenCount
+
+        // Semantic compaction runs inside the programmatic step (the pruner
+        // agent), and its `context_compaction` result only lands afterwards.
+        // Announce the live state up front so the UI can show a compacting
+        // card instead of a silent stall. `getSemanticCompactionBudget` is pure
+        // in `contextWindowTokens`, so this single hoisted value is the one
+        // authoritative budget for both this emission and the semantic branch
+        // below.
+        //
+        // Deliberately NOT gated on an explicit maxContextLength override:
+        // only the window-derived trigger may announce a start, otherwise
+        // every step of an overridden run would emit a spurious one.
+        const semanticBudget = getSemanticCompactionBudget(
+          currentAgentState.contextWindowTokens,
+        )
+        const exceededSemanticTrigger =
+          contextTokensBeforeProgrammatic + 1_000 >
+          semanticBudget.triggerBudgetTokens
+        // Transient, loop-owned anti-thrash advisory. Read once per iteration so
+        // the announcement, the pass itself, and the unproductive-pass
+        // bookkeeping below can never disagree about whether this iteration is
+        // allowed to compact.
+        const semanticCompactionSuppressed =
+          currentAgentState.suppressSemanticCompaction === true
+        // Announced for BOTH pruner paths: an orchestrator's generator spawns
+        // the pruner itself, while a prompt-only template gets the
+        // runtime-driven pass below. A suppressed iteration runs no pass, so it
+        // must not announce one either.
+        const announceSemanticPass =
+          exceededSemanticTrigger && !semanticCompactionSuppressed
+        if (announceSemanticPass) {
+          unsettledCompactionStart = true
+          onResponseChunk({
+            type: 'context_compaction_status',
+            state: 'started',
+            ...compactionCorrelation,
+            contextTokens: contextTokensBeforeProgrammatic,
+            resolvedContextWindowTokens:
+              semanticBudget.resolvedContextWindowTokens,
+            triggerBudgetTokens: semanticBudget.triggerBudgetTokens,
+            targetBudgetTokens: semanticBudget.targetBudgetTokens,
+          })
+        }
 
         // 1. Run programmatic step first if it exists
         let n: number | undefined = undefined
@@ -1851,6 +2049,33 @@ export async function loopAgentSteps(
               countTokensJson(system) + countTokensJson(toolsForTokenCount)
             initialAgentState.toolDefinitions = toolDefinitions
           }
+        } else if (announceSemanticPass) {
+          // A prompt-only template has no generator to spawn the pruner, so the
+          // runtime drives exactly one semantic pass itself. Strictly the `else`
+          // branch: a `handleSteps` template must keep using only the generator
+          // path, otherwise one iteration would pay for two pruner calls.
+          //
+          // The helper still applies the ordinary spawn-permission contract, so
+          // a template that does not declare `context-pruner` in
+          // `spawnableAgents` declines the pass; the announcement above is
+          // trigger-gated and is settled either way.
+          //
+          // Placed between the historyTokensBefore/After measurements so the
+          // existing reporting branch observes the reduction unchanged, and
+          // before the task-memory goal capture below so the pruner's
+          // `set_messages` revision guard sees the same persisted revision the
+          // programmatic path does. Failures are absorbed by the helper.
+          await runRuntimeSemanticCompaction({
+            ...params,
+
+            agentState: currentAgentState,
+            agentTemplate,
+            localAgentTemplates,
+            logger,
+            system,
+            tools,
+            userInputId,
+          })
         }
 
         // Capture the request goal once per step for the root agent. The
@@ -1938,9 +2163,6 @@ export async function loopAgentSteps(
                 ),
             ),
         )
-        const semanticBudget = getSemanticCompactionBudget(
-          currentAgentState.contextWindowTokens,
-        )
         const activeContextLimits = getEffectiveContextLimits(
           currentAgentState.contextWindowTokens,
           maxContextLength,
@@ -1949,9 +2171,6 @@ export async function loopAgentSteps(
           activeContextLimits.providerSafeMessageLimit
         const activeContextWindowForStatus =
           activeContextLimits.statusWindowTokens
-        const exceededSemanticTrigger =
-          contextTokensBeforeProgrammatic + 1_000 >
-          semanticBudget.triggerBudgetTokens
         const hasExplicitMaxContextLength = maxContextLength !== undefined
         if (
           retainedSemanticMemory &&
@@ -1973,16 +2192,30 @@ export async function loopAgentSteps(
               categoriesAfterProgrammatic[category].tokens <
                 categoriesBeforeProgrammatic[category].tokens,
           )
+          const compactionTelemetry = registerCompaction({
+            action: 'semantic_compaction',
+            preCompactionHistoryTokens: historyTokensBeforeProgrammatic,
+            postCompactionHistoryTokens: historyTokensAfterProgrammatic,
+          })
+          const semanticReason = exceededSemanticTrigger
+            ? 'Total context exceeded the model-aware semantic trigger budget.'
+            : 'An explicit maxContextLength override allowed semantic compaction before the model-aware trigger budget.'
           onResponseChunk({
             type: 'context_compaction',
             action: 'semantic_compaction',
+            ...compactionCorrelation,
             resolvedContextWindowTokens:
               semanticBudget.resolvedContextWindowTokens,
             triggerBudgetTokens: semanticBudget.triggerBudgetTokens,
             targetBudgetTokens: semanticBudget.targetBudgetTokens,
-            reason: exceededSemanticTrigger
-              ? 'Total context exceeded the model-aware semantic trigger budget.'
-              : 'An explicit maxContextLength override allowed semantic compaction before the model-aware trigger budget.',
+            compactionCount: compactionTelemetry.compactionCount,
+            consecutiveNoProgressCompactions:
+              compactionTelemetry.consecutiveNoProgressCompactions,
+            reason: compactionTelemetry.noProgress
+              ? `${semanticReason} ${buildCompactionNoProgressClause(
+                  compactionTelemetry.consecutiveNoProgressCompactions,
+                )}`
+              : semanticReason,
             before: {
               tokens: historyTokensBeforeProgrammatic,
               messages: historyBeforeProgrammatic.length,
@@ -1999,6 +2232,17 @@ export async function loopAgentSteps(
               'Resume from the retained <knowledge_memory> and verify exact live files before editing.',
           })
           compactedThisIteration = true
+        } else if (
+          announceSemanticPass &&
+          historyTokensAfterProgrammatic >= historyTokensBeforeProgrammatic
+        ) {
+          // A semantic pass was announced for this iteration, but the pruner
+          // returned the transcript unchanged (or larger) — the actual thrash
+          // case. Register it for the per-pass semantic streak ONLY: nothing
+          // was compacted, so this must not touch the shipped
+          // `compactionCount`/post-vs-post streak and must not emit a
+          // `context_compaction` event.
+          registerUnproductiveSemanticPass()
         }
 
         // Deterministic trimming is now an emergency brake after semantic
@@ -2023,16 +2267,33 @@ export async function loopAgentSteps(
           )
           currentAgentState.contextTokenCount = estimateContextTokensLocally()
           const report = pruningResult.report!
+          const compactionTelemetry = registerCompaction({
+            action: 'mechanical_trim',
+            preCompactionHistoryTokens: report.beforeTokens,
+            postCompactionHistoryTokens: report.afterTokens,
+          })
+          const mechanicalReason =
+            'Total context remained above the provider-safe request budget after semantic compaction.'
           onResponseChunk({
             type: 'context_compaction',
             action: 'mechanical_trim',
+            ...compactionCorrelation,
             resolvedContextWindowTokens: currentAgentState.contextWindowTokens,
             triggerBudgetTokens:
               activeMaxContextLength ?? DEFAULT_MAX_CONTEXT_TOKENS,
             targetBudgetTokens:
               activeMaxContextLength ?? DEFAULT_MAX_CONTEXT_TOKENS,
-            reason:
-              'Total context remained above the provider-safe request budget after semantic compaction.',
+            compactionCount: compactionTelemetry.compactionCount,
+            consecutiveNoProgressCompactions:
+              compactionTelemetry.consecutiveNoProgressCompactions,
+            fitsBudget: report.fitsBudget,
+            shortfallTokens: report.shortfallTokens,
+            escalated: report.escalated,
+            reason: compactionTelemetry.noProgress
+              ? `${mechanicalReason} ${buildCompactionNoProgressClause(
+                  compactionTelemetry.consecutiveNoProgressCompactions,
+                )}`
+              : mechanicalReason,
             before: {
               tokens: report.beforeTokens,
               messages: report.beforeMessageCount,
@@ -2045,9 +2306,11 @@ export async function loopAgentSteps(
             },
             removedCategories: report.removedCategories,
             retainedKnowledgeMemory: report.retainedKnowledgeMemory,
-            recovery: report.retainedKnowledgeMemory
-              ? 'Resume from <knowledge_memory>; re-read exact live files before editing.'
-              : 'Re-gather exact constraints, files, and validation evidence before continuing.',
+            recovery: !report.fitsBudget
+              ? 'This request may still exceed the provider budget: reduce pinned state (fewer keepDuringTruncation blocks, or /compact) or start a fresh turn before retrying.'
+              : report.retainedKnowledgeMemory
+                ? 'Resume from <knowledge_memory>; re-read exact live files before editing.'
+                : 'Re-gather exact constraints, files, and validation evidence before continuing.',
           })
           compactedThisIteration = true
         }
@@ -2059,6 +2322,13 @@ export async function loopAgentSteps(
           // lose the newly synthesized recovery memory.
           maybeCheckpoint(currentAgentState, true)
         }
+
+        // Settle the live compacting state announced before the programmatic
+        // step. Harmless when a real `context_compaction` result already
+        // arrived (the consumer has nothing pending left to drop); its purpose
+        // is a pass that decided NOT to compact, which must never leave a
+        // pending state stuck on screen.
+        settleCompactionStatus()
 
         onResponseChunk({
           type: 'context_window',
@@ -2296,6 +2566,12 @@ export async function loopAgentSteps(
       }
     }
   } finally {
+    // A compaction start that no normal branch settled (a throw between
+    // `started` and the settle point, or a cancellation) still reports its
+    // terminal state here. Best-effort by design: a user-initiated abort makes
+    // the SDK drop post-abort events, which is why the CLI additionally treats
+    // a replayed pending compaction card as an interrupted pass.
+    settleCompactionStatus()
     // Always tear down this run's in-memory programmatic-step state. When a
     // generator yields STEP/STEP_ALL it is intentionally retained across loop
     // iterations; if a later LLM step throws or the run is aborted, control
@@ -2312,6 +2588,24 @@ const STEP_CAP_REACHED_MESSAGE = [
   'Current work and run state were preserved, so the task can resume safely on the next turn.',
   'Increase maxAgentSteps in openbuff.json if this workload routinely needs a larger step budget.',
 ].join(' ')
+
+/**
+ * How many consecutive unproductive compactions must occur before the emitted
+ * `reason` calls out compaction thrash, and — for the per-pass semantic-only
+ * streak — before the loop stops spawning the semantic pruner for the rest of
+ * the turn. One threshold for both signals. The loop still never reacts by
+ * lowering budgets or dropping pinned state; suppression only avoids paying
+ * for a pass that was measured not to reclaim space, and an announced pass is
+ * still announced and still settled.
+ */
+const COMPACTION_NO_PROGRESS_STREAK_THRESHOLD = 2
+
+const buildCompactionNoProgressClause = (
+  consecutiveNoProgressCompactions: number,
+): string =>
+  `Compaction is not reclaiming space: ${consecutiveNoProgressCompactions} consecutive compactions reclaimed under ${Math.round(
+    COMPACTION_NO_PROGRESS_FRACTION * 100,
+  )}%.`
 
 /**
  * How many steps before the cap the one-time near-cap checkpoint nudge fires.

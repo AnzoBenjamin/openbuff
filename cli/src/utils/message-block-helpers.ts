@@ -836,6 +836,32 @@ export const appendInterruptionNotice = (
 }
 
 /**
+ * Terminates every still-running (`status: 'pending'`) root-level compaction
+ * block, rewriting it to the terminal `'interrupted'` state and dropping the
+ * now-meaningless `liveSessionId` stamp. Composed into the abort/teardown block
+ * update so a pass whose run ended before it reported a result can never be
+ * persisted — or replayed — as a live "Compacting context…" card.
+ *
+ * Returns the ORIGINAL array reference when nothing was pending so React skips
+ * a re-render. Root-level only: compaction blocks are never nested under an
+ * agent block.
+ */
+export const markPendingCompactionInterrupted = (
+  blocks: ContentBlock[],
+): ContentBlock[] => {
+  let changed = false
+  const next = blocks.map((block) => {
+    if (block.type !== 'compaction' || block.status !== 'pending') {
+      return block
+    }
+    changed = true
+    const { liveSessionId: _liveSessionId, ...rest } = block
+    return { ...rest, status: 'interrupted' as const }
+  })
+  return changed ? next : blocks
+}
+
+/**
  * Recursively finds an agent block by ID and returns its agent type.
  * Returns undefined if not found.
  */

@@ -11,7 +11,10 @@ import { formatElapsedTime } from '../../utils/format-elapsed-time'
 import { processImagesForMessage } from '../../utils/image-processor'
 import { logger } from '../../utils/logger'
 import { getFileAttachmentContextMetadata } from '../../utils/pending-attachments'
-import { appendInterruptionNotice } from '../../utils/message-block-helpers'
+import {
+  appendInterruptionNotice,
+  markPendingCompactionInterrupted,
+} from '../../utils/message-block-helpers'
 import { getUserMessage } from '../../utils/message-history'
 import {
   createBatchedMessageUpdater,
@@ -371,7 +374,13 @@ export const setupStreamingContext = (params: {
       const cancelledBlocks = markRunningToolsAsCancelled(
         markRunningAgentsAsCancelled(blocks),
       )
-      return appendInterruptionNotice(cancelledBlocks)
+      // A compaction pass that was still running is terminated here, in the
+      // same composed update: the SDK drops every post-abort event, so neither
+      // `settled` nor `finish` arrives to end the pending state, and this is
+      // the last write before the turn's blocks are persisted.
+      return appendInterruptionNotice(
+        markPendingCompactionInterrupted(cancelledBlocks),
+      )
     })
     updater.markComplete()
   })

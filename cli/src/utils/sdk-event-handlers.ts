@@ -21,6 +21,7 @@ import {
   findAgentTypeById,
   getBackgroundShellJobIdFromToolOutput,
   insertPlanBlock,
+  markPendingCompactionInterrupted,
   nestBlockUnderParent,
   transformAskUserBlocks,
   updateBlocksRecursively,
@@ -42,6 +43,7 @@ import {
   processTextChunk,
 } from './stream-chunk-processor'
 import { computeCompletionSummary } from './completion-summary'
+import { CLI_LIVE_SESSION_ID } from '../types/chat'
 
 import type { AgentMode } from './constants'
 import type { MessageUpdater } from './message-updater'
@@ -49,6 +51,9 @@ import type { StreamController } from '../hooks/stream-state'
 import type { StreamStatus } from '../hooks/use-message-queue'
 import type {
   AgentContentBlock,
+  CompactionCategoryDelta,
+  CompactionContentBlock,
+  CompactionNotice,
   ContentBlock,
   TextContentBlock,
   ToolContentBlock,
@@ -57,6 +62,7 @@ import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type {
   PrintModeContextWindow,
   PrintModeContextCompaction,
+  PrintModeContextCompactionStatus,
   PrintModeEvent as SDKEvent,
   PrintModeJobUpdate,
   PrintModeFinish,
@@ -80,6 +86,19 @@ export type SetContextWindowUsageFn = (
   usage: { used: number; max: number } | null,
 ) => void
 
+// Re-exported from its canonical declaration in ../types/chat so existing
+// importers of this module keep working while there is only one shape.
+export type { CompactionNotice }
+
+/**
+ * Accumulating setter for the status-bar compaction chip: receives an updater so
+ * repeated compactions within one turn can keep counting from the previous
+ * notice, and null to clear it when a new turn starts.
+ */
+export type SetCompactionNoticeFn = (
+  update: (previous: CompactionNotice | null) => CompactionNotice | null,
+) => void
+
 export type StreamChunkEvent =
   | string
   | {
@@ -100,6 +119,7 @@ export type StreamingState = {
   setStreamingAgents: SetStreamingAgentsFn
   setStreamStatus: SetStreamStatusFn
   setContextWindowUsage: SetContextWindowUsageFn
+  setCompactionNotice: SetCompactionNoticeFn
 }
 
 export type MessageState = {
@@ -1245,40 +1265,284 @@ const handleContextWindow = (
   })
 }
 
+/**
+ * Tokens recorded for one category of a compaction snapshot, or 0 when the
+ * payload omits that category map entry. A cross-version or replayed
+ * `context_compaction` event may carry a removed category with no matching
+ * entry in `before`/`after.categories`; degrading to 0 keeps the block
+ * renderable instead of throwing a TypeError inside the SDK event handler.
+ */
+const compactionCategoryTokens = (
+  categories:
+    | Partial<Record<CompactionCategoryDelta['category'], { tokens?: unknown }>>
+    | undefined,
+  category: CompactionCategoryDelta['category'],
+): number => {
+  const tokens = categories?.[category]?.tokens
+  return typeof tokens === 'number' && Number.isFinite(tokens) ? tokens : 0
+}
+
+/**
+ * True when a compaction event belongs to the ROOT agent run rather than a
+ * subagent or inline one. `ancestorRunIds` is empty exactly for the root run
+ * (the same convention as `reasoning_delta`), so a non-empty lineage describes
+ * another agent's context and must not drive root-level state. The
+ * `context_compaction` result carries the correlation optionally for
+ * persisted/replayed events emitted before it existed; an absent field keeps
+ * the previous root-attributed behavior.
+ */
+const isRootCompactionEvent = (event: { ancestorRunIds?: string[] }): boolean =>
+  (event.ancestorRunIds?.length ?? 0) === 0
+
+/**
+ * Index of the newest still-running compaction block produced by `runId`, or
+ * -1. Only the newest one is consumed by an arriving result: two results can
+ * land in one runtime iteration (semantic then mechanical) and the second must
+ * append rather than overwrite the first. Matched on the producing run so a
+ * result from one agent loop cannot settle another loop's live card; a legacy
+ * uncorrelated result (`undefined`) still pairs with an equally uncorrelated
+ * block.
+ */
+const findLastPendingCompactionIndex = (
+  blocks: ContentBlock[],
+  runId: string | undefined,
+): number => {
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    const block = blocks[index]
+    if (
+      block.type === 'compaction' &&
+      block.status === 'pending' &&
+      block.runId === runId
+    ) {
+      return index
+    }
+  }
+  return -1
+}
+
+/**
+ * Drops the still-running compaction blocks produced by `runId`, returning the
+ * original array reference when there was nothing to drop so React skips a
+ * re-render. Used by the `settled` path only: a pass that reported no result
+ * never compacted anything, so its card has nothing to report and should
+ * disappear entirely. An abnormal turn end instead rewrites the block via
+ * {@link markPendingCompactionInterrupted}, which keeps an honest terminal
+ * record. Only that run's blocks are dropped, so one agent loop's `settled`
+ * cannot clear another loop's live card. `runId` is required on
+ * `printModeContextCompactionStatusSchema`, so unlike
+ * {@link findLastPendingCompactionIndex} — reached from the `context_compaction`
+ * result path, where the correlation fields are optional — there is no
+ * uncorrelated case to pair here. Root-level only: compaction blocks are never
+ * nested under an agent block.
+ */
+const dropPendingCompactionBlocks = (
+  blocks: ContentBlock[],
+  runId: string,
+): ContentBlock[] => {
+  const next = blocks.filter(
+    (block) =>
+      !(
+        block.type === 'compaction' &&
+        block.status === 'pending' &&
+        block.runId === runId
+      ),
+  )
+  return next.length === blocks.length ? blocks : next
+}
+
+/**
+ * Live compaction state. The pruner agent runs inline and is hidden from the
+ * CLI, so `started` renders a pending compaction card (and a live status-bar
+ * chip) that the terminal `context_compaction` result settles in place.
+ * `settled` is the runtime's guarantee that a pass which decided not to compact
+ * cannot leave that pending state on screen.
+ *
+ * Every agent loop emits this event, so it is filtered and paired by run:
+ * only the root run (empty `ancestorRunIds`) drives this root-level card and
+ * chip, and a `settled` only clears the pending card its own `runId` started.
+ * Without both rules a subagent's compaction would render as a root-level
+ * 'Compacting context…' card and cross-settle the root run's live pass.
+ *
+ * Neither cleanup path is reachable when the user aborts mid-compaction: the
+ * SDK drops every post-abort event, and the blocks of the turn are persisted to
+ * chat-messages.json afterwards. The pending block is therefore stamped with
+ * {@link CLI_LIVE_SESSION_ID} so a replayed copy renders as an interrupted
+ * pass rather than a permanent "Compacting context…" card, and the status chip
+ * stops reporting a live pass once the run is no longer active.
+ */
+const handleContextCompactionStatus = (
+  state: EventHandlerState,
+  event: PrintModeContextCompactionStatus,
+) => {
+  if (!isRootCompactionEvent(event)) return
+
+  if (event.state === 'started') {
+    const pendingBlock: CompactionContentBlock = {
+      type: 'compaction',
+      status: 'pending',
+      // Stamped so a persisted/replayed copy of this transient block (the user
+      // aborted the turn before `settled` or `context_compaction` arrived)
+      // renders as an interrupted pass instead of a permanently live card.
+      liveSessionId: CLI_LIVE_SESSION_ID,
+      // Correlated so only this run's own `settled`/result can consume the card.
+      runId: event.runId,
+      action: 'semantic_compaction',
+      beforeTokens: event.contextTokens ?? 0,
+      afterTokens: 0,
+      beforeMessages: 0,
+      afterMessages: 0,
+      reductionPercent: 0,
+      retainedKnowledgeMemory: false,
+      recovery: '',
+      categoryDeltas: [],
+      ...(event.resolvedContextWindowTokens !== undefined && {
+        resolvedContextWindowTokens: event.resolvedContextWindowTokens,
+      }),
+      ...(event.triggerBudgetTokens !== undefined && {
+        triggerBudgetTokens: event.triggerBudgetTokens,
+      }),
+      ...(event.targetBudgetTokens !== undefined && {
+        targetBudgetTokens: event.targetBudgetTokens,
+      }),
+    }
+    state.message.updater.updateAiMessageBlocks((blocks) => [
+      ...blocks,
+      pendingBlock,
+    ])
+    state.streaming.setCompactionNotice((previous) => ({
+      count: previous?.count ?? 0,
+      // The live chip label does not read `action`, and a pass that has only
+      // started has not decided its own action yet, so the accumulated action
+      // of the last COMPLETED pass is carried forward. Overwriting it would
+      // mislabel the settled chip after an abort mid-compaction: a turn whose
+      // only completed pass was a mechanical trim would read '⇲ compacted ×N'.
+      action: previous?.action ?? 'semantic_compaction',
+      degraded: previous?.degraded ?? false,
+      pending: true,
+    }))
+    return
+  }
+
+  state.message.updater.updateAiMessageBlocks((blocks) =>
+    dropPendingCompactionBlocks(blocks, event.runId),
+  )
+  state.streaming.setCompactionNotice((previous) => {
+    if (!previous) return null
+    // A start fired but nothing ever completed: clearing the notice keeps a
+    // '⇲ compacted ×0' chip from ever being rendered.
+    if (previous.count === 0) return null
+    if (!previous.pending) return previous
+    return {
+      count: previous.count,
+      action: previous.action,
+      degraded: previous.degraded,
+    }
+  })
+}
+
 const handleContextCompaction = (
   state: EventHandlerState,
   event: PrintModeContextCompaction,
 ) => {
-  const action =
-    event.action === 'semantic_compaction'
-      ? 'Semantic context compaction'
-      : 'Emergency context trim'
-  const removed =
-    event.removedCategories.length > 0
-      ? ` Removed: ${event.removedCategories.join(', ')}.`
-      : ''
-  const retained = event.retainedKnowledgeMemory
-    ? ' Retained knowledge memory: yes.'
-    : ' Retained knowledge memory: no.'
-  const resolvedWindow = event.resolvedContextWindowTokens
-    ? event.resolvedContextWindowTokens.toLocaleString()
-    : 'unknown (conservative fallback)'
-  const budgetDetails =
-    event.triggerBudgetTokens !== undefined &&
-    event.targetBudgetTokens !== undefined
-      ? ` Resolved window: ${resolvedWindow} tokens; trigger budget: ${event.triggerBudgetTokens.toLocaleString()}; target budget: ${event.targetBudgetTokens.toLocaleString()}.`
-      : ''
-  const reason = event.reason ? ` Reason: ${event.reason}` : ''
-  const content = `${action}: ${event.before.tokens.toLocaleString()} → ${event.after.tokens.toLocaleString()} tokens; ${event.before.messages} → ${event.after.messages} messages.${budgetDetails}${reason}${removed}${retained} ${event.recovery}`
+  // Whole-percent reduction, clamped so a compaction that somehow grew the
+  // context (or reported a zero baseline) renders 0% instead of a negative or
+  // out-of-range percent.
+  const reductionPercent =
+    event.before.tokens > 0
+      ? Math.min(
+          100,
+          Math.max(
+            0,
+            Math.round(
+              ((event.before.tokens - event.after.tokens) /
+                event.before.tokens) *
+                100,
+            ),
+          ),
+        )
+      : 0
 
-  state.message.updater.updateAiMessageBlocks((blocks) => [
-    ...blocks,
-    {
-      type: 'text' as const,
-      textType: 'text' as const,
-      content,
-    },
-  ])
+  // `removedCategories` is required by the current event contract, but a
+  // cross-version or replayed `context_compaction` payload emitted before the
+  // field existed can omit it. Degrading to an empty delta list keeps the card
+  // renderable instead of throwing a TypeError inside the SDK event handler.
+  const removedCategories = Array.isArray(event.removedCategories)
+    ? event.removedCategories
+    : []
+
+  const categoryDeltas: CompactionCategoryDelta[] = removedCategories.map(
+    (category) => ({
+      category,
+      beforeTokens: compactionCategoryTokens(event.before.categories, category),
+      afterTokens: compactionCategoryTokens(event.after.categories, category),
+    }),
+  )
+
+  const degraded =
+    event.fitsBudget === false ||
+    (event.consecutiveNoProgressCompactions ?? 0) >= 2
+
+  const resultBlock: CompactionContentBlock = {
+    type: 'compaction',
+    status: 'complete',
+    action: event.action,
+    ...(event.runId !== undefined && { runId: event.runId }),
+    beforeTokens: event.before.tokens,
+    afterTokens: event.after.tokens,
+    beforeMessages: event.before.messages,
+    afterMessages: event.after.messages,
+    reductionPercent,
+    retainedKnowledgeMemory: event.retainedKnowledgeMemory,
+    recovery: event.recovery,
+    categoryDeltas,
+    ...(event.reason !== undefined && { reason: event.reason }),
+    ...(event.resolvedContextWindowTokens !== undefined && {
+      resolvedContextWindowTokens: event.resolvedContextWindowTokens,
+    }),
+    ...(event.triggerBudgetTokens !== undefined && {
+      triggerBudgetTokens: event.triggerBudgetTokens,
+    }),
+    ...(event.targetBudgetTokens !== undefined && {
+      targetBudgetTokens: event.targetBudgetTokens,
+    }),
+    ...(event.compactionCount !== undefined && {
+      compactionCount: event.compactionCount,
+    }),
+    ...(event.consecutiveNoProgressCompactions !== undefined && {
+      consecutiveNoProgressCompactions: event.consecutiveNoProgressCompactions,
+    }),
+    ...(event.fitsBudget !== undefined && { fitsBudget: event.fitsBudget }),
+    ...(event.shortfallTokens !== undefined && {
+      shortfallTokens: event.shortfallTokens,
+    }),
+    ...(event.escalated !== undefined && { escalated: event.escalated }),
+  }
+
+  // The live pending card settles into the result in place; with no pending
+  // card for this run (e.g. a mechanical trim with no preceding start, or a
+  // subagent result while the root card is live) the result appends, which is
+  // the pre-existing behavior.
+  state.message.updater.updateAiMessageBlocks((blocks) => {
+    const pendingIndex = findLastPendingCompactionIndex(blocks, event.runId)
+    if (pendingIndex === -1) return [...blocks, resultBlock]
+    const next = [...blocks]
+    next[pendingIndex] = resultBlock
+    return next
+  })
+
+  // The notice accumulates across compactions within a turn. `compactionCount`
+  // counts the EMITTING run's own passes, so only the root run's count may
+  // replace the turn total; a subagent/inline result contributes one pass
+  // instead of overwriting it, and never settles the root run's live pass.
+  const rootScoped = isRootCompactionEvent(event)
+  state.streaming.setCompactionNotice((previous) => ({
+    count: rootScoped
+      ? (event.compactionCount ?? (previous?.count ?? 0) + 1)
+      : (previous?.count ?? 0) + 1,
+    action: event.action,
+    degraded,
+    ...(!rootScoped && previous?.pending === true ? { pending: true } : {}),
+  }))
 }
 
 const handleFinish = (state: EventHandlerState, event: PrintModeFinish) => {
@@ -1288,7 +1552,15 @@ const handleFinish = (state: EventHandlerState, event: PrintModeFinish) => {
 
   const settledIds = new Set<string>()
   state.message.updater.updateAiMessageBlocks((blocks) => {
-    const settledBlocks = settleOrphanedForegroundAgents(blocks, settledIds)
+    // Defensive turn-boundary cleanup: an abnormal end between `started` and
+    // `settled` must not leave a live compacting card on screen. The pass is
+    // rewritten to its terminal interrupted state rather than deleted, so the
+    // transcript keeps an honest record of a compaction that never reported a
+    // result. Kept separate from the recursive agent/tool settling below, which
+    // walks nested blocks. A user abort never reaches this handler: the abort
+    // listener in hooks/helpers/send-message.ts applies the same rewrite.
+    const rootBlocks = markPendingCompactionInterrupted(blocks)
+    const settledBlocks = settleOrphanedForegroundAgents(rootBlocks, settledIds)
     const summary = computeCompletionSummary(settledBlocks)
     if (!summary) return settledBlocks
 
@@ -1426,6 +1698,9 @@ export const createEventHandler =
       .with({ type: 'context_window' }, (e) => handleContextWindow(state, e))
       .with({ type: 'context_compaction' }, (e) =>
         handleContextCompaction(state, e),
+      )
+      .with({ type: 'context_compaction_status' }, (e) =>
+        handleContextCompactionStatus(state, e),
       )
       .with({ type: 'job_update' }, (e) => handleJobUpdate(state, e))
       .otherwise(() => undefined)

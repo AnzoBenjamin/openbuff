@@ -1386,11 +1386,19 @@ rather than blending into the orchestrator's turn.
 
 #### `context-pruner` silencing
 
-When `agent_type === 'context-pruner'`, the handler suppresses **all**
-forwarded chunks (including the child's `subagent_start` /
-`subagent_finish` emitted by `executeSubagent`), so the pruner runs
-silently and produces no TUI output. This is the existing behavior; the
-`TODO` in source notes a future option may make this configurable.
+When the resolved `agent_type` is the context-pruner, the handler suppresses
+**all** forwarded chunks (including the child's `subagent_start` /
+`subagent_finish` emitted by `executeSubagent`), so the pruner runs silently and
+produces no TUI output. Identity here is matched by **bare agent id** through
+`isContextPrunerAgentId`, not by exact string equality: `context-pruner`,
+`acme/context-pruner`, `acme/context-pruner@1.2.3`, and underscore aliases such
+as `context_pruner` all qualify and are silenced identically. That is a
+widening of the previous exact `agent_type === 'context-pruner'` rule — see
+"Spawned agents have three parent-history transfer modes" below for the rest of
+the contract the same match governs (full parent transcript, forced
+`inheritParentSystemPrompt`, transcript write-back, and the anti-thrash skip),
+and `sdk/CHANGELOG.md` for the consumer migration note. The `TODO` in source
+notes a future option may make the silencing configurable.
 
 #### Context-window-aware compaction budgets
 
@@ -1400,18 +1408,18 @@ uses that value instead of treating every model as 200k-class:
 
 | Resolved window | Semantic trigger | History target | Provider-safe request limit |
 | --------------: | ---------------: | -------------: | --------------------------: |
-|              8k |               2k |          1,680 |                          4k |
-|             16k |               6k |          3,360 |                          8k |
-|             32k |              18k |         10,080 |                         24k |
-|             64k |              42k |         23,520 |                         56k |
-|            128k |              96k |            72k |                     112.64k |
-|            200k |             160k |            84k |                        176k |
-|         262,144 |          209,715 |        110,100 |                     230,687 |
-|            500k |             400k |           210k |                        440k |
-|              1m |             800k |           420k |                        880k |
+|              8k |               2k |          1,400 |                          4k |
+|             16k |            5,600 |          2,800 |                          8k |
+|             32k |           16,800 |          8,400 |                         24k |
+|             64k |           39,200 |         19,600 |                         56k |
+|            128k |           89,600 |            72k |                     112.64k |
+|            200k |             140k |            72k |                        176k |
+|         262,144 |          183,500 |         91,750 |                     230,687 |
+|            500k |             350k |           175k |                        440k |
+|              1m |             700k |           350k |                        880k |
 
-For 128k-and-larger windows, the trigger is bounded by both an 80% ratio and
-explicit 32k–160k semantic headroom. The target is 42% of the resolved window,
+For 128k-and-larger windows, the trigger is bounded by both a 70% ratio and
+explicit 32k–160k semantic headroom. The target is 35% of the resolved window,
 bounded to 72k–420k, and
 is split across assistant/tool-call summaries, user text, and tool-result
 facts. Unknown or invalid provider windows conservatively fall back to a 140k
@@ -1431,12 +1439,20 @@ expanding the history after a successful primary request. The SDK still
 enforces the actual attempt's provider-safe limit at dispatch time. Explicit
 `maxContextLength` overrides are clamped and cannot widen the active model.
 
-The pinned task contract retains a bounded 2,400-character beginning-and-end
-view of the latest live user request plus a 1,000-character next action. This
-preserves both initial requirements and trailing instructions when a user pastes
-a long failure transcript. Reviewer blockers use larger bounded entries, while
-inline reviewer internals are isolated before compaction so they do not consume
-the orchestrator's history budget in the first place.
+The pinned task contract retains a bounded beginning-and-end view of the latest
+live user request plus a bounded next action. Both limits are _baseline_ caps at
+the legacy 100k target (2,400 characters for the goal, 1,400 for the next
+action) and are scaled by the same `clamp(targetTokens / 100_000, 0.5, 3.0)`
+factor as the rest of the pinned block, so they are not fixed absolutes: the
+default 200k-class window resolves a 72k semantic target (scale `0.72`) and
+therefore caps the goal at ~1,728 and the next action at ~1,008 characters,
+while a ~1m-token window resolves ~350k and reaches the 3x clamp (7,200 /
+4,200). Size prompts against the scaled value for the active window, not against
+the 100k baseline. This preserves both initial requirements and trailing
+instructions when a user pastes a long failure transcript. Reviewer blockers use
+larger bounded entries, while inline reviewer internals are isolated before
+compaction so they do not consume the orchestrator's history budget in the first
+place.
 
 Mechanical trimming remains a later emergency brake. Its provider-safe limit
 reserves 12% of the declared window, bounded to 8k–128k, for system prompts,
@@ -1445,6 +1461,151 @@ resolved window, trigger budget, target budget, and reason, along with category
 telemetry and whether `<knowledge_memory>` survived. The existing pinned
 control-plane, blocker, validation, review-receipt, and high-value finding
 extraction remains authoritative across repeated compaction.
+
+The SDK's request-time brake (`getMessagesForModelContext`) subtracts this
+request's counted system-prompt and tool-schema tokens from the resolved message
+limit. Tool names, descriptions, and plain JSON Schemas are counted exactly,
+while an opaque Zod/Standard Schema `inputSchema` is converted to a real JSON
+Schema and counted from that projection, clamped between a per-tool floor and a
+per-tool ceiling and falling back to the floor when the conversion is not
+possible. Its `cache_emergency_trim` log and analytics payload separate the two
+budgets explicitly: `maxTotalTokens` is the resolved _request_ budget,
+`systemTokens` is the counted overhead, and `effectiveMessageBudgetTokens` is
+the message-only budget actually applied. `triggerBudgetTokens` and
+`targetBudgetTokens` — the pair consumers compare against message token counts,
+including the `trigger=`/`target=` numbers in the log line — report that same
+message-only budget, so no emitted field is ambiguous about which threshold
+fired. With no counted overhead the message-only budget equals
+`maxTotalTokens`, so those values are unchanged.
+
+`context_compaction` telemetry is additive on the public `handleEvent` surface.
+`resolvedContextWindowTokens`, `triggerBudgetTokens`, `targetBudgetTokens`,
+`compactionCount`, `consecutiveNoProgressCompactions`, `shortfallTokens`,
+`fitsBudget`, and `escalated` are all optional in
+`common/src/types/print-mode.ts`, so persisted or replayed events emitted before
+this telemetry existed still validate and no consumer migration is required.
+Consumers that ignore the new fields keep their previous behavior; the CLI
+treats `fitsBudget: false` or two-or-more consecutive low-yield passes as a
+degraded compaction.
+
+The CLI records each compaction pass as a typed `compaction` content block
+(`CompactionContentBlock` in `cli/src/types/chat.ts`, rendered by
+`CompactionBox`) instead of appending the previous concatenated `text` block.
+Blocks are persisted to `chat-messages.json` and replayed on reload, so the
+renderer sanitizes missing, non-finite, negative, or unknown-category values
+coming back from an older session, and a replayed session that still holds the
+old free-text notice keeps rendering as plain text.
+
+The pinned `<knowledge_memory>` block's per-field caps scale with the resolved
+semantic target budget instead of being fixed. The scale factor is
+`targetTokens / 100_000`, clamped to `[0.5, 3.0]`, so the legacy 100k target is
+the scale-factor-`1.0` baseline: 12 decisions, 25 files inspected, 25 edits, 12
+validation results, 12 review receipts, 16 post-edit anchors, 12 blockers, a
+2,400-character goal, a 1,400-character next action, and 480-character entries.
+That baseline is not a byte-identical replay of the previous fixed caps: this
+change also raised three of them — decisions 8 -> 12, blockers 8 -> 12, and the
+next action 1,000 -> 1,400 characters. Every other baseline cap is unchanged
+from before: the 2,400-character goal, 25 files inspected, 25 edits, 12
+validation results, 12 review receipts, 16 post-edit anchors, and 480-character
+entries. A ~1m-token window resolves to a ~350k target and
+therefore retains 3x those counts, while a small BYOK window scales down to
+0.5x. Per-entry character caps — including the goal and next-action caps above —
+scale by the same factor, so the baseline numbers above hold only at the legacy
+100k target. The default 200k-class window resolves a 72k target (scale `0.72`)
+and yields 9 decisions, 18 files inspected, 18 edits, 9 validation results, 9
+review receipts, 12 post-edit anchors, 9 blockers, a ~1,728-character goal, a
+~1,008-character next action, and ~346-character entries.
+
+Because that block is pinned verbatim and exempt from the normal budget cutoff,
+deeper retention is bounded by a hard ceiling of
+`max(1_500, floor(targetTokens * 0.25))` estimated tokens. When the block
+exceeds it, entries are evicted oldest-first in a fixed priority order:
+`postEditAnchors` -> `filesInspected` -> `decisions` -> `validationResults` ->
+`reviewReceipts` -> `editsMade` -> `blockers`. `Goal:` and `Next Action:` are
+never dropped; under extreme pressure they are truncated (beginning-and-end
+preserving) toward floors of 480 and 240 characters respectively. These caps
+live in the serialized `handleSteps` of `agents/context-pruner.ts`, outside the
+machine-generated `<pruner-budgets-generated>` region that stays owned by
+`scripts/generate-pruner-budgets.ts`.
+
+Live compaction state is reported by a separate additive
+`context_compaction_status` event on the public `handleEvent` surface
+(`common/src/types/print-mode.ts`), not by the `context_compaction` result. It
+carries `state: 'started' | 'settled'`, the required agent/run correlation
+`runId` and `ancestorRunIds` (plus an optional `agentId`), and optional
+`contextTokens`, `resolvedContextWindowTokens`, `triggerBudgetTokens`, and
+`targetBudgetTokens`. `packages/agent-runtime/src/run-agent-step.ts` emits
+`started` immediately before the programmatic step whenever the window-derived
+semantic trigger is exceeded, whether or not the agent has a `handleSteps`
+generator: an orchestrator's generator spawns the pruner itself, while a
+prompt-only template gets a runtime-driven pass
+(`packages/agent-runtime/src/util/runtime-semantic-compaction.ts`). Two
+additional gates apply, and both suppress the announcement as well as the pass:
+the transient loop-owned anti-thrash advisory (`suppressSemanticCompaction`,
+set after consecutive passes reclaim no space and reset at loop entry), and — for
+the runtime-driven pass only — the ordinary spawn-permission contract, so a
+prompt-only template that does not declare `context-pruner` in its
+`spawnableAgents` announces a pass that then declines to spawn. Emission is
+deliberately not gated on an explicit `maxContextLength` override.
+`settled` is emitted after both compaction branches whenever a `started` was
+emitted, and again on the run's exit path when a step throws or is cancelled
+before reaching them, so a pass that decides not to compact cannot leave a
+pending state on screen. As with `job_update`, consumers should treat unknown
+event variants as no-ops; no consumer migration is required.
+
+Because every `loopAgentSteps` invocation emits these events — the root turn,
+foreground subagents, and inline agents alike — the protocol is scoped by run
+for both producers and consumers. Each emission carries the emitting run's own
+`runId` and `ancestorRunIds`, `ancestorRunIds` is empty **only** for the root
+run (the same convention as `reasoning_delta`), and a run has at most one
+unsettled `started` at a time. Consumers must therefore pair `started` with the
+`settled` of the **same** `runId`, so concurrent or nested loops cannot
+cross-settle each other, and a consumer that renders live compaction state as
+root-level UI must ignore events with a non-empty `ancestorRunIds` instead of
+showing a subagent's compaction as a root-level card. The sibling
+`compactionCount` on the `context_compaction` result is scoped the same way: it
+counts the emitting run's own passes, not a per-turn total across nested runs,
+so only the root run's count may be adopted as the turn total. The result event
+carries the same three correlation fields, but optionally, so persisted or
+replayed events emitted before they existed still validate and stay
+root-attributed.
+
+Only `runId` and `ancestorRunIds` are authoritative on the delivered payload;
+the optional `agentId` is not. The `spawn_agents` forwarding path in
+`packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts` rewrites
+`agentId` to the direct child's agent id on every forwarded event that is not
+`text`, `tool_call`/`tool_result`, or `subagent_start`/`subagent_finish` — which
+includes both compaction events — while spreading the rest of the payload
+unchanged. A depth-1 child's events therefore still carry the emitter's own
+agent id, but for a run nested two or more levels deep the delivered `agentId`
+names the nearest forwarding child rather than the emitting agent. `runId` and
+`ancestorRunIds` survive every hop, so consumers must key per-agent compaction
+state off `runId`, use `ancestorRunIds` for lineage, and treat `agentId` as a
+best-effort display hint.
+
+In the CLI, a root-run `started` appends a pending `compaction` block stamped
+with that `runId` (`CompactionContentBlock.runId`) that the terminal
+`context_compaction` result of the same run replaces in place (a second result
+in the same iteration appends instead), a root-run `settled` drops only that
+run's still-pending block, and `handleFinish` clears any stray pending block —
+including uncorrelated ones replayed from an older session — at the turn
+boundary. A subagent's status event is ignored for root-level state, and a
+subagent result contributes one completed pass to the status-bar count without
+overwriting the root turn's total or clearing its live chip.
+
+One cleanup path stays unreachable by construction: a user-initiated abort makes
+the SDK drop every post-abort event, so neither `settled` nor `handleFinish`
+can run, and the turn's blocks are persisted to `chat-messages.json` afterwards.
+A pending block is therefore stamped with `liveSessionId`
+(`CLI_LIVE_SESSION_ID` in `cli/src/types/chat.ts`, an opaque per-process id) and
+is only rendered as live while that stamp matches the current process.
+A replayed pending block — an absent stamp from an older CLI, or a foreign one
+from the aborted session — renders as "Compaction interrupted" with its result
+lines still suppressed, never as a permanent "Compacting context…" card. The
+status-bar chip applies the same rule live: `pending` is only honored while the
+run is active, so an aborted turn falls back to the settled `⇲ compacted ×N`
+form and drops the chip entirely when no pass ever completed. The field is
+optional and additive, so persisted blocks from before it round-trip unchanged.
 
 Operational memory is also stored as versioned typed task memory with a
 revision CAS and checksum. Requirements, decisions, blockers, files, edits,
@@ -1460,8 +1621,31 @@ Spawned agents have three parent-history transfer modes: `none`, `pinned`, and
 specialists default to the bounded `pinned` mode, which transfers only the
 newest `<pinned_active_work_state>` and `<knowledge_memory>` blocks. The
 context-pruner remains the explicit `full`-history exception because editing
-the parent transcript is its job. Custom history editors must opt in with both
-`messageHistoryMode: 'full'` and `propagateMessageHistoryChanges: true`.
+the parent transcript is its job, and `spawn_agent_inline` matches that
+exception by bare agent id rather than by exact string equality:
+`isContextPrunerAgentId` normalizes the declared `agent_type` and compares only
+the bare segment, so a publisher-qualified or version-pinned declaration —
+`acme/context-pruner`, `acme/context-pruner@1.2.3`, or an underscore alias — is
+treated identically to the bare `context-pruner`. Every agent that matches gets
+the whole pruner contract: the full parent transcript
+(`messageHistoryMode: 'full'`), forced `inheritParentSystemPrompt: true`, fully
+silenced child output, and write-back of the child's transcript over the
+parent's `messageHistory`. The operative pruner params the runtime injects into
+a serialized `handleSteps` are matched the same way (`isContextPrunerAgentId`
+over the template id and the resolved `agentType` in
+`packages/agent-runtime/src/run-programmatic-step.ts`): the model-aware
+`semanticBudget`, the parent's `taskMemory` and `workspaceState`, and the
+caller's `maxContextLength` clamped to the resolved model message limit. That
+injection is what lets the pruner's transactional `set_messages` publish a
+matching `expectedTaskMemoryRevision`; keying it off the bare literal instead
+would leave a pinned pruner on its embedded budget arithmetic and a `-1`
+revision, so `commitTaskMemory` would reject the transcript replacement for
+exactly the spellings documented as equivalent. The same match also governs the transient
+`suppressSemanticCompaction` anti-thrash skip, which declines a pruner spawn —
+after its input is validated — for the rest of a turn whose consecutive
+semantic passes reclaimed no context space. Custom history editors must opt in
+with both `messageHistoryMode: 'full'` and
+`propagateMessageHistoryChanges: true`.
 Ordinary inline children have independent system prompts, tools, and
 `agentContext`, and their private transcripts are never copied back into the
 parent. Structured handoffs and child results are bounded before entering the

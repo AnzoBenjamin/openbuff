@@ -45,6 +45,7 @@ import type { ChatMessage } from '../types/chat'
 import type { SendMessageFn } from '../types/contracts/send-message'
 import type { AgentMode } from '../utils/constants'
 import type { SendMessageTimerEvent } from '../utils/send-message-timer'
+import type { SetCompactionNoticeFn } from '../utils/sdk-event-handlers'
 import type { AgentDefinition, MessageContent, RunState } from '@openbuff/sdk'
 interface UseSendMessageOptions {
   inputRef: React.MutableRefObject<any>
@@ -52,6 +53,7 @@ interface UseSendMessageOptions {
   isChainInProgressRef: React.MutableRefObject<boolean>
   setStreamStatus: (status: StreamStatus) => void
   setContextWindowUsage: (usage: { used: number; max: number } | null) => void
+  setCompactionNotice: SetCompactionNoticeFn
   setCanProcessQueue: (can: boolean) => void
   abortControllerRef: React.MutableRefObject<AbortController | null>
   agentId?: string
@@ -108,6 +110,7 @@ export const useSendMessage = ({
   isChainInProgressRef,
   setStreamStatus,
   setContextWindowUsage,
+  setCompactionNotice,
   setCanProcessQueue,
   abortControllerRef,
   agentId,
@@ -300,6 +303,9 @@ export const useSendMessage = ({
         agentId,
       })
       setIsRetrying(false)
+      // A new turn starts with no compaction notice: the status-bar chip only
+      // reports compactions that happened during the turn in progress.
+      setCompactionNotice(() => null)
 
       // Prepare user message (bash context, images, text attachments, mode divider)
       let userMessageId: string
@@ -540,6 +546,7 @@ export const useSendMessage = ({
           setStreamingAgents,
           setStreamStatus,
           setContextWindowUsage,
+          setCompactionNotice,
           aiMessageId,
           updater,
           hasReceivedContentRef,
@@ -682,6 +689,7 @@ export const useSendMessage = ({
       resumeQueue,
       scrollToLatest,
       setCanProcessQueue,
+      setCompactionNotice,
       setContextWindowUsage,
       setStreamStatus,
       streamRefs,

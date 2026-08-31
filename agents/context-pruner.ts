@@ -182,19 +182,32 @@ const definition: AgentDefinition = {
     // user's trailing "what to do now" instruction, which often follows a
     // long diagnostic transcript.
     const KNOWLEDGE_MEMORY_MAX_GOAL_CHARS = 2_400
-    const KNOWLEDGE_MEMORY_MAX_DECISIONS = 8
+    const KNOWLEDGE_MEMORY_MAX_DECISIONS = 12
     const KNOWLEDGE_MEMORY_MAX_FILES_INSPECTED = 25
     const KNOWLEDGE_MEMORY_MAX_EDITS = 25
     const KNOWLEDGE_MEMORY_MAX_VALIDATION_RESULTS = 12
     const KNOWLEDGE_MEMORY_MAX_REVIEW_RECEIPTS = 12
     const KNOWLEDGE_MEMORY_MAX_POST_EDIT_ANCHORS = 16
-    const KNOWLEDGE_MEMORY_MAX_BLOCKERS = 8
-    const KNOWLEDGE_MEMORY_MAX_NEXT_ACTION_CHARS = 1_000
+    const KNOWLEDGE_MEMORY_MAX_BLOCKERS = 12
+    const KNOWLEDGE_MEMORY_MAX_NEXT_ACTION_CHARS = 1_400
     const KNOWLEDGE_MEMORY_ENTRY_CHARS = 480
     const KNOWLEDGE_MEMORY_FILE_FINDING_CHARS = 160
     const KNOWLEDGE_MEMORY_REVIEW_RECEIPT_CHARS = 1_200
     const TOOL_ERROR_DETAIL_CHARS = 1_200
     const EDIT_RESULT_DETAIL_CHARS = 2_000
+
+    /** Target at which the caps above apply verbatim (legacy DEFAULT_TARGET_CONTEXT_LENGTH). */
+    const KNOWLEDGE_MEMORY_SCALE_BASELINE_TARGET_TOKENS = 100_000
+    const KNOWLEDGE_MEMORY_MIN_SCALE = 0.5
+    const KNOWLEDGE_MEMORY_MAX_SCALE = 3
+    /** The pinned block may not exceed this share of the summary target. */
+    const KNOWLEDGE_MEMORY_MAX_BUDGET_FRACTION = 0.25
+    /** Floor so a tiny window still keeps a usable task contract. */
+    const KNOWLEDGE_MEMORY_MIN_BUDGET_TOKENS = 1_500
+    const KNOWLEDGE_MEMORY_MIN_GOAL_CHARS = 480
+    const KNOWLEDGE_MEMORY_MIN_NEXT_ACTION_CHARS = 240
+    /** Share of a list dropped per ceiling-eviction pass (bounds re-render cost). */
+    const KNOWLEDGE_MEMORY_EVICTION_CHUNK_FRACTION = 0.25
 
     /** Tool categories for knowledge memory extraction */
     const FILE_INSPECTION_TOOLS = [
@@ -822,11 +835,22 @@ const definition: AgentDefinition = {
       })
     }
 
+    /**
+     * Normalize for dedupe comparison only (collapse internal whitespace,
+     * lowercase) so near-duplicate repeats of the same decision/blocker/
+     * validation line stop consuming retention budget. The original trimmed
+     * text is what gets stored.
+     */
+    function normalizeDedupeKey(text: string): string {
+      return text.replace(/\s+/g, ' ').trim().toLowerCase()
+    }
+
     function addUniqueLine(lines: string[], line: string): void {
       const trimmed = line.trim()
-      if (trimmed && !lines.includes(trimmed)) {
-        lines.push(trimmed)
-      }
+      if (!trimmed) return
+      const key = normalizeDedupeKey(trimmed)
+      if (lines.some((existing) => normalizeDedupeKey(existing) === key)) return
+      lines.push(trimmed)
     }
 
     function extractPinnedActiveWorkState(text: string): string[] {
@@ -877,9 +901,10 @@ const definition: AgentDefinition = {
 
     function addUniqueEntry(lines: string[], entry: string): void {
       const trimmed = entry.trim()
-      if (trimmed && !lines.includes(trimmed)) {
-        lines.push(trimmed)
-      }
+      if (!trimmed) return
+      const key = normalizeDedupeKey(trimmed)
+      if (lines.some((existing) => normalizeDedupeKey(existing) === key)) return
+      lines.push(trimmed)
     }
 
     /** Parse a previous <knowledge_memory> block back into the accumulator. */
@@ -989,7 +1014,10 @@ const definition: AgentDefinition = {
 
     function addUniqueText(texts: string[], text: string): void {
       const trimmed = text.trim()
-      if (trimmed && !texts.includes(trimmed)) texts.push(trimmed)
+      if (!trimmed) return
+      const key = normalizeDedupeKey(trimmed)
+      if (texts.some((existing) => normalizeDedupeKey(existing) === key)) return
+      texts.push(trimmed)
     }
 
     function collectFailureTexts(
@@ -1515,50 +1543,102 @@ const definition: AgentDefinition = {
       return first.slice(0, KNOWLEDGE_MEMORY_FILE_FINDING_CHARS - 3) + '...'
     }
 
-    /** Apply per-field budgets with rolling eviction of oldest entries (RISK2). */
+    /**
+     * Bounded scale for the per-field knowledge-memory caps. The legacy
+     * default target (100k tokens) yields exactly 1.0, so the baseline cap
+     * constants apply unscaled; note that those baseline constants were
+     * themselves raised for decisions (8 -> 12), blockers (8 -> 12), and the
+     * next action (1,000 -> 1,400 chars), so a 1.0 factor is not a
+     * byte-identical replay of the previous retention. Larger model-aware
+     * targets retain more recoverable evidence per pass and smaller ones
+     * retain less.
+     */
+    function knowledgeMemoryScale(target: number): number {
+      if (!Number.isFinite(target) || target <= 0) return 1
+      const raw = target / KNOWLEDGE_MEMORY_SCALE_BASELINE_TARGET_TOKENS
+      return Math.min(
+        KNOWLEDGE_MEMORY_MAX_SCALE,
+        Math.max(KNOWLEDGE_MEMORY_MIN_SCALE, raw),
+      )
+    }
+
+    /** Estimated tokens of the emitted pinned block (same heuristic as elsewhere). */
+    function estimateKnowledgeMemoryTokens(km: KnowledgeMemory): number {
+      return Math.ceil(buildKnowledgeMemoryBlock(km).length / CHARS_PER_TOKEN)
+    }
+
+    /**
+     * Apply per-field budgets with rolling eviction of oldest entries (RISK2),
+     * scaled by the resolved summary target, then enforce a hard ceiling on the
+     * whole pinned block. The block is emitted verbatim and is explicitly not
+     * subject to the normal budget cutoff, so the ceiling is what keeps deeper
+     * retention from crowding out the live working set on small windows.
+     * Goal and Next Action are truncated toward a floor, never dropped.
+     */
     function enforceKnowledgeMemoryBudgets(km: KnowledgeMemory): void {
+      type KnowledgeMemoryListField =
+        | 'postEditAnchors'
+        | 'filesInspected'
+        | 'decisions'
+        | 'validationResults'
+        | 'reviewReceipts'
+        | 'editsMade'
+        | 'blockers'
+
+      const scale = knowledgeMemoryScale(targetContextLength)
+      const scaleBudget = (base: number): number =>
+        Math.max(1, Math.round(base * scale))
       const capTextPreservingEnds = (text: string, max: number): string =>
         truncateLongText(text, max)
 
-      km.goal = capTextPreservingEnds(km.goal, KNOWLEDGE_MEMORY_MAX_GOAL_CHARS)
+      const maxDecisions = scaleBudget(KNOWLEDGE_MEMORY_MAX_DECISIONS)
+      const maxFilesInspected = scaleBudget(
+        KNOWLEDGE_MEMORY_MAX_FILES_INSPECTED,
+      )
+      const maxEdits = scaleBudget(KNOWLEDGE_MEMORY_MAX_EDITS)
+      const maxValidationResults = scaleBudget(
+        KNOWLEDGE_MEMORY_MAX_VALIDATION_RESULTS,
+      )
+      const maxReviewReceipts = scaleBudget(
+        KNOWLEDGE_MEMORY_MAX_REVIEW_RECEIPTS,
+      )
+      const maxPostEditAnchors = scaleBudget(
+        KNOWLEDGE_MEMORY_MAX_POST_EDIT_ANCHORS,
+      )
+      const maxBlockers = scaleBudget(KNOWLEDGE_MEMORY_MAX_BLOCKERS)
+
+      km.goal = capTextPreservingEnds(
+        km.goal,
+        scaleBudget(KNOWLEDGE_MEMORY_MAX_GOAL_CHARS),
+      )
       km.nextAction = capTextPreservingEnds(
         km.nextAction,
-        KNOWLEDGE_MEMORY_MAX_NEXT_ACTION_CHARS,
+        scaleBudget(KNOWLEDGE_MEMORY_MAX_NEXT_ACTION_CHARS),
       )
-      if (km.decisions.length > KNOWLEDGE_MEMORY_MAX_DECISIONS) {
-        km.decisions = km.decisions.slice(-KNOWLEDGE_MEMORY_MAX_DECISIONS)
+      if (km.decisions.length > maxDecisions) {
+        km.decisions = km.decisions.slice(-maxDecisions)
       }
-      if (km.filesInspected.length > KNOWLEDGE_MEMORY_MAX_FILES_INSPECTED) {
-        km.filesInspected = km.filesInspected.slice(
-          -KNOWLEDGE_MEMORY_MAX_FILES_INSPECTED,
-        )
+      if (km.filesInspected.length > maxFilesInspected) {
+        km.filesInspected = km.filesInspected.slice(-maxFilesInspected)
       }
-      if (km.editsMade.length > KNOWLEDGE_MEMORY_MAX_EDITS) {
-        km.editsMade = km.editsMade.slice(-KNOWLEDGE_MEMORY_MAX_EDITS)
+      if (km.editsMade.length > maxEdits) {
+        km.editsMade = km.editsMade.slice(-maxEdits)
       }
-      if (
-        km.validationResults.length > KNOWLEDGE_MEMORY_MAX_VALIDATION_RESULTS
-      ) {
-        km.validationResults = km.validationResults.slice(
-          -KNOWLEDGE_MEMORY_MAX_VALIDATION_RESULTS,
-        )
+      if (km.validationResults.length > maxValidationResults) {
+        km.validationResults = km.validationResults.slice(-maxValidationResults)
       }
-      if (km.reviewReceipts.length > KNOWLEDGE_MEMORY_MAX_REVIEW_RECEIPTS) {
-        km.reviewReceipts = km.reviewReceipts.slice(
-          -KNOWLEDGE_MEMORY_MAX_REVIEW_RECEIPTS,
-        )
+      if (km.reviewReceipts.length > maxReviewReceipts) {
+        km.reviewReceipts = km.reviewReceipts.slice(-maxReviewReceipts)
       }
-      if (km.postEditAnchors.length > KNOWLEDGE_MEMORY_MAX_POST_EDIT_ANCHORS) {
-        km.postEditAnchors = km.postEditAnchors.slice(
-          -KNOWLEDGE_MEMORY_MAX_POST_EDIT_ANCHORS,
-        )
+      if (km.postEditAnchors.length > maxPostEditAnchors) {
+        km.postEditAnchors = km.postEditAnchors.slice(-maxPostEditAnchors)
       }
-      if (km.blockers.length > KNOWLEDGE_MEMORY_MAX_BLOCKERS) {
-        km.blockers = km.blockers.slice(-KNOWLEDGE_MEMORY_MAX_BLOCKERS)
+      if (km.blockers.length > maxBlockers) {
+        km.blockers = km.blockers.slice(-maxBlockers)
       }
 
       const capEntry = (entry: string, max: number): string =>
-        capTextPreservingEnds(entry, max)
+        capTextPreservingEnds(entry, scaleBudget(max))
 
       km.decisions = km.decisions.map((e) =>
         capEntry(e, KNOWLEDGE_MEMORY_ENTRY_CHARS),
@@ -1578,6 +1658,63 @@ const definition: AgentDefinition = {
       km.blockers = km.blockers.map((e) =>
         capEntry(e, KNOWLEDGE_MEMORY_ENTRY_CHARS),
       )
+
+      // Hard ceiling on the pinned block, computed from the post-compaction
+      // history target (not the trigger). Evicted first -> last, oldest entries
+      // first, mirroring the rolling-eviction policy of the caps above.
+      const ceiling = Math.max(
+        KNOWLEDGE_MEMORY_MIN_BUDGET_TOKENS,
+        Math.floor(targetContextLength * KNOWLEDGE_MEMORY_MAX_BUDGET_FRACTION),
+      )
+      const EVICTION_ORDER: KnowledgeMemoryListField[] = [
+        'postEditAnchors',
+        'filesInspected',
+        'decisions',
+        'validationResults',
+        'reviewReceipts',
+        'editsMade',
+        'blockers',
+      ]
+      while (estimateKnowledgeMemoryTokens(km) > ceiling) {
+        const field = EVICTION_ORDER.find((key) => km[key].length > 0)
+        if (field) {
+          const entries = km[field]
+          entries.splice(
+            0,
+            Math.max(
+              1,
+              Math.floor(
+                entries.length * KNOWLEDGE_MEMORY_EVICTION_CHUNK_FRACTION,
+              ),
+            ),
+          )
+          continue
+        }
+        // Every list is empty: the task contract itself is over the ceiling.
+        // Shrink it toward the floor instead of dropping it, halving per pass.
+        if (km.nextAction.length > KNOWLEDGE_MEMORY_MIN_NEXT_ACTION_CHARS) {
+          km.nextAction = capTextPreservingEnds(
+            km.nextAction,
+            Math.max(
+              KNOWLEDGE_MEMORY_MIN_NEXT_ACTION_CHARS,
+              Math.floor(km.nextAction.length / 2),
+            ),
+          )
+          continue
+        }
+        if (km.goal.length > KNOWLEDGE_MEMORY_MIN_GOAL_CHARS) {
+          km.goal = capTextPreservingEnds(
+            km.goal,
+            Math.max(
+              KNOWLEDGE_MEMORY_MIN_GOAL_CHARS,
+              Math.floor(km.goal.length / 2),
+            ),
+          )
+          continue
+        }
+        // Both are at their floor: keep them (R3) rather than looping forever.
+        break
+      }
     }
 
     /** Detect the latest substantive user request or override. */

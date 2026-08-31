@@ -186,14 +186,56 @@ const contextCategorySummarySchema = z.object({
   userAssistantMessages: contextCategoryStatsSchema,
 })
 
+/**
+ * Context-compaction telemetry on the public `handleEvent` surface.
+ *
+ * ADDITIVE, non-breaking public-contract change: every field added after the
+ * original `before`/`after`/`removedCategories`/`retainedKnowledgeMemory`/
+ * `recovery` core is optional, so persisted or replayed events emitted before
+ * that telemetry existed still validate and consumers that ignore the new
+ * fields keep their previous behavior. No consumer migration is required. The
+ * documented contract lives in `docs/agents-and-tools.md` under
+ * "Context-window-aware compaction budgets".
+ */
 export const printModeContextCompactionSchema = z.object({
   type: z.literal('context_compaction'),
   action: z.enum(['semantic_compaction', 'mechanical_trim']),
+  // Agent/run correlation for the loop that compacted. `loopAgentSteps` runs
+  // for the root turn, for foreground subagents, and for inline agents, so a
+  // consumer that keeps per-turn state MUST scope this payload — `runId`
+  // identifies the emitting run and `ancestorRunIds` is its lineage (empty
+  // ONLY for the root run). Those two are the authoritative keys: they are
+  // forwarded verbatim by every hop between the emitting run and the consumer.
+  // `agentId` is stamped by the emitting run but is NOT reliable end-to-end —
+  // the `spawn_agents` forwarding path rewrites it to the direct child's agent
+  // id on every forwarded event that is not text/tool/subagent, so for a run
+  // nested two or more levels deep the DELIVERED `agentId` names the nearest
+  // forwarding child rather than the emitter. Treat it as a display hint and
+  // key per-agent state off `runId`. All three are optional for compatibility
+  // with persisted/replayed events emitted before the fields existed; an event
+  // without `ancestorRunIds` predates nested-run attribution and stays
+  // root-attributed, which is the previous behavior.
+  runId: z.string().optional(),
+  ancestorRunIds: z.string().array().optional(),
+  agentId: z.string().optional(),
   resolvedContextWindowTokens: z.number().optional(),
   // Optional for compatibility with persisted/replayed events emitted before
   // model-aware compaction telemetry was added.
   triggerBudgetTokens: z.number().optional(),
   targetBudgetTokens: z.number().optional(),
+  // Also optional for compatibility with persisted/replayed events emitted
+  // before anti-thrash and fit-verification telemetry existed: how many
+  // compactions the EMITTING agent run (`runId` above) has performed — not a
+  // per-turn total across nested runs, so a consumer tracking one run's count
+  // must ignore counts correlated to another run — how many consecutive ones
+  // reclaimed almost nothing, and (mechanical trims only) whether the trimmed
+  // request actually fits the budget, by how many tokens it misses, and
+  // whether the escalation pass had to drop extra optional messages.
+  compactionCount: z.number().optional(),
+  consecutiveNoProgressCompactions: z.number().optional(),
+  shortfallTokens: z.number().optional(),
+  fitsBudget: z.boolean().optional(),
+  escalated: z.boolean().optional(),
   reason: z.string().optional(),
   before: z.object({
     tokens: z.number(),
@@ -219,6 +261,101 @@ export const printModeContextCompactionSchema = z.object({
 })
 export type PrintModeContextCompaction = z.infer<
   typeof printModeContextCompactionSchema
+>
+
+/**
+ * Live context-compaction progress. ADDITIVE, non-breaking public-contract
+ * change: this is a NEW member of the {@link printModeEventSchema}
+ * discriminated union — no existing event variant is removed, renamed, or
+ * retyped, so no consumer migration or deprecation is required. In particular
+ * the terminal {@link printModeContextCompactionSchema} result event keeps its
+ * exact shape.
+ *
+ * PRODUCER CONTRACT. Every `loopAgentSteps` invocation emits this event —
+ * the root turn, foreground subagents, and inline agents alike — so every
+ * emission is correlated to its own run by the required `runId` /
+ * `ancestorRunIds` pair (`agentId` is supplied when the producer knows it, and
+ * is rewritten by subagent forwarding — see the CONSUMER CONTRACT below).
+ * `state: 'started'` is emitted immediately before a step that is likely to run
+ * semantic compaction (the pruner agent runs inline and is hidden from the
+ * CLI, so without this the user sees nothing until the result arrives).
+ *
+ * EMISSION GATE. The only trigger is the window-derived semantic compaction
+ * budget being exceeded by the pre-step context estimate. In particular:
+ *   - It is NOT gated on the agent having a `handleSteps` generator. An
+ *     orchestrator's generator spawns the pruner itself; a prompt-only
+ *     template instead gets an equivalent runtime-driven pass, and both
+ *     announce through this event. A consumer must therefore expect `started`
+ *     from prompt-only agents too.
+ *   - It IS suppressed for an iteration where the transient loop-owned
+ *     anti-thrash advisory is active (`suppressSemanticCompaction` on the
+ *     agent state, set after consecutive passes reclaimed no context space in
+ *     the current turn and reset at loop entry). A suppressed iteration runs
+ *     no pass and emits NEITHER half of the pair — it is not reported as a
+ *     `started`/`settled` no-op — so a consumer must not infer "the trigger
+ *     was never exceeded" from the absence of an event.
+ *   - It is deliberately NOT gated on an explicit `maxContextLength` override,
+ *     so an overridden run does not emit a `started` on every step.
+ *   - For the runtime-driven (prompt-only) pass, the ordinary spawn-permission
+ *     contract still applies AFTER the announcement: a template that does not
+ *     declare `context-pruner` in its `spawnableAgents` announces a pass that
+ *     then declines to spawn, so an announced pass is not a guarantee that any
+ *     compaction happened. The terminal `context_compaction` result remains
+ *     the only signal that context was actually reclaimed.
+ *
+ * `state: 'settled'` is emitted after the compaction branches for every
+ * `started` of the SAME `runId`, and again on that run's exit path when a step
+ * throws or is cancelled before reaching them, so a pass that decides NOT to
+ * compact cannot leave a live state stuck on screen. A run emits at most one
+ * unsettled `started` at a time. Both budgets and the pre-step context size are
+ * optional because they are informational only.
+ *
+ * CONSUMER CONTRACT. Pair `started` with `settled` by `runId`: a `settled` from
+ * one run never settles another run's `started`, so concurrent or nested loops
+ * cannot cross-settle each other. `ancestorRunIds` is empty ONLY for the root
+ * agent run (mirroring `printModeReasoningDelta`), so a consumer that renders
+ * live compaction state as root-level UI must ignore events whose
+ * `ancestorRunIds` is non-empty — otherwise a subagent's compaction shows up as
+ * a root-level 'Compacting context…' card. Consumers that nest per-agent UI can
+ * instead key off `runId`, which — like `ancestorRunIds` — is forwarded
+ * verbatim. `agentId` is NOT a per-agent key: the `spawn_agents` forwarding
+ * path overwrites it with the direct child's agent id on every forwarded event
+ * that is not text/tool/subagent, so a depth>=2 run's delivered `agentId`
+ * identifies the nearest forwarding child rather than the emitter.
+ *
+ * One case stays unreachable by construction: a user-initiated abort makes the
+ * SDK drop every post-abort event, so a consumer that renders `started` as live
+ * UI must be able to settle that state on its own — the CLI stamps its pending
+ * card with the producing process id and renders a replayed one as an
+ * interrupted pass, so a persisted transcript never replays a permanently live
+ * card.
+ *
+ * Forward-compatibility contract for `handleEvent` consumers: an exhaustive
+ * `switch`/match over `event.type` should treat unknown variants as no-ops
+ * (the SDK's own default handler only branches on `error`, and the CLI handler
+ * uses a catch-all `.otherwise`). Consumers that only care about the final
+ * compaction result can safely ignore `context_compaction_status` entirely.
+ */
+export const printModeContextCompactionStatusSchema = z.object({
+  type: z.literal('context_compaction_status'),
+  state: z.enum(['started', 'settled']),
+  // Required agent/run correlation: this event is stateful, so an unattributed
+  // payload would be unusable — a consumer could not tell whose pending state
+  // a `settled` belongs to, nor whether a `started` came from the root run.
+  // `ancestorRunIds` is empty exactly for the root run.
+  runId: z.string(),
+  ancestorRunIds: z.string().array(),
+  // Emitting agent id as stamped by the producer. Display hint only: subagent
+  // forwarding rewrites it (see the CONSUMER CONTRACT above), so it is not a
+  // stable per-agent key at nesting depth >= 2.
+  agentId: z.string().optional(),
+  contextTokens: z.number().optional(),
+  resolvedContextWindowTokens: z.number().optional(),
+  triggerBudgetTokens: z.number().optional(),
+  targetBudgetTokens: z.number().optional(),
+})
+export type PrintModeContextCompactionStatus = z.infer<
+  typeof printModeContextCompactionStatusSchema
 >
 
 /**
@@ -270,6 +407,7 @@ export const printModeEventSchema = z.discriminatedUnion('type', [
   printModeToolStartSchema,
 
   printModeContextCompactionSchema,
+  printModeContextCompactionStatusSchema,
   printModeContextWindowSchema,
   printModeJobUpdateSchema,
   printModeReasoningDeltaSchema,

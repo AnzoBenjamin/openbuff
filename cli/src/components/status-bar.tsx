@@ -15,6 +15,7 @@ import {
   selectStatusBarChips,
   type StatusBarChipTone,
 } from '../utils/status-bar-chips'
+import type { CompactionNotice } from '../types/chat'
 import type { StatusIndicatorState } from '../utils/status-indicator-state'
 
 /** A small status-bar action button with hover-bold styling. */
@@ -71,6 +72,11 @@ interface StatusBarProps {
   scrollToLatest: () => void
   statusIndicatorState: StatusIndicatorState
   contextWindowUsage?: { used: number; max: number } | null
+  /**
+   * Accumulated context-compaction notice for the current turn (null once the
+   * next turn starts). Rendered as a chip beside the context usage.
+   */
+  compactionNotice?: CompactionNotice | null
   /** Session-accumulated cost in cents (1 dollar = 100 cents). */
   sessionCostCents?: number | null
   /** Resolved model id for the active agent mode (short display string). */
@@ -88,6 +94,7 @@ export const StatusBar = ({
   scrollToLatest,
   statusIndicatorState,
   contextWindowUsage,
+  compactionNotice,
   sessionCostCents,
   modelName,
   diffStats,
@@ -138,6 +145,7 @@ export const StatusBar = ({
     widthSize: width.size,
     terminalWidth,
     contextWindowUsage,
+    compactionNotice,
     sessionCostCents,
     modelName,
     diffStats,

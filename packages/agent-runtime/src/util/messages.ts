@@ -253,6 +253,15 @@ function getContextCategory(message: Message): ContextCategory {
   return 'toolResults'
 }
 
+/** Eviction order: cheapest-to-recover context first, conversation last. */
+export const CONTEXT_EVICTION_PRIORITY: readonly ContextCategory[] = [
+  'fileReads',
+  'toolResults',
+  'subagents',
+  'todos',
+  'userAssistantMessages',
+]
+
 export function getContextCategoryTelemetry(
   messages: Message[],
 ): ContextCategorySummary {
@@ -290,6 +299,12 @@ export type ContextTrimReport = {
   afterCategories: ContextCategorySummary
   removedCategories: ContextCategory[]
   retainedKnowledgeMemory: boolean
+  /** True when the returned history fits `maxTotalTokens - systemTokens`. */
+  fitsBudget: boolean
+  /** Tokens still over budget after every trimming pass (0 when it fits). */
+  shortfallTokens: number
+  /** True when the escalation pass had to drop additional optional messages. */
+  escalated: boolean
 }
 
 function messageContainsText(message: Message, needle: string): boolean {
@@ -384,6 +399,54 @@ function buildMechanicalRecoveryMessage(params: {
   )
 }
 
+function collectAssistantToolCallIds(messages: Message[]): Set<string> {
+  const toolCallIds = new Set<string>()
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue
+    for (const part of message.content) {
+      if (part.type === 'tool-call') {
+        toolCallIds.add(part.toolCallId)
+      }
+    }
+  }
+  return toolCallIds
+}
+
+/**
+ * Removes `role: 'tool'` messages whose `toolCallId` lost its assistant
+ * `tool-call` content part during removal. Scoped to calls that were paired
+ * before the removal so tool results that never had an assistant call in the
+ * history are left exactly as the caller provided them.
+ */
+function dropOrphanToolResults(params: {
+  messages: Message[]
+  previouslyCalledToolCallIds: Set<string>
+}): Message[] {
+  const { messages, previouslyCalledToolCallIds } = params
+  const survivingCalledToolCallIds = collectAssistantToolCallIds(messages)
+  return messages.filter(
+    (message) =>
+      message.role !== 'tool' ||
+      !previouslyCalledToolCallIds.has(message.toolCallId) ||
+      survivingCalledToolCallIds.has(message.toolCallId),
+  )
+}
+
+/**
+ * Re-pair tool calls and tool results in both directions after non-contiguous
+ * removal: assistant-side orphans via `filterUnfinishedToolCalls`, tool-side
+ * orphans via `dropOrphanToolResults`.
+ */
+function reconcileToolCallPairing(params: {
+  before: Message[]
+  after: Message[]
+}): Message[] {
+  return dropOrphanToolResults({
+    messages: filterUnfinishedToolCalls(params.after),
+    previouslyCalledToolCallIds: collectAssistantToolCallIds(params.before),
+  })
+}
+
 /**
  * Trims messages from the beginning to fit within token limits while preserving
  * important content. Also simplifies large tool results to save tokens.
@@ -433,6 +496,9 @@ export function trimMessagesToFitTokenLimitWithReport(params: {
       beforeCategories: categories,
       afterCategories: categories,
       removedCategories: [],
+      fitsBudget: true,
+      shortfallTokens: 0,
+      escalated: false,
       retainedKnowledgeMemory: messages.some((message) =>
         messageContainsText(
           message,
@@ -511,26 +577,72 @@ export function trimMessagesToFitTokenLimitWithReport(params: {
   let removedTokens = 0
   const tokensToRemove = Math.max(0, optionalTokens - targetOptionalTokens)
 
-  const placeholder = 'deleted'
-  const filteredMessages: (Message | typeof placeholder)[] = []
-  for (const message of shortenedMessages) {
-    if (removedTokens >= tokensToRemove || message.keepDuringTruncation) {
-      filteredMessages.push(message)
-      continue
-    }
-    removedTokens += countTokensJson(message)
-    if (
-      filteredMessages.length === 0 ||
-      filteredMessages[filteredMessages.length - 1] !== placeholder
-    ) {
-      filteredMessages.push(placeholder)
-      removedTokens -= countTokensJson(replacementMessage)
+  // Category-aware eviction (CONTEXT_EVICTION_PRIORITY): drop the
+  // cheapest-to-recover context first and conversation last, oldest-first
+  // within each category. Removal is no longer contiguous by construction, so
+  // the removals are decided as a set first and the array is then rebuilt in
+  // original order, collapsing each contiguous removed run into exactly one
+  // pointer placeholder. Placeholder token credit is tracked via the run count
+  // so the accounting stays equivalent to the previous contiguous walk.
+  const placeholderTokens = countTokensJson(replacementMessage)
+  // An assistant message whose tool result is pinned must stay: dropping it
+  // would orphan a message we are not allowed to remove, and reconciliation
+  // would then have to choose between a pinned drop and an invalid pairing.
+  const pinnedToolCallIds = new Set(
+    shortenedMessages.flatMap((message) =>
+      message.role === 'tool' && message.keepDuringTruncation
+        ? [message.toolCallId]
+        : [],
+    ),
+  )
+  const answersPinnedToolResult = (message: Message): boolean =>
+    message.role === 'assistant' &&
+    message.content.some(
+      (part) =>
+        part.type === 'tool-call' && pinnedToolCallIds.has(part.toolCallId),
+    )
+  const removedIndices = new Set<number>()
+  let removedMessageTokens = 0
+  let placeholderRuns = 0
+  for (const category of CONTEXT_EVICTION_PRIORITY) {
+    if (removedTokens >= tokensToRemove) break
+    for (let index = 0; index < shortenedMessages.length; index++) {
+      if (removedTokens >= tokensToRemove) break
+      const message = shortenedMessages[index]
+      if (message.keepDuringTruncation || removedIndices.has(index)) continue
+      if (answersPinnedToolResult(message)) continue
+      if (getContextCategory(message) !== category) continue
+      const mergesPrevious = removedIndices.has(index - 1)
+      const mergesNext = removedIndices.has(index + 1)
+      removedIndices.add(index)
+      removedMessageTokens += countTokensJson(message)
+      placeholderRuns +=
+        mergesPrevious && mergesNext ? -1 : mergesPrevious || mergesNext ? 0 : 1
+      removedTokens = removedMessageTokens - placeholderRuns * placeholderTokens
     }
   }
 
-  let trimmedMessages = filteredMessages.map((m) =>
-    m === placeholder ? replacementMessage : m,
-  )
+  let trimmedMessages: Message[] = []
+  for (let index = 0; index < shortenedMessages.length; index++) {
+    if (!removedIndices.has(index)) {
+      trimmedMessages.push(shortenedMessages[index])
+      continue
+    }
+    if (!removedIndices.has(index - 1)) {
+      trimmedMessages.push(replacementMessage)
+    }
+  }
+
+  // Priority-ordered removal can strand an assistant tool-call without its
+  // result, or a tool result without its call. Reconcile both directions
+  // before the recovery-envelope substitution and the final token count so the
+  // report numbers describe the array we actually return.
+  if (removedIndices.size > 0) {
+    trimmedMessages = reconcileToolCallPairing({
+      before: shortenedMessages,
+      after: trimmedMessages,
+    })
+  }
 
   // Compute the running token total once (O(n)), then maintain it with
   // per-message deltas inside the simplification loop. Previously the loop
@@ -573,6 +685,45 @@ export function trimMessagesToFitTokenLimitWithReport(params: {
     }
   }
 
+  // Escalation pass: tool-result simplification can run out of compressible
+  // content while the history is still over budget. Keep dropping remaining
+  // optional messages in eviction-priority order (oldest-first) instead of
+  // silently reporting a successful trim. Pinned messages, the retained
+  // <knowledge_memory>, and the compacted-context pointer are never dropped.
+  let escalated = false
+  if (runningTokens > maxMessageTokens) {
+    const isEvictableDuringEscalation = (message: Message): boolean =>
+      !message.keepDuringTruncation &&
+      !answersPinnedToolResult(message) &&
+      !messageContainsText(message, COMPACTED_CONTEXT_POINTER) &&
+      !messageContainsText(message, '<knowledge_memory>')
+    const escalationRemoved = new Set<number>()
+    for (const category of CONTEXT_EVICTION_PRIORITY) {
+      if (runningTokens <= maxMessageTokens) break
+      for (let index = 0; index < trimmedMessages.length; index++) {
+        if (runningTokens <= maxMessageTokens) break
+        const message = trimmedMessages[index]
+        if (escalationRemoved.has(index)) continue
+        if (getContextCategory(message) !== category) continue
+        if (!isEvictableDuringEscalation(message)) continue
+        escalationRemoved.add(index)
+        // Maintain the running total per drop instead of recounting the whole
+        // array, so the escalation pass stays linear in message count.
+        runningTokens -= countTokensJson(message)
+      }
+    }
+    if (escalationRemoved.size > 0) {
+      escalated = true
+      trimmedMessages = reconcileToolCallPairing({
+        before: trimmedMessages,
+        after: trimmedMessages.filter(
+          (_, index) => !escalationRemoved.has(index),
+        ),
+      })
+      runningTokens = countTokensJson(trimmedMessages)
+    }
+  }
+
   const afterCategories = getContextCategoryTelemetry(trimmedMessages)
   const removedCategories = (
     Object.keys(initialContextCategoryTelemetry) as ContextCategory[]
@@ -601,6 +752,14 @@ export function trimMessagesToFitTokenLimitWithReport(params: {
     })
   }
   const finalTokens = countTokensJson(trimmedMessages)
+  const fitsBudget = finalTokens <= maxMessageTokens
+  const shortfallTokens = Math.max(0, finalTokens - maxMessageTokens)
+  if (!fitsBudget) {
+    logger.warn(
+      { finalTokens, maxMessageTokens, shortfallTokens, requiredTokens },
+      'Mechanical trim could not reach the message budget: pinned/required content alone exceeds the budget',
+    )
+  }
 
   logger.debug(
     {
@@ -625,6 +784,9 @@ export function trimMessagesToFitTokenLimitWithReport(params: {
     afterCategories,
     removedCategories,
     retainedKnowledgeMemory,
+    fitsBudget,
+    shortfallTokens,
+    escalated,
   }
 }
 

@@ -263,7 +263,7 @@ describe('selectStatusBarChips', () => {
     expect(lgLabel.startsWith(mdLabel.slice(0, -1))).toBe(true)
   })
 
-  test('sm is percent-only context and keeps git when there is no index chip', () => {
+  test('sm prefixes the context percent and keeps git when there is no index chip', () => {
     const { chips } = selectStatusBarChips({
       ...full,
       widthSize: 'sm',
@@ -271,11 +271,40 @@ describe('selectStatusBarChips', () => {
     })
     const chipsById = byId(chips)
 
-    expect(chipsById.context?.label).toBe('48%')
+    // 'ctx' prefix so the percent is not read as part of the neighbouring git
+    // chip; sm still renders no bar.
+    expect(chipsById.context?.label).toBe('ctx 48%')
     expect(chipsById.context?.label).not.toContain('█')
     expect(chipsById.model).toBeUndefined()
     expect(chipsById.cost).toBeUndefined()
     expect(chipsById.git?.label).toBe('~3 +2')
+  })
+
+  test('sm context degrades from the prefixed label to the bare percent', () => {
+    const timerLabel = '12s'
+    const budgetFor = (contextLabel: string) =>
+      statusBarClusterWidth([
+        { id: 'context', label: contextLabel, tone: 'secondary' },
+        { id: 'timer', label: timerLabel, tone: 'secondary' },
+      ])
+    const contextAt = (terminalWidth: number) =>
+      byId(
+        selectStatusBarChips({
+          ...full,
+          widthSize: 'sm',
+          terminalWidth,
+          isActive: false,
+        }).chips,
+      ).context
+
+    // Room for the prefixed label beside the timer, so nothing degrades.
+    expect(
+      contextAt(widthForBudget(budgetFor('ctx 48%'), full.showStop))?.label,
+    ).toBe('ctx 48%')
+    // One column tighter: the prefix goes and the bare percent survives.
+    expect(
+      contextAt(widthForBudget(budgetFor('ctx 48%') - 1, full.showStop))?.label,
+    ).toBe('48%')
   })
 
   test('sm drops git for a secondary index chip, not only for alerts', () => {
@@ -443,10 +472,256 @@ describe('selectStatusBarChips', () => {
       }).chips,
     )
 
-    // Token counts belong to the lg >=70% branch only.
+    // md only adds token counts from 80%; 75% keeps the bar-and-percent form.
     expect(chipsById.context?.label).toMatch(/^[█░]{6} 75%$/)
     expect(chipsById.context?.label).not.toContain('/')
     expect(chipsById.context?.tone).toBe('warning')
+  })
+
+  test('md shows token counts from 80% and degrades counts, then bar, then percent', () => {
+    const contextAt = (terminalWidth: number) =>
+      byId(
+        selectStatusBarChips({
+          ...full,
+          widthSize: 'md',
+          terminalWidth,
+          contextWindowUsage: { used: 170_000, max: 200_000 }, // 85%
+          isActive: false,
+        }).chips,
+      ).context
+
+    const countsLabel = contextAt(200)?.label ?? ''
+    expect(countsLabel).toMatch(/^170k\/200k [█░]{6} 85%$/)
+
+    // Same label without its token-count prefix: the intermediate form the
+    // overflow loop should stop at while it still fits.
+    const barLabel = countsLabel.slice(countsLabel.indexOf(' ') + 1)
+    const timerLabel = '12s'
+    const budgetFor = (contextLabel: string) =>
+      statusBarClusterWidth([
+        { id: 'context', label: contextLabel, tone: 'warning' },
+        { id: 'timer', label: timerLabel, tone: 'secondary' },
+      ])
+
+    const intermediate = contextAt(
+      widthForBudget(budgetFor(barLabel), full.showStop),
+    )
+    expect(intermediate?.label).toBe(barLabel)
+    expect(intermediate?.label).toMatch(/^[█░]{6} 85%$/)
+
+    const bare = contextAt(
+      widthForBudget(budgetFor(barLabel) - 1, full.showStop),
+    )
+    expect(bare?.label).toBe('85%')
+  })
+
+  test('compaction chip label and tone follow the width size and action', () => {
+    const compactionAt = (
+      widthSize: 'xs' | 'sm' | 'md' | 'lg',
+      notice: NonNullable<SelectStatusBarChipsInput['compactionNotice']>,
+    ) =>
+      byId(
+        selectStatusBarChips({
+          ...full,
+          widthSize,
+          terminalWidth: 400,
+          compactionNotice: notice,
+        }).chips,
+      ).compaction
+
+    const semantic = {
+      count: 2,
+      action: 'semantic_compaction',
+      degraded: false,
+    } as const
+
+    expect(compactionAt('xs', semantic)?.label).toBe('⇲ 2')
+    expect(compactionAt('sm', semantic)?.label).toBe('⇲ 2')
+    expect(compactionAt('md', semantic)?.label).toBe('⇲ compacted ×2')
+    expect(compactionAt('lg', semantic)?.label).toBe('⇲ compacted ×2')
+    expect(compactionAt('lg', semantic)?.tone).toBe('warning')
+
+    const trimmed = {
+      count: 3,
+      action: 'mechanical_trim',
+      degraded: true,
+    } as const
+    expect(compactionAt('md', trimmed)?.label).toBe('⇲ trimmed ×3')
+    expect(compactionAt('lg', trimmed)?.label).toBe('⇲ trimmed ×3')
+    expect(compactionAt('lg', trimmed)?.tone).toBe('error')
+    expect(compactionAt('sm', trimmed)?.label).toBe('⇲ 3')
+    expect(compactionAt('sm', trimmed)?.tone).toBe('error')
+  })
+
+  test('compaction chip reports the live state while a pass is pending', () => {
+    const pendingAt = (widthSize: 'xs' | 'sm' | 'md' | 'lg') =>
+      byId(
+        selectStatusBarChips({
+          ...full,
+          widthSize,
+          terminalWidth: 400,
+          compactionNotice: {
+            // Nothing has completed yet: the chip must still render at count 0.
+            count: 0,
+            action: 'semantic_compaction',
+            degraded: false,
+            pending: true,
+          },
+        }).chips,
+      ).compaction
+
+    expect(pendingAt('xs')?.label).toBe('⇲ …')
+    expect(pendingAt('sm')?.label).toBe('⇲ …')
+    expect(pendingAt('md')?.label).toBe('⇲ compacting…')
+    expect(pendingAt('lg')?.label).toBe('⇲ compacting…')
+    expect(pendingAt('lg')?.tone).toBe('warning')
+
+    // A degraded earlier pass does not tone the live chip red.
+    const degradedPending = byId(
+      selectStatusBarChips({
+        ...full,
+        widthSize: 'lg',
+        terminalWidth: 400,
+        compactionNotice: {
+          count: 1,
+          action: 'mechanical_trim',
+          degraded: true,
+          pending: true,
+        },
+      }).chips,
+    ).compaction
+    expect(degradedPending?.label).toBe('⇲ compacting…')
+    expect(degradedPending?.tone).toBe('warning')
+  })
+
+  test('an idle run stops reporting a pending pass as live', () => {
+    // The run aborted mid-compaction, so no settling event will ever arrive.
+    // The chip must not keep claiming a compaction is running.
+    const settled = byId(
+      selectStatusBarChips({
+        ...full,
+        widthSize: 'lg',
+        terminalWidth: 400,
+        isActive: false,
+        compactionNotice: {
+          count: 2,
+          action: 'mechanical_trim',
+          degraded: true,
+          pending: true,
+        },
+      }).chips,
+    ).compaction
+    expect(settled?.label).toBe('⇲ trimmed ×2')
+    // Settled again, so the degraded pass tones the chip red.
+    expect(settled?.tone).toBe('error')
+
+    // Nothing ever completed: there is no count worth showing, so the chip is
+    // dropped rather than rendering an information-free '⇲ 0'.
+    expect(
+      byId(
+        selectStatusBarChips({
+          ...full,
+          widthSize: 'lg',
+          terminalWidth: 400,
+          isActive: false,
+          compactionNotice: {
+            count: 0,
+            action: 'semantic_compaction',
+            degraded: false,
+            pending: true,
+          },
+        }).chips,
+      ).compaction,
+    ).toBeUndefined()
+  })
+
+  test('a zero-count settled notice renders no compaction chip', () => {
+    expect(
+      byId(
+        selectStatusBarChips({
+          ...full,
+          widthSize: 'lg',
+          terminalWidth: 400,
+          compactionNotice: {
+            count: 0,
+            action: 'semantic_compaction',
+            degraded: false,
+          },
+        }).chips,
+      ).compaction,
+    ).toBeUndefined()
+  })
+
+  test('compaction chip renders right after context and is omitted without a notice', () => {
+    const withNotice = selectStatusBarChips({
+      ...full,
+      widthSize: 'lg',
+      terminalWidth: 400,
+      compactionNotice: {
+        count: 1,
+        action: 'semantic_compaction',
+        degraded: false,
+      },
+      indexChip: { label: 'idx ready', tone: 'secondary' },
+    })
+    expect(withNotice.chips.map((chip) => chip.id)).toEqual([
+      'context',
+      'compaction',
+      'index',
+      'git',
+      'model',
+      'cost',
+      'timer',
+    ])
+
+    const withoutNotice = selectStatusBarChips({
+      ...full,
+      widthSize: 'lg',
+      terminalWidth: 400,
+      compactionNotice: null,
+    })
+    expect(byId(withoutNotice.chips).compaction).toBeUndefined()
+  })
+
+  test('overflow drops the compaction chip after git but before context', () => {
+    const compactionNotice = {
+      count: 2,
+      action: 'semantic_compaction',
+      degraded: false,
+    } as const
+    const chipsAt = (terminalWidth: number) =>
+      selectStatusBarChips({
+        ...full,
+        widthSize: 'lg',
+        terminalWidth,
+        compactionNotice,
+      }).chips
+    const idsAt = (terminalWidth: number) =>
+      chipsAt(terminalWidth).map((chip) => chip.id)
+
+    const allChips = chipsAt(widthForBudget(120, full.showStop))
+    const clusterWithout = (dropped: StatusBarChip['id'][]) =>
+      statusBarClusterWidth(
+        allChips.filter((chip) => !dropped.includes(chip.id)),
+      )
+
+    // The compaction chip survives while cost, model, and git are given up.
+    expect(
+      idsAt(
+        widthForBudget(clusterWithout(['cost', 'model', 'git']), full.showStop),
+      ),
+    ).toEqual(['context', 'compaction', 'timer'])
+
+    // One priority step further: the compaction chip goes before context is
+    // shortened or dropped.
+    expect(
+      idsAt(
+        widthForBudget(
+          clusterWithout(['cost', 'model', 'git', 'compaction']),
+          full.showStop,
+        ),
+      ),
+    ).toEqual(['context', 'timer'])
   })
 
   test('xs keeps the timer when the stop hint is hidden', () => {

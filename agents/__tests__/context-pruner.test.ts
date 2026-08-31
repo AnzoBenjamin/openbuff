@@ -3641,6 +3641,35 @@ describe('context-pruner threshold behavior', () => {
     expect(knowledgeMemory).not.toContain('diagnostic '.repeat(500))
   })
 
+  // The 2,400-character goal cap documented in docs/agents-and-tools.md and
+  // cli/CHANGELOG.md is a baseline at the legacy 100k semantic target, not a
+  // fixed absolute: it is scaled by clamp(targetTokens / 100_000, 0.5, 3).
+  // A 200k-class window resolves a 72k target, so the effective cap is
+  // round(2_400 * 0.72) = 1_728 characters.
+  test('scales the pinned goal cap below the documented baseline on a 200k window', () => {
+    mockAgentState.contextWindowTokens = 200_000
+    const latest: Message = {
+      ...createMessage(
+        'user',
+        ['GOAL-HEAD', 'filler '.repeat(2_000), 'GOAL-TAIL'].join('\n'),
+      ),
+      tags: ['USER_PROMPT'],
+    }
+
+    // No explicit maxContextLength: the target comes from the resolved window.
+    const results = runHandleSteps([latest], 250_000)
+    const content = results[0].input.messages[0].content[0].text
+    const goal = content.match(
+      /Goal:\n {2}([\s\S]*?)\n(?:Decisions:|Files Inspected:|Edits Made:|Validation Results:|Review Receipts:|Post-Edit Anchors:|Blockers:|Next Action:|<\/knowledge_memory>)/,
+    )?.[1]
+
+    expect(goal).toBeDefined()
+    expect(goal).toContain('GOAL-HEAD')
+    expect(goal).toContain('GOAL-TAIL')
+    expect(goal!.length).toBeLessThanOrEqual(1_728)
+    expect(goal!.length).toBeGreaterThan(1_400)
+  })
+
   test('preserves a structured inline reviewer receipt with the full fingerprint', () => {
     const fingerprint = 'a'.repeat(64)
     const messages: Message[] = [
@@ -4161,11 +4190,15 @@ describe('context-pruner dual-budget behavior', () => {
   const runHandleSteps = (
     messages: Message[],
     contextTokenCount: number,
-    maxContextLength: number,
+    maxContextLength?: number,
     budgets?: {
       assistantToolBudget?: number
       userBudget?: number
       toolFactsBudget?: number
+      semanticBudget?: {
+        triggerBudgetTokens?: number
+        targetBudgetTokens?: number
+      }
     },
   ) => {
     mockAgentState.messageHistory = messages
@@ -4179,7 +4212,10 @@ describe('context-pruner dual-budget behavior', () => {
     const generator = contextPruner.handleSteps!({
       agentState: mockAgentState,
       logger: mockLogger,
-      params: { maxContextLength, ...budgets },
+      params: {
+        ...(maxContextLength !== undefined ? { maxContextLength } : {}),
+        ...budgets,
+      },
     })
     const results: any[] = []
     let result = generator.next()
@@ -4868,5 +4904,164 @@ describe('context-pruner dual-budget behavior', () => {
     // New messages should also be included
     expect(content).toContain('New request about feature B')
     expect(content).toContain('Working on feature B')
+  })
+
+  const extractKnowledgeMemoryBlock = (content: string): string =>
+    content.match(/<knowledge_memory>[\s\S]*?<\/knowledge_memory>/)?.[0] ?? ''
+
+  /** Count "  - entry" lines under a knowledge-memory section header. */
+  const countKnowledgeMemoryEntries = (
+    content: string,
+    header: string,
+  ): number => {
+    const section =
+      extractKnowledgeMemoryBlock(content).split(`${header}:\n`)[1] ?? ''
+    let count = 0
+    for (const line of section.split('\n')) {
+      if (!line.startsWith('  - ')) break
+      count += 1
+    }
+    return count
+  }
+
+  const createSuccessfulReadMessages = (paths: string[]): Message[] =>
+    paths.flatMap((path, index) => [
+      createToolCallMessage(`scaled-read-${index}`, 'read_files', {
+        paths: [path],
+      }),
+      createToolResultMessage(`scaled-read-${index}`, 'read_files', {
+        kind: 'read_files_result',
+        version: 1,
+        status: 'ok',
+        summary: { requested: 1, ok: 1, partial: 0, failed: 0, uniquePaths: 1 },
+        results: [
+          {
+            selector: 'file',
+            requestIndex: 0,
+            path,
+            status: 'ok',
+            content: 'export const value = 1',
+            complete: true,
+            template: false,
+          },
+        ],
+      }),
+    ])
+
+  const createValidationMessages = (count: number): Message[] =>
+    Array.from({ length: count }, (_, index) => index).flatMap((index) => [
+      createToolCallMessage(`scaled-cmd-${index}`, 'run_terminal_command', {
+        command: `bun test suite-${index}`,
+      }),
+      createToolResultMessage(`scaled-cmd-${index}`, 'run_terminal_command', {
+        exitCode: 0,
+        command: `bun test suite-${index}`,
+      }),
+    ])
+
+  test('retains strictly more Files Inspected entries as the semantic target scales up', () => {
+    const paths = Array.from(
+      { length: 90 },
+      (_, index) => `src/module-${index}/inspected-file-${index}.ts`,
+    )
+    const messages: Message[] = [
+      createMessage('user', 'Inspect the whole module tree'),
+      ...createSuccessfulReadMessages(paths),
+    ]
+
+    // ~200k window: target 70k tokens -> 0.70 scale.
+    const compactContent = runHandleSteps(messages, 200_000, undefined, {
+      semanticBudget: {
+        triggerBudgetTokens: 140_000,
+        targetBudgetTokens: 70_000,
+      },
+    })[0].input.messages[0].content[0].text
+    // ~1M window: target 350k tokens -> clamped 3.0 scale.
+    const largeContent = runHandleSteps(messages, 800_000, undefined, {
+      semanticBudget: {
+        triggerBudgetTokens: 700_000,
+        targetBudgetTokens: 350_000,
+      },
+    })[0].input.messages[0].content[0].text
+
+    const compactCount = countKnowledgeMemoryEntries(
+      compactContent,
+      'Files Inspected',
+    )
+    const largeCount = countKnowledgeMemoryEntries(
+      largeContent,
+      'Files Inspected',
+    )
+
+    expect(compactCount).toBe(18) // round(25 * 0.70)
+    expect(largeCount).toBe(75) // 25 * KNOWLEDGE_MEMORY_MAX_SCALE
+    expect(largeCount).toBeGreaterThan(compactCount)
+  })
+
+  test('bounds the pinned knowledge_memory block on a small window but never drops Goal or Next Action', () => {
+    mockAgentState.base2ActiveWork = {
+      nextRequiredAction: `Re-run the failing suite and repair the regression. ${'NEXT_ACTION_DETAIL '.repeat(
+        60,
+      )}`,
+    }
+    const paths = Array.from(
+      { length: 40 },
+      (_, index) =>
+        `src/deep/nested/${'segment-'.repeat(12)}${index}/file-${index}.ts`,
+    )
+    const decisions = Array.from(
+      { length: 20 },
+      (_, index) => `Decision: option ${index} ${'rationale '.repeat(30)}`,
+    ).join('\n')
+    const messages: Message[] = [
+      createMessage(
+        'user',
+        `Bound the pinned block. ${'GOAL_DETAIL '.repeat(300)}`,
+      ),
+      ...createSuccessfulReadMessages(paths),
+      createMessage('assistant', decisions),
+      ...createValidationMessages(20),
+    ]
+
+    // 8k-class window: target 2.5k tokens, so the ceiling is the
+    // KNOWLEDGE_MEMORY_MIN_BUDGET_TOKENS floor of 1500 tokens.
+    const content = runHandleSteps(messages, 20_000, undefined, {
+      semanticBudget: {
+        triggerBudgetTokens: 2_800,
+        targetBudgetTokens: 2_500,
+      },
+    })[0].input.messages[0].content[0].text
+    const block = extractKnowledgeMemoryBlock(content)
+
+    expect(block).not.toBe('')
+    expect(Math.ceil(block.length / 3)).toBeLessThanOrEqual(1_500)
+    expect(block).toContain('Goal:')
+    expect(block).toContain('Next Action:')
+  })
+
+  test('keeps legacy 100k-target retention counts unchanged', () => {
+    // No contextWindowTokens and no maxContextLength => 140k trigger /
+    // 100k target, the scale-factor 1.0 baseline.
+    const paths = Array.from(
+      { length: 40 },
+      (_, index) => `src/legacy-${index}.ts`,
+    )
+    const decisions = Array.from(
+      { length: 20 },
+      (_, index) => `Decision: keep legacy retention path ${index}`,
+    ).join('\n')
+    const messages: Message[] = [
+      createMessage('user', 'Preserve the legacy retention baseline'),
+      ...createSuccessfulReadMessages(paths),
+      createMessage('assistant', decisions),
+      ...createValidationMessages(20),
+    ]
+
+    const content = runHandleSteps(messages, 200_000)[0].input.messages[0]
+      .content[0].text
+
+    expect(countKnowledgeMemoryEntries(content, 'Files Inspected')).toBe(25)
+    expect(countKnowledgeMemoryEntries(content, 'Decisions')).toBe(12)
+    expect(countKnowledgeMemoryEntries(content, 'Validation Results')).toBe(12)
   })
 })

@@ -15,6 +15,7 @@ import {
   getSemanticCompactionBudget,
 } from './util/context-pruning'
 import { remintConfirmedPostEditAnchors } from './util/read-authorization'
+import { isContextPrunerAgentId } from './util/context-pruner-identity'
 import { createWarnLatch } from './util/warn-latch'
 
 import type { FileProcessingState } from './tools/handlers/tool/write-file'
@@ -364,6 +365,23 @@ export async function runProgrammaticStep(
         : modelMessageLimit === undefined
           ? requestedContextLimit
           : Math.min(requestedContextLimit, modelMessageLimit)
+    // Pruner identity is an agent-id question, not a string-equality one: a
+    // consumer may declare the pruner bare, publisher-qualified, or
+    // version-pinned, and both spawn paths resolve and run exactly what was
+    // declared. Matching by bare id here keeps the operative pruner contract
+    // (`semanticBudget`, `taskMemory`, `workspaceState`, and the clamped
+    // `maxContextLength`) identical for every spelling. Without it a pinned
+    // pruner receives none of them, falls back to its embedded compatibility
+    // budget arithmetic, and publishes `expectedTaskMemoryRevision: -1`, so
+    // `commitTaskMemory` raises a revision conflict and the transactional
+    // `set_messages` rejects the transcript replacement whenever the parent
+    // already has task memory — the announced compaction would silently not
+    // happen. `agentState.agentType` is checked too, mirroring the recursion
+    // guard in `runtime-semantic-compaction`, so a resolved template that kept
+    // a bare `id` while being spawned under a pinned type still matches.
+    const isContextPruner =
+      isContextPrunerAgentId(template.id) ||
+      isContextPrunerAgentId(agentState.agentType)
     // Hoisted so the blank-root warning and the control-plane injection below
     // can never diverge on what counts as a base2 run.
     const isBase2 = template.id.startsWith('base2')
@@ -379,46 +397,45 @@ export async function runProgrammaticStep(
         `No fileContext.projectRoot for a base2 run: gate telemetry sink disabled, so no gate telemetry will be recorded. Warning once per base2 template id per process, for at most ${MISSING_BASE2_PROJECT_ROOT_WARN_KEY_CAP} ids.`,
       )
     }
-    const generatorParams =
-      template.id === 'context-pruner'
+    const generatorParams = isContextPruner
+      ? {
+          ...(toolCallParams ?? {}),
+          ...(clampedContextLimit === undefined
+            ? {}
+            : { maxContextLength: clampedContextLimit }),
+          semanticBudget: getSemanticCompactionBudget(
+            agentState.contextWindowTokens,
+          ),
+          taskMemory: agentState.taskMemory,
+          workspaceState: agentState.workspaceState,
+        }
+      : isBase2
         ? {
             ...(toolCallParams ?? {}),
-            ...(clampedContextLimit === undefined
-              ? {}
-              : { maxContextLength: clampedContextLimit }),
-            semanticBudget: getSemanticCompactionBudget(
-              agentState.contextWindowTokens,
-            ),
-            taskMemory: agentState.taskMemory,
-            workspaceState: agentState.workspaceState,
+            orchestrationControlPlane: {
+              selectSpecialistReviewers,
+              planDiscoveryBatch,
+              transitionBase2Gate,
+              // Durable JSONL sink for base2's gate telemetry. Injected here
+              // because handleSteps is serialized and cannot import it. The
+              // key is dropped entirely without a projectRoot — base2
+              // type-guards the field — so the disabled case the warning
+              // above reports is explicit instead of a recorder whose every
+              // append is a no-op.
+              // Deliberately the raw backend `logger`, not `streamingLogger`:
+              // a sink failure is a backend filesystem diagnostic, not
+              // generator output, so it is not streamed to the client log.
+              ...(projectRoot
+                ? {
+                    recordGateTelemetry: createGateTelemetryRecorder({
+                      projectRoot,
+                      logger,
+                    }),
+                  }
+                : {}),
+            },
           }
-        : isBase2
-          ? {
-              ...(toolCallParams ?? {}),
-              orchestrationControlPlane: {
-                selectSpecialistReviewers,
-                planDiscoveryBatch,
-                transitionBase2Gate,
-                // Durable JSONL sink for base2's gate telemetry. Injected here
-                // because handleSteps is serialized and cannot import it. The
-                // key is dropped entirely without a projectRoot — base2
-                // type-guards the field — so the disabled case the warning
-                // above reports is explicit instead of a recorder whose every
-                // append is a no-op.
-                // Deliberately the raw backend `logger`, not `streamingLogger`:
-                // a sink failure is a backend filesystem diagnostic, not
-                // generator output, so it is not streamed to the client log.
-                ...(projectRoot
-                  ? {
-                      recordGateTelemetry: createGateTelemetryRecorder({
-                        projectRoot,
-                        logger,
-                      }),
-                    }
-                  : {}),
-              },
-            }
-          : toolCallParams
+        : toolCallParams
 
     // Initialize native generator
     const initializedGenerator = generatorFn({

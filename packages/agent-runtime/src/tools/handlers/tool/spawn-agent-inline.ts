@@ -1,3 +1,4 @@
+import { generateCompactId } from '@codebuff/common/util/string'
 import { mapValues } from 'lodash'
 
 import {
@@ -14,6 +15,7 @@ import {
 } from './spawn-agent-utils'
 import { appendOrchestrationEvent } from '../../../util/orchestration-ledger'
 import { selectAgentAttempt } from '../../../orchestration/select-agent-attempt'
+import { isContextPrunerAgentId } from '../../../util/context-pruner-identity'
 import {
   acquireWorkspacePathLease,
   releaseWorkspacePathLease,
@@ -97,8 +99,71 @@ export const handleSpawnAgentInline = (async (
     apiKey: params.apiKey,
   })
 
+  // Pruner identity is an agent-id question, not a string-equality one: the
+  // parent may declare the pruner bare, publisher-qualified, or version-pinned,
+  // and `validateAndGetAgentTemplate` resolves `agentType` to whatever was
+  // declared. Every pruner-specific decision below keys off this single check so
+  // the anti-thrash advisory, the parent-transcript write-back and the
+  // silent-output contract hold identically for all three spellings.
+  const isContextPruner = isContextPrunerAgentId(agentType)
+
   validateAgentInput(agentTemplate, agentType, prompt, spawnParams)
   validateVersionedAgentHandoff({ agentType, handoff })
+
+  // Anti-thrash advisory published by `loopAgentSteps` for the current turn:
+  // consecutive semantic passes measurably reclaimed no context space, so skip
+  // this pruner spawn instead of paying for another thrashing pass.
+  // Transient/loop-owned — never authoritative across turns. The trip itself is
+  // warned once by the loop, so this per-skip path only logs at debug.
+  //
+  // Deliberately placed AFTER both validators — which are pure input checks
+  // with no side effect this skip path depends on — so a malformed pruner spawn
+  // keeps reporting its validation error while suppression is active instead of
+  // silently reporting success.
+  if (isContextPruner && parentAgentState.suppressSemanticCompaction === true) {
+    logger.debug(
+      {
+        agentType,
+        runId: parentAgentState.runId ?? parentAgentState.agentId,
+      },
+      'Skipped context-pruner spawn: semantic compaction is suppressed for this turn',
+    )
+    // Uniform envelope: every other return path of this handler returns
+    // `{ result, agentReceipt }`. The receipt is built through the single
+    // construction site because `agentReceiptSchema` is `.strict()`. A spawn the
+    // runtime declined to execute is a cancellation, not a completion, and the
+    // skip message travels in the receipt output so the reason survives.
+    const skipMessage =
+      'Semantic compaction skipped: consecutive compaction passes reclaimed no context space this turn. Continue without compacting, or reduce pinned state / start a fresh turn.'
+    // `receipt.agentId` names the spawn, never the parent: a parent agentId here
+    // makes the receipt read as if it described the parent run. Unlike the
+    // executed path below, this id correlates with nothing persisted — the skip
+    // returns before any `appendOrchestrationEvent` call and never reaches
+    // `reconcileAgentReceiptIntoParent`, so no `spawn_started`/`spawn_finished`
+    // ledger pair and no task-memory receipt record ever mention it. It exists
+    // only so this envelope is shaped like the others; treat it as an opaque
+    // per-skip marker, not a spawn id that can be looked up.
+    const receipt = buildRuntimeAgentReceipt({
+      agentType,
+      agentId: generateCompactId(),
+      handoff,
+      spawnParams,
+      output: { message: skipMessage },
+      status: 'cancelled',
+    })
+    return {
+      output: [
+        {
+          type: 'json',
+          value: {
+            result: receipt.output ?? { message: skipMessage },
+            agentReceipt: receipt,
+          },
+        },
+      ],
+    }
+  }
+
   const effectiveAgentTemplate = deriveSpawnTemplateCapabilities({
     agentTemplate,
     parentAgentTemplate,
@@ -145,7 +210,7 @@ export const handleSpawnAgentInline = (async (
   // This keeps each child's model window independent and avoids duplicating the
   // parent's system/tool baseline unless the child explicitly opts in.
   const editsParentMessageHistory =
-    agentType === 'context-pruner' ||
+    isContextPruner ||
     effectiveAgentTemplate.propagateMessageHistoryChanges === true
   const inlineMessageHistoryMode = editsParentMessageHistory
     ? 'full'
@@ -154,10 +219,9 @@ export const handleSpawnAgentInline = (async (
     ...selection.candidate.template,
     includeMessageHistory: inlineMessageHistoryMode !== 'none',
     messageHistoryMode: inlineMessageHistoryMode,
-    inheritParentSystemPrompt:
-      agentType === 'context-pruner'
-        ? true
-        : effectiveAgentTemplate.inheritParentSystemPrompt,
+    inheritParentSystemPrompt: isContextPruner
+      ? true
+      : effectiveAgentTemplate.inheritParentSystemPrompt,
   }
 
   // Create an isolated child state with the selected bounded transfer mode.
@@ -217,7 +281,7 @@ export const handleSpawnAgentInline = (async (
       parentTools,
       onResponseChunk: (chunk: string | PrintModeEvent) => {
         // Inherits parent's onResponseChunk, except for context-pruner (TODO: add an option for it to be silent?)
-        if (agentType !== 'context-pruner') {
+        if (!isContextPruner) {
           if (typeof chunk === 'string') {
             writeToClient(chunk)
             return

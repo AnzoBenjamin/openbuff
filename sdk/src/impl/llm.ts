@@ -11,6 +11,7 @@ import { convertCbToModelMessages } from '@codebuff/common/util/messages'
 import { isExplicitlyDefinedModel } from '@codebuff/common/util/model-utils'
 import { StopSequenceHandler } from '@codebuff/common/util/stop-sequence'
 import {
+  asSchema,
   streamText,
   generateText,
   generateObject,
@@ -60,10 +61,7 @@ import type { OpenRouterProviderOptions } from '@codebuff/internal/openrouter-ai
 import type { GenerateObjectResult, LanguageModel } from 'ai'
 import type z from 'zod/v4'
 import { trimMessagesToFitTokenLimit } from '@codebuff/agent-runtime/util/messages'
-import {
-  DEFAULT_MAX_CONTEXT_TOKENS,
-  getModelContextMessageLimit,
-} from '@codebuff/agent-runtime/util/context-pruning'
+import { getModelContextMessageLimit } from '@codebuff/agent-runtime/util/context-pruning'
 import { countTokensJson } from '@codebuff/agent-runtime/util/token-counter'
 import type { Message } from '@codebuff/common/types/messages/codebuff-message'
 
@@ -379,24 +377,229 @@ function emitCacheDebugUsage(params: {
 const POST_STREAM_METADATA_TIMEOUT_MS = 500
 
 /**
+ * Depth cap for the JSON-safety probe below. Real JSON Schemas nest far
+ * shallower than this, and the cap also bounds the walk on a self-referential
+ * object instead of recursing forever.
+ */
+const MAX_TOOL_SCHEMA_PROBE_DEPTH = 12
+
+/**
+ * Floor for the per-tool reservation of an `inputSchema` that is a
+ * validation-library schema instance (`tool({ inputSchema: z.object({...}) })`
+ * — the canonical form the published `promptAiSdkStream`/`promptAiSdk` param
+ * types accept) rather than a plain JSON Schema. Such objects are not JSON
+ * data: they carry functions and self-references, so serializing them either
+ * throws on a cycle or emits library internals whose size bears no relation to
+ * the schema the provider actually receives. The schema is therefore converted
+ * to a real JSON Schema and counted from that projection (see
+ * {@link countOpaqueToolSchemaTokens}); this floor is what a tool reserves when
+ * the conversion is impossible or yields something smaller, so a failed
+ * conversion never reserves less than the previous flat estimate did.
+ */
+const OPAQUE_TOOL_SCHEMA_FALLBACK_TOKENS = 120
+
+/**
+ * Per-tool ceiling on the converted schema count above. Counting the real JSON
+ * Schema keeps a large tool surface from being materially under-reserved, but
+ * `getMessagesForModelContext` subtracts this overhead from the message budget
+ * one-for-one, so a single absurd schema must not be able to collapse that
+ * budget to nothing.
+ */
+const MAX_COUNTED_TOOL_SCHEMA_TOKENS = 8_000
+
+/**
+ * True when `value` is plain JSON data that `JSON.stringify` reproduces
+ * faithfully: primitives, arrays, and plain objects only. Class instances
+ * (Zod and other Standard Schema objects), functions, and anything nested
+ * deeper than {@link MAX_TOOL_SCHEMA_PROBE_DEPTH} — which includes every
+ * self-referential structure — are rejected.
+ */
+function isJsonData(value: unknown, depth = 0): boolean {
+  if (value === null) return true
+  const valueType = typeof value
+  if (
+    valueType === 'string' ||
+    valueType === 'number' ||
+    valueType === 'boolean'
+  ) {
+    return true
+  }
+  if (valueType !== 'object') return false
+  if (depth >= MAX_TOOL_SCHEMA_PROBE_DEPTH) return false
+  if (Array.isArray(value)) {
+    return value.every((entry) => isJsonData(entry, depth + 1))
+  }
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) return false
+  return Object.values(value as Record<string, unknown>).every(
+    (entry) => entry === undefined || isJsonData(entry, depth + 1),
+  )
+}
+
+/**
+ * The plain JSON Schema for a tool's `inputSchema` when one is directly
+ * available — either the AI-SDK `jsonSchema()` wrapper's own `jsonSchema`
+ * property or a bare JSON Schema object. Returns `undefined` for an opaque
+ * validation-library schema, which is then estimated rather than serialized.
+ */
+function getPlainToolInputSchema(inputSchema: unknown): unknown {
+  if (!inputSchema || typeof inputSchema !== 'object') return undefined
+  const record = inputSchema as Record<string, unknown>
+  if (isJsonData(record.jsonSchema)) return record.jsonSchema
+  if (isJsonData(record)) return record
+  return undefined
+}
+
+/**
+ * Size-aware token reservation for a tool whose `inputSchema` is an opaque
+ * validation-library schema instance. The instance itself is never
+ * `JSON.stringify`-ed: it is converted to a real JSON Schema with the AI SDK's
+ * `asSchema` helper, validated with {@link isJsonData}, counted from that
+ * projection, and clamped into
+ * `[OPAQUE_TOOL_SCHEMA_FALLBACK_TOKENS, MAX_COUNTED_TOOL_SCHEMA_TOKENS]`.
+ *
+ * Conversion is best-effort and can never propagate a failure out of
+ * {@link countRequestOverheadTokens}: a non-schema or self-referential object
+ * makes `asSchema` (or reading its `jsonSchema` property) throw, and any result
+ * that is not plain JSON data — a `Promise`, a wrapper, an absent property — is
+ * treated as a failed conversion. Both cases fall back to the floor instead of
+ * charging library internals against the message budget.
+ */
+function countOpaqueToolSchemaTokens(inputSchema: unknown): number {
+  let counted = 0
+  try {
+    const { jsonSchema } = asSchema(
+      inputSchema as Parameters<typeof asSchema>[0],
+    ) as { jsonSchema?: unknown }
+    if (isJsonData(jsonSchema)) {
+      // `isJsonData` returns a plain boolean rather than a type predicate, so
+      // narrow explicitly. It has already proven this is JSON data, and only a
+      // non-null object or primitive reaches `countTokensJson`.
+      counted = countTokensJson(jsonSchema as string | object)
+    }
+  } catch {
+    // Any conversion failure (non-schema input, cycle, throwing getter) leaves
+    // `counted` at 0 so the clamp below reserves the flat floor.
+  }
+  return Math.max(
+    OPAQUE_TOOL_SCHEMA_FALLBACK_TOKENS,
+    Math.min(MAX_COUNTED_TOOL_SCHEMA_TOKENS, counted),
+  )
+}
+
+/**
+ * Token cost of the tool surface of a request, counted from a JSON-safe
+ * projection of the caller-supplied `tools` rather than from the object
+ * itself. The projection mirrors the Anthropic-shaped `toolsForTokenCount`
+ * list the runtime counts for pruning, so both budgets measure the same
+ * surface.
+ */
+function countToolSurfaceTokens(tools: unknown): number {
+  if (!tools || typeof tools !== 'object') return 0
+
+  let total = 0
+  for (const [name, tool] of Object.entries(tools as Record<string, unknown>)) {
+    const definition =
+      tool && typeof tool === 'object' ? (tool as Record<string, unknown>) : {}
+    const description =
+      typeof definition.description === 'string'
+        ? definition.description
+        : undefined
+    const inputSchema = getPlainToolInputSchema(definition.inputSchema)
+
+    total += countTokensJson({
+      name,
+      ...(description !== undefined && { description }),
+      ...(inputSchema !== undefined && { input_schema: inputSchema }),
+    })
+    if (inputSchema === undefined && definition.inputSchema !== undefined) {
+      total += countOpaqueToolSchemaTokens(definition.inputSchema)
+    }
+  }
+  return total
+}
+
+/**
+ * Token cost of the non-message request surface (system prompt + tool schemas)
+ * that the request-time trim must subtract from the model's message budget so
+ * the SDK brake reserves the same kind of overhead the runtime's
+ * `maybePruneContext` reserves. The two numbers are not required to be equal:
+ * this count is derived from the request's own tool objects (see the
+ * compatibility contract below), not from the runtime's serialized tool
+ * definitions, so for the same model the two projections can diverge.
+ *
+ * Compatibility contract for the exported request paths: the caller-supplied
+ * `tools` object is never serialized directly, because the published param
+ * types accept AI-SDK tools whose `inputSchema` is a Zod (or other Standard
+ * Schema) instance. Counting those by `JSON.stringify` would throw on a
+ * self-reference and, when it did not throw, would charge library internals
+ * against the message budget and collapse it. Names, descriptions, and plain
+ * JSON Schemas are counted exactly; an opaque schema instance is instead
+ * converted to a real JSON Schema with the AI SDK's `asSchema` helper and
+ * counted from that projection, clamped into
+ * `[OPAQUE_TOOL_SCHEMA_FALLBACK_TOKENS, MAX_COUNTED_TOOL_SCHEMA_TOKENS]` so the
+ * reservation is size-aware without being pathological. That conversion never
+ * throws out of this function: a non-schema or self-referential `inputSchema`
+ * falls back to the floor. Absent fields count 0 rather than counting
+ * `undefined` — a tool with no `inputSchema` at all reserves nothing for a
+ * schema — and `includeTools` is false when the provider-compatibility layer
+ * strips tools from the request.
+ */
+export function countRequestOverheadTokens(params: {
+  system?: unknown
+  tools?: unknown
+  includeTools: boolean
+}): number {
+  const { system } = params
+  const systemTokens =
+    typeof system === 'string'
+      ? countTokensJson(system)
+      : typeof system === 'object' && system !== null && isJsonData(system)
+        ? countTokensJson(system)
+        : 0
+
+  return (
+    systemTokens +
+    (params.includeTools ? countToolSurfaceTokens(params.tools) : 0)
+  )
+}
+
+/**
  * Request-time emergency-brake trim (M4.3, SPEC R4/AC4).
  *
- * Trims the message array to fit the active model's context window using the
- * unified reserved-token policy from `@codebuff/agent-runtime/util/context-pruning`
- * (`getModelContextMessageLimit`). When the model window is unknown, falls
- * back to the flat `DEFAULT_MAX_CONTEXT_TOKENS` so the SDK and runtime share
- * one threshold.
+ * The resolved message limit comes from `getModelContextMessageLimit` applied
+ * to the active model's context window (falling back to the flat
+ * `DEFAULT_MAX_CONTEXT_TOKENS` when the window is unknown). `systemTokens` —
+ * the token cost of the system prompt plus the tool schemas actually sent with
+ * the request — is subtracted from that limit, so the effective message budget
+ * reserves request overhead the way the runtime's `maybePruneContext` does.
+ * The two budgets are parallel brakes, not mirrored ones: each side counts its
+ * own projection of the tool surface, and the runtime's limit may additionally
+ * be capped by a provider `maxContextLength`, so the resulting message budgets
+ * can differ substantially for the same model. Omitting `systemTokens` (or
+ * passing 0) reproduces the previous, more permissive behavior in which the
+ * whole message limit was available to messages alone.
  *
  * This is the *last line of defense*: the runtime `maybePruneContext` and the
  * LLM-based context-pruner agent are expected to keep the conversation under
  * the unified threshold in steady state. When this function actually has to
  * drop messages, it emits a `CACHE_EMERGENCY_TRIM` telemetry event so any
- * threshold regression is directly observable.
+ * threshold regression is directly observable. That payload separates the two
+ * budgets explicitly: `maxTotalTokens` is the resolved request budget,
+ * `systemTokens` the counted overhead, and `effectiveMessageBudgetTokens` the
+ * message-only budget actually applied. `triggerBudgetTokens`/
+ * `targetBudgetTokens` report that same message-only budget, because they are
+ * the fields consumers compare against message token counts.
  */
 export function getMessagesForModelContext(params: {
   messages: Message[]
   contextWindowTokens?: number
   maxTotalTokensOverride?: number
+  /**
+   * Tokens consumed by the system prompt + tool schemas of this request.
+   * Subtracted from the resolved message limit; defaults to 0.
+   */
+  systemTokens?: number
   logger: ParamsOf<PromptAiSdkStreamFn>['logger']
   trackEvent?: ParamsOf<PromptAiSdkStreamFn>['trackEvent']
   userId?: string
@@ -416,9 +619,25 @@ export function getMessagesForModelContext(params: {
             Math.floor(params.maxTotalTokensOverride),
           ),
         )
+  // Same numeric sanitation as maxTotalTokensOverride above (non-finite or
+  // negative coerces to 0, value is floored), plus a floor on the resulting
+  // message budget: trimMessagesToFitTokenLimit derives
+  // `maxMessageTokens = maxTotalTokens - systemTokens`, so an oversized system
+  // surface must not yield a zero/negative budget.
+  const requestedSystemTokens =
+    params.systemTokens === undefined ||
+    !Number.isFinite(params.systemTokens) ||
+    params.systemTokens < 0
+      ? 0
+      : Math.floor(params.systemTokens)
+  const systemTokens = Math.min(
+    requestedSystemTokens,
+    Math.max(0, maxTotalTokens - 1),
+  )
+  const effectiveMessageBudgetTokens = maxTotalTokens - systemTokens
   const trimmed = trimMessagesToFitTokenLimit({
     messages: params.messages,
-    systemTokens: 0,
+    systemTokens,
     maxTotalTokens,
     logger: params.logger,
   })
@@ -432,9 +651,20 @@ export function getMessagesForModelContext(params: {
     const outputTokens = countTokensJson(trimmed)
     const telemetryProperties = {
       contextWindowTokens: params.contextWindowTokens,
+      // `maxTotalTokens` keeps its existing meaning (the resolved request
+      // budget). The message-only budget after subtracting the system + tool
+      // surface is reported separately so neither field is ambiguous.
       maxTotalTokens,
-      triggerBudgetTokens: maxTotalTokens,
-      targetBudgetTokens: maxTotalTokens,
+      systemTokens,
+      effectiveMessageBudgetTokens,
+      // `triggerBudgetTokens`/`targetBudgetTokens` are the pair consumers
+      // compare against message token counts, so they report the threshold
+      // actually applied to messages — the message-only budget — rather than
+      // the pre-subtraction request budget. With no system surface (or
+      // `systemTokens: 0`) both still equal `maxTotalTokens`, so the previous
+      // values are unchanged for callers that pass no overhead.
+      triggerBudgetTokens: effectiveMessageBudgetTokens,
+      targetBudgetTokens: effectiveMessageBudgetTokens,
       reason:
         'Messages exceeded the provider-safe request budget at dispatch time.',
       inputTokens,
@@ -453,7 +683,9 @@ export function getMessagesForModelContext(params: {
       },
       'Emergency request-time context trim fired (cache_emergency_trim). ' +
         `Resolved window=${params.contextWindowTokens ?? 'unknown'}, ` +
-        `trigger=${maxTotalTokens}, target=${maxTotalTokens}. ` +
+        `trigger=${effectiveMessageBudgetTokens}, target=${effectiveMessageBudgetTokens}, ` +
+        `systemTokens=${systemTokens}, ` +
+        `messageBudget=${effectiveMessageBudgetTokens}. ` +
         'This indicates the provider-safe request budget was exceeded before ' +
         'the SDK fallback; expected ~0 in steady state.',
     )
@@ -878,6 +1110,16 @@ export async function* promptAiSdkStream(
                   agentProviderOptions: params.agentProviderOptions,
                 })
 
+          // Computed inside the attempt loop rather than hoisted: failover
+          // and retries can resolve a different model whose compatibility
+          // layer strips `tools` from the request, and the emergency brake
+          // must subtract the overhead of the request actually sent.
+          const requestOverheadTokens = countRequestOverheadTokens({
+            system: streamParams.system,
+            tools: streamParams.tools,
+            includeTools: compatibility.supportsTools !== false,
+          })
+
           response = streamText({
             ...streamParams,
             ...(compatibility.supportsTools === false
@@ -891,6 +1133,7 @@ export async function* promptAiSdkStream(
                 messages: params.messages,
                 contextWindowTokens: contextWindowTokens ?? undefined,
                 maxTotalTokensOverride: providerMessageLimitOverride,
+                systemTokens: requestOverheadTokens,
                 logger,
                 trackEvent,
                 userId,
@@ -1513,6 +1756,14 @@ export async function promptAiSdk(
         cacheDebugCorrelation: params.cacheDebugCorrelation,
       })
 
+  // Same system/tool surface as the streaming path (generateText params carry
+  // `system` and `tools`), so the emergency brake subtracts it here too.
+  const requestOverheadTokens = countRequestOverheadTokens({
+    system: params.system,
+    tools: params.tools,
+    includeTools: compatibility.supportsTools !== false,
+  })
+
   let response: Awaited<ReturnType<typeof generateText>>
   try {
     response = await generateText({
@@ -1527,6 +1778,7 @@ export async function promptAiSdk(
         messages: getMessagesForModelContext({
           messages: params.messages,
           contextWindowTokens,
+          systemTokens: requestOverheadTokens,
           logger,
           trackEvent: params.trackEvent,
           userId: params.userId,
@@ -1652,6 +1904,10 @@ export async function promptAiSdkStructured<T>(
       output: 'object',
       messages: convertCbToModelMessages({
         ...params,
+        // `PromptAiSdkStructuredInput` has no `system`/`tools` request surface
+        // (unlike the streamText/generateText param types), so there is
+        // nothing comparable to subtract and systemTokens stays at its 0
+        // default here.
         messages: getMessagesForModelContext({
           messages: params.messages,
           contextWindowTokens,
