@@ -3,6 +3,8 @@ import stringWidth from 'string-width'
 
 import {
   formatStatusTokenCount,
+  SCROLL_BUTTON_COMPACT_RESERVATION,
+  SCROLL_BUTTON_RESERVATION,
   selectStatusBarChips,
   shortenStatusModelName,
   statusBarChipBudget,
@@ -1052,6 +1054,59 @@ describe('selectStatusBarChips', () => {
     }
   })
 
+  test('a visible scroll button tightens the chip budget', () => {
+    const withScroll = selectStatusBarChips({
+      ...full,
+      widthSize: 'lg',
+      terminalWidth: 60,
+      showScrollButton: true,
+    })
+    expect(statusBarClusterWidth(withScroll.chips)).toBeLessThanOrEqual(
+      statusBarChipBudget(60, full.showStop, true),
+    )
+
+    // Omitting the flag keeps the existing selection, so the two-argument
+    // budget path and the current call sites are unchanged.
+    expect(
+      selectStatusBarChips({ ...full, widthSize: 'lg', terminalWidth: 60 })
+        .chips,
+    ).toEqual(
+      selectStatusBarChips({
+        ...full,
+        widthSize: 'lg',
+        terminalWidth: 60,
+        showScrollButton: false,
+      }).chips,
+    )
+  })
+
+  test('the compact scroll button form leaves the chips more room', () => {
+    const idsFor = (scrollButtonCompact: boolean) =>
+      selectStatusBarChips({
+        ...full,
+        widthSize: 'sm',
+        terminalWidth: 80,
+        showScrollButton: true,
+        scrollButtonCompact,
+      }).chips.map((chip) => chip.id)
+
+    // At 'xs'/'sm' the button renders three columns, so the seven columns the
+    // expanded reservation would have taken keep the git chip instead.
+    expect(idsFor(true)).toEqual(['context', 'git', 'timer'])
+    expect(idsFor(false)).toEqual(['context', 'timer'])
+
+    // Omitting the flag keeps the expanded reservation, so existing call sites
+    // are unaffected.
+    expect(
+      selectStatusBarChips({
+        ...full,
+        widthSize: 'sm',
+        terminalWidth: 80,
+        showScrollButton: true,
+      }).chips.map((chip) => chip.id),
+    ).toEqual(idsFor(false))
+  })
+
   test('never exits overflow handling with an over-budget cluster', () => {
     for (const terminalWidth of [1, 8, 12, 20, 39, 60]) {
       for (const showStop of [true, false]) {
@@ -1100,6 +1155,66 @@ describe('statusBarChipBudget', () => {
     expect(statusBarChipBudget(8, true)).toBe(1)
     expect(statusBarChipBudget(1, true)).toBe(0)
     expect(statusBarChipBudget(1, false)).toBe(1)
+  })
+
+  test('reserves the scroll button only when it is shown', () => {
+    // 0.4 * 200 = 80 columns, so neither budget hits the MIN_WIDTH_BUDGET floor
+    // and the difference is exactly the new reservation.
+    for (const showStop of [true, false]) {
+      const withoutScroll = statusBarChipBudget(200, showStop)
+      const withScroll = statusBarChipBudget(200, showStop, true)
+
+      expect(withScroll).toBe(withoutScroll - SCROLL_BUTTON_RESERVATION)
+      expect(withScroll).toBeGreaterThan(0)
+    }
+  })
+
+  test('reserves the compact width when the narrow button form is rendered', () => {
+    // Strictly cheaper than the expanded reservation, so the narrow form can
+    // never reserve more columns than it renders.
+    expect(SCROLL_BUTTON_COMPACT_RESERVATION).toBe(3)
+    expect(SCROLL_BUTTON_COMPACT_RESERVATION).toBeLessThan(
+      SCROLL_BUTTON_RESERVATION,
+    )
+
+    // 0.4 * 200 = 80 columns, so no budget here hits the MIN_WIDTH_BUDGET floor
+    // and each difference is exactly the reservation under test.
+    for (const showStop of [true, false]) {
+      const withoutScroll = statusBarChipBudget(200, showStop)
+      const compact = statusBarChipBudget(200, showStop, true, true)
+      const expanded = statusBarChipBudget(200, showStop, true)
+
+      expect(compact).toBe(withoutScroll - 3)
+      expect(compact).toBe(withoutScroll - SCROLL_BUTTON_COMPACT_RESERVATION)
+      expect(compact).toBeGreaterThan(expanded)
+      expect(compact - expanded).toBe(
+        SCROLL_BUTTON_RESERVATION - SCROLL_BUTTON_COMPACT_RESERVATION,
+      )
+    }
+  })
+
+  test('the compact flag is ignored while the scroll button is hidden', () => {
+    for (const terminalWidth of [1, 8, 12, 20, 60, 200]) {
+      for (const showStop of [true, false]) {
+        expect(statusBarChipBudget(terminalWidth, showStop, false, true)).toBe(
+          statusBarChipBudget(terminalWidth, showStop),
+        )
+      }
+    }
+  })
+
+  test('the two-argument form keeps its previous budgets', () => {
+    // The third parameter is optional and defaults to false, so existing call
+    // sites must be unaffected.
+    for (const terminalWidth of [1, 8, 12, 20, 60, 200]) {
+      for (const showStop of [true, false]) {
+        expect(statusBarChipBudget(terminalWidth, showStop)).toBe(
+          statusBarChipBudget(terminalWidth, showStop, false),
+        )
+      }
+    }
+    expect(statusBarChipBudget(60, false)).toBe(24)
+    expect(statusBarChipBudget(60, true)).toBe(17)
   })
 })
 

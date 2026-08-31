@@ -24,6 +24,10 @@ import {
 } from '@codebuff/common/tools/metadata'
 import { isAbortError } from '@codebuff/common/util/error'
 import { jsonToolResult } from '@codebuff/common/util/messages'
+import {
+  isExternalReadPath,
+  isOwnedTempPath,
+} from '@codebuff/common/util/project-path-containment'
 import { generateCompactId } from '@codebuff/common/util/string'
 import { cloneDeep } from 'lodash'
 import z from 'zod/v4'
@@ -1499,9 +1503,26 @@ function isFileChangingTool(toolName: string): boolean {
 }
 
 const POST_FOLLOWUPS_ERROR_MESSAGE =
-  'No tools are available after suggest_followups in the same step (except end_turn/task_completed). suggest_followups must be the absolute last actionable tool after the completion summary (and after git-committer if committing).'
+  'No tools are available after suggest_followups in the same step (except end_turn/task_completed). suggest_followups is the FINAL output of the turn: emit it only after your user-visible completion summary (and after git-committer if committing), then emit nothing further. Reorder so suggest_followups is your last tool call.'
 const ALREADY_EMITTED_FOLLOWUPS_ERROR_MESSAGE =
-  'suggest_followups already ended the actionable work for this turn. No more non-terminal tools are available after followups (except end_turn/task_completed).'
+  'suggest_followups already ended the actionable work for this turn. It is the FINAL output of the turn, so no further non-terminal tools may run (only end_turn/task_completed). End the turn now instead of calling more tools.'
+// Concise, calm summary for the followups ordering/gate rejections. These are
+// agent-facing control-flow diagnostics the model corrects on its own, so the
+// CLI suppresses the visible banner (see `autoRecovering` in
+// `common/src/types/print-mode.ts`); the full `message` still reaches the model.
+const FOLLOWUPS_ORDERING_USER_MESSAGE =
+  'The model called suggest_followups out of order and is correcting the ordering automatically. No action is needed.'
+// Concise, calm summary for the pre-gate git-committer withhold. Like the
+// followups ordering rejections, this is normal harness ordering the model
+// resolves by ending its turn, so the CLI suppresses the visible banner while
+// the full `message` still reaches the model.
+const GIT_COMMITTER_WITHHELD_USER_MESSAGE =
+  'Commit deferred until the validation/reviewer gate passes. No action is needed.'
+// Single source for the malformed-tool-call user summary shared by the native
+// (`executeToolCall`) and custom/MCP (`executeCustomToolCall`) parse-failure
+// paths, so the two stay in sync.
+const malformedToolCallUserMessage = (toolName: string): string =>
+  `The model sent a malformed \`${toolName}\` tool call and is correcting it automatically. No action is needed.`
 
 function isTerminalFollowupCompanion(name: string): boolean {
   return (
@@ -1596,6 +1617,20 @@ export function getFilesystemToolPaths(
     return { access: 'read', paths: strings(input.path) }
   }
   if (toolName === 'glob' || toolName === 'code_search') {
+    return {
+      access: 'read',
+      paths: [
+        ...strings(input.cwd ?? '.'),
+        // code_search additionally accepts an explicit `paths` list whose
+        // entries may be absolute, so those must be backstopped too. `glob`
+        // has no `paths` input, so its behavior is unchanged.
+        ...(toolName === 'code_search' ? strings(input.paths) : []),
+      ],
+    }
+  }
+  if (toolName === 'find_files_matching_content') {
+    // Previously fell through and returned undefined, so this tool got NO
+    // backstop at all while still resolving an arbitrary absolute cwd.
     return { access: 'read', paths: strings(input.cwd ?? '.') }
   }
   if (toolName === 'edit_transaction') {
@@ -1679,6 +1714,25 @@ function normalizedEscapesProject(normalized: string): boolean {
     path.isAbsolute(normalized)
   )
 }
+
+// Tools whose SDK handler is the authoritative containment layer for the
+// owned-temp / allowlisted-external READ relaxation in executeToolCall.
+//
+// INVARIANT: a tool belongs here ONLY if its SDK handler resolves every
+// caller-supplied path through `resolveFilePathForRead*Operation` (the
+// read-only containment resolvers in `sdk/src/tools/path-utils.ts`). This
+// backstop is deliberately NOT the authoritative containment layer — it defers
+// to the handler — so exempting a tool whose handler does not contain removes
+// the only check that exists for it. `code_search` and
+// `find_files_matching_content` are deliberately absent: they resolve an
+// arbitrary caller `cwd` and spawn ripgrep there with no containment
+// resolution at all.
+const EXTERNAL_READ_EXEMPT_TOOLS = new Set([
+  'read_files',
+  'read_logs',
+  'read_image',
+  'list_directory',
+])
 
 const MAX_CUSTOM_INPUT_SCAN_DEPTH = 6
 const MAX_CUSTOM_INPUT_SCAN_STRINGS = 1000
@@ -1966,7 +2020,7 @@ export async function executeToolCall<T extends ToolName>(
       type: 'error',
 
       message: `${toolCall.error}\n\n${inputLabel}:\n${formattedInput}`,
-      userMessage: `The model sent a malformed \`${toolName}\` tool call and is correcting it automatically. No action is needed.`,
+      userMessage: malformedToolCallUserMessage(toolName),
       autoRecovering: true,
     })
     logger.debug(
@@ -2007,19 +2061,61 @@ export async function executeToolCall<T extends ToolName>(
           // lexical scope for missing paths so create operations still work.
         }
       }
+      // READ-ONLY owned-temp and external-read exceptions. The SDK
+      // deliberately permits reads under the openbuff-owned OS temp namespace
+      // (see read-files.ts `authorizeReadTarget` and read-logs.ts): that is how
+      // a parent agent reads back tmux capture evidence and background-job
+      // logs. It equally permits reads strictly inside a root the user
+      // explicitly allowlisted (the openbuff config directory for logs/state,
+      // plus any `readableRoots` entry in openbuff.json). This backstop has no
+      // notion of either namespace, so without the exceptions it refuses reads
+      // the SDK is designed to allow.
+      //
+      // The SDK read handlers of the EXEMPT tools (see
+      // EXTERNAL_READ_EXEMPT_TOOLS) remain AUTHORITATIVE for both: they run
+      // the real containment resolution (symlink dereferencing,
+      // strictly-inside checks, and the fail-closed mandatory-sensitive
+      // refusal that keeps `credentials.json` unreadable inside an allowlisted
+      // config root). This layer only stops pre-dispatch refusal of paths
+      // those handlers will validate themselves, so a tool whose handler does
+      // NOT contain (e.g. code_search) is never exempted.
+      //
+      // Access-scoped AND tool-scoped. Access: a WRITE to an owned-temp or
+      // allowlisted-external path keeps hard-blocking here. The
+      // (narrower) owned-temp mutation policy is owned by the SDK's
+      // filesystem-authority.ts `ownedTempMutationRefusal` — tmux captures are
+      // verification evidence a subagent must not be able to forge — and the
+      // external allowlist is READ-only by construction (there is no
+      // `external-write` scope), so this layer must not pre-authorize any
+      // mutation of either.
+      //
+      // Both predicates get the RAW caller path: each resolves its own input
+      // and refuses any raw `..` segment itself, which is exactly the guard we
+      // want. The project-relative `normalized` form would be a meaningless
+      // `../..`-style string here.
+      const externalReadAllowed =
+        filesystemAccess.access === 'read' &&
+        EXTERNAL_READ_EXEMPT_TOOLS.has(toolName) &&
+        (isOwnedTempPath(rawPath) || isExternalReadPath(rawPath))
       // A path "escapes" the project when it traverses above the root or is
       // absolute (either lexically or after canonicalization). Escapes are the
       // real containment boundary: an agent must never read or write outside
-      // the project, so these are always hard-blocked regardless of access.
+      // the project, so these are always hard-blocked regardless of access —
+      // except for the owned-temp / allowlisted-external reads above.
       const escapesProject =
-        normalizedEscapesProject(normalized) ||
-        normalizedEscapesProject(canonical)
+        !externalReadAllowed &&
+        (normalizedEscapesProject(normalized) ||
+          normalizedEscapesProject(canonical))
       // An in-project path is a scope mismatch when it stays inside the project
       // but does not match the agent's declared filesystemScope patterns. Only
-      // meaningful when the agent declared a scope for this access type.
+      // meaningful when the agent declared a scope for this access type. An
+      // owned-temp or allowlisted-external read is not in-project, so it is
+      // never pattern-matched against filesystemScope globs: it is neither
+      // hard-blocked above nor spuriously warned about below.
       const scopeMismatch =
         allowedPatterns !== undefined &&
         !escapesProject &&
+        !externalReadAllowed &&
         !allowedPatterns.some(
           (pattern) =>
             scopePatternMatches(normalized, pattern) &&
@@ -2090,6 +2186,8 @@ export async function executeToolCall<T extends ToolName>(
     onResponseChunk({
       type: 'error',
       message: postFollowupsBlockReason,
+      userMessage: FOLLOWUPS_ORDERING_USER_MESSAGE,
+      autoRecovering: true,
     })
     return abortablePreviousToolCallFinished
   }
@@ -2102,7 +2200,9 @@ export async function executeToolCall<T extends ToolName>(
       onResponseChunk({
         type: 'error',
         message:
-          'Tool `suggest_followups` is not available yet. GATE: PENDING (or final summary not written). End your turn so the runtime gate can clear; call this only after GATE: PASSED and a user-visible completion summary.',
+          'Tool `suggest_followups` is not available yet. GATE: PENDING (or final summary not written). End your turn so the runtime gate can clear. Call it only after GATE: PASSED, and only as the FINAL output of that turn: user-visible completion summary first, then git-committer if committing, then suggest_followups with nothing after it.',
+        userMessage: FOLLOWUPS_ORDERING_USER_MESSAGE,
+        autoRecovering: true,
       })
       return abortablePreviousToolCallFinished
     }
@@ -2169,6 +2269,8 @@ export async function executeToolCall<T extends ToolName>(
           type: 'error',
           message:
             'git-committer withheld: GATE: PENDING (need GATE: PASSED / phase=final_response_allowed). End your turn; do not retry or predict gate progress. Spawn git-committer once after GATE: PASSED.',
+          userMessage: GIT_COMMITTER_WITHHELD_USER_MESSAGE,
+          autoRecovering: true,
         })
         if (filteredAgents.length === 0) {
           return abortablePreviousToolCallFinished
@@ -3059,6 +3161,8 @@ export async function executeCustomToolCall(
     onResponseChunk({
       type: 'error',
       message: postFollowupsBlockReason,
+      userMessage: FOLLOWUPS_ORDERING_USER_MESSAGE,
+      autoRecovering: true,
     })
     return abortablePreviousToolCallFinished
   }
@@ -3112,7 +3216,7 @@ export async function executeCustomToolCall(
     onResponseChunk({
       type: 'error',
       message: `${toolCall.error}\n\n${inputLabel}:\n${formattedInput}`,
-      userMessage: `The model sent a malformed \`${toolName}\` tool call and is correcting it automatically. No action is needed.`,
+      userMessage: malformedToolCallUserMessage(toolName),
       autoRecovering: true,
     })
     logger.debug(
@@ -3169,14 +3273,16 @@ export async function executeCustomToolCall(
   // `previousToolCallFinished` here (the handler still awaits it internally).
   //
   // Reachability (RF-1): `queued` is threaded through `ExecuteToolCallParams`
-  // for any serialized same-path write, and custom/MCP tool paths can be
-  // queued when a per-path write barrier applies to a custom/unknown-path
-  // input — so this branch is genuinely reachable, not dead defensive code.
-  // It is rarer than the native write_file/edit_transaction path because most
-  // custom tools do not touch the project filesystem and therefore never hit
-  // the write barrier, but the runtime does not restrict `queued` to native
-  // tools. The downstream CLI flip is covered by the queued-block tool_start
-  // tests in sdk-event-handlers.test.ts (including the nested-agent case).
+  // for any serialized same-path write, and a custom/MCP tool has no statically
+  // determinable target path, so stream-parser.ts marks it `queued` whenever an
+  // outstanding write barrier or in-flight read exists — this branch is
+  // genuinely reachable, not dead defensive code. Pinned at the runtime level
+  // by 'emits tool_start for a custom/MCP tool queued behind an in-flight write
+  // (RF-1)' in __tests__/run-agent-step-tools.test.ts, which drives a custom
+  // tool through processStream behind a gated write_file and asserts the
+  // tool_start chunk for that call id. The downstream CLI flip is covered
+  // separately by the queued-block tool_start tests in
+  // sdk-event-handlers.test.ts (including the nested-agent case).
   if (queued === true) {
     abortablePreviousToolCallFinished.then(
       () => {

@@ -35,6 +35,8 @@ const createTestContext = () => {
     },
   )
 
+  const loggerCalls: { level: string; message: unknown }[] = []
+
   const ctx: EventHandlerState = {
     streaming: {
       streamRefs: {
@@ -80,10 +82,14 @@ const createTestContext = () => {
       setHasReceivedPlanResponse: () => {},
     },
     logger: {
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-      debug: () => {},
+      info: (_obj: unknown, message?: unknown) =>
+        loggerCalls.push({ level: 'info', message }),
+      warn: (_obj: unknown, message?: unknown) =>
+        loggerCalls.push({ level: 'warn', message }),
+      error: (_obj: unknown, message?: unknown) =>
+        loggerCalls.push({ level: 'error', message }),
+      debug: (_obj: unknown, message?: unknown) =>
+        loggerCalls.push({ level: 'debug', message }),
     } as Logger,
     setIsRetrying: () => {},
   }
@@ -91,6 +97,7 @@ const createTestContext = () => {
   return {
     ctx,
     getMessages: () => messages,
+    getLoggerCalls: () => loggerCalls,
   }
 }
 
@@ -185,6 +192,51 @@ describe('sdk-event-handlers', () => {
       autoRecovering: true,
     })
     expect(getMessages()[0].userError).toBeUndefined()
+  })
+
+  test('does not render an error banner for suggest_followups ordering rejections', () => {
+    const { ctx, getMessages } = createTestContext()
+    createEventHandler(ctx)({
+      type: 'error',
+      message:
+        'Tool `suggest_followups` is not available yet. GATE: PENDING (or final summary not written).',
+      userMessage:
+        'The model called suggest_followups out of order and is correcting the ordering automatically. No action is needed.',
+      autoRecovering: true,
+    })
+    expect(getMessages()[0].userError).toBeUndefined()
+  })
+
+  test('logs auto-recovering runtime errors at debug rather than error', () => {
+    const { ctx, getLoggerCalls } = createTestContext()
+    createEventHandler(ctx)({
+      type: 'error',
+      message:
+        'Tool `suggest_followups` is not available yet. GATE: PENDING (or final summary not written).',
+      userMessage:
+        'The model called suggest_followups out of order and is correcting the ordering automatically. No action is needed.',
+      autoRecovering: true,
+    })
+    const calls = getLoggerCalls()
+    expect(calls).toContainEqual({
+      level: 'debug',
+      message: 'SDK auto-recovering runtime notice',
+    })
+    expect(calls.some((call) => call.level === 'error')).toBe(false)
+  })
+
+  test('logs genuine runtime errors at error level', () => {
+    const { ctx, getLoggerCalls } = createTestContext()
+    createEventHandler(ctx)({
+      type: 'error',
+      message: 'Provider failed\n    at secret/path.ts:1:2',
+    })
+    const calls = getLoggerCalls()
+    expect(calls).toContainEqual({
+      level: 'error',
+      message: 'SDK runtime error event',
+    })
+    expect(calls.some((call) => call.level === 'debug')).toBe(false)
   })
 
   test('background agent cards remain running until polling reports settlement', () => {
@@ -796,13 +848,13 @@ describe('sdk-event-handlers', () => {
   test('tool_start flips a queued custom/unknown-path tool block back to running', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
-    // Pins RF-1: the `queued === true` branch in `executeCustomToolCall` that
-    // emits `tool_start` for a custom/MCP tool is genuinely reachable, not dead
-    // defensive code. The CLI handler treats any queued tool_call identically
-    // regardless of whether it was produced by the native (`executeToolCall`) or
-    // custom (`executeCustomToolCall`) path, so a custom/unknown-path tool name
-    // that lands queued must flip from 'queued' to 'running' on tool_start
-    // exactly like a native write_file.
+    // CLI-side coverage only: the queued→running flip is tool-name agnostic, so
+    // a custom/MCP tool name that lands queued must flip from 'queued' to
+    // 'running' on tool_start exactly like a native write_file. This does NOT
+    // exercise the runtime `queued === true` branch in `executeCustomToolCall`;
+    // that branch's reachability is pinned at the runtime level by 'emits
+    // tool_start for a custom/MCP tool queued behind an in-flight write (RF-1)'
+    // in packages/agent-runtime/src/__tests__/run-agent-step-tools.test.ts.
     dispatchValidEvent(handleEvent, {
       type: 'tool_call',
       toolCallId: 'custom-write-queued',

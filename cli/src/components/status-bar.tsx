@@ -2,7 +2,10 @@ import { TextAttributes } from '@opentui/core'
 import React, { useEffect, useState } from 'react'
 
 import { Button } from './button'
-import { ScrollToBottomButton } from './scroll-to-bottom-button'
+import {
+  isScrollButtonCompact,
+  ScrollToBottomButton,
+} from './scroll-to-bottom-button'
 import { ShimmerText } from './shimmer-text'
 
 import { useTerminalLayout } from '../hooks/use-terminal-layout'
@@ -153,6 +156,10 @@ export const StatusBar = ({
     elapsedSeconds,
     showTimer: shouldShowTimer,
     showStop,
+    showScrollButton: !isAtBottom,
+    // ScrollToBottomButton renders its compact form on the same shared
+    // predicate, so the reserved columns match the width it actually renders.
+    scrollButtonCompact: isScrollButtonCompact(width),
     isActive,
   })
 
@@ -233,32 +240,28 @@ export const StatusBar = ({
         backgroundColor: hasContent ? theme.surface : 'transparent',
       }}
     >
+      {/* Left: the working label, sized to its content. */}
       <box
         style={{
-          flexGrow: 1,
           flexShrink: 1,
-          flexBasis: 0,
+          minWidth: 0,
         }}
       >
         <text style={{ wrapMode: 'none' }}>{statusIndicatorContent}</text>
       </box>
 
+      {/* Middle: the chip cluster, left-aligned inside the growing region so it
+          fills the empty middle instead of packing against the right edge. */}
       <box
         style={{
           flexGrow: 1,
           flexShrink: 1,
           flexBasis: 0,
           flexDirection: 'row',
-          justifyContent: 'flex-end',
+          justifyContent: 'flex-start',
           alignItems: 'center',
-          gap: 1,
         }}
       >
-        {!isAtBottom && (
-          <box style={{ flexShrink: 0 }}>
-            <ScrollToBottomButton onClick={scrollToLatest} />
-          </box>
-        )}
         <text style={{ wrapMode: 'none' }}>
           {chips.map((chip, index) => (
             <React.Fragment key={chip.id}>
@@ -274,6 +277,20 @@ export const StatusBar = ({
             </React.Fragment>
           ))}
         </text>
+      </box>
+
+      {/* Right: every width-varying control lives here so a hover cannot reflow
+          the label or the chips. No minWidth: 0, which would collapse the
+          scroll button's reserved width. */}
+      <box
+        style={{
+          flexShrink: 0,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 1,
+        }}
+      >
+        {!isAtBottom && <ScrollToBottomButton onClick={scrollToLatest} />}
         {showStop && onStop && (
           <StatusActionButton onClick={onStop}>■ Esc</StatusActionButton>
         )}

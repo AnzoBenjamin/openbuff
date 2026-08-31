@@ -13,6 +13,9 @@ initializeThemeStore()
 
 const theme = chatThemes.dark
 
+/** Icons the tightened box must never render again. */
+const REMOVED_ICONS = ['✅', '❌', '⚠️', '⚠', '🔴', '🟡', '🟢']
+
 function makeSummary(overrides: Partial<CompletionSummary>): CompletionSummary {
   return {
     filesEdited: 0,
@@ -190,11 +193,13 @@ describe('CompletionSummaryBox deriveTone', () => {
     expect(markup).toContain('1 failed')
   })
 
-  test('renders auxiliary section', () => {
+  test('renders auxiliary section under the Agents label', () => {
     const markup = renderSummary(
       makeSummary({ auxiliaryCompleted: 2, auxiliaryFailed: 1 }),
     )
-    expect(markup).toContain('auxiliary')
+    expect(markup).toContain('Agents')
+    expect(markup).toContain('2 completed')
+    expect(markup).toContain('1 failed')
   })
 
   test('renders errors section with error color', () => {
@@ -203,21 +208,64 @@ describe('CompletionSummaryBox deriveTone', () => {
     expect(markup).toContain(theme.error)
   })
 
-  test('renders BLOCKING with red icon', () => {
+  test('renders BLOCKING in the error tone, without an icon', () => {
     const markup = renderSummary(makeSummary({ reviewVerdict: 'BLOCKING' }))
     expect(markup).toContain('BLOCKING')
-    expect(markup).toContain('🔴')
+    expect(markup).toContain(theme.error)
   })
 
-  test('renders NON_BLOCKING with yellow icon', () => {
+  test('renders NON_BLOCKING in the warning tone, without an icon', () => {
     const markup = renderSummary(makeSummary({ reviewVerdict: 'NON_BLOCKING' }))
     expect(markup).toContain('NON_BLOCKING')
-    expect(markup).toContain('🟡')
+    expect(markup).toContain(theme.warning)
   })
 
-  test('renders LOOKS_GOOD with green icon', () => {
+  test('renders LOOKS_GOOD in the success tone, without an icon', () => {
     const markup = renderSummary(makeSummary({ reviewVerdict: 'LOOKS_GOOD' }))
     expect(markup).toContain('LOOKS_GOOD')
-    expect(markup).toContain('🟢')
+    expect(markup).toContain(theme.success)
+  })
+
+  test('titles the box and emits none of the removed status emoji', () => {
+    const markup = renderSummary(
+      makeSummary({
+        filesEdited: 2,
+        filesRolledBack: 1,
+        hooksPassed: 1,
+        hooksSkipped: 2,
+        reviewVerdict: 'NON_BLOCKING',
+        testPassed: 5,
+        testFailed: 1,
+        auxiliaryCompleted: 3,
+        auxiliaryFailed: 1,
+        errors: 2,
+      }),
+    )
+
+    expect(markup).toContain('Run summary')
+    for (const icon of REMOVED_ICONS) {
+      expect(markup).not.toContain(icon)
+    }
+    // Meaning still survives without color: the state words are in the values.
+    expect(markup).toContain('rolled back')
+    expect(markup).toContain('2 skipped')
+  })
+
+  test('pads the label column so every row value starts at the same offset', () => {
+    const markup = renderSummary(
+      makeSummary({ filesEdited: 2, reviewVerdict: 'LOOKS_GOOD' }),
+    )
+    // One row per <text>; strip the inline spans to get the rendered line.
+    const rows = [...markup.matchAll(/<text[^>]*>(.*?)<\/text>/g)].map(
+      (match) => match[1].replace(/<[^>]*>/g, ''),
+    )
+    const filesRow = rows.find((row) => row.startsWith('Files'))
+    const reviewRow = rows.find((row) => row.startsWith('Review'))
+
+    expect(filesRow).toBeDefined()
+    expect(reviewRow).toBeDefined()
+    // 'Files' is a column shorter than 'Review', so equal value offsets can
+    // only come from the shared padded label column.
+    expect(filesRow?.indexOf('2 edited')).toBe(reviewRow?.indexOf('LOOKS_GOOD'))
   })
 })

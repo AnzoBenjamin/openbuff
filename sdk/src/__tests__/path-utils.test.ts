@@ -4,10 +4,18 @@ import path from 'path'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import {
+  configureExternalReadRoots,
+  resetExternalReadRootsForTesting,
+} from '@codebuff/common/util/project-path-containment'
+
+import {
   getProjectPathLookupKeys,
+  getScopedReadPolicyAliases,
   isSafeProjectRelativePath,
   resolveFilePathForFileSystemOperation,
+  resolveFilePathForFileSystemReadOperation,
   resolveFilePathForOperation,
+  resolveFilePathForReadOperation,
   resolveFilePathWithinProject,
 } from '../tools/path-utils'
 
@@ -181,4 +189,112 @@ test('filesystem operations resolve symlinks through the injected filesystem', a
       virtualFs,
     ),
   ).resolves.toBeNull()
+})
+
+describe('read-only operation resolvers', () => {
+  let projectDir: string
+  let externalRoot: string
+  let externalFile: string
+
+  /** Host-realpath-backed adapter for the async read resolver. */
+  const hostFileSystem = {
+    realpath: async (input: string) => fs.realpathSync(input),
+  } as unknown as CodebuffFileSystem
+
+  beforeEach(() => {
+    resetExternalReadRootsForTesting()
+    projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-resolver-proj-'))
+    externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'read-resolver-ext-'))
+    externalFile = path.join(externalRoot, 'notes.txt')
+    fs.writeFileSync(externalFile, 'notes\n')
+    fs.writeFileSync(
+      path.join(projectDir, 'in-project.ts'),
+      'export const a = 1\n',
+    )
+  })
+
+  afterEach(() => {
+    // The registry is module state: reset unconditionally so no later test
+    // file inherits an open external read boundary.
+    resetExternalReadRootsForTesting()
+    fs.rmSync(projectDir, { recursive: true, force: true })
+    fs.rmSync(externalRoot, { recursive: true, force: true })
+  })
+
+  test('an in-project path resolves identically to the write-path resolver', () => {
+    configureExternalReadRoots([externalRoot])
+
+    expect(resolveFilePathForReadOperation(projectDir, 'in-project.ts')).toEqual(
+      resolveFilePathForOperation(projectDir, 'in-project.ts'),
+    )
+  })
+
+  test('an allowlisted external file resolves with scope external-read', () => {
+    configureExternalReadRoots([externalRoot])
+
+    const resolved = resolveFilePathForReadOperation(projectDir, externalFile)
+    expect(resolved).not.toBeNull()
+    expect(resolved!.scope).toBe('external-read')
+    expect(resolved!.operationPath).toBe(resolved!.realFullPath)
+    // Outside the project, so `relativePath` is the absolute resolved path.
+    expect(resolved!.relativePath).toBe(path.resolve(externalFile))
+
+    // The write twin stays blind to the read allowlist.
+    expect(resolveFilePathForOperation(projectDir, externalFile)).toBeNull()
+  })
+
+  test('the async read resolver agrees with the sync one', async () => {
+    configureExternalReadRoots([externalRoot])
+
+    const resolved = await resolveFilePathForFileSystemReadOperation(
+      projectDir,
+      externalFile,
+      hostFileSystem,
+    )
+    expect(resolved).not.toBeNull()
+    expect(resolved!.scope).toBe('external-read')
+    expect(resolved!.operationPath).toBe(resolved!.realFullPath)
+
+    // The write twin refuses it through the same injected filesystem.
+    await expect(
+      resolveFilePathForFileSystemOperation(
+        projectDir,
+        externalFile,
+        hostFileSystem,
+      ),
+    ).resolves.toBeNull()
+  })
+
+  test('refuses the external file while the registry is unconfigured', () => {
+    expect(resolveFilePathForReadOperation(projectDir, externalFile)).toBeNull()
+  })
+})
+
+describe('getScopedReadPolicyAliases', () => {
+  test('returns no extra aliases for a project-scoped path', () => {
+    // The project-relative path is already the key a host policy targets, so
+    // adding a bare basename alias there would widen host filters.
+    expect(getScopedReadPolicyAliases('project', 'src/notes.png')).toEqual([])
+  })
+
+  test('builds basename and <scope>/<basename> keys for non-project scopes', () => {
+    // The absolute relativePath of an external-read/owned-temp resolution never
+    // matches a project-relative glob, so these are the keys a host filter can
+    // actually target. Same alias shape read-files.ts builds.
+    expect(
+      getScopedReadPolicyAliases('external-read', '/external-root/notes.png'),
+    ).toEqual(['notes.png', 'external-read/notes.png'])
+    expect(
+      getScopedReadPolicyAliases('owned-temp', '/tmp/openbuff-x/job.log'),
+    ).toEqual(['job.log', 'owned-temp/job.log'])
+  })
+
+  test('normalizes backslash separators before taking the basename', () => {
+    // On a POSIX host a backslash is a legal filename character, so the
+    // normalization is what keeps the alias a bare basename rather than a
+    // whole path fragment.
+    expect(
+      getScopedReadPolicyAliases('external-read', '/external-root\\notes.png'),
+    ).toEqual(['notes.png', 'external-read/notes.png'])
+  })
 })

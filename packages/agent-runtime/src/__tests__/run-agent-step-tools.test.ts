@@ -7,6 +7,11 @@ import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-run
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { promptSuccess } from '@codebuff/common/util/error'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
+import {
+  configureExternalReadRoots,
+  getOwnedTempRoots,
+  resetExternalReadRootsForTesting,
+} from '@codebuff/common/util/project-path-containment'
 
 import { handleWriteTodos } from '../tools/handlers/tool/write-todos'
 import {
@@ -26,7 +31,12 @@ import {
 
 import { runAgentStep } from '../run-agent-step'
 import { clearAgentGeneratorCache } from '../run-programmatic-step'
-import { createToolCallChunk } from './test-utils'
+import { processStream } from '../tools/stream-parser'
+import {
+  createMockStreamWithToolCalls,
+  createToolCallChunk,
+  mockFileContext as sharedMockFileContext,
+} from './test-utils'
 import { asUserMessage } from '../util/messages'
 
 import type { AgentTemplate } from '../templates/types'
@@ -503,6 +513,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringContaining(
           'Tool `suggest_followups` is not available yet',
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -607,6 +618,7 @@ describe('runAgentStep - set_output tool', () => {
       expect.objectContaining({
         type: 'error',
         message: expect.stringContaining('git-committer withheld'),
+        autoRecovering: true,
       }),
     )
     // Pin the affirmative GATE vocabulary: withheld until GATE: PASSED /
@@ -704,6 +716,7 @@ describe('runAgentStep - set_output tool', () => {
       expect.objectContaining({
         type: 'error',
         message: expect.stringContaining('git-committer withheld'),
+        autoRecovering: true,
       }),
     )
     // The spawn_agents tool_call proceeds with only the helper agent.
@@ -1789,6 +1802,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringContaining(
           'Tool `suggest_followups` is not available yet',
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -2079,6 +2093,580 @@ describe('runAgentStep - set_output tool', () => {
     )
   })
 
+  it('does not hard-block reads of an openbuff-owned temp path', async () => {
+    // The SDK deliberately allows reads under the openbuff-owned OS temp
+    // namespace (tmux capture evidence, background-job logs), so this runtime
+    // backstop must not refuse them. The path is built from getOwnedTempRoots()
+    // rather than a hardcoded '/tmp' because on macOS os.tmpdir() is a
+    // symlinked '/var/folders/...' path.
+    const ownedTempRead = path.join(
+      getOwnedTempRoots()[0],
+      'tmux-captures-session-1',
+      'capture-001.txt',
+    )
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('read_files', {
+        paths: [ownedTempRead],
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['read_files', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'unscoped-agent',
+      localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+      agentTemplate: unscopedAgent,
+      agentState,
+      prompt: 'Read back the tmux capture evidence',
+    })
+
+    // No read-scope error chunk...
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining('filesystem read scope'),
+      }),
+    )
+    // ...and the read is published as a tool call.
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'read_files',
+      }),
+    )
+  })
+
+  it('still hard-blocks writes to an openbuff-owned temp path', async () => {
+    // The owned-temp exception is read-only by construction: the SDK's
+    // filesystem-authority.ts owns the narrower owned-temp mutation policy
+    // (tmux captures are verification evidence a subagent must not forge), so
+    // this backstop must never pre-authorize a write there.
+    const ownedTempWrite = path.join(
+      getOwnedTempRoots()[0],
+      'tmux-captures-session-1',
+      'capture-001.txt',
+    )
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('write_file', {
+        path: ownedTempWrite,
+        instructions: 'Forge tmux capture evidence',
+        content: 'export const blocked = true\n',
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['write_file', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'unscoped-agent',
+      localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+      agentTemplate: unscopedAgent,
+      agentState,
+      prompt: 'Write into the owned temp namespace',
+    })
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining(
+          'was blocked by the unscoped-agent filesystem write scope',
+        ),
+      }),
+    )
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'write_file',
+      }),
+    )
+  })
+
+  it('still hard-blocks reads of a non-owned absolute temp sibling', async () => {
+    // Attribution guard: the allow above must come from owned-temp SCOPE, not
+    // from "any absolute temp path". This first segment matches no
+    // OWNED_TEMP_SEGMENT_PATTERNS entry, so the read stays hard-blocked.
+    const nonOwnedTempRead = path.join(
+      getOwnedTempRoots()[0],
+      'not-openbuff-owned',
+      'file.txt',
+    )
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('read_files', {
+        paths: [nonOwnedTempRead],
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['read_files', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'unscoped-agent',
+      localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+      agentTemplate: unscopedAgent,
+      agentState,
+      prompt: 'Read an unowned absolute temp path',
+    })
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining(
+          'was blocked by the unscoped-agent filesystem read scope',
+        ),
+      }),
+    )
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'read_files',
+      }),
+    )
+  })
+
+  it('does not hard-block reads of an allowlisted external path', async () => {
+    // The SDK read handlers deliberately allow reads strictly inside a root the
+    // user explicitly allowlisted (the openbuff config dir, plus openbuff.json
+    // `readableRoots`), so this runtime backstop must not refuse them. The SDK
+    // resolvers stay authoritative — including the fail-closed
+    // mandatory-sensitive refusal — this layer only stops pre-dispatch refusal.
+    const externalRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'external-read-backstop-'),
+    )
+    const externalRead = path.join(externalRoot, 'notes.txt')
+    fs.writeFileSync(externalRead, 'notes\n')
+    // Module state: reset before configuring so a differing set from an earlier
+    // test can never make the configure-once primitive throw here.
+    resetExternalReadRootsForTesting()
+    configureExternalReadRoots([externalRoot])
+
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('read_files', {
+        paths: [externalRead],
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['read_files', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    try {
+      await runAgentStep({
+        ...runAgentStepBaseParams,
+        agentType: 'unscoped-agent',
+        localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+        agentTemplate: unscopedAgent,
+        agentState,
+        prompt: 'Read a file inside an allowlisted external root',
+      })
+
+      // No read-scope error chunk...
+      expect(chunks).not.toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          message: expect.stringContaining('filesystem read scope'),
+        }),
+      )
+      // ...and the read is published as a tool call.
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call',
+          toolName: 'read_files',
+        }),
+      )
+    } finally {
+      // Unconditional reset in both the success and failure paths: an
+      // unreset registry would leave an open read boundary for every later
+      // test in this process.
+      resetExternalReadRootsForTesting()
+      fs.rmSync(externalRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('still hard-blocks writes to an allowlisted external path', async () => {
+    // The external allowlist is READ-only by construction (there is no
+    // external-write scope), so this backstop must never pre-authorize a write
+    // there — the exception stays gated on access === 'read'.
+    const externalRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'external-read-backstop-write-'),
+    )
+    const externalWrite = path.join(externalRoot, 'notes.txt')
+    fs.writeFileSync(externalWrite, 'notes\n')
+    resetExternalReadRootsForTesting()
+    configureExternalReadRoots([externalRoot])
+
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('write_file', {
+        path: externalWrite,
+        instructions: 'Write into an allowlisted read-only root',
+        content: 'export const blocked = true\n',
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['write_file', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    try {
+      await runAgentStep({
+        ...runAgentStepBaseParams,
+        agentType: 'unscoped-agent',
+        localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+        agentTemplate: unscopedAgent,
+        agentState,
+        prompt: 'Write into the allowlisted external root',
+      })
+
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          message: expect.stringContaining(
+            'was blocked by the unscoped-agent filesystem write scope',
+          ),
+        }),
+      )
+      expect(chunks).not.toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call',
+          toolName: 'write_file',
+        }),
+      )
+    } finally {
+      resetExternalReadRootsForTesting()
+      fs.rmSync(externalRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('still hard-blocks reads of a non-allowlisted external sibling', async () => {
+    // Attribution guard: the allow above must come from the ALLOWLIST, not from
+    // "any absolute path outside the project". The sibling directory shares the
+    // allowlisted root's prefix, which a naive startsWith check would admit.
+    const externalRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'external-read-backstop-sibling-'),
+    )
+    const siblingRoot = `${externalRoot}-evil`
+    fs.mkdirSync(siblingRoot)
+    const siblingRead = path.join(siblingRoot, 'notes.txt')
+    fs.writeFileSync(siblingRead, 'sibling\n')
+    resetExternalReadRootsForTesting()
+    configureExternalReadRoots([externalRoot])
+
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('read_files', {
+        paths: [siblingRead],
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['read_files', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    try {
+      await runAgentStep({
+        ...runAgentStepBaseParams,
+        agentType: 'unscoped-agent',
+        localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+        agentTemplate: unscopedAgent,
+        agentState,
+        prompt: 'Read a non-allowlisted external sibling path',
+      })
+
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          message: expect.stringContaining(
+            'was blocked by the unscoped-agent filesystem read scope',
+          ),
+        }),
+      )
+      expect(chunks).not.toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call',
+          toolName: 'read_files',
+        }),
+      )
+    } finally {
+      resetExternalReadRootsForTesting()
+      fs.rmSync(externalRoot, { recursive: true, force: true })
+      fs.rmSync(siblingRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('still hard-blocks code_search with an absolute cwd inside an allowlisted external root', async () => {
+    // ER-3: the external-read relaxation is TOOL-scoped, not merely
+    // access-scoped. code_search's SDK handler performs NO containment (it
+    // realpaths the caller cwd and spawns ripgrep there), so it is absent from
+    // EXTERNAL_READ_EXEMPT_TOOLS and stays hard-blocked even for a configured
+    // allowlisted root — otherwise code_search({ cwd: '<configDir>/projects' })
+    // would recursively grep other projects' persisted transcripts.
+    const externalRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'external-read-code-search-'),
+    )
+    fs.writeFileSync(path.join(externalRoot, 'notes.txt'), 'notes\n')
+    resetExternalReadRootsForTesting()
+    configureExternalReadRoots([externalRoot])
+
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('code_search', {
+        pattern: 'apiKey',
+        cwd: externalRoot,
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['code_search', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    try {
+      await runAgentStep({
+        ...runAgentStepBaseParams,
+        agentType: 'unscoped-agent',
+        localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+        agentTemplate: unscopedAgent,
+        agentState,
+        prompt: 'Grep inside an allowlisted external root',
+      })
+
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          message: expect.stringContaining(
+            'was blocked by the unscoped-agent filesystem read scope',
+          ),
+        }),
+      )
+      expect(chunks).not.toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call',
+          toolName: 'code_search',
+        }),
+      )
+    } finally {
+      resetExternalReadRootsForTesting()
+      fs.rmSync(externalRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('still allows read_files for an absolute path inside an allowlisted external root', async () => {
+    // Attribution guard for the ER-3 fix: gating the relaxation on
+    // EXTERNAL_READ_EXEMPT_TOOLS must not be a blanket revert. read_files IS a
+    // migrated tool (its SDK handler resolves through the read-only containment
+    // resolvers), so the same configured root that code_search cannot reach
+    // stays readable here.
+    const externalRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'external-read-exempt-read-files-'),
+    )
+    const externalRead = path.join(externalRoot, 'notes.txt')
+    fs.writeFileSync(externalRead, 'notes\n')
+    resetExternalReadRootsForTesting()
+    configureExternalReadRoots([externalRoot])
+
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('read_files', {
+        paths: [externalRead],
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['read_files', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    try {
+      await runAgentStep({
+        ...runAgentStepBaseParams,
+        agentType: 'unscoped-agent',
+        localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+        agentTemplate: unscopedAgent,
+        agentState,
+        prompt: 'Read a file inside an allowlisted external root',
+      })
+
+      expect(chunks).not.toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          message: expect.stringContaining('filesystem read scope'),
+        }),
+      )
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call',
+          toolName: 'read_files',
+        }),
+      )
+    } finally {
+      resetExternalReadRootsForTesting()
+      fs.rmSync(externalRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('hard-blocks find_files_matching_content with an absolute cwd outside the project', async () => {
+    // ER-3: find_files_matching_content used to fall through
+    // getFilesystemToolPaths and return undefined, so it got NO backstop at all
+    // while still resolving an arbitrary absolute cwd. It now has a backstop
+    // entry, and (like code_search) is not exempt, so an out-of-project cwd is
+    // hard-blocked.
+    const outsideRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'ffmc-outside-project-'),
+    )
+    fs.writeFileSync(path.join(outsideRoot, 'notes.txt'), 'notes\n')
+    // The registry stays closed: nothing here is allowlisted.
+    resetExternalReadRootsForTesting()
+
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('find_files_matching_content', {
+        pattern: 'apiKey',
+        cwd: outsideRoot,
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['find_files_matching_content', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    try {
+      await runAgentStep({
+        ...runAgentStepBaseParams,
+        agentType: 'unscoped-agent',
+        localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+        agentTemplate: unscopedAgent,
+        agentState,
+        prompt: 'Search content outside the project root',
+      })
+
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          message: expect.stringContaining(
+            'was blocked by the unscoped-agent filesystem read scope',
+          ),
+        }),
+      )
+      expect(chunks).not.toContainEqual(
+        expect.objectContaining({
+          type: 'tool_call',
+          toolName: 'find_files_matching_content',
+        }),
+      )
+    } finally {
+      resetExternalReadRootsForTesting()
+      fs.rmSync(outsideRoot, { recursive: true, force: true })
+    }
+  })
+
   it('blocks suggest_followups after same-step rewrite_symbol edits when the gate started open', async () => {
     const chunks: unknown[] = []
     runAgentStepBaseParams = {
@@ -2141,6 +2729,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringContaining(
           'Tool `suggest_followups` is not available yet',
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -2202,6 +2791,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringMatching(
           /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -2260,6 +2850,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringMatching(
           /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -2319,6 +2910,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringMatching(
           /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -2381,6 +2973,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringMatching(
           /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -2483,6 +3076,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringMatching(
           /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -2592,6 +3186,7 @@ describe('runAgentStep - set_output tool', () => {
         message: expect.stringMatching(
           /No tools are available after suggest_followups|suggest_followups already ended the actionable work/,
         ),
+        autoRecovering: true,
       }),
     )
     expect(chunks).not.toContainEqual(
@@ -3012,5 +3607,197 @@ describe('runAgentStep - set_output tool', () => {
     expect(resultAgentState.repeatedStepProgressCount).toBe(
       REPEATED_STEP_LOOP_LIMIT,
     )
+  })
+})
+
+describe('processStream queued custom/MCP tool tool_start', () => {
+  const customToolName = 'custom_queued_write'
+  const queuedFileContext: ProjectFileContext = {
+    ...sharedMockFileContext,
+    customToolDefinitions: {
+      [customToolName]: {
+        inputSchema: {
+          type: 'object',
+          properties: {
+            target: { type: 'string' },
+          },
+          required: ['target'],
+          additionalProperties: false,
+        },
+        endsAgentStep: false,
+        description: 'Custom tool used to pin the queued tool_start branch',
+      },
+    },
+  }
+  const customToolAgent: AgentTemplate = {
+    id: 'queued-custom-tool-agent',
+    displayName: 'Queued Custom Tool Agent',
+    spawnerPrompt: 'Drives a queued custom tool through processStream',
+    model: 'claude-3-5-sonnet-20241022',
+    inputSchema: {},
+    outputMode: 'last_message' as const,
+    includeMessageHistory: true,
+    inheritParentSystemPrompt: false,
+    mcpServers: {},
+    toolNames: ['write_file', customToolName, 'end_turn'],
+    spawnableAgents: [],
+    systemPrompt: 'Test system prompt',
+    instructionsPrompt: 'Test instructions prompt',
+    stepPrompt: 'Test step prompt',
+  }
+
+  type ToolEvent = {
+    type?: string
+    toolName?: string
+    toolCallId?: string
+    queued?: boolean
+  }
+  const asToolEvent = (chunk: unknown): ToolEvent => chunk as ToolEvent
+
+  it('emits tool_start for a custom/MCP tool queued behind an in-flight write (RF-1)', async () => {
+    // RF-1 reachability, pinned at the RUNTIME level: a custom/MCP tool has no
+    // statically determinable target path, so it serializes behind every
+    // outstanding write barrier. While a prior named-path write_file is still
+    // in flight, the custom tool is dispatched with `queued === true`, which is
+    // exactly the branch in executeCustomToolCall that emits `tool_start` once
+    // that barrier resolves. Deleting that emission makes this test fail.
+    const writePath = 'queued-custom-write.txt'
+    const chunks: unknown[] = []
+
+    let releaseWrite!: () => void
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve
+    })
+    let writeStarted!: () => void
+    const writeStart = new Promise<void>((resolve) => {
+      writeStarted = resolve
+    })
+    let customCallObserved!: () => void
+    const customCall = new Promise<void>((resolve) => {
+      customCallObserved = resolve
+    })
+
+    const agentRuntimeImpl: AgentRuntimeDeps & AgentRuntimeScopedDeps = {
+      ...TEST_AGENT_RUNTIME_IMPL,
+      sendAction: () => {},
+      requestFiles: async () => buildReadFilesResultV1([]),
+      requestOptionalFile: async () => null,
+      requestToolCall: async (toolCallParams) => {
+        if (toolCallParams.toolName === 'write_file') {
+          // Hold the per-path write barrier open so the following custom tool
+          // is dispatched while that write is still in flight.
+          writeStarted()
+          await writeGate
+          return { output: [] }
+        }
+        return { output: [{ type: 'json', value: { ok: true } }] }
+      },
+    }
+
+    const sessionState = getInitialSessionState(queuedFileContext)
+    // Pre-authorize the write path so write_file does not need a separate read.
+    sessionState.mainAgentState.readAuthorizationsByPath = {
+      [writePath]: true,
+    }
+
+    const stream = createMockStreamWithToolCalls([
+      {
+        toolName: 'write_file',
+        input: {
+          path: writePath,
+          instructions: 'hold the per-path write barrier',
+          content: 'first write',
+        },
+      },
+      { toolName: customToolName, input: { target: 'queued-custom-input' } },
+      { toolName: 'end_turn', input: {} },
+    ])
+
+    const processing = processStream({
+      ...agentRuntimeImpl,
+      agentContext: {},
+      agentState: sessionState.mainAgentState,
+      agentStepId: 'queued-custom-step-id',
+      agentTemplate: customToolAgent,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fileContext: queuedFileContext,
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { [customToolAgent.id]: customToolAgent },
+      messages: [],
+      prompt: 'Run a custom tool behind an in-flight write',
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      stream,
+      system: 'test system',
+      tools: {},
+      userId: TEST_USER_ID,
+      userInputId: 'test-input-id',
+      onCostCalculated: async () => {},
+      onResponseChunk: (chunk) => {
+        chunks.push(chunk)
+        const event = asToolEvent(chunk)
+        if (event.type === 'tool_call' && event.toolName === customToolName) {
+          customCallObserved()
+        }
+      },
+    })
+
+    await writeStart
+    await customCall
+
+    // The custom tool's tool_call is published immediately and carries the
+    // runtime `queued` signal, because the prior write still holds a barrier.
+    const customCallChunk = chunks
+      .map(asToolEvent)
+      .find(
+        (event) =>
+          event.type === 'tool_call' && event.toolName === customToolName,
+      )
+    expect(customCallChunk).toBeDefined()
+    expect(customCallChunk!.queued).toBe(true)
+    const customToolCallId = customCallChunk!.toolCallId
+    expect(typeof customToolCallId).toBe('string')
+
+    // No queued→running transition has fired yet for any call: every queued
+    // tool in this step is still waiting on the gated write.
+    expect(
+      chunks.map(asToolEvent).some((event) => event.type === 'tool_start'),
+    ).toBe(false)
+
+    releaseWrite()
+    await processing
+
+    // Once the write barrier resolves, executeCustomToolCall emits tool_start
+    // for the custom tool's own call id, ordered after its tool_call and before
+    // its tool_result.
+    const startIdx = chunks.findIndex((chunk) => {
+      const event = asToolEvent(chunk)
+      return (
+        event.type === 'tool_start' && event.toolCallId === customToolCallId
+      )
+    })
+    expect(startIdx).toBeGreaterThan(-1)
+    expect(chunks[startIdx]).toMatchObject({
+      type: 'tool_start',
+      toolCallId: customToolCallId,
+    })
+
+    const callIdx = chunks.findIndex((chunk) => {
+      const event = asToolEvent(chunk)
+      return event.type === 'tool_call' && event.toolCallId === customToolCallId
+    })
+    const resultIdx = chunks.findIndex((chunk) => {
+      const event = asToolEvent(chunk)
+      return (
+        event.type === 'tool_result' && event.toolCallId === customToolCallId
+      )
+    })
+    expect(callIdx).toBeGreaterThan(-1)
+    expect(callIdx).toBeLessThan(startIdx)
+    expect(resultIdx).toBeGreaterThan(startIdx)
   })
 })

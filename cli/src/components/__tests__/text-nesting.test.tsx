@@ -198,12 +198,18 @@ describe('harness box renderers survive the real OpenTUI reconciler', () => {
     )
 
     expectRendered(frame, [
-      '3 files edited',
-      'Hooks: 1 passed',
-      'Reviewed:',
+      'Run summary',
+      'Files',
+      '3 edited',
+      'Hooks',
+      '1 passed',
+      'Review',
       'LOOKS_GOOD',
-      'Tests: 2 passed',
-      'auxiliary agent',
+      'Tests',
+      '2 passed',
+      'Agents',
+      '1 completed',
+      'Errors',
       '1 error',
     ])
   })

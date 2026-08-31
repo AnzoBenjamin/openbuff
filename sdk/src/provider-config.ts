@@ -472,6 +472,21 @@ export const providerConfigFileSchema = z
     /** Approval UX for classified terminal effects. */
     approvalMode: z.enum(['balanced', 'strict', 'allow-all']).optional(),
     /**
+     * Additional roots OUTSIDE the project that read-only tools may reach
+     * (read_files, read_logs, read_image, list_directory).
+     *
+     * Reads only: this never grants write access, and there is no
+     * external-write equivalent. Each entry must be an ABSOLUTE path or it is
+     * ignored (a relative entry in a possibly-global config file is ambiguous,
+     * so it is dropped rather than anchored to a guessed directory).
+     * Filesystem roots (`/`, `C:\`) and entries containing a `..` segment are
+     * refused, because allowlisting a filesystem root is the opposite of an
+     * allowlist. Mandatory-sensitive files (`.env`, `credentials.json`, private
+     * keys, ...) stay blocked inside an allowlisted root. The value is applied
+     * once per process, so changing it requires restarting openbuff.
+     */
+    readableRoots: z.array(z.string().min(1)).default([]),
+    /**
      * Optional fixed agent-step cap. Unset or -1 means unlimited productive
      * steps; a repeated-step watchdog still stops identical no-progress loops.
      */
@@ -555,6 +570,9 @@ export const providerConfigFileSchema = z
       ...(config.approvalMode !== undefined && {
         approvalMode: config.approvalMode,
       }),
+      // Always present thanks to `.default([])`, so downstream code (the
+      // run-start registry wiring) never has to handle `undefined`.
+      readableRoots: config.readableRoots,
       // Optional in the resolved config: omitted unless explicitly set, so
       // callers use the unlimited default plus the no-progress watchdog.
       ...(config.maxAgentSteps !== undefined && {
@@ -595,6 +613,17 @@ export type ResolvedProviderModel = {
 export type LoadedProviderConfig = {
   config: ProviderConfigFile
   sourceFilePaths: string[]
+  /**
+   * ER-1 provenance metadata for the `readableRoots` trust gate:
+   * `path.resolve(<readableRoots entry>)` -> the absolute path of the config
+   * FILE that declared it.
+   *
+   * Deliberately kept OUTSIDE the parsed `config` object (and OPTIONAL) so the
+   * zod schema OUTPUT type is unchanged — adding a required field there caused
+   * wide test-fixture churn we already had to repair once. Consumers must fail
+   * CLOSED when an effective root has no recorded source here.
+   */
+  readableRootsSources?: Record<string, string>
   diagnostics?: Array<{
     filePath: string
     message: string
@@ -635,6 +664,7 @@ const emptyProviderConfig = (): ProviderConfigFile => ({
   fileChangeHooks: [],
   autoFileChangeHooks: undefined,
   approvalMode: 'balanced',
+  readableRoots: [],
   failoverModels: undefined,
   maxAgentSteps: undefined,
 })
@@ -810,6 +840,7 @@ function readProviderConfigFile(
 
     let config = emptyProviderConfig()
     const sourceFilePaths: string[] = []
+    const readableRootsSources: Record<string, string> = {}
     let sourceFiles: NonNullable<LoadedProviderConfig['sourceFiles']> = {
       providers: {},
       routes: {
@@ -826,6 +857,13 @@ function readProviderConfigFile(
         sourceFiles,
         loadedFragment.sourceFiles ?? {},
       )
+      // ER-1 provenance follows the same last-declaration-wins rule as
+      // `mergeSourceFiles` above, so nested/extends fragments attribute their
+      // roots to the exact file that declared them.
+      Object.assign(
+        readableRootsSources,
+        loadedFragment.readableRootsSources ?? {},
+      )
     }
 
     const parseResult = providerConfigFileSchema.safeParse(rawConfig)
@@ -835,6 +873,12 @@ function readProviderConfigFile(
       )
     }
     config = mergeProviderConfigs(config, parseResult.data)
+
+    // This file's own declarations win over any fragment it included, matching
+    // the override-wins `readableRoots` merge in mergeProviderConfigs.
+    for (const entry of parseResult.data.readableRoots) {
+      readableRootsSources[path.resolve(entry)] = resolvedConfigPath
+    }
 
     const currentSourceFiles = getSourceFilesFromRawConfig(
       rawConfig,
@@ -848,6 +892,7 @@ function readProviderConfigFile(
         new Set([...sourceFilePaths, resolvedConfigPath]),
       ),
       sourceFiles,
+      readableRootsSources,
     }
     state.cache.set(resolvedConfigPath, result)
     return result
@@ -936,6 +981,12 @@ function mergeProviderConfigs(
     autoFileChangeHooks:
       override.autoFileChangeHooks ?? base.autoFileChangeHooks,
     approvalMode: override.approvalMode ?? base.approvalMode,
+    // An override fragment that simply omits `readableRoots` parses to `[]`
+    // (schema default), so a plain override would silently erase a base
+    // fragment's allowlist. Only a non-empty override replaces it.
+    readableRoots: override.readableRoots?.length
+      ? override.readableRoots
+      : (base.readableRoots ?? []),
     failoverModels: override.failoverModels ?? base.failoverModels,
     maxAgentSteps: override.maxAgentSteps ?? base.maxAgentSteps,
   }
@@ -1201,6 +1252,7 @@ export function loadProviderConfigSync(
 
   let config = emptyProviderConfig()
   const sourceFilePaths: string[] = []
+  const readableRootsSources: Record<string, string> = {}
   const diagnostics: NonNullable<LoadedProviderConfig['diagnostics']> = []
   let sourceFiles: NonNullable<LoadedProviderConfig['sourceFiles']> = {
     providers: {},
@@ -1222,6 +1274,18 @@ export function loadProviderConfigSync(
       sourceFiles = mergeSourceFiles(
         sourceFiles,
         parsedConfig.sourceFiles ?? {},
+      )
+      // ER-1 provenance: every fragment already attributes its own
+      // `readableRoots` entries to the exact file that declared them, so this
+      // merge just folds those maps together — later config paths overwrite
+      // earlier ones for the same root, matching the override-wins merge
+      // above. Deliberately NO fallback to `configPath` for an unattributed
+      // root: an unrecorded root must stay unrecorded so the trust gate fails
+      // CLOSED rather than inheriting this file's trust. Purely in-memory — no
+      // extra filesystem work on this hot path.
+      Object.assign(
+        readableRootsSources,
+        parsedConfig.readableRootsSources ?? {},
       )
     } catch (error) {
       if (explicitConfigPath) {
@@ -1249,6 +1313,7 @@ export function loadProviderConfigSync(
     config,
     sourceFilePaths,
     sourceFiles,
+    readableRootsSources,
     diagnostics,
   }
   providerConfigCache = { key: cacheKey, config: result }
@@ -2429,6 +2494,10 @@ export function writeProviderConfigFile(params: {
         existingConfig.autoFileChangeHooks ?? newConfig.autoFileChangeHooks,
       failoverModels: existingConfig.failoverModels ?? newConfig.failoverModels,
       maxAgentSteps: existingConfig.maxAgentSteps ?? newConfig.maxAgentSteps,
+      // Preserve the user's existing allowlist; /setup only adds providers.
+      readableRoots: existingConfig.readableRoots?.length
+        ? existingConfig.readableRoots
+        : (newConfig.readableRoots ?? []),
     }
 
     if (tryWriteFragmentedConfig(configPath, mergedConfig)) {

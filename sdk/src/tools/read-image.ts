@@ -8,7 +8,10 @@ import {
 } from '@codebuff/common/constants/images'
 import { FILE_READ_STATUS } from '@codebuff/common/old-constants'
 
-import { resolveFilePathForFileSystemOperation } from './path-utils'
+import {
+  getScopedReadPolicyAliases,
+  resolveFilePathForFileSystemReadOperation,
+} from './path-utils'
 import { isReadPathBlocked } from './read-policy'
 
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
@@ -85,7 +88,9 @@ export async function readImages(params: {
         },
       }
     }
-    const resolvedPath = await resolveFilePathForFileSystemOperation(
+    // Read-only tool, so it resolves through the read-only containment
+    // resolver.
+    const resolvedPath = await resolveFilePathForFileSystemReadOperation(
       cwd,
       imagePath,
       fs,
@@ -114,7 +119,17 @@ export async function readImages(params: {
       }
     }
 
-    if (isReadPathBlocked(relativePath, fileFilter)) {
+    // A non-'project' resolution carries an ABSOLUTE relativePath, so the
+    // scoped `<scope>/<basename>` aliases are added for the host fileFilter;
+    // without them a filter written against project-relative globs would
+    // silently fail open. The basename comes from the dereferenced
+    // `operationPath`, exactly like read-files.ts's `authorizeReadTarget`, so
+    // the two tools present the same key to a host policy.
+    const policyAliases = [
+      relativePath,
+      ...getScopedReadPolicyAliases(resolvedPath.scope, fullPath),
+    ]
+    if (policyAliases.some((alias) => isReadPathBlocked(alias, fileFilter))) {
       return {
         kind: 'error',
         entry: {
@@ -125,16 +140,29 @@ export async function readImages(params: {
       }
     }
 
-    // Realpath-based containment: if the resolved path (or any symlink it
-    // points through) escapes the project root, reject before reading.
-    let realResolved: string | null = null
-    try {
-      realResolved = await fs.realpath(fullPath)
-    } catch {
-      // File may not exist yet; fall through and let fs.stat below produce
-      // the normal DOES_NOT_EXIST error.
-    }
-    if (realResolved && !isInsideRoot(rootRealPath, realResolved)) {
+    // INVARIANT (single dereference): `fullPath` IS the resolver's
+    // `operationPath` — the ONE already-dereferenced path it validated, both
+    // lexically and after realpath, against the boundary that matches its
+    // scope, plus the fail-closed mandatory-sensitive refusal. Read handlers
+    // must operate on `operationPath` and must NEVER independently re-resolve
+    // it: a second `fs.realpath` here would reopen exactly the TOCTOU window
+    // the single-dereference contract exists to close (a symlink swapped
+    // between the resolver's realpath and ours would redirect the read to an
+    // arbitrary file, while the extension gate above only ever sees the
+    // pre-dereference `relativePath`). `read-files.ts`, `read-logs.ts` and
+    // `list-directory.ts` already follow this.
+    //
+    // The project-root check below is now a redundant ASSERTION on resolver
+    // output rather than the primary control: a 'project' resolution has
+    // already been contained against the real project root. An 'external-read'
+    // (allowlisted readableRoots) or 'owned-temp' resolution is legitimately
+    // outside the project root and was contained against its own boundary, so
+    // asserting it against the project root would reject every such read —
+    // which is exactly the documented read_image support for readableRoots.
+    if (
+      resolvedPath.scope === 'project' &&
+      !isInsideRoot(rootRealPath, fullPath)
+    ) {
       return {
         kind: 'error',
         entry: {
@@ -144,7 +172,9 @@ export async function readImages(params: {
         },
       }
     }
-    const safePath = realResolved ?? fullPath
+    // A non-existent file needs no special handling here: the fs.stat below
+    // produces the normal DOES_NOT_EXIST error (see its catch).
+    const safePath = fullPath
 
     try {
       const stats = await fs.stat(safePath)

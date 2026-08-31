@@ -1,10 +1,14 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { promises as nodeFs } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'os'
 import path from 'path'
 
-import { OWNED_TEMP_SEGMENT_PATTERNS } from '@codebuff/common/util/project-path-containment'
+import {
+  OWNED_TEMP_SEGMENT_PATTERNS,
+  configureExternalReadRoots,
+  resetExternalReadRootsForTesting,
+} from '@codebuff/common/util/project-path-containment'
 
 import {
   listDirectory,
@@ -793,6 +797,96 @@ describe('listDirectory listing behaviour', () => {
     // The guidance must name an action the model can take through this tool:
     // fileFilter is supplied host-side and is not a list_directory input.
     expect(value.errorMessage).not.toContain('fileFilter')
+  })
+})
+
+describe('listDirectory allowlisted external read roots', () => {
+  // Synthetic absolute root: every filesystem call goes through the stub
+  // filesystem, and the name deliberately avoids the `openbuff-` owned-temp
+  // patterns so an allow here can only come from the external read allowlist.
+  const externalRoot = path.resolve('/external-read-root')
+  // Strictly inside the root: the root itself is deliberately not readable.
+  const externalDir = path.join(externalRoot, 'logs')
+
+  beforeEach(() => {
+    resetExternalReadRootsForTesting()
+  })
+
+  afterEach(() => {
+    // The registry is module state: reset unconditionally so no later test
+    // inherits an open external read boundary.
+    resetExternalReadRootsForTesting()
+  })
+
+  test('lists a directory strictly inside a configured external root', async () => {
+    configureExternalReadRoots([externalRoot])
+    const readdir = makeReaddir([
+      dirent('job.log'),
+      dirent('.env'),
+      dirent('nested', 'dir'),
+    ])
+    const result = await listDirectory({
+      directoryPath: externalDir,
+      projectPath: '/virtual/repo',
+      fs: makeFs({ readdir }),
+    })
+    const value = expectListing(result)
+    expect(value.files).toEqual(['job.log'])
+    // The mandatory sensitive-path block still applies to external entries.
+    expect(value.directories).toEqual(['nested'])
+    expect(value.path).toBe(externalDir)
+    // Listing runs on the resolved real path inside the allowlisted root.
+    expect(readdir.calls).toEqual([externalDir])
+  })
+
+  test('refuses the same directory while the registry is unconfigured', async () => {
+    // No configureExternalReadRoots call: the default posture is closed, so the
+    // allow above is attributable to the allowlist rather than to directories
+    // outside the project having become generally listable.
+    const result = await listDirectory({
+      directoryPath: externalDir,
+      projectPath: '/virtual/repo',
+      fs: rejectingFs(),
+    })
+    expectContainmentRejection(result)
+  })
+
+  test('applies a host fileFilter to the external-read entry alias', async () => {
+    configureExternalReadRoots([externalRoot])
+    // An external-read resolution carries an ABSOLUTE relativePath, so the
+    // joined entry path is absolute too and a host filter written against
+    // project-relative globs would never match it — a fail-open. The scoped
+    // `external-read/<basename>` alias is what the host can target.
+    const seen: string[] = []
+    const fileFilter: FileFilter = (filePath) => {
+      seen.push(filePath)
+      return {
+        status:
+          filePath === 'external-read/blocked.log' ||
+          filePath === 'external-read/blocked-dir'
+            ? 'blocked'
+            : 'allow',
+      }
+    }
+    const result = await listDirectory({
+      directoryPath: externalDir,
+      projectPath: '/virtual/repo',
+      fs: makeFs({
+        readdir: makeReaddir([
+          dirent('kept.log'),
+          dirent('blocked.log'),
+          dirent('nested', 'dir'),
+          dirent('blocked-dir', 'dir'),
+        ]),
+      }),
+      fileFilter,
+    })
+    const value = expectListing(result)
+    expect(value.files).toEqual(['kept.log'])
+    expect(value.directories).toEqual(['nested'])
+    expect(seen).toContain('external-read/kept.log')
+    expect(seen).toContain('external-read/blocked.log')
+    expect(seen).toContain('external-read/blocked-dir')
   })
 })
 
