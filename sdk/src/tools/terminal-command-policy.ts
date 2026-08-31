@@ -33,6 +33,12 @@ const READ_ONLY_ENV_DUMP_REASON =
   'dumping or mutating the process environment is not allowed'
 
 /**
+ * Dump-adjacent utilities. A fragment that cannot be classified structurally
+ * but still names one of these fails closed instead of being allowed.
+ */
+const ENV_DUMP_UTILITY_PATTERN = /\b(?:printenv|env|export|set)\b/i
+
+/**
  * True when `set` arguments are only shell option toggles (`-e`, `+x`,
  * `-o pipefail`, `-euo pipefail`, …). Positional/`--` forms are not safe:
  * they can rewrite `$@` rather than just enable errexit/pipefail.
@@ -403,7 +409,7 @@ function findProcessEnvironmentIssue(
     // untokenizable junk that still names a dumper). Non-dump segments that
     // merely tokenize poorly stay allowed so ordinary workspace commands are
     // not false-denied by the env-dump gate.
-    if (/\b(?:printenv|env|export|set)\b/i.test(trimmed)) {
+    if (ENV_DUMP_UTILITY_PATTERN.test(trimmed)) {
       return reason
     }
     return undefined
@@ -589,11 +595,23 @@ function findProcessEnvironmentIssueInPieces(
   pieces: string[],
   style: 'workspace' | 'read-only',
 ): string | undefined {
+  const reason =
+    style === 'workspace'
+      ? WORKSPACE_ENV_DUMP_REASON
+      : READ_ONLY_ENV_DUMP_REASON
   for (const piece of pieces) {
     const trimmed = piece.trim()
     if (!trimmed) continue
-    const segments = splitReadOnlyShellSegments(trimmed)
+    // Background `&` is a real command separator for this scan: classify every
+    // job instead of handing `pwd & printenv` to the first-executable resolver.
+    const segments = splitReadOnlyShellSegments(trimmed, {
+      backgroundAmpersand: 'split',
+    })
     if (!segments) {
+      // Still unparseable (unbalanced substitution, dangling separator): fail
+      // closed when the piece names a dump utility, the same way the
+      // `__unsafe-tmux-wrapper__` branch does.
+      if (ENV_DUMP_UTILITY_PATTERN.test(trimmed)) return reason
       const issue = findProcessEnvironmentIssue(trimmed, style)
       if (issue) return issue
       continue
@@ -1053,7 +1071,18 @@ function findTraversalPath(command: string): string | undefined {
   return undefined
 }
 
-function splitReadOnlyShellSegments(command: string): string[] | undefined {
+/**
+ * Split a command on unquoted `|`, `;`, `&&`, and newlines. A single
+ * background `&` is rejected by default (read-only containment); callers that
+ * only need per-command classification pass `backgroundAmpersand: 'split'` to
+ * treat it as an ordinary separator.
+ */
+function splitReadOnlyShellSegments(
+  command: string,
+  options: { backgroundAmpersand: 'reject' | 'split' } = {
+    backgroundAmpersand: 'reject',
+  },
+): string[] | undefined {
   const segments: string[] = []
   let quote: "'" | '"' | null = null
   let escaped = false
@@ -1086,7 +1115,11 @@ function splitReadOnlyShellSegments(command: string): string[] | undefined {
     ) {
       continue
     }
-    if (char === '&' && command[index + 1] !== '&') {
+    if (
+      char === '&' &&
+      command[index + 1] !== '&' &&
+      options.backgroundAmpersand === 'reject'
+    ) {
       return undefined
     }
     if (
@@ -1818,10 +1851,16 @@ function findOutsideAbsolutePath(
     const resolved = path.resolve(token)
     const tempRoot = path.resolve('/tmp')
     const relativeToTemp = path.relative(tempRoot, resolved)
+    // Exempt the temp root itself (`/tmp`, `/tmp/`) as well as anything
+    // strictly inside it, so bare-`/tmp` operands like `stat -c '%a %U' /tmp`
+    // and the tmux-cli stale-capture sweep (`find /tmp -maxdepth 1 ...`) are
+    // tolerated. The gate is the RESOLVED relationship, never a raw `/tmp`
+    // string prefix: `'/tmpfoo'.startsWith('/tmp')` is true, so a prefix test
+    // would silently admit siblings like `/tmpfoo` and `/tmpevil/x`, which
+    // resolve outside the temp root and must stay refused.
     if (
-      token.startsWith('/tmp/') &&
-      !relativeToTemp.startsWith('..') &&
-      !path.isAbsolute(relativeToTemp)
+      relativeToTemp === '' ||
+      (!relativeToTemp.startsWith('..') && !path.isAbsolute(relativeToTemp))
     ) {
       continue
     }

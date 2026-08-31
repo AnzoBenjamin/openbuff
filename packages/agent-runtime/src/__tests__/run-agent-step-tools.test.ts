@@ -7,6 +7,7 @@ import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-run
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { promptSuccess } from '@codebuff/common/util/error'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
+import { getOwnedTempRoots } from '@codebuff/common/util/project-path-containment'
 
 import { handleWriteTodos } from '../tools/handlers/tool/write-todos'
 import {
@@ -2080,6 +2081,179 @@ describe('runAgentStep - set_output tool', () => {
       }),
     )
     // ...and is never published as a tool call.
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'read_files',
+      }),
+    )
+  })
+
+  it('does not hard-block reads of an openbuff-owned temp path', async () => {
+    // The SDK deliberately allows reads under the openbuff-owned OS temp
+    // namespace (tmux capture evidence, background-job logs), so this runtime
+    // backstop must not refuse them. The path is built from getOwnedTempRoots()
+    // rather than a hardcoded '/tmp' because on macOS os.tmpdir() is a
+    // symlinked '/var/folders/...' path.
+    const ownedTempRead = path.join(
+      getOwnedTempRoots()[0],
+      'tmux-captures-session-1',
+      'capture-001.txt',
+    )
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('read_files', {
+        paths: [ownedTempRead],
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['read_files', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'unscoped-agent',
+      localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+      agentTemplate: unscopedAgent,
+      agentState,
+      prompt: 'Read back the tmux capture evidence',
+    })
+
+    // No read-scope error chunk...
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining('filesystem read scope'),
+      }),
+    )
+    // ...and the read is published as a tool call.
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'read_files',
+      }),
+    )
+  })
+
+  it('still hard-blocks writes to an openbuff-owned temp path', async () => {
+    // The owned-temp exception is read-only by construction: the SDK's
+    // filesystem-authority.ts owns the narrower owned-temp mutation policy
+    // (tmux captures are verification evidence a subagent must not forge), so
+    // this backstop must never pre-authorize a write there.
+    const ownedTempWrite = path.join(
+      getOwnedTempRoots()[0],
+      'tmux-captures-session-1',
+      'capture-001.txt',
+    )
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('write_file', {
+        path: ownedTempWrite,
+        instructions: 'Forge tmux capture evidence',
+        content: 'export const blocked = true\n',
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['write_file', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'unscoped-agent',
+      localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+      agentTemplate: unscopedAgent,
+      agentState,
+      prompt: 'Write into the owned temp namespace',
+    })
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining(
+          'was blocked by the unscoped-agent filesystem write scope',
+        ),
+      }),
+    )
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'write_file',
+      }),
+    )
+  })
+
+  it('still hard-blocks reads of a non-owned absolute temp sibling', async () => {
+    // Attribution guard: the allow above must come from owned-temp SCOPE, not
+    // from "any absolute temp path". This first segment matches no
+    // OWNED_TEMP_SEGMENT_PATTERNS entry, so the read stays hard-blocked.
+    const nonOwnedTempRead = path.join(
+      getOwnedTempRoots()[0],
+      'not-openbuff-owned',
+      'file.txt',
+    )
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('read_files', {
+        paths: [nonOwnedTempRead],
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['read_files', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'unscoped-agent',
+      localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+      agentTemplate: unscopedAgent,
+      agentState,
+      prompt: 'Read an unowned absolute temp path',
+    })
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining(
+          'was blocked by the unscoped-agent filesystem read scope',
+        ),
+      }),
+    )
     expect(chunks).not.toContainEqual(
       expect.objectContaining({
         type: 'tool_call',

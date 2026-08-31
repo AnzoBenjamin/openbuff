@@ -180,6 +180,9 @@ describe('terminal command permission policy', () => {
       'export',
       'export -p',
       'pwd; printenv',
+      // Background `&` is a command separator too: the dump job must be seen.
+      'pwd & printenv',
+      'true & env',
       // Nested/wrapped/path dump forms must not slip past bare-leading checks.
       'env printenv',
       'env env',
@@ -228,6 +231,46 @@ describe('terminal command permission policy', () => {
           projectRoot,
         }).allowed,
       ).toBe(false)
+    }
+  })
+
+  it('tolerates the bare temp-root token while still refusing sibling-prefix paths', () => {
+    for (const command of [
+      // Bare `/tmp` operand (no trailing slash).
+      "stat -c '%a %U' /tmp",
+      // The verbatim stale-capture sweep at the top of the tmux-cli setup script.
+      "find /tmp -maxdepth 1 -type d -name 'tmux-captures-*' -mmin +1440",
+      // Paths inside the temp root keep working.
+      'cat /tmp/openbuff-job-1.log',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'workspace-write',
+          projectRoot,
+        }),
+      ).toEqual({ allowed: true })
+    }
+    // Sibling-prefix regression: a naive `startsWith('/tmp')` relaxation would
+    // allow these, because `'/tmpfoo'.startsWith('/tmp')` is true.
+    for (const [command, token] of [
+      ['cat /tmpfoo/secret', '/tmpfoo/secret'],
+      ['cat /tmpevil/x', '/tmpevil/x'],
+      // Unrelated outside paths stay refused.
+      ['cat /etc/passwd', '/etc/passwd'],
+    ] as const) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'workspace-write',
+          projectRoot,
+        }),
+      ).toEqual({
+        allowed: false,
+        reason: `absolute path is outside the project: ${token}`,
+      })
     }
   })
 

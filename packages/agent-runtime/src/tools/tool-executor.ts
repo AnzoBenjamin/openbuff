@@ -24,6 +24,7 @@ import {
 } from '@codebuff/common/tools/metadata'
 import { isAbortError } from '@codebuff/common/util/error'
 import { jsonToolResult } from '@codebuff/common/util/messages'
+import { isOwnedTempPath } from '@codebuff/common/util/project-path-containment'
 import { generateCompactId } from '@codebuff/common/util/string'
 import { cloneDeep } from 'lodash'
 import z from 'zod/v4'
@@ -2024,19 +2025,45 @@ export async function executeToolCall<T extends ToolName>(
           // lexical scope for missing paths so create operations still work.
         }
       }
+      // READ-ONLY owned-temp exception. The SDK deliberately permits reads
+      // under the openbuff-owned OS temp namespace (see read-files.ts
+      // `authorizeReadTarget` and read-logs.ts): that is how a parent agent
+      // reads back tmux capture evidence and background-job logs. This
+      // backstop has no notion of that namespace, so without the exception it
+      // refuses reads the SDK allows.
+      //
+      // Deliberately access-scoped, never tool-scoped: a WRITE to an
+      // owned-temp path keeps hard-blocking here, because the (narrower)
+      // owned-temp mutation policy is owned by the SDK's
+      // filesystem-authority.ts `ownedTempMutationRefusal` — tmux captures are
+      // verification evidence a subagent must not be able to forge, so this
+      // layer must not pre-authorize any mutation of them.
+      //
+      // `isOwnedTempPath` gets the RAW caller path: it resolves its own input
+      // and refuses any raw `..` segment itself, which is exactly the guard we
+      // want. The project-relative `normalized` form would be a meaningless
+      // `../..`-style string here.
+      const ownedTempRead =
+        filesystemAccess.access === 'read' && isOwnedTempPath(rawPath)
       // A path "escapes" the project when it traverses above the root or is
       // absolute (either lexically or after canonicalization). Escapes are the
       // real containment boundary: an agent must never read or write outside
-      // the project, so these are always hard-blocked regardless of access.
+      // the project, so these are always hard-blocked regardless of access —
+      // except for the owned-temp read above.
       const escapesProject =
-        normalizedEscapesProject(normalized) ||
-        normalizedEscapesProject(canonical)
+        !ownedTempRead &&
+        (normalizedEscapesProject(normalized) ||
+          normalizedEscapesProject(canonical))
       // An in-project path is a scope mismatch when it stays inside the project
       // but does not match the agent's declared filesystemScope patterns. Only
-      // meaningful when the agent declared a scope for this access type.
+      // meaningful when the agent declared a scope for this access type. An
+      // owned-temp read is not in-project, so it is never pattern-matched
+      // against filesystemScope globs: it is neither hard-blocked above nor
+      // spuriously warned about below.
       const scopeMismatch =
         allowedPatterns !== undefined &&
         !escapesProject &&
+        !ownedTempRead &&
         !allowedPatterns.some(
           (pattern) =>
             scopePatternMatches(normalized, pattern) &&
