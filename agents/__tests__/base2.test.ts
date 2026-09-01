@@ -10609,3 +10609,164 @@ describe('base2 inline formatGateStateBlock delimiter safety', () => {
     expect(parsed?.advisories).toEqual([hostileAdvisory])
   })
 })
+
+describe('base2 gate-pass continuation directive', () => {
+  /** write_todos tool-call + successful tool result, the fixture shape the
+   * existing workflow-todo-progress cases use. */
+  function writeTodosHistory(
+    todos: Array<{ content: string; status: string }>,
+  ) {
+    return [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'todos-1',
+            toolName: 'write_todos',
+            input: { todos },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        toolCallId: 'todos-1',
+        toolName: 'write_todos',
+        content: [{ type: 'json', value: { success: true } }],
+      },
+    ]
+  }
+
+  /** Drive one edit through validation + code-reviewer to the gate-pass
+   * add_message and return its content. */
+  function driveToGatePassMessage(agentState: Record<string, unknown>): string {
+    const base2 = createBase2('default')
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Make the requested change now please',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    const maybePinned = gen.next().value
+    if (maybePinned !== 'STEP') {
+      expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+    }
+    expect(
+      gen.next(finishStepWithToolResult(editReceipt('src/a.ts'))).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(gen.next(feedJson({ status: ' M src/a.ts' })).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
+    expect(gen.next(feedJson([])).value).toMatchObject({
+      toolName: 'git_status',
+    })
+    const reviewCall = gen.next(feedJson({ status: ' M src/a.ts' }))
+      .value as any
+    expect(reviewCall).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'code-reviewer' }] },
+    })
+    expect(
+      gen.next(attestedReviewerResult(reviewCall) as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    const gatePassed = gen.next(feedJson({ status: ' M src/a.ts' }))
+    expect(gatePassed.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    return (gatePassed.value as any).input.content as string
+  }
+
+  test('with no incomplete workflow todos the gate-pass notice is unchanged', () => {
+    const content = driveToGatePassMessage({ agentId: 'base2-custom' })
+
+    // The original notice text is load-bearing for prompt/gate snapshots.
+    expect(content).toContain(
+      'Provide your single user-visible completion summary now',
+    )
+    expect(content).toContain(
+      'Do not make more edits unless absolutely necessary; any new edits will rerun the gate.',
+    )
+    // ...and no continuation directive is emitted.
+    expect(content).not.toContain('Next workflow action:')
+    expect(content).not.toContain('declared workflow still has remaining items')
+    expect(content).not.toContain('Default behavior: continue with that next')
+  })
+
+  test('with an incomplete workflow todo the gate-pass notice tells the agent to continue this turn', () => {
+    const content = driveToGatePassMessage({
+      agentId: 'base2-custom',
+      messageHistory: writeTodosHistory([
+        { content: 'Implement wave 1 of the refactor', status: 'completed' },
+        { content: 'Implement wave 2 of the refactor', status: 'pending' },
+      ]),
+    })
+
+    expect(content).toContain(
+      'The gate passed for the current edits, but your declared workflow still has remaining items: Completed 1/2.',
+    )
+    expect(content).toContain(
+      'Next workflow action: Implement wave 2 of the refactor',
+    )
+    expect(content).toContain(
+      'Default behavior: continue with that next workflow item in this same turn instead of finalizing.',
+    )
+    // A re-armed gate is the concern that currently makes the model stop, so it
+    // is addressed explicitly.
+    expect(content).toContain(
+      'New edits will re-arm the validation/reviewer gate.',
+    )
+    // Stopping early is allowed but must be stated with a concrete reason.
+    expect(content).toContain(
+      'you MUST say so explicitly in your completion summary and state the concrete reason',
+    )
+    expect(content).toContain(
+      'Silently finalizing with incomplete declared todos is not acceptable.',
+    )
+    // The original single-summary / suggest_followups-last ordering still
+    // applies when it does finalize.
+    expect(content).toContain('Write at most one completion summary per turn.')
+    expect(content).toContain(
+      'Call suggest_followups only as the absolute last tool after that summary',
+    )
+  })
+
+  test('DEFAULT step prompt carries the write_todos continuation directive; fast mode does not', () => {
+    const base2 = createBase2('default')
+    expect(base2.stepPrompt).toContain(
+      'a passing validation/reviewer gate is not a stopping point',
+    )
+    expect(base2.stepPrompt).toContain(
+      'continue through the remaining declared items in this same turn',
+    )
+
+    const fast = createBase2('fast')
+    expect(fast.stepPrompt).not.toContain(
+      'a passing validation/reviewer gate is not a stopping point',
+    )
+  })
+
+  test('EXECUTE_PLAN step prompt continues to the next plan task without relaxing one-in_progress', () => {
+    const executePlan = createBase2('default', { executePlan: true })
+
+    expect(executePlan.stepPrompt).toContain(
+      'claim the next actionable task and keep executing in this same turn',
+    )
+    expect(executePlan.stepPrompt).toContain(
+      'one in_progress at a time, never claiming several at once',
+    )
+    expect(executePlan.stepPrompt).toContain(
+      'naming the task ID you reached and what remains',
+    )
+    // It also inherits the shared DEFAULT-mode directive.
+    expect(executePlan.stepPrompt).toContain(
+      'a passing validation/reviewer gate is not a stopping point',
+    )
+  })
+})

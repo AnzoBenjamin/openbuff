@@ -1046,15 +1046,11 @@ ${guideSections}
           ? Math.min(Math.floor(configuredMaxSpecialistRepairRounds), 20)
           : Number.POSITIVE_INFINITY
       const MAX_SPECIALIST_NO_VERDICT_RETRIES = 1
-      // Single source of truth for the post-gate finalization instruction used
-      // by every gate-pass path (fresh pass, conversation reuse, durable
-      // fingerprint reuse). Worded idempotently so a model that already wrote
-      // a summary earlier in the turn adds only follow-up suggestions instead
-      // of repeating the summary. Declared inline because handleSteps is
-      // serialized via .toString() and reconstructed with new Function(...),
-      // so a module-scope binding would be undefined at reconstruction time.
-      const GATE_PASS_FINALIZATION_NOTICE =
-        'Provide your single user-visible completion summary now if you have not already written one this turn; if you already have, add only the follow-up suggestions instead of repeating it. Write at most one completion summary per turn. Call suggest_followups only as the absolute last tool after that summary (and after git-committer if committing this turn); never mid-turn and never before remaining work. Do not make more edits unless absolutely necessary; any new edits will rerun the gate.'
+      // The post-gate finalization instruction shared by every gate-pass path
+      // is built by buildGatePassFinalizationNotice() in the inline-helper
+      // region below (see that function's comment for why it must stay a
+      // hoisted inline `function` declaration and why reading activeWorkState
+      // at call time is safe).
       const existingActiveWorkState = mutableAgentState.base2ActiveWork
       const hadPendingGateFiles =
         !!existingActiveWorkState &&
@@ -3680,7 +3676,7 @@ ${guideSections}
               role: 'user',
               content: [
                 `Previous validation and reviewer gate already passed in this conversation with ${conversationReviewerVerdict} for pending files: ${currentPendingGateFiles.join(', ')}.`,
-                `Reusing that unchanged gate result; ${GATE_PASS_FINALIZATION_NOTICE}`,
+                `Reusing that unchanged gate result; ${buildGatePassFinalizationNotice()}`,
                 formatGateStateBlock(
                   'validation/reviewer',
                   'passed',
@@ -3741,7 +3737,7 @@ ${guideSections}
               role: 'user',
               content: [
                 `Previous validation and reviewer gate already passed with ${durableReviewerVerdict} for pending files: ${currentPendingGateFiles.join(', ')}.`,
-                GATE_PASS_FINALIZATION_NOTICE,
+                buildGatePassFinalizationNotice(),
                 formatGateStateBlock(
                   'validation/reviewer',
                   'passed',
@@ -5623,7 +5619,7 @@ ${guideSections}
                 passedPendingFiles.length > 0
                   ? 'The preceding Change review diff is the user-visible filesystem evidence for this gate. Use /diff for the full current working-tree diff, /changes for the file list, or /diff -- <path> to inspect one file.'
                   : '',
-                GATE_PASS_FINALIZATION_NOTICE,
+                buildGatePassFinalizationNotice(),
                 formatGateStateBlock(
                   'validation/reviewer',
                   'passed',
@@ -5695,6 +5691,44 @@ ${guideSections}
       }
       function markActiveWorkStateChanged(): void {
         activeWorkState.lastPinnedStateMessage = ''
+      }
+
+      // Single source of truth for the post-gate finalization instruction used
+      // by every gate-pass path (fresh pass, conversation reuse, durable
+      // fingerprint reuse). Worded idempotently so a model that already wrote
+      // a summary earlier in the turn adds only follow-up suggestions instead
+      // of repeating the summary.
+      //
+      // Inline because handleSteps is serialized via .toString() and
+      // reconstructed with new Function(...), so a module-scope binding would
+      // be undefined at reconstruction time. It MUST stay a hoisted `function`
+      // declaration and never become a `const` arrow: all three call sites
+      // appear EARLIER in the source than this declaration, and only a
+      // function declaration hoists above them. Reading `activeWorkState` at
+      // call time is safe because every call site executes inside the gate
+      // loop, long after activeWorkState is initialized.
+      //
+      // SOFT continuation directive: when the agent declared multi-phase work
+      // with write_todos and an incomplete item remains, the notice tells it to
+      // keep going in the same turn instead of finalizing, and to state an
+      // explicit reason if it stops early. Nothing here hard-blocks
+      // finalization — no gate state is read or written, the directive lives
+      // entirely in the emitted text. With no incomplete declared work the
+      // original notice is returned BYTE-FOR-BYTE, because prompt/gate
+      // snapshots and e2e tests pin that exact string.
+      function buildGatePassFinalizationNotice(): string {
+        const finalizationNotice =
+          'Provide your single user-visible completion summary now if you have not already written one this turn; if you already have, add only the follow-up suggestions instead of repeating it. Write at most one completion summary per turn. Call suggest_followups only as the absolute last tool after that summary (and after git-committer if committing this turn); never mid-turn and never before remaining work. Do not make more edits unless absolutely necessary; any new edits will rerun the gate.'
+        const progress = activeWorkState.workflowTodoProgress
+        const nextWorkflowAction = (progress?.nextWorkflowAction ?? '').trim()
+        if (!progress || !nextWorkflowAction) return finalizationNotice
+        return [
+          `The gate passed for the current edits, but your declared workflow still has remaining items: Completed ${progress.completedCount}/${progress.totalCount}. Next workflow action: ${nextWorkflowAction}`,
+          'Default behavior: continue with that next workflow item in this same turn instead of finalizing. The user asked for the whole declared workflow, not just the current wave, so asking permission between your own self-declared waves is redundant while the remaining items are part of the same request.',
+          'New edits will re-arm the validation/reviewer gate. That is expected and acceptable for continuing declared work, so a re-armed gate is not a reason to stop.',
+          'Finalizing is still permitted. If you stop before the declared workflow is complete you MUST say so explicitly in your completion summary and state the concrete reason (blocked on a decision, needs user input, remaining work is genuinely out of scope, or repeated failure) plus what remains. Silently finalizing with incomplete declared todos is not acceptable.',
+          'When you do finalize: provide your single user-visible completion summary now if you have not already written one this turn; if you already have, add only the follow-up suggestions instead of repeating it. Write at most one completion summary per turn. Call suggest_followups only as the absolute last tool after that summary (and after git-committer if committing this turn); never mid-turn and never before remaining work.',
+        ].join('\n')
       }
 
       // Durable one-line mid-turn gate-progress note. Rendered by
@@ -10051,6 +10085,8 @@ function buildImplementationStepPrompt({
       ? 'Write your completion summary exactly once per turn. For edited code, write it in the final message after the automated validation/reviewer gate has passed — do not summarize the finished work before the gate runs.'
       : `After completing the user request, summarize your changes in a sentence${isFast ? '' : ' or a few short bullet points'}.`,
     isDefault &&
+      'When you declared multi-step work with write_todos, a passing validation/reviewer gate is not a stopping point: continue through the remaining declared items in this same turn. Stop early only with an explicitly stated reason and a note of what still remains.',
+    isDefault &&
       'Do not manually spawn code-reviewer for the same edited file set that the automated runtime gate will review. Manual review is only for user-requested extra review or pre-edit/advisory review. Spawn security-reviewer for auth, crypto, secrets, permissions, injection, sandboxing, supply-chain, or production-risk changes.',
     isDefault &&
       'After the automated validation/reviewer gate has passed for edited code, write your single completion summary and call suggest_followups with around 3 useful next steps as the absolute last tool in that same final message (after git-committer if committing), if that tool is available; never mid-turn and never before remaining work. If suggest_followups is unavailable, do not let that block the final summary/end.',
@@ -10071,6 +10107,7 @@ function buildExecutePlanStepPrompt({}: {}) {
     'You are in EXECUTE_PLAN mode. Execute or resume durable plan artifacts, using the project source editing tools when implementation work is required. Unlike PLAN mode, you may edit project source files to complete planned tasks.',
     'Treat SPEC.md, PLAN.md, STATUS.md, and LESSONS.md under the durable plan session as authoritative. Use any artifact contents already present in the conversation as the initial source of truth, confirm the next incomplete or blocked item from that context, and read artifacts directly only when contents are missing, truncated, stale, or have changed. Do not repeatedly re-read unchanged artifacts or source files after confirming the next item; continue from it unless the artifacts say completed work must be revisited.',
     'Honor the deterministic preflight included with resumed artifacts. Do not edit source when preflight reports errors. Use stable task IDs for updates, keep at most one task in_progress, respect dependencies, and do not mark a task done until its Validate gate passes and the checkpoint is recorded.',
+    'Completing one plan task and passing its validation gate is not the end of the turn: claim the next actionable task and keep executing in this same turn. This does not relax the at-most-one-task-in_progress rule above — advance through the tasks sequentially, one in_progress at a time, never claiming several at once. If you stop before the plan is complete, say so explicitly and state the reason, naming the task ID you reached and what remains.',
     'Keep STATUS.md current as you progress: update completed/pending/blocked items, current state, validation results, and the next checkpoint. Keep LESSONS.md current with gotchas, decisions, reusable findings, and follow-up notes discovered during execution. Prefer update_plan_status for incremental STATUS.md / LESSONS.md updates; use create_plan for SPEC.md / PLAN.md revisions, substantial rewrites, or creating missing artifacts.',
     'Use normal implementation behavior for source changes: gather context before editing, follow project conventions, validate meaningful changes when appropriate, and summarize the completed work concisely. Do not let plan artifacts drift behind actual implementation state.',
   ).join('\n')

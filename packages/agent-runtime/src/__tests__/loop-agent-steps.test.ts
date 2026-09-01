@@ -244,8 +244,203 @@ describe('loopAgentSteps', () => {
       type: 'context_window',
       used: expect.any(Number),
       max: 32_000,
+      // Model-aware semantic-compaction budget for this window, published so
+      // the CLI status chip can show where compaction will fire.
+      compactionTriggerTokens: 16_800,
+      compactionTargetTokens: 8_400,
     })
     expect(result.agentState.contextWindowTokens).toBe(32_000)
+  })
+
+  it('forwards a request-time SDK trim as a context_request_trim event', async () => {
+    setup()
+    const events: any[] = []
+    // The SDK reports the trim while the request is being dispatched, so the
+    // callback has to be invoked from inside the generator body — a call made
+    // outside it would never run.
+    const promptAiSdkStream = mock(async function* (params) {
+      params.onRequestContextTrimmed({
+        contextWindowTokens: 32_000,
+        messageBudgetTokens: 22_400,
+        beforeTokens: 30_000,
+        afterTokens: 12_000,
+        beforeMessages: 6,
+        afterMessages: 2,
+        model: 'claude-3-5-sonnet-20241022',
+      })
+      yield { type: 'text' as const, text: 'LLM response\n\n' }
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    })
+
+    await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    // Reaching this trim means the runtime-owned brakes were already exceeded,
+    // so it is published as its own event with the measurements untouched.
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'context_request_trim',
+        // Root run: empty lineage, so root-level live UI may render it.
+        ancestorRunIds: [],
+        resolvedContextWindowTokens: 32_000,
+        messageBudgetTokens: 22_400,
+        beforeTokens: 30_000,
+        afterTokens: 12_000,
+        beforeMessages: 6,
+        afterMessages: 2,
+        model: 'claude-3-5-sonnet-20241022',
+      }),
+    )
+    // The run id is minted by the runtime during the run rather than by this
+    // fixture, so pin that it is present instead of a literal value.
+    const trim = events.find((event) => event.type === 'context_request_trim')
+    expect(typeof trim.runId).toBe('string')
+    expect(trim.runId.length).toBeGreaterThan(0)
+  })
+
+  it('stamps a nested run lineage on the context_request_trim event', async () => {
+    setup()
+    const events: any[] = []
+    // Same nested-lineage mechanism as the compaction lineage case: a non-empty
+    // `ancestorRunIds` on the agent state entering the loop.
+    agentState.ancestorRunIds = ['parent-run']
+    const promptAiSdkStream = mock(async function* (params) {
+      params.onRequestContextTrimmed({
+        contextWindowTokens: 32_000,
+        messageBudgetTokens: 22_400,
+        beforeTokens: 30_000,
+        afterTokens: 12_000,
+        beforeMessages: 6,
+        afterMessages: 2,
+        model: 'claude-3-5-sonnet-20241022',
+      })
+      yield { type: 'text' as const, text: 'LLM response\n\n' }
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    })
+
+    await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    // `runId` and `ancestorRunIds` — not `agentId` — are the correlation keys a
+    // consumer may rely on: subagent forwarding rewrites `agentId` at nesting
+    // depth >= 2, so a nested trim must be identified by its lineage.
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'context_request_trim',
+        ancestorRunIds: ['parent-run'],
+        resolvedContextWindowTokens: 32_000,
+        messageBudgetTokens: 22_400,
+        beforeTokens: 30_000,
+        afterTokens: 12_000,
+        beforeMessages: 6,
+        afterMessages: 2,
+        model: 'claude-3-5-sonnet-20241022',
+      }),
+    )
+    const trim = events.find((event) => event.type === 'context_request_trim')
+    expect(typeof trim.runId).toBe('string')
+    expect(trim.runId.length).toBeGreaterThan(0)
+  })
+
+  it('publishes the same compaction budget on context_window as on the compaction event', async () => {
+    setup()
+    const events: any[] = []
+    agentState.messageHistory = [
+      userMessage('small-window evidence '.repeat(8_000)),
+      userMessage('Continue from the retained goal.'),
+    ]
+    agentTemplate.handleSteps =
+      contextPruner.handleSteps as AgentTemplate['handleSteps']
+
+    await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      resolveModelContextWindow: mock(() => 32_000),
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    // Same fixture and the same expected numbers as the semantic-compaction
+    // case for a 32k window, so the reported status-line budget and the budget
+    // the compaction branches actually used cannot drift.
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'context_compaction',
+        action: 'semantic_compaction',
+        triggerBudgetTokens: 16_800,
+        targetBudgetTokens: 8_400,
+      }),
+    )
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'context_window',
+        max: 32_000,
+        compactionTriggerTokens: 16_800,
+        compactionTargetTokens: 8_400,
+      }),
+    )
+  })
+
+  it('keeps the window-derived compaction trigger when maxContextLength clamps max below it', async () => {
+    setup()
+    const events: any[] = []
+
+    await loopAgentSteps({
+      ...baseParams,
+      // The explicit override clamps the reported status window...
+      maxContextLength: 50_000,
+      spawnParams: { maxContextLength: 50_000 },
+      resolveModelContextWindow: mock(() => 200_000),
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    // ...while the trigger/target stay derived from the RAW 200k model window,
+    // because an override does not move the window-derived trigger. So a
+    // published `compactionTriggerTokens` above `max` is expected, exactly as
+    // printModeContextWindowSchema documents; a consumer that renders the two
+    // together must clamp or suppress it itself.
+    expect(events).toContainEqual({
+      type: 'context_window',
+      used: expect.any(Number),
+      max: 50_000,
+      compactionTriggerTokens: 140_000,
+      compactionTargetTokens: 72_000,
+    })
+  })
+
+  it('keeps the unknown-window fallback trigger above a small configured window', async () => {
+    setup()
+    const events: any[] = []
+
+    await loopAgentSteps({
+      ...baseParams,
+      // No resolveModelContextWindow: the window is unknown, so the budgets are
+      // the conservative 140k/100k fallback rather than anything derived from
+      // the configured ceiling reported as `max`.
+      maxContextLength: 50_000,
+      spawnParams: { maxContextLength: 50_000 },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'context_window',
+        max: 50_000,
+        compactionTriggerTokens: 140_000,
+        compactionTargetTokens: 100_000,
+      }),
+    )
   })
 
   it('runs semantic programmatic compaction before the mechanical brake', async () => {

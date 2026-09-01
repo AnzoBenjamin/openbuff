@@ -23,10 +23,33 @@ export type StatusBarChip = {
 
 export type StatusBarWidthSize = 'xs' | 'sm' | 'md' | 'lg'
 
+/**
+ * Canonical context-window usage for the context chip. Declared once here and
+ * reused by the SDK event handler that produces it (`SetContextWindowUsageFn`,
+ * which re-exports it), the chat state that holds it, the send-message hook
+ * that threads the setter, and the status-bar component, so a later additive
+ * field cannot go silently missing from one consumer.
+ *
+ * `compactionTriggerTokens` is the runtime's model-aware semantic-compaction
+ * trigger budget and is optional: it is absent for events emitted before the
+ * field existed, and the chip then renders exactly as it did before.
+ *
+ * It is NOT bounded by `max`: the event derives it from the raw model window
+ * while `max` is clamped by an explicit `maxContextLength` override, and an
+ * unknown window yields a flat fallback budget (see
+ * `printModeContextWindowSchema`). `contextTriggerTokens` below is the single
+ * place that reconciles the two for rendering.
+ */
+export type StatusBarContextUsage = {
+  used: number
+  max: number
+  compactionTriggerTokens?: number
+}
+
 export type SelectStatusBarChipsInput = {
   widthSize: StatusBarWidthSize
   terminalWidth: number
-  contextWindowUsage?: { used: number; max: number } | null
+  contextWindowUsage?: StatusBarContextUsage | null
   sessionCostCents?: number | null
   modelName?: string | null
   diffStats?: { modified: number; added: number; deleted: number } | null
@@ -48,9 +71,13 @@ export type SelectStatusBarChipsInput = {
    * the budget or that stopped reclaiming space, and `pending` marks a pass
    * that is running right now (the chip renders even at `count: 0`). `pending`
    * is only honored while `isActive`: an aborted turn never delivers the
-   * settling event, so an idle run must not keep claiming a live pass. The
-   * producer only sets `pending` for the root agent run, so a subagent's
-   * compaction never renders here as a live root-level pass.
+   * settling event, so an idle run must not keep claiming a live pass. `pending`
+   * is derived from the notice's `pendingRunIds` set, which records EVERY run
+   * with an unsettled pass — root and nested alike — so a subagent's compaction
+   * keeps this shared chip live (without ever rendering a root-level card of its
+   * own) until that run settles. A notice produced before that set existed can
+   * carry a bare `pending: true` instead; the producers keep that flag, and this
+   * selector reads `pending` alone, so the legacy shape renders identically.
    */
   compactionNotice?: CompactionNotice | null
   elapsedSeconds: number
@@ -138,9 +165,40 @@ export function shortenStatusModelName(
   return truncateStatusLabel(modelName.replace(PROVIDER_PREFIX, ''), maxChars)
 }
 
-const contextTone = (pct: number): StatusBarChipTone => {
+/**
+ * Sanitized compaction trigger in tokens, or null when there is nothing
+ * meaningful to report. Numbers arriving from persisted state are coerced
+ * defensively before being divided by `max`, and a trigger at or above `max` is
+ * suppressed rather than pinned to the end of the bar: the unknown-window
+ * fallback budget can exceed a small configured window, where a marker at 100%
+ * would be actively misleading.
+ */
+const contextTriggerTokens = (usage: StatusBarContextUsage): number | null => {
+  const trigger = usage.compactionTriggerTokens
+  if (typeof trigger !== 'number' || !Number.isFinite(trigger)) return null
+  if (trigger <= 0) return null
+  if (!(usage.max > 0) || trigger >= usage.max) return null
+  return trigger
+}
+
+/** Trigger position as a 0..100 percent of the window, or null when unknown. */
+const contextTriggerPct = (usage: StatusBarContextUsage): number | null => {
+  const trigger = contextTriggerTokens(usage)
+  if (trigger == null) return null
+  return Math.min(100, Math.max(0, Math.round((trigger / usage.max) * 100)))
+}
+
+/**
+ * Pure in its arguments: the warning threshold is the compaction trigger when
+ * one is known (that is the point at which the next step may compact) and the
+ * fixed 70 otherwise. The 90 error threshold is fixed either way.
+ */
+const contextTone = (
+  pct: number,
+  triggerPct?: number | null,
+): StatusBarChipTone => {
   if (pct >= 90) return 'error'
-  if (pct >= 70) return 'warning'
+  if (pct >= (triggerPct ?? 70)) return 'warning'
   return 'secondary'
 }
 
@@ -153,14 +211,46 @@ const percentLabel = (pct: number): string => `${pct}%`
  */
 const contextPercentLabel = (pct: number): string => `ctx ${pct}%`
 
-/** '<used>/<max>' prefix for the sizes wide enough to render token counts. */
-const contextCountsPrefix = (usage: { used: number; max: number }): string =>
-  `${formatStatusTokenCount(usage.used)}/${formatStatusTokenCount(usage.max)}`
+/**
+ * '<used>/<max>' prefix for the sizes wide enough to render token counts, plus
+ * a '⇲<trigger>' suffix when `triggerTokens` is supplied. The glyph is the one
+ * the compaction chip already uses, so it reads as the same concept.
+ */
+const contextCountsPrefix = (
+  usage: StatusBarContextUsage,
+  triggerTokens?: number | null,
+): string => {
+  const counts = `${formatStatusTokenCount(usage.used)}/${formatStatusTokenCount(usage.max)}`
+  return triggerTokens == null
+    ? counts
+    : `${counts} ⇲${formatStatusTokenCount(triggerTokens)}`
+}
 
-/** `pct` must already be clamped to 0..100 by the caller. */
-const buildUsageBar = (pct: number, length: number): string => {
+/**
+ * `pct` must already be clamped to 0..100 by the caller. A supplied
+ * `triggerPct` marks its cell with '│' INSTEAD of the glyph that cell would
+ * otherwise get, so the rendered width is unchanged. The marker is drawn even
+ * when usage has already passed it: that the threshold was crossed is the
+ * useful signal.
+ */
+const buildUsageBar = (
+  pct: number,
+  length: number,
+  triggerPct?: number | null,
+): string => {
   const filled = Math.round((pct / 100) * length)
-  return `${'█'.repeat(filled)}${'░'.repeat(length - filled)}`
+  const markerIndex =
+    triggerPct == null
+      ? -1
+      : Math.min(
+          length - 1,
+          Math.max(0, Math.floor((triggerPct / 100) * length)),
+        )
+  let bar = ''
+  for (let index = 0; index < length; index++) {
+    bar += index === markerIndex ? '│' : index < filled ? '█' : '░'
+  }
+  return bar
 }
 
 /** Bar cell count, or null for the sizes that render the percent only. */
@@ -174,11 +264,12 @@ const contextBarLength = (widthSize: StatusBarWidthSize): number | null => {
 const barPercentLabel = (
   widthSize: StatusBarWidthSize,
   pct: number,
+  triggerPct?: number | null,
 ): string => {
   const barLength = contextBarLength(widthSize)
   return barLength == null
     ? percentLabel(pct)
-    : `${buildUsageBar(pct, barLength)} ${percentLabel(pct)}`
+    : `${buildUsageBar(pct, barLength, triggerPct)} ${percentLabel(pct)}`
 }
 
 /**
@@ -197,19 +288,25 @@ const contextCountsThreshold = (
 
 /**
  * Progressively shorter context labels for the overflow loop, widest first, so
- * a token-count label gives up its counts before its bar instead of collapsing
- * straight to the bare percent. Sizes that render neither counts nor a bar have
- * fewer entries rather than repeating one. The first entry is also the widest
- * form buildContextLabel renders, so the two cannot drift.
+ * a token-count label gives up its compaction-trigger suffix, then its counts,
+ * before its bar instead of collapsing straight to the bare percent. Sizes that
+ * render neither counts nor a bar have fewer entries rather than repeating one.
+ *
+ * INVARIANT: the first entry is exactly the widest form buildContextLabel
+ * renders, so the two cannot drift; adding a wider form to one and not the
+ * other silently breaks overflow shortening. Both are exported so a test can
+ * pin that invariant directly.
  */
-const contextLabelFallbacks = (
+export const contextLabelFallbacks = (
   widthSize: StatusBarWidthSize,
-  usage: { used: number; max: number },
+  usage: StatusBarContextUsage,
   pct: number,
 ): [string, ...string[]] => {
-  const barPercent = barPercentLabel(widthSize, pct)
+  const triggerTokens = contextTriggerTokens(usage)
+  const barPercent = barPercentLabel(widthSize, pct, contextTriggerPct(usage))
   if (contextCountsThreshold(widthSize) != null) {
     return [
+      `${contextCountsPrefix(usage, triggerTokens)} ${barPercent}`,
       `${contextCountsPrefix(usage)} ${barPercent}`,
       barPercent,
       percentLabel(pct),
@@ -221,17 +318,18 @@ const contextLabelFallbacks = (
   return [percentLabel(pct)]
 }
 
-const buildContextLabel = (
+/** Widest context label for a size; see the invariant on contextLabelFallbacks. */
+export const buildContextLabel = (
   widthSize: StatusBarWidthSize,
-  usage: { used: number; max: number },
+  usage: StatusBarContextUsage,
   pct: number,
 ): string => {
-  const barPercent = barPercentLabel(widthSize, pct)
+  const barPercent = barPercentLabel(widthSize, pct, contextTriggerPct(usage))
   const countsThreshold = contextCountsThreshold(widthSize)
 
   if (countsThreshold != null) {
     return pct >= countsThreshold
-      ? `${contextCountsPrefix(usage)} ${barPercent}`
+      ? `${contextCountsPrefix(usage, contextTriggerTokens(usage))} ${barPercent}`
       : barPercent
   }
 
@@ -361,7 +459,7 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
 
   const chips: StatusBarChip[] = []
   let contextPct: number | null = null
-  let contextUsage: { used: number; max: number } | null = null
+  let contextUsage: StatusBarContextUsage | null = null
 
   const hasIndexError = indexChip?.tone === 'error'
   const omitContextForIndexError = widthSize === 'xs' && hasIndexError
@@ -383,7 +481,7 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
     chips.push({
       id: 'context',
       label: buildContextLabel(widthSize, contextWindowUsage, contextPct),
-      tone: contextTone(contextPct),
+      tone: contextTone(contextPct, contextTriggerPct(contextWindowUsage)),
     })
     contextUsage = contextWindowUsage
   }

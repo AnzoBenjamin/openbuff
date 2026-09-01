@@ -57,32 +57,41 @@ const isLiveCompaction = (block: CompactionContentBlock): boolean =>
 const INTERRUPTED_TEXT = 'Interrupted before this pass reported a result.'
 
 /**
- * The pending/interrupted/unsettled triple that both the tone and every
- * rendered line depend on.
+ * The pending/interrupted/declined triple that both the tone and every rendered
+ * line depend on.
  */
 type CompactionPresentation = {
   unsettled: boolean
   pending: boolean
   interrupted: boolean
+  declined: boolean
 }
 
 /**
- * Single source of truth for pending vs interrupted, consumed by both
- * {@link deriveTone} and the render path so the chosen tone and the rendered
- * lines cannot drift apart.
+ * Single source of truth for pending vs interrupted vs declined, consumed by
+ * both {@link deriveTone} and the render path so the chosen tone and the
+ * rendered lines cannot drift apart.
  *
- * `unsettled` covers a live pass, a terminated one and a replayed pending one:
- * none has result fields, so the result lines stay suppressed for all. A
- * pending block that is not live in THIS process (absent or foreign
- * `liveSessionId`, i.e. a replayed transcript) is deliberately presented as
- * interrupted — see {@link isLiveCompaction}.
+ * `unsettled` covers a live pass, a terminated one, a declined one and a
+ * replayed pending one: none has result fields, so the result lines stay
+ * suppressed for all. A pending block that is not live in THIS process (absent
+ * or foreign `liveSessionId`, i.e. a replayed transcript) is deliberately
+ * presented as interrupted — see {@link isLiveCompaction}. A `declined` pass is
+ * terminal but reclaimed nothing, so it is never presented as interrupted.
  */
 const derivePresentation = (
   block: CompactionContentBlock,
 ): CompactionPresentation => {
-  const unsettled = block.status === 'pending' || block.status === 'interrupted'
+  const declined = block.status === 'declined'
+  const unsettled =
+    declined || block.status === 'pending' || block.status === 'interrupted'
   const pending = block.status === 'pending' && isLiveCompaction(block)
-  return { unsettled, pending, interrupted: unsettled && !pending }
+  return {
+    unsettled,
+    pending,
+    interrupted: unsettled && !pending && !declined,
+    declined,
+  }
 }
 
 const deriveTone = (
@@ -91,9 +100,12 @@ const deriveTone = (
 ): Tone => {
   // A pass that is still running has no result to judge yet, so it always
   // reads as neutral regardless of `action`; a pass that never settled reads
-  // as a warning.
+  // as a warning, and a declined one is merely uneventful.
   if (presentation.interrupted) return 'warning'
-  if (presentation.pending) return 'secondary'
+  if (presentation.pending || presentation.declined) return 'secondary'
+  // The request-time emergency brake fired only because every runtime brake was
+  // already exceeded.
+  if (block.trimSource === 'request') return 'error'
   if (block.fitsBudget === false) return 'error'
   const noProgress = block.consecutiveNoProgressCompactions
   if (
@@ -123,15 +135,22 @@ interface CompactionBoxProps {
 
 export const CompactionBox = memo(({ block }: CompactionBoxProps) => {
   const theme = useTheme()
-  const { unsettled, pending, interrupted } = derivePresentation(block)
-  const tone = deriveTone(block, { unsettled, pending, interrupted })
-  const title = pending
+  const presentation = derivePresentation(block)
+  const { unsettled, pending, interrupted, declined } = presentation
+  const tone = deriveTone(block, presentation)
+  const baseTitle = pending
     ? 'Compacting context…'
     : interrupted
       ? 'Compaction interrupted'
-      : block.action === 'mechanical_trim'
-        ? 'Context trimmed (emergency)'
-        : 'Context compacted'
+      : declined
+        ? 'Compaction pass — nothing reclaimed'
+        : block.trimSource === 'request'
+          ? 'Context trimmed at request time'
+          : block.action === 'mechanical_trim'
+            ? 'Context trimmed (emergency)'
+            : 'Context compacted'
+  // A nested run's pass is labelled so it is not mistaken for the root turn's.
+  const title = block.subagent === true ? `Subagent: ${baseTitle}` : baseTitle
 
   const beforeTokens = sanitizeCount(block.beforeTokens)
   const afterTokens = sanitizeCount(block.afterTokens)
@@ -188,7 +207,7 @@ export const CompactionBox = memo(({ block }: CompactionBoxProps) => {
         <text
           style={{
             wrapMode: 'word',
-            fg: pending ? theme.secondary : theme.warning,
+            fg: pending || declined ? theme.secondary : theme.warning,
           }}
         >
           {pendingText}

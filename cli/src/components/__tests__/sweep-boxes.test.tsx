@@ -196,6 +196,72 @@ describe('CompactionBox', () => {
     expect(markup).not.toContain('target')
   })
 
+  test('renders a declined pass with the current size only and no result lines', () => {
+    const markup = renderToStaticMarkup(
+      <CompactionBox
+        block={compactionBlock({
+          status: 'declined',
+          beforeTokens: 152_000,
+          afterTokens: 0,
+          beforeMessages: 0,
+          afterMessages: 0,
+          reductionPercent: 0,
+          retainedKnowledgeMemory: false,
+          recovery: 'Re-read exact files before editing.',
+          categoryDeltas: [],
+          targetBudgetTokens: 70_000,
+        })}
+      />,
+    )
+
+    expect(markup).toContain('Compaction pass — nothing reclaimed')
+    expect(markup).toContain('152k tokens → target 70k')
+    // A declined pass ran: it is not an interrupted one, and it has no result.
+    expect(markup).not.toContain('Compaction interrupted')
+    expect(markup).not.toContain(
+      'Interrupted before this pass reported a result.',
+    )
+    expect(markup).not.toContain('Compacting context…')
+    expect(markup).not.toContain('tokens (−0%)')
+    expect(markup).not.toContain('0 → 0 messages')
+    expect(markup).not.toContain('No knowledge memory retained')
+    expect(markup).not.toContain('Re-read exact files before editing.')
+  })
+
+  test('renders a request-time trim with its own title, distinct from the runtime emergency trim', () => {
+    const markup = renderToStaticMarkup(
+      <CompactionBox
+        block={compactionBlock({
+          action: 'mechanical_trim',
+          trimSource: 'request',
+          retainedKnowledgeMemory: false,
+          categoryDeltas: [],
+          reason: 'Request-time emergency brake.',
+          recovery: 'Reduce pinned state or start a fresh turn.',
+        })}
+      />,
+    )
+
+    expect(markup).toContain('Context trimmed at request time')
+    expect(markup).not.toContain('Context trimmed (emergency)')
+    expect(markup).toContain('Request-time emergency brake.')
+    expect(markup).toContain('Reduce pinned state or start a fresh turn.')
+
+    // A runtime mechanical trim (no trimSource) keeps its existing title.
+    const runtime = renderToStaticMarkup(
+      <CompactionBox block={compactionBlock({ action: 'mechanical_trim' })} />,
+    )
+    expect(runtime).toContain('Context trimmed (emergency)')
+    expect(runtime).not.toContain('Context trimmed at request time')
+  })
+
+  test('prefixes a subagent pass title', () => {
+    const markup = renderToStaticMarkup(
+      <CompactionBox block={compactionBlock({ subagent: true })} />,
+    )
+    expect(markup).toContain('Subagent: Context compacted')
+  })
+
   test('renders the emergency title, shortfall line and missing-memory line', () => {
     const markup = renderToStaticMarkup(
       <CompactionBox

@@ -17,6 +17,7 @@ import {
 import {
   selectStatusBarChips,
   type StatusBarChipTone,
+  type StatusBarContextUsage,
 } from '../utils/status-bar-chips'
 import type { CompactionNotice } from '../types/chat'
 import type { StatusIndicatorState } from '../utils/status-indicator-state'
@@ -74,7 +75,14 @@ interface StatusBarProps {
   isAtBottom: boolean
   scrollToLatest: () => void
   statusIndicatorState: StatusIndicatorState
-  contextWindowUsage?: { used: number; max: number } | null
+  /**
+   * Context usage for the chip, in the canonical
+   * {@link StatusBarContextUsage} shape the chip selector consumes: its
+   * optional `compactionTriggerTokens` is only present once the runtime
+   * reports its model-aware compaction trigger budget, and the chip renders as
+   * before without it.
+   */
+  contextWindowUsage?: StatusBarContextUsage | null
   /**
    * Accumulated context-compaction notice for the current turn (null once the
    * next turn starts). Rendered as a chip beside the context usage.

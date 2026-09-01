@@ -1507,6 +1507,48 @@ renderer sanitizes missing, non-finite, negative, or unknown-category values
 coming back from an older session, and a replayed session that still holds the
 old free-text notice keeps rendering as plain text.
 
+The persisted block's `status` field enumerates four values:
+
+- absent or `'complete'` — a finished pass. Absent is what every block written
+  before the field existed holds, so an older replayed session still renders as
+  a completed pass.
+- `'pending'` — live in the producing process only, identified by the
+  `liveSessionId` stamp described below.
+- `'interrupted'` — terminal: the run ended (abort or turn teardown) before the
+  pass reported anything, so that path rewrites `'pending'` to it and a block
+  that reaches persistence never claims to still be running.
+- `'declined'` — terminal: the pass RAN and reclaimed nothing, because the
+  runtime settled it without ever reporting a result. Distinct from
+  `'interrupted'` (the pass completed); the card reads "Compaction pass —
+  nothing reclaimed" and its result lines stay suppressed.
+
+Two optional fields are persisted alongside it. `subagent: true` marks a pass
+performed by a foreground subagent or inline agent run (non-empty
+`ancestorRunIds`) so the card is labelled as a nested pass; it is absent on root
+passes and on blocks written by an older CLI, which are therefore read as root
+passes. `trimSource: 'request'` marks the SDK's request-time emergency trim
+(`context_request_trim`), a strictly later and more severe brake than the
+runtime-owned passes; it is absent for the runtime passes and for every block
+written by an older CLI.
+
+The format stays additive, but forward replay is not symmetric with backward
+replay, so both directions are stated explicitly:
+
+- Forward (older block, current CLI): every added field is optional and its
+  absent value is exactly the previous behavior, so prior sessions round-trip
+  unchanged.
+- Backward (block written by this version, replayed by an older CLI): the older
+  renderer knows only `pending`/`complete`/`interrupted`, so it falls through to
+  its completed-pass branch for an unknown `status`. A `'declined'` block —
+  whose result fields are the zeroed placeholders of a pass that never reported
+  one — therefore renders there as a completed pass claiming `→ 0 tokens
+  (−0%)`, and `subagent`/`trimSource` are dropped, so a nested or request-time
+  trim is presented as a root-level runtime pass. That mis-rendering is
+  cosmetic and confined to the transcript card: no persisted field is
+  reinterpreted, nothing fails to parse, and the session still loads. Consumers
+  that must stay readable by an older CLI should treat an unknown `status` as
+  non-terminal-unknown rather than as `complete`.
+
 The pinned `<knowledge_memory>` block's per-field caps scale with the resolved
 semantic target budget instead of being fixed. The scale factor is
 `targetTokens / 100_000`, clamped to `[0.5, 3.0]`, so the legacy 100k target is
@@ -1597,12 +1639,54 @@ best-effort display hint.
 In the CLI, a root-run `started` appends a pending `compaction` block stamped
 with that `runId` (`CompactionContentBlock.runId`) that the terminal
 `context_compaction` result of the same run replaces in place (a second result
-in the same iteration appends instead), a root-run `settled` drops only that
-run's still-pending block, and `handleFinish` clears any stray pending block —
-including uncorrelated ones replayed from an older session — at the turn
-boundary. A subagent's status event is ignored for root-level state, and a
-subagent result contributes one completed pass to the status-bar count without
-overwriting the root turn's total or clearing its live chip.
+in the same iteration appends instead), a root-run `settled` rewrites only that
+run's still-pending block to the terminal `status: 'declined'` card — the pass
+ran and reclaimed nothing, so the transcript keeps an honest trace of it instead
+of the card being deleted, and consecutive declined cards of the same run
+collapse into one — and `handleFinish` clears any stray pending block,
+including uncorrelated ones replayed from an older session, at the turn
+boundary.
+
+A subagent's status event never adds, settles, or declines a root-level card,
+but it is not ignored for root-level state: its `runId` is recorded in the
+notice's `pendingRunIds` set, and the `pending` flag behind the root-level
+status chip is derived from that set. The chip therefore reports a live pass
+while any run — root or nested — has an unsettled `started`, and only that run's
+own `settled` removes its entry. A subagent result likewise contributes one
+completed pass to the status-bar count without overwriting the root turn's total
+or clearing its live chip.
+
+The request-time brake reports itself through its own additive
+`context_request_trim` event on the public `handleEvent` surface
+(`common/src/types/print-mode.ts`). It fires only when the dispatch-time trim
+actually dropped messages, and it is a DIFFERENT event from
+`context_compaction`: reaching it means every runtime brake above it was already
+exceeded, so the two must never be merged or counted as one pass. Its required
+fields are `messageBudgetTokens` (the message-only budget actually applied, i.e.
+the resolved request budget minus the counted system + tool surface),
+`beforeTokens`/`afterTokens`, and `beforeMessages`/`afterMessages`; `runId`,
+`ancestorRunIds`, `agentId`, `resolvedContextWindowTokens`, and `model` are
+optional, with the same correlation semantics (and the same `agentId` caveat) as
+the status event above. The CLI renders it as a `compaction` block marked
+`trimSource: 'request'` with its own "Context trimmed at request time" title: it
+never consumes an announced pending card, because it settles no announced pass,
+and it always degrades the turn's compaction chip. Consumers that only care
+about runtime-owned compaction can ignore the variant entirely.
+
+Two more additive surfaces accompany it. The `context_window` event gained
+optional `compactionTriggerTokens` and `compactionTargetTokens`, which report
+the runtime's model-aware semantic-compaction budget for the ACTIVE model
+(exactly what `getSemanticCompactionBudget` returns for the resolved window), so
+a UI can show where compaction will fire instead of surprising the user with it;
+both are optional, so replayed events emitted before they existed still validate
+and a consumer that ignores them renders exactly as before. On the SDK side, the
+published `promptAiSdk`, `promptAiSdkStream`, and `promptAiSdkStructured`
+signatures gained an optional `onRequestContextTrimmed` callback and its
+`RequestContextTrimInfo` payload type (`common/src/types/contracts/llm.ts`,
+implemented in `sdk/src/impl/llm.ts`). It is purely observational: it can never
+affect the trim result, a throwing consumer is caught and logged rather than
+aborting dispatch, and existing callers that omit it are unaffected. All three
+additions are additive and require no consumer migration.
 
 One cleanup path stays unreachable by construction: a user-initiated abort makes
 the SDK drop every post-abort event, so neither `settled` nor `handleFinish`
