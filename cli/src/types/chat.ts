@@ -142,6 +142,20 @@ export type PlanContentBlock = {
 
 export type GateStateStatus = 'pending' | 'passed' | 'failed' | 'skipped'
 
+/**
+ * Parsed `<gate-state>` block.
+ *
+ * PUBLISHED BLOCK SCHEMA (canonical consumer contract, kept in step with the
+ * producer `formatGateStateBlock` in agents/base2/base2.ts and the parser
+ * `parseGateStateBlock` in cli/src/utils/message-block-helpers.ts): `gate` and
+ * `status` are required; `details`, `origin`, `advisories`, and `workflow` are
+ * optional and additive, so a block persisted before one of them existed
+ * replays unchanged. Any new producer key MUST be added here, to the parser
+ * docblock, and to the renderer, or downstream consumers parse a format this
+ * contract does not describe. The prose summary in cli/knowledge.md is a
+ * pointer to this contract, not a second source of truth; refresh it whenever
+ * this enumeration changes.
+ */
 export type GateStateContentBlock = {
   type: 'gate-state'
   gate: string
@@ -163,6 +177,25 @@ export type GateStateContentBlock = {
    * cannot terminate the tag-delimited block early.
    */
   advisories?: string[]
+  /**
+   * Declared write_todos workflow progress reported alongside the gate result.
+   * Present ONLY when the gate PASSED while declared workflow work still
+   * remained, so a turn that finalizes with outstanding declared items is
+   * distinguishable from a genuinely complete one. Observability only: no gate
+   * phase, finalization decision, or follow-up permission reads it.
+   *
+   * Bounded by contract: base2's `formatGateStateBlock` emits a
+   * `nextWorkflowAction` of at most 240 characters and emits the field at all
+   * only when `completedCount < totalCount` (work actually remains), and the
+   * CLI parser (`parseGateStateWorkflow`) enforces the same bounds, dropping
+   * the field whole when arbitrary assistant text violates them. Optional, so
+   * blocks persisted before it existed replay unchanged.
+   */
+  workflow?: {
+    completedCount: number
+    totalCount: number
+    nextWorkflowAction: string
+  }
 }
 
 export type CompletionSummaryContentBlock = {

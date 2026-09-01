@@ -3681,6 +3681,9 @@ ${guideSections}
                   'validation/reviewer',
                   'passed',
                   `conversation gate-state reuse; reviewer verdict ${conversationReviewerVerdict}; pending files: ${currentPendingGateFiles.join(', ')}`,
+                  undefined,
+                  undefined,
+                  activeWorkState.workflowTodoProgress,
                 ),
               ].join('\n'),
             },
@@ -3742,6 +3745,9 @@ ${guideSections}
                   'validation/reviewer',
                   'passed',
                   `durable gate-pass reuse via fingerprint match; reviewer verdict ${durableReviewerVerdict}; pending files: ${currentPendingGateFiles.join(', ')}`,
+                  undefined,
+                  undefined,
+                  activeWorkState.workflowTodoProgress,
                 ),
               ].join('\n'),
             },
@@ -4279,19 +4285,55 @@ ${guideSections}
         // working tree is not review evidence: committed bytes still require a
         // snapshot-bound review unless a matching receipt survived the prior
         // pass.
+        // Content evidence is the GATE-COMPUTED receipt id. `gateId` is
+        // `${reviewer}:${expectedFingerprint}`, and `expectedFingerprint` is
+        // the fingerprint base2 itself hashed for that review, so an equal
+        // gateId means the receipt was recorded against these exact bytes.
+        const expectedReceiptGateId = `${requiredReviewerAgentType}:${reviewableFingerprint}`
         const matchingReviewReceipt = activeWorkState.reviewReceipts.some(
           (receipt) =>
             receipt.reviewer === requiredReviewerAgentType &&
             receipt.verdict === 'LOOKS_GOOD' &&
-            receipt.snapshotFingerprint === reviewableFingerprint &&
+            receipt.gateId === expectedReceiptGateId &&
             receipt.reviewedFileCount === reviewableGateScopeFiles.length &&
             gateFileSetsEqual(receipt.reviewedFiles, reviewableGateScopeFiles),
         )
+        // Provenance matters here. The receipt ALSO carries a reviewer-reported
+        // `snapshotFingerprint`, which is drift-tolerated by
+        // `collectReviewerAttestationIssues` (a coverage-complete review that
+        // reports any well-formed `v3:` fingerprint is credited even when it
+        // does not equal the id base2 computed). That field is therefore NOT
+        // content evidence and is deliberately not read above. The gate-computed
+        // `gateId` is: `recordSuccessfulReviewReceipt` builds it from base2's own
+        // `expectedFingerprint`, which is
+        // `hashGateSnapshotDetails(buildGateSnapshotDetails(reviewableGateScopeFiles, ''))`
+        // and folds in every file's working-tree content marker. So an equal
+        // gateId over an equal file set is the writer-guaranteed proof that these
+        // exact bytes were already reviewed LOOKS_GOOD by this reviewer family.
+        // `reviewedReviewableFingerprint` used to be a second required
+        // conjunct, but it is ONE scalar overwritten on every gate pass while
+        // `reviewReceipts` is a durable bounded ledger: after wave 1 reviewed
+        // {A,B} and wave 2 reviewed {C}, the scalar held only fingerprint({C}),
+        // so a later cycle re-arming on the unchanged {A,B} set re-spawned the
+        // reviewer even though a matching LOOKS_GOOD receipt for those exact
+        // bytes was still on file. The scalar added no safety (the gateId match
+        // is strictly more specific — same family, same file set, same
+        // gate-computed bytes), only false misses. It is now WRITE-ONLY state
+        // kept for serialized-state compatibility with older sessions and
+        // scheduled for removal; see its docblock in agents/base2/gate-state.ts
+        // for the reader inventory and removal path.
+        //
+        // The attestability check is what keeps this fail-closed, and it is why
+        // widening the rule is safe: a non-attestable marker such as
+        // `unreadable:no-crypto` is a STABLE error string, not content
+        // evidence, so two unrelated snapshots compare equal under it and a
+        // stale receipt could otherwise buy a skip. Ordering mirrors
+        // `hasFreshGateFingerprintForPendingFiles`: bail on an empty set, then
+        // bail on a non-attestable fingerprint, then consult the recorded
+        // evidence.
         const reviewableSetAlreadyReviewed =
           reviewableGateScopeFiles.length > 0 &&
-          !!activeWorkState.reviewedReviewableFingerprint &&
-          activeWorkState.reviewedReviewableFingerprint ===
-            reviewableFingerprint &&
+          isAttestableSnapshotFingerprint(reviewableFingerprint) &&
           matchingReviewReceipt
         const skipReviewerForReviewableScope =
           runReviewerGate &&
@@ -5525,9 +5567,11 @@ ${guideSections}
               passedPendingFiles,
               validationSummary,
             )
-            // R5: record the reviewable subset's fingerprint so a later
-            // git-action turn (no new source edits) that reopens the gate on
-            // an unchanged reviewable set can skip re-review.
+            // Soft-deprecated WRITE-ONLY field: nothing in production source
+            // reads it (the reviewer skip reads the reviewReceipts ledger). It
+            // is still written so state serialized by this base2 stays
+            // round-trip identical for older readers; see its docblock in
+            // agents/base2/gate-state.ts for the removal path.
             activeWorkState.reviewedReviewableFingerprint =
               reviewableFingerprint
             activeWorkState.lastReviewerGateSkipReason = ''
@@ -5626,6 +5670,7 @@ ${guideSections}
                   passDetails,
                   undefined,
                   passAdvisories,
+                  activeWorkState.workflowTodoProgress,
                 ),
               ].join('\n'),
             },
@@ -5794,12 +5839,26 @@ ${guideSections}
       // reconstructed with new Function(...), so module-scope closures are
       // not available at reconstruction time. Keep these deterministic and
       // single-line so the CLI can promote them into GateStateBox blocks.
+      //
+      // PUBLISHED BLOCK SCHEMA emitted by this function (the producer half of
+      // the parse contract documented on `parseGateStateBlock` /
+      // `GateStateContentBlock` in the CLI): `gate` and `status` are always
+      // present; `details` is always present (possibly empty); `repairRound`,
+      // `maxRepairRounds`, `advisories`, and `workflow` are optional and
+      // additive. `origin` is not emitted — the CLI defaults it to "Base2".
+      // Adding a key here REQUIRES updating both published CLI enumerations
+      // (cli/src/types/chat.ts and cli/src/utils/message-block-helpers.ts).
       function formatGateStateBlock(
         gate: 'validation' | 'reviewer' | 'validation/reviewer',
         status: 'passed' | 'failed' | 'skipped',
         details: string,
         repairRound?: number,
         advisories?: string[],
+        workflow?: {
+          completedCount: number
+          totalCount: number
+          nextWorkflowAction: string
+        },
       ): string {
         // Order matters: collapse whitespace FIRST so tabs/newlines/CRs become
         // spaces, then strip the remaining C0/DEL control bytes (ESC, NUL,
@@ -5816,6 +5875,11 @@ ${guideSections}
           repairRound?: number
           maxRepairRounds?: number
           advisories?: string[]
+          workflow?: {
+            completedCount: number
+            totalCount: number
+            nextWorkflowAction: string
+          }
         } = { gate, status, details: normalizedDetails }
         if (
           typeof repairRound === 'number' &&
@@ -5836,6 +5900,15 @@ ${guideSections}
         const boundedAdvisories = boundAdvisoryLines(advisories)
         if (boundedAdvisories.length > 0) {
           payload.advisories = boundedAdvisories
+        }
+        // Declared-workflow observability: the gate-PASS paths pass
+        // activeWorkState.workflowTodoProgress here so a turn that finalizes
+        // with declared write_todos work outstanding is machine-distinguishable
+        // from a genuinely complete one. Bounded (and omitted whole) by the
+        // shared helper below; nothing downstream may branch on it.
+        const boundedWorkflow = boundWorkflowProgress(workflow)
+        if (boundedWorkflow) {
+          payload.workflow = boundedWorkflow
         }
         // Delimiter safety: this payload carries reviewer-authored text
         // (`details`, `advisories`), so a literal `</gate-state>` inside it
@@ -5872,6 +5945,79 @@ ${guideSections}
               ? `${advisory.slice(0, 237).trimEnd()}...`
               : advisory,
           )
+      }
+
+      // Declared-workflow progress for the <gate-state> payload. It lives next
+      // to boundAdvisoryLines for the same reason: both carry model-authored
+      // bytes into the CLI's <text> renderer, so the 240-char cap and the
+      // control-byte strip must stay in lockstep across the two fields.
+      //
+      // Returns undefined — the key is then OMITTED ENTIRELY, never emitted as
+      // a partial or zeroed object — unless every condition holds:
+      //   - both counts are finite non-negative integers (Number.isInteger
+      //     already rejects NaN/Infinity/floats). Corrupt counts would render
+      //     nonsense progress math like `3/NaN` in the CLI.
+      //   - totalCount > 0. A turn with no declared todos legitimately reports
+      //     0/0; that is not "work remains".
+      //   - completedCount <= totalCount. An over-count is corrupt state.
+      //   - completedCount < totalCount. LOAD-BEARING: emitting on equality
+      //     would report a FINISHED workflow as incomplete on every clean
+      //     turn, which is precisely the false signal this field exists to
+      //     avoid.
+      //   - the sanitized action is non-empty. An action that survives
+      //     sanitization as '' carries no continuation target.
+      //
+      // Sanitization ORDER matches the `details` field above and the CLI-side
+      // `sanitizeGateStateText`: collapse whitespace FIRST (so tabs/newlines
+      // become spaces instead of vanishing), then strip C0/DEL (an unstripped
+      // ESC in model-authored text could spoof terminal output), then trim,
+      // then cap length so the 240-char bound describes the text actually
+      // shown. The parser sanitizes independently because it also reads
+      // hand-authored/non-base2 assistant text.
+      // Type-only alias, declared so BOTH the parameter and the return
+      // annotation stay SIMPLE (bracket-free) tokens.
+      // `extractInlineFunctionSource` — which the delimiter-safety test uses to
+      // reconstruct this inline helper out of the serialized handleSteps body —
+      // cannot walk a return annotation that opens with a leading `|` union:
+      // its annotation scan ends at the first whitespace, the body scan then
+      // mistakes the union member's `{` for the function body, and the slice is
+      // a body-less signature that TypeScript erases as an overload
+      // declaration. The helper would then be missing at runtime and every
+      // formatGateStateBlock call would throw `boundWorkflowProgress is not
+      // defined`. Types are erased before handleSteps is reconstructed, so this
+      // alias costs nothing at runtime.
+      type BoundedWorkflowProgress = {
+        completedCount: number
+        totalCount: number
+        nextWorkflowAction: string
+      }
+      function boundWorkflowProgress(
+        progress?: BoundedWorkflowProgress,
+      ): BoundedWorkflowProgress | undefined {
+        if (!progress) return undefined
+        const { completedCount, totalCount } = progress
+        if (
+          !Number.isInteger(completedCount) ||
+          !Number.isInteger(totalCount) ||
+          completedCount < 0 ||
+          totalCount <= 0 ||
+          completedCount >= totalCount
+        ) {
+          return undefined
+        }
+        const normalizedAction = String(progress.nextWorkflowAction ?? '')
+          .replace(/\s+/g, ' ')
+          .replace(/[\x00-\x1f\x7f]/g, '')
+          .trim()
+        if (normalizedAction.length === 0) return undefined
+        return {
+          completedCount,
+          totalCount,
+          nextWorkflowAction:
+            normalizedAction.length > 240
+              ? `${normalizedAction.slice(0, 237).trimEnd()}...`
+              : normalizedAction,
+        }
       }
 
       function emitGateTelemetry(payload: Record<string, unknown>): void {
