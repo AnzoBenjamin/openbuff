@@ -142,6 +142,20 @@ export type PlanContentBlock = {
 
 export type GateStateStatus = 'pending' | 'passed' | 'failed' | 'skipped'
 
+/**
+ * Parsed `<gate-state>` block.
+ *
+ * PUBLISHED BLOCK SCHEMA (canonical consumer contract, kept in step with the
+ * producer `formatGateStateBlock` in agents/base2/base2.ts and the parser
+ * `parseGateStateBlock` in cli/src/utils/message-block-helpers.ts): `gate` and
+ * `status` are required; `details`, `origin`, `advisories`, and `workflow` are
+ * optional and additive, so a block persisted before one of them existed
+ * replays unchanged. Any new producer key MUST be added here, to the parser
+ * docblock, and to the renderer, or downstream consumers parse a format this
+ * contract does not describe. The prose summary in cli/knowledge.md is a
+ * pointer to this contract, not a second source of truth; refresh it whenever
+ * this enumeration changes.
+ */
 export type GateStateContentBlock = {
   type: 'gate-state'
   gate: string
@@ -163,6 +177,25 @@ export type GateStateContentBlock = {
    * cannot terminate the tag-delimited block early.
    */
   advisories?: string[]
+  /**
+   * Declared write_todos workflow progress reported alongside the gate result.
+   * Present ONLY when the gate PASSED while declared workflow work still
+   * remained, so a turn that finalizes with outstanding declared items is
+   * distinguishable from a genuinely complete one. Observability only: no gate
+   * phase, finalization decision, or follow-up permission reads it.
+   *
+   * Bounded by contract: base2's `formatGateStateBlock` emits a
+   * `nextWorkflowAction` of at most 240 characters and emits the field at all
+   * only when `completedCount < totalCount` (work actually remains), and the
+   * CLI parser (`parseGateStateWorkflow`) enforces the same bounds, dropping
+   * the field whole when arbitrary assistant text violates them. Optional, so
+   * blocks persisted before it existed replay unchanged.
+   */
+  workflow?: {
+    completedCount: number
+    totalCount: number
+    nextWorkflowAction: string
+  }
 }
 
 export type CompletionSummaryContentBlock = {
@@ -216,8 +249,38 @@ export type CompactionContentBlock = {
    * reported a result (the user aborted mid-compaction, or the turn ended
    * abnormally): the abort/teardown path rewrites 'pending' to it, so a block
    * that reaches persistence never claims to still be running.
+   * 'declined' is the terminal state of a pass that RAN and reclaimed nothing
+   * (the runtime settled it without ever reporting a result), which is distinct
+   * from 'interrupted': the pass completed, it simply had nothing to reclaim.
+   *
+   * Backward replay is lossy but non-fatal, and is documented as such in
+   * `docs/agents-and-tools.md`: an older CLI enumerates only
+   * pending/complete/interrupted and falls through to its completed-pass branch
+   * for an unknown value, so a 'declined' block written here renders there as a
+   * completed pass reporting `→ 0 tokens (−0%)` (its result fields are the
+   * zeroed placeholders of a pass that never reported one). Nothing fails to
+   * parse and the session still loads.
    */
-  status?: 'pending' | 'complete' | 'interrupted'
+  status?: 'pending' | 'complete' | 'interrupted' | 'declined'
+  /**
+   * True when this pass was performed by a foreground subagent or inline agent
+   * run (non-empty `ancestorRunIds`) rather than the root turn, so the card can
+   * be labelled as a nested pass. Absent on root passes and on
+   * persisted/replayed blocks written by an older CLI (treated as root), which
+   * also means an older CLI replaying a block written here drops the label and
+   * presents a nested pass as a root one.
+   */
+  subagent?: boolean
+  /**
+   * Which brake produced this block. Absent for the runtime-owned passes
+   * (`context_compaction`, including its mechanical emergency trim), which is
+   * also what every persisted/replayed block written by an older CLI holds.
+   * 'request' marks the SDK's request-time emergency trim
+   * (`context_request_trim`), a strictly later and more severe brake that must
+   * not be presented as a runtime pass. An older CLI drops the field on replay
+   * and therefore presents such a trim as an ordinary runtime pass.
+   */
+  trimSource?: 'runtime' | 'request'
   /**
    * Set to {@link CLI_LIVE_SESSION_ID} while `status: 'pending'` is live in the
    * producing process. Absent on a completed pass, on an 'interrupted' one (the
@@ -264,13 +327,28 @@ export type CompactionContentBlock = {
  * status-bar component, so a later additive field cannot go silently missing
  * from one consumer.
  *
- * Turn-scoped and root-level: every agent loop (root, foreground subagents,
- * inline agents) reports its own compaction events, so the producer counts a
- * nested run's completed pass but only ever adopts the ROOT run's own
- * `compactionCount` as the total, and only the root run's live pass sets
- * `pending`.
+ * Turn-scoped, and shared across nesting levels: every agent loop (root,
+ * foreground subagents, inline agents) reports its own compaction events, so
+ * the producer counts a nested run's completed pass but only ever adopts the
+ * ROOT run's own `compactionCount` as the turn total.
+ *
+ * Live state is NOT root-only. A live pass of ANY run — root or nested — is
+ * recorded in {@link CompactionNotice.pendingRunIds} and therefore sets
+ * `pending`, so a subagent's compaction keeps the shared status-bar chip live
+ * even though it renders no root-level card of its own. Only the ROOT run's
+ * live pass additionally gets a pending transcript card.
  */
 export type CompactionNotice = {
+  /**
+   * Passes that COMPLETED in this turn (the root run's own reported
+   * `compactionCount` when it reports one, plus each nested run's passes).
+   *
+   * A settled notice never stays at 0: the shared chip selector renders nothing
+   * for a notice that is neither pending nor `count > 0`, so the producer
+   * clears such a notice to null instead of retaining unobservable state. A
+   * pass that ran and reclaimed nothing is reported by its terminal
+   * `status: 'declined'` transcript card, not by the notice.
+   */
   count: number
   /**
    * Action of the most recently COMPLETED pass. A pass that has only started
@@ -280,8 +358,32 @@ export type CompactionNotice = {
   action: CompactionContentBlock['action']
   /** The pass did not fit the budget, or stopped reclaiming space. */
   degraded: boolean
-  /** A compaction pass is running right now in the root agent run. */
+  /**
+   * A compaction pass is running right now. Derived from {@link pendingRunIds}
+   * (true exactly when it is non-empty) so consumers that only read this flag
+   * need no change. The one exception is the tolerated legacy shape described
+   * on {@link pendingRunIds}: a `pending: true` with no `pendingRunIds` is
+   * carried forward verbatim by the producers instead of being recomputed away,
+   * so such a notice keeps its live flag until a settling event clears it.
+   */
   pending?: boolean
+  /**
+   * Runs with a live (announced but unsettled) compaction pass. Tracked per run
+   * so nested or concurrent agent loops cannot cross-settle each other's live
+   * state: `started` adds the emitting `runId`, `settled` removes it, and a
+   * `settled` for a run that was never recorded is tolerated as a no-op. Root
+   * and nested runs alike are recorded here — a subagent pass renders no
+   * root-level card, but it does keep the shared root-level chip live until its
+   * own run settles.
+   *
+   * Absent on notices produced before this field existed. Such a notice can
+   * still carry `pending: true`, and that live flag is HONORED: the producers
+   * keep it on events that settle no announced pass (a request-time trim, a
+   * nested compaction result) and clear it on the events that do settle one (a
+   * `settled` status, a root compaction result), because an uncorrelated live
+   * pass has no run id to match against.
+   */
+  pendingRunIds?: string[]
 }
 
 export type AskUserContentBlock = {

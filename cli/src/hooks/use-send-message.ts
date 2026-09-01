@@ -45,14 +45,17 @@ import type { ChatMessage } from '../types/chat'
 import type { SendMessageFn } from '../types/contracts/send-message'
 import type { AgentMode } from '../utils/constants'
 import type { SendMessageTimerEvent } from '../utils/send-message-timer'
-import type { SetCompactionNoticeFn } from '../utils/sdk-event-handlers'
+import type {
+  SetCompactionNoticeFn,
+  SetContextWindowUsageFn,
+} from '../utils/sdk-event-handlers'
 import type { AgentDefinition, MessageContent, RunState } from '@openbuff/sdk'
 interface UseSendMessageOptions {
   inputRef: React.MutableRefObject<any>
   activeSubagentsRef: React.MutableRefObject<Set<string>>
   isChainInProgressRef: React.MutableRefObject<boolean>
   setStreamStatus: (status: StreamStatus) => void
-  setContextWindowUsage: (usage: { used: number; max: number } | null) => void
+  setContextWindowUsage: SetContextWindowUsageFn
   setCompactionNotice: SetCompactionNoticeFn
   setCanProcessQueue: (can: boolean) => void
   abortControllerRef: React.MutableRefObject<AbortController | null>

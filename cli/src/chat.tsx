@@ -100,7 +100,10 @@ import type { MultilineInputHandle } from './components/multiline-input'
 import type { MatchedSlashCommand } from './hooks/use-suggestion-engine'
 import { AGENT_MODE_TO_ID, type AgentMode } from './utils/constants'
 import type { FileTreeNode } from '@codebuff/common/util/file'
-import type { CompactionNotice } from './utils/sdk-event-handlers'
+import type {
+  CompactionNotice,
+  StatusBarContextUsage,
+} from './utils/sdk-event-handlers'
 import type { ScrollBoxRenderable } from '@opentui/core'
 
 export const Chat = ({
@@ -387,10 +390,11 @@ export const Chat = ({
 
   // M4.3: Context-window usage for the status bar (updated via context_window
   // PrintModeEvent from the agent runtime).
-  const [contextWindowUsage, setContextWindowUsage] = useState<{
-    used: number
-    max: number
-  } | null>(null)
+  // Canonical shape (StatusBarContextUsage): its optional
+  // `compactionTriggerTokens` is only present once the runtime reports its
+  // model-aware compaction trigger budget on the context_window event.
+  const [contextWindowUsage, setContextWindowUsage] =
+    useState<StatusBarContextUsage | null>(null)
 
   // Accumulated context-compaction notice for the turn in progress (reset to
   // null when a new run starts, inside useSendMessage). Drives the status-bar

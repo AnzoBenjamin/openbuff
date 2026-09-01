@@ -33,6 +33,12 @@ afterAll(() => {
 })
 
 function makeProjectTempDir(prefix: string): string {
+  // Ensure the root at USE time, not only at module load. `.base2-test-scratch`
+  // is shared with agents/e2e/*.e2e.test.ts, whose afterAll removes the parent
+  // once it looks empty; when bun runs those files alongside this one the root
+  // can vanish between module load and this call, and mkdtemp then fails with
+  // ENOENT. recursive: true makes this a no-op in the common case.
+  mkdirSync(TEST_TMP_ROOT, { recursive: true })
   return mkdtempSync(join(TEST_TMP_ROOT, prefix))
 }
 
@@ -158,6 +164,11 @@ function parseGateStateBlock(text: string):
       repairRound?: number
       maxRepairRounds?: number
       advisories?: string[]
+      workflow?: {
+        completedCount: number
+        totalCount: number
+        nextWorkflowAction: string
+      }
     }
   | undefined {
   const match = text.match(/<gate-state>([\s\S]*?)<\/gate-state>/)
@@ -179,6 +190,17 @@ function parseGateStateBlock(text: string):
       ...(Array.isArray(parsed.advisories)
         ? {
             advisories: parsed.advisories.map((advisory) => String(advisory)),
+          }
+        : {}),
+      // Declared-workflow progress is emitted on gate-PASS only, so it is read
+      // back verbatim here rather than re-derived.
+      ...(parsed.workflow && typeof parsed.workflow === 'object'
+        ? {
+            workflow: parsed.workflow as {
+              completedCount: number
+              totalCount: number
+              nextWorkflowAction: string
+            },
           }
         : {}),
     }
@@ -10527,6 +10549,11 @@ type InlineGateStateBlockHelpers = {
     details: string,
     repairRound?: number,
     advisories?: string[],
+    workflow?: {
+      completedCount: number
+      totalCount: number
+      nextWorkflowAction: string
+    },
   ) => string
   extractGateStateBlocksFromMessage: (message: unknown) => Array<{
     gate: string
@@ -10554,6 +10581,12 @@ function loadInlineGateStateBlockHelpers(): InlineGateStateBlockHelpers {
       // which the reviewer/security/specialist add_message surfaces also call.
       // Reconstructing the producer without it throws at call time.
       extractInlineFunctionSource(base2Source, 'boundAdvisoryLines'),
+      // Same contract for the declared-workflow bounds helper: the producer
+      // calls it unconditionally (it is what decides whether to emit the
+      // optional `workflow` key at all), so omitting it here throws
+      // `boundWorkflowProgress is not defined` on every call, not only on the
+      // calls that pass workflow progress.
+      extractInlineFunctionSource(base2Source, 'boundWorkflowProgress'),
       extractInlineFunctionSource(
         base2Source,
         'extractGateStateBlocksFromMessage',
@@ -10607,5 +10640,654 @@ describe('base2 inline formatGateStateBlock delimiter safety', () => {
     // The same bytes round-trip through the CLI-facing parse shape too.
     const parsed = parseGateStateBlock(block)
     expect(parsed?.advisories).toEqual([hostileAdvisory])
+  })
+})
+
+describe('base2 gate-pass continuation directive', () => {
+  /** write_todos tool-call + successful tool result, the fixture shape the
+   * existing workflow-todo-progress cases use. */
+  function writeTodosHistory(
+    todos: Array<{ content: string; status: string }>,
+  ) {
+    return [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'todos-1',
+            toolName: 'write_todos',
+            input: { todos },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        toolCallId: 'todos-1',
+        toolName: 'write_todos',
+        content: [{ type: 'json', value: { success: true } }],
+      },
+    ]
+  }
+
+  /** Drive one edit through validation + code-reviewer to the gate-pass
+   * add_message and return its content. */
+  function driveToGatePassMessage(agentState: Record<string, unknown>): string {
+    const base2 = createBase2('default')
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Make the requested change now please',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    const maybePinned = gen.next().value
+    if (maybePinned !== 'STEP') {
+      expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+    }
+    expect(
+      gen.next(finishStepWithToolResult(editReceipt('src/a.ts'))).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(gen.next(feedJson({ status: ' M src/a.ts' })).value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+    })
+    expect(gen.next(feedJson([])).value).toMatchObject({
+      toolName: 'git_status',
+    })
+    const reviewCall = gen.next(feedJson({ status: ' M src/a.ts' }))
+      .value as any
+    expect(reviewCall).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'code-reviewer' }] },
+    })
+    expect(
+      gen.next(attestedReviewerResult(reviewCall) as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    const gatePassed = gen.next(feedJson({ status: ' M src/a.ts' }))
+    expect(gatePassed.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    return (gatePassed.value as any).input.content as string
+  }
+
+  test('with no incomplete workflow todos the gate-pass notice is unchanged', () => {
+    const content = driveToGatePassMessage({ agentId: 'base2-custom' })
+
+    // The original notice text is load-bearing for prompt/gate snapshots.
+    expect(content).toContain(
+      'Provide your single user-visible completion summary now',
+    )
+    expect(content).toContain(
+      'Do not make more edits unless absolutely necessary; any new edits will rerun the gate.',
+    )
+    // ...and no continuation directive is emitted.
+    expect(content).not.toContain('Next workflow action:')
+    expect(content).not.toContain('declared workflow still has remaining items')
+    expect(content).not.toContain('Default behavior: continue with that next')
+  })
+
+  test('with an incomplete workflow todo the gate-pass notice tells the agent to continue this turn', () => {
+    const content = driveToGatePassMessage({
+      agentId: 'base2-custom',
+      messageHistory: writeTodosHistory([
+        { content: 'Implement wave 1 of the refactor', status: 'completed' },
+        { content: 'Implement wave 2 of the refactor', status: 'pending' },
+      ]),
+    })
+
+    expect(content).toContain(
+      'The gate passed for the current edits, but your declared workflow still has remaining items: Completed 1/2.',
+    )
+    expect(content).toContain(
+      'Next workflow action: Implement wave 2 of the refactor',
+    )
+    expect(content).toContain(
+      'Default behavior: continue with that next workflow item in this same turn instead of finalizing.',
+    )
+    // A re-armed gate is the concern that currently makes the model stop, so it
+    // is addressed explicitly.
+    expect(content).toContain(
+      'New edits will re-arm the validation/reviewer gate.',
+    )
+    // Stopping early is allowed but must be stated with a concrete reason.
+    expect(content).toContain(
+      'you MUST say so explicitly in your completion summary and state the concrete reason',
+    )
+    expect(content).toContain(
+      'Silently finalizing with incomplete declared todos is not acceptable.',
+    )
+    // The original single-summary / suggest_followups-last ordering still
+    // applies when it does finalize.
+    expect(content).toContain('Write at most one completion summary per turn.')
+    expect(content).toContain(
+      'Call suggest_followups only as the absolute last tool after that summary',
+    )
+  })
+
+  test('DEFAULT step prompt carries the write_todos continuation directive; fast mode does not', () => {
+    const base2 = createBase2('default')
+    expect(base2.stepPrompt).toContain(
+      'a passing validation/reviewer gate is not a stopping point',
+    )
+    expect(base2.stepPrompt).toContain(
+      'continue through the remaining declared items in this same turn',
+    )
+
+    const fast = createBase2('fast')
+    expect(fast.stepPrompt).not.toContain(
+      'a passing validation/reviewer gate is not a stopping point',
+    )
+  })
+
+  test('EXECUTE_PLAN step prompt continues to the next plan task without relaxing one-in_progress', () => {
+    const executePlan = createBase2('default', { executePlan: true })
+
+    expect(executePlan.stepPrompt).toContain(
+      'claim the next actionable task and keep executing in this same turn',
+    )
+    expect(executePlan.stepPrompt).toContain(
+      'one in_progress at a time, never claiming several at once',
+    )
+    expect(executePlan.stepPrompt).toContain(
+      'naming the task ID you reached and what remains',
+    )
+    // It also inherits the shared DEFAULT-mode directive.
+    expect(executePlan.stepPrompt).toContain(
+      'a passing validation/reviewer gate is not a stopping point',
+    )
+  })
+
+  // The soft continuation directive above is prompt prose; the machine-readable
+  // <gate-state> block must ALSO report the outstanding declared work, so a
+  // consumer can tell a finalized-with-work-remaining turn from a clean one.
+  test('the gate-pass <gate-state> block carries workflow progress when declared work remains', () => {
+    const content = driveToGatePassMessage({
+      agentId: 'base2-custom',
+      messageHistory: writeTodosHistory([
+        { content: 'Implement wave 1 of the refactor', status: 'completed' },
+        { content: 'Implement wave 2 of the refactor', status: 'pending' },
+        { content: 'Add focused tests', status: 'pending' },
+      ]),
+    })
+
+    const gateState = parseGateStateBlock(content)
+    expect(gateState).toMatchObject({
+      gate: 'validation/reviewer',
+      status: 'passed',
+    })
+    expect(gateState!.workflow).toEqual({
+      completedCount: 1,
+      totalCount: 3,
+      nextWorkflowAction: 'Implement wave 2 of the refactor',
+    })
+  })
+
+  // completedCount < totalCount is the load-bearing guard: emitting on equality
+  // would report a finished workflow as incomplete on every clean turn. The
+  // payload must stay byte-identical to the pre-field output here.
+  test('the workflow key is absent when every declared todo is complete', () => {
+    const content = driveToGatePassMessage({
+      agentId: 'base2-custom',
+      messageHistory: writeTodosHistory([
+        { content: 'Implement wave 1 of the refactor', status: 'completed' },
+        { content: 'Implement wave 2 of the refactor', status: 'completed' },
+      ]),
+    })
+
+    expect(parseGateStateBlock(content)!.workflow).toBeUndefined()
+    expect(content).not.toContain('"workflow"')
+  })
+
+  test('the workflow key is absent when no declared workflow progress exists', () => {
+    const content = driveToGatePassMessage({ agentId: 'base2-custom' })
+
+    expect(parseGateStateBlock(content)!.workflow).toBeUndefined()
+    expect(content).not.toContain('"workflow"')
+  })
+
+  test('the workflow key is absent when the next workflow action is blank', () => {
+    // Seeded rather than driven through write_todos: a whitespace-only todo
+    // content is dropped by the extractor, so a progress record that is
+    // genuinely incomplete yet carries a blank action can only arrive from
+    // normalized serialized state.
+    const content = driveToGatePassMessage({
+      agentId: 'base2-custom',
+      base2ActiveWork: {
+        touchedFiles: [],
+        changedFiles: [],
+        pendingGateFiles: [],
+        currentPhase: 'idle',
+        latestWorkSummary: '',
+        openReviewerBlockers: [],
+        lastValidationSummary: '',
+        nextRequiredAction: '',
+        lastPinnedStateMessage: '',
+        workflowTodoProgress: {
+          todos: [
+            { content: 'Wave 1', status: 'completed', completed: true },
+            { content: '   ', status: 'pending', completed: false },
+          ],
+          completedCount: 1,
+          totalCount: 2,
+          nextWorkflowAction: '   ',
+        },
+      },
+    })
+
+    expect(parseGateStateBlock(content)!.workflow).toBeUndefined()
+    expect(content).not.toContain('"workflow"')
+  })
+
+  test('the workflow action is truncated at 240 characters', () => {
+    const content = driveToGatePassMessage({
+      agentId: 'base2-custom',
+      messageHistory: writeTodosHistory([
+        { content: 'Implement wave 1 of the refactor', status: 'completed' },
+        { content: 'x'.repeat(300), status: 'pending' },
+      ]),
+    })
+
+    const workflow = parseGateStateBlock(content)!.workflow
+    expect(workflow).toEqual({
+      completedCount: 1,
+      totalCount: 2,
+      nextWorkflowAction: `${'x'.repeat(237)}...`,
+    })
+    expect(workflow!.nextWorkflowAction).toHaveLength(240)
+  })
+
+  // Model-authored text flows into the CLI's <text> renderer, so an unstripped
+  // ESC could spoof terminal output.
+  test('control characters are stripped from the workflow action', () => {
+    const content = driveToGatePassMessage({
+      agentId: 'base2-custom',
+      messageHistory: writeTodosHistory([
+        { content: 'Implement wave 1 of the refactor', status: 'completed' },
+        {
+          content: 'continue \u001b[31mwave 2\u0000\tnow\u007f',
+          status: 'pending',
+        },
+      ]),
+    })
+
+    const workflow = parseGateStateBlock(content)!.workflow
+    expect(workflow!.nextWorkflowAction).toBe('continue [31mwave 2 now')
+    expect(/[\u0000-\u001f\u007f]/.test(workflow!.nextWorkflowAction)).toBe(
+      false,
+    )
+  })
+})
+
+describe('base2 reviewer skip via the durable receipt ledger', () => {
+  /** Durable review receipt in the shape recordSuccessfulReviewReceipt writes. */
+  function reviewReceiptFor(params: {
+    reviewer: string
+    snapshotFingerprint: string
+    reviewedFiles: string[]
+    verdict?: 'LOOKS_GOOD' | 'NON_BLOCKING'
+    /**
+     * Defaults to the gate-computed `${reviewer}:${snapshotFingerprint}` id
+     * recordSuccessfulReviewReceipt writes. Overridden to model a receipt whose
+     * reviewer-REPORTED `snapshotFingerprint` drifted from the fingerprint base2
+     * computed for that review, which the attestation path tolerates.
+     */
+    gateId?: string
+  }) {
+    const {
+      reviewer,
+      snapshotFingerprint,
+      reviewedFiles,
+      verdict = 'LOOKS_GOOD',
+      gateId = `${reviewer}:${snapshotFingerprint}`,
+    } = params
+    return {
+      gateId,
+      reviewer,
+      verdict,
+      snapshotFingerprint,
+      reviewedFiles,
+      reviewedFileCount: reviewedFiles.length,
+      dimensions: {},
+      findings: [],
+      findingCount: 0,
+      requirementCoverage: [],
+      requirementCoverageCount: 0,
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    }
+  }
+
+  /**
+   * Gate state parked mid-gate on one pending reviewable file, with the aux
+   * gates already credited so only the FINAL reviewer decision runs.
+   */
+  function reviewerSkipSeedState(
+    gateFile: string,
+    overrides: Partial<Record<string, unknown>>,
+  ) {
+    return {
+      touchedFiles: [gateFile],
+      changedFiles: [gateFile],
+      pendingGateFiles: [gateFile],
+      currentPhase: 'awaiting_validation',
+      latestWorkSummary: '',
+      openReviewerBlockers: [],
+      openReviewerFindings: [],
+      lastValidationSummary: '',
+      nextRequiredAction: '',
+      lastPinnedStateMessage: '',
+      gatePassedFiles: [],
+      gatePassedFileMarkers: {},
+      gatePassedPendingFiles: [],
+      gatePassedReviewerVerdict: '',
+      gatePassedValidationSummary: '',
+      gatePassedFingerprint: '',
+      reviewedReviewableFingerprint: '',
+      lastReviewerGateSkipReason: '',
+      reviewReceipts: [],
+      testWriterGateDone: true,
+      docWriterGateDone: true,
+      securityReviewGateDone: true,
+      preEditSecurityReviewDone: true,
+      specialistReviewGatesDone: [],
+      auxGatesLastPendingFiles: [gateFile],
+      ...overrides,
+    }
+  }
+
+  /** Drive a seeded turn to the yield that follows the reviewer-skip decision. */
+  function driveToReviewerDecision(
+    gateFile: string,
+    activeWork: Record<string, unknown>,
+  ) {
+    const base2 = createBase2('default')
+    const agentState = { agentId: 'base2-custom', base2ActiveWork: activeWork }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Finish the pending review.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    const maybePinned = gen.next().value
+    if (maybePinned !== 'STEP') {
+      expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+    }
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+    })
+    expect(
+      gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    expect(gen.next(feedJson([])).value).toMatchObject({
+      toolName: 'git_status',
+    })
+    const decision = gen.next(feedJson({ status: ` M ${gateFile}` }))
+    return { gen, agentState, decision }
+  }
+
+  function seedReviewableFile(prefix: string) {
+    const tmpDir = makeProjectTempDir(prefix)
+    const tmpFile = join(tmpDir, 'a.ts')
+    writeFileSync(tmpFile, 'export const value = 1\n')
+    const gateFile = normalizeGateFilePath(tmpFile)
+    return {
+      tmpDir,
+      gateFile,
+      // Same construction as the gate's reviewable fingerprint:
+      // hashGateSnapshotDetails(buildGateSnapshotDetails(reviewable, '')).
+      reviewableFingerprint: buildFingerprint(
+        [{ file: gateFile, contentMarker: buildContentMarker(tmpFile) }],
+        '',
+      ),
+    }
+  }
+
+  test('a matching receipt skips the reviewer even when the scalar holds a later-wave fingerprint', () => {
+    // Wave 1 reviewed {A}, wave 2 reviewed {C}, so the single scalar holds only
+    // fingerprint({C}). A later cycle that re-arms on the unchanged {A} set
+    // must reuse the durable receipt instead of re-spawning the reviewer.
+    const { tmpDir, gateFile, reviewableFingerprint } = seedReviewableFile(
+      'base2-reviewer-skip-receipt-',
+    )
+    const telemetry: Array<Record<string, unknown>> = []
+    const originalInfo = console.info
+    console.info = (...args: unknown[]) => {
+      const [first] = args
+      if (typeof first === 'string' && first.includes('"base2.gate"')) {
+        telemetry.push(JSON.parse(first) as Record<string, unknown>)
+      }
+    }
+    try {
+      const { gen, agentState, decision } = driveToReviewerDecision(
+        gateFile,
+        reviewerSkipSeedState(gateFile, {
+          reviewedReviewableFingerprint: `v3:${'a'.repeat(64)}`,
+          reviewReceipts: [
+            reviewReceiptFor({
+              reviewer: 'code-reviewer',
+              snapshotFingerprint: reviewableFingerprint,
+              reviewedFiles: [gateFile],
+            }),
+          ],
+        }),
+      )
+
+      // The reviewer was NOT spawned; the gate reported the skip instead.
+      expect(decision.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const content = (decision.value as any).input.content as string
+      expect(content).toContain(
+        'Reviewer gate skipped (reviewer skip: reviewable source set unchanged since last review)',
+      )
+      const gateState = parseGateStateBlock(content)
+      expect(gateState).toMatchObject({ gate: 'reviewer', status: 'skipped' })
+      expect(gateState!.details).toContain(
+        'reviewer-skip-reviewable-set-unchanged',
+      )
+      expect(gateState!.details).toContain(gateFile)
+      expect(
+        telemetry.some(
+          (event) =>
+            event.reviewerStatus === 'skipped' &&
+            event.skipReason === 'reviewer-skip-reviewable-set-unchanged',
+        ),
+      ).toBe(true)
+
+      // The rest of the gate finalizes directly: no code-reviewer spawn at all.
+      const afterSkip = gen.next()
+      expect(afterSkip.value).toMatchObject({ toolName: 'git_status' })
+      const gatePassed = gen.next(feedJson({ status: ` M ${gateFile}` }))
+      expect(gatePassed.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      expect((gatePassed.value as any).input.content).toMatch(
+        /reviewer gate passed with LOOKS_GOOD/i,
+      )
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe(
+        'final_response_allowed',
+      )
+    } finally {
+      console.info = originalInfo
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a matching receipt plus a matching scalar still skips the reviewer (no regression)', () => {
+    const { tmpDir, gateFile, reviewableFingerprint } = seedReviewableFile(
+      'base2-reviewer-skip-scalar-',
+    )
+    try {
+      const { decision } = driveToReviewerDecision(
+        gateFile,
+        reviewerSkipSeedState(gateFile, {
+          reviewedReviewableFingerprint: reviewableFingerprint,
+          reviewReceipts: [
+            reviewReceiptFor({
+              reviewer: 'code-reviewer',
+              snapshotFingerprint: reviewableFingerprint,
+              reviewedFiles: [gateFile],
+            }),
+          ],
+        }),
+      )
+
+      expect(decision.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const content = (decision.value as any).input.content as string
+      expect(content).toContain(
+        'reviewer skip: reviewable source set unchanged since last review',
+      )
+      expect(parseGateStateBlock(content)!.details).toContain(
+        'reviewer-skip-reviewable-set-unchanged',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a non-attestable reviewable fingerprint never grants a receipt-based skip (fail closed)', () => {
+    // With no collision-resistant hash available, hashGateSnapshotDetails
+    // returns the STABLE sentinel 'unreadable:no-crypto'. Every receipt
+    // predicate then matches trivially, so only the attestability guard keeps
+    // the gate from treating a stable error string as content evidence.
+    const tmpDir = makeProjectTempDir('base2-reviewer-skip-no-crypto-')
+    const originalGetBuiltinModule = (process as any).getBuiltinModule
+    const originalRequire = (globalThis as any).require
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      const nonAttestableFingerprint = 'unreadable:no-crypto'
+      // Remove both module loaders the inline hasher probes.
+      ;(process as any).getBuiltinModule = undefined
+      ;(globalThis as any).require = undefined
+      const { decision } = driveToReviewerDecision(
+        gateFile,
+        reviewerSkipSeedState(gateFile, {
+          reviewedReviewableFingerprint: nonAttestableFingerprint,
+          reviewReceipts: [
+            reviewReceiptFor({
+              reviewer: 'code-reviewer',
+              snapshotFingerprint: nonAttestableFingerprint,
+              reviewedFiles: [gateFile],
+            }),
+          ],
+        }),
+      )
+
+      expect(decision.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'code-reviewer' }] },
+      })
+      // Self-check that the current fingerprint really is the non-attestable
+      // marker, so the spawn is caused by the attestability guard.
+      expect((decision.value as any).input.agents[0].prompt).toContain(
+        `Snapshot fingerprint (echo exactly): ${nonAttestableFingerprint}`,
+      )
+    } finally {
+      ;(process as any).getBuiltinModule = originalGetBuiltinModule
+      ;(globalThis as any).require = originalRequire
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // The persisted `snapshotFingerprint` is REVIEWER-REPORTED and drift-tolerated
+  // by the attestation path, so it is not content evidence on its own. Only the
+  // gate-computed `gateId` (`${reviewer}:${expectedFingerprint}`) may buy a skip.
+  test('a receipt whose gate-computed gateId does not match still spawns the reviewer', () => {
+    const { tmpDir, gateFile, reviewableFingerprint } = seedReviewableFile(
+      'base2-reviewer-skip-reported-only-',
+    )
+    try {
+      const { decision } = driveToReviewerDecision(
+        gateFile,
+        reviewerSkipSeedState(gateFile, {
+          reviewReceipts: [
+            reviewReceiptFor({
+              reviewer: 'code-reviewer',
+              // The reviewer REPORTED the current reviewable fingerprint...
+              snapshotFingerprint: reviewableFingerprint,
+              reviewedFiles: [gateFile],
+              // ...but base2 computed a different fingerprint for that review,
+              // so the gate-computed receipt id does not attest these bytes.
+              gateId: `code-reviewer:v3:${'b'.repeat(64)}`,
+            }),
+          ],
+        }),
+      )
+
+      expect(decision.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'code-reviewer' }] },
+      })
+      expect((decision.value as any).input.agents[0].prompt).toContain(
+        `Snapshot fingerprint (echo exactly): ${reviewableFingerprint}`,
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a receipt whose reviewedFiles or reviewer family differs still spawns the reviewer', () => {
+    const { tmpDir, gateFile, reviewableFingerprint } = seedReviewableFile(
+      'base2-reviewer-skip-mismatch-',
+    )
+    try {
+      // Same fingerprint and count, different reviewed file set.
+      const mismatchedFiles = driveToReviewerDecision(
+        gateFile,
+        reviewerSkipSeedState(gateFile, {
+          reviewedReviewableFingerprint: reviewableFingerprint,
+          reviewReceipts: [
+            reviewReceiptFor({
+              reviewer: 'code-reviewer',
+              snapshotFingerprint: reviewableFingerprint,
+              reviewedFiles: ['src/other.ts'],
+            }),
+          ],
+        }),
+      )
+      expect(mismatchedFiles.decision.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'code-reviewer' }] },
+      })
+
+      // A security-reviewer receipt can never satisfy the code-reviewer gate.
+      const mismatchedFamily = driveToReviewerDecision(
+        gateFile,
+        reviewerSkipSeedState(gateFile, {
+          reviewedReviewableFingerprint: reviewableFingerprint,
+          reviewReceipts: [
+            reviewReceiptFor({
+              reviewer: 'security-reviewer',
+              snapshotFingerprint: reviewableFingerprint,
+              reviewedFiles: [gateFile],
+            }),
+          ],
+        }),
+      )
+      expect(mismatchedFamily.decision.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'code-reviewer' }] },
+      })
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
   })
 })

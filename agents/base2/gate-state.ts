@@ -90,10 +90,42 @@ export type Base2GateState = {
   gatePassedFileMarkers?: Record<string, string>
   /**
    * Content fingerprint of the reviewable-source subset the last time the
-   * final code-reviewer gate passed. Used to skip re-review when a
-   * subsequent turn (e.g. a git-action turn with no new source edits)
-   * reopens the gate on an unchanged reviewable set. Backward-compatible:
-   * older serialized state lacks this field (treated as unset).
+   * final code-reviewer gate passed.
+   *
+   * SOFT-DEPRECATED and WRITE-ONLY as of the receipt-driven reviewer skip.
+   *
+   * Readers: NONE. There is no production reader of this field anywhere —
+   * base2.ts only writes it on the gate-pass path and defaults it to `''` when
+   * hydrating serialized state, and no CLI/renderer/telemetry surface reads it
+   * (the pinned active-work message and the gate telemetry payload are built
+   * from `gatePassedFingerprint`, `gatePassedFiles`, `pendingGateFiles`,
+   * `currentPhase`, and `reviewReceipts`). It is referenced only by test
+   * fixtures that seed serialized state.
+   *
+   * Why it lost its reader: it used to be a required conjunct of the reviewer
+   * skip, but a single scalar is overwritten on every gate pass, so an earlier
+   * wave's reviewable set re-arming produced false misses. That decision now
+   * reads the durable `reviewReceipts` ledger, matching a LOOKS_GOOD receipt by
+   * its GATE-COMPUTED `gateId` (`${reviewer}:${expectedFingerprint}`) plus the
+   * reviewed file set, and an attestability check on the current fingerprint.
+   * The reviewer-reported `snapshotFingerprint` on a receipt is drift-tolerated
+   * and is deliberately NOT used as content evidence.
+   *
+   * Migration/removal path for consumers:
+   * 1. Do not add new readers. Anything that needs "was this reviewable set
+   *    already reviewed?" must match a `reviewReceipts` entry on `gateId` +
+   *    `reviewedFiles`, exactly like base2's reviewer-skip rule.
+   * 2. The field stays written for one deprecation window so a session
+   *    serialized by an older base2 keeps round-tripping unchanged (no
+   *    migration step, no rollback risk: it is additive and optional).
+   * 3. Removal: once no serialized state in circulation is read by a base2 that
+   *    still declares it, drop the write in base2.ts's gate-pass path, drop the
+   *    `??= ''` default, drop this field, and drop the test-fixture seeds. Older
+   *    serialized state stays loadable because unknown persisted keys are
+   *    ignored.
+   *
+   * Backward-compatible: older serialized state lacks this field (treated as
+   * unset).
    */
   reviewedReviewableFingerprint?: string
   lastReviewerGateSkipReason: string

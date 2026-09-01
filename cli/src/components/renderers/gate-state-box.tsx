@@ -33,6 +33,17 @@ const STATUS_TONE: Record<
   skipped: 'secondary',
 }
 
+/**
+ * Renders a parsed `<gate-state>` block.
+ *
+ * PUBLISHED BLOCK SCHEMA (the rendered surface of the consumer contract
+ * declared on `GateStateContentBlock` in cli/src/types/chat.ts): `gate` and
+ * `status` are required; `details`, `origin`, `advisories`, and `workflow` are
+ * optional and additive. Rendered order is details -> `workflow` (declared
+ * write_todos progress remaining on a PASSING gate, warning tone) ->
+ * `advisories` (non-blocking reviewer observations, secondary tone). Keep this
+ * list, the type, and the parser docblock in step when the producer adds a key.
+ */
 export const GateStateBox = memo(({ block }: GateStateBoxProps) => {
   const theme = useTheme()
   const color = theme[STATUS_TONE[block.gateStatus]]
@@ -64,6 +75,26 @@ export const GateStateBox = memo(({ block }: GateStateBoxProps) => {
         >
           {block.details}
         </text>
+      ) : null}
+      {block.workflow ? (
+        <>
+          <text
+            style={{
+              wrapMode: 'word',
+              fg: theme.warning,
+            }}
+          >
+            {`Declared workflow: ${block.workflow.completedCount}/${block.workflow.totalCount} complete — ${block.workflow.totalCount - block.workflow.completedCount} remaining`}
+          </text>
+          <text
+            style={{
+              wrapMode: 'word',
+              fg: theme.warning,
+            }}
+          >
+            {`Next: ${block.workflow.nextWorkflowAction}`}
+          </text>
+        </>
       ) : null}
       {block.advisories && block.advisories.length > 0 ? (
         <>

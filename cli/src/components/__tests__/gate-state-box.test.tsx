@@ -176,6 +176,47 @@ describe('GateStateBox', () => {
     expect(markup).not.toContain('Advisory')
   })
 
+  // Declared work remaining while the gate passed is a caution, not an error,
+  // so both lines render in the warning tone between details and advisories.
+  test('renders both declared-workflow lines when workflow progress is present', () => {
+    const markup = renderToStaticMarkup(
+      <GateStateBox
+        block={makeBlock({
+          gateStatus: 'passed',
+          details: 'no blockers',
+          workflow: {
+            completedCount: 1,
+            totalCount: 3,
+            nextWorkflowAction: 'Implement wave 2 of the refactor',
+          },
+          advisories: ['naming nit in helper'],
+        })}
+      />,
+    )
+
+    expect(markup).toContain('Declared workflow: 1/3 complete')
+    expect(markup).toContain('2 remaining')
+    expect(markup).toContain('Next: Implement wave 2 of the refactor')
+    expect(markup).toContain(theme.warning)
+    // Ordering: after details, before the advisories section.
+    expect(markup.indexOf('no blockers')).toBeLessThan(
+      markup.indexOf('Declared workflow'),
+    )
+    expect(markup.indexOf('Declared workflow')).toBeLessThan(
+      markup.indexOf('Advisory (non-blocking)'),
+    )
+  })
+
+  test('renders no declared-workflow lines when workflow is absent', () => {
+    const block = makeBlock({ gateStatus: 'passed', details: 'no blockers' })
+    delete block.workflow
+    const markup = renderToStaticMarkup(<GateStateBox block={block} />)
+
+    expect(markup).toContain('no blockers')
+    expect(markup).not.toContain('Declared workflow')
+    expect(markup).not.toContain('Next:')
+  })
+
   test('uses error color for failed status', () => {
     const failedMarkup = renderToStaticMarkup(
       <GateStateBox block={makeBlock({ gateStatus: 'failed' })} />,

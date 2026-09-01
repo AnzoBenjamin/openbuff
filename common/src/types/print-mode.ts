@@ -167,10 +167,47 @@ export const printModePhaseSchema = z.object({
 })
 export type PrintModePhase = z.infer<typeof printModePhaseSchema>
 
+/**
+ * Live context-window usage for the status line.
+ *
+ * ADDITIVE, non-breaking public-contract change: the required `used`/`max`
+ * pair is unchanged, and `compactionTriggerTokens`/`compactionTargetTokens`
+ * were added afterwards. They report the runtime's model-aware
+ * semantic-compaction budget for the ACTIVE model (exactly the values
+ * `getSemanticCompactionBudget` returns for the resolved context window), so a
+ * UI can show at what point compaction will fire instead of surprising the
+ * user with it. Both are optional for compatibility with persisted or replayed
+ * events emitted before the fields existed, and a consumer that ignores them
+ * keeps its previous behavior — no consumer migration is required.
+ *
+ * RELATION TO `max` — the two are computed from DIFFERENT inputs, so a
+ * consumer must NOT assume the trigger sits inside the reported window:
+ *   - `max` is the status window: the resolved model context window, clamped
+ *     by an explicit `maxContextLength` override when one is configured
+ *     (`min(maxContextLength, contextWindow)`), and falling back to the flat
+ *     190k default only when neither is known.
+ *   - `compactionTriggerTokens`/`compactionTargetTokens` are derived from the
+ *     RAW resolved model window alone and are deliberately NOT clamped by
+ *     `maxContextLength` (an override does not move the window-derived
+ *     trigger), and when that window is unknown they are the conservative
+ *     140k/100k fallback budgets rather than anything derived from `max`.
+ *
+ * So `compactionTriggerTokens > max` is a legitimate, expected payload: an
+ * override that shrinks `max` below the model's own trigger, or the
+ * unknown-window fallback against a small configured window, both produce it.
+ * The ONLY ordering guaranteed between the new fields themselves is
+ * `1 <= compactionTargetTokens <= compactionTriggerTokens`. A consumer that
+ * renders trigger against `max` (a marker on a usage bar, a percentage, a
+ * warning threshold) must therefore clamp or suppress it for itself; the CLI
+ * status bar drops the marker entirely once the trigger reaches `max`, since
+ * pinning it to 100% would claim compaction fires exactly at the window edge.
+ */
 export const printModeContextWindowSchema = z.object({
   type: z.literal('context_window'),
   used: z.number(),
   max: z.number(),
+  compactionTriggerTokens: z.number().optional(),
+  compactionTargetTokens: z.number().optional(),
 })
 export type PrintModeContextWindow = z.infer<
   typeof printModeContextWindowSchema
@@ -363,6 +400,87 @@ export type PrintModeContextCompactionStatus = z.infer<
 >
 
 /**
+ * Request-time emergency context trim. ADDITIVE, non-breaking public-contract
+ * change: this is a NEW member of the {@link printModeEventSchema}
+ * discriminated union — no existing event variant is removed, renamed, or
+ * retyped, so no consumer migration or deprecation is required. In particular
+ * {@link printModeContextCompactionSchema} keeps its exact shape.
+ *
+ * PRODUCER CONTRACT. This reports the LAST-LINE-OF-DEFENSE trim performed at
+ * request dispatch time, when the messages of an outgoing provider request
+ * still exceed the provider-safe message budget after every runtime brake has
+ * run. It is emitted only when that trim actually dropped messages. It is a
+ * DIFFERENT event from `context_compaction`, which reports the runtime-owned
+ * semantic and mechanical passes: a `context_request_trim` means those earlier
+ * brakes were exceeded, so the two must not be merged or counted as one pass.
+ * `messageBudgetTokens` is the message-only budget actually applied (the
+ * resolved request budget minus the counted system + tool surface), and
+ * `resolvedContextWindowTokens` is the post-routing model window when known.
+ *
+ * Agent/run correlation mirrors {@link printModeContextCompactionStatusSchema}:
+ * `runId` identifies the emitting run and `ancestorRunIds` is its lineage
+ * (empty ONLY for the root run); both are forwarded verbatim by every hop.
+ * `agentId` is a display hint only — the `spawn_agents` forwarding path
+ * rewrites it on every forwarded event that is not text/tool/subagent, so at
+ * nesting depth >= 2 the delivered value names the nearest forwarding child
+ * rather than the emitter. All three are optional so a persisted or replayed
+ * payload emitted without correlation still validates.
+ *
+ * Forward-compatibility contract for `handleEvent` consumers: an exhaustive
+ * `switch`/match over `event.type` should treat unknown variants as no-ops
+ * (the SDK's own default handler only branches on `error`, and the CLI handler
+ * uses a catch-all `.otherwise`). Consumers that only care about runtime-owned
+ * compaction can safely ignore `context_request_trim` entirely.
+ */
+export const printModeContextRequestTrimSchema = z.object({
+  type: z.literal('context_request_trim'),
+  runId: z.string().optional(),
+  ancestorRunIds: z.string().array().optional(),
+  agentId: z.string().optional(),
+  resolvedContextWindowTokens: z.number().optional(),
+  messageBudgetTokens: z.number(),
+  beforeTokens: z.number(),
+  afterTokens: z.number(),
+  beforeMessages: z.number(),
+  afterMessages: z.number(),
+  model: z.string().optional(),
+})
+export type PrintModeContextRequestTrim = z.infer<
+  typeof printModeContextRequestTrimSchema
+>
+
+/**
+ * Request-time sibling of {@link printModeContextRequestTrimSchema}: the
+ * payload type of the optional `onRequestContextTrimmed` callback on the
+ * published `promptAiSdk`/`promptAiSdkStream`/`promptAiSdkStructured`
+ * signatures. It carries the same trim measurements as the event, minus the
+ * run correlation the runtime stamps on when it forwards the trim as an event.
+ *
+ * DECLARED HERE rather than re-exported from `./contracts/llm` (which now
+ * re-exports it back, so the runtime and SDK call sites that consume the
+ * callback keep importing it from the same place): the SDK entry point
+ * publishes THIS module's types wholesale and the published `dist/index.d.ts`
+ * is generated from that entry point alone, so a declaration the published
+ * module owns cannot be lost by a bundler resolving a re-export chain into an
+ * unpublished internal module. `cli/src/utils/__tests__/sdk-event-handlers.test.ts`
+ * names the type through `@openbuff/sdk` to pin that published path.
+ *
+ * `contextWindowTokens` is the resolved model window when known;
+ * `messageBudgetTokens` is the message-only budget applied after reserving the
+ * counted system + tool surface. Widening this is a public-contract change:
+ * only add optional fields.
+ */
+export type RequestContextTrimInfo = {
+  contextWindowTokens?: number
+  messageBudgetTokens: number
+  beforeTokens: number
+  afterTokens: number
+  beforeMessages: number
+  afterMessages: number
+  model?: string
+}
+
+/**
  * Live background-job update (M5). ADDITIVE, non-breaking public-contract
  * change: this is a NEW member of the {@link printModeEventSchema}
  * discriminated union — no existing event variant is removed, renamed, or
@@ -412,6 +530,7 @@ export const printModeEventSchema = z.discriminatedUnion('type', [
 
   printModeContextCompactionSchema,
   printModeContextCompactionStatusSchema,
+  printModeContextRequestTrimSchema,
   printModeContextWindowSchema,
   printModeJobUpdateSchema,
   printModeReasoningDeltaSchema,

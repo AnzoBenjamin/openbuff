@@ -12,6 +12,7 @@ import {
   getProviderContextLimitFromError,
 } from '../llm'
 
+import type { RequestContextTrimInfo } from '@codebuff/common/types/contracts/llm'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { Message } from '@codebuff/common/types/messages/codebuff-message'
 
@@ -183,6 +184,108 @@ describe('getMessagesForModelContext', () => {
           targetBudgetTokens: 600,
         },
       })
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  test('reports a request-time trim to the onTrimmed consumer', () => {
+    // Deliberately the same fixture and window/system shape as the
+    // trigger/target telemetry case above, which already pins
+    // `effectiveMessageBudgetTokens: 600` for exactly these inputs: asserting
+    // the same 600 here is what keeps the callback payload and the emitted
+    // telemetry from drifting to two different message-only budgets.
+    const messages: Message[] = [
+      userMessage('old context '.repeat(10_000)),
+      userMessage('middle context '.repeat(10_000)),
+      userMessage('recent context '.repeat(10_000)),
+    ]
+    const trimInfos: RequestContextTrimInfo[] = []
+    const warnSpy = spyOn(logger, 'warn').mockImplementation(() => {})
+
+    try {
+      const result = getMessagesForModelContext({
+        messages,
+        contextWindowTokens: 2_000,
+        systemTokens: 400,
+        model: 'anthropic/claude-4-sonnet',
+        logger,
+        onTrimmed: (info) => trimInfos.push(info),
+      })
+
+      // The callback reports the trim once, never per dropped message.
+      expect(trimInfos).toHaveLength(1)
+      const info = trimInfos[0]
+      expect(info.messageBudgetTokens).toBe(600)
+      expect(info.contextWindowTokens).toBe(2_000)
+      // The model is forwarded so a consumer can attribute the trim to the
+      // model whose window it was measured against.
+      expect(info.model).toBe('anthropic/claude-4-sonnet')
+      // before/after are measured against the request that was actually sent,
+      // so they must match the input history and the returned one.
+      expect(info.beforeMessages).toBe(messages.length)
+      expect(info.afterMessages).toBe(result.length)
+      expect(info.afterTokens).toBeLessThan(info.beforeTokens)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  test('does not invoke onTrimmed when no trim occurs', () => {
+    const messages: Message[] = [userMessage('short context')]
+    const trimInfos: RequestContextTrimInfo[] = []
+
+    const result = getMessagesForModelContext({
+      messages,
+      contextWindowTokens: 200_000,
+      logger,
+      onTrimmed: (info) => trimInfos.push(info),
+    })
+
+    // Returning the very same array reference is what "no trim" means here, so
+    // reference identity and callback silence have to agree.
+    expect(result).toBe(messages)
+    expect(trimInfos).toEqual([])
+  })
+
+  test('absorbs a throwing onTrimmed consumer without changing the trim', () => {
+    const messages: Message[] = [
+      userMessage('old context '.repeat(10_000)),
+      userMessage('middle context '.repeat(10_000)),
+      userMessage('recent context '.repeat(10_000)),
+    ]
+    const warnSpy = spyOn(logger, 'warn').mockImplementation(() => {})
+
+    try {
+      let result: Message[] | undefined
+      // A UI/telemetry consumer must never be able to abort the request the
+      // trim just made sendable.
+      expect(() => {
+        result = getMessagesForModelContext({
+          messages,
+          contextWindowTokens: 2_000,
+          logger,
+          onTrimmed: () => {
+            throw new Error('onTrimmed consumer exploded')
+          },
+        })
+      }).not.toThrow()
+
+      expect(result).not.toBe(messages)
+      expect(JSON.stringify(result)).toContain(COMPACTED_CONTEXT_POINTER)
+
+      // The emergency-trim telemetry warns from the same block, so a bare call
+      // count would not distinguish the swallow: key off the swallow's own
+      // message and the reported error instead.
+      const swallowed = warnSpy.mock.calls.filter(
+        (call) =>
+          typeof call[1] === 'string' &&
+          call[1].includes('Ignoring request-time context-trim consumer error'),
+      )
+      expect(swallowed).toHaveLength(1)
+      expect(
+        (swallowed[0][0] as { error?: { message?: string } }).error?.message,
+      ).toBe('onTrimmed consumer exploded')
     } finally {
       warnSpy.mockRestore()
     }

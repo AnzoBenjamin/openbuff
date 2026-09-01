@@ -7,6 +7,7 @@ import type { SendActionFn } from '@codebuff/common/types/contracts/client'
 import type {
   CacheDebugUsageData,
   PromptAiSdkStreamFn,
+  RequestContextTrimInfo,
 } from '@codebuff/common/types/contracts/llm'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ParamsOf } from '@codebuff/common/types/function-params'
@@ -39,6 +40,7 @@ export const getAgentStreamFromTemplate = (params: {
   }) => void
   onCacheDebugUsageReceived?: (usage: CacheDebugUsageData) => void
   onModelContextResolved?: (contextWindowTokens: number | undefined) => void
+  onRequestContextTrimmed?: (info: RequestContextTrimInfo) => void
 
   onCostCalculated?: (providerCostCents: number) => Promise<void>
   promptAiSdkStream: PromptAiSdkStreamFn
@@ -65,6 +67,7 @@ export const getAgentStreamFromTemplate = (params: {
     onCacheDebugProviderRequestBuilt,
     onCacheDebugUsageReceived,
     onModelContextResolved,
+    onRequestContextTrimmed,
 
     sendAction,
     onCostCalculated,
@@ -107,6 +110,7 @@ export const getAgentStreamFromTemplate = (params: {
     onCacheDebugProviderRequestBuilt,
     onCacheDebugUsageReceived,
     onModelContextResolved,
+    onRequestContextTrimmed,
 
     onCostCalculated,
     sendAction,

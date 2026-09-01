@@ -67,6 +67,13 @@ const sanitizeGateStateText = (value: string): string =>
  */
 const MAX_GATE_STATE_ADVISORIES = 8
 const MAX_GATE_STATE_ADVISORY_LENGTH = 240
+/**
+ * Mirrors base2's `boundWorkflowProgress`, which caps the emitted
+ * `nextWorkflowAction` at 240 characters. Same reason as the advisory bounds:
+ * this parser also reads hand-authored/non-base2 assistant text, so it enforces
+ * the producer's cap itself instead of trusting the payload.
+ */
+const MAX_GATE_STATE_WORKFLOW_ACTION_LENGTH = 240
 
 /**
  * Accept advisories only when they are an array of non-empty strings within the
@@ -94,6 +101,52 @@ const parseGateStateAdvisories = (value: unknown): string[] => {
 }
 
 /**
+ * Accept declared-workflow progress only when the producer's contract holds:
+ * a record whose `completedCount`/`totalCount` are finite non-negative integers
+ * (`Number.isInteger` already rejects NaN/Infinity/floats) with
+ * `totalCount > 0` and `completedCount < totalCount` — work must actually
+ * remain — and whose `nextWorkflowAction` is a non-empty string within
+ * MAX_GATE_STATE_WORKFLOW_ACTION_LENGTH characters AFTER sanitization.
+ *
+ * Anything else drops the field WHOLE, fail-closed exactly like
+ * `parseGateStateAdvisories`: a partial or zeroed object would render nonsense
+ * progress math, and admitting `completedCount === totalCount` would report a
+ * finished workflow as incomplete on every clean turn — the false signal this
+ * field exists to avoid.
+ *
+ * The action is sanitized BEFORE the non-empty and length checks (whitespace
+ * collapsed first, then C0/DEL stripped), so a hand-authored payload cannot
+ * smuggle ANSI escapes into the opentui `<text>` renderer, and an action made
+ * only of control characters becomes empty and drops the field.
+ */
+const parseGateStateWorkflow = (
+  value: unknown,
+): GateStateContentBlock['workflow'] => {
+  if (!isRecordValue(value)) return undefined
+  const { completedCount, totalCount } = value
+  if (
+    typeof completedCount !== 'number' ||
+    typeof totalCount !== 'number' ||
+    !Number.isInteger(completedCount) ||
+    !Number.isInteger(totalCount) ||
+    completedCount < 0 ||
+    totalCount <= 0 ||
+    completedCount >= totalCount
+  ) {
+    return undefined
+  }
+  if (typeof value.nextWorkflowAction !== 'string') return undefined
+  const nextWorkflowAction = sanitizeGateStateText(value.nextWorkflowAction)
+  if (
+    nextWorkflowAction.length === 0 ||
+    nextWorkflowAction.length > MAX_GATE_STATE_WORKFLOW_ACTION_LENGTH
+  ) {
+    return undefined
+  }
+  return { completedCount, totalCount, nextWorkflowAction }
+}
+
+/**
  * Build a gate-state block from an already-parsed JSON payload whose `gate` is
  * a non-empty string. Returns null when the status is not one of the pinned
  * statuses, keeping the JSON form exactly as strict as the line form.
@@ -114,6 +167,7 @@ const buildGateStateFromJson = (
       : ''
   const origin = typeof payload.origin === 'string' ? payload.origin.trim() : ''
   const advisories = parseGateStateAdvisories(payload.advisories)
+  const workflow = parseGateStateWorkflow(payload.workflow)
 
   return {
     type: 'gate-state',
@@ -121,6 +175,7 @@ const buildGateStateFromJson = (
     gateStatus: status,
     ...(details ? { details } : {}),
     ...(advisories.length > 0 ? { advisories } : {}),
+    ...(workflow ? { workflow } : {}),
     origin: origin || 'Base2',
   }
 }
@@ -128,10 +183,26 @@ const buildGateStateFromJson = (
 /**
  * Parse the pinned Base2 gate-state shape from a message buffer.
  *
+ * PUBLISHED BLOCK SCHEMA (canonical parse contract for downstream consumers;
+ * this docblock and `GateStateContentBlock` in cli/src/types/chat.ts are the
+ * published enumeration, and both must list every key the producer emits):
+ * - `gate` (string, required)
+ * - `status` (required): pending | passed | failed | skipped
+ * - `details` (string, optional)
+ * - `origin` (string, optional; defaults to "Base2")
+ * - `advisories` (string[], optional; non-blocking reviewer observations)
+ * - `workflow` (object, optional; declared write_todos progress on a PASSING
+ *   gate, as `{ completedCount, totalCount, nextWorkflowAction }`)
+ * Producers may also emit `repairRound`/`maxRepairRounds`, which this parser
+ * ignores. Every optional key is additive: a block persisted before a key
+ * existed replays unchanged.
+ *
  * Base2 emits a JSON payload, which is tried first:
  *
  *   <gate-state>{"gate":"validation/reviewer","status":"passed",
- *   "details":"...","origin":"Base2","advisories":["..."]}</gate-state>
+ *   "details":"...","origin":"Base2","advisories":["..."],
+ *   "workflow":{"completedCount":1,"totalCount":3,
+ *   "nextWorkflowAction":"..."}}</gate-state>
  *
  * The legacy line form remains supported (case-insensitive on keys/status,
  * narrow on purpose):
@@ -161,6 +232,11 @@ const buildGateStateFromJson = (
  *   line form and the JSON payload form agree on gate/status/details/origin.
  * - `advisories` is a JSON-payload-only field. The line form never carried it,
  *   so an `advisories:` line stays an unrecognized key and yields no advisories.
+ * - `workflow` (declared write_todos progress on a PASSING gate) is likewise
+ *   JSON-payload-only, and is admitted only within the producer's bounds: a
+ *   240-char sanitized `nextWorkflowAction` plus finite non-negative integer
+ *   counts with `totalCount > 0` and `completedCount < totalCount`. A violating
+ *   payload drops the field whole rather than rendering partial progress math.
  * - Advisories are admitted only within the producer's bounds
  *   (MAX_GATE_STATE_ADVISORIES entries, MAX_GATE_STATE_ADVISORY_LENGTH chars per
  *   entry); an out-of-bounds or otherwise malformed list is dropped whole and

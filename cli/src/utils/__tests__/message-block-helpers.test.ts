@@ -2221,6 +2221,218 @@ describe('parseGateStateBlock', () => {
     })
   })
 
+  test('parses declared workflow progress from the JSON payload form', () => {
+    const buffer = `<gate-state>${JSON.stringify({
+      gate: 'validation/reviewer',
+      status: 'passed',
+      details: 'no blockers',
+      workflow: {
+        completedCount: 1,
+        totalCount: 3,
+        nextWorkflowAction: 'Implement wave 2 of the refactor',
+      },
+    })}</gate-state>`
+    expect(parseGateStateBlock(buffer)).toEqual({
+      type: 'gate-state',
+      gate: 'validation/reviewer',
+      gateStatus: 'passed',
+      details: 'no blockers',
+      workflow: {
+        completedCount: 1,
+        totalCount: 3,
+        nextWorkflowAction: 'Implement wave 2 of the refactor',
+      },
+      origin: 'Base2',
+    })
+  })
+
+  // Published consumer contract: the documented `<gate-state>` schema is
+  // gate/status plus optional details, origin, advisories, and workflow. A
+  // payload carrying EVERY documented key must parse into exactly those keys,
+  // and producer-only keys the contract declares as ignored (repairRound /
+  // maxRepairRounds) must not leak into the block.
+  test('parses every key of the published gate-state schema and ignores producer-only keys', () => {
+    const buffer = `<gate-state>${JSON.stringify({
+      gate: 'validation/reviewer',
+      status: 'passed',
+      details: 'no blockers',
+      origin: 'Base2',
+      advisories: ['naming nit in helper'],
+      workflow: {
+        completedCount: 1,
+        totalCount: 3,
+        nextWorkflowAction: 'Implement wave 2 of the refactor',
+      },
+      repairRound: 2,
+      maxRepairRounds: 5,
+    })}</gate-state>`
+    const parsed = parseGateStateBlock(buffer)
+    expect(parsed).toEqual({
+      type: 'gate-state',
+      gate: 'validation/reviewer',
+      gateStatus: 'passed',
+      details: 'no blockers',
+      advisories: ['naming nit in helper'],
+      workflow: {
+        completedCount: 1,
+        totalCount: 3,
+        nextWorkflowAction: 'Implement wave 2 of the refactor',
+      },
+      origin: 'Base2',
+    })
+    expect(Object.keys(parsed!).sort()).toEqual([
+      'advisories',
+      'details',
+      'gate',
+      'gateStatus',
+      'origin',
+      'type',
+      'workflow',
+    ])
+  })
+
+  test('sanitizes control characters in the workflow action', () => {
+    const buffer = `<gate-state>${JSON.stringify({
+      gate: 'validation/reviewer',
+      status: 'passed',
+      workflow: {
+        completedCount: 1,
+        totalCount: 2,
+        nextWorkflowAction: 'continue \u001b[31mwave 2\u0000\tnow\u007f',
+      },
+    })}</gate-state>`
+    const parsed = parseGateStateBlock(buffer)
+    expect(parsed!.workflow).toEqual({
+      completedCount: 1,
+      totalCount: 2,
+      nextWorkflowAction: 'continue [31mwave 2 now',
+    })
+    expect(
+      /[\u0000-\u001f\u007f]/.test(parsed!.workflow!.nextWorkflowAction),
+    ).toBe(false)
+  })
+
+  // Fail-closed drop-whole rule, mirroring parseGateStateAdvisories: a partial
+  // or zeroed object would render nonsense progress math, and admitting
+  // completedCount === totalCount would report a finished workflow as
+  // incomplete on every clean turn.
+  test('drops the workflow field whole when the payload violates the producer bounds', () => {
+    const withWorkflow = (workflow: unknown) =>
+      `<gate-state>${JSON.stringify({
+        gate: 'ci',
+        status: 'passed',
+        details: 'ok',
+        workflow,
+      })}</gate-state>`
+    const expected = {
+      type: 'gate-state' as const,
+      gate: 'ci',
+      gateStatus: 'passed' as const,
+      details: 'ok',
+      origin: 'Base2',
+    }
+    const invalidWorkflows: unknown[] = [
+      // Not a record.
+      'incomplete',
+      ['incomplete'],
+      42,
+      // Missing counts.
+      { nextWorkflowAction: 'Implement wave 2' },
+      { completedCount: 1, nextWorkflowAction: 'Implement wave 2' },
+      { totalCount: 3, nextWorkflowAction: 'Implement wave 2' },
+      // Non-finite / non-integer / negative counts.
+      {
+        completedCount: Number.NaN,
+        totalCount: 3,
+        nextWorkflowAction: 'Implement wave 2',
+      },
+      {
+        completedCount: 1,
+        totalCount: Number.POSITIVE_INFINITY,
+        nextWorkflowAction: 'Implement wave 2',
+      },
+      {
+        completedCount: 1.5,
+        totalCount: 3,
+        nextWorkflowAction: 'Implement wave 2',
+      },
+      {
+        completedCount: -1,
+        totalCount: 3,
+        nextWorkflowAction: 'Implement wave 2',
+      },
+      // No declared todos at all.
+      {
+        completedCount: 0,
+        totalCount: 0,
+        nextWorkflowAction: 'Implement wave 2',
+      },
+      // Work no longer remains.
+      {
+        completedCount: 3,
+        totalCount: 3,
+        nextWorkflowAction: 'Implement wave 2',
+      },
+      // Corrupt over-count.
+      {
+        completedCount: 4,
+        totalCount: 3,
+        nextWorkflowAction: 'Implement wave 2',
+      },
+      // Empty / whitespace-only / controls-only action.
+      { completedCount: 1, totalCount: 3, nextWorkflowAction: '' },
+      { completedCount: 1, totalCount: 3, nextWorkflowAction: '   ' },
+      {
+        completedCount: 1,
+        totalCount: 3,
+        nextWorkflowAction: '\u0000\u001b\u007f',
+      },
+      // Non-string action.
+      { completedCount: 1, totalCount: 3, nextWorkflowAction: 42 },
+      // Over the 240-char bound.
+      {
+        completedCount: 1,
+        totalCount: 3,
+        nextWorkflowAction: 'a'.repeat(241),
+      },
+    ]
+    for (const workflow of invalidWorkflows) {
+      expect(parseGateStateBlock(withWorkflow(workflow))).toEqual(expected)
+    }
+  })
+
+  test('keeps a workflow action exactly at the producer cap', () => {
+    const nextWorkflowAction = 'b'.repeat(240)
+    const buffer = `<gate-state>${JSON.stringify({
+      gate: 'ci',
+      status: 'passed',
+      workflow: { completedCount: 0, totalCount: 1, nextWorkflowAction },
+    })}</gate-state>`
+    expect(parseGateStateBlock(buffer)!.workflow).toEqual({
+      completedCount: 0,
+      totalCount: 1,
+      nextWorkflowAction,
+    })
+  })
+
+  // Parse contract: workflow is a JSON-payload-only field, exactly like
+  // advisories. The legacy line form never carried it.
+  test('does not read workflow from the legacy line form', () => {
+    const buffer = [
+      '<gate-state>',
+      'gate: ci',
+      'status: passed',
+      'workflow: 1/3 complete',
+      '</gate-state>',
+    ].join('\n')
+    expect(parseGateStateBlock(buffer)).toEqual({
+      type: 'gate-state',
+      gate: 'ci',
+      gateStatus: 'passed',
+      origin: 'Base2',
+    })
+  })
+
   test('returns null for JSON that is not a gate-state object', () => {
     expect(
       parseGateStateBlock('<gate-state>["gate","status"]</gate-state>'),

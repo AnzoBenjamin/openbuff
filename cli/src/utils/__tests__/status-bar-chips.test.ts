@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import stringWidth from 'string-width'
 
 import {
+  buildContextLabel,
+  contextLabelFallbacks,
   formatStatusTokenCount,
   SCROLL_BUTTON_COMPACT_RESERVATION,
   SCROLL_BUTTON_RESERVATION,
@@ -12,6 +14,7 @@ import {
   STOP_BUTTON_WIDTH,
   type SelectStatusBarChipsInput,
   type StatusBarChip,
+  type StatusBarContextUsage,
 } from '../status-bar-chips'
 
 const full = {
@@ -726,6 +729,162 @@ describe('selectStatusBarChips', () => {
     ).toEqual(['context', 'timer'])
   })
 
+  test('marks the compaction trigger cell in the bar without widening the label', () => {
+    const contextFor = (
+      contextWindowUsage: SelectStatusBarChipsInput['contextWindowUsage'],
+    ) =>
+      byId(
+        selectStatusBarChips({
+          ...full,
+          widthSize: 'lg',
+          terminalWidth: 400,
+          contextWindowUsage,
+        }).chips,
+      ).context
+
+    // 48% usage in a 200k window with the trigger at 140k (70%): the marker
+    // lands on cell 7 of the 10-cell bar and replaces the glyph that cell
+    // would otherwise have rendered.
+    const withTrigger = contextFor({
+      used: 96_400,
+      max: 200_000,
+      compactionTriggerTokens: 140_000,
+    })
+    const withoutTrigger = contextFor({ used: 96_400, max: 200_000 })
+
+    expect(withTrigger?.label).toBe('█████░░│░░ 48%')
+    expect(withoutTrigger?.label).toBe('█████░░░░░ 48%')
+    // The marker replaces a cell rather than adding one, so the chip cannot
+    // get wider for the same size and usage.
+    expect(stringWidth(withTrigger?.label ?? '')).toBe(
+      stringWidth(withoutTrigger?.label ?? ''),
+    )
+
+    // Marker on the very last cell with usage already past it: the crossing is
+    // the useful signal, so the marker is still rendered.
+    const crossed = contextFor({
+      used: 200_000,
+      max: 200_000,
+      compactionTriggerTokens: 190_000,
+    })
+    expect(crossed?.label).toBe('200k/200k ⇲190k █████████│ 100%')
+    expect(crossed?.tone).toBe('error')
+  })
+
+  test('suppresses a meaningless trigger and keeps the fixed-70 warning tone', () => {
+    // A trigger at or above the window is misleading (the unknown-window
+    // fallback budget can exceed a small configured window), and a non-finite,
+    // zero, or negative value carries no information at all.
+    for (const compactionTriggerTokens of [
+      200_000,
+      240_000,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      0,
+      -5,
+    ]) {
+      const warning = byId(
+        selectStatusBarChips({
+          ...full,
+          widthSize: 'lg',
+          terminalWidth: 400,
+          contextWindowUsage: {
+            used: 150_000,
+            max: 200_000,
+            compactionTriggerTokens,
+          },
+        }).chips,
+      ).context
+
+      expect(warning?.label).toBe('150k/200k ████████░░ 75%')
+      expect(warning?.label).not.toContain('│')
+      expect(warning?.label).not.toContain('⇲')
+      // No trigger is known, so the tone falls back to the fixed 70.
+      expect(warning?.tone).toBe('warning')
+
+      const below = byId(
+        selectStatusBarChips({
+          ...full,
+          widthSize: 'lg',
+          terminalWidth: 400,
+          contextWindowUsage: {
+            used: 138_000, // 69%
+            max: 200_000,
+            compactionTriggerTokens,
+          },
+        }).chips,
+      ).context
+      expect(below?.tone).toBe('secondary')
+    }
+  })
+
+  test('warns from the trigger percent when it is below the fixed 70', () => {
+    // A 32k window with the model-aware trigger at 16.8k puts the warning at
+    // 53% — the point at which the next step may compact.
+    const toneAt = (used: number) =>
+      byId(
+        selectStatusBarChips({
+          ...full,
+          widthSize: 'lg',
+          terminalWidth: 400,
+          contextWindowUsage: {
+            used,
+            max: 32_000,
+            compactionTriggerTokens: 16_800,
+          },
+        }).chips,
+      ).context
+
+    expect(toneAt(15_000)?.tone).toBe('secondary') // 47%
+    const atTrigger = toneAt(16_800) // 53%
+    expect(atTrigger?.tone).toBe('warning')
+    expect(atTrigger?.label).toBe('█████│░░░░ 53%')
+    // The 90 error threshold stays fixed regardless of the trigger.
+    expect(toneAt(28_800)?.tone).toBe('error') // 90%
+  })
+
+  test('lg shows the trigger suffix from 70% and drops it before the bar', () => {
+    const usage = {
+      used: 150_000, // 75%
+      max: 200_000,
+      compactionTriggerTokens: 140_000,
+    }
+    const contextAt = (terminalWidth: number) =>
+      byId(
+        selectStatusBarChips({
+          ...full,
+          widthSize: 'lg',
+          terminalWidth,
+          contextWindowUsage: usage,
+        }).chips,
+      ).context
+
+    const widest = contextAt(400)?.label ?? ''
+    expect(widest).toBe('150k/200k ⇲140k ███████│░░ 75%')
+
+    const timerLabel = '12s'
+    const budgetFor = (contextLabel: string) =>
+      statusBarClusterWidth([
+        { id: 'context', label: contextLabel, tone: 'warning' },
+        { id: 'timer', label: timerLabel, tone: 'secondary' },
+      ])
+
+    // One step down the ladder: the trigger suffix goes before the counts.
+    const withoutSuffix = '150k/200k ███████│░░ 75%'
+    expect(contextAt(widthForBudget(budgetFor(widest) - 1, full.showStop))
+      ?.label).toBe(withoutSuffix)
+
+    // Then the counts, and only then the bar.
+    const barOnly = '███████│░░ 75%'
+    expect(
+      contextAt(widthForBudget(budgetFor(withoutSuffix) - 1, full.showStop))
+        ?.label,
+    ).toBe(barOnly)
+    expect(
+      contextAt(widthForBudget(budgetFor(barOnly) - 1, full.showStop))?.label,
+    ).toBe('75%')
+  })
+
   test('xs keeps the timer when the stop hint is hidden', () => {
     const { chips } = selectStatusBarChips({
       ...full,
@@ -1136,6 +1295,55 @@ describe('selectStatusBarChips', () => {
               )
             }
           }
+        }
+      }
+    }
+  })
+})
+
+describe('contextLabelFallbacks', () => {
+  test('its first entry is exactly the widest form buildContextLabel renders', () => {
+    // Load-bearing invariant: the overflow loop steps down from
+    // buildContextLabel's output, so a wider form added to one and not the
+    // other silently breaks shortening. Checked with and without a known
+    // compaction trigger, at every size and on both sides of the
+    // token-count thresholds.
+    //
+    // The sizes that can render token counts only spend the columns on them
+    // from their threshold up ('lg' 70%, 'md' 80%), so below it
+    // buildContextLabel deliberately renders the narrower bar+percent form
+    // while the fallback ladder always starts from the counts form. Equality
+    // therefore holds only at or above the threshold; below it the invariant is
+    // that the ladder can still reach the form actually rendered (the narrower
+    // output appears in the list) and that its widest entry is never narrower
+    // than what is rendered.
+    const usages: StatusBarContextUsage[] = [
+      { used: 150_000, max: 200_000 },
+      { used: 150_000, max: 200_000, compactionTriggerTokens: 140_000 },
+      // A meaningless trigger renders no suffix, so the two must still agree.
+      { used: 150_000, max: 200_000, compactionTriggerTokens: 200_000 },
+    ]
+
+    for (const widthSize of ['xs', 'sm', 'md', 'lg'] as const) {
+      // Mirrors contextCountsThreshold in the module under test.
+      const threshold = widthSize === 'lg' ? 70 : widthSize === 'md' ? 80 : null
+
+      for (const usage of usages) {
+        for (const pct of [0, 48, 69, 70, 75, 85, 100]) {
+          const fallbacks = contextLabelFallbacks(widthSize, usage, pct)
+          const rendered = buildContextLabel(widthSize, usage, pct)
+
+          if (threshold == null || pct >= threshold) {
+            expect(fallbacks[0]).toBe(rendered)
+            continue
+          }
+
+          // Narrower form by design: the ladder must still contain it, and its
+          // widest entry must remain at least as wide as what is rendered.
+          expect(fallbacks).toContain(rendered)
+          expect(stringWidth(fallbacks[0])).toBeGreaterThanOrEqual(
+            stringWidth(rendered),
+          )
         }
       }
     }

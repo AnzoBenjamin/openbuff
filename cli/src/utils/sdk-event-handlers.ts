@@ -47,6 +47,7 @@ import { CLI_LIVE_SESSION_ID } from '../types/chat'
 
 import type { AgentMode } from './constants'
 import type { MessageUpdater } from './message-updater'
+import type { StatusBarContextUsage } from './status-bar-chips'
 import type { StreamController } from '../hooks/stream-state'
 import type { StreamStatus } from '../hooks/use-message-queue'
 import type {
@@ -63,6 +64,7 @@ import type {
   PrintModeContextWindow,
   PrintModeContextCompaction,
   PrintModeContextCompactionStatus,
+  PrintModeContextRequestTrim,
   PrintModeEvent as SDKEvent,
   PrintModeJobUpdate,
   PrintModeFinish,
@@ -82,13 +84,30 @@ export type SetStreamingAgentsFn = (
 
 export type SetStreamStatusFn = (status: StreamStatus) => void
 
+/**
+ * Forwards the `context_window` event's usage to the status bar. The payload is
+ * the canonical {@link StatusBarContextUsage} the chip selector consumes, so a
+ * later additive field cannot go silently missing from one hop.
+ *
+ * `compactionTriggerTokens` — the runtime's model-aware semantic-compaction
+ * trigger budget — is forwarded only when the event supplies it: persisted or
+ * replayed events emitted before the field existed omit it, and the chip then
+ * renders exactly as it did before. It is forwarded verbatim and therefore NOT
+ * bounded by `max` — see `printModeContextWindowSchema`; the status-bar chip
+ * suppresses a trigger that reaches `max`.
+ */
 export type SetContextWindowUsageFn = (
-  usage: { used: number; max: number } | null,
+  usage: StatusBarContextUsage | null,
 ) => void
 
 // Re-exported from its canonical declaration in ../types/chat so existing
 // importers of this module keep working while there is only one shape.
 export type { CompactionNotice }
+
+// Same reason, for the canonical context-usage shape declared in
+// ./status-bar-chips: consumers of this module's setter get the shape from the
+// same place rather than restating it.
+export type { StatusBarContextUsage }
 
 /**
  * Accumulating setter for the status-bar compaction chip: receives an updater so
@@ -1258,10 +1277,17 @@ const handleContextWindow = (
   event: PrintModeContextWindow,
 ) => {
   // Context-window events carry the current token usage and max so the
-  // CLI status bar can display how full the context window is.
+  // CLI status bar can display how full the context window is, plus the
+  // model-aware compaction budget so the chip can also show where compaction
+  // will fire. `compactionTargetTokens` is deliberately NOT forwarded: the
+  // post-compaction target is not user-actionable at a glance, and it stays
+  // available on the event for other consumers.
   state.streaming.setContextWindowUsage({
     used: event.used,
     max: event.max,
+    ...(event.compactionTriggerTokens !== undefined && {
+      compactionTriggerTokens: event.compactionTriggerTokens,
+    }),
   })
 }
 
@@ -1321,47 +1347,130 @@ const findLastPendingCompactionIndex = (
 }
 
 /**
- * Drops the still-running compaction blocks produced by `runId`, returning the
- * original array reference when there was nothing to drop so React skips a
- * re-render. Used by the `settled` path only: a pass that reported no result
- * never compacted anything, so its card has nothing to report and should
- * disappear entirely. An abnormal turn end instead rewrites the block via
- * {@link markPendingCompactionInterrupted}, which keeps an honest terminal
- * record. Only that run's blocks are dropped, so one agent loop's `settled`
- * cannot clear another loop's live card. `runId` is required on
+ * Rewrites the still-running compaction blocks produced by `runId` to the
+ * terminal `status: 'declined'` state, returning the ORIGINAL array reference
+ * when there was nothing to rewrite so React skips a re-render. Used by the
+ * `settled` path only: such a pass RAN and reclaimed nothing, so the transcript
+ * keeps an honest trace of it instead of deleting the card. That is distinct
+ * from {@link markPendingCompactionInterrupted}, which reports a pass whose run
+ * ended (abort/teardown) before it could report anything at all.
+ *
+ * Consecutive over-trigger iterations can each announce and decline a pass, so
+ * a rewritten card that is immediately preceded by an identical declined card
+ * of the same run collapses into it rather than accumulating a column of
+ * duplicates. Only the immediately preceding block is considered, so an
+ * unrelated block or another run's card between them keeps both.
+ *
+ * Only that run's blocks are rewritten, so one agent loop's `settled` cannot
+ * touch another loop's live card. `runId` is required on
  * `printModeContextCompactionStatusSchema`, so unlike
  * {@link findLastPendingCompactionIndex} — reached from the `context_compaction`
  * result path, where the correlation fields are optional — there is no
  * uncorrelated case to pair here. Root-level only: compaction blocks are never
  * nested under an agent block.
  */
-const dropPendingCompactionBlocks = (
+const declinePendingCompactionBlocks = (
   blocks: ContentBlock[],
   runId: string,
 ): ContentBlock[] => {
-  const next = blocks.filter(
-    (block) =>
+  let changed = false
+  const next: ContentBlock[] = []
+  for (const block of blocks) {
+    if (
       !(
         block.type === 'compaction' &&
         block.status === 'pending' &&
         block.runId === runId
-      ),
-  )
-  return next.length === blocks.length ? blocks : next
+      )
+    ) {
+      next.push(block)
+      continue
+    }
+    changed = true
+    // The live stamp is meaningless once the pass is terminal.
+    const { liveSessionId: _liveSessionId, ...rest } = block
+    const declined: CompactionContentBlock = { ...rest, status: 'declined' }
+    const previous = next[next.length - 1]
+    if (
+      previous &&
+      previous.type === 'compaction' &&
+      previous.status === 'declined' &&
+      previous.runId === runId
+    ) {
+      next[next.length - 1] = declined
+      continue
+    }
+    next.push(declined)
+  }
+  return changed ? next : blocks
 }
 
 /**
- * Live compaction state. The pruner agent runs inline and is hidden from the
- * CLI, so `started` renders a pending compaction card (and a live status-bar
- * chip) that the terminal `context_compaction` result settles in place.
- * `settled` is the runtime's guarantee that a pass which decided not to compact
- * cannot leave that pending state on screen.
+ * Live-pass bookkeeping for {@link CompactionNotice}, keyed by the emitting
+ * `runId` so nested or concurrent agent loops cannot cross-settle each other.
+ */
+const addPendingRunId = (
+  pendingRunIds: string[] | undefined,
+  runId: string,
+): string[] =>
+  pendingRunIds?.includes(runId)
+    ? pendingRunIds
+    : [...(pendingRunIds ?? []), runId]
+
+/** Tolerates a `settled` for a run that was never recorded (a post-reset event). */
+const removePendingRunId = (
+  pendingRunIds: string[] | undefined,
+  runId: string,
+): string[] => (pendingRunIds ?? []).filter((id) => id !== runId)
+
+/**
+ * True for the compatibility case {@link CompactionNotice.pendingRunIds}
+ * documents: a notice produced before per-run tracking existed carries
+ * `pending: true` with no `pendingRunIds` at all. Its live pass belongs to an
+ * unknown run, so it cannot be matched per run — but dropping it would silently
+ * lose a live flag the type promises to tolerate, so it is carried forward until
+ * a settling event for it arrives.
+ */
+const hasUncorrelatedPending = (
+  previous: CompactionNotice | null | undefined,
+): boolean => previous?.pending === true && previous.pendingRunIds === undefined
+
+/**
+ * `pending` is kept as the DERIVED value of `pendingRunIds` so the status-bar
+ * chip needs no logic change. Both are omitted once nothing is live, so a
+ * settled notice has the exact shape it had before per-run tracking existed and
+ * cannot outlive the turn as a stale `pending: true`.
  *
- * Every agent loop emits this event, so it is filtered and paired by run:
- * only the root run (empty `ancestorRunIds`) drives this root-level card and
- * chip, and a `settled` only clears the pending card its own `runId` started.
- * Without both rules a subagent's compaction would render as a root-level
- * 'Compacting context…' card and cross-settle the root run's live pass.
+ * `legacyPending` covers the tolerated uncorrelated case (see
+ * {@link hasUncorrelatedPending}): a live flag with no run set stays a bare
+ * `pending: true`, since inventing a run id for it would let an unrelated
+ * `settled` clear it.
+ */
+const pendingNoticeFields = (
+  pendingRunIds: string[],
+  legacyPending = false,
+): { pending?: true; pendingRunIds?: string[] } =>
+  pendingRunIds.length > 0
+    ? { pending: true, pendingRunIds }
+    : legacyPending
+      ? { pending: true }
+      : {}
+
+/**
+ * Live compaction state. The pruner agent runs inline and is hidden from the
+ * CLI, so `started` marks the status-bar chip live and — for the ROOT run only
+ * — appends a pending compaction card that the terminal `context_compaction`
+ * result settles in place. A non-root run gets no card: its pass is short-lived
+ * and a live nested card would only flicker, but its live state is still
+ * reported on the chip. `settled` is the runtime's guarantee that a pass which
+ * decided not to compact cannot leave that pending state on screen; the card is
+ * rewritten as a declined pass rather than deleted, so the transcript keeps an
+ * honest trace of a pass that reclaimed nothing.
+ *
+ * Every agent loop emits this event, so live state is paired by run:
+ * `pendingRunIds` records each run with an unsettled `started`, and a `settled`
+ * only clears its own `runId`. Without that a subagent's compaction would
+ * cross-settle the root run's live pass.
  *
  * Neither cleanup path is reachable when the user aborts mid-compaction: the
  * SDK drops every post-abort event, and the blocks of the turn are persisted to
@@ -1374,70 +1483,162 @@ const handleContextCompactionStatus = (
   state: EventHandlerState,
   event: PrintModeContextCompactionStatus,
 ) => {
-  if (!isRootCompactionEvent(event)) return
+  const rootScoped = isRootCompactionEvent(event)
 
   if (event.state === 'started') {
-    const pendingBlock: CompactionContentBlock = {
-      type: 'compaction',
-      status: 'pending',
-      // Stamped so a persisted/replayed copy of this transient block (the user
-      // aborted the turn before `settled` or `context_compaction` arrived)
-      // renders as an interrupted pass instead of a permanently live card.
-      liveSessionId: CLI_LIVE_SESSION_ID,
-      // Correlated so only this run's own `settled`/result can consume the card.
-      runId: event.runId,
-      action: 'semantic_compaction',
-      beforeTokens: event.contextTokens ?? 0,
-      afterTokens: 0,
-      beforeMessages: 0,
-      afterMessages: 0,
-      reductionPercent: 0,
-      retainedKnowledgeMemory: false,
-      recovery: '',
-      categoryDeltas: [],
-      ...(event.resolvedContextWindowTokens !== undefined && {
-        resolvedContextWindowTokens: event.resolvedContextWindowTokens,
-      }),
-      ...(event.triggerBudgetTokens !== undefined && {
-        triggerBudgetTokens: event.triggerBudgetTokens,
-      }),
-      ...(event.targetBudgetTokens !== undefined && {
-        targetBudgetTokens: event.targetBudgetTokens,
-      }),
+    if (rootScoped) {
+      const pendingBlock: CompactionContentBlock = {
+        type: 'compaction',
+        status: 'pending',
+        // Stamped so a persisted/replayed copy of this transient block (the user
+        // aborted the turn before `settled` or `context_compaction` arrived)
+        // renders as an interrupted pass instead of a permanently live card.
+        liveSessionId: CLI_LIVE_SESSION_ID,
+        // Correlated so only this run's own `settled`/result can consume the card.
+        runId: event.runId,
+        action: 'semantic_compaction',
+        beforeTokens: event.contextTokens ?? 0,
+        afterTokens: 0,
+        beforeMessages: 0,
+        afterMessages: 0,
+        reductionPercent: 0,
+        retainedKnowledgeMemory: false,
+        recovery: '',
+        categoryDeltas: [],
+        ...(event.resolvedContextWindowTokens !== undefined && {
+          resolvedContextWindowTokens: event.resolvedContextWindowTokens,
+        }),
+        ...(event.triggerBudgetTokens !== undefined && {
+          triggerBudgetTokens: event.triggerBudgetTokens,
+        }),
+        ...(event.targetBudgetTokens !== undefined && {
+          targetBudgetTokens: event.targetBudgetTokens,
+        }),
+      }
+      state.message.updater.updateAiMessageBlocks((blocks) => [
+        ...blocks,
+        pendingBlock,
+      ])
     }
-    state.message.updater.updateAiMessageBlocks((blocks) => [
-      ...blocks,
-      pendingBlock,
-    ])
     state.streaming.setCompactionNotice((previous) => ({
       count: previous?.count ?? 0,
       // The live chip label does not read `action`, and a pass that has only
       // started has not decided its own action yet, so the accumulated action
       // of the last COMPLETED pass is carried forward. Overwriting it would
-      // mislabel the settled chip after an abort mid-compaction: a turn whose
+      // mislead the settled chip after an abort mid-compaction: a turn whose
       // only completed pass was a mechanical trim would read '⇲ compacted ×N'.
       action: previous?.action ?? 'semantic_compaction',
       degraded: previous?.degraded ?? false,
-      pending: true,
+      ...pendingNoticeFields(
+        addPendingRunId(previous?.pendingRunIds, event.runId),
+      ),
     }))
     return
   }
 
   state.message.updater.updateAiMessageBlocks((blocks) =>
-    dropPendingCompactionBlocks(blocks, event.runId),
+    declinePendingCompactionBlocks(blocks, event.runId),
   )
   state.streaming.setCompactionNotice((previous) => {
     if (!previous) return null
-    // A start fired but nothing ever completed: clearing the notice keeps a
-    // '⇲ compacted ×0' chip from ever being rendered.
-    if (previous.count === 0) return null
-    if (!previous.pending) return previous
+    const pendingRunIds = removePendingRunId(
+      previous.pendingRunIds,
+      event.runId,
+    )
+    // A pass that was announced and settled without a result RAN and reclaimed
+    // nothing; its honest trace is the terminal `declined` card rewritten
+    // above, not the notice. `selectStatusBarChips` renders nothing for a
+    // notice that is neither pending nor `count > 0`, so once no pass is live
+    // and none has completed the notice is cleared rather than retained as
+    // state no consumer can observe (which also keeps a '⇲ compacted ×0' chip
+    // unreachable). An uncorrelated legacy `pending: true` is settled here
+    // rather than carried: a `settled` is the only event that can ever clear a
+    // live flag whose run is unknown, so keeping it would strand the chip.
+    if (previous.count === 0 && pendingRunIds.length === 0) return null
     return {
       count: previous.count,
       action: previous.action,
       degraded: previous.degraded,
+      ...pendingNoticeFields(pendingRunIds),
     }
   })
+}
+
+/**
+ * Request-time emergency trim (`context_request_trim`): the SDK dropped
+ * messages at dispatch time because the request still exceeded the
+ * provider-safe budget after every runtime brake ran. A DIFFERENT brake from
+ * the runtime's own `mechanical_trim` result, so the block is marked
+ * `trimSource: 'request'` and never consumes a pending card — it is an
+ * additional pass, not the settlement of an announced one — and it always
+ * degrades the notice, because reaching it means the earlier brakes failed.
+ */
+const handleContextRequestTrim = (
+  state: EventHandlerState,
+  event: PrintModeContextRequestTrim,
+) => {
+  // Same clamp as handleContextCompaction: a trim that somehow grew the request
+  // (or reported a zero baseline) renders 0% rather than an out-of-range value.
+  const reductionPercent =
+    event.beforeTokens > 0
+      ? Math.min(
+          100,
+          Math.max(
+            0,
+            Math.round(
+              ((event.beforeTokens - event.afterTokens) / event.beforeTokens) *
+                100,
+            ),
+          ),
+        )
+      : 0
+
+  const trimBlock: CompactionContentBlock = {
+    type: 'compaction',
+    status: 'complete',
+    action: 'mechanical_trim',
+    trimSource: 'request',
+    ...(event.runId !== undefined && { runId: event.runId }),
+    ...(isRootCompactionEvent(event) ? {} : { subagent: true }),
+    beforeTokens: event.beforeTokens,
+    afterTokens: event.afterTokens,
+    beforeMessages: event.beforeMessages,
+    afterMessages: event.afterMessages,
+    reductionPercent,
+    retainedKnowledgeMemory: false,
+    recovery:
+      'The runtime compaction brakes were exceeded: reduce pinned state (fewer keepDuringTruncation blocks, or /compact) or start a fresh turn.',
+    categoryDeltas: [],
+    reason:
+      'Request-time emergency brake: messages still exceeded the provider-safe request budget at dispatch time.',
+    triggerBudgetTokens: event.messageBudgetTokens,
+    targetBudgetTokens: event.messageBudgetTokens,
+    ...(event.resolvedContextWindowTokens !== undefined && {
+      resolvedContextWindowTokens: event.resolvedContextWindowTokens,
+    }),
+  }
+
+  // Always appended: this trim settles no announced pass, so a live root card
+  // stays live until its own result or `settled` arrives.
+  state.message.updater.updateAiMessageBlocks((blocks) => [
+    ...blocks,
+    trimBlock,
+  ])
+
+  state.streaming.setCompactionNotice((previous) => ({
+    count: (previous?.count ?? 0) + 1,
+    action: 'mechanical_trim',
+    // A request-time trim means the runtime brakes failed, so the turn is
+    // degraded regardless of how the earlier passes reported.
+    degraded: true,
+    // This trim settles no announced pass, so every live pass is carried
+    // forward — including a legacy notice's uncorrelated `pending: true`,
+    // which would otherwise silently lose its live flag here.
+    ...pendingNoticeFields(
+      previous?.pendingRunIds ?? [],
+      hasUncorrelatedPending(previous),
+    ),
+  }))
 }
 
 const handleContextCompaction = (
@@ -1487,6 +1688,9 @@ const handleContextCompaction = (
     status: 'complete',
     action: event.action,
     ...(event.runId !== undefined && { runId: event.runId }),
+    // A nested run's pass is labelled as such: it reports another agent's
+    // context, not the root turn's.
+    ...(isRootCompactionEvent(event) ? {} : { subagent: true }),
     beforeTokens: event.before.tokens,
     afterTokens: event.after.tokens,
     beforeMessages: event.before.messages,
@@ -1535,14 +1739,29 @@ const handleContextCompaction = (
   // replace the turn total; a subagent/inline result contributes one pass
   // instead of overwriting it, and never settles the root run's live pass.
   const rootScoped = isRootCompactionEvent(event)
-  state.streaming.setCompactionNotice((previous) => ({
-    count: rootScoped
-      ? (event.compactionCount ?? (previous?.count ?? 0) + 1)
-      : (previous?.count ?? 0) + 1,
-    action: event.action,
-    degraded,
-    ...(!rootScoped && previous?.pending === true ? { pending: true } : {}),
-  }))
+  state.streaming.setCompactionNotice((previous) => {
+    // A root result consumes this run's announced pass; a nested result leaves
+    // every live pass (including the root's) exactly as it was. A legacy
+    // uncorrelated root result carries no runId, so it clears the live set the
+    // way it did before per-run tracking existed.
+    const pendingRunIds = !rootScoped
+      ? (previous?.pendingRunIds ?? [])
+      : event.runId === undefined
+        ? []
+        : removePendingRunId(previous?.pendingRunIds, event.runId)
+    // A nested result changes no live state, so an uncorrelated legacy
+    // `pending: true` is carried forward; a root result consumes the announced
+    // pass that flag stands for and therefore clears it.
+    const legacyPending = !rootScoped && hasUncorrelatedPending(previous)
+    return {
+      count: rootScoped
+        ? (event.compactionCount ?? (previous?.count ?? 0) + 1)
+        : (previous?.count ?? 0) + 1,
+      action: event.action,
+      degraded,
+      ...pendingNoticeFields(pendingRunIds, legacyPending),
+    }
+  })
 }
 
 const handleFinish = (state: EventHandlerState, event: PrintModeFinish) => {
@@ -1704,6 +1923,9 @@ export const createEventHandler =
       )
       .with({ type: 'context_compaction_status' }, (e) =>
         handleContextCompactionStatus(state, e),
+      )
+      .with({ type: 'context_request_trim' }, (e) =>
+        handleContextRequestTrim(state, e),
       )
       .with({ type: 'job_update' }, (e) => handleJobUpdate(state, e))
       .otherwise(() => undefined)

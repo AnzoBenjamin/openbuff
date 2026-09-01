@@ -54,6 +54,7 @@ import type {
   PromptAiSdkStreamFn,
   PromptAiSdkStructuredInput,
   PromptAiSdkStructuredOutput,
+  RequestContextTrimInfo,
 } from '@codebuff/common/types/contracts/llm'
 import type { ParamsOf } from '@codebuff/common/types/function-params'
 import type { JSONObject } from '@codebuff/common/types/json'
@@ -605,6 +606,12 @@ export function getMessagesForModelContext(params: {
   userId?: string
   userInputId?: string
   model?: string
+  /**
+   * Observational report of a trim that actually dropped messages. It can
+   * never change the returned messages, and a throwing consumer is caught and
+   * logged so a UI/telemetry callback cannot abort the request.
+   */
+  onTrimmed?: (info: RequestContextTrimInfo) => void
 }): Message[] {
   const resolvedMessageLimit = getModelContextMessageLimit(
     params.contextWindowTokens,
@@ -696,6 +703,28 @@ export function getMessagesForModelContext(params: {
       properties: telemetryProperties,
       logger: params.logger,
     })
+
+    if (params.onTrimmed) {
+      // Never allowed to abort the trim: the messages are already computed, so
+      // a throwing consumer is absorbed here and the trimmed result is
+      // returned unchanged.
+      try {
+        params.onTrimmed({
+          contextWindowTokens: params.contextWindowTokens,
+          messageBudgetTokens: effectiveMessageBudgetTokens,
+          beforeTokens: inputTokens,
+          afterTokens: outputTokens,
+          beforeMessages: params.messages.length,
+          afterMessages: trimmed.length,
+          model: params.model,
+        })
+      } catch (error) {
+        params.logger.warn(
+          { error: getErrorObject(error) },
+          'Ignoring request-time context-trim consumer error; the trim itself is unaffected',
+        )
+      }
+    }
   }
 
   return trimmed
@@ -1139,6 +1168,7 @@ export async function* promptAiSdkStream(
                 userId,
                 userInputId,
                 model: effectiveModel,
+                onTrimmed: params.onRequestContextTrimmed,
               }),
               includeCacheControl:
                 isChatGptOAuth && compatibility.stripCacheControl === false,
@@ -1784,6 +1814,7 @@ export async function promptAiSdk(
           userId: params.userId,
           userInputId: params.userInputId,
           model: effectiveModelSdk,
+          onTrimmed: params.onRequestContextTrimmed,
         }),
         includeCacheControl: compatibility.stripCacheControl === false,
       }),
@@ -1916,6 +1947,7 @@ export async function promptAiSdkStructured<T>(
           userId: params.userId,
           userInputId: params.userInputId,
           model: effectiveModelStructured,
+          onTrimmed: params.onRequestContextTrimmed,
         }),
         includeCacheControl: compatibility.stripCacheControl === false,
       }),

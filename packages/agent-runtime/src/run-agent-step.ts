@@ -100,6 +100,7 @@ import type {
 import type {
   CacheDebugUsageData,
   PromptAiSdkFn,
+  RequestContextTrimInfo,
 } from '@codebuff/common/types/contracts/llm'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
@@ -633,6 +634,28 @@ export const runAgentStep = async (
   const onModelContextResolved = (contextWindowTokens: number | undefined) => {
     agentState.contextWindowTokens = contextWindowTokens
   }
+  // Request-time emergency trim (the SDK's last line of defense). Reported as
+  // its own event rather than folded into `context_compaction`: reaching it
+  // means the runtime-owned semantic/mechanical brakes were already exceeded.
+  // Correlation is keyed off the emitting run (`runId`/`ancestorRunIds`), never
+  // `agentId`, which subagent forwarding rewrites at nesting depth >= 2.
+  const onRequestContextTrimmed = (info: RequestContextTrimInfo) => {
+    onResponseChunk({
+      type: 'context_request_trim',
+      runId: agentState.runId,
+      agentId: agentState.agentId,
+      ancestorRunIds: [...agentState.ancestorRunIds],
+      ...(info.contextWindowTokens !== undefined && {
+        resolvedContextWindowTokens: info.contextWindowTokens,
+      }),
+      messageBudgetTokens: info.messageBudgetTokens,
+      beforeTokens: info.beforeTokens,
+      afterTokens: info.afterTokens,
+      beforeMessages: info.beforeMessages,
+      afterMessages: info.afterMessages,
+      ...(info.model !== undefined && { model: info.model }),
+    })
+  }
 
   logger.debug(
     {
@@ -764,6 +787,7 @@ export const runAgentStep = async (
     onCacheDebugProviderRequestBuilt,
     onCacheDebugUsageReceived,
     onModelContextResolved,
+    onRequestContextTrimmed,
     template: agentTemplate,
     onCostCalculated,
   })
@@ -2334,6 +2358,19 @@ export async function loopAgentSteps(
           type: 'context_window',
           used: currentAgentState.contextTokenCount,
           max: activeContextWindowForStatus,
+          // Reuses the single hoisted `semanticBudget` for this iteration (see
+          // its declaration above) rather than recomputing it, so the status
+          // line reports exactly the budget the compaction branches used and
+          // the two can never drift.
+          //
+          // `max` is the OVERRIDE-CLAMPED status window while these two come
+          // from the raw model window (or the unknown-window fallback), so
+          // `compactionTriggerTokens > max` is a legitimate payload here. That
+          // relation is part of the published contract — see
+          // `printModeContextWindowSchema` in common/src/types/print-mode.ts —
+          // so neither value is reconciled against the other before emission.
+          compactionTriggerTokens: semanticBudget.triggerBudgetTokens,
+          compactionTargetTokens: semanticBudget.targetBudgetTokens,
         })
 
         // Check if output is required but missing

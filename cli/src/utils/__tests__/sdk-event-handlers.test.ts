@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 import { createMessageUpdater } from '../message-updater'
 import {
@@ -6,17 +8,29 @@ import {
   createStreamChunkHandler,
 } from '../sdk-event-handlers'
 
-import type { ChatMessage, CompactionNotice } from '../../types/chat'
+import type {
+  ChatMessage,
+  CompactionContentBlock,
+  CompactionNotice,
+} from '../../types/chat'
 import { CLI_LIVE_SESSION_ID } from '../../types/chat'
 import type { EventHandlerState } from '../sdk-event-handlers'
+import type { StatusBarContextUsage } from '../status-bar-chips'
 
-import { printModeEventSchema } from '@codebuff/common/types/print-mode'
+import {
+  printModeContextRequestTrimSchema,
+  printModeEventSchema,
+} from '@codebuff/common/types/print-mode'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type {
   PrintModeContextCompaction,
   PrintModeEvent,
   PrintModeJobUpdate,
 } from '@codebuff/common/types/print-mode'
+// Named through the PUBLISHED entry point rather than the internal common
+// module: `dist/index.d.ts` is generated from `sdk/src/index.ts` alone, so this
+// is the exact resolution path a consumer of the bundled types takes.
+import type { RequestContextTrimInfo } from '@openbuff/sdk'
 
 const createTestContext = () => {
   let messages: ChatMessage[] = [
@@ -663,7 +677,7 @@ describe('sdk-event-handlers', () => {
   })
 
   test('handles context_window event by calling setContextWindowUsage', () => {
-    const captured: { usage: { used: number; max: number } | null } = {
+    const captured: { usage: StatusBarContextUsage | null } = {
       usage: null,
     }
     const { ctx } = createTestContext()
@@ -677,8 +691,41 @@ describe('sdk-event-handlers', () => {
     expect(captured.usage).toEqual({ used: 50000, max: 200000 })
   })
 
+  test('forwards the compaction trigger on context_window only when the event supplies it', () => {
+    // The canonical status-bar shape rather than a restated structural copy, so
+    // this pins the forwarded payload to the type the chip selector consumes.
+    const captured: Array<StatusBarContextUsage | null> = []
+    const { ctx } = createTestContext()
+    ctx.streaming.setContextWindowUsage = (usage) => captured.push(usage)
+    const handleEvent = createEventHandler(ctx)
+
+    handleEvent({
+      type: 'context_window',
+      used: 150_000,
+      max: 200_000,
+      compactionTriggerTokens: 140_000,
+      compactionTargetTokens: 100_000,
+    })
+    // A persisted/replayed event emitted before the fields existed.
+    handleEvent({ type: 'context_window', used: 10_000, max: 200_000 })
+
+    expect(captured[0]).toEqual({
+      used: 150_000,
+      max: 200_000,
+      compactionTriggerTokens: 140_000,
+    })
+    // The post-compaction target is not user-actionable at a glance, so it is
+    // deliberately not forwarded to the chip; it stays on the event for other
+    // consumers.
+    expect(captured[0]).not.toHaveProperty('compactionTargetTokens')
+    // Absent on the event: the key is omitted entirely rather than set to
+    // undefined, so older CLI state keeps working unchanged.
+    expect(captured[1]).toEqual({ used: 10_000, max: 200_000 })
+    expect(Object.keys(captured[1] ?? {})).toEqual(['used', 'max'])
+  })
+
   test('keeps the last context usage after finish', () => {
-    const captured: Array<{ used: number; max: number } | null> = []
+    const captured: Array<StatusBarContextUsage | null> = []
     const { ctx } = createTestContext()
     ctx.streaming.setContextWindowUsage = (usage) => captured.push(usage)
     const handleEvent = createEventHandler(ctx)
@@ -1819,6 +1866,7 @@ describe('sdk-event-handlers', () => {
       action: 'semantic_compaction',
       degraded: false,
       pending: true,
+      pendingRunIds: ['root-run'],
     })
   })
 
@@ -1923,7 +1971,7 @@ describe('sdk-event-handlers', () => {
     })
   })
 
-  test('settled with no result drops the pending block and clears the notice', () => {
+  test('settled with no result rewrites the pending block as a declined pass and clears the notice', () => {
     const { ctx, getMessages } = createTestContext()
     const notices: Array<CompactionNotice | null> = []
     let notice: CompactionNotice | null = null
@@ -1947,13 +1995,431 @@ describe('sdk-event-handlers', () => {
       ancestorRunIds: [],
     })
 
+    // The pass RAN and reclaimed nothing, so the transcript keeps an honest
+    // terminal trace of it instead of deleting the card.
+    const compactionBlocks = (getMessages()[0].blocks ?? []).filter(
+      (block) => block.type === 'compaction',
+    )
+    expect(compactionBlocks).toHaveLength(1)
+    expect(compactionBlocks[0]).toMatchObject({
+      type: 'compaction',
+      status: 'declined',
+      runId: 'root-run',
+      beforeTokens: 152_000,
+    })
+    // The live stamp is meaningless once the pass is terminal.
+    expect(compactionBlocks[0]).not.toHaveProperty('liveSessionId')
+    // The declined pass is reported by the transcript card above. The chip
+    // selector renders nothing for a settled notice at count 0, so the notice
+    // is cleared instead of being retained as unobservable state.
+    expect(notices.at(-1)).toBeNull()
+  })
+
+  test('consecutive declined passes on the same run collapse into a single card', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+
+    for (const contextTokens of [152_000, 153_000]) {
+      dispatchValidEvent(handleEvent, {
+        type: 'context_compaction_status',
+        state: 'started',
+        runId: 'root-run',
+        ancestorRunIds: [],
+        contextTokens,
+      })
+      dispatchValidEvent(handleEvent, {
+        type: 'context_compaction_status',
+        state: 'settled',
+        runId: 'root-run',
+        ancestorRunIds: [],
+      })
+    }
+
+    // Over-trigger iterations that each decline must not accumulate a column of
+    // identical cards.
+    const compactionBlocks = (getMessages()[0].blocks ?? []).filter(
+      (block) => block.type === 'compaction',
+    )
+    expect(compactionBlocks).toHaveLength(1)
+    expect(compactionBlocks[0]).toMatchObject({
+      status: 'declined',
+      runId: 'root-run',
+      beforeTokens: 153_000,
+    })
+  })
+
+  test('the widened persisted compaction block stays plain JSON and round-trips prior sessions', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+
+    // A block written by an OLDER CLI: no status, no subagent, no trimSource.
+    // Replaying it must not rewrite or enrich it, so prior sessions round-trip.
+    const legacyBlock: CompactionContentBlock = {
+      type: 'compaction',
+      action: 'semantic_compaction',
+      beforeTokens: 190_000,
+      afterTokens: 120_000,
+      beforeMessages: 20,
+      afterMessages: 12,
+      reductionPercent: 37,
+      retainedKnowledgeMemory: true,
+      recovery: 'Re-read exact files before editing.',
+      categoryDeltas: [],
+    }
+    ctx.message.updater.updateAiMessageBlocks((blocks) => [
+      ...blocks,
+      legacyBlock,
+    ])
+
+    // Both new terminal/label fields are produced by live events: a declined
+    // root pass and a nested request-time trim.
+    dispatchValidEvent(handleEvent, {
+      type: 'context_compaction_status',
+      state: 'started',
+      runId: 'root-run',
+      ancestorRunIds: [],
+      contextTokens: 152_000,
+    })
+    dispatchValidEvent(handleEvent, {
+      type: 'context_compaction_status',
+      state: 'settled',
+      runId: 'root-run',
+      ancestorRunIds: [],
+    })
+    dispatchValidEvent(handleEvent, {
+      type: 'context_request_trim',
+      runId: 'child-run',
+      ancestorRunIds: ['root-run'],
+      messageBudgetTokens: 90_000,
+      beforeTokens: 100_000,
+      afterTokens: 80_000,
+      beforeMessages: 12,
+      afterMessages: 9,
+    })
+
+    const blocks = (getMessages()[0].blocks ?? []).filter(
+      (block) => block.type === 'compaction',
+    ) as CompactionContentBlock[]
+    expect(blocks).toHaveLength(3)
+
+    // The legacy block is byte-identical after replay: no status was invented
+    // for it, so an older session keeps rendering as a completed pass.
+    expect(blocks[0]).toEqual(legacyBlock)
+    expect(blocks[0]).not.toHaveProperty('status')
+    expect(blocks[0]).not.toHaveProperty('subagent')
+    expect(blocks[0]).not.toHaveProperty('trimSource')
+
+    // The widened fields are the documented terminal value plus the two optional
+    // labels, and nothing else was added to the persisted shape.
+    expect(blocks[1]).toMatchObject({ status: 'declined', runId: 'root-run' })
+    expect(blocks[2]).toMatchObject({
+      status: 'complete',
+      trimSource: 'request',
+      subagent: true,
+    })
+
+    // Persistence is JSON: every block survives a chat-messages.json round trip
+    // unchanged, so no field is a function, class instance, or undefined hole.
+    expect(JSON.parse(JSON.stringify(blocks))).toEqual(blocks)
+  })
+
+  test('context_request_trim renders a request-time card and degrades the notice', () => {
+    const { ctx, getMessages } = createTestContext()
+    const notices: Array<CompactionNotice | null> = []
+    let notice: CompactionNotice | null = null
+    ctx.streaming.setCompactionNotice = (update) => {
+      notice = update(notice)
+      notices.push(notice)
+    }
+    const handleEvent = createEventHandler(ctx)
+
+    dispatchValidEvent(handleEvent, {
+      type: 'context_compaction_status',
+      state: 'started',
+      runId: 'root-run',
+      ancestorRunIds: [],
+      contextTokens: 152_000,
+    })
+    dispatchValidEvent(handleEvent, {
+      type: 'context_request_trim',
+      runId: 'root-run',
+      ancestorRunIds: [],
+      resolvedContextWindowTokens: 200_000,
+      messageBudgetTokens: 150_000,
+      beforeTokens: 180_000,
+      afterTokens: 140_000,
+      beforeMessages: 30,
+      afterMessages: 22,
+      model: 'anthropic/claude',
+    })
+
+    const compactionBlocks = (getMessages()[0].blocks ?? []).filter(
+      (block) => block.type === 'compaction',
+    )
+    // The request-time trim is an ADDITIONAL pass, so it appends rather than
+    // consuming the root run's still-live card.
+    expect(compactionBlocks).toHaveLength(2)
+    expect(compactionBlocks[0]).toMatchObject({
+      status: 'pending',
+      runId: 'root-run',
+    })
+    expect(compactionBlocks[1]).toMatchObject({
+      type: 'compaction',
+      status: 'complete',
+      action: 'mechanical_trim',
+      trimSource: 'request',
+      runId: 'root-run',
+      beforeTokens: 180_000,
+      afterTokens: 140_000,
+      beforeMessages: 30,
+      afterMessages: 22,
+      // (180000 - 140000) / 180000 = 22.2% -> 22
+      reductionPercent: 22,
+      retainedKnowledgeMemory: false,
+      triggerBudgetTokens: 150_000,
+      targetBudgetTokens: 150_000,
+      resolvedContextWindowTokens: 200_000,
+      categoryDeltas: [],
+    })
+    expect(compactionBlocks[1]).not.toHaveProperty('subagent')
+    // Reaching the request-time brake means the runtime brakes failed.
+    expect(notices.at(-1)).toEqual({
+      count: 1,
+      action: 'mechanical_trim',
+      degraded: true,
+      pending: true,
+      pendingRunIds: ['root-run'],
+    })
+  })
+
+  test('a nested context_request_trim is marked as a subagent pass', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+
+    dispatchValidEvent(handleEvent, {
+      type: 'context_request_trim',
+      runId: 'child-run',
+      ancestorRunIds: ['root-run'],
+      agentId: 'child-agent',
+      messageBudgetTokens: 90_000,
+      beforeTokens: 100_000,
+      afterTokens: 80_000,
+      beforeMessages: 12,
+      afterMessages: 9,
+    })
+
     expect(
-      (getMessages()[0].blocks ?? []).filter(
+      (getMessages()[0].blocks ?? []).find(
         (block) => block.type === 'compaction',
       ),
-    ).toHaveLength(0)
-    // Nothing ever completed, so no '⇲ compacted ×0' chip is left behind.
-    expect(notices.at(-1)).toBeNull()
+    ).toMatchObject({
+      status: 'complete',
+      trimSource: 'request',
+      runId: 'child-run',
+      subagent: true,
+    })
+  })
+
+  test('printModeContextRequestTrimSchema parses a minimal payload and requires messageBudgetTokens', () => {
+    const minimal = {
+      type: 'context_request_trim' as const,
+      messageBudgetTokens: 150_000,
+      beforeTokens: 180_000,
+      afterTokens: 140_000,
+      beforeMessages: 30,
+      afterMessages: 22,
+    }
+    expect(printModeContextRequestTrimSchema.parse(minimal)).toEqual(minimal)
+    // The correlation fields are optional, so the minimal payload above also
+    // parses through the discriminated union.
+    expect(printModeEventSchema.parse(minimal)).toMatchObject({
+      type: 'context_request_trim',
+    })
+
+    const { messageBudgetTokens: _omitted, ...withoutBudget } = minimal
+    expect(
+      printModeContextRequestTrimSchema.safeParse(withoutBudget).success,
+    ).toBe(false)
+  })
+
+  test('RequestContextTrimInfo is nameable from the published SDK type surface', () => {
+    // `RequestContextTrimInfo` is the payload type of the `promptAiSdk*`
+    // `onRequestContextTrimmed` callback. The type-only import above names it
+    // through `@openbuff/sdk`, so this file fails to compile if the published
+    // entry point stops exporting it.
+    const info: RequestContextTrimInfo = {
+      contextWindowTokens: 200_000,
+      messageBudgetTokens: 150_000,
+      beforeTokens: 180_000,
+      afterTokens: 140_000,
+      beforeMessages: 30,
+      afterMessages: 22,
+      model: 'anthropic/claude',
+    }
+
+    // Runtime evidence for the BUNDLED surface, which a type-only import cannot
+    // give on its own: `sdk/scripts/build.ts` generates `dist/index.d.ts` from
+    // `sdk/src/index.ts` with `exportReferencedTypes: false`, so a type only
+    // survives bundling if the entry point publishes the module that DECLARES
+    // it. Assert both halves of that chain in the live sources: the entry point
+    // re-exports `print-mode` wholesale, and `print-mode` declares the type
+    // itself instead of forwarding it out of the unpublished contracts module.
+    const repoRoot = join(import.meta.dir, '..', '..', '..', '..')
+    const sdkEntryPoint = readFileSync(
+      join(repoRoot, 'sdk', 'src', 'index.ts'),
+      'utf8',
+    )
+    const printModeSource = readFileSync(
+      join(repoRoot, 'common', 'src', 'types', 'print-mode.ts'),
+      'utf8',
+    )
+    expect(sdkEntryPoint).toContain(
+      "export type * from '@codebuff/common/types/print-mode'",
+    )
+    expect(printModeSource).toContain('export type RequestContextTrimInfo = {')
+    expect(printModeSource).not.toContain(
+      "export type { RequestContextTrimInfo } from './contracts/llm'",
+    )
+
+    // The callback payload maps field-for-field onto the published event, so a
+    // consumer that names the type can forward it as `context_request_trim`.
+    const { contextWindowTokens, ...trimMeasurements } = info
+    expect(
+      printModeContextRequestTrimSchema.parse({
+        type: 'context_request_trim',
+        resolvedContextWindowTokens: contextWindowTokens,
+        ...trimMeasurements,
+      }),
+    ).toEqual({
+      type: 'context_request_trim',
+      resolvedContextWindowTokens: 200_000,
+      messageBudgetTokens: 150_000,
+      beforeTokens: 180_000,
+      afterTokens: 140_000,
+      beforeMessages: 30,
+      afterMessages: 22,
+      model: 'anthropic/claude',
+    })
+  })
+
+  test('a legacy notice with pending but no pendingRunIds keeps its live flag until a settling event', () => {
+    const { ctx } = createTestContext()
+    const notices: Array<CompactionNotice | null> = []
+    // The tolerated pre-per-run shape documented on
+    // `CompactionNotice.pendingRunIds`: a live pass with no recorded run.
+    let notice: CompactionNotice | null = {
+      count: 1,
+      action: 'semantic_compaction',
+      degraded: false,
+      pending: true,
+    }
+    ctx.streaming.setCompactionNotice = (update) => {
+      notice = update(notice)
+      notices.push(notice)
+    }
+    const handleEvent = createEventHandler(ctx)
+    const categories = {
+      toolResults: { tokens: 10, percent: 10, messages: 1 },
+      todos: { tokens: 10, percent: 10, messages: 1 },
+      fileReads: { tokens: 20, percent: 20, messages: 2 },
+      subagents: { tokens: 20, percent: 20, messages: 2 },
+      userAssistantMessages: { tokens: 40, percent: 40, messages: 4 },
+    }
+
+    // A request-time trim settles no announced pass, so the uncorrelated live
+    // flag survives it instead of being silently recomputed away.
+    dispatchValidEvent(handleEvent, {
+      type: 'context_request_trim',
+      runId: 'root-run',
+      ancestorRunIds: [],
+      messageBudgetTokens: 150_000,
+      beforeTokens: 180_000,
+      afterTokens: 140_000,
+      beforeMessages: 30,
+      afterMessages: 22,
+    })
+    expect(notices.at(-1)).toEqual({
+      count: 2,
+      action: 'mechanical_trim',
+      degraded: true,
+      pending: true,
+    })
+
+    // A NESTED compaction result changes no live state either.
+    dispatchValidEvent(handleEvent, {
+      type: 'context_compaction',
+      action: 'semantic_compaction',
+      runId: 'child-run',
+      ancestorRunIds: ['root-run'],
+      before: { tokens: 100_000, messages: 20, categories },
+      after: { tokens: 60_000, messages: 8, categories },
+      removedCategories: [],
+      retainedKnowledgeMemory: true,
+      recovery: 'Resume from <knowledge_memory>.',
+    })
+    expect(notices.at(-1)).toEqual({
+      count: 3,
+      action: 'semantic_compaction',
+      degraded: false,
+      pending: true,
+    })
+
+    // A `settled` is the only signal that can clear a live flag whose run is
+    // unknown, so it does — the chip must not stay live for the rest of the turn.
+    dispatchValidEvent(handleEvent, {
+      type: 'context_compaction_status',
+      state: 'settled',
+      runId: 'root-run',
+      ancestorRunIds: [],
+    })
+    expect(notices.at(-1)).toEqual({
+      count: 3,
+      action: 'semantic_compaction',
+      degraded: false,
+    })
+  })
+
+  test('a legacy pending flag is consumed by the root compaction result it stands for', () => {
+    const { ctx } = createTestContext()
+    const notices: Array<CompactionNotice | null> = []
+    let notice: CompactionNotice | null = {
+      count: 0,
+      action: 'semantic_compaction',
+      degraded: false,
+      pending: true,
+    }
+    ctx.streaming.setCompactionNotice = (update) => {
+      notice = update(notice)
+      notices.push(notice)
+    }
+    const handleEvent = createEventHandler(ctx)
+    const categories = {
+      toolResults: { tokens: 10, percent: 10, messages: 1 },
+      todos: { tokens: 10, percent: 10, messages: 1 },
+      fileReads: { tokens: 20, percent: 20, messages: 2 },
+      subagents: { tokens: 20, percent: 20, messages: 2 },
+      userAssistantMessages: { tokens: 40, percent: 40, messages: 4 },
+    }
+
+    dispatchValidEvent(handleEvent, {
+      type: 'context_compaction',
+      action: 'semantic_compaction',
+      runId: 'root-run',
+      ancestorRunIds: [],
+      before: { tokens: 152_000, messages: 20, categories },
+      after: { tokens: 60_000, messages: 8, categories },
+      removedCategories: [],
+      retainedKnowledgeMemory: true,
+      recovery: 'Resume from <knowledge_memory>.',
+    })
+
+    // The root run reported its result, so the pass the uncorrelated flag stood
+    // for is over and the notice settles.
+    expect(notices.at(-1)).toEqual({
+      count: 1,
+      action: 'semantic_compaction',
+      degraded: false,
+    })
   })
 
   test('a started pass keeps the completed action so an aborted turn labels the chip by what finished', () => {
@@ -2006,10 +2472,11 @@ describe('sdk-event-handlers', () => {
       action: 'mechanical_trim',
       degraded: false,
       pending: true,
+      pendingRunIds: ['root-run'],
     })
   })
 
-  test('a subagent compaction status neither renders nor cross-settles the root run state', () => {
+  test('a subagent compaction status renders no card but still reports a live pass', () => {
     const { ctx, getMessages } = createTestContext()
     const notices: Array<CompactionNotice | null> = []
     let notice: CompactionNotice | null = null
@@ -2027,7 +2494,8 @@ describe('sdk-event-handlers', () => {
       contextTokens: 152_000,
     })
     // A foreground subagent / inline agent loop compacts its own context. Its
-    // lineage is non-empty, so it must not add a second root-level card.
+    // lineage is non-empty, so it must not add a second root-level card, but
+    // the chip still reports that a pass is live.
     dispatchValidEvent(handleEvent, {
       type: 'context_compaction_status',
       state: 'started',
@@ -2035,6 +2503,18 @@ describe('sdk-event-handlers', () => {
       ancestorRunIds: ['root-run'],
       agentId: 'child-agent',
       contextTokens: 90_000,
+    })
+    expect(
+      (getMessages()[0].blocks ?? []).filter(
+        (block) => block.type === 'compaction',
+      ),
+    ).toHaveLength(1)
+    expect(notices.at(-1)).toEqual({
+      count: 0,
+      action: 'semantic_compaction',
+      degraded: false,
+      pending: true,
+      pendingRunIds: ['root-run', 'child-run'],
     })
     // Nor may its settle clear the root run's still-live card.
     dispatchValidEvent(handleEvent, {
@@ -2055,20 +2535,24 @@ describe('sdk-event-handlers', () => {
       action: 'semantic_compaction',
       degraded: false,
       pending: true,
+      pendingRunIds: ['root-run'],
     })
 
-    // Only the root run's own settle ends the live state.
+    // Only the root run's own settle ends the live state, and it terminates the
+    // card as a declined pass rather than deleting it.
     dispatchValidEvent(handleEvent, {
       type: 'context_compaction_status',
       state: 'settled',
       runId: 'root-run',
       ancestorRunIds: [],
     })
-    expect(
-      (getMessages()[0].blocks ?? []).filter(
-        (block) => block.type === 'compaction',
-      ),
-    ).toHaveLength(0)
+    const settled = (getMessages()[0].blocks ?? []).filter(
+      (block) => block.type === 'compaction',
+    )
+    expect(settled).toHaveLength(1)
+    expect(settled[0]).toMatchObject({ status: 'declined', runId: 'root-run' })
+    // No pass completed in the turn, so the settled notice is cleared: the chip
+    // renders nothing for a notice that is neither pending nor count > 0.
     expect(notices.at(-1)).toBeNull()
   })
 
@@ -2118,12 +2602,18 @@ describe('sdk-event-handlers', () => {
     )
     expect(blocks).toHaveLength(2)
     expect(blocks[0]).toMatchObject({ status: 'pending', runId: 'root-run' })
-    expect(blocks[1]).toMatchObject({ status: 'complete', runId: 'child-run' })
+    expect(blocks[1]).toMatchObject({
+      status: 'complete',
+      runId: 'child-run',
+      // A nested run's result is labelled as a subagent pass.
+      subagent: true,
+    })
     expect(notices.at(-1)).toEqual({
       count: 1,
       action: 'semantic_compaction',
       degraded: false,
       pending: true,
+      pendingRunIds: ['root-run'],
     })
 
     // The root run's own result adopts its reported count and clears the live
@@ -2214,6 +2704,7 @@ describe('sdk-event-handlers', () => {
       action: 'semantic_compaction',
       degraded: false,
       pending: true,
+      pendingRunIds: ['root-run'],
     })
 
     // Its result is recorded under its own emitting run, even though the
@@ -2240,6 +2731,8 @@ describe('sdk-event-handlers', () => {
     expect(blocks[1]).toMatchObject({
       status: 'complete',
       runId: 'grandchild-run',
+      // Rendered as its own nested pass rather than being card-suppressed.
+      subagent: true,
     })
     // The nested run's own count never becomes the root turn's total, and the
     // root run's live pass is still live.
@@ -2248,6 +2741,7 @@ describe('sdk-event-handlers', () => {
       action: 'semantic_compaction',
       degraded: false,
       pending: true,
+      pendingRunIds: ['root-run'],
     })
   })
 
