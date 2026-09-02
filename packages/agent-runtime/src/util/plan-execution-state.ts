@@ -37,6 +37,14 @@ export function validatePlanTransition(params: {
   currentTask?: string | null
   existingState: PlanSessionState | null
   checkpoint?: PlanCheckpoint
+  /**
+   * Gate-issued per-task validation receipts read from base2 gate state.
+   * `undefined` means the caller has no gate-issued evidence to check against
+   * (non-base2 agent, or a base2 run with the validation gate disabled), and
+   * the legacy "any non-empty receiptIds" rule applies unchanged. A PRESENT
+   * array — including an empty one — means verification is active.
+   */
+  gateIssuedReceipts?: Array<{ receiptId: string; taskId: string }>
 }): PlanTransitionValidation {
   const errors: string[] = []
   const original = preflightPlan(params.originalContent)
@@ -114,6 +122,38 @@ export function validatePlanTransition(params: {
         errors.push(
           `Task ${task.id} validation checkpoint must reference at least one receipt ID.`,
         )
+      }
+      // Real evidence check: the cited receipt must be one the
+      // validation/reviewer gate itself issued for THIS task. Receipt IDs are
+      // otherwise entirely model-supplied, so an invented string satisfies the
+      // non-empty rule above without any gate ever having passed. A PRESENT
+      // gateIssuedReceipts array — including an EMPTY one — turns verification
+      // on and must reject (gate active, no evidence yet); an ABSENT one leaves
+      // the legacy rule untouched for callers with no gate-issued evidence.
+      if (params.gateIssuedReceipts) {
+        const citedReceiptIds = checkpoint?.receiptIds ?? []
+        const citesGateIssuedReceipt = citedReceiptIds.some((receiptId) =>
+          params.gateIssuedReceipts?.some(
+            (issued) =>
+              issued.taskId === task.id && issued.receiptId === receiptId,
+          ),
+        )
+        if (!citesGateIssuedReceipt) {
+          // Receipts are superseded when the work they cover changes, so the
+          // rejection has to be actionable NOW: name the IDs that are live for
+          // this task (bounded so a long ledger cannot flood the message), or
+          // say that none is and why.
+          const liveReceiptIdsForTask = params.gateIssuedReceipts
+            .filter((issued) => issued.taskId === task.id)
+            .map((issued) => issued.receiptId)
+          const liveReceiptGuidance =
+            liveReceiptIdsForTask.length > 0
+              ? `Live gate-issued receipt IDs for ${task.id}: ${liveReceiptIdsForTask.slice(0, 4).join(', ')}.`
+              : `No gate-issued receipt is live for ${task.id}; let the validation/reviewer gate close for that task's changes first (a receipt is superseded when its files change again).`
+          errors.push(
+            `Task ${task.id} validation checkpoint must cite a gate-issued receipt ID from a passed validation/reviewer gate for that task; invented receipt IDs are rejected. ${liveReceiptGuidance}`,
+          )
+        }
       }
     }
   }

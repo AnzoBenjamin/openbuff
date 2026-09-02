@@ -10,6 +10,7 @@ import { FALLBACK_GUIDES } from '@codebuff/common/util/guides'
 import type {
   Base2ActiveWorkPhase,
   Base2ActiveWorkState,
+  Base2PlanTaskGateReceipt,
   Base2WorkflowTodo,
   Base2WorkflowTodoProgress,
   Base2ReviewReceipt,
@@ -1145,6 +1146,45 @@ ${guideSections}
       activeWorkState.specialistNoVerdictCounts ??= {}
       activeWorkState.reviewReceipts ??= []
       activeWorkState.auxGatesLastPendingFiles ??= []
+      // Gate-issued per-task plan validation receipts, published ONLY when the
+      // validation/reviewer gate actually runs. The PRESENCE of this key is
+      // what switches the update_plan_status handler from the legacy "any
+      // non-empty receiptIds" rule to gate-issued verification, and
+      // present-and-empty REJECTS (the gate is active but has issued no
+      // evidence yet). With the gate disabled (hasNoValidation / plan-only /
+      // base2-fast) no receipt could ever be minted, so publishing an empty
+      // array there would hard-regress those runs by making every plan task
+      // impossible to complete — the key must stay ABSENT so they keep the
+      // legacy behavior.
+      //
+      // An INHERITED key must be DELETED for exactly the same reason: a session
+      // that published it under EXECUTE_PLAN/base2 and later resumes through a
+      // gate-disabled variant would otherwise restore base2ActiveWork with
+      // verification still on while no receipt can ever be minted. The
+      // invariant is "present ⇔ the gate is active for THIS run", not "present ⇔
+      // the gate ran at some point in this session". Dropping the stale ledger
+      // is safe in both directions: the gate-disabled run falls back to the
+      // legacy rule, and the next fresh gate pass re-mints a receipt for
+      // whatever task is claimed then.
+      if (runValidationGate) {
+        // Normalize rather than `??= []`: a PRESENT-but-non-array ledger (corrupt
+        // or hand-edited serialized state) is not usable evidence, and `??= []`
+        // left such a value intact for every reader below — the gate-pass mint's
+        // `.some(...)`, the printed live-receipt `.find(...)`, and
+        // buildPinnedActiveWorkMessage's `.find(...)` — which then threw a
+        // TypeError inside handleSteps and failed the whole turn instead of
+        // failing closed. Normalizing to an EMPTY array keeps the key PRESENT, so
+        // the runtime handler still treats gate-issued verification as active and
+        // rejects a checkpoint citing an unmatched receipt ID; that is exactly the
+        // fail-closed reading its own readGateIssuedPlanTaskReceipts applies to a
+        // malformed ledger, and it matches the Array.isArray guards in
+        // prunePlanTaskGateReceipts / supersedePlanTaskGateReceiptsForChangedFiles.
+        if (!Array.isArray(activeWorkState.planTaskGateReceipts)) {
+          activeWorkState.planTaskGateReceipts = []
+        }
+      } else {
+        delete activeWorkState.planTaskGateReceipts
+      }
       // Condoned finding texts: finding texts that a repair-editor has already
       // reported as addressed via findingsAddressed. When a fresh reviewer
       // re-returns identical text, the finding is 'condoned' — no longer
@@ -1192,6 +1232,12 @@ ${guideSections}
         activeWorkState.gatePassedPendingFiles,
       )
       updateWorkflowTodoProgressFromMessages(mutableAgentState.messageHistory)
+      // Track the EXECUTE_PLAN task the model has claimed through
+      // update_plan_status so the gate-pass path can mint a receipt bound to
+      // that exact task. Done at turn start as well as post-STEP so a task
+      // claimed in an earlier turn is already known when this turn's gate
+      // passes.
+      updateActivePlanTaskFromMessages(mutableAgentState.messageHistory)
       // Recognize a user-issued "COMMIT ANYWAY" at turn start (not only in
       // the post-STEP messageHistory branch) so a git-committer spawned in
       // the first step of the 'COMMIT ANYWAY' turn already sees the
@@ -1378,7 +1424,7 @@ ${guideSections}
       // uncommittedUnvalidatedFiles publication and any commit-guard evaluation.
       {
         const ledgerMarkers = (activeWorkState.gatePassedFileMarkers ??= {})
-        let evictedDriftedGatePassedFile = false
+        const evictedGatePassedFiles: string[] = []
         for (const file of Array.from(gatePassedFiles)) {
           const storedMarker = ledgerMarkers[file]
           const currentMarker = readGateFileContentMarker(file)
@@ -1395,10 +1441,10 @@ ${guideSections}
             delete ledgerMarkers[file]
             changedFiles.add(file)
             pendingGateFiles.add(file)
-            evictedDriftedGatePassedFile = true
+            evictedGatePassedFiles.push(file)
           }
         }
-        if (evictedDriftedGatePassedFile) {
+        if (evictedGatePassedFiles.length > 0) {
           activeWorkState.pendingGateFiles = Array.from(pendingGateFiles)
           activeWorkState.gatePassedFiles = Array.from(gatePassedFiles)
           activeWorkState.currentPhase = 'awaiting_validation'
@@ -1406,9 +1452,20 @@ ${guideSections}
             'A previously gate-passed file changed after crediting; validation and review were reopened.'
           editsHappened = true
           finalResponseGateOpen = false
+          // An evicted path is back in the pending set, so any gate-issued
+          // plan-task receipt that covered it must stop authorizing a `done`
+          // transition (and every receipt with no verifiable content identity
+          // goes with it — see the helper).
+          supersedePlanTaskGateReceiptsForChangedFiles(evictedGatePassedFiles)
           markActiveWorkStateChanged()
         }
       }
+      // Turn-start content verification for the gate-issued plan-task receipt
+      // ledger. Runs right after the eviction block (and well after hydration,
+      // which is what publishes/deletes the key) so the ledger the runtime
+      // handler reads this turn only contains receipts whose covered bytes still
+      // hash to the fingerprint they were minted with.
+      prunePlanTaskGateReceipts()
       // Latest dirty working-tree snapshot for P0 re-arm / P2 pin lag / P3
       // unvalidated publication. Starts as the turn-start dirty set and is
       // refreshed whenever a real mid-turn git_status result is extracted.
@@ -1620,6 +1677,7 @@ ${guideSections}
         if (Array.isArray(messageHistory)) {
           currentConversationMessages = messageHistory
           updateWorkflowTodoProgressFromMessages(messageHistory)
+          updateActivePlanTaskFromMessages(messageHistory)
           updateCommitScopeBypassFromMessages(messageHistory)
           processedMessageHistoryLength = messageHistory.length
         }
@@ -5532,6 +5590,13 @@ ${guideSections}
             }
           }
           let activeWorkStateChanged = false
+          // The live gate-issued plan-task receipt named in the gate-pass
+          // message below. Assigned only when the FRESH mint site further down
+          // issues a new receipt; the message falls back to the task's existing
+          // live receipt, because supersession changes the ID and the model must
+          // always be able to read the CURRENT one. Kept as a single declaration
+          // here so the message builder can see it.
+          let mintedPlanTaskReceipt: Base2PlanTaskGateReceipt | undefined
           if (passedPendingFiles.length > 0 && reviewerFinalizationVerdict) {
             // No pinned emission happens between here and the end of the gate,
             // so a transient 'gate: passed' line could never be rendered.
@@ -5617,6 +5682,131 @@ ${guideSections}
             validationSummary ===
               'Configured file-change hooks were skipped because none matched the changed files.'
           const passVerdict = reviewerFinalizationVerdict || 'LOOKS_GOOD'
+          // Content verification immediately before the mint, so the ledger this
+          // pass republishes (and the ID it prints) cannot carry a receipt whose
+          // covered bytes changed earlier in the turn.
+          prunePlanTaskGateReceipts()
+          // Gate-issued per-task plan validation receipt. Minted ONLY on this
+          // FRESH gate-pass emission, and only while a plan task is claimed:
+          // this is the only path with a live snapshot base2 just hashed itself.
+          // The conversation-reuse and durable-fingerprint-reuse pass paths above
+          // `continue` before reaching here and deliberately mint nothing — one
+          // review would otherwise keep issuing receipts for several different
+          // tasks across turns.
+          //
+          // Three shapes, so a task whose cycle had no reviewable diff is still
+          // completable WITHOUT the receipt overstating its evidence:
+          //   - reviewable subset non-empty  -> 'reviewed-diff'     (files = that subset)
+          //   - pending files but none reviewable -> 'unreviewed-scope' (files = validated pending set)
+          //   - no pending files at all      -> 'no-diff'          (files = [])
+          // The 'no-diff' shape must NOT depend on a reviewer verdict: that path
+          // reaches this emission with `reviewerFinalizationVerdict` empty, which
+          // is exactly why the receipt records `passVerdict`.
+          //
+          // INVARIANT for every kind:
+          // `snapshotFingerprint === hashGateSnapshotDetails(buildGateSnapshotDetails(files, ''))`
+          // — content only, empty summary component — so verification is uniform.
+          // For 'reviewed-diff' that value IS `reviewSnapshotFingerprint`, the
+          // fingerprint base2 computed for THIS review, so the receipt stays bound
+          // to the exact reviewed bytes. The id is always derived from that
+          // gate-computed fingerprint, NEVER from a reviewer-REPORTED
+          // snapshotFingerprint, which the attestation path deliberately
+          // drift-tolerates and which would therefore make the receipt forgeable.
+          // Same gate-COMPUTED provenance rule as a review receipt's `gateId`.
+          //
+          // A non-attestable fingerprint mints NOTHING for any kind: a stable
+          // `unreadable:*` marker is an error string, not content evidence, so two
+          // unrelated snapshots would compare equal under it.
+          const claimedPlanTaskId = activeWorkState.activePlanTaskId
+          if (
+            typeof claimedPlanTaskId === 'string' &&
+            claimedPlanTaskId.length > 0
+          ) {
+            const receiptEvidence =
+              reviewableGateScopeFiles.length > 0
+                ? 'reviewed-diff'
+                : passedPendingFiles.length > 0
+                  ? 'unreviewed-scope'
+                  : 'no-diff'
+            const receiptFiles =
+              receiptEvidence === 'reviewed-diff'
+                ? [...reviewableGateScopeFiles]
+                : receiptEvidence === 'unreviewed-scope'
+                  ? [...passedPendingFiles]
+                  : []
+            const receiptFingerprint =
+              receiptEvidence === 'reviewed-diff'
+                ? reviewSnapshotFingerprint
+                : hashGateSnapshotDetails(
+                    buildGateSnapshotDetails(receiptFiles, ''),
+                  )
+            if (isAttestableSnapshotFingerprint(receiptFingerprint)) {
+              // The evidence kind is part of the id for the two non-reviewed
+              // kinds, so a receipt that claims no content review can never be
+              // mistaken for one that does.
+              const receiptKindSegment =
+                receiptEvidence === 'reviewed-diff' ? '' : `${receiptEvidence}:`
+              const planTaskReceiptId = `plan-gate:${claimedPlanTaskId}:${receiptKindSegment}${receiptFingerprint.slice(0, 16)}`
+              const existingPlanTaskReceipts = readPlanTaskGateReceipts(
+                activeWorkState.planTaskGateReceipts,
+              )
+              // Idempotent repeat pass: this task already has a live receipt with
+              // the identical id, i.e. the same evidence, so leave it (and its
+              // recordedAt) untouched.
+              if (
+                !existingPlanTaskReceipts.some(
+                  (receipt) =>
+                    receipt.taskId === claimedPlanTaskId &&
+                    receipt.receiptId === planTaskReceiptId,
+                )
+              ) {
+                mintedPlanTaskReceipt = {
+                  receiptId: planTaskReceiptId,
+                  taskId: claimedPlanTaskId,
+                  evidence: receiptEvidence,
+                  snapshotFingerprint: receiptFingerprint,
+                  files: receiptFiles,
+                  validationSummary,
+                  reviewerVerdict: passVerdict,
+                  recordedAt: new Date().toISOString(),
+                }
+                // REPLACE, never append, for this task: exactly one receipt is
+                // live per task so the printed id is unambiguous. Still bounded
+                // to the most recent 24 entries over the remaining tasks, the
+                // same convention as reviewReceipts.
+                activeWorkState.planTaskGateReceipts = [
+                  ...existingPlanTaskReceipts.filter(
+                    (receipt) => receipt.taskId !== claimedPlanTaskId,
+                  ),
+                  mintedPlanTaskReceipt,
+                ].slice(-24)
+                markActiveWorkStateChanged()
+              }
+            }
+          }
+          // Printed on every fresh gate-pass emission whenever a live receipt
+          // exists for the claimed task — not only when this pass minted one —
+          // because supersession changes the id and the model must always be able
+          // to read the CURRENT one. Fully omitted with no claim or no live
+          // receipt, so non-plan gate-pass content stays byte-identical.
+          const livePlanTaskReceipt =
+            mintedPlanTaskReceipt ??
+            (typeof claimedPlanTaskId === 'string' &&
+            claimedPlanTaskId.length > 0
+              ? readPlanTaskGateReceipts(
+                  activeWorkState.planTaskGateReceipts,
+                ).find((receipt) => receipt.taskId === claimedPlanTaskId)
+              : undefined)
+          const planTaskReceiptLines = livePlanTaskReceipt
+            ? [
+                `Plan task ${livePlanTaskReceipt.taskId} gate receipt: ${livePlanTaskReceipt.receiptId}. Pass this exact string in update_plan_status checkpoint.receiptIds when marking ${livePlanTaskReceipt.taskId} done; do not invent a receipt ID.`,
+                livePlanTaskReceipt.evidence === 'reviewed-diff'
+                  ? `Evidence: reviewed diff over ${livePlanTaskReceipt.files.length} file(s). This receipt is superseded when any covered file changes again; re-read the current ID after the next gate pass.`
+                  : livePlanTaskReceipt.evidence === 'unreviewed-scope'
+                    ? `Evidence: no reviewable diff in this gate cycle; validation covered ${livePlanTaskReceipt.files.length} non-reviewable file(s). This receipt is superseded as soon as any further change is recorded.`
+                    : 'Evidence: no file changes in this gate cycle. This receipt is superseded as soon as any further change is recorded.',
+              ]
+            : []
           const passDetails =
             passedPendingFiles.length > 0
               ? `reviewer verdict ${passVerdict}; ${validationHooksSkipped ? validationSummary : 'validation hooks ran'}; pending files: ${passedPendingFiles.join(', ')}`
@@ -5663,6 +5853,11 @@ ${guideSections}
                 passedPendingFiles.length > 0
                   ? 'The preceding Change review diff is the user-visible filesystem evidence for this gate. Use /diff for the full current working-tree diff, /changes for the file list, or /diff -- <path> to inspect one file.'
                   : '',
+                // Only when a live plan-task receipt exists, so the gate-pass
+                // content stays byte-identical for non-plan turns (prompt/gate
+                // snapshots and the gate e2e tests pin it). Placed BEFORE the
+                // finalization notice so that instruction stays last.
+                ...planTaskReceiptLines,
                 buildGatePassFinalizationNotice(),
                 formatGateStateBlock(
                   'validation/reviewer',
@@ -7737,6 +7932,15 @@ function hashGateSnapshotDetails(details: string): string {
             activeWorkState.pendingGateFiles.push(file)
           }
         }
+        // Every recorded change supersedes gate-issued plan-task receipts that
+        // covered a changed path, plus every receipt with no verifiable content
+        // identity. This deliberately also fires on the status-observation and
+        // gate re-arm paths: the gate itself re-arms there, so a receipt must
+        // stop authorizing completion. Guarded on normalizedFiles so a call that
+        // recorded nothing can never drop a live receipt.
+        if (normalizedFiles.length > 0) {
+          supersedePlanTaskGateReceiptsForChangedFiles(normalizedFiles)
+        }
         if (
           normalizedFiles.length > 0 &&
           (!opts?.fromStatusObservation || discoveredNewPendingFile)
@@ -7754,6 +7958,116 @@ function hashGateSnapshotDetails(details: string): string {
             activeWorkState.repairRoundCount = 0
           }
         }
+      }
+
+      // Content verification for the gate-issued plan-task receipt ledger. A
+      // receipt only authorizes a `done` transition while it is still TRUE, so
+      // recompute each receipt's own invariant
+      // (`snapshotFingerprint === hash(details(files, ''))`) against the live
+      // working tree and drop every receipt that no longer holds. Structurally
+      // invalid entries (older/corrupt serialized state) are dropped too, so a
+      // malformed ledger can never grant completion.
+      //
+      // Mirrors the shape of the credited-file eviction ledger above: iterate,
+      // drop on mismatch/unattestable/missing, write back once, mark changed
+      // once. Pruning to an EMPTY array is deliberate and is NOT the same as
+      // deleting the key: presence keeps gate-issued verification active for the
+      // runtime handler, which is what makes an invented receipt ID fail.
+      //
+      // Inline because handleSteps is serialized via .toString() +
+      // new Function(...), so it must not reference module-scope imports; it
+      // reuses the inline buildGateSnapshotDetails / hashGateSnapshotDetails /
+      // isAttestableSnapshotFingerprint helpers (which resolve node builtins at
+      // call time) and must stay a hoisted `function` declaration because both
+      // call sites appear EARLIER in the source than this declaration.
+      function prunePlanTaskGateReceipts(): void {
+        const receipts = activeWorkState.planTaskGateReceipts
+        if (!Array.isArray(receipts) || receipts.length === 0) return
+        const liveReceipts = receipts.filter((receipt) => {
+          if (!receipt || typeof receipt !== 'object') return false
+          if (
+            typeof receipt.receiptId !== 'string' ||
+            receipt.receiptId.length === 0
+          ) {
+            return false
+          }
+          if (
+            typeof receipt.taskId !== 'string' ||
+            receipt.taskId.length === 0
+          ) {
+            return false
+          }
+          // A non-array `files` (or a non-string entry) cannot be re-hashed at
+          // all, so it is not verifiable evidence.
+          if (!Array.isArray(receipt.files)) return false
+          if (receipt.files.some((file) => typeof file !== 'string')) {
+            return false
+          }
+          const recomputedFingerprint = hashGateSnapshotDetails(
+            buildGateSnapshotDetails(receipt.files, ''),
+          )
+          // A non-attestable recomputation is a stable error string, not content
+          // evidence, so two unrelated snapshots would compare equal under it.
+          if (!isAttestableSnapshotFingerprint(recomputedFingerprint)) {
+            return false
+          }
+          return recomputedFingerprint === receipt.snapshotFingerprint
+        })
+        if (liveReceipts.length === receipts.length) return
+        activeWorkState.planTaskGateReceipts = liveReceipts
+        markActiveWorkStateChanged()
+      }
+
+      // Change supersession for the gate-issued plan-task receipt ledger: the
+      // complement of prunePlanTaskGateReceipts. Two drops, both required:
+      //   - every receipt whose covered `files` intersect the changed paths (its
+      //     content evidence no longer describes the workspace);
+      //   - every receipt whose `evidence` is not 'reviewed-diff', because those
+      //     have no verifiable content identity at all — a 'no-diff' receipt's
+      //     fingerprint is the hash of an EMPTY file list, i.e. a constant, so it
+      //     can never fail content verification and supersession is the only
+      //     thing that can retire it. Legacy receipts serialized before
+      //     `evidence` existed fail closed the same way.
+      // Inline (hoisted `function`) for the same serialization reason as
+      // prunePlanTaskGateReceipts; reuses the inline normalizeGateFileList so the
+      // changed paths are compared in the same normalized form the receipts
+      // store.
+      function supersedePlanTaskGateReceiptsForChangedFiles(
+        files: string[],
+      ): void {
+        const receipts = activeWorkState.planTaskGateReceipts
+        if (!Array.isArray(receipts) || receipts.length === 0) return
+        const changedFilePaths = new Set(normalizeGateFileList(files))
+        // Nothing was actually recorded (every path normalized away), so there is
+        // no change to supersede and a live receipt must not be dropped.
+        if (changedFilePaths.size === 0) return
+        const survivingReceipts = receipts.filter((receipt) => {
+          if (!receipt || receipt.evidence !== 'reviewed-diff') return false
+          const receiptFiles = Array.isArray(receipt.files) ? receipt.files : []
+          return !receiptFiles.some((file) => changedFilePaths.has(file))
+        })
+        if (survivingReceipts.length === receipts.length) return
+        activeWorkState.planTaskGateReceipts = survivingReceipts
+        markActiveWorkStateChanged()
+      }
+
+      // Single guarded READ of the gate-issued plan-task receipt ledger, shared
+      // by the three readers that only look at it: the gate-pass mint, the
+      // printed live-receipt lookup, and buildPinnedActiveWorkMessage's durable
+      // recovery line. They each used `(... ?? []).some/.find(...)`, which a
+      // PRESENT-but-non-array ledger turns into a TypeError that fails the whole
+      // turn. Hydration now normalizes such a value to `[]`, so this is the
+      // second layer: it keeps all three readers as fail-closed as
+      // prunePlanTaskGateReceipts / supersedePlanTaskGateReceiptsForChangedFiles
+      // (both already guard with Array.isArray) so a future writer cannot
+      // reintroduce the crash. Inline hoisted `function` for the same
+      // serialization reason as those two: handleSteps is serialized via
+      // .toString() + new Function(...), so it must not reference module-scope
+      // imports, and every call site appears EARLIER in the source.
+      function readPlanTaskGateReceipts(
+        receipts: Base2PlanTaskGateReceipt[] | undefined,
+      ): Base2PlanTaskGateReceipt[] {
+        return Array.isArray(receipts) ? receipts : []
       }
 
       function reviewChallengeFingerprint(files: string[]): string {
@@ -8919,6 +9233,24 @@ function hashGateSnapshotDetails(details: string): string {
         ) {
           sections.push(`Gate progress: ${state.gateProgressLine}`)
         }
+        // Durable recovery surface for the current gate-issued plan-task receipt
+        // ID. A receipt is superseded when the work it covers changes, so the ID
+        // printed in an earlier gate-pass message goes stale; the pinned block
+        // survives context compaction, which makes this the reliable place to
+        // re-read the live one. Omitted entirely with no claimed task or no
+        // matching receipt.
+        const pinnedPlanTaskId = state.activePlanTaskId
+        const pinnedPlanTaskReceipt =
+          typeof pinnedPlanTaskId === 'string' && pinnedPlanTaskId.length > 0
+            ? readPlanTaskGateReceipts(state.planTaskGateReceipts).find(
+                (receipt) => receipt.taskId === pinnedPlanTaskId,
+              )
+            : undefined
+        if (pinnedPlanTaskReceipt) {
+          sections.push(
+            `Live plan-task gate receipt: ${pinnedPlanTaskReceipt.receiptId} (task ${pinnedPlanTaskReceipt.taskId}, evidence ${pinnedPlanTaskReceipt.evidence})`,
+          )
+        }
         if (hasUnresolvedGateWork) {
           sections.push(
             'suggest_followups: BLOCKED — GATE: PENDING. End your turn; call suggest_followups only after GATE: PASSED.',
@@ -9016,6 +9348,165 @@ function hashGateSnapshotDetails(details: string): string {
         )
         activeWorkState.workflowTodoProgress = progress
         if (progressChanged) markActiveWorkStateChanged()
+      }
+
+      // EXECUTE_PLAN active-task tracking. The claimed PLAN.md task is what
+      // binds a gate pass to ONE plan task, so the gate-pass path can mint a
+      // per-task validation receipt the runtime later verifies a
+      // `update_plan_status` checkpoint against. Same structure as
+      // extractLatestWorkflowTodoProgress / updateWorkflowTodoProgressFromMessages
+      // (walk history for a tool call, pair it with its SUCCESSFUL result,
+      // derive durable state, write it only on change), including the shared
+      // toolCallSucceeded result check. Self-contained inline helpers because
+      // handleSteps is serialized via .toString() + new Function(...), so they
+      // must not reference module-scope imports; `function` declarations hoist
+      // above both call sites (turn start and the post-STEP messageHistory
+      // block), which appear earlier in the source.
+      //
+      // Local type aliases so BOTH annotations below stay bracket-free tokens:
+      // agents/__tests__/helpers/extract-inline-function-source.ts cannot slice
+      // a return annotation that opens with a leading `|` union (it would emit a
+      // body-less signature TypeScript erases as an overload, and the helper is
+      // then missing at runtime). `boundWorkflowProgress` is the same precedent.
+      type ActivePlanTaskId = string | undefined
+      type PlanTaskClaimIntent = {
+        /** Normalized stable ID this call claimed, or '' when it claimed none. */
+        claimed: string
+        /** True when the call explicitly emptied the currentTask pointer. */
+        cleared: boolean
+        /** Normalized stable IDs this call moved to done/cancelled. */
+        completed: string[]
+      }
+
+      // Normalize a raw currentTask / taskId / task pointer to its leading
+      // stable-ID token: trim, then keep the text before the first whitespace or
+      // ':' (which also covers the ' — ' form). `"P2-T3 Implement the thing"`
+      // therefore becomes `"P2-T3"`, mirroring how validatePlanTransition
+      // matches a currentTask pointer against a task id (`=== id`,
+      // `startsWith(id + ' ')`, `startsWith(id + ':')`,
+      // `startsWith(id + ' —')`). Deliberately conservative: splitting on '-'
+      // would corrupt a legitimate ID such as `P2-T3`.
+      function normalizePlanTaskPointer(value: unknown): string {
+        if (typeof value !== 'string') return ''
+        const trimmed = value.trim()
+        if (!trimmed) return ''
+        const separator = trimmed.search(/[\s:]/)
+        return separator < 0 ? trimmed : trimmed.slice(0, separator)
+      }
+
+      function extractPlanTaskClaimIntent(input: unknown): PlanTaskClaimIntent {
+        const intent: PlanTaskClaimIntent = {
+          claimed: '',
+          cleared: false,
+          completed: [],
+        }
+        if (!input || typeof input !== 'object' || Array.isArray(input)) {
+          return intent
+        }
+        const record = input as Record<string, unknown>
+        const rawUpdates = Array.isArray(record.updates) ? record.updates : []
+        for (const update of rawUpdates) {
+          if (!update || typeof update !== 'object') continue
+          const entry = update as Record<string, unknown>
+          const pointer = normalizePlanTaskPointer(entry.taskId ?? entry.task)
+          if (!pointer) continue
+          if (entry.status === 'in_progress') {
+            // LAST in_progress entry wins: at most one task may be in progress,
+            // so a later entry in the same atomic call supersedes an earlier one.
+            intent.claimed = pointer
+          } else if (entry.status === 'done' || entry.status === 'cancelled') {
+            intent.completed.push(pointer)
+          }
+        }
+        if (typeof record.currentTask === 'string') {
+          // The explicit pointer wins over a derived in_progress entry, matching
+          // the handler's own currentTask-then-fallback precedence.
+          const pointer = normalizePlanTaskPointer(record.currentTask)
+          if (pointer) {
+            intent.claimed = pointer
+          } else if (record.currentTask.trim().length === 0) {
+            intent.claimed = ''
+            intent.cleared = true
+          }
+        }
+        return intent
+      }
+
+      function extractActivePlanTaskIdFromMessages(
+        messages: unknown,
+      ): ActivePlanTaskId {
+        // Seeded from durable state so a task claimed in an earlier turn (or
+        // before context compaction dropped its tool call) stays claimed until
+        // a successful call clears it.
+        let activeTaskId = activeWorkState.activePlanTaskId
+        if (!Array.isArray(messages)) return activeTaskId
+        const pendingToolCalls = new Map<string, PlanTaskClaimIntent>()
+
+        for (const message of messages) {
+          if (!message || typeof message !== 'object') continue
+          const record = message as Record<string, unknown>
+          if (record.role === 'assistant' && Array.isArray(record.content)) {
+            for (const part of record.content) {
+              if (!part || typeof part !== 'object') continue
+              const toolCall = part as Record<string, unknown>
+              if (toolCall.type !== 'tool-call') continue
+              const toolName =
+                typeof toolCall.toolName === 'string' ? toolCall.toolName : ''
+              if (toolName !== 'update_plan_status') continue
+              const toolCallId =
+                typeof toolCall.toolCallId === 'string'
+                  ? toolCall.toolCallId
+                  : ''
+              if (!toolCallId) continue
+              pendingToolCalls.set(
+                toolCallId,
+                extractPlanTaskClaimIntent(toolCall.input),
+              )
+            }
+          }
+
+          if (record.role !== 'tool') continue
+          const toolCallId =
+            typeof record.toolCallId === 'string' ? record.toolCallId : ''
+          const intent = pendingToolCalls.get(toolCallId)
+          if (!intent) continue
+          // Fail closed on a rejected transition: the runtime handler refuses a
+          // plan update atomically, so a claim it never applied must not let the
+          // gate mint a receipt for that task.
+          //
+          // The handler's own POINTER-only messages are opted in here: a call
+          // that only manipulates `currentTask` (no `updates`) returns exactly
+          // `Current task pointer cleared.` or `Current task -> "<task>".`, which
+          // match none of the shared success verbs. Without this the shared
+          // predicate rejected the handler's own success message, so a
+          // pointer-only release left `activePlanTaskId` stale and later gate
+          // passes kept minting and printing receipts for a RELEASED task —
+          // contradicting the documented contract in gate-state.ts ("Cleared when
+          // a successful call empties `currentTask`") — while a pointer-only claim
+          // was never recorded at all, so no receipt could be minted for it. The
+          // failure-word veto inside toolCallSucceeded still rejects
+          // `No changes applied.` and every `errorMessage` refusal.
+          if (!toolCallSucceeded(record.content, /\bcurrent task\b/i)) continue
+          if (intent.claimed) {
+            activeTaskId = intent.claimed
+          } else if (intent.cleared) {
+            activeTaskId = undefined
+          }
+          // Completing (or cancelling) the claimed task releases the claim, so a
+          // later gate pass cannot keep minting receipts for a finished task.
+          if (activeTaskId && intent.completed.includes(activeTaskId)) {
+            activeTaskId = undefined
+          }
+        }
+
+        return activeTaskId
+      }
+
+      function updateActivePlanTaskFromMessages(messages: unknown): void {
+        const nextActiveTaskId = extractActivePlanTaskIdFromMessages(messages)
+        if (activeWorkState.activePlanTaskId === nextActiveTaskId) return
+        activeWorkState.activePlanTaskId = nextActiveTaskId
+        markActiveWorkStateChanged()
       }
 
       // Detects an exact standalone "COMMIT ANYWAY" user message and publishes
@@ -9234,13 +9725,33 @@ function hashGateSnapshotDetails(details: string): string {
         })
       }
 
-      function toolCallSucceeded(value: unknown): boolean {
+      // `extraSuccessPattern` is an OPT-IN per-call-site success verb, consulted
+      // only after the shared failure-word veto below and only when the shared
+      // verb list did not already match. It exists because that list
+      // (success|updated|wrote|written|saved) does not cover every handler's own
+      // success message — see the plan-task claim tracker, whose pointer-only
+      // `update_plan_status` results are exactly `Current task -> "<task>".` and
+      // `Current task pointer cleared.` — and broadening the shared list would
+      // change the verdict for every other consumer (workflow-todo progress
+      // included). Callers that pass nothing keep the previous behavior
+      // unchanged. Pass a NON-global pattern: `RegExp.test` is stateful for /g.
+      function toolCallSucceeded(
+        value: unknown,
+        extraSuccessPattern?: RegExp,
+      ): boolean {
         if (!value) return false
-        if (Array.isArray(value)) return value.some(toolCallSucceeded)
+        // Explicit arrow, never a bare `value.some(toolCallSucceeded)`: `.some`
+        // passes the element INDEX as the second argument, which would arrive
+        // here as `extraSuccessPattern` and throw on `.test`.
+        if (Array.isArray(value)) {
+          return value.some((item) =>
+            toolCallSucceeded(item, extraSuccessPattern),
+          )
+        }
         if (typeof value !== 'object') return false
         const record = value as Record<string, unknown>
         if (record.type === 'json' && 'value' in record) {
-          return toolCallSucceeded(record.value)
+          return toolCallSucceeded(record.value, extraSuccessPattern)
         }
         if (
           record.success === false ||
@@ -9253,7 +9764,10 @@ function hashGateSnapshotDetails(details: string): string {
         if (typeof record.message === 'string') {
           // Only trust the success-verb regex when the message does not itself
           // contain a failure indicator, otherwise messages like "No updates
-          // were saved" would false-positive on "saved".
+          // were saved" would false-positive on "saved". The veto guards
+          // extraSuccessPattern too, so an opt-in verb can never credit a message
+          // the handler used to report that nothing was applied (e.g.
+          // `No changes applied.`).
           if (
             /\b(failed|failure|unable|could not|cannot|did not|was not|were not|skipped|no[- ]op|no changes|error)\b/i.test(
               record.message,
@@ -9261,8 +9775,16 @@ function hashGateSnapshotDetails(details: string): string {
           ) {
             return false
           }
-          return /\b(success|successful|updated|wrote|written|saved)\b/i.test(
-            record.message,
+          if (
+            /\b(success|successful|updated|wrote|written|saved)\b/i.test(
+              record.message,
+            )
+          ) {
+            return true
+          }
+          return (
+            extraSuccessPattern !== undefined &&
+            extraSuccessPattern.test(record.message)
           )
         }
         return Object.keys(record).length > 0
@@ -10202,7 +10724,7 @@ function buildExecutePlanInstructionsPrompt(params: {
     '## Durable plan execution mode',
     '',
     'You are in EXECUTE_PLAN mode. Your job is to execute or resume durable plan artifacts, not merely revise them. Treat durable artifact contents already provided in the conversation as the initial authoritative context; read artifacts directly only when their contents are missing, truncated, stale, or have changed. Continue from the next actionable milestone, and use normal project source editing tools when implementation work is required.',
-    'Run the plan preflight before editing. Tasks should have stable IDs, dependencies, Acceptance criteria, and Validate gates. Claim exactly one actionable task by moving it to in_progress and recording its stable ID as currentTask. A task may move to done only after its validation gate passes; record validation/review evidence as a checkpoint. If preflight fails, repair the durable plan before implementation. Use STATE.json revisions to avoid overwriting newer execution state.',
+    'Run the plan preflight before editing. Tasks should have stable IDs, dependencies, Acceptance criteria, and Validate gates. Claim exactly one actionable task by moving it to in_progress and recording its stable ID as currentTask. A task may move to done only after its validation gate passes; record validation/review evidence as a checkpoint. That checkpoint must cite the gate-issued receipt ID printed in the gate-pass message (shaped `plan-gate:<taskId>:<fingerprintPrefix>`, or `plan-gate:<taskId>:unreviewed-scope:<fingerprintPrefix>` / `plan-gate:<taskId>:no-diff:<fingerprintPrefix>` when the cycle had no reviewable diff) in checkpoint.receiptIds; never invent a receipt ID, because the runtime verifies it against gate state and rejects an ID that matches no gate-issued receipt for that task. A receipt is SUPERSEDED when the task\'s files change again, so after further edits you must let the gate close again and copy the NEW ID from the newest gate-pass message (or the pinned harness state); never reuse an ID from an earlier gate-pass message. If preflight fails, repair the durable plan before implementation. Use STATE.json revisions to avoid overwriting newer execution state.',
     '',
     'Keep STATUS.md and LESSONS.md current throughout execution. Prefer update_plan_status for incremental STATUS.md / LESSONS.md updates; use create_plan for SPEC.md / PLAN.md revisions, substantial rewrites, or creating missing artifacts. PLAN mode remains plan-only, but EXECUTE_PLAN is allowed to edit project source to complete the plan. Do not let plan artifacts drift behind actual implementation state.',
   ].join('\n')
@@ -10253,7 +10775,7 @@ function buildExecutePlanStepPrompt({}: {}) {
     'You are in EXECUTE_PLAN mode. Execute or resume durable plan artifacts, using the project source editing tools when implementation work is required. Unlike PLAN mode, you may edit project source files to complete planned tasks.',
     'Treat SPEC.md, PLAN.md, STATUS.md, and LESSONS.md under the durable plan session as authoritative. Use any artifact contents already present in the conversation as the initial source of truth, confirm the next incomplete or blocked item from that context, and read artifacts directly only when contents are missing, truncated, stale, or have changed. Do not repeatedly re-read unchanged artifacts or source files after confirming the next item; continue from it unless the artifacts say completed work must be revisited.',
     'Honor the deterministic preflight included with resumed artifacts. Do not edit source when preflight reports errors. Use stable task IDs for updates, keep at most one task in_progress, respect dependencies, and do not mark a task done until its Validate gate passes and the checkpoint is recorded.',
-    'Completing one plan task and passing its validation gate is not the end of the turn: claim the next actionable task and keep executing in this same turn. This does not relax the at-most-one-task-in_progress rule above — advance through the tasks sequentially, one in_progress at a time, never claiming several at once. If you stop before the plan is complete, say so explicitly and state the reason, naming the task ID you reached and what remains.',
+    'Completing one plan task and passing its validation gate is not the end of the turn: claim the next actionable task and keep executing in this same turn. This does not relax the at-most-one-task-in_progress rule above — advance through the tasks sequentially, one in_progress at a time, never claiming several at once. After a claimed task passes its validation/reviewer gate, copy the gate-issued receipt ID from the gate-pass message into update_plan_status checkpoint.receiptIds, mark that task done, then claim the next one. Receipt IDs must never be invented: the runtime verifies them against gate state and rejects an unmatched one, so a fabricated ID fails the transition instead of completing the task. A receipt is also superseded once the files it covers change again (and a `plan-gate:<taskId>:unreviewed-scope:...` / `plan-gate:<taskId>:no-diff:...` receipt as soon as any further change is recorded), so if you edit more after a gate pass you must let the gate close again and copy the NEW ID; never reuse an ID from an earlier gate-pass message. The live ID is also repeated in the pinned harness state. If you stop before the plan is complete, say so explicitly and state the reason, naming the task ID you reached and what remains.',
     'Keep STATUS.md current as you progress: update completed/pending/blocked items, current state, validation results, and the next checkpoint. Keep LESSONS.md current with gotchas, decisions, reusable findings, and follow-up notes discovered during execution. Prefer update_plan_status for incremental STATUS.md / LESSONS.md updates; use create_plan for SPEC.md / PLAN.md revisions, substantial rewrites, or creating missing artifacts.',
     'Use normal implementation behavior for source changes: gather context before editing, follow project conventions, validate meaningful changes when appropriate, and summarize the completed work concisely. Do not let plan artifacts drift behind actual implementation state.',
   ).join('\n')
