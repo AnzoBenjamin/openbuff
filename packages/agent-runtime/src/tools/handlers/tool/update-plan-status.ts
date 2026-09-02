@@ -25,6 +25,7 @@ import type {
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { AgentState } from '@codebuff/common/types/session-state'
 
 type ToolName = 'update_plan_status'
 
@@ -111,6 +112,47 @@ export function applyTaskUpdate(
   return { lines, matched: false }
 }
 
+/**
+ * Gate-issued per-task validation receipts published by base2 into
+ * `agentState.base2ActiveWork.planTaskGateReceipts`.
+ *
+ * Returns `undefined` ONLY when there is no gate-issued ledger at all — no
+ * `base2ActiveWork`, or a genuinely absent `planTaskGateReceipts` — so
+ * `validatePlanTransition` keeps its legacy "any non-empty receiptIds" rule for
+ * non-base2 agents and for a base2 run with the validation gate disabled. A
+ * PRESENT ledger (including an empty one) turns verification on, so the
+ * absent-vs-present distinction is load-bearing and must not be collapsed to
+ * `[]` — nor, in the other direction, may a malformed ledger silently reopen the
+ * legacy rule: a present key whose value is not an array is verification ACTIVE
+ * with no usable evidence, and returns `[]` so the completion fails closed.
+ *
+ * `base2ActiveWork` is typed `Record<string, unknown>`, so each entry is
+ * narrowed field by field rather than cast: only entries whose `receiptId` and
+ * `taskId` are both non-empty strings can match a checkpoint, and any other
+ * entry is dropped (an all-malformed ledger therefore also rejects).
+ */
+function readGateIssuedPlanTaskReceipts(
+  base2ActiveWork: Record<string, unknown> | undefined,
+): Array<{ receiptId: string; taskId: string }> | undefined {
+  if (!base2ActiveWork) return undefined
+  const receipts = base2ActiveWork.planTaskGateReceipts
+  // Absent ledger: base2 DELETES the key on a gate-disabled turn, and a JSON
+  // round-trip drops an `undefined` value, so both read back as "no ledger".
+  if (receipts === undefined) return undefined
+  // Present but unusable => fail closed rather than fall back to the legacy rule.
+  if (!Array.isArray(receipts)) return []
+  return receipts.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
+    const record = entry as Record<string, unknown>
+    const { receiptId, taskId } = record
+    if (typeof receiptId !== 'string' || receiptId.trim().length === 0) {
+      return []
+    }
+    if (typeof taskId !== 'string' || taskId.trim().length === 0) return []
+    return [{ receiptId, taskId }]
+  })
+}
+
 function buildAppendBlock(entry: AppendEntry, nowIso: string): string {
   const heading = entry.heading.trim().replace(/\s+/g, ' ')
   const body = entry.body.replace(/\s+$/g, '')
@@ -127,9 +169,13 @@ function buildAppendBlock(entry: AppendEntry, nowIso: string): string {
 export const handleUpdatePlanStatus = (async (params: {
   previousToolCallFinished: Promise<void>
   toolCall: CodebuffToolCall<ToolName>
+  // The runtime always supplies agentState (CodebuffToolHandlerFunction
+  // requires it); it is optional here only so callers that construct just the
+  // fields this handler reads keep type-checking.
+  agentState?: AgentState
   logger: Logger
 }): Promise<{ output: CodebuffToolOutput<ToolName> }> => {
-  const { previousToolCallFinished, toolCall, logger } = params
+  const { previousToolCallFinished, toolCall, agentState, logger } = params
   const {
     path: artifactPath,
     updates,
@@ -266,6 +312,11 @@ export const handleUpdatePlanStatus = (async (params: {
           : currentTaskApplied,
       existingState,
       checkpoint,
+      // Present array (even empty) => the checkpoint must cite a gate-issued
+      // receipt for this task; undefined => legacy any-non-empty behavior.
+      gateIssuedReceipts: readGateIssuedPlanTaskReceipts(
+        agentState?.base2ActiveWork,
+      ),
     })
     if (!transition.ok) {
       return {

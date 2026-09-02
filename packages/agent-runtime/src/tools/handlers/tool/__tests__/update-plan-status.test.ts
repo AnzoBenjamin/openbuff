@@ -12,6 +12,7 @@ import {
 
 import type { CodebuffToolCall } from '@codebuff/common/tools/list'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { AgentState } from '@codebuff/common/types/session-state'
 
 const silentLogger: Logger = {
   debug: () => undefined,
@@ -488,5 +489,190 @@ describe('handleUpdatePlanStatus', () => {
 
     const value = result.output[0].value as { errorMessage?: string }
     expect(value.errorMessage).toMatch(/unknown sessionStatus/)
+  })
+
+  // The gate-issued receipts are read out of agentState.base2ActiveWork, which
+  // base2 publishes only while its validation/reviewer gate is active. Same PLAN
+  // content and same checkpoint shape in both cases: only the cited receipt ID
+  // differs, so these pin that the handler forwards the real evidence rather
+  // than trusting the model-supplied ID.
+  const PLAN_WITH_CLAIMED_TASK = [
+    '# Plan',
+    '',
+    '- [~] P1-T1 Implement the thing',
+    '  - Acceptance: observable result',
+    '  - Validate: bun test',
+    '',
+  ].join('\n')
+  const GATE_RECEIPT_ID = `plan-gate:P1-T1:v3:${'a'.repeat(13)}`
+
+  function agentStateWithGateReceipts(
+    planTaskGateReceipts: unknown,
+  ): AgentState {
+    // Only the fields this handler reads; the runtime supplies the full state.
+    return {
+      base2ActiveWork: { planTaskGateReceipts },
+    } as unknown as AgentState
+  }
+
+  test('completes a plan task when the checkpoint cites a gate-issued receipt', async () => {
+    const planPath = path.join(tempDir, '.agents/sessions/demo/PLAN.md')
+    fs.writeFileSync(planPath, PLAN_WITH_CLAIMED_TASK)
+
+    const result = await handleUpdatePlanStatus({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: makeCall({
+        path: '.agents/sessions/demo/PLAN.md',
+        updates: [{ taskId: 'P1-T1', status: 'done' }],
+        checkpoint: {
+          taskId: 'P1-T1',
+          phase: 'validation',
+          passed: true,
+          receiptIds: [GATE_RECEIPT_ID],
+        },
+      }),
+      agentState: agentStateWithGateReceipts([
+        {
+          receiptId: GATE_RECEIPT_ID,
+          taskId: 'P1-T1',
+          snapshotFingerprint: `v3:${'a'.repeat(64)}`,
+          files: ['src/a.ts'],
+          validationSummary: 'validation hooks ran',
+          reviewerVerdict: 'LOOKS_GOOD',
+          recordedAt: '2025-01-01T00:00:00.000Z',
+        },
+      ]),
+      logger: silentLogger,
+    })
+
+    const value = result.output[0].value as { message?: string }
+    expect(value.message).toMatch(/Updated 1 task line/)
+    expect(fs.readFileSync(planPath, 'utf8')).toContain(
+      '- [x] P1-T1 Implement the thing',
+    )
+  })
+
+  test('rejects an invented receipt ID against the published gate-issued receipts', async () => {
+    const planPath = path.join(tempDir, '.agents/sessions/demo/PLAN.md')
+    fs.writeFileSync(planPath, PLAN_WITH_CLAIMED_TASK)
+
+    const result = await handleUpdatePlanStatus({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: makeCall({
+        path: '.agents/sessions/demo/PLAN.md',
+        updates: [{ taskId: 'P1-T1', status: 'done' }],
+        checkpoint: {
+          taskId: 'P1-T1',
+          phase: 'validation',
+          passed: true,
+          receiptIds: ['validation-1'],
+        },
+      }),
+      agentState: agentStateWithGateReceipts([
+        {
+          receiptId: GATE_RECEIPT_ID,
+          taskId: 'P1-T1',
+          snapshotFingerprint: `v3:${'a'.repeat(64)}`,
+          files: ['src/a.ts'],
+          validationSummary: 'validation hooks ran',
+          reviewerVerdict: 'LOOKS_GOOD',
+          recordedAt: '2025-01-01T00:00:00.000Z',
+        },
+      ]),
+      logger: silentLogger,
+    })
+
+    const value = result.output[0].value as { errorMessage?: string }
+    expect(value.errorMessage).toMatch(/must cite a gate-issued receipt ID/)
+    // Atomic: the artifact is untouched when the transition is refused.
+    expect(fs.readFileSync(planPath, 'utf8')).toBe(PLAN_WITH_CLAIMED_TASK)
+  })
+
+  test('keeps the legacy receipt rule when no gate-issued receipts are published', async () => {
+    const planPath = path.join(tempDir, '.agents/sessions/demo/PLAN.md')
+    fs.writeFileSync(planPath, PLAN_WITH_CLAIMED_TASK)
+
+    const result = await handleUpdatePlanStatus({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: makeCall({
+        path: '.agents/sessions/demo/PLAN.md',
+        updates: [{ taskId: 'P1-T1', status: 'done' }],
+        checkpoint: {
+          taskId: 'P1-T1',
+          phase: 'validation',
+          passed: true,
+          receiptIds: ['validation-1'],
+        },
+      }),
+      // planTaskGateReceipts absent (gate disabled / non-base2 caller).
+      agentState: agentStateWithGateReceipts(undefined),
+      logger: silentLogger,
+    })
+
+    const value = result.output[0].value as { message?: string }
+    expect(value.message).toMatch(/Updated 1 task line/)
+    expect(fs.readFileSync(planPath, 'utf8')).toContain(
+      '- [x] P1-T1 Implement the thing',
+    )
+  })
+
+  // A PRESENT ledger means verification is ACTIVE, so a malformed one must fail
+  // closed instead of silently reopening the legacy "any non-empty receiptIds"
+  // rule. Only a genuinely absent key may fall back.
+  test('a present-but-non-array planTaskGateReceipts fails closed', async () => {
+    const planPath = path.join(tempDir, '.agents/sessions/demo/PLAN.md')
+    fs.writeFileSync(planPath, PLAN_WITH_CLAIMED_TASK)
+
+    const result = await handleUpdatePlanStatus({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: makeCall({
+        path: '.agents/sessions/demo/PLAN.md',
+        updates: [{ taskId: 'P1-T1', status: 'done' }],
+        checkpoint: {
+          taskId: 'P1-T1',
+          phase: 'validation',
+          passed: true,
+          receiptIds: [GATE_RECEIPT_ID],
+        },
+      }),
+      agentState: agentStateWithGateReceipts({ corrupted: true }),
+      logger: silentLogger,
+    })
+
+    const value = result.output[0].value as { errorMessage?: string }
+    expect(value.errorMessage).toMatch(/must cite a gate-issued receipt ID/)
+    expect(value.errorMessage).toMatch(/No gate-issued receipt is live for/)
+    // Atomic: the artifact is untouched when the transition is refused.
+    expect(fs.readFileSync(planPath, 'utf8')).toBe(PLAN_WITH_CLAIMED_TASK)
+  })
+
+  test('entries with non-string receiptId/taskId are dropped and therefore reject', async () => {
+    const planPath = path.join(tempDir, '.agents/sessions/demo/PLAN.md')
+    fs.writeFileSync(planPath, PLAN_WITH_CLAIMED_TASK)
+
+    const result = await handleUpdatePlanStatus({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: makeCall({
+        path: '.agents/sessions/demo/PLAN.md',
+        updates: [{ taskId: 'P1-T1', status: 'done' }],
+        checkpoint: {
+          taskId: 'P1-T1',
+          phase: 'validation',
+          passed: true,
+          receiptIds: [GATE_RECEIPT_ID],
+        },
+      }),
+      agentState: agentStateWithGateReceipts([
+        { receiptId: 42, taskId: 'P1-T1' },
+        { receiptId: GATE_RECEIPT_ID, taskId: null },
+        { receiptId: '  ', taskId: 'P1-T1' },
+        'not-a-receipt',
+      ]),
+      logger: silentLogger,
+    })
+
+    const value = result.output[0].value as { errorMessage?: string }
+    expect(value.errorMessage).toMatch(/must cite a gate-issued receipt ID/)
+    expect(fs.readFileSync(planPath, 'utf8')).toBe(PLAN_WITH_CLAIMED_TASK)
   })
 })

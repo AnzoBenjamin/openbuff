@@ -86,6 +86,40 @@ task requires a passed validation checkpoint with `receiptIds`.
 | `summary`    | string, optional                     | Short human-readable summary.                                |
 | `receiptIds` | array of non-empty strings, optional | Supporting receipt IDs. An empty array is treated as absent. |
 
+When the caller's agent state carries gate-issued receipts — base2 publishes
+`planTaskGateReceipts` in `base2ActiveWork` while its automated validation/reviewer
+gate is active — `receiptIds` must cite at least one of those receipts whose task ID
+matches the task being completed. Gate-issued receipt IDs are printed in the gate-pass
+message and come in three shapes, one per evidence kind:
+
+- `plan-gate:<taskId>:<fingerprintPrefix>` — a reviewable diff was reviewed.
+- `plan-gate:<taskId>:unreviewed-scope:<fingerprintPrefix>` — pending files existed but
+  none of them were reviewable (docs-only, `.md`, `.agents/`), so validation covered
+  them and the reviewer was skipped.
+- `plan-gate:<taskId>:no-diff:<fingerprintPrefix>` — the cycle had no file changes at
+  all (verification-only work).
+
+A task whose gate cycle had no reviewable diff is therefore still completable, via an
+`unreviewed-scope` or `no-diff` receipt that records exactly what was covered instead
+of implying a content review that never happened. Arbitrary strings are rejected, and
+a present-but-empty receipt list means the gate has issued no evidence for any task
+yet, so completion is refused.
+
+Receipts are superseded rather than permanent. A receipt stops authorizing completion
+once the files it covers change again, and an `unreviewed-scope` / `no-diff` receipt —
+which has no verifiable content identity — is superseded as soon as any further change
+is recorded. After more edits, let the validation/reviewer gate close again and cite
+the NEW ID from the newest gate-pass message; the current live ID is also repeated in
+the pinned harness state, which survives context compaction. When the check rejects,
+the error lists the receipt IDs that are live for that task, or reports that none is.
+
+A published ledger that is present but malformed (not an array, or entries without a
+string `receiptId`/`taskId`) fails closed: verification stays active with no usable
+evidence, so the completion is refused instead of falling back to the legacy rule.
+Callers with no gate-issued receipts at all (a non-base2 agent, or a base2 run with the
+gate disabled) keep the previous behavior: any non-empty `receiptIds` satisfies the
+check.
+
 ## Usage example
 
 ```json

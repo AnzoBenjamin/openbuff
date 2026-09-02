@@ -11291,3 +11291,1277 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
     }
   })
 })
+
+describe('base2 EXECUTE_PLAN gate-issued plan-task receipts', () => {
+  /** update_plan_status tool call plus its paired tool result. */
+  function planStatusHistory(
+    input: Record<string, unknown>,
+    result: Record<string, unknown> = { message: 'Updated 1 task line(s).' },
+  ) {
+    return [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'plan-1',
+            toolName: 'update_plan_status',
+            input: {
+              path: '.agents/sessions/demo/PLAN.md',
+              ...input,
+            },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        toolCallId: 'plan-1',
+        toolName: 'update_plan_status',
+        content: [{ type: 'json', value: result }],
+      },
+    ]
+  }
+
+  /**
+   * Run a turn far enough for the turn-start extraction to publish the claimed
+   * plan task, then read it back off durable gate state.
+   */
+  function claimedTaskAfterTurn(params: {
+    messageHistory?: unknown[]
+    seededActivePlanTaskId?: string
+  }): string | undefined {
+    const base2 = createBase2('default', { executePlan: true })
+    const agentState: Record<string, unknown> = {
+      agentId: 'base2-execute-plan',
+      ...(params.messageHistory
+        ? { messageHistory: params.messageHistory }
+        : {}),
+      ...(params.seededActivePlanTaskId
+        ? {
+            base2ActiveWork: {
+              activePlanTaskId: params.seededActivePlanTaskId,
+            },
+          }
+        : {}),
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Continue the plan.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    return (agentState as any).base2ActiveWork.activePlanTaskId
+  }
+
+  /** Drive one reviewable edit through validation + code-reviewer to the gate pass. */
+  function driveToPlanGatePass(params: {
+    gateFile: string
+    agentState: Record<string, unknown>
+  }): { content: string; reviewFingerprint: string } {
+    const base2 = createBase2('default', { executePlan: true })
+    const gen = base2.handleSteps!({
+      agentState: params.agentState,
+      prompt: 'Continue the plan.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    const maybePinned = gen.next().value
+    if (maybePinned !== 'STEP') {
+      expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+    }
+    expect(
+      gen.next(finishStepWithToolResult(editReceipt(params.gateFile))).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next(feedJson({ status: ` M ${params.gateFile}` })).value,
+    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    expect(gen.next(feedJson([])).value).toMatchObject({
+      toolName: 'git_status',
+    })
+    const reviewCall = gen.next(feedJson({ status: ` M ${params.gateFile}` }))
+      .value as any
+    expect(reviewCall).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'code-reviewer' }] },
+    })
+    const reviewFingerprint =
+      String(reviewCall.input.agents[0].prompt).match(
+        /Snapshot fingerprint \(echo exactly\): ([^\n]+)/,
+      )?.[1] ?? ''
+    expect(
+      gen.next(attestedReviewerResult(reviewCall) as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    const gatePassed = gen.next(feedJson({ status: ` M ${params.gateFile}` }))
+    expect(gatePassed.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    return {
+      content: (gatePassed.value as any).input.content as string,
+      reviewFingerprint,
+    }
+  }
+
+  /**
+   * Same gate pass, but for a NON-reviewable pending file so the final reviewer
+   * is skipped. That is the only way to reach a gate pass while the snapshot
+   * fingerprint is non-attestable: a reviewer can never attest one, so the
+   * spawn path would block on attestation instead of passing.
+   */
+  function driveToGatePassViaReviewerSkip(params: {
+    gateFile: string
+    agentState: Record<string, unknown>
+  }): string {
+    const base2 = createBase2('default', { executePlan: true })
+    const gen = base2.handleSteps!({
+      agentState: params.agentState,
+      prompt: 'Continue the plan.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    const maybePinned = gen.next().value
+    if (maybePinned !== 'STEP') {
+      expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+    }
+    expect(
+      gen.next(finishStepWithToolResult(editReceipt(params.gateFile))).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next(feedJson({ status: ` M ${params.gateFile}` })).value,
+    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    expect(gen.next(feedJson([])).value).toMatchObject({
+      toolName: 'git_status',
+    })
+    const reviewerSkip = gen.next(feedJson({ status: ` M ${params.gateFile}` }))
+    expect(reviewerSkip.value).toMatchObject({ toolName: 'add_message' })
+    expect((reviewerSkip.value as any).input.content).toContain(
+      'Reviewer gate skipped',
+    )
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    const gatePassed = gen.next(feedJson({ status: ` M ${params.gateFile}` }))
+    expect(gatePassed.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    return (gatePassed.value as any).input.content as string
+  }
+
+  function seedIdleGateState(
+    overrides: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      touchedFiles: [],
+      changedFiles: [],
+      pendingGateFiles: [],
+      currentPhase: 'idle',
+      latestWorkSummary: '',
+      openReviewerBlockers: [],
+      lastValidationSummary: '',
+      nextRequiredAction: '',
+      lastPinnedStateMessage: '',
+      ...overrides,
+    }
+  }
+
+  /**
+   * Gate state parked mid-gate on one already-pending file, with the aux gates
+   * credited so only the FINAL validation + code-reviewer decision runs. Unlike
+   * seedIdleGateState + a fresh edit, resuming a seeded pending file records NO
+   * change this turn, which is the only way to observe the mint's idempotent
+   * same-receiptId branch (a re-recorded change to a covered file supersedes the
+   * receipt first).
+   */
+  function seedPendingGateState(
+    gateFile: string,
+    overrides: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      touchedFiles: [gateFile],
+      changedFiles: [gateFile],
+      pendingGateFiles: [gateFile],
+      currentPhase: 'awaiting_validation',
+      latestWorkSummary: '',
+      openReviewerBlockers: [],
+      openReviewerFindings: [],
+      lastValidationSummary: '',
+      nextRequiredAction: '',
+      lastPinnedStateMessage: '',
+      gatePassedFiles: [],
+      gatePassedFileMarkers: {},
+      gatePassedPendingFiles: [],
+      gatePassedReviewerVerdict: '',
+      gatePassedValidationSummary: '',
+      gatePassedFingerprint: '',
+      reviewedReviewableFingerprint: '',
+      lastReviewerGateSkipReason: '',
+      reviewReceipts: [],
+      testWriterGateDone: true,
+      docWriterGateDone: true,
+      securityReviewGateDone: true,
+      preEditSecurityReviewDone: true,
+      specialistReviewGatesDone: [],
+      auxGatesLastPendingFiles: [gateFile],
+      ...overrides,
+    }
+  }
+
+  /** Resume a seeded pending file through validation + review to the gate pass. */
+  function driveSeededPendingGatePass(params: {
+    gateFile: string
+    agentState: Record<string, unknown>
+  }): { content: string; reviewFingerprint: string } {
+    const base2 = createBase2('default', { executePlan: true })
+    const gen = base2.handleSteps!({
+      agentState: params.agentState,
+      prompt: 'Continue the plan.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      gen.next(feedJson({ status: ` M ${params.gateFile}` })).value,
+    ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    const maybePinned = gen.next().value
+    if (maybePinned !== 'STEP') {
+      expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+    }
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+    })
+    expect(
+      gen.next(feedJson({ status: ` M ${params.gateFile}` })).value,
+    ).toMatchObject({ toolName: 'run_file_change_hooks' })
+    expect(gen.next(feedJson([])).value).toMatchObject({
+      toolName: 'git_status',
+    })
+    const reviewCall = gen.next(feedJson({ status: ` M ${params.gateFile}` }))
+      .value as any
+    expect(reviewCall).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'code-reviewer' }] },
+    })
+    const reviewFingerprint =
+      String(reviewCall.input.agents[0].prompt).match(
+        /Snapshot fingerprint \(echo exactly\): ([^\n]+)/,
+      )?.[1] ?? ''
+    expect(
+      gen.next(attestedReviewerResult(reviewCall) as any).value,
+    ).toMatchObject({ toolName: 'git_status' })
+    const gatePassed = gen.next(feedJson({ status: ` M ${params.gateFile}` }))
+    expect(gatePassed.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    return {
+      content: (gatePassed.value as any).input.content as string,
+      reviewFingerprint,
+    }
+  }
+
+  /** Live gate-issued plan-task receipt ledger published on durable gate state. */
+  function planTaskReceiptsOf(
+    agentState: Record<string, unknown>,
+  ): Array<Record<string, unknown>> {
+    return (agentState as any).base2ActiveWork.planTaskGateReceipts as Array<
+      Record<string, unknown>
+    >
+  }
+
+  /**
+   * Drive a turn only as far as the turn-start bookkeeping (hydration, credited
+   * file eviction, plan-task receipt content verification), which all runs right
+   * after the first git_status result is fed back.
+   */
+  function driveToTurnStartBookkeeping(
+    agentState: Record<string, unknown>,
+    status = '',
+  ): void {
+    const base2 = createBase2('default', { executePlan: true })
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Continue the plan.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    gen.next(feedJson({ status }))
+  }
+
+  test('an explicit currentTask pointer is normalized to its stable ID token', () => {
+    // "<ID> <prose>" is a legitimate pointer shape, and validatePlanTransition
+    // matches it against a task id by prefix, so the claim must store the ID.
+    expect(
+      claimedTaskAfterTurn({
+        messageHistory: planStatusHistory({
+          currentTask: 'P2-T3 Implement the thing',
+          updates: [{ taskId: 'P2-T3', status: 'in_progress' }],
+        }),
+      }),
+    ).toBe('P2-T3')
+  })
+
+  test('the last in_progress update is claimed when no currentTask is supplied', () => {
+    expect(
+      claimedTaskAfterTurn({
+        messageHistory: planStatusHistory({
+          updates: [
+            { taskId: 'P1-T9', status: 'pending' },
+            { taskId: 'P2-T3', status: 'in_progress' },
+          ],
+        }),
+      }),
+    ).toBe('P2-T3')
+  })
+
+  test('an in_progress update falls back to task when taskId is absent', () => {
+    expect(
+      claimedTaskAfterTurn({
+        messageHistory: planStatusHistory({
+          updates: [{ task: 'P4-T2 — do the thing', status: 'in_progress' }],
+        }),
+      }),
+    ).toBe('P4-T2')
+  })
+
+  test('a successful empty currentTask clears the claimed task', () => {
+    // The handler's message for a call that both rewrites a line and empties the
+    // pointer; the unrelated pending update cannot itself clear P2-T3, so only
+    // the empty currentTask can.
+    expect(
+      claimedTaskAfterTurn({
+        seededActivePlanTaskId: 'P2-T3',
+        messageHistory: planStatusHistory(
+          {
+            currentTask: '',
+            updates: [{ taskId: 'P9-T1', status: 'pending' }],
+          },
+          {
+            message: 'Updated 1 task line(s). Current task pointer cleared.',
+          },
+        ),
+      }),
+    ).toBeUndefined()
+  })
+
+  test('a pointer-only clear message clears the claimed task', () => {
+    // A call that ONLY empties the pointer (`currentTask: ''`, no `updates`)
+    // returns exactly 'Current task pointer cleared.', which matches none of the
+    // shared success verbs; the claim tracker must still recognize it, or later
+    // gate passes keep minting receipts for a released task.
+    expect(
+      claimedTaskAfterTurn({
+        seededActivePlanTaskId: 'P2-T3',
+        messageHistory: planStatusHistory(
+          { currentTask: '' },
+          { message: 'Current task pointer cleared.' },
+        ),
+      }),
+    ).toBeUndefined()
+  })
+
+  test('a pointer-only claim message claims the task', () => {
+    // Same root cause in the other direction: a pointer-only SET returns exactly
+    // 'Current task -> "<task>".', so without recognizing it the claim is never
+    // recorded and the gate can never mint a receipt for that task.
+    expect(
+      claimedTaskAfterTurn({
+        messageHistory: planStatusHistory(
+          { currentTask: 'P2-T3 Implement the thing' },
+          { message: 'Current task -> "P2-T3 Implement the thing".' },
+        ),
+      }),
+    ).toBe('P2-T3')
+  })
+
+  test('a pointer-only clear that applied nothing leaves the claim intact', () => {
+    // Fail closed: the handler reports an unapplied call with a failure phrase,
+    // so the opt-in pointer-message pattern must not credit it.
+    expect(
+      claimedTaskAfterTurn({
+        seededActivePlanTaskId: 'P2-T3',
+        messageHistory: planStatusHistory(
+          { currentTask: '' },
+          { message: 'No changes applied.' },
+        ),
+      }),
+    ).toBe('P2-T3')
+  })
+
+  test('moving the claimed task to done clears the claim', () => {
+    expect(
+      claimedTaskAfterTurn({
+        seededActivePlanTaskId: 'P2-T3',
+        messageHistory: planStatusHistory({
+          updates: [{ taskId: 'P2-T3', status: 'done' }],
+        }),
+      }),
+    ).toBeUndefined()
+  })
+
+  test('a rejected update_plan_status call never claims a task', () => {
+    // The runtime handler refuses a plan transition atomically, so a claim it
+    // never applied must not let the gate mint a receipt for that task.
+    expect(
+      claimedTaskAfterTurn({
+        messageHistory: planStatusHistory(
+          {
+            currentTask: 'P2-T3 Implement the thing',
+            updates: [{ taskId: 'P2-T3', status: 'in_progress' }],
+          },
+          {
+            errorMessage:
+              'update_plan_status: PLAN transition is atomic; no task matched: P2-T3.',
+          },
+        ),
+      }),
+    ).toBeUndefined()
+  })
+
+  test('a fresh gate pass mints one receipt and names it in the gate-pass message', () => {
+    const tmpDir = makeProjectTempDir('base2-plan-gate-receipt-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2-execute-plan',
+        messageHistory: planStatusHistory({
+          currentTask: 'P2-T3 Implement the thing',
+          updates: [{ taskId: 'P2-T3', status: 'in_progress' }],
+        }),
+      }
+
+      const { content, reviewFingerprint } = driveToPlanGatePass({
+        gateFile,
+        agentState,
+      })
+
+      // The receipt must be bound to the fingerprint base2 hashed itself for
+      // this review, never to a reviewer-reported value.
+      expect(reviewFingerprint).toBe(
+        buildFingerprint(
+          [{ file: gateFile, contentMarker: buildContentMarker(tmpFile) }],
+          '',
+        ),
+      )
+      const expectedReceiptId = `plan-gate:P2-T3:${reviewFingerprint.slice(0, 16)}`
+      expect(expectedReceiptId).toMatch(/^plan-gate:P2-T3:v3:[a-f0-9]{13}$/)
+
+      const receipts = (agentState as any).base2ActiveWork
+        .planTaskGateReceipts as Array<Record<string, unknown>>
+      expect(receipts).toHaveLength(1)
+      expect(receipts[0]).toMatchObject({
+        receiptId: expectedReceiptId,
+        taskId: 'P2-T3',
+        evidence: 'reviewed-diff',
+        snapshotFingerprint: reviewFingerprint,
+        files: [gateFile],
+        validationSummary: 'No configured file-change hooks ran.',
+        reviewerVerdict: 'LOOKS_GOOD',
+      })
+
+      expect(content).toContain(
+        `Plan task P2-T3 gate receipt: ${expectedReceiptId}.`,
+      )
+      expect(content).toContain(
+        'Pass this exact string in update_plan_status checkpoint.receiptIds when marking P2-T3 done; do not invent a receipt ID.',
+      )
+      // The evidence sentence is APPENDED after the pinned instruction above, so
+      // both existing substrings still match unchanged.
+      expect(content).toContain(
+        'Evidence: reviewed diff over 1 file(s). This receipt is superseded when any covered file changes again; re-read the current ID after the next gate pass.',
+      )
+      // The receipt line is an extra LINE inside the existing gate-pass
+      // message, inserted before the finalization instruction so that
+      // instruction stays last.
+      expect(content.indexOf(expectedReceiptId)).toBeLessThan(
+        content.indexOf(
+          'Provide your single user-visible completion summary now',
+        ),
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a repeat pass on the identical snapshot appends no duplicate receipt', () => {
+    const tmpDir = makeProjectTempDir('base2-plan-gate-receipt-dedupe-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      const reviewableFingerprint = buildFingerprint(
+        [{ file: gateFile, contentMarker: buildContentMarker(tmpFile) }],
+        '',
+      )
+      const seededReceipt = {
+        receiptId: `plan-gate:P2-T3:${reviewableFingerprint.slice(0, 16)}`,
+        taskId: 'P2-T3',
+        evidence: 'reviewed-diff',
+        snapshotFingerprint: reviewableFingerprint,
+        files: [gateFile],
+        validationSummary: 'No configured file-change hooks ran.',
+        reviewerVerdict: 'LOOKS_GOOD',
+        recordedAt: '2025-01-01T00:00:00.000Z',
+      }
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2-execute-plan',
+        // Resumed mid-gate rather than re-edited: a fresh edit to a covered file
+        // is a recorded CHANGE, which supersedes the receipt before the mint
+        // runs. This path records no change, so the mint hits its idempotent
+        // same-receiptId branch and must leave the seed (and its recordedAt)
+        // exactly as it was.
+        base2ActiveWork: seedPendingGateState(gateFile, {
+          activePlanTaskId: 'P2-T3',
+          planTaskGateReceipts: [seededReceipt],
+        }),
+      }
+
+      const { content, reviewFingerprint } = driveSeededPendingGatePass({
+        gateFile,
+        agentState,
+      })
+
+      expect(reviewFingerprint).toBe(reviewableFingerprint)
+      expect(planTaskReceiptsOf(agentState)).toEqual([seededReceipt])
+      // The content now DOES name the receipt: the ID is printed whenever a live
+      // receipt exists for the claimed task, not only when this pass minted one,
+      // because supersession changes the ID and it must stay recoverable.
+      expect(content).toContain(
+        `Plan task P2-T3 gate receipt: ${seededReceipt.receiptId}.`,
+      )
+      expect(content).toContain('Evidence: reviewed diff over 1 file(s).')
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('with no claimed plan task the gate mints nothing and the pass content is unchanged', () => {
+    const tmpDir = makeProjectTempDir('base2-plan-gate-receipt-unclaimed-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2-execute-plan',
+      }
+
+      const { content } = driveToPlanGatePass({ gateFile, agentState })
+
+      expect(
+        (agentState as any).base2ActiveWork.activePlanTaskId,
+      ).toBeUndefined()
+      // The key is PRESENT (the gate is active) but empty, and that is what
+      // makes the runtime reject an invented checkpoint receipt.
+      expect((agentState as any).base2ActiveWork.planTaskGateReceipts).toEqual(
+        [],
+      )
+      expect(content).not.toContain('gate receipt')
+      expect(content).toContain(
+        `Reviewer gate passed with LOOKS_GOOD for pending files: ${gateFile}.`,
+      )
+      expect(content).toContain(
+        'Provide your single user-visible completion summary now',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a non-attestable gate fingerprint mints no receipt (fail closed)', () => {
+    // Without a collision-resistant hash, hashGateSnapshotDetails returns the
+    // STABLE 'unreadable:no-crypto' sentinel. That is an error string, not
+    // content evidence — two unrelated snapshots compare equal under it — so it
+    // must never become a receipt ID.
+    const originalGetBuiltinModule = (process as any).getBuiltinModule
+    const originalRequire = (globalThis as any).require
+    try {
+      ;(process as any).getBuiltinModule = undefined
+      ;(globalThis as any).require = undefined
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2-execute-plan',
+        base2ActiveWork: seedIdleGateState({ activePlanTaskId: 'P2-T3' }),
+      }
+
+      const content = driveToGatePassViaReviewerSkip({
+        gateFile: 'docs/plan-notes.md',
+        agentState,
+      })
+
+      expect((agentState as any).base2ActiveWork.planTaskGateReceipts).toEqual(
+        [],
+      )
+      expect(content).not.toContain('gate receipt')
+    } finally {
+      ;(process as any).getBuiltinModule = originalGetBuiltinModule
+      ;(globalThis as any).require = originalRequire
+    }
+  })
+
+  // R1: a plan task whose gate cycle produced NO reviewable diff must still be
+  // completable, and its receipt must say so instead of carrying the hash of an
+  // empty file list while presenting as reviewed-diff evidence.
+  test('a docs-only gate cycle mints an unreviewed-scope receipt over the validated pending set', () => {
+    const tmpDir = makeProjectTempDir('base2-plan-gate-receipt-docs-')
+    try {
+      const docsFile = join(tmpDir, 'plan-notes.md')
+      writeFileSync(docsFile, '# Plan notes\n')
+      const gateFile = normalizeGateFilePath(docsFile)
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2-execute-plan',
+        base2ActiveWork: seedIdleGateState({ activePlanTaskId: 'P2-T3' }),
+      }
+
+      const content = driveToGatePassViaReviewerSkip({ gateFile, agentState })
+
+      const expectedFingerprint = buildFingerprint(
+        [{ file: gateFile, contentMarker: buildContentMarker(docsFile) }],
+        '',
+      )
+      // The whole point of the kind: the fingerprint is the hash of the
+      // VALIDATED pending set, not of the empty reviewable subset (which is a
+      // constant and would claim content evidence that does not exist).
+      expect(expectedFingerprint).not.toBe(buildFingerprint([], ''))
+      const receipts = planTaskReceiptsOf(agentState)
+      expect(receipts).toHaveLength(1)
+      expect(receipts[0]).toMatchObject({
+        receiptId: `plan-gate:P2-T3:unreviewed-scope:${expectedFingerprint.slice(0, 16)}`,
+        taskId: 'P2-T3',
+        evidence: 'unreviewed-scope',
+        snapshotFingerprint: expectedFingerprint,
+        files: [gateFile],
+        reviewerVerdict: 'LOOKS_GOOD',
+      })
+      expect(receipts[0].receiptId).toMatch(
+        /^plan-gate:P2-T3:unreviewed-scope:v3:[a-f0-9]{13}$/,
+      )
+
+      expect(content).toContain(
+        `Plan task P2-T3 gate receipt: ${receipts[0].receiptId}.`,
+      )
+      expect(content).toContain(
+        'Evidence: no reviewable diff in this gate cycle; validation covered 1 non-reviewable file(s). This receipt is superseded as soon as any further change is recorded.',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // R1: zero pending files reaches the same gate-pass emission with
+  // reviewerFinalizationVerdict EMPTY (passVerdict falls back to LOOKS_GOOD), so
+  // the 'no-diff' mint must not depend on a verdict being present.
+  test('a gate pass with no pending files mints a no-diff receipt', () => {
+    const agentState: Record<string, unknown> = {
+      agentId: 'base2-execute-plan',
+      base2ActiveWork: seedIdleGateState({ activePlanTaskId: 'P2-T3' }),
+    }
+    const base2 = createBase2('default', { executePlan: true })
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Continue the plan.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    const maybePinned = gen.next().value
+    if (maybePinned !== 'STEP') {
+      expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+    }
+    // No edit artifact at all: verification-only work.
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+    })
+    const gatePassed = gen.next(feedJson({ status: '' }))
+    expect(gatePassed.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+    })
+    const content = (gatePassed.value as any).input.content as string
+
+    const emptyFingerprint = buildFingerprint([], '')
+    const receipts = planTaskReceiptsOf(agentState)
+    expect(receipts).toHaveLength(1)
+    expect(receipts[0]).toMatchObject({
+      receiptId: `plan-gate:P2-T3:no-diff:${emptyFingerprint.slice(0, 16)}`,
+      taskId: 'P2-T3',
+      evidence: 'no-diff',
+      snapshotFingerprint: emptyFingerprint,
+      files: [],
+      reviewerVerdict: 'LOOKS_GOOD',
+    })
+    expect(receipts[0].receiptId).toMatch(
+      /^plan-gate:P2-T3:no-diff:v3:[a-f0-9]{13}$/,
+    )
+    expect(content).toContain(
+      `Plan task P2-T3 gate receipt: ${receipts[0].receiptId}.`,
+    )
+    expect(content).toContain(
+      'Evidence: no file changes in this gate cycle. This receipt is superseded as soon as any further change is recorded.',
+    )
+  })
+
+  // R2 mechanism 1: content verification at turn start. A receipt whose covered
+  // bytes changed is no longer true, so it must stop authorizing completion even
+  // though its taskId/receiptId still "match" a checkpoint.
+  test('turn-start content verification drops a receipt whose covered bytes changed', () => {
+    const tmpDir = makeProjectTempDir('base2-plan-gate-receipt-stale-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      const staleFingerprint = buildFingerprint(
+        [{ file: gateFile, contentMarker: buildContentMarker(tmpFile) }],
+        '',
+      )
+      // The code changed after the receipt was issued.
+      writeFileSync(tmpFile, 'export const value = 2\n')
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2-execute-plan',
+        base2ActiveWork: seedIdleGateState({
+          activePlanTaskId: 'P2-T3',
+          planTaskGateReceipts: [
+            {
+              receiptId: `plan-gate:P2-T3:${staleFingerprint.slice(0, 16)}`,
+              taskId: 'P2-T3',
+              evidence: 'reviewed-diff',
+              snapshotFingerprint: staleFingerprint,
+              files: [gateFile],
+              validationSummary: 'No configured file-change hooks ran.',
+              reviewerVerdict: 'LOOKS_GOOD',
+              recordedAt: '2025-01-01T00:00:00.000Z',
+            },
+          ],
+        }),
+      }
+
+      driveToTurnStartBookkeeping(agentState)
+
+      const activeWork = (agentState as any).base2ActiveWork
+      expect(activeWork.planTaskGateReceipts).toEqual([])
+      // PRUNED, not deleted: presence is what keeps gate-issued verification
+      // active in the runtime handler, so an invented ID still fails.
+      expect('planTaskGateReceipts' in activeWork).toBe(true)
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('turn-start content verification keeps a receipt whose bytes still match', () => {
+    const tmpDir = makeProjectTempDir('base2-plan-gate-receipt-fresh-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      const liveReceipt = {
+        receiptId: `plan-gate:P2-T3:${buildFingerprint(
+          [{ file: gateFile, contentMarker: buildContentMarker(tmpFile) }],
+          '',
+        ).slice(0, 16)}`,
+        taskId: 'P2-T3',
+        evidence: 'reviewed-diff',
+        snapshotFingerprint: buildFingerprint(
+          [{ file: gateFile, contentMarker: buildContentMarker(tmpFile) }],
+          '',
+        ),
+        files: [gateFile],
+        validationSummary: 'No configured file-change hooks ran.',
+        reviewerVerdict: 'LOOKS_GOOD',
+        recordedAt: '2025-01-01T00:00:00.000Z',
+      }
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2-execute-plan',
+        base2ActiveWork: seedIdleGateState({
+          activePlanTaskId: 'P2-T3',
+          planTaskGateReceipts: [liveReceipt],
+        }),
+      }
+
+      driveToTurnStartBookkeeping(agentState)
+
+      expect(planTaskReceiptsOf(agentState)).toEqual([liveReceipt])
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // A PRESENT-but-non-array ledger (corrupt or hand-edited serialized state)
+  // must fail closed rather than throw: the mint's `.some(...)`, the printed
+  // live-receipt `.find(...)`, and the pinned recovery line all read this key.
+  test('a non-array planTaskGateReceipts ledger is normalized to an empty array', () => {
+    const agentState: Record<string, unknown> = {
+      agentId: 'base2-execute-plan',
+      base2ActiveWork: seedIdleGateState({
+        activePlanTaskId: 'P2-T3',
+        planTaskGateReceipts: {
+          receiptId: 'plan-gate:P2-T3:v3:0123456789abc',
+          taskId: 'P2-T3',
+        },
+      }),
+    }
+
+    driveToTurnStartBookkeeping(agentState)
+
+    const activeWork = (agentState as any).base2ActiveWork
+    expect(activeWork.planTaskGateReceipts).toEqual([])
+    // NORMALIZED, not deleted: presence is what keeps gate-issued verification
+    // active in the runtime handler, so an invented ID still fails.
+    expect('planTaskGateReceipts' in activeWork).toBe(true)
+  })
+
+  test('a gate pass over a non-array ledger still mints and prints one receipt', () => {
+    const tmpDir = makeProjectTempDir('base2-plan-gate-receipt-nonarray-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2-execute-plan',
+        base2ActiveWork: seedIdleGateState({
+          activePlanTaskId: 'P2-T3',
+          // Not an array: the mint's `.some(...)`, the printed receipt's
+          // `.find(...)`, and the pinned recovery line's `.find(...)` would each
+          // throw a TypeError and fail the whole turn.
+          planTaskGateReceipts: 'corrupt',
+        }),
+      }
+
+      const { content, reviewFingerprint } = driveToPlanGatePass({
+        gateFile,
+        agentState,
+      })
+
+      const expectedReceiptId = `plan-gate:P2-T3:${reviewFingerprint.slice(0, 16)}`
+      const receipts = planTaskReceiptsOf(agentState)
+      expect(receipts).toHaveLength(1)
+      expect(receipts[0]).toMatchObject({
+        receiptId: expectedReceiptId,
+        taskId: 'P2-T3',
+        evidence: 'reviewed-diff',
+        files: [gateFile],
+      })
+      expect(content).toContain(
+        `Plan task P2-T3 gate receipt: ${expectedReceiptId}.`,
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // R2 mechanism 2: change supersession. A 'no-diff' fingerprint is a constant
+  // and an 'unreviewed-scope' one attests no review, so content verification can
+  // never retire them — only supersession can.
+  test('a recorded change supersedes non-reviewed receipts and intersecting reviewed ones', () => {
+    const tmpDir = makeProjectTempDir('base2-plan-gate-receipt-supersede-')
+    try {
+      const editedFile = join(tmpDir, 'a.ts')
+      const unrelatedFile = join(tmpDir, 'b.ts')
+      const docsFile = join(tmpDir, 'notes.md')
+      writeFileSync(editedFile, 'export const a = 1\n')
+      writeFileSync(unrelatedFile, 'export const b = 1\n')
+      writeFileSync(docsFile, '# notes\n')
+      const editedGateFile = normalizeGateFilePath(editedFile)
+      const unrelatedGateFile = normalizeGateFilePath(unrelatedFile)
+      const docsGateFile = normalizeGateFilePath(docsFile)
+
+      const receiptFor = (params: {
+        taskId: string
+        evidence: string
+        files: Array<{ gateFile: string; absolutePath: string }>
+      }) => {
+        const fingerprint = buildFingerprint(
+          params.files.map((file) => ({
+            file: file.gateFile,
+            contentMarker: buildContentMarker(file.absolutePath),
+          })),
+          '',
+        )
+        return {
+          receiptId: `plan-gate:${params.taskId}:${params.evidence === 'reviewed-diff' ? '' : `${params.evidence}:`}${fingerprint.slice(0, 16)}`,
+          taskId: params.taskId,
+          evidence: params.evidence,
+          snapshotFingerprint: fingerprint,
+          files: params.files.map((file) => file.gateFile),
+          validationSummary: 'No configured file-change hooks ran.',
+          reviewerVerdict: 'LOOKS_GOOD',
+          recordedAt: '2025-01-01T00:00:00.000Z',
+        }
+      }
+      const intersectingReviewed = receiptFor({
+        taskId: 'P1-T1',
+        evidence: 'reviewed-diff',
+        files: [{ gateFile: editedGateFile, absolutePath: editedFile }],
+      })
+      const unrelatedReviewed = receiptFor({
+        taskId: 'P1-T2',
+        evidence: 'reviewed-diff',
+        files: [{ gateFile: unrelatedGateFile, absolutePath: unrelatedFile }],
+      })
+      const unreviewedScope = receiptFor({
+        taskId: 'P1-T3',
+        evidence: 'unreviewed-scope',
+        files: [{ gateFile: docsGateFile, absolutePath: docsFile }],
+      })
+      const noDiff = {
+        receiptId: `plan-gate:P1-T4:no-diff:${buildFingerprint([], '').slice(0, 16)}`,
+        taskId: 'P1-T4',
+        evidence: 'no-diff',
+        snapshotFingerprint: buildFingerprint([], ''),
+        files: [] as string[],
+        validationSummary: 'No configured file-change hooks ran.',
+        reviewerVerdict: 'LOOKS_GOOD',
+        recordedAt: '2025-01-01T00:00:00.000Z',
+      }
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2-execute-plan',
+        base2ActiveWork: seedIdleGateState({
+          activePlanTaskId: 'P1-T1',
+          planTaskGateReceipts: [
+            intersectingReviewed,
+            unrelatedReviewed,
+            unreviewedScope,
+            noDiff,
+          ],
+        }),
+      }
+
+      const base2 = createBase2('default', { executePlan: true })
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Continue the plan.',
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
+      // Every seeded receipt survives turn-start content verification, so the
+      // drops below are attributable to supersession alone.
+      expect(planTaskReceiptsOf(agentState)).toEqual([
+        intersectingReviewed,
+        unrelatedReviewed,
+        unreviewedScope,
+        noDiff,
+      ])
+      const maybePinned = gen.next().value
+      if (maybePinned !== 'STEP') {
+        expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+      // One recorded change to editedGateFile.
+      expect(
+        gen.next(finishStepWithToolResult(editReceipt(editedGateFile))).value,
+      ).toMatchObject({ toolName: 'git_status' })
+
+      expect(planTaskReceiptsOf(agentState)).toEqual([unrelatedReviewed])
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // One live receipt per task: the printed ID must be unambiguous, so a mint
+  // REPLACES that task's earlier receipt instead of appending.
+  test('a second fresh pass for the same task replaces its earlier receipt', () => {
+    const tmpDir = makeProjectTempDir('base2-plan-gate-receipt-replace-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      const unrelatedFile = join(tmpDir, 'b.ts')
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      writeFileSync(unrelatedFile, 'export const other = 1\n')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      const unrelatedGateFile = normalizeGateFilePath(unrelatedFile)
+      // Same task, covering a DIFFERENT file whose bytes never change, so it
+      // survives both content verification and supersession. Only the
+      // one-live-receipt-per-task replacement can remove it.
+      const earlierSameTaskFingerprint = buildFingerprint(
+        [
+          {
+            file: unrelatedGateFile,
+            contentMarker: buildContentMarker(unrelatedFile),
+          },
+        ],
+        '',
+      )
+      const earlierSameTaskReceipt = {
+        receiptId: `plan-gate:P2-T3:${earlierSameTaskFingerprint.slice(0, 16)}`,
+        taskId: 'P2-T3',
+        evidence: 'reviewed-diff',
+        snapshotFingerprint: earlierSameTaskFingerprint,
+        files: [unrelatedGateFile],
+        validationSummary: 'No configured file-change hooks ran.',
+        reviewerVerdict: 'LOOKS_GOOD',
+        recordedAt: '2025-01-01T00:00:00.000Z',
+      }
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2-execute-plan',
+        base2ActiveWork: seedIdleGateState({
+          activePlanTaskId: 'P2-T3',
+          planTaskGateReceipts: [earlierSameTaskReceipt],
+        }),
+      }
+
+      const first = driveToPlanGatePass({ gateFile, agentState })
+      const firstReceiptId = `plan-gate:P2-T3:${first.reviewFingerprint.slice(0, 16)}`
+      expect(firstReceiptId).not.toBe(earlierSameTaskReceipt.receiptId)
+      expect(planTaskReceiptsOf(agentState)).toHaveLength(1)
+      expect(planTaskReceiptsOf(agentState)[0].receiptId).toBe(firstReceiptId)
+      expect(first.content).not.toContain(earlierSameTaskReceipt.receiptId)
+
+      // A later pass over different bytes for the same claimed task likewise
+      // leaves exactly one receipt, carrying the new ID.
+      writeFileSync(tmpFile, 'export const value = 2\n')
+      const second = driveToPlanGatePass({ gateFile, agentState })
+      const secondReceiptId = `plan-gate:P2-T3:${second.reviewFingerprint.slice(0, 16)}`
+
+      expect(secondReceiptId).not.toBe(firstReceiptId)
+      const receipts = planTaskReceiptsOf(agentState)
+      expect(receipts).toHaveLength(1)
+      expect(receipts[0]).toMatchObject({
+        receiptId: secondReceiptId,
+        taskId: 'P2-T3',
+        evidence: 'reviewed-diff',
+        snapshotFingerprint: second.reviewFingerprint,
+        files: [gateFile],
+      })
+      expect(second.content).toContain(
+        `Plan task P2-T3 gate receipt: ${secondReceiptId}.`,
+      )
+      expect(second.content).not.toContain(firstReceiptId)
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // R3: pinned state survives context compaction, so it is the durable place to
+  // re-read the live receipt ID after supersession changed it.
+  test('the pinned active-work message names the live plan-task gate receipt', () => {
+    const tmpDir = makeProjectTempDir('base2-plan-gate-receipt-pinned-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      const liveFingerprint = buildFingerprint(
+        [{ file: gateFile, contentMarker: buildContentMarker(tmpFile) }],
+        '',
+      )
+      const liveReceipt = {
+        receiptId: `plan-gate:P2-T3:${liveFingerprint.slice(0, 16)}`,
+        taskId: 'P2-T3',
+        evidence: 'reviewed-diff',
+        snapshotFingerprint: liveFingerprint,
+        files: [gateFile],
+        validationSummary: 'No configured file-change hooks ran.',
+        reviewerVerdict: 'LOOKS_GOOD',
+        recordedAt: '2025-01-01T00:00:00.000Z',
+      }
+
+      /** Pinned block emitted right after the turn's context-pruner spawn. */
+      function pinnedMessageFor(activeWork: Record<string, unknown>): string {
+        const base2 = createBase2('default', { executePlan: true })
+        const gen = base2.handleSteps!({
+          agentState: {
+            agentId: 'base2-execute-plan',
+            base2ActiveWork: activeWork,
+          },
+          prompt: 'Continue the plan.',
+          params: {},
+          config: base2.programmaticConfig,
+        } as any)
+        expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+        expect(
+          gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+        ).toMatchObject({ toolName: 'spawn_agent_inline' })
+        const pinned = gen.next()
+        expect(pinned.value).toMatchObject({
+          toolName: 'add_message',
+          input: { role: 'user' },
+        })
+        return (pinned.value as any).input.content as string
+      }
+
+      expect(
+        pinnedMessageFor(
+          seedPendingGateState(gateFile, {
+            activePlanTaskId: 'P2-T3',
+            planTaskGateReceipts: [liveReceipt],
+          }),
+        ),
+      ).toContain(
+        `Live plan-task gate receipt: ${liveReceipt.receiptId} (task P2-T3, evidence reviewed-diff)`,
+      )
+
+      // No claimed task: nothing to recover, so the line is omitted entirely.
+      expect(
+        pinnedMessageFor(
+          seedPendingGateState(gateFile, {
+            planTaskGateReceipts: [liveReceipt],
+          }),
+        ),
+      ).not.toContain('Live plan-task gate receipt:')
+
+      // Claimed task with no live receipt (e.g. it was just superseded).
+      expect(
+        pinnedMessageFor(
+          seedPendingGateState(gateFile, {
+            activePlanTaskId: 'P2-T3',
+            planTaskGateReceipts: [],
+          }),
+        ),
+      ).not.toContain('Live plan-task gate receipt:')
+
+      // Claimed task with a PRESENT-but-non-array ledger: the pinned line reads
+      // this key with `.find(...)`, so it must fail closed (line omitted, turn
+      // still produces the pinned block) instead of throwing a TypeError.
+      expect(
+        pinnedMessageFor(
+          seedPendingGateState(gateFile, {
+            activePlanTaskId: 'P2-T3',
+            planTaskGateReceipts: 'corrupt',
+          }),
+        ),
+      ).not.toContain('Live plan-task gate receipt:')
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // Presence-vs-absence is load-bearing in the other direction too: with the
+  // gate disabled no receipt could ever be minted, so publishing the key would
+  // make every plan task impossible to complete.
+  test('a no-validation run leaves planTaskGateReceipts absent entirely', () => {
+    const base2 = createBase2('default', { hasNoValidation: true })
+    const agentState: Record<string, unknown> = {
+      agentId: 'base2-no-validation',
+      messageHistory: planStatusHistory({
+        currentTask: 'P2-T3 Implement the thing',
+        updates: [{ taskId: 'P2-T3', status: 'in_progress' }],
+      }),
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Continue the plan.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+
+    const activeWork = (agentState as any).base2ActiveWork
+    // The task is still tracked; only the receipt ledger stays unpublished.
+    expect(activeWork.activePlanTaskId).toBe('P2-T3')
+    expect('planTaskGateReceipts' in activeWork).toBe(false)
+  })
+
+  // Same invariant on the resume path: a session that published the key under a
+  // gate-enabled run must not carry it into a gate-disabled variant, where no
+  // receipt can ever be minted and every new plan task would become impossible
+  // to complete.
+  test('a gate-disabled variant clears an inherited planTaskGateReceipts key', () => {
+    const seededReceipt = {
+      receiptId: 'plan-gate:P1-T1:v3:0123456789abc',
+      taskId: 'P1-T1',
+      evidence: 'reviewed-diff',
+      snapshotFingerprint: 'v3:0123456789abc',
+      files: ['src/a.ts'],
+      validationSummary: 'No configured file-change hooks ran.',
+      reviewerVerdict: 'LOOKS_GOOD',
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    }
+    const variants = [
+      {
+        agentId: 'base2-no-validation',
+        base2: createBase2('default', { hasNoValidation: true }),
+        passConfig: true,
+      },
+      {
+        agentId: 'base2-plan',
+        base2: createBase2('default', { planOnly: true }),
+        passConfig: true,
+      },
+      {
+        // base2-fast disables the gate through the agentId fallback, which is
+        // only consulted when no programmaticConfig is supplied.
+        agentId: 'base2-fast',
+        base2: createBase2('fast'),
+        passConfig: false,
+      },
+    ]
+
+    for (const variant of variants) {
+      const agentState: Record<string, unknown> = {
+        agentId: variant.agentId,
+        base2ActiveWork: seedIdleGateState({
+          activePlanTaskId: 'P2-T3',
+          planTaskGateReceipts: [seededReceipt],
+        }),
+      }
+      const gen = variant.base2.handleSteps!({
+        agentState,
+        prompt: 'Continue the plan.',
+        params: {},
+        ...(variant.passConfig
+          ? { config: variant.base2.programmaticConfig }
+          : {}),
+      } as any)
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+
+      const activeWork = (agentState as any).base2ActiveWork
+      // Absent again, so update_plan_status falls back to the legacy "any
+      // non-empty receiptIds" rule instead of demanding gate evidence this run
+      // can never issue.
+      expect('planTaskGateReceipts' in activeWork).toBe(false)
+      // The claim is execution tracking, not gate credit, so it stays.
+      expect(activeWork.activePlanTaskId).toBe('P2-T3')
+    }
+  })
+
+  test('the EXECUTE_PLAN prompts state the gate-issued receipt contract', () => {
+    const executePlan = createBase2('default', { executePlan: true })
+
+    expect(executePlan.stepPrompt).toContain(
+      'copy the gate-issued receipt ID from the gate-pass message into update_plan_status checkpoint.receiptIds',
+    )
+    expect(executePlan.stepPrompt).toContain(
+      'the runtime verifies them against gate state and rejects an unmatched one',
+    )
+    expect(executePlan.instructionsPrompt).toContain(
+      'plan-gate:<taskId>:<fingerprintPrefix>',
+    )
+    expect(executePlan.instructionsPrompt).toContain(
+      'never invent a receipt ID',
+    )
+    // Supersession changes the ID, so both prompts must say the model has to
+    // re-read the NEW one instead of reusing an earlier gate-pass message.
+    expect(executePlan.instructionsPrompt).toContain(
+      "A receipt is SUPERSEDED when the task's files change again",
+    )
+    expect(executePlan.instructionsPrompt).toContain(
+      'never reuse an ID from an earlier gate-pass message',
+    )
+    expect(executePlan.stepPrompt).toContain(
+      'superseded once the files it covers change again',
+    )
+    expect(executePlan.stepPrompt).toContain(
+      'never reuse an ID from an earlier gate-pass message',
+    )
+  })
+})
