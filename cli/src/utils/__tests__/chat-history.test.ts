@@ -1,13 +1,22 @@
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
+import {
+  describe,
+  test,
+  expect,
+  beforeEach,
+  afterEach,
+  mock,
+  spyOn,
+} from 'bun:test'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
+import * as projectFiles from '../../project-files'
+
 let tempDataDir = ''
 
-mock.module('../../project-files', () => ({
-  getProjectDataDir: () => tempDataDir,
-}))
+// spyOn (restored after each test) instead of mock.module: a module mock
+// leaks into every other test file in the same bun process.
 
 import { deleteChatSession, getAllChats } from '../chat-history'
 
@@ -31,9 +40,11 @@ function writeChat(chatId: string, prompt: string) {
 describe('chat-history', () => {
   beforeEach(() => {
     tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codebuff-history-'))
+    spyOn(projectFiles, 'getProjectDataDir').mockReturnValue(tempDataDir)
   })
 
   afterEach(() => {
+    mock.restore()
     fs.rmSync(tempDataDir, { recursive: true, force: true })
   })
 

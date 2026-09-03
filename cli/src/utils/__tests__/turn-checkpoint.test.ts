@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
@@ -47,6 +47,9 @@ function makeAgentState(agentId: string): AgentState {
 
 describe('turn checkpoint (P2-3)', () => {
   beforeEach(() => {
+    // Defensive: drop any mock/spy leaked by another test file in the same
+    // bun process so the real project-files resolution below is authoritative.
+    mock.restore()
     if (fs.existsSync(tmpProjectRoot)) {
       fs.rmSync(tmpProjectRoot, { recursive: true, force: true })
     }
