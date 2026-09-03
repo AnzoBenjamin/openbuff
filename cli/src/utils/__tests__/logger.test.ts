@@ -2,42 +2,26 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { setProjectRootResolver } from '@codebuff/common/util/plan-artifacts'
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test'
 
-let mockProjectRoot = ''
+import * as projectFiles from '../../project-files'
+
 let mockChatDir = ''
 
-// Full stub: do not import.meta.require('../../project-files') inside this
-// mock factory (bun deadlocks on a self-require). setProjectRoot still wires
-// the plan-artifact resolver so command-args / plan-timeline in the same
-// process keep working.
-mock.module('../../project-files', () => ({
-  setProjectRoot: (dir: string) => {
-    mockProjectRoot = dir
-    setProjectRootResolver(() => mockProjectRoot)
-    return dir
-  },
-  getProjectRoot: () => {
-    if (!mockProjectRoot) {
-      throw new Error('Project root not set')
-    }
-    return mockProjectRoot
-  },
-  getCurrentChatDir: () => {
-    if (mockChatDir) return mockChatDir
-    if (!mockProjectRoot) {
-      throw new Error('Project root not set')
-    }
-    return path.join(mockProjectRoot, 'chat')
-  },
-  getProjectDataDir: () => mockProjectRoot,
-  getProjectStorageKey: (root: string) => path.basename(root) || 'project',
-  getCurrentChatId: () => 'logger-test-chat',
-  setCurrentChatId: (chatId: string) => chatId,
-  startNewChat: () => 'logger-test-chat',
-  getMostRecentChatDir: () => null,
-}))
+// Spy on the real project-files module instead of mock.module: a module mock
+// replaces the module for every other test file in the same bun process,
+// which sent turn-checkpoint.test.ts's checkpoint path into this file's
+// `<root>/chat` stub in CI. Spies restore cleanly via mock.restore() in
+// teardown. setProjectRoot still wires the plan-artifact resolver so
+// command-args / plan-timeline in the same process keep working.
 
 import { setProjectRoot } from '../../project-files'
 import {
@@ -61,10 +45,12 @@ function setupLoggerTempDir() {
   mockChatDir = path.join(tempDir, 'chat')
   fs.mkdirSync(mockChatDir, { recursive: true })
   setProjectRoot(tempDir)
+  spyOn(projectFiles, 'getCurrentChatDir').mockReturnValue(mockChatDir)
 }
 
 function teardownLoggerTempDir() {
   clearLogFile()
+  mock.restore()
   mockChatDir = ''
   fs.rmSync(tempDir, { recursive: true, force: true })
 }
