@@ -112,13 +112,6 @@ describe('Spawn Agents Permissions', () => {
     ).toBe('openbuff/file-picker@1.0.0')
   })
 
-  it('corrects the common code-searcher spawn typo', () => {
-    expect(normalizeSpawnAgentType('code-searccher')).toBe('code-searcher')
-    expect(getMatchingSpawn(['code-searcher'], 'code-searccher')).toBe(
-      'code-searcher',
-    )
-  })
-
   it('normalizes underscored spawn agent types to hyphenated ids', () => {
     expect(normalizeSpawnAgentType('file_picker')).toBe('file-picker')
   })
@@ -157,25 +150,19 @@ describe('Spawn Agents Permissions', () => {
     expect(JSON.stringify(output)).toContain('Mock agent response')
   })
 
-  it('derives a discovery question for params-only code-searcher spawns', async () => {
-    const parentAgent = createMockAgent('parent', ['code-searcher'])
-    const childAgent = createMockAgent('code-searcher')
+  it('derives a discovery question for params-only file-picker spawns', async () => {
+    const parentAgent = createMockAgent('parent', ['file-picker'])
+    const childAgent = createMockAgent('file-picker')
     const sessionState = getInitialSessionState(mockFileContext)
     const toolCall: CodebuffToolCall<'spawn_agents'> = {
       toolName: 'spawn_agents',
-      toolCallId: 'spawn-code-searcher-without-prompt',
+      toolCallId: 'spawn-file-picker-without-prompt',
       input: {
         agents: [
           {
-            agent_type: 'code-searcher',
+            agent_type: 'file-picker',
             params: {
-              searchQueries: [
-                {
-                  pattern: 'worker|queue|analysis',
-                  cwd: 'server/src/__tests__',
-                  flags: '-g *.test.ts',
-                },
-              ],
+              directories: ['server/src/__tests__'],
             },
           },
         ],
@@ -186,7 +173,7 @@ describe('Spawn Agents Permissions', () => {
       ...handleSpawnAgentsBaseParams,
       agentState: sessionState.mainAgentState,
       agentTemplate: parentAgent,
-      localAgentTemplates: { 'code-searcher': childAgent },
+      localAgentTemplates: { 'file-picker': childAgent },
       toolCall,
     })
 
@@ -197,22 +184,22 @@ describe('Spawn Agents Permissions', () => {
     expect(
       sessionState.mainAgentState.discoveryCoverage?.shards[0],
     ).toMatchObject({
-      agentType: 'code-searcher',
+      agentType: 'file-picker',
       status: 'completed',
     })
     expect(
       sessionState.mainAgentState.discoveryCoverage?.shards[0].question,
-    ).toContain('worker|queue|analysis')
+    ).toContain('server/src/__tests__')
   })
 
   it('does not retain partial discovery claims when a batch has duplicates', async () => {
-    const parentAgent = createMockAgent('parent', ['code-searcher'])
-    const childAgent = createMockAgent('code-searcher')
+    const parentAgent = createMockAgent('parent', ['file-picker'])
+    const childAgent = createMockAgent('file-picker')
     const sessionState = getInitialSessionState(mockFileContext)
     const duplicate = {
-      agent_type: 'code-searcher' as const,
+      agent_type: 'file-picker' as const,
       params: {
-        searchQueries: [{ pattern: 'worker', cwd: 'server/src/__tests__' }],
+        directories: ['server/src/__tests__'],
       },
     }
 
@@ -221,10 +208,10 @@ describe('Spawn Agents Permissions', () => {
         ...handleSpawnAgentsBaseParams,
         agentState: sessionState.mainAgentState,
         agentTemplate: parentAgent,
-        localAgentTemplates: { 'code-searcher': childAgent },
+        localAgentTemplates: { 'file-picker': childAgent },
         toolCall: {
           toolName: 'spawn_agents',
-          toolCallId: 'spawn-duplicate-code-searchers',
+          toolCallId: 'spawn-duplicate-file-pickers',
           input: { agents: [duplicate, duplicate] },
         },
       }),
@@ -434,7 +421,7 @@ describe('Spawn Agents Permissions', () => {
 
   it('keeps child static spawnableAgents after handoff', () => {
     const parentAgent = createMockAgent('orchestrator', ['repair-editor'])
-    const childAgent = createMockAgent('repair-editor', ['code-searcher'])
+    const childAgent = createMockAgent('repair-editor', ['file-picker'])
     childAgent.toolNames = ['edit_transaction']
 
     const derived = deriveSpawnTemplateCapabilities({
@@ -444,7 +431,7 @@ describe('Spawn Agents Permissions', () => {
       projectRoot: mockFileContext.projectRoot,
     })
 
-    expect(derived.spawnableAgents).toEqual(['code-searcher'])
+    expect(derived.spawnableAgents).toEqual(['file-picker'])
   })
 
   it('keeps programmatic tools after handoff even when not in allowedTools', () => {

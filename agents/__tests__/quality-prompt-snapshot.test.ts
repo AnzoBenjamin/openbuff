@@ -338,28 +338,24 @@ describe('shared craftsmanship prompt sections', () => {
     expect(qualitySection).toContain('Don\'t type cast as "any"')
   })
 
-  test('base2 system prompt prefers direct code_search and multi-query code-searcher', () => {
-    // Root content-search tools are granted; the prompt must prefer direct
-    // code_search for single-pattern search and code-searcher for multi-query
-    // batching. Guard the semantic content without freezing the exact wording.
+  test('base2 system prompt routes content search to the code_search tool', () => {
+    // Root content search is the code_search tool only; the code-searcher
+    // agent was removed, so the prompt must not name it anywhere. Guard the
+    // semantic content without freezing the exact wording.
     const base2 = createBase2('default')
 
-    expect(base2.systemPrompt).toContain('code-searcher')
     expect(base2.systemPrompt).toContain('code_search')
-    expect(base2.systemPrompt).toContain('Prefer direct')
-    expect(base2.systemPrompt).toContain('multi-query')
+    expect(base2.systemPrompt).not.toContain('code-searcher')
     expect(base2.systemPrompt).not.toContain('not granted to you as root')
   })
 
-  test('base2 system prompt names required spawn params for code-searcher and basher', () => {
-    // Regression guard for observed spawn failures: code-searcher requires
-    // params.searchQueries and basher requires params.command. The prompt
-    // must name both required keys so the orchestrator supplies them in
-    // params instead of relying on the prose prompt and hitting a spawn
-    // rejection.
+  test('base2 system prompt names the required basher spawn param', () => {
+    // Regression guard for an observed spawn failure: basher requires
+    // params.command. The prompt must name that required key so the
+    // orchestrator supplies it in params instead of relying on the prose
+    // prompt and hitting a spawn rejection.
     const base2 = createBase2('default')
 
-    expect(base2.systemPrompt).toContain('params.searchQueries')
     expect(base2.systemPrompt).toContain('params.command')
   })
 })

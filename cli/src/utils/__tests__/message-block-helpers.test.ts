@@ -47,7 +47,7 @@ describe('getAgentBaseName', () => {
   })
 
   test('normalizes direct tool aliases to canonical agent names', () => {
-    expect(getAgentBaseName('code_searcher')).toBe('code-searcher')
+    expect(getAgentBaseName('file_picker')).toBe('file-picker')
   })
 
   test('handles scoped name without version', () => {
@@ -1324,7 +1324,7 @@ describe('moveSpawnAgentBlock', () => {
         type: 'agent',
         agentId: 'toolcall-1',
         agentName: 'Agent B',
-        agentType: 'code-searcher',
+        agentType: 'file-picker',
         content: '',
         status: 'running',
         blocks: [],

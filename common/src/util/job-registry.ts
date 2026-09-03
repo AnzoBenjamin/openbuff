@@ -91,6 +91,13 @@ export type JobEventPayload =
       state: JobState
       exitCode?: number | null
       error?: string
+      /**
+       * Resolved value of the unit of work. Stamped onto `job.result` when the
+       * transition is terminal, exactly like `exitCode`/`error`, so the record
+       * itself is the durable home of a settled result and an adapter's own
+       * view no longer has to stay alive for the result to be readable.
+       */
+      result?: unknown
     }
   | { type: 'status'; message?: string }
 
@@ -164,8 +171,19 @@ export interface WaitJobOptions {
   predicate?: (event: JobEvent) => boolean
   /** Resolve with timedOut=true after this many milliseconds. */
   timeoutMs?: number
-  /** Only events with sequence > cursor count as new. Defaults to 0. */
+  /**
+   * Only events with sequence > cursor count as new. Defaults to 0. Clamped to
+   * the job's latest sequence, so a cursor past the end can never make the
+   * terminal transition unable to settle the waiter.
+   */
   cursor?: number
+  /**
+   * Abort the wait when this signal fires. The waiter settles with the job's
+   * current snapshot and `timedOut: true` (an aborted join observed no terminal
+   * transition) and its listener is detached on settle, so joining a job can
+   * never outlive its caller.
+   */
+  signal?: AbortSignal
 }
 
 /** Result of {@link JobRegistry.wait}. */
@@ -333,6 +351,14 @@ interface PendingWaiter {
   predicate?: (event: JobEvent) => boolean
   timeoutMs?: number
   timer?: ReturnType<typeof setTimeout>
+  /**
+   * Caller-supplied abort signal and the listener attached to it. Both are
+   * detached together with the timer on settle (see
+   * {@link JobRegistry.detachWaiter}) so a settled waiter leaves nothing
+   * attached to a long-lived signal.
+   */
+  signal?: AbortSignal
+  onAbort?: () => void
   /**
    * Accepts `undefined` because {@link JobRegistry.clear} resolves pending
    * waiters with it — the same "job no longer exists" value {@link
@@ -508,30 +534,35 @@ export class JobRegistry {
   }
 
   /**
-   * Return every buffered event with sequence > cursor. `nextCursor` is the
-   * highest sequence returned (or the passed cursor when none); `truncated`
-   * reports that events at or below the cursor were evicted, and `dropped`
-   * is the cumulative eviction count so consumers can detect gaps.
+   * Return every buffered event with sequence > cursor. The cursor is
+   * normalized by {@link JobRegistry.clampCursor} first, so a consumer that
+   * reports back a cursor past the job's latest sequence is self-healed instead
+   * of being pinned past every future event. `nextCursor` is the highest
+   * sequence returned (or the clamped cursor when none); `truncated` reports
+   * that events at or below the cursor were evicted, and `dropped` is the
+   * cumulative eviction count so consumers can detect gaps.
    */
   snapshot(jobId: string, cursor = 0): JobSnapshot | undefined {
     const record = this.records.get(jobId)
     if (!record) return undefined
-    const events = record.events.filter((event) => event.sequence > cursor)
+    const clamped = this.clampCursor(record, cursor)
+    const events = record.events.filter((event) => event.sequence > clamped)
     const last = events[events.length - 1]
     return {
       events,
-      nextCursor: last ? last.sequence : cursor,
+      nextCursor: last ? last.sequence : clamped,
       state: record.job.state,
-      truncated: this.truncatedAtCursor(record, cursor),
+      truncated: this.truncatedAtCursor(record, clamped),
       dropped: record.dropped,
     }
   }
 
   /**
    * Resolve when the predicate matches a NEW event (sequence > cursor), or
-   * the job reaches a terminal state, or the timeout fires — whichever comes
-   * first. Driven purely off the registry's internal notifications: no
-   * sleep-polling, and listeners/timers are cleaned up on settle. Resolves
+   * the job reaches a terminal state, or the timeout fires, or the caller's
+   * abort signal fires — whichever comes first. Driven purely off the
+   * registry's internal notifications: no sleep-polling, and
+   * listeners/timers/abort listeners are cleaned up on settle. Resolves
    * `undefined` for an unknown job id.
    */
   wait(
@@ -541,8 +572,16 @@ export class JobRegistry {
     const record = this.records.get(jobId)
     if (!record) return Promise.resolve(undefined)
 
-    const cursor = options.cursor ?? 0
-    const immediate = this.evaluateWait(record, cursor, options.predicate)
+    // Clamp before anything else: a cursor past the job's latest sequence would
+    // make every later event — the terminal transition included — fail the
+    // `sequence > cursor` test, so the waiter could never be settled.
+    const cursor = this.clampCursor(record, options.cursor)
+    const immediate = this.evaluateWait(
+      record,
+      cursor,
+      options.predicate,
+      options.signal?.aborted === true,
+    )
     if (immediate) return Promise.resolve(immediate)
 
     return new Promise<WaitJobResult | undefined>((resolve) => {
@@ -556,6 +595,16 @@ export class JobRegistry {
         waiter.timer = setTimeout(() => {
           this.settleWaiter(jobId, waiter)
         }, options.timeoutMs)
+      }
+      if (options.signal) {
+        // Settle (and detach) on abort so a join cannot outlive its caller. An
+        // aborted join observed no terminal transition, so it settles with the
+        // current snapshot and timedOut=true, exactly like a deadline.
+        waiter.signal = options.signal
+        waiter.onAbort = () => {
+          this.settleWaiter(jobId, waiter, true)
+        }
+        options.signal.addEventListener('abort', waiter.onAbort, { once: true })
       }
       this.addWaiter(jobId, waiter)
     })
@@ -680,7 +729,7 @@ export class JobRegistry {
     ])
     this.waiters.clear()
     for (const waiter of pendingWaiters) {
-      if (waiter.timer) clearTimeout(waiter.timer)
+      this.detachWaiter(waiter)
       waiter.resolve(undefined)
     }
     for (const subscribers of this.streamSubscribers.values()) {
@@ -774,6 +823,9 @@ export class JobRegistry {
         if (payload.error !== undefined) {
           record.job.error = payload.error
         }
+        if (payload.result !== undefined) {
+          record.job.result = payload.result
+        }
       }
       record.job.state = transitionedTo
     }
@@ -836,6 +888,28 @@ export class JobRegistry {
   }
 
   /**
+   * Normalize a consumer-supplied cursor: floor a missing/non-finite/negative
+   * value to 0, and clamp anything above the job's latest sequence back down to
+   * it. Without the upper clamp a cursor past the end would make every future
+   * event (including the terminal transition) fail the `sequence > cursor`
+   * test, so a waiter created with it could never settle and a snapshot would
+   * keep echoing the bogus cursor back to the consumer.
+   */
+  private clampCursor(record: JobRecord, cursor: number | undefined): number {
+    const latestSequence = record.nextSequence - 1
+    if (cursor === undefined || !Number.isFinite(cursor) || cursor < 0) return 0
+    return Math.min(Math.floor(cursor), latestSequence)
+  }
+
+  /** Clear a waiter's timeout and detach its abort listener. */
+  private detachWaiter(waiter: PendingWaiter): void {
+    if (waiter.timer) clearTimeout(waiter.timer)
+    if (waiter.signal && waiter.onAbort) {
+      waiter.signal.removeEventListener('abort', waiter.onAbort)
+    }
+  }
+
+  /**
    * Evaluate a wait against the job's CURRENT buffer: predicate over new
    * events first, then terminal state. Returns the result when the wait can
    * settle immediately, or `undefined` when it must remain pending.
@@ -892,7 +966,7 @@ export class JobRegistry {
     if (!waiters || !waiters.has(waiter)) return
     waiters.delete(waiter)
     if (waiters.size === 0) this.waiters.delete(jobId)
-    if (waiter.timer) clearTimeout(waiter.timer)
+    this.detachWaiter(waiter)
 
     const record = this.records.get(jobId)
     if (!record) {
@@ -915,8 +989,8 @@ export class JobRegistry {
       waiter.resolve(result)
       return
     }
-    // The record is live and non-terminal (only reachable from the timeout
-    // path): report the current snapshot with timedOut=true.
+    // The record is live and non-terminal (only reachable from the timeout or
+    // abort path): report the current snapshot with timedOut=true.
     waiter.resolve(
       this.evaluateWait(record, waiter.cursor, waiter.predicate, true) ?? {
         events: [],

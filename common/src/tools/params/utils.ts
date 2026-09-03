@@ -403,7 +403,6 @@ const MAX_REJOINED_LENGTH = 65_536
  * REPLACEMENT_PLACEHOLDER_KEYS) so it is not recreated for every entry.
  */
 const ARRAY_PARAM_KEYS = [
-  'searchQueries',
   'filePaths',
   'directories',
   'prompts',
@@ -525,7 +524,7 @@ export function normalizeSpawnAgentList(value: unknown, depth = 0): unknown {
 
       // Provider tool-call serializers sometimes preserve an agent-specific
       // array as a JSON string inside an otherwise valid params object (for
-      // example, `searchQueries: "[...]"`). Decode only known array-shaped
+      // example, `changed_files: "[...]"`). Decode only known array-shaped
       // handoff fields; leave commands, prompts, and arbitrary custom values
       // untouched so intentional strings are never reinterpreted as data.
       for (const key of ARRAY_PARAM_KEYS) {
@@ -549,117 +548,6 @@ export function normalizeSpawnAgentList(value: unknown, depth = 0): unknown {
       ) {
         paramsRecord.command = record.command
         paramsRepaired = true
-      }
-
-      // Code-searcher: recover params.searchQueries from explicit structured
-      // fields only (mirror basher command repair). Prefer nested params over
-      // top-level. Never invent patterns from prompt prose; leave ambiguous
-      // shapes untouched so Zod fails closed.
-      if (record.agent_type === 'code-searcher') {
-        const wrapSearchQueryObject = (
-          value: unknown,
-        ): unknown[] | undefined => {
-          if (
-            value === null ||
-            typeof value !== 'object' ||
-            Array.isArray(value)
-          ) {
-            return undefined
-          }
-          const query = value as Record<string, unknown>
-          if (
-            typeof query.pattern !== 'string' ||
-            query.pattern.trim() === ''
-          ) {
-            return undefined
-          }
-          return [value]
-        }
-
-        const buildQueryFromPattern = (
-          pattern: string,
-          source: Record<string, unknown>,
-        ): Record<string, unknown> => {
-          const query: Record<string, unknown> = { pattern }
-          if (typeof source.flags === 'string') query.flags = source.flags
-          if (typeof source.cwd === 'string') query.cwd = source.cwd
-          if (
-            typeof source.maxResults === 'number' &&
-            Number.isFinite(source.maxResults)
-          ) {
-            query.maxResults = source.maxResults
-          }
-          return query
-        }
-
-        const nonEmptyStringPatterns = (
-          value: unknown,
-        ): string[] | undefined => {
-          if (!Array.isArray(value) || value.length === 0) return undefined
-          if (
-            !value.every(
-              (entry) => typeof entry === 'string' && entry.trim() !== '',
-            )
-          ) {
-            return undefined
-          }
-          return value as string[]
-        }
-
-        // Single object at params.searchQueries → one-element array.
-        if (paramsRecord.searchQueries !== undefined) {
-          const wrapped = wrapSearchQueryObject(paramsRecord.searchQueries)
-          if (wrapped) {
-            paramsRecord.searchQueries = wrapped
-            paramsRepaired = true
-          }
-          // Non-empty string that is not a JSON array was already left alone
-          // by ARRAY_PARAM_KEYS; do not reinterpret it here.
-        } else {
-          // Prefer nested structured fields over top-level aliases.
-          if (
-            typeof paramsRecord.pattern === 'string' &&
-            paramsRecord.pattern.trim() !== ''
-          ) {
-            paramsRecord.searchQueries = [
-              buildQueryFromPattern(paramsRecord.pattern, paramsRecord),
-            ]
-            paramsRepaired = true
-          } else {
-            const nestedPatterns = nonEmptyStringPatterns(paramsRecord.patterns)
-            if (nestedPatterns) {
-              paramsRecord.searchQueries = nestedPatterns.map((pattern) => ({
-                pattern,
-              }))
-              paramsRepaired = true
-            } else if (Array.isArray(record.searchQueries)) {
-              paramsRecord.searchQueries = record.searchQueries
-              paramsRepaired = true
-            } else {
-              const wrappedTop = wrapSearchQueryObject(record.searchQueries)
-              if (wrappedTop) {
-                paramsRecord.searchQueries = wrappedTop
-                paramsRepaired = true
-              } else if (
-                typeof record.pattern === 'string' &&
-                record.pattern.trim() !== ''
-              ) {
-                paramsRecord.searchQueries = [
-                  buildQueryFromPattern(record.pattern, record),
-                ]
-                paramsRepaired = true
-              } else {
-                const topPatterns = nonEmptyStringPatterns(record.patterns)
-                if (topPatterns) {
-                  paramsRecord.searchQueries = topPatterns.map((pattern) => ({
-                    pattern,
-                  }))
-                  paramsRepaired = true
-                }
-              }
-            }
-          }
-        }
       }
 
       // Recover labelled v3 gate tokens from prose after compaction; never bare

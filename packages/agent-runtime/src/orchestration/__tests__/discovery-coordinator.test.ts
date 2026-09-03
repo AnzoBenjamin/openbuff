@@ -5,12 +5,13 @@ import {
   claimDiscoveryShard,
   completeDiscoveryShard,
   planDiscoveryBatch,
+  reconcileInterruptedDiscoveryShards,
 } from '../discovery-coordinator'
 
 describe('discovery coordinator', () => {
   test('derives a stable non-empty question for params-only discovery agents', () => {
     const first = buildDiscoveryQuestion({
-      agentType: 'code-searcher',
+      agentType: 'file-picker',
       spawnParams: {
         searchQueries: [
           { cwd: 'server/src', flags: '-g *.test.ts', pattern: 'worker' },
@@ -18,7 +19,7 @@ describe('discovery coordinator', () => {
       },
     })
     const reordered = buildDiscoveryQuestion({
-      agentType: 'code-searcher',
+      agentType: 'file-picker',
       spawnParams: {
         searchQueries: [
           { pattern: 'worker', flags: '-g *.test.ts', cwd: 'server/src' },
@@ -33,12 +34,12 @@ describe('discovery coordinator', () => {
 
   test('never records an empty shard question', () => {
     const claimed = claimDiscoveryShard({
-      agentType: 'code-searcher',
+      agentType: 'file-picker',
       question: '   ',
       workspaceRevision: 1,
     })
 
-    expect(claimed.state.shards[0].question).toBe('code-searcher discovery')
+    expect(claimed.state.shards[0].question).toBe('file-picker discovery')
   })
 
   test('deduplicates candidates and merges evidence reasons', () => {
@@ -148,7 +149,7 @@ describe('discovery coordinator', () => {
 
   test('allows a failed shard to be retried and records completion', () => {
     const claimed = claimDiscoveryShard({
-      agentType: 'code-searcher',
+      agentType: 'file-picker',
       question: 'mutation broker',
       workspaceRevision: 4,
     })
@@ -159,7 +160,7 @@ describe('discovery coordinator', () => {
     })
     const retried = claimDiscoveryShard({
       existing: failed,
-      agentType: 'code-searcher',
+      agentType: 'file-picker',
       question: 'broker mutation',
       workspaceRevision: 4,
     })
@@ -168,5 +169,60 @@ describe('discovery coordinator', () => {
     expect(failed?.shards[0].completedAt).toBeNumber()
     expect(retried.shardKey).toBe(claimed.shardKey)
     expect(retried.state.shards).toHaveLength(2)
+  })
+
+  test('reconciles a shard left active by an interrupted spawn so it can be reclaimed', () => {
+    const claimed = claimDiscoveryShard({
+      agentType: 'file-picker',
+      question: 'interrupted question',
+      workspaceRevision: 5,
+    })
+    // Without reconciliation the still-active claim makes every later claim for
+    // this question throw, which fails the whole spawn batch.
+    expect(() =>
+      claimDiscoveryShard({
+        existing: claimed.state,
+        agentType: 'file-picker',
+        question: 'question interrupted',
+        workspaceRevision: 5,
+      }),
+    ).toThrow('Duplicate discovery shard')
+
+    const reconciled = reconcileInterruptedDiscoveryShards(claimed.state)!
+
+    expect(reconciled.shards[0]).toMatchObject({ status: 'interrupted' })
+    expect(reconciled.shards[0].completedAt).toBeNumber()
+    expect(reconciled.revision).toBe(claimed.state.revision + 1)
+    expect(() =>
+      claimDiscoveryShard({
+        existing: reconciled,
+        agentType: 'file-picker',
+        question: 'question interrupted',
+        workspaceRevision: 5,
+      }),
+    ).not.toThrow()
+  })
+
+  test('leaves settled shards and missing coverage untouched', () => {
+    const claimed = claimDiscoveryShard({
+      agentType: 'file-picker',
+      question: 'settled question',
+      workspaceRevision: 6,
+    })
+    const completed = completeDiscoveryShard({
+      existing: claimed.state,
+      shardKey: claimed.shardKey,
+      status: 'completed',
+    })!
+
+    // Idempotent: nothing is active, so the same state comes back without
+    // revision churn (and an absent coverage state stays absent).
+    expect(reconcileInterruptedDiscoveryShards(completed)).toBe(completed)
+    expect(reconcileInterruptedDiscoveryShards(undefined)).toBeUndefined()
+
+    const reconciledOnce = reconcileInterruptedDiscoveryShards(claimed.state)!
+    expect(reconcileInterruptedDiscoveryShards(reconciledOnce)).toBe(
+      reconciledOnce,
+    )
   })
 })

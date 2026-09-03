@@ -216,7 +216,6 @@ const definition: AgentDefinition = {
       'read_subtree',
       'read_image',
       'code_search',
-      'code_searcher',
       'query_index',
       'glob',
       'list_directory',

@@ -2932,7 +2932,7 @@ describe('runAgentStep - set_output tool', () => {
       })
       // Force a second tool-call batch after suggest_followups has executed.
       yield createToolCallChunk('spawn_agents', {
-        agents: [{ agent_type: 'code-searcher', prompt: 'Search more' }],
+        agents: [{ agent_type: 'file-picker', prompt: 'Search more' }],
       })
       return promptSuccess('mock-message-id')
     }
@@ -2948,7 +2948,7 @@ describe('runAgentStep - set_output tool', () => {
       ...testAgent,
       id: 'test-followup-agent',
       toolNames: ['spawn_agents', 'suggest_followups', 'end_turn'],
-      spawnableAgents: ['code-searcher'],
+      spawnableAgents: ['file-picker'],
     }
 
     await runAgentStep({

@@ -14,6 +14,7 @@ import {
   snapshotCoverageCompletenessRule,
   writeAuditFindingsParams,
 } from '@codebuff/common/tools/params/tool/write-audit-findings'
+import { containsStructuralAuditReceipt } from '@codebuff/common/util/audit-receipt'
 import { getContentHash } from '@codebuff/common/util/content-hash'
 
 import {
@@ -67,6 +68,10 @@ describe('writeAuditFindings', () => {
       '## [HIGH] correctness — packages/agent-runtime/src/tools/tool-executor.ts:688',
     )
     expect(markdown).toContain('### Files')
+    // The artifact records the snapshot its findings were evaluated against, so
+    // an already-exists collision can be checked against what is on disk rather
+    // than against the colliding caller's own snapshotId.
+    expect(markdown).toContain(`- Snapshot: ${input.snapshotId}`)
     // The declared domains must be visible to agents that parse the Markdown
     // artifact, matching structuralReceipt.domains in the JSON receipt.
     expect(markdown).toContain('### Domains')
@@ -88,6 +93,15 @@ describe('writeAuditFindings', () => {
 
     expect(markdown).toContain('### Files')
     expect(markdown).not.toContain('### Domains')
+  })
+
+  test('omits the snapshot attestation line when snapshotId is omitted', () => {
+    const { snapshotId: _snapshotId, ...legacyInput } = input
+    const markdown = renderAuditFindingsMarkdown(legacyInput)
+
+    // A legacy artifact attests to no snapshot, so a collision against it can
+    // never claim snapshot-bound coverage.
+    expect(markdown).not.toContain('- Snapshot:')
   })
 
   test('cannot forge a heading with a bare CR in a finding field', () => {
@@ -221,6 +235,22 @@ describe('writeAuditFindings', () => {
     expect(typeof collisionMessage).toBe('string')
     expect(collisionMessage).not.toBe('')
     expect(collisionMessage).toContain('the file already exists')
+    // Exclusive-create keeps one shard from clobbering another's findings, so a
+    // collision means THIS shard's findings are already persisted: the message
+    // must name the existing artifact path and must not direct a duplicate
+    // write under a suffixed shard id.
+    expect(collisionMessage).toContain(artifactPath)
+    expect(collisionMessage).toContain(
+      "this shard's findings are already persisted",
+    )
+    expect(collisionMessage).toContain('do not write a duplicate')
+    expect(collisionMessage).not.toContain(`"${input.shardId}-2"`)
+    expect(collisionMessage).not.toContain('retry with a distinct shard id')
+    // A distinct shard id stays available, but only for a deliberately
+    // different artifact.
+    expect(collisionMessage).toContain(
+      'Use a distinct shard id only when intentionally writing an additional, different artifact.',
+    )
     expect(await fs.readFile(`/repo/${artifactPath}`, 'utf8')).toBe(markdown)
   })
 
@@ -1100,5 +1130,222 @@ describe('writeAuditFindings', () => {
       errorMessage: 'Missing or invalid write_audit_findings parameters.',
     })
     expect(JSON.stringify(value)).not.toContain(oversizedSlug)
+  })
+
+  test('marks an already-existing artifact as durably persisted for its snapshot', async () => {
+    const fs = createMockFs()
+    const shardId = 'runtime-collision'
+    const params = { ...input, shardId }
+    const artifactPath = auditFindingsArtifactPath(params)
+    const markdown = renderAuditFindingsMarkdown(params)
+
+    const first = await writeAuditFindings({
+      parameters: params,
+      cwd: '/repo',
+      fs,
+    })
+    expect(first.mutation?.outcome).toBe('applied')
+
+    const second = await writeAuditFindings({
+      parameters: params,
+      cwd: '/repo',
+      fs,
+    })
+    const collision =
+      second.output[0]?.type === 'json' ? second.output[0].value : undefined
+
+    // Still a rejection: nothing is applied a second time and the compact
+    // success receipt is not synthesized for a write that did not happen.
+    expect(second.mutation).toBeDefined()
+    expect(second.mutation?.outcome).not.toBe('applied')
+    expect(collision).not.toHaveProperty('structuralReceipt')
+    expect(collision).not.toHaveProperty('contentHash')
+    expect(await fs.readFile(`/repo/${artifactPath}`, 'utf8')).toBe(markdown)
+
+    // The rejection now carries an explicit snapshot-bound durable-persistence
+    // marker, echoing only the schema-validated shard id and the derived path.
+    // Asserted with toEqual so a marker that also forged the
+    // subsystem/file/domain coverage this rejected call never persisted fails.
+    const marker =
+      collision &&
+      typeof collision === 'object' &&
+      'alreadyPersisted' in collision
+        ? collision.alreadyPersisted
+        : undefined
+    expect(marker).toEqual({
+      schema_version: 1,
+      shardId,
+      artifactPath,
+      snapshot_id: input.snapshotId,
+    })
+    expect(collision).toMatchObject({ artifactPath })
+
+    // The one shared gate the generator and buildRuntimeAgentReceipt consume
+    // accepts it, and only for this snapshot.
+    expect(containsStructuralAuditReceipt(second.output, input.snapshotId)).toBe(
+      true,
+    )
+    expect(
+      containsStructuralAuditReceipt(second.output, 'snapshot-other'),
+    ).toBe(false)
+
+    // The added field must still validate at the tool boundary.
+    expect(
+      writeAuditFindingsParams.outputSchema.safeParse(second.output).success,
+    ).toBe(true)
+
+    // The no-duplicate recovery stays on the message.
+    const collisionMessage =
+      collision && typeof collision === 'object' && 'errorMessage' in collision
+        ? collision.errorMessage
+        : undefined
+    expect(collisionMessage).toContain('the file already exists')
+    expect(collisionMessage).toContain(
+      "this shard's findings are already persisted",
+    )
+    expect(collisionMessage).toContain('do not write a duplicate')
+  })
+
+  test('omits the snapshot binding from the marker when the caller sent no snapshotId', async () => {
+    const fs = createMockFs()
+    const { snapshotId: _snapshotId, ...legacyInput } = input
+    const params = { ...legacyInput, shardId: 'runtime-collision-unbound' }
+    const artifactPath = auditFindingsArtifactPath(params)
+
+    await writeAuditFindings({ parameters: params, cwd: '/repo', fs })
+    const { output: second } = await writeAuditFindings({
+      parameters: params,
+      cwd: '/repo',
+      fs,
+    })
+    const collision = second[0]?.type === 'json' ? second[0].value : undefined
+
+    // No snapshot binding at all, so an unbound shard cannot satisfy a
+    // snapshot-bound gate.
+    expect(collision).toMatchObject({ artifactPath })
+    expect(
+      collision &&
+        typeof collision === 'object' &&
+        'alreadyPersisted' in collision
+        ? collision.alreadyPersisted
+        : undefined,
+    ).toEqual({
+      schema_version: 1,
+      shardId: params.shardId,
+      artifactPath,
+    })
+    expect(containsStructuralAuditReceipt(second, 'snapshot-1')).toBe(false)
+    expect(containsStructuralAuditReceipt(second)).toBe(false)
+  })
+
+  test('does not mark an ordinary rejected write as durably persisted', async () => {
+    const fs = createMockFs()
+    const shardId = 'runtime-invalid-parameters'
+    const artifactPath = auditFindingsArtifactPath({
+      sessionSlug: input.sessionSlug,
+      shardId,
+    })
+
+    // Widening the gate to ANY rejection would let a failed write claim
+    // coverage, so only the already-exists case carries the marker.
+    const { output: result } = await writeAuditFindings({
+      parameters: { ...input, shardId, findings: [], noIssuesFound: false },
+      cwd: '/repo',
+      fs,
+    })
+    const value = result[0]?.type === 'json' ? result[0].value : undefined
+
+    expect(value).toMatchObject({
+      artifactPath,
+      errorMessage: 'Missing or invalid write_audit_findings parameters.',
+    })
+    expect(value).not.toHaveProperty('alreadyPersisted')
+    expect(containsStructuralAuditReceipt(result, input.snapshotId)).toBe(false)
+  })
+
+  test('does not bind the collision marker to a snapshot the persisted artifact never attested to', async () => {
+    const fs = createMockFs()
+    const shardId = 'runtime-stale-snapshot'
+    const firstParams = { ...input, shardId }
+    const artifactPath = auditFindingsArtifactPath(firstParams)
+    const firstMarkdown = renderAuditFindingsMarkdown(firstParams)
+
+    const first = await writeAuditFindings({
+      parameters: firstParams,
+      cwd: '/repo',
+      fs,
+    })
+    expect(first.mutation?.outcome).toBe('applied')
+
+    // Same shard id, NEW snapshot: the artifact on disk was written for
+    // snapshot-1, so binding the marker to the caller's snapshotId would let
+    // this re-run satisfy a snapshot-2-bound coverage gate with a stale file.
+    const { output: second } = await writeAuditFindings({
+      parameters: { ...firstParams, snapshotId: 'snapshot-2' },
+      cwd: '/repo',
+      fs,
+    })
+    const collision = second[0]?.type === 'json' ? second[0].value : undefined
+
+    expect(collision).toMatchObject({ artifactPath })
+    expect(
+      collision &&
+        typeof collision === 'object' &&
+        'alreadyPersisted' in collision
+        ? collision.alreadyPersisted
+        : undefined,
+    ).toEqual({ schema_version: 1, shardId, artifactPath })
+    // Unbound marker: neither the new snapshot nor the artifact's own snapshot
+    // can be claimed from this rejection.
+    expect(containsStructuralAuditReceipt(second, 'snapshot-2')).toBe(false)
+    expect(containsStructuralAuditReceipt(second, input.snapshotId)).toBe(false)
+    expect(containsStructuralAuditReceipt(second)).toBe(false)
+
+    const collisionMessage =
+      collision && typeof collision === 'object' && 'errorMessage' in collision
+        ? collision.errorMessage
+        : undefined
+    expect(collisionMessage).toContain(
+      "does not attest to this call's snapshotId",
+    )
+    expect(collisionMessage).not.toContain('do not write a duplicate')
+    // The persisted artifact is left exactly as the first call wrote it.
+    expect(await fs.readFile(`/repo/${artifactPath}`, 'utf8')).toBe(
+      firstMarkdown,
+    )
+  })
+
+  test('leaves the collision marker unbound when the persisted artifact attests to no snapshot', async () => {
+    const shardId = 'runtime-legacy-artifact'
+    const params = { ...input, shardId }
+    const artifactPath = auditFindingsArtifactPath(params)
+    const { snapshotId: _snapshotId, ...legacyInput } = params
+    const legacyMarkdown = renderAuditFindingsMarkdown(legacyInput)
+    // A legacy artifact carries no `- Snapshot:` line, so a snapshot-bound
+    // re-run colliding with it must not be able to claim that snapshot's
+    // coverage from the collision.
+    const fs = createMockFs({
+      files: { [`/repo/${artifactPath}`]: legacyMarkdown },
+    })
+
+    const { output: result } = await writeAuditFindings({
+      parameters: params,
+      cwd: '/repo',
+      fs,
+    })
+    const collision = result[0]?.type === 'json' ? result[0].value : undefined
+
+    expect(
+      collision &&
+        typeof collision === 'object' &&
+        'alreadyPersisted' in collision
+        ? collision.alreadyPersisted
+        : undefined,
+    ).toEqual({ schema_version: 1, shardId, artifactPath })
+    expect(containsStructuralAuditReceipt(result, input.snapshotId)).toBe(false)
+    expect(containsStructuralAuditReceipt(result)).toBe(false)
+    expect(await fs.readFile(`/repo/${artifactPath}`, 'utf8')).toBe(
+      legacyMarkdown,
+    )
   })
 })

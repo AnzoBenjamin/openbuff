@@ -154,10 +154,10 @@ Some commentary after`
       "prompt": "Find relevant files"
     },
     {
-      "agent_type": "code-searcher",
+      "agent_type": "general-agent",
       "params": {
-        "searchQueries": [
-          {"pattern": "function test"}
+        "filePaths": [
+          "src/test.ts"
         ]
       }
     }

@@ -119,30 +119,6 @@ const spawnAgentEntryFields = {
             .describe(
               'Maximum extracted failure lines to return with save_full_log (basher)',
             ),
-          searchQueries: z
-            .array(
-              z.object({
-                pattern: z.string().describe('The pattern to search for'),
-                flags: z
-                  .union([z.string(), z.array(z.string())])
-                  .optional()
-                  .describe(
-                    'Optional ripgrep flags as one string or argv tokens (e.g. "-i -g *.ts" or ["-i", "-g", "*.ts"]). Do not quote the entire expression inside the JSON string.',
-                  ),
-                cwd: z
-                  .string()
-                  .optional()
-                  .describe(
-                    'Optional working directory relative to project root',
-                  ),
-                maxResults: z
-                  .number()
-                  .optional()
-                  .describe('Max results per file. Default 15'),
-              }),
-            )
-            .optional()
-            .describe('Array of code search queries (code-searcher)'),
           filePaths: z
             .array(z.string())
             .optional()
@@ -319,9 +295,9 @@ const inputSchema = z
 const description = `
 Spawn agents in parallel (up to batch max). Pass \`agents\` as a real array of objects — do not JSON.stringify entries.
 
-- **\`agent_type\` must be a name from the live "You can spawn the following agents" catalog** (hyphenated ids; underscores accepted). It is an agent name (e.g. basher, code-searcher, general-agent), **not a tool name** (read_files, str_replace, …). Call tools directly; do not wrap them in spawn_agents.
+- **\`agent_type\` must be a name from the live "You can spawn the following agents" catalog** (hyphenated ids; underscores accepted). It is an agent name (e.g. basher, file-picker, general-agent), **not a tool name** (read_files, str_replace, …). Call tools directly; do not wrap them in spawn_agents.
 - Prefer spawn_agents over single-agent tool aliases so multiple agents can run in parallel. Same nested \`prompt\` + \`params\` schema either way.
-- Include required agent params (e.g. basher \`command\`, code-searcher \`searchQueries\`, git-committer \`owned_paths\`, librarian \`repoUrl\`, dependency-manager \`manager\`+\`operation\`, security-reviewer \`changed_files\`+\`snapshot_fingerprint\`, reviewer specialists \`snapshot_id\`, repair-editor versioned \`handoff\`). Agent-specific fields go in \`params\`, not only the prompt.
+- Include required agent params (e.g. basher \`command\`, git-committer \`owned_paths\`, librarian \`repoUrl\`, dependency-manager \`manager\`+\`operation\`, security-reviewer \`changed_files\`+\`snapshot_fingerprint\`, reviewer specialists \`snapshot_id\`, repair-editor versioned \`handoff\`). Agent-specific fields go in \`params\`, not only the prompt.
 - \`background: true\` returns a jobId immediately; poll with check_background_agent.
 
 Example:
@@ -336,10 +312,9 @@ ${$getNativeToolCallExampleString({
         params: { command: 'npm test' },
       },
       {
-        agent_type: 'code-searcher',
-        params: {
-          searchQueries: [{ pattern: 'authenticate', flags: '-g *.ts' }],
-        },
+        agent_type: 'file-picker',
+        prompt: 'Find the auth-related files',
+        params: { directories: ['src'] },
       },
       {
         agent_type: 'git-committer',

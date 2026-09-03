@@ -24,7 +24,6 @@
     "code-reviewer": "agentrouter/gpt-5.5",
     "file-picker": "agentrouter/gpt-5.5",
     "file-lister": "agentrouter/gpt-5.5",
-    "code-searcher": "agentrouter/gpt-5.5",
     "directory-lister": "agentrouter/gpt-5.5",
     "glob-matcher": "agentrouter/gpt-5.5",
     "context-pruner": "agentrouter/gpt-5.5",

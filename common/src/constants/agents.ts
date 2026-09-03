@@ -38,10 +38,6 @@ export const AGENT_PERSONAS = {
     displayName: 'Nit Pick Nick',
     purpose: 'Reviews file changes and responds with critical feedback.',
   } as const,
-  'code-searcher': {
-    displayName: 'Code Searcher',
-    purpose: 'Expert at searching the codebase for relevant code.',
-  } as const,
   'file-lister': {
     displayName: 'Liszt the File Lister',
     purpose: 'Lists files relevant to a task.',

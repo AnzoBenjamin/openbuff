@@ -228,3 +228,36 @@ export function completeDiscoveryShard(params: {
     ),
   })
 }
+
+/**
+ * Settle discovery shards left `active` by a spawn that never recorded a
+ * terminal receipt (an interrupted or unsettled turn). Shard claims are durable
+ * parent state, so without this an `active` shard would make
+ * {@link claimDiscoveryShard} throw for that question forever — and that throw
+ * fails the whole spawn batch. An `interrupted` shard is reclaimable, exactly
+ * like a `failed` one, so the next turn can legitimately re-ask the question.
+ *
+ * Call ONLY at run entry, where no spawn of the current run is in flight yet:
+ * an `active` shard observed there necessarily belongs to a previous,
+ * interrupted turn. Idempotent — a reconciled shard is no longer `active`, and
+ * a state with nothing to reconcile is returned unchanged (same reference, no
+ * revision churn).
+ */
+export function reconcileInterruptedDiscoveryShards(
+  existing?: DiscoveryCoverageV1,
+): DiscoveryCoverageV1 | undefined {
+  const hasActiveShard = existing?.shards.some(
+    (shard) => shard.status === 'active',
+  )
+  if (!existing || !hasActiveShard) return existing
+  const completedAt = Date.now()
+  return discoveryCoverageV1Schema.parse({
+    ...existing,
+    revision: existing.revision + 1,
+    shards: existing.shards.map((shard) =>
+      shard.status === 'active'
+        ? { ...shard, status: 'interrupted', completedAt }
+        : shard,
+    ),
+  })
+}

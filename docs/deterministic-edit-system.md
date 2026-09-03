@@ -481,8 +481,8 @@ Subagent use is phase-triggered orchestration policy, not a random choice. The p
   `multi-file`, `cross-subsystem`, or `unknown surface` before editing.
   Tiny tasks read the directly relevant file; focused tasks also inspect
   adjacent tests/callers; multi-file tasks search and read representative
-  files; cross-subsystem or unknown-surface tasks use `query_index`,
-  `list_directory`, `glob`, and parallel file-picker/code-searcher shards.
+  cross-subsystem or unknown-surface tasks use `query_index`,
+  `list_directory`, `glob`, and parallel file-picker shards.
 - Tool choice: route repository state to `git_status`, source inspection to
   `read_files`/`read_outline`/`read_subtree`/`glob`/`list_directory`/
   `query_index`, images to `read_image`, whole-symbol edits to
@@ -495,8 +495,8 @@ Subagent use is phase-triggered orchestration policy, not a random choice. The p
   migrations, release/publish/deploy actions, production-affecting scripts,
   and ambiguous product behavior. For reversible or obvious choices,
   choose the conservative path and proceed.
-- Discovery phase: use `query_index` directly, then spawn file-picker,
-  code-searcher, or researcher agents when relevant files, APIs, or
+- Discovery phase: use `query_index` directly, then spawn file-picker or
+  researcher agents when relevant files, APIs, or
   commands are not already obvious.
 - Reasoning phase: spawn `thinker` after context discovery for complex
   design, architecture, risk, tradeoff, spec/plan critique, or debugging

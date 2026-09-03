@@ -149,9 +149,12 @@ export function extractSubagentContextParams(
   }
 }
 
-const SPAWN_AGENT_TYPE_ALIASES: Readonly<Record<string, string>> = {
-  'code-searccher': 'code-searcher',
-}
+/**
+ * Known agent-name typo corrections applied before permission checks and
+ * template lookup. Currently empty; keep the table so restoring a narrow alias
+ * stays a one-line change.
+ */
+const SPAWN_AGENT_TYPE_ALIASES: Readonly<Record<string, string>> = {}
 
 /**
  * Canonicalizes known agent-name typos before permission checks and template
@@ -546,6 +549,24 @@ const REVIEWER_EVIDENCE_CHARS = 360
 const REVIEWER_REQUIREMENT_EVIDENCE_LIMIT = 2
 const PARENT_AGENT_OUTPUT_MAX_CHARS = 256_000
 const PARENT_AGENT_OUTPUT_STRING_CHARS = 4_000
+/**
+ * Answer-bearing fields get a much larger cap than incidental metadata: these
+ * are the channels a child agent actually reports through (assistant text,
+ * set_output summaries, captured command output), so clipping them at the
+ * default 4k is what made long basher logs and long agent answers arrive
+ * truncated. Everything else keeps the default cap.
+ */
+const PARENT_AGENT_OUTPUT_HIGH_FIDELITY_STRING_CHARS = 32_000
+const HIGH_FIDELITY_STRING_FIELDS = new Set([
+  'text',
+  'message',
+  'summary',
+  'answer',
+  'report',
+  'digest',
+  'stdout',
+  'stderr',
+])
 const PARENT_AGENT_OUTPUT_ARRAY_ITEMS = 48
 const CONTROL_PLANE_ARRAY_FIELDS = new Set([
   'reviewedFiles',
@@ -640,7 +661,9 @@ function compactAgentOutputValue(
   if (typeof value === 'string') {
     const compacted = truncateReviewerText(
       value,
-      PARENT_AGENT_OUTPUT_STRING_CHARS,
+      fieldName && HIGH_FIDELITY_STRING_FIELDS.has(fieldName)
+        ? PARENT_AGENT_OUTPUT_HIGH_FIDELITY_STRING_CHARS
+        : PARENT_AGENT_OUTPUT_STRING_CHARS,
     )
     if (typeof compacted === 'string') {
       truncation.omittedChars += Math.max(0, value.length - compacted.length)
@@ -1297,15 +1320,20 @@ export function buildRuntimeAgentReceipt(params: {
     typeof shardId === 'string' &&
     shardId.trim().length > 0 &&
     trimmedSnapshotId.length > 0
+  // Credit the generator harvest from the harvest flag alone: the harvest
+  // never sets AgentState.consecutiveTextOnlyWithoutCompletion, and the
+  // step-cap early return never touches it either, so requiring that counter
+  // suppressed the retryable 'no task_completed' error on one exit path and not
+  // the other. Only a harvest that recovered REAL answer text may stand in for
+  // explicit completion: an answerless / step-capped run marks its output with
+  // noHarvestedAnswer, whose summary is just a placeholder, so it stays a
+  // retryable partial the parent can re-spawn instead of completed with zero
+  // errors.
+  const harvestedOutput = params.agentState?.output
   const hasHarvestedFallback =
-    (params.agentState as unknown as Record<string, unknown>)
-      ?.consecutiveTextOnlyWithoutCompletion !== undefined &&
-    (params.agentState as unknown as Record<string, unknown>)?.output !==
-      undefined &&
-    (
-      (params.agentState as unknown as Record<string, unknown>)
-        ?.output as Record<string, unknown>
-    )?.harvestedFromFallback === true
+    harvestedOutput !== undefined &&
+    harvestedOutput.harvestedFromFallback === true &&
+    harvestedOutput.noHarvestedAnswer !== true
   const hasExplicitCompletionOrHarvest =
     containsToolCall(receiptSources, 'task_completed') || hasHarvestedFallback
   const missingExplicitCompletion =
@@ -1764,10 +1792,7 @@ export function validateAgentInput(
                 : normalizedAgentType === 'librarian' &&
                     issuePaths.has('repoUrl')
                   ? '\n\nRecovery: set params.repoUrl to a GitHub URL, for example { "agent_type": "librarian", "params": { "repoUrl": "https://github.com/<owner>/<repo>" } }. params.repoUrl must have the form https://github.com/<owner>/<repo>; a URL only in prompt prose is not used.'
-                  : normalizedAgentType === 'code-searcher' &&
-                      issuePaths.has('searchQueries')
-                    ? '\n\nRecovery: spawn code-searcher with { "agent_type": "code-searcher", "params": { "searchQueries": [{ "pattern": "<regex>", "flags": "-g *.ts" }] } }. searchQueries is a required array of objects each with a non-empty string "pattern"; queries mentioned only in prompt prose are never executed.'
-                    : ''
+                  : ''
       const paramsContract = formatAgentParamsContract(inputSchema.params)
       throw new Error(
         `Invalid params for agent ${agentType}: ${formatValidationIssues({ issues: result.error.issues })}\n\nExact params contract (from the child agent schema): ${paramsContract}\nPreserve params field names exactly.${recoveryHint}\n\nOriginal params value:\n${formatValueForError(params ?? {})}`,

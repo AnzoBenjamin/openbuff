@@ -1095,9 +1095,8 @@ export function buildUnavailableToolMessage(params: {
   toolName: string
   agentId: string
   availableTools: string[]
-  input?: unknown
 }): string {
-  const { toolName, agentId, availableTools, input } = params
+  const { toolName, agentId, availableTools } = params
   const availableList =
     availableTools.length > 0
       ? availableTools.map((name) => `\`${name}\``).join(', ')
@@ -1115,29 +1114,17 @@ export function buildUnavailableToolMessage(params: {
   // granted. Point the model at the granted tools / spawnable agents instead
   // of letting it guess another unavailable name.
   if ((toolNames as readonly string[]).includes(toolName)) {
-    // Concrete recovery for content-search tools: prefer direct code_search
-    // when already granted; otherwise point at the code-searcher spawn recipe.
-    // This stays message-only; the tool remains fail-closed and nothing is
-    // auto-spawned. When the rejected input carried an explicit pattern, bake
-    // that exact string into the spawn recipe instead of a placeholder.
+    // Concrete recovery for content-search tools: when `code_search` is already
+    // granted, point at calling it directly, once per pattern. An ungranted
+    // content-search tool falls through to the generic registered-but-not-
+    // granted guidance below. This stays message-only; the tool remains
+    // fail-closed and nothing is auto-spawned.
     if (
-      toolName === 'code_search' ||
-      toolName === 'find_files_matching_content'
+      (toolName === 'code_search' ||
+        toolName === 'find_files_matching_content') &&
+      availableTools.includes('code_search')
     ) {
-      if (availableTools.includes('code_search')) {
-        return `${base} Use the granted \`code_search\` tool directly (pattern/flags/cwd/maxResults). For multi-query batching, spawn code-searcher with params.searchQueries.`
-      }
-      const inputPattern =
-        input !== null &&
-        typeof input === 'object' &&
-        !Array.isArray(input) &&
-        typeof (input as Record<string, unknown>).pattern === 'string' &&
-        ((input as Record<string, unknown>).pattern as string).trim() !== ''
-          ? ((input as Record<string, unknown>).pattern as string)
-          : undefined
-      const patternJson =
-        inputPattern !== undefined ? JSON.stringify(inputPattern) : '"<regex>"'
-      return `${base} \`${toolName}\` is a registered tool but is not granted to this agent; spawn the code-searcher agent instead: { "agent_type": "code-searcher", "params": { "searchQueries": [{ "pattern": ${patternJson}, "flags": "-g *.ts" }] } }.`
+      return `${base} Use the granted \`code_search\` tool directly (pattern/flags/cwd/maxResults). For several patterns, issue one \`code_search\` call per pattern.`
     }
     return `${base} \`${toolName}\` is a registered tool but is not granted to this agent; use one of the available tools above, or spawn an agent that provides that capability.`
   }
@@ -1260,7 +1247,7 @@ function getToolValidationHint(
     const base = [
       'Expected shape: { "agents": [{ "agent_type": string, "prompt"?: string, "params"?: object, "handoff"?: object }] }.',
       'Pass agents as an array of objects. `prompt`, `params`, and `handoff` must be inside each agent object; check every brace and bracket when a field appears misplaced. Valid stringified or double-stringified JSON is repaired automatically, but ambiguous brace nesting, truncated JSON, and non-object entries are rejected without guessing or auto-repair. Do not stringify each agent entry.',
-      'Corrected example: { "agents": [{ "agent_type": "code-searcher", "prompt": "<task>", "params": { "searchQueries": [{ "pattern": "<regex>" }] } }] } — note prompt/params live INSIDE each agent object, and agents is a real array, not a JSON string.',
+      'Corrected example: { "agents": [{ "agent_type": "basher", "prompt": "<task>", "params": { "command": "<shell>" } }] } — note prompt/params live INSIDE each agent object, and agents is a real array, not a JSON string.',
     ].join('\n')
     const hasHandoffIssue = (issues ?? []).some(isSpawnAgentHandoffIssue)
     if (!hasHandoffIssue) return base
@@ -1973,7 +1960,6 @@ export async function executeToolCall<T extends ToolName>(
         toolName,
         agentId: agentTemplate.id,
         availableTools: getEffectiveAgentToolNames(agentTemplate),
-        input,
       }),
     })
     return abortablePreviousToolCallFinished
@@ -2005,7 +1991,6 @@ export async function executeToolCall<T extends ToolName>(
         toolName,
         agentId: agentTemplate.id,
         availableTools,
-        input,
       }),
     })
     return abortablePreviousToolCallFinished
@@ -3202,7 +3187,6 @@ export async function executeCustomToolCall(
         toolName,
         agentId: agentTemplate.id,
         availableTools,
-        input,
       }),
     })
     return abortablePreviousToolCallFinished

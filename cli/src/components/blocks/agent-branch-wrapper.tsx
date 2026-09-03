@@ -26,7 +26,6 @@ import {
   processBlocks,
   type BlockProcessorHandlers,
 } from '../../utils/block-processor'
-import { getCodeSearcherCollapsedPreview } from '../../utils/code-search-summary'
 import { shouldRenderAsSimpleText } from '../../utils/constants'
 import {
   isImplementorAgent,
@@ -69,11 +68,6 @@ function getCollapsedPreview(
     if (outputPreview) {
       return outputPreview
     }
-  }
-
-  const codeSearcherPreview = getCodeSearcherCollapsedPreview(agentBlock)
-  if (codeSearcherPreview) {
-    return codeSearcherPreview
   }
 
   // Default preview: use the displayed prompt or first line of text content.

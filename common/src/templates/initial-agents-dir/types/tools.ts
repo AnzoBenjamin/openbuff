@@ -961,17 +961,6 @@ export interface SpawnAgentsParams {
       failure_pattern?: string
       /** Maximum extracted failure lines to return with save_full_log (basher) */
       max_failure_lines?: number
-      /** Array of code search queries (code-searcher) */
-      searchQueries?: {
-        /** The pattern to search for */
-        pattern: string
-        /** Optional ripgrep flags as one string or argv tokens (e.g. "-i -g *.ts" or ["-i", "-g", "*.ts"]). Do not quote the entire expression inside the JSON string. */
-        flags?: string | string[]
-        /** Optional working directory relative to project root */
-        cwd?: string
-        /** Max results per file. Default 15 */
-        maxResults?: number
-      }[]
       /** Relevant file paths to read (general-agent) */
       filePaths?: string[]
       /** Relevant directory paths to inventory (general-agent) */

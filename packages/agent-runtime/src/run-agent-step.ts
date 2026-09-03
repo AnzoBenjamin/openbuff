@@ -27,9 +27,10 @@ import {
   reconcileInterruptedLedgerSpawns,
 } from './util/orchestration-ledger'
 import { reconcileInterruptedPathLeases } from './util/workspace-path-leases'
+import { reconcileInterruptedDiscoveryShards } from './orchestration/discovery-coordinator'
 import { additionalSystemPrompts } from './system-prompt/prompts'
 import { getAgentTemplate } from './templates/agent-registry'
-import { getBackgroundAgentJob } from './util/background-agent-jobs'
+import { reconcileInterruptedBackgroundAgentIntents } from './util/background-agent-jobs'
 import {
   buildAgentToolSet,
   getModelVisibleSpawnableAgents,
@@ -1340,6 +1341,13 @@ export async function loopAgentSteps(
   initialAgentState.contextWindowTokens = resolvedModelContextWindow
   reconcileInterruptedLedgerSpawns(initialAgentState)
   reconcileInterruptedPathLeases(initialAgentState)
+  // Discovery shard claims are durable parent state too: a shard left 'active'
+  // by an interrupted spawn would otherwise make claimDiscoveryShard throw for
+  // that question forever, failing the whole spawn batch. Nothing of THIS run
+  // is in flight yet here, so an 'active' shard belongs to a previous turn.
+  initialAgentState.discoveryCoverage = reconcileInterruptedDiscoveryShards(
+    initialAgentState.discoveryCoverage,
+  )
   if (
     !initialAgentState.orchestrationLedger?.events.some(
       (event) =>
@@ -1362,14 +1370,7 @@ export async function loopAgentSteps(
       },
     })
   }
-  for (const job of initialAgentState.backgroundAgentJobs ?? []) {
-    if (job.status === 'running' && !getBackgroundAgentJob(job.jobId)) {
-      job.status = 'interrupted'
-      job.completedAt = Date.now()
-      job.error =
-        'Background agent host process/session ended before a terminal receipt was recorded.'
-    }
-  }
+  reconcileInterruptedBackgroundAgentIntents(initialAgentState)
 
   if (signal.aborted) {
     return {

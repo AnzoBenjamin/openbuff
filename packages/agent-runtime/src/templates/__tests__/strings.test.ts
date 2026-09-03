@@ -25,7 +25,6 @@ import gitCommitter from '../../../../../agents/git-committer/git-committer'
 import librarian from '../../../../../agents/librarian/librarian'
 import dependencyManager from '../../../../../agents/dependency-manager/dependency-manager'
 import securityReviewer from '../../../../../agents/security-reviewer/security-reviewer'
-import codeSearcher from '../../../../../agents/file-explorer/code-searcher'
 import globMatcher from '../../../../../agents/file-explorer/glob-matcher'
 import directoryLister from '../../../../../agents/file-explorer/directory-lister'
 import basher from '../../../../../agents/basher'
@@ -435,23 +434,23 @@ describe('getAgentPrompt', () => {
         spawnerPrompt: 'Spawn to find relevant files in a codebase',
       })
 
-      const codeSearcherTemplate = createMockAgentTemplate({
-        id: 'code-searcher',
-        displayName: 'Code Searcher',
-        spawnerPrompt: 'Mechanically runs multiple code search queries',
+      const globMatcherTemplate = createMockAgentTemplate({
+        id: 'glob-matcher',
+        displayName: 'Glob Matcher',
+        spawnerPrompt: 'Mechanically runs multiple glob pattern matches',
       })
 
       const mainAgentTemplate = createMockAgentTemplate({
         id: 'main-agent',
         displayName: 'Main Agent',
-        spawnableAgents: ['file-picker', 'code-searcher'],
+        spawnableAgents: ['file-picker', 'glob-matcher'],
         instructionsPrompt: 'Main agent instructions.',
       })
 
       const agentTemplates: Record<string, AgentTemplate> = {
         'main-agent': mainAgentTemplate,
         'file-picker': filePickerTemplate,
-        'code-searcher': codeSearcherTemplate,
+        'glob-matcher': globMatcherTemplate,
       }
 
       const result = await getAgentPrompt({
@@ -473,7 +472,7 @@ describe('getAgentPrompt', () => {
         '- file-picker: Spawn to find relevant files in a codebase',
       )
       expect(result).toContain(
-        '- code-searcher: Mechanically runs multiple code search queries',
+        '- glob-matcher: Mechanically runs multiple glob pattern matches',
       )
     })
 
@@ -860,7 +859,6 @@ describe('getAgentPrompt', () => {
         librarian,
         dependencyManager,
         securityReviewer,
-        codeSearcher,
         globMatcher,
         directoryLister,
         basher,

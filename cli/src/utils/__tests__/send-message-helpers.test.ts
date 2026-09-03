@@ -1380,7 +1380,7 @@ describe('getAgentBaseName', () => {
   })
 
   test('normalizes direct tool aliases to canonical agent names', () => {
-    expect(getAgentBaseName('code_searcher')).toBe('code-searcher')
+    expect(getAgentBaseName('file_picker')).toBe('file-picker')
   })
 })
 
@@ -1400,7 +1400,7 @@ describe('agentTypesMatch', () => {
 
   test('does not match different base names', () => {
     expect(
-      getAgentBaseName('file-picker') === getAgentBaseName('code-searcher'),
+      getAgentBaseName('file-picker') === getAgentBaseName('directory-lister'),
     ).toBe(false)
   })
 })
@@ -1589,7 +1589,7 @@ describe('createSpawnAgentBlocks', () => {
   test('creates agent blocks from spawn_agents input', () => {
     const agents = [
       { agent_type: 'file-picker', prompt: 'Find files' },
-      { agent_type: 'code-searcher', prompt: 'Search code' },
+      { agent_type: 'directory-lister', prompt: 'List directories' },
     ]
 
     const result = createSpawnAgentBlocks('tool-1', agents)
