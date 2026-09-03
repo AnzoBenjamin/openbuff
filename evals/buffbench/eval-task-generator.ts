@@ -1,7 +1,6 @@
 import { type AgentDefinition, type OpenbuffClient } from '@openbuff/sdk'
 
 import { PLACEHOLDER } from '../../agents/types/secret-agent-definition'
-import codeSearcherDef from '../../agents/file-explorer/code-searcher'
 import directoryListerDef from '../../agents/file-explorer/directory-lister'
 import fileListerDef from '../../agents/file-explorer/file-lister'
 import filePickerDef from '../../agents/file-explorer/file-picker'
@@ -127,7 +126,6 @@ export async function generateEvalTask({
     findAllReferencerDef as AgentDefinition,
     filePickerDef as AgentDefinition,
     fileListerDef as AgentDefinition,
-    codeSearcherDef as AgentDefinition,
     directoryListerDef as AgentDefinition,
     globMatcherDef as AgentDefinition,
     ...(agentDefinitions || []),

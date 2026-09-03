@@ -120,4 +120,98 @@ describe('containsStructuralAuditReceipt', () => {
       ),
     ).toBe(false)
   })
+
+  it('accepts an already-persisted collision marker bound to the expected snapshot', () => {
+    // write_audit_findings creates the artifact exclusively, so an
+    // already-exists rejection means THIS shard's findings are already durably
+    // at that path. The rejection carries no structuralReceipt, so the marker
+    // is what keeps the shard from burning its completion retries.
+    const artifactPath = '.agents/sessions/readiness/findings/services.md'
+    const collision = {
+      messageHistory: [
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'json',
+              value: {
+                artifactPath,
+                errorMessage: `Failed to create file: the file already exists. Shard id "services": this shard's findings are already persisted at ${artifactPath}.`,
+                alreadyPersisted: {
+                  schema_version: 1,
+                  shardId: 'services',
+                  artifactPath,
+                  snapshot_id: 'snapshot-1',
+                },
+              },
+            },
+          ],
+        },
+      ],
+    }
+
+    expect(containsStructuralAuditReceipt(collision, 'snapshot-1')).toBe(true)
+    // Same expectedSnapshotId rule as structuralReceipt: with no expected id,
+    // any string snapshot_id counts.
+    expect(containsStructuralAuditReceipt(collision)).toBe(true)
+    expect(containsStructuralAuditReceipt(collision, '')).toBe(true)
+  })
+
+  it('rejects an already-persisted marker bound to a different snapshot', () => {
+    // Keeping the snapshot binding on the marker is what stops any colliding
+    // write from forging coverage for a snapshot it never evaluated.
+    const collision = {
+      alreadyPersisted: {
+        schema_version: 1,
+        shardId: 'services',
+        artifactPath: '.agents/sessions/readiness/findings/services.md',
+        snapshot_id: 'snapshot-1',
+      },
+    }
+
+    expect(containsStructuralAuditReceipt(collision, 'snapshot-2')).toBe(false)
+  })
+
+  it('rejects an already-persisted marker with no snapshot binding when one is expected', () => {
+    // A legacy call without snapshotId gets an unbound marker, so it must not
+    // satisfy a snapshot-bound gate.
+    const unbound = {
+      alreadyPersisted: {
+        schema_version: 1,
+        shardId: 'services',
+        artifactPath: '.agents/sessions/readiness/findings/services.md',
+      },
+    }
+
+    expect(containsStructuralAuditReceipt(unbound, 'snapshot-1')).toBe(false)
+    expect(containsStructuralAuditReceipt(unbound)).toBe(false)
+  })
+
+  it('rejects an ordinary rejection that carries no already-persisted marker', () => {
+    // Only the durably-persisted case satisfies the gate; a plain failed write
+    // must never clear it.
+    expect(
+      containsStructuralAuditReceipt(
+        {
+          messageHistory: [
+            {
+              role: 'tool',
+              content: [
+                {
+                  type: 'json',
+                  value: {
+                    artifactPath:
+                      '.agents/sessions/readiness/findings/services.md',
+                    errorMessage:
+                      'Audit findings artifact was not confirmed as written.',
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        'snapshot-1',
+      ),
+    ).toBe(false)
+  })
 })

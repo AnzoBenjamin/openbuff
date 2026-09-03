@@ -156,7 +156,6 @@ describe('generateEvalTask', () => {
         'find-all-referencer',
         'file-picker',
         'file-lister',
-        'code-searcher',
         'directory-lister',
         'glob-matcher',
       ]),

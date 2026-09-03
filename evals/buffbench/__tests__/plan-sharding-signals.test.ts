@@ -269,13 +269,13 @@ describe('extractSpawnAgentsCalls', () => {
     const events: PrintModeEvent[] = [
       spawnAgentsCall([
         { agent_type: 'file-picker', prompt: 'a' },
-        { agent_type: 'code-searcher', prompt: 'b' },
+        { agent_type: 'general-agent', prompt: 'b' },
       ]),
     ]
     const calls = extractSpawnAgentsCalls(events)
     expect(calls).toHaveLength(1)
     expect(calls[0].agentCount).toBe(2)
-    expect(calls[0].agentTypes).toEqual(['file-picker', 'code-searcher'])
+    expect(calls[0].agentTypes).toEqual(['file-picker', 'general-agent'])
   })
 
   test('ignores nested spawn_agents calls (parentAgentId set)', () => {
@@ -313,7 +313,7 @@ describe('extractSpawnAgentsCalls', () => {
     const events: PrintModeEvent[] = [
       spawnAgentsCall([{ agent_type: 'file-picker', prompt: 'a' }]),
       spawnAgentsCall([
-        { agent_type: 'code-searcher', prompt: 'b' },
+        { agent_type: 'general-agent', prompt: 'b' },
         { agent_type: 'researcher-docs', prompt: 'c' },
       ]),
     ]
@@ -332,7 +332,7 @@ describe('extractSubagentStarts', () => {
   test('extracts top-level subagent_start records', () => {
     const events: PrintModeEvent[] = [
       subagentStart({ agentId: 's1', agentType: 'file-picker' }),
-      subagentStart({ agentId: 's2', agentType: 'code-searcher' }),
+      subagentStart({ agentId: 's2', agentType: 'general-agent' }),
     ]
     const starts = extractSubagentStarts(events)
     expect(starts).toHaveLength(2)
@@ -385,7 +385,7 @@ describe('computePlanShardingSignals', () => {
   test('detects parallel sharding via concurrent subagent starts', () => {
     const events: PrintModeEvent[] = [
       subagentStart({ agentId: 's1', agentType: 'file-picker' }),
-      subagentStart({ agentId: 's2', agentType: 'code-searcher' }),
+      subagentStart({ agentId: 's2', agentType: 'general-agent' }),
       subagentStart({ agentId: 's3', agentType: 'file-picker' }),
       subagentFinish({ agentId: 's1' }),
       subagentFinish({ agentId: 's2' }),
@@ -403,7 +403,7 @@ describe('computePlanShardingSignals', () => {
       spawnAgentsCall([
         { agent_type: 'file-picker', prompt: 'a' },
         { agent_type: 'file-picker', prompt: 'b' },
-        { agent_type: 'code-searcher', prompt: 'c' },
+        { agent_type: 'general-agent', prompt: 'c' },
         { agent_type: 'researcher-docs', prompt: 'd' },
       ]),
     ]
@@ -413,12 +413,12 @@ describe('computePlanShardingSignals', () => {
     expect(s.requestedAgentTypes).toEqual([
       'file-picker',
       'file-picker',
-      'code-searcher',
+      'general-agent',
       'researcher-docs',
     ])
     expect(s.distinctAgentTypes).toEqual([
-      'code-searcher',
       'file-picker',
+      'general-agent',
       'researcher-docs',
     ])
   })
@@ -449,7 +449,7 @@ describe('evaluateShardingVerdict', () => {
   test('pass: parallel subagent sharding for an audit prompt', () => {
     const events: PrintModeEvent[] = [
       subagentStart({ agentId: 's1', agentType: 'file-picker' }),
-      subagentStart({ agentId: 's2', agentType: 'code-searcher' }),
+      subagentStart({ agentId: 's2', agentType: 'general-agent' }),
       subagentFinish({ agentId: 's1' }),
       subagentFinish({ agentId: 's2' }),
     ]
@@ -464,7 +464,7 @@ describe('evaluateShardingVerdict', () => {
       spawnAgentsCall([
         { agent_type: 'file-picker', prompt: 'a' },
         { agent_type: 'file-picker', prompt: 'b' },
-        { agent_type: 'code-searcher', prompt: 'c' },
+        { agent_type: 'general-agent', prompt: 'c' },
       ]),
     ]
     const signals = computePlanShardingSignals({ events, prompt: AUDIT_PROMPT })
@@ -546,20 +546,20 @@ describe('evaluateShardingVerdict', () => {
 
 /**
  * Build a sharding trace with `filePickers` file-picker subagent_start events
- * and `codeSearchers` code-searcher subagent_start events (no finishes → all
- * in-flight, so they count toward the sharding signals).
+ * and `auditShards` general-agent audit-shard subagent_start events (no
+ * finishes → all in-flight, so they count toward the sharding signals).
  */
 function shardingEvents(
   filePickers: number,
-  codeSearchers: number,
+  auditShards: number,
 ): PrintModeEvent[] {
   const events: PrintModeEvent[] = []
   for (let i = 0; i < filePickers; i++) {
     events.push(subagentStart({ agentId: `fp-${i}`, agentType: 'file-picker' }))
   }
-  for (let i = 0; i < codeSearchers; i++) {
+  for (let i = 0; i < auditShards; i++) {
     events.push(
-      subagentStart({ agentId: `cs-${i}`, agentType: 'code-searcher' }),
+      subagentStart({ agentId: `audit-${i}`, agentType: 'general-agent' }),
     )
   }
   return events
@@ -588,7 +588,7 @@ describe('evaluateMinimumShardRule', () => {
     expect(result.requiredPairs).toBe(5)
     expect(result.actualPairs).toBe(5)
     expect(result.filePickerCount).toBe(5)
-    expect(result.codeSearcherCount).toBe(5)
+    expect(result.auditShardCount).toBe(5)
     expect(result.satisfies).toBe(true)
     expect(result.reason).toContain('>=5 shard pairs')
   })
@@ -618,7 +618,7 @@ describe('evaluateMinimumShardRule', () => {
     expect(result.requiredPairs).toBe(5)
     expect(result.actualPairs).toBe(2)
     expect(result.filePickerCount).toBe(2)
-    expect(result.codeSearcherCount).toBe(2)
+    expect(result.auditShardCount).toBe(2)
     expect(result.satisfies).toBe(false)
     expect(result.reason).toContain('only 2')
   })
@@ -632,8 +632,8 @@ describe('evaluateMinimumShardRule', () => {
           prompt: `file shard ${index}`,
         })),
         ...Array.from({ length: 5 }, (_, index) => ({
-          agent_type: 'code-searcher',
-          prompt: `search shard ${index}`,
+          agent_type: 'general-agent',
+          prompt: `audit shard ${index}`,
         })),
       ]),
     ]
@@ -643,12 +643,12 @@ describe('evaluateMinimumShardRule', () => {
     })
     const result = evaluateMinimumShardRule({ signals, breadth })
     expect(signals.filePickerCount).toBe(5)
-    expect(signals.codeSearcherCount).toBe(5)
+    expect(signals.auditShardCount).toBe(5)
     expect(result.actualPairs).toBe(5)
     expect(result.satisfies).toBe(true)
   })
 
-  test('violates: has file-pickers but no code-searchers (actualPairs=0)', () => {
+  test('violates: has file-pickers but no general-agent audit shards (actualPairs=0)', () => {
     const breadth = classifyBreadth(BROAD_AUDIT_3_DOMAINS)
     const signals = computePlanShardingSignals({
       events: shardingEvents(5, 0),
@@ -656,13 +656,13 @@ describe('evaluateMinimumShardRule', () => {
     })
     const result = evaluateMinimumShardRule({ signals, breadth })
     expect(result.filePickerCount).toBe(5)
-    expect(result.codeSearcherCount).toBe(0)
+    expect(result.auditShardCount).toBe(0)
     expect(result.actualPairs).toBe(0)
     expect(result.satisfies).toBe(false)
-    expect(result.reason).toContain('code-searcher=0')
+    expect(result.reason).toContain('general-agent=0')
   })
 
-  test('violates: has code-searchers but no file-pickers (actualPairs=0)', () => {
+  test('violates: has general-agent audit shards but no file-pickers (actualPairs=0)', () => {
     const breadth = classifyBreadth(BROAD_AUDIT_3_DOMAINS)
     const signals = computePlanShardingSignals({
       events: shardingEvents(0, 5),
@@ -670,7 +670,7 @@ describe('evaluateMinimumShardRule', () => {
     })
     const result = evaluateMinimumShardRule({ signals, breadth })
     expect(result.filePickerCount).toBe(0)
-    expect(result.codeSearcherCount).toBe(5)
+    expect(result.auditShardCount).toBe(5)
     expect(result.actualPairs).toBe(0)
     expect(result.satisfies).toBe(false)
     expect(result.reason).toContain('file-picker=0')

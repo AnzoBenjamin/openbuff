@@ -28,7 +28,6 @@ export const COLLAPSED_BY_DEFAULT_AGENT_IDS = [
   'file-picker',
   'code-reviewer-selector',
   'basher',
-  'code-searcher',
   'directory-lister',
   'glob-matcher',
   'researcher-web',

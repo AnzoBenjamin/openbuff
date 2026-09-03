@@ -70,7 +70,7 @@ SESSION=$(./scripts/tmux/tmux-cli.sh start \
 ./scripts/tmux/tmux-cli.sh stop "$SESSION"
 ```
 
-When verifying UI output, prefer checking the saved capture file for concrete strings that should and should not appear. For example, after expanding a code-searcher agent, check that the capture shows the search summary but not raw structured payload keys like `results:` or `stdout:`.
+When verifying UI output, prefer checking the saved capture file for concrete strings that should and should not appear. For example, after expanding a file-picker agent, check that the capture shows the search summary but not raw structured payload keys like `results:` or `stdout:`.
 
 ## Deterministic lifecycle E2E coverage
 

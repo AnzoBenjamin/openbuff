@@ -277,6 +277,31 @@ const inputSchema = z
     }
   })
 
+/**
+ * Idempotency marker carried by an already-exists collision whose persisted
+ * artifact is BYTE-IDENTICAL to the findings this call renders. The artifact is
+ * created exclusively, so a collision proves an artifact for THIS shard is
+ * already at the derived path; content identity is what proves those persisted
+ * findings are this call's, which is the only case that may be reported as an
+ * idempotent success. The write itself did not happen, so such a call returns
+ * the rejection shape rather than a synthesized compact receipt; this marker is
+ * what the shared coverage gate accepts, so a retried shard is not left
+ * permanently uncoverable.
+ *
+ * A collision whose persisted contents DIFFER carries no marker at all: that
+ * call's findings are persisted nowhere, so it is rejected and must be written
+ * under a distinct shard id. `snapshot_id` is present exactly when the
+ * identical persisted artifact was rendered for that snapshot, so neither a
+ * legacy call without snapshotId nor a re-run under a different snapshot can
+ * satisfy a snapshot-bound gate with a stale artifact.
+ */
+export const auditFindingsAlreadyPersistedSchema = z.object({
+  schema_version: z.literal(1),
+  shardId: z.string(),
+  artifactPath: z.string(),
+  snapshot_id: z.string().optional(),
+})
+
 export const auditFindingsReceiptSchema = z.object({
   artifactPath: z.string(),
   artifacts: z.array(z.string()).length(1),
@@ -306,6 +331,15 @@ export const auditFindingsReceiptSchema = z.object({
 export const auditFindingsErrorSchema = z.object({
   errorMessage: z.string(),
   artifactPath: z.string(),
+  /**
+   * Present when the rejection was an already-exists collision, so a caller can
+   * tell a shard whose findings are already durably persisted from an ordinary
+   * failure. The write itself did not happen, so no compact success receipt is
+   * synthesized; `snapshot_id` is the field the shared coverage gate consumes
+   * and is set only when the persisted bytes are this call's findings AND attest
+   * to this call's snapshot.
+   */
+  alreadyPersisted: auditFindingsAlreadyPersistedSchema.optional(),
 })
 
 const toolName = 'write_audit_findings'
@@ -313,7 +347,7 @@ const toolName = 'write_audit_findings'
 export const writeAuditFindingsParams = {
   toolName,
   endsAgentStep: false,
-  description: `Persist one audit shard's structured findings to a runtime-owned Markdown artifact. The path is derived as .agents/sessions/<sessionSlug>/findings/<shardId>.md; callers cannot choose another path. New audit flows must copy the exact inspect_codebase_structure snapshotId into snapshotId and explicitly list every evaluated coverage domain; the result then includes structuralReceipt for direct use with evaluate_audit_coverage. Legacy calls without both fields remain accepted but do not receive that attestation. Every rejection returns one generic message, so read the field descriptions of noIssuesFound and coverage for the rules they enforce. Return only the compact receipt after writing—do not repeat findings in prose.`,
+  description: `Persist one audit shard's structured findings to a runtime-owned Markdown artifact. The path is derived as .agents/sessions/<sessionSlug>/findings/<shardId>.md; callers cannot choose another path. New audit flows must copy the exact inspect_codebase_structure snapshotId into snapshotId and explicitly list every evaluated coverage domain; the result then includes structuralReceipt for direct use with evaluate_audit_coverage. Legacy calls without both fields remain accepted but do not receive that attestation. Creation is exclusive: when an artifact already exists at the derived path and its contents are byte-identical to this call, no second write happens and the rejection carries a snapshot-bound alreadyPersisted marker the coverage gate accepts, so the retry stays composable; when the existing contents differ, the call is rejected, nothing from it is persisted, and those findings must be written under a distinct shard id. Every rejection returns one generic message, so read the field descriptions of noIssuesFound and coverage for the rules they enforce. Return only the compact receipt after writing—do not repeat findings in prose.`,
   inputSchema,
   outputSchema: jsonToolResultSchema(
     z.union([auditFindingsReceiptSchema, auditFindingsErrorSchema]),

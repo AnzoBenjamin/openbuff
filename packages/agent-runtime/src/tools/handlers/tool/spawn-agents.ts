@@ -2,10 +2,13 @@ import { jsonToolResult } from '@codebuff/common/util/messages'
 import { MAX_SPAWN_BATCH_SIZE } from '@codebuff/common/constants/agents'
 
 import {
-  allocateBackgroundAgentJob,
+  abandonPreLaunchBackgroundAgentJob,
+  allocateBackgroundAgentJobBatch,
   appendBackgroundAgentChunk,
-  assertBackgroundAgentCapacity,
   attachBackgroundAgentPromise,
+  BACKGROUND_AGENT_CANCEL_REASON,
+  backgroundAgentJobWasCancelled,
+  reconcileInterruptedBackgroundAgentIntents,
 } from '../../../util/background-agent-jobs'
 
 import {
@@ -33,6 +36,7 @@ import {
   completeDiscoveryShard,
 } from '../../../orchestration/discovery-coordinator'
 
+import type { BackgroundAgentJob } from '../../../util/background-agent-jobs'
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
   CodebuffToolCall,
@@ -132,6 +136,14 @@ export const handleSpawnAgents = (async (
     )
   }
 
+  // The parent's durable background-job intents double as the background
+  // concurrency budget (`runningForRoot` below), so reconcile them against the
+  // live registry HERE too — not only at loopAgentSteps entry. Otherwise a job
+  // that vanished mid-turn keeps a 'running' intent for the rest of the turn
+  // and can reject a later legitimate background spawn. Same field writes as
+  // the turn-entry pass and idempotent, so a retried spawn behaves identically.
+  reconcileInterruptedBackgroundAgentIntents(parentAgentState)
+
   // Validate the complete batch before launching any detached work. Without
   // this preflight, an invalid later entry could throw after earlier
   // background agents had started but before their job ids were returned.
@@ -224,29 +236,13 @@ export const handleSpawnAgents = (async (
   const reports: Array<SpawnAgentReport | undefined> = new Array(
     validatedAgents.length,
   )
-  const backgroundAgentCount = validatedAgents.filter(
+  const backgroundAgents = validatedAgents.filter(
     (validated) => validated.input.background,
-  ).length
-  if (backgroundAgentCount > 0) {
-    assertBackgroundAgentCapacity({
-      additional: backgroundAgentCount,
-      owner: {
-        clientSessionId: params.clientSessionId,
-        rootRunId:
-          parentAgentState.ancestorRunIds[0] ??
-          parentAgentState.runId ??
-          parentAgentState.agentId,
-        parentRunId: parentAgentState.runId ?? parentAgentState.agentId,
-        parentAgentId: parentAgentState.agentId,
-        userInputId,
-      },
-    })
-  }
+  )
   let nextDiscoveryCoverage = parentAgentState.discoveryCoverage
   for (const validated of validatedAgents) {
     if (
       validated.agentType === 'file-picker' ||
-      validated.agentType === 'code-searcher' ||
       validated.agentType === 'file-lister'
     ) {
       const claimed = claimDiscoveryShard({
@@ -268,6 +264,42 @@ export const handleSpawnAgents = (async (
   // parent state remains unchanged instead of retaining an active shard for an
   // agent that was never launched.
   parentAgentState.discoveryCoverage = nextDiscoveryCoverage
+  // Spawns whose `spawn_started` ledger event has already been emitted. A
+  // rejected batch must terminate them, or the control-plane ledger keeps
+  // reporting spawns that were never launched as in-flight for the rest of the
+  // turn.
+  const startedSpawnIds = new Set<string>()
+  // Release everything the batch already claimed when a whole-batch step
+  // fails, so a rejected batch never leaves an active workspace path lease, an
+  // active discovery shard, or an unterminated `spawn_started` behind for an
+  // agent that was never launched.
+  const rollbackValidatedClaims = (reason: string) => {
+    for (const validated of validatedAgents) {
+      releaseWorkspacePathLease(parentAgentState, validated.leaseId)
+      parentAgentState.discoveryCoverage = completeDiscoveryShard({
+        existing: parentAgentState.discoveryCoverage,
+        shardKey: validated.discoveryShardKey,
+        status: 'interrupted',
+      })
+      // `interrupted` is the terminal marker reconcileInterruptedLedgerSpawns
+      // recognizes, so a spawn that never launched settles in the ledger
+      // instead of staying pending. Emitted at most once per started spawn.
+      if (startedSpawnIds.delete(validated.subAgentState.agentId)) {
+        appendOrchestrationEvent({
+          state: parentAgentState,
+          event: {
+            type: 'interrupted',
+            runId: parentAgentState.runId ?? parentAgentState.agentId,
+            subjectType: 'spawn',
+            subjectId: validated.subAgentState.agentId,
+            reason,
+            workspaceRevision: parentAgentState.workspaceState?.revision,
+            workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
+          },
+        })
+      }
+    }
+  }
   try {
     for (const validated of validatedAgents) {
       validated.leaseId = acquireWorkspacePathLease({
@@ -279,14 +311,9 @@ export const handleSpawnAgents = (async (
       })
     }
   } catch (error) {
-    for (const validated of validatedAgents) {
-      releaseWorkspacePathLease(parentAgentState, validated.leaseId)
-      parentAgentState.discoveryCoverage = completeDiscoveryShard({
-        existing: parentAgentState.discoveryCoverage,
-        shardKey: validated.discoveryShardKey,
-        status: 'interrupted',
-      })
-    }
+    rollbackValidatedClaims(
+      'Workspace path lease acquisition failed before the spawn was launched.',
+    )
     throw error
   }
   for (const validated of validatedAgents) {
@@ -304,193 +331,280 @@ export const handleSpawnAgents = (async (
         workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
       },
     })
+    startedSpawnIds.add(validated.subAgentState.agentId)
   }
-  for (const validated of validatedAgents) {
-    if (!validated.input.background) continue
-    const {
-      agentTemplate,
-      agentType,
-      runtimeSpawnParams,
-      subAgentState,
-      spawnIndex,
-    } = validated
-    const { prompt, timeout_seconds } = validated.input
+  // Claim the whole background batch's capacity in ONE atomic check that also
+  // pre-allocates every job id: a concurrent spawn can no longer land between
+  // a batch preflight and a per-job allocation and reject mid-batch after
+  // earlier coroutines were already launched. Either every id exists (and
+  // every coroutine below is launched), or nothing is launched and the leases
+  // and discovery shards taken for the validated batch are rolled back.
+  // Pre-allocation is also required because executeSubagent fires
+  // onResponseChunk(startEvent) synchronously — before it returns the
+  // coroutine promise — so each chunk handler needs a valid jobId already.
+  let backgroundJobs: BackgroundAgentJob[] = []
+  if (backgroundAgents.length > 0) {
+    try {
+      backgroundJobs = allocateBackgroundAgentJobBatch({
+        agents: backgroundAgents.map((validated) => ({
+          agentType: validated.agentType,
+          agentName: validated.agentTemplate.displayName,
+        })),
+        owner: {
+          clientSessionId: params.clientSessionId,
+          rootRunId:
+            parentAgentState.ancestorRunIds[0] ??
+            parentAgentState.runId ??
+            parentAgentState.agentId,
+          parentRunId: parentAgentState.runId ?? parentAgentState.agentId,
+          parentAgentId: parentAgentState.agentId,
+          userInputId,
+        },
+      })
+    } catch (error) {
+      rollbackValidatedClaims(
+        'Background agent job allocation failed before the spawn was launched.',
+      )
+      throw error
+    }
+  }
+  // Every job allocated above is already 'running' in the registry while still
+  // holding only the allocation placeholder promise: no settle handler is wired
+  // until attachBackgroundAgentPromise below, and nothing reaps background
+  // agent jobs. A throw inside this loop (extractSubagentContextParams,
+  // createCombinedAbortSignal, or a synchronous executeSubagent throw) would
+  // therefore strand the not-yet-launched jobs 'running' forever, permanently
+  // consuming the process-wide (32) and per-root (8) background budget. Track
+  // the jobs whose coroutine WAS launched — those keep normal settle handling
+  // and must never be abandoned — and terminally abandon only the rest.
+  const wiredBackgroundJobIds = new Set<string>()
+  try {
+    for (const [backgroundIndex, validated] of backgroundAgents.entries()) {
+      const {
+        agentTemplate,
+        agentType,
+        runtimeSpawnParams,
+        subAgentState,
+        spawnIndex,
+      } = validated
+      const { prompt, timeout_seconds } = validated.input
 
-    const contextParams = extractSubagentContextParams(params)
+      const contextParams = extractSubagentContextParams(params)
 
-    // Pre-allocate the jobId so executeSubagent's synchronous
-    // onResponseChunk(startEvent) callback has a valid jobId to buffer into.
-    // executeSubagent fires the start event before it even returns the
-    // coroutine promise, so we cannot register-after-allocate here.
-    const job = allocateBackgroundAgentJob({
-      agentType,
-      agentName: agentTemplate.displayName,
-      owner: {
-        clientSessionId: params.clientSessionId,
-        rootRunId:
-          parentAgentState.ancestorRunIds[0] ??
-          parentAgentState.runId ??
-          parentAgentState.agentId,
-        parentRunId: parentAgentState.runId ?? parentAgentState.agentId,
-        parentAgentId: parentAgentState.agentId,
-        userInputId,
-      },
-    })
-    const backgroundSignal = contextParams.signal
-      ? createCombinedAbortSignal(
-          contextParams.signal,
-          job.abortController.signal,
-        )
-      : job.abortController.signal
-    parentAgentState.backgroundAgentJobs ??= []
-    parentAgentState.backgroundAgentJobs.push({
-      jobId: job.jobId,
-      agentType,
-      status: 'running',
-      startedAt: job.startedAt,
-    })
+      // jobId pre-allocated with the rest of the batch above.
+      const job = backgroundJobs[backgroundIndex]
+      // Keep the combined signal in its own binding: it installs an abort
+      // listener on BOTH inputs, and neither fires when the job settles
+      // normally, so its cleanup() must run on settle or that listener (plus a
+      // closure over this job's AbortController) stays attached to the
+      // long-lived parent signal for the rest of the run. Mirrors
+      // executeSubagent's `finally { combinedSignal?.cleanup?.() }`.
+      const combinedSignal = contextParams.signal
+        ? createCombinedAbortSignal(
+            contextParams.signal,
+            job.abortController.signal,
+          )
+        : undefined
+      const backgroundSignal = combinedSignal ?? job.abortController.signal
+      parentAgentState.backgroundAgentJobs ??= []
+      parentAgentState.backgroundAgentJobs.push({
+        jobId: job.jobId,
+        agentType,
+        status: 'running',
+        startedAt: job.startedAt,
+      })
 
-    // Detached coroutine: do NOT await. The unified job-registry core (via
-    // the background-agent adapter) is the source of truth for lifecycle
-    // and the buffered chunk stream that check_background_agent polls; the
-    // adapter owns only this job's AbortController and capacity limits.
-    const detachedPromise = executeSubagent({
-      ...contextParams,
-      signal: backgroundSignal,
-      ancestorRunIds: parentAgentState.ancestorRunIds,
-      userInputId: `${userInputId}-${agentType}${subAgentState.agentId}`,
-      prompt: prompt || '',
-      spawnParams: runtimeSpawnParams,
-      agentTemplate,
-      parentAgentState,
-      agentState: subAgentState,
-      fingerprintId,
-      spawnToolCallId: toolCall.toolCallId,
-      spawnIndex,
-      // Per-spawn wall-clock override (seconds → ms; -1 → no timeout).
-      subagentTimeoutMs:
-        timeout_seconds === undefined ? undefined : timeout_seconds * 1000,
-      // Background agents are detached; the parent never waits for them, so
-      // the "only child" step-count semantics (tuned for blocking spawns the
-      // parent blocks on) never apply. Force false regardless of how many
-      // agents are in the batch.
-      isOnlyChild: false,
-      excludeToolFromMessageHistory: false,
-      fromHandleSteps: false,
-      parentSystemPrompt,
-      parentTools: agentTemplate.inheritParentSystemPrompt
-        ? parentTools
-        : undefined,
-      onResponseChunk: (chunk: string | PrintModeEvent) => {
-        // Buffer the chunk for polling. We do NOT forward background agent
-        // chunks to writeToClient/sendSubagentChunk because the parent has
-        // already moved past this tool call — surfacing interleaved output
-        // would confuse the active turn.
-        if (typeof chunk === 'string') {
+      // Detached coroutine: do NOT await. The unified job-registry core (via
+      // the background-agent adapter) is the source of truth for lifecycle
+      // and the buffered chunk stream that check_background_agent polls; the
+      // adapter owns only this job's AbortController and capacity limits.
+      const detachedPromise = executeSubagent({
+        ...contextParams,
+        signal: backgroundSignal,
+        ancestorRunIds: parentAgentState.ancestorRunIds,
+        userInputId: `${userInputId}-${agentType}${subAgentState.agentId}`,
+        prompt: prompt || '',
+        spawnParams: runtimeSpawnParams,
+        agentTemplate,
+        parentAgentState,
+        agentState: subAgentState,
+        fingerprintId,
+        spawnToolCallId: toolCall.toolCallId,
+        spawnIndex,
+        // Per-spawn wall-clock override (seconds → ms; -1 → no timeout).
+        subagentTimeoutMs:
+          timeout_seconds === undefined ? undefined : timeout_seconds * 1000,
+        // Background agents are detached; the parent never waits for them, so
+        // the "only child" step-count semantics (tuned for blocking spawns the
+        // parent blocks on) never apply. Force false regardless of how many
+        // agents are in the batch.
+        isOnlyChild: false,
+        excludeToolFromMessageHistory: false,
+        fromHandleSteps: false,
+        parentSystemPrompt,
+        parentTools: agentTemplate.inheritParentSystemPrompt
+          ? parentTools
+          : undefined,
+        onResponseChunk: (chunk: string | PrintModeEvent) => {
+          // Buffer the chunk for polling. We do NOT forward background agent
+          // chunks to writeToClient/sendSubagentChunk because the parent has
+          // already moved past this tool call — surfacing interleaved output
+          // would confuse the active turn.
+          if (typeof chunk === 'string') {
+            appendBackgroundAgentChunk(job.jobId, {
+              type: 'text',
+              payload: chunk,
+              timestamp: Date.now(),
+            })
+            return
+          }
           appendBackgroundAgentChunk(job.jobId, {
-            type: 'text',
+            type: chunk.type,
             payload: chunk,
             timestamp: Date.now(),
           })
-          return
-        }
-        appendBackgroundAgentChunk(job.jobId, {
-          type: chunk.type,
-          payload: chunk,
-          timestamp: Date.now(),
-        })
-      },
-    })
+        },
+      })
 
-    attachBackgroundAgentPromise(
-      job,
-      detachedPromise
-        .then((result) => {
-          const receipt = buildRuntimeAgentReceipt({
-            agentType,
-            agentId: result.agentState.agentId,
-            handoff: validated.handoff,
-            spawnParams: validated.runtimeSpawnParams,
-            output: result.output,
-            agentState: result.agentState,
+      attachBackgroundAgentPromise(
+        job,
+        detachedPromise
+          .then((result) => {
+            // The coroutine settled: detach the combined signal's abort
+            // listeners from the long-lived parent signal (idempotent, and a
+            // no-op when there was no parent signal to combine).
+            combinedSignal?.cleanup?.()
+            const receipt = buildRuntimeAgentReceipt({
+              agentType,
+              agentId: result.agentState.agentId,
+              handoff: validated.handoff,
+              spawnParams: validated.runtimeSpawnParams,
+              output: result.output,
+              agentState: result.agentState,
+            })
+            reconcileAgentReceiptIntoParent({
+              parentAgentState,
+              receipt,
+              agentType,
+              objective: validated.handoff?.objective,
+            })
+            const intent = parentAgentState.backgroundAgentJobs?.find(
+              (entry) => entry.jobId === job.jobId,
+            )
+            if (intent) {
+              intent.status = 'completed'
+              intent.completedAt = Date.now()
+              intent.childRunId = result.agentState.runId
+              intent.receipt = receipt
+            }
+            releaseWorkspacePathLease(parentAgentState, validated.leaseId)
+            parentAgentState.discoveryCoverage = completeDiscoveryShard({
+              existing: parentAgentState.discoveryCoverage,
+              shardKey: validated.discoveryShardKey,
+              status: 'completed',
+            })
+            return {
+              agentId: result.agentState.agentId,
+              agentName: agentTemplate.displayName,
+              agentType,
+              output: receipt.output,
+              agentReceipt: receipt,
+              creditsUsed: result.agentState.creditsUsed || 0,
+            }
           })
-          reconcileAgentReceiptIntoParent({
-            parentAgentState,
-            receipt,
-            agentType,
-            objective: validated.handoff?.objective,
-          })
-          const intent = parentAgentState.backgroundAgentJobs?.find(
-            (entry) => entry.jobId === job.jobId,
-          )
-          if (intent) {
-            intent.status = 'completed'
-            intent.completedAt = Date.now()
-            intent.childRunId = result.agentState.runId
-            intent.receipt = receipt
-          }
-          releaseWorkspacePathLease(parentAgentState, validated.leaseId)
-          parentAgentState.discoveryCoverage = completeDiscoveryShard({
-            existing: parentAgentState.discoveryCoverage,
-            shardKey: validated.discoveryShardKey,
-            status: 'completed',
-          })
-          return {
-            agentId: result.agentState.agentId,
-            agentName: agentTemplate.displayName,
-            agentType,
-            output: receipt.output,
-            agentReceipt: receipt,
-            creditsUsed: result.agentState.creditsUsed || 0,
-          }
-        })
-        .catch((error) => {
-          const receipt = buildRuntimeAgentReceipt({
-            agentType,
-            agentId: subAgentState.agentId,
-            handoff: validated.handoff,
-            spawnParams: validated.runtimeSpawnParams,
-            output: undefined,
-            agentState: subAgentState,
-            status: 'failed',
-            error,
-          })
-          reconcileAgentReceiptIntoParent({
-            parentAgentState,
-            receipt,
-            agentType,
-            objective: validated.handoff?.objective,
-          })
-          const intent = parentAgentState.backgroundAgentJobs?.find(
-            (entry) => entry.jobId === job.jobId,
-          )
-          if (intent) {
-            intent.status = 'error'
-            intent.completedAt = Date.now()
-            intent.error =
-              error instanceof Error ? error.message : String(error)
-            intent.receipt = receipt
-          }
-          releaseWorkspacePathLease(parentAgentState, validated.leaseId)
-          parentAgentState.discoveryCoverage = completeDiscoveryShard({
-            existing: parentAgentState.discoveryCoverage,
-            shardKey: validated.discoveryShardKey,
-            status: 'failed',
-          })
-          throw error
-        }),
-    )
+          .catch((error) => {
+            // Same detach on the failure/cancellation path.
+            combinedSignal?.cleanup?.()
+            // A rejection driven by THIS job's own
+            // check_background_agent({ cancel: true }) abort is a
+            // cancellation, not a failure: the registry already recorded
+            // 'cancelled', so stamping 'error'/'failed' onto the parent's
+            // durable intent and receipt would make one job report two
+            // different terminal outcomes. Ordinary rejections — including
+            // subagent timeouts and a parent-signal abort — keep the
+            // error/failed path unchanged.
+            const cancelled = backgroundAgentJobWasCancelled(job)
+            const receipt = buildRuntimeAgentReceipt({
+              agentType,
+              agentId: subAgentState.agentId,
+              handoff: validated.handoff,
+              spawnParams: validated.runtimeSpawnParams,
+              output: undefined,
+              agentState: subAgentState,
+              status: cancelled ? 'cancelled' : 'failed',
+              // Any `error` is folded into the receipt's `errors`, which forces
+              // status 'failed', so the cancelled case requests 'cancelled'
+              // with no error and carries the reason on the intent instead.
+              error: cancelled ? undefined : error,
+            })
+            reconcileAgentReceiptIntoParent({
+              parentAgentState,
+              receipt,
+              agentType,
+              objective: validated.handoff?.objective,
+            })
+            const intent = parentAgentState.backgroundAgentJobs?.find(
+              (entry) => entry.jobId === job.jobId,
+            )
+            if (intent) {
+              intent.status = cancelled ? 'cancelled' : 'error'
+              intent.completedAt = Date.now()
+              // Keep the cancellation reason check_background_agent already
+              // recorded; fall back to the adapter's canonical reason.
+              intent.error = cancelled
+                ? (intent.error ?? BACKGROUND_AGENT_CANCEL_REASON)
+                : error instanceof Error
+                  ? error.message
+                  : String(error)
+              intent.receipt = receipt
+            }
+            releaseWorkspacePathLease(parentAgentState, validated.leaseId)
+            parentAgentState.discoveryCoverage = completeDiscoveryShard({
+              existing: parentAgentState.discoveryCoverage,
+              shardKey: validated.discoveryShardKey,
+              status: 'failed',
+            })
+            throw error
+          }),
+      )
+      // Wired: this job's coroutine is launched and its settle handlers own
+      // the terminal transition from here on, so it must never be abandoned.
+      wiredBackgroundJobIds.add(job.jobId)
 
-    reports[spawnIndex] = {
-      agentId: subAgentState.agentId,
-      agentName: agentTemplate.displayName,
-      agentType,
-      value: {
-        background: true,
-        jobId: job.jobId,
-        message: `Agent launched in background. Poll progress with check_background_agent({ jobId: "${job.jobId}" }).`,
-      } as JSONValue,
+      reports[spawnIndex] = {
+        agentId: subAgentState.agentId,
+        agentName: agentTemplate.displayName,
+        agentType,
+        value: {
+          background: true,
+          jobId: job.jobId,
+          message: `Agent launched in background. Poll progress with check_background_agent({ jobId: "${job.jobId}" }).`,
+        } as JSONValue,
+      }
     }
+  } catch (error) {
+    const abandonReason =
+      'Background agent spawn failed before its coroutine was launched.'
+    for (const job of backgroundJobs) {
+      if (wiredBackgroundJobIds.has(job.jobId)) continue
+      abandonPreLaunchBackgroundAgentJob(job, abandonReason)
+      // The durable intent doubles as the per-root background budget, so an
+      // abandoned job's intent must settle here too instead of counting as
+      // 'running' for the rest of the turn. Jobs whose coroutine WAS launched
+      // keep their intent and their settle handlers, untouched.
+      const intent = parentAgentState.backgroundAgentJobs?.find(
+        (entry) => entry.jobId === job.jobId,
+      )
+      if (intent && intent.status === 'running') {
+        intent.status = 'error'
+        intent.completedAt = Date.now()
+        intent.error = abandonReason
+      }
+    }
+    rollbackValidatedClaims(
+      'Background agent launch failed before the spawn was launched.',
+    )
+    throw error
   }
 
   const foregroundAgents = validatedAgents.filter(

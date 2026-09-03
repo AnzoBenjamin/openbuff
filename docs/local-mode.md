@@ -114,8 +114,7 @@ ChatGPT/Codex subscription:
   },
   "agents": {
     "base2": "openai/gpt-5.5",
-    "thinker": "codex/gpt-5.5",
-    "code-searcher": "local/qwen-coder"
+    "thinker": "codex/gpt-5.5"
   },
   "providers": {
     "openai": {

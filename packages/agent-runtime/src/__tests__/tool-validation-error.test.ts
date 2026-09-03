@@ -841,8 +841,8 @@ describe('tool validation error handling', () => {
         input: {
           agents: [
             {
-              agent_type: 'code-searcher',
-              params: { searchQueries: [{ pattern: 'x' }] },
+              agent_type: 'file-picker',
+              params: { directories: ['src'] },
             },
           ],
           prompt: 'find x',
@@ -854,7 +854,7 @@ describe('tool validation error handling', () => {
     if (!('error' in result)) {
       expect(result.input.agents[0].prompt).toBe('find x')
       expect(result.input.agents[0].params).toEqual({
-        searchQueries: [{ pattern: 'x' }],
+        directories: ['src'],
       })
     }
   })
@@ -885,7 +885,7 @@ describe('tool validation error handling', () => {
         toolName: 'spawn_agents',
         toolCallId: 'spawn-agents-single-agent-no-overwrite-tool-call-id',
         input: {
-          agents: [{ agent_type: 'code-searcher', prompt: 'inner' }],
+          agents: [{ agent_type: 'file-picker', prompt: 'inner' }],
           prompt: 'outer',
         },
       },
@@ -925,7 +925,7 @@ describe('tool validation error handling', () => {
         toolCallId: 'spawn-agents-stringified-misbraced-prompt-tool-call-id',
         input: {
           agents:
-            '[{"agent_type": "code-searcher", "params": {"searchQueries": [{"pattern": "serialized handleSteps", "flags": "-g *.ts"}]}}, "prompt": "Find the test in the agents test suite."}]',
+            '[{"agent_type": "file-picker", "params": {"directories": [{"pattern": "serialized handleSteps", "flags": "-g *.ts"}]}}, "prompt": "Find the test in the agents test suite."}]',
         },
       },
     })
@@ -2428,33 +2428,6 @@ describe('tool validation error handling', () => {
     expect(message).toContain('Preserve params field names exactly.')
   })
 
-  it('gives code-searcher a searchQueries recovery hint on empty params', async () => {
-    const { validateAgentInput } =
-      await import('../tools/handlers/tool/spawn-agent-utils')
-    const codeSearcher = {
-      ...testAgentTemplate,
-      id: 'code-searcher',
-      inputSchema: {
-        params: z.object({
-          searchQueries: z.array(z.object({ pattern: z.string() })),
-        }),
-      },
-    }
-
-    let message = ''
-    try {
-      validateAgentInput(codeSearcher, 'code-searcher', undefined, {})
-    } catch (error) {
-      message = error instanceof Error ? error.message : String(error)
-    }
-
-    expect(message).toContain('Missing required: searchQueries')
-    expect(message).toContain('spawn code-searcher with')
-    expect(message).toContain('"searchQueries"')
-    expect(message).toContain('required array of objects')
-    expect(message).toContain('Preserve params field names exactly.')
-  })
-
   it('publishes a structured failure result when Basher is missing command', async () => {
     const parent: AgentTemplate = {
       ...testAgentTemplate,
@@ -3386,16 +3359,15 @@ describe('buildUnavailableToolMessage', () => {
         toolName,
         agentId: 'base2',
         availableTools: ['read_files', 'code_search'],
-        input: { pattern: 'alpha' },
       })
 
       expect(message).toContain('Use the granted `code_search` tool directly')
-      expect(message).toContain('params.searchQueries')
-      expect(message).not.toContain('"pattern": "alpha"')
+      expect(message).toContain('one `code_search` call per pattern')
+      expect(message).not.toContain('code-searcher')
     }
   })
 
-  it('gives concrete code-searcher recovery when code_search is unavailable', () => {
+  it('falls back to generic not-granted guidance when code_search is unavailable', () => {
     for (const toolName of ['code_search', 'find_files_matching_content']) {
       const message = buildUnavailableToolMessage({
         toolName,
@@ -3403,23 +3375,12 @@ describe('buildUnavailableToolMessage', () => {
         availableTools: ['read_files'],
       })
 
-      expect(message).toContain('code-searcher')
-      expect(message).toContain('searchQueries')
-      expect(message).toContain('"pattern": "<regex>"')
+      expect(message).toContain(
+        'is a registered tool but is not granted to this agent',
+      )
+      expect(message).not.toContain('code-searcher')
+      expect(message).not.toContain('searchQueries')
     }
-  })
-
-  it('inlines an explicit input pattern into the code-searcher spawn recipe', () => {
-    const message = buildUnavailableToolMessage({
-      toolName: 'code_search',
-      agentId: 'base2',
-      availableTools: ['read_files'],
-      input: { pattern: 'normalizeSpawnAgentList' },
-    })
-
-    expect(message).toContain('code-searcher')
-    expect(message).toContain('"pattern": "normalizeSpawnAgentList"')
-    expect(message).not.toContain('"pattern": "<regex>"')
   })
 
   it('suggests the closest granted tool for a likely typo', () => {

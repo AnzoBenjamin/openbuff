@@ -86,7 +86,7 @@ Prompt-based and programmatic agent definitions that ship with Openbuff.
 - **Key agents:**
   - `base2/` — The default agent family (base2, base2-plan).
   - `editor/` — Code editing specialist.
-  - `file-explorer/` — File picker, code searcher, directory lister, glob matcher.
+  - `file-explorer/` — File picker, file lister, directory lister, glob matcher.
   - `thinker/` — Deep reasoning agent.
   - `reviewer/` — Code review agent.
   - `researcher/` — Local web search and docs search agents.

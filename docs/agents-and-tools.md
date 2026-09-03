@@ -16,11 +16,11 @@ Agents in Openbuff can be either prompt-based or programmatic (utilizing `handle
 
 Not every shipped agent is directly spawnable by the orchestrator (`base2` / `base-deep`). Agents fall into two categories:
 
-**Orchestrator-spawnable agents** are listed in the `spawnableAgents` array of `base2.ts` and `base-deep.ts`. These are general-purpose specialists the orchestrator can delegate to at policy-defined phase boundaries: `file-picker`, `code-searcher`, `code-reviewer`, `editor`, `thinker`, `basher`, `researcher-web`, `researcher-docs`, `git-committer`, `debugger`, `doc-writer`, `security-reviewer`, `test-writer`, `librarian`, and others. `context-pruner` is runtime-internal and is not publicly spawnable. Adding an agent to `spawnableAgents` means the orchestrator may spawn it when the current phase and task scope make its capabilities relevant; it does not mean agents should be spawned randomly or for tiny direct-answer tasks.
+**Orchestrator-spawnable agents** are listed in the `spawnableAgents` array of `base2.ts` and `base-deep.ts`. These are general-purpose specialists the orchestrator can delegate to at policy-defined phase boundaries: `file-picker`, `code-reviewer`, `editor`, `thinker`, `basher`, `researcher-web`, `researcher-docs`, `git-committer`, `debugger`, `doc-writer`, `security-reviewer`, `test-writer`, `librarian`, and others. `context-pruner` is runtime-internal and is not publicly spawnable. Adding an agent to `spawnableAgents` means the orchestrator may spawn it when the current phase and task scope make its capabilities relevant; it does not mean agents should be spawned randomly or for tiny direct-answer tasks.
 
 Common phase triggers and routing policies:
 
-- `file-picker`, `code-searcher`, `researcher-web`, `researcher-docs` — discovery phase when files, APIs, docs, or commands are not already obvious. Scope first as `tiny`, `focused`, `multi-file`, `cross-subsystem`, or `unknown surface`; scale reads/searches and parallel shards accordingly. For large-repo planning, do not use file-pickers as the only shards: they are discovery-focused and should be paired with code-searchers plus reasoning-capable shards when analysis is required.
+- `file-picker`, `researcher-web`, `researcher-docs` — discovery phase when files, APIs, docs, or commands are not already obvious. Scope first as `tiny`, `focused`, `multi-file`, `cross-subsystem`, or `unknown surface`; scale reads/searches and parallel shards accordingly. For large-repo planning, do not use file-pickers as the only shards: they are discovery-focused and should be paired with direct code_search plus reasoning-capable general-agent shards when analysis is required.
 - `general-agent` — focused reasoning/audit shards after discovery for larger repositories or complex domains. Give each shard explicit files or a narrow subsystem. Audit shards persist their own structured results with `write_audit_findings` and return only a compact artifact receipt, so the parent context carries paths/counts/hashes instead of every finding body.
 - `thinker` — reasoning phase after context gathering for complex design, architecture, tradeoff, risk, spec/plan critique, or debugging strategy choices. Use it to synthesize discovered evidence when no file writes are needed; skip it for straightforward edits and never use it as a replacement for reading files.
 - `editor` — implementation phase for non-trivial source changes, with a self-contained implementation brief because it does not rely on parent context. The five brief fields accept either colon labels (`Requirements:`) or normal Markdown headings (`## Requirements`). Skip it for tiny one-file edits and direct answers.
@@ -150,7 +150,7 @@ GLB, and OBJ inspectors do not require Blender.
 Several shipped agents share prompt text through centralized sections rather than maintaining separate copies:
 
 - `agents/base2/quality-prompt-section.ts` exports the shared Code Craftsmanship guidance used by `base2`, `base-deep`, and the `editor` agent. This section is byte-frozen by snapshot tests so the three consumers do not drift accidentally.
-- The same file also exports `buildBroadAuditSection(finalizeClause)`, which injects the orchestrator's scope-then-shard contract for broad, open-ended, and audit-style requests. The generated section tells `base2` / `base-deep` to measure repository breadth before synthesis, cover frontend/page/route/UI wiring when a frontend exists, spawn file-picker and code-searcher shards by subsystem, add general-agent reasoning/audit shards that can write durable findings files for whole-codebase or production-readiness audits, use thinker for post-discovery synthesis when useful, and interpolate `finalizeClause` for the current prompt path.
+- The same file also exports `buildBroadAuditSection(finalizeClause)`, which injects the orchestrator's scope-then-shard contract for broad, open-ended, and audit-style requests. The generated section tells `base2` / `base-deep` to measure repository breadth before synthesis, cover frontend/page/route/UI wiring when a frontend exists, spawn file-picker discovery shards by subsystem, add general-agent reasoning/audit shards that can write durable findings files for whole-codebase or production-readiness audits, use thinker for post-discovery synthesis when useful, and interpolate `finalizeClause` for the current prompt path.
 - The same file also exports orchestrator-only guidance for gate awareness, security-sensitive file review, and git discipline. `base2` and `base-deep` interpolate those sections; the `editor` intentionally does not, because validation/review, security triage, and git workflow orchestration remain parent-agent responsibilities.
 - `common/src/constants/prompt-sections.ts` owns the shared Frontend Development section. `packages/agent-runtime/src/templates/types.ts` exposes it as the `{CODEBUFF_FRONTEND_SECTION}` placeholder, and `packages/agent-runtime/src/templates/strings.ts` replaces that placeholder only when `fileTreeHasFrontendFiles` detects `.tsx` or `.jsx` files in the project tree.
 - `common/src/util/language-capabilities.ts` is the canonical registry for TypeScript/JavaScript, Python, Rust, Go, Java, C#/.NET, C/C++, Ruby, PHP, Swift, Kotlin, and GDScript. It owns extensions, manifests, bundled idioms, language-server/compiler/formatter/linter/test metadata, and focused/project validation stages. `common/src/util/language-profiles.ts` derives `{CODEBUFF_LANGUAGE_PROFILE}` detection from that registry.
@@ -700,19 +700,18 @@ fails closed, changes nothing, and returns a diagnostic instead of executing
 the tool.
 
 Codebase search for orchestrator/base agents (`base2` / `base-deep`) and the
-`general-agent` discovery/analysis shard may use `code_search` directly for
-single-pattern content search,
-`query_index` for graph/index retrieval, or spawn the `code-searcher` agent for
-multi-query batch search with `params.searchQueries`. Ungranted tools still
-fail closed.
+`general-agent` discovery/analysis shard uses `code_search` for ripgrep-style
+content search and `query_index` for graph/index retrieval. Several patterns
+mean several `code_search` calls, which may be issued in parallel in one
+message. Ungranted tools still fail closed.
 
 The rejection message names the tools the agent actually has available. When
 the attempted name is a real-but-ungranted registry tool, the message says so;
 for a likely typo it also suggests a near lexical match ("Did you mean ...").
 When you hit this error, pick a tool from the listed available tools, or spawn
-an agent that provides the capability (for example, spawn `code-searcher` for
-multi-query batch search). Do not retry the same unavailable name — the result
-will not change.
+an agent that provides the capability (for example, call `code_search` directly
+for ripgrep-style content search, one call per pattern). Do not retry the same
+unavailable name — the result will not change.
 
 ### `suggest_followups` last-action contract
 

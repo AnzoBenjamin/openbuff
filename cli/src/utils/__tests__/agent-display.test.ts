@@ -58,8 +58,8 @@ describe('getAgentDisplayPrompt', () => {
 
   test('ignores non-basher what_to_summarize params', () => {
     const block = createAgentBlock({
-      agentName: 'code-searcher',
-      agentType: 'code-searcher',
+      agentName: 'file-picker',
+      agentType: 'file-picker',
       params: {
         what_to_summarize: 'This is not a basher prompt',
       },
@@ -121,7 +121,7 @@ describe('getBasherFinishedOutputPreview', () => {
 
   test('ignores non-basher output', () => {
     const block = createAgentBlock({
-      agentType: 'code-searcher',
+      agentType: 'file-picker',
       status: 'complete',
       blocks: [{ type: 'text', content: 'Search results' }],
     })

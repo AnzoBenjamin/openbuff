@@ -58,10 +58,8 @@ describe('spawn_agents handoff schema', () => {
 
   it('repairs double-stringified lists and stringified agent entries', () => {
     const entry = {
-      agent_type: 'code-searcher',
-      params: {
-        searchQueries: [{ pattern: 'authenticate', flags: ['-g', '*.ts'] }],
-      },
+      agent_type: 'file-picker',
+      params: { directories: ['src', 'cli'] },
     }
     for (const agents of [
       JSON.stringify(JSON.stringify([entry])),
@@ -77,11 +75,9 @@ describe('spawn_agents handoff schema', () => {
     const result = spawnAgentsParams.inputSchema.safeParse({
       agents: [
         {
-          agent_type: 'code-searcher',
+          agent_type: 'security-reviewer',
           params: {
-            searchQueries: JSON.stringify([
-              { pattern: 'Helmet', flags: "-g '*.tsx'" },
-            ]),
+            changed_files: JSON.stringify(['src/a.ts', 'src/b.ts']),
           },
         },
       ],
@@ -89,8 +85,9 @@ describe('spawn_agents handoff schema', () => {
 
     expect(result.success).toBe(true)
     if (result.success) {
-      expect(result.data.agents[0]?.params?.searchQueries).toEqual([
-        { pattern: 'Helmet', flags: "-g '*.tsx'" },
+      expect(result.data.agents[0]?.params?.changed_files).toEqual([
+        'src/a.ts',
+        'src/b.ts',
       ])
     }
   })
@@ -154,11 +151,11 @@ describe('spawn_agents common params fields', () => {
 describe('live-catalog spawn enum', () => {
   const catalogSchema = buildSpawnAgentsProviderInputSchema([
     'file-picker',
-    'code-searcher',
+    'general-agent',
   ])
 
   it('accepts visible hyphenated types and the underscore alias', () => {
-    for (const agent_type of ['file-picker', 'code-searcher', 'file_picker']) {
+    for (const agent_type of ['file-picker', 'general-agent', 'file_picker']) {
       expect(
         catalogSchema.safeParse({ agents: [{ agent_type }] }).success,
       ).toBe(true)

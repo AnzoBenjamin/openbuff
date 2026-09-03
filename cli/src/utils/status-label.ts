@@ -5,7 +5,6 @@
 
 const AGENT_TYPE_LABELS: Array<{ pattern: string; label: string }> = [
   { pattern: 'file-picker', label: 'gathering context...' },
-  { pattern: 'code-searcher', label: 'searching codebase...' },
   { pattern: 'researcher-web', label: 'searching the web...' },
   { pattern: 'researcher-docs', label: 'reading documentation...' },
   { pattern: 'editor', label: 'editing...' },

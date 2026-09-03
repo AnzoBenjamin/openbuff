@@ -328,6 +328,60 @@ describe('jobRegistry', () => {
     })
   })
 
+  describe('terminal result stamping', () => {
+    it('stamps job.result from a terminal lifecycle event', () => {
+      const job = createRunningJob()
+
+      jobRegistry.emit(job.jobId, {
+        type: 'lifecycle',
+        state: 'completed',
+        result: { output: 'done' },
+      })
+
+      expect(jobRegistry.get(job.jobId)?.state).toBe('completed')
+      expect(jobRegistry.get(job.jobId)?.result).toEqual({ output: 'done' })
+    })
+
+    it('ignores a result carried by a non-terminal transition', () => {
+      const job = createRunningJob()
+
+      jobRegistry.emit(job.jobId, {
+        type: 'lifecycle',
+        state: 'stopping',
+        result: 'not-settled-yet',
+      })
+
+      expect(jobRegistry.get(job.jobId)?.state).toBe('stopping')
+      expect(jobRegistry.get(job.jobId)?.result).toBeUndefined()
+    })
+
+    it('does not stamp a result when the terminal transition is rejected', () => {
+      const job = createRunningJob()
+      jobRegistry.cancel(job.jobId)
+
+      // Terminal states are absorbing, so a late completed(result) is not
+      // recorded at all: a cancelled job never acquires a result.
+      const rejected = jobRegistry.emit(job.jobId, {
+        type: 'lifecycle',
+        state: 'completed',
+        result: { output: 'too late' },
+      })
+
+      expect(rejected).toBeUndefined()
+      expect(jobRegistry.get(job.jobId)?.state).toBe('cancelled')
+      expect(jobRegistry.get(job.jobId)?.result).toBeUndefined()
+    })
+
+    it('leaves result undefined when a terminal event carries none', () => {
+      const job = createRunningJob()
+
+      jobRegistry.emit(job.jobId, lifecycle('completed'))
+
+      expect(jobRegistry.get(job.jobId)?.state).toBe('completed')
+      expect(jobRegistry.get(job.jobId)?.result).toBeUndefined()
+    })
+  })
+
   describe('event sequencing', () => {
     it('assigns contiguous, monotonically increasing sequence numbers per job', () => {
       const job = createRunningJob()
@@ -674,6 +728,20 @@ describe('jobRegistry', () => {
         'three',
       ])
     })
+
+    it('clamps a cursor past the latest sequence back down to it', () => {
+      const job = createRunningJob()
+      jobRegistry.emit(job.jobId, out('only'))
+      const latest = jobRegistry.snapshot(job.jobId, 0)!.events.at(-1)!.sequence
+
+      const snap = jobRegistry.snapshot(job.jobId, 10_000)!
+
+      // An echoed-back bogus cursor is self-healed instead of pinning the
+      // consumer past every future event.
+      expect(snap.events).toEqual([])
+      expect(snap.nextCursor).toBe(latest)
+      expect(snap.truncated).toBe(false)
+    })
   })
 
   describe('wait', () => {
@@ -815,6 +883,61 @@ describe('jobRegistry', () => {
       // After clear() the job genuinely no longer exists, so the waiter gets
       // wait()'s unknown-job-id resolution instead of hanging forever.
       expect(await pending).toBeUndefined()
+    })
+
+    it('clamps a cursor past the latest sequence so the terminal transition settles the wait', async () => {
+      const job = createRunningJob()
+
+      // Unclamped, this cursor makes every later event fail `sequence > cursor`,
+      // so the waiter could only ever settle by timing out.
+      const pending = jobRegistry.wait(job.jobId, {
+        cursor: 10_000,
+        predicate: () => false,
+        timeoutMs: 5_000,
+      })
+      await sleep(5)
+
+      jobRegistry.emit(job.jobId, lifecycle('completed'))
+
+      const result = (await pending)!
+      expect(result.timedOut).toBeFalsy()
+      expect(result.state).toBe('completed')
+    })
+
+    it('settles a pending wait when the abort signal fires', async () => {
+      const job = createRunningJob()
+      const controller = new AbortController()
+
+      const pending = jobRegistry.wait(job.jobId, {
+        predicate: () => false,
+        timeoutMs: 5_000,
+        signal: controller.signal,
+      })
+      await sleep(5)
+      controller.abort()
+
+      const result = (await pending)!
+      expect(result.timedOut).toBe(true)
+      expect(result.state).toBe('running')
+      // Aborting the join does not touch the job, and the settled waiter is
+      // detached so later events cannot resolve it again.
+      jobRegistry.emit(job.jobId, out('after-abort'))
+      expect(jobRegistry.get(job.jobId)?.state).toBe('running')
+    })
+
+    it('resolves immediately for an already-aborted signal', async () => {
+      const job = createRunningJob()
+      const controller = new AbortController()
+      controller.abort()
+
+      const result = (await jobRegistry.wait(job.jobId, {
+        predicate: () => false,
+        timeoutMs: 5_000,
+        signal: controller.signal,
+      }))!
+
+      expect(result.timedOut).toBe(true)
+      expect(result.state).toBe('running')
     })
   })
 

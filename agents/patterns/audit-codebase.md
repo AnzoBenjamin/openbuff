@@ -119,8 +119,9 @@ editor/reviewer rather than creating a language-specific agent.
 (detected by `classifyBreadth` in `evals/buffbench/plan-sharding-signals.ts`),
 you MUST spawn at least `max(domainCount, 5)` shard **pairs** — never fewer
 than 5, even if fewer domains were enumerated. A "pair" = one `file-picker`
-subagent (discovers files) + one `code-searcher` subagent (finds patterns); a
-shard with only one type does not count toward the minimum. This rule is
+subagent (discovers files) + one `general-agent` audit shard (analyzes them and
+persists findings); a shard with only one type does not count toward the
+minimum. This rule is
 machine-checked by the pure function `evaluateMinimumShardRule`, which is wired
 into `evaluateShardingVerdict` as an additional gate: a `broad-audit` trace
 that shards but falls short of the minimum-pair bar fails with a clear reason.
@@ -153,12 +154,12 @@ parent receives only compact receipts, so raw findings never occupy its
 context.
 
 **Pair composition (M10.2):** Each shard pair MUST include both a
-`file-picker` (discovers the shard's files) and a `code-searcher` (finds
-patterns across them). A shard that runs only a `file-picker` or only a
-`code-searcher` does **not** count toward the minimum-shard floor — the
-minimum is measured in complete pairs (`min(file-picker, code-searcher)`), not
-raw subagent count. So a trace with 10 `file-picker`s and 0 `code-searcher`s
-has 0 pairs and fails the rule.
+`file-picker` (discovers the shard's files) and a `general-agent` audit shard
+(analyzes them and persists findings). A shard that runs only a `file-picker`
+or only a `general-agent` does **not** count toward the minimum-shard floor —
+the minimum is measured in complete pairs (`min(file-picker, general-agent)`),
+not raw subagent count. So a trace with 10 `file-picker`s and 0
+`general-agent`s has 0 pairs and fails the rule.
 
 ### Step 3.5 — Machine-check the coverage matrix
 

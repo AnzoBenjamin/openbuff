@@ -453,7 +453,7 @@ describe('processBlocks', () => {
       const blocks: ContentBlock[] = [
         createNonImplementorAgent('fp-1', 'file-picker'),
         createNonImplementorAgent('b-1', 'basher'),
-        createNonImplementorAgent('cs-1', 'code-searcher'),
+        createNonImplementorAgent('dl-1', 'directory-lister'),
       ]
 
       const result = processBlocks(blocks, handlers)
@@ -465,7 +465,7 @@ describe('processBlocks', () => {
       expect(agentBlocks).toHaveLength(3)
       expect(agentBlocks[0].agentType).toBe('file-picker')
       expect(agentBlocks[1].agentType).toBe('basher')
-      expect(agentBlocks[2].agentType).toBe('code-searcher')
+      expect(agentBlocks[2].agentType).toBe('directory-lister')
     })
 
     test('groups consecutive non-implementor agents including mixed sizes', () => {
@@ -473,7 +473,7 @@ describe('processBlocks', () => {
       const blocks: ContentBlock[] = [
         createNonImplementorAgent('fp-1', 'file-picker'),
         createNonImplementorAgent('cr-1', 'code-reviewer'),
-        createNonImplementorAgent('cs-1', 'code-searcher'),
+        createNonImplementorAgent('dl-1', 'directory-lister'),
       ]
 
       const result = processBlocks(blocks, handlers)
@@ -486,7 +486,7 @@ describe('processBlocks', () => {
       expect(agentBlocks).toHaveLength(3)
       expect(agentBlocks[0].agentType).toBe('file-picker')
       expect(agentBlocks[1].agentType).toBe('code-reviewer')
-      expect(agentBlocks[2].agentType).toBe('code-searcher')
+      expect(agentBlocks[2].agentType).toBe('directory-lister')
     })
 
     test('separates non-implementor groups from other block types', () => {
@@ -624,7 +624,7 @@ describe('processBlocks', () => {
         createReasoningBlock('considering options'),
         createTextBlock('I will search for files first'),
         createNonImplementorAgent('fp-1', 'file-picker'),
-        createNonImplementorAgent('cs-1', 'code-searcher'),
+        createNonImplementorAgent('dl-1', 'directory-lister'),
         createTextBlock('Now I will make changes'),
         createImplementorAgent('impl-1', 'editor-implementor'),
         createImplementorAgent('impl-2', 'editor-implementor'),
@@ -733,7 +733,7 @@ describe('processBlocks', () => {
         createNonImplementorAgent('fp-1', 'file-picker'), // index 1
         createNonImplementorAgent('b-1', 'basher'), // index 2
         createNonImplementorAgent('cr-1', 'code-reviewer'), // index 3
-        createNonImplementorAgent('cs-1', 'code-searcher'), // index 4
+        createNonImplementorAgent('dl-1', 'directory-lister'), // index 4
         createTextBlock('text at 5'),
       ]
 
@@ -774,7 +774,7 @@ describe('splitAgentsBySize', () => {
     const agents = [
       createNonImplementorAgent('fp-1', 'file-picker'),
       createNonImplementorAgent('b-1', 'basher'),
-      createNonImplementorAgent('cs-1', 'code-searcher'),
+      createNonImplementorAgent('dl-1', 'directory-lister'),
     ]
     const result = splitAgentsBySize(agents)
     expect(result).toEqual([agents])

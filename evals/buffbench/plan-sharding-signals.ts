@@ -5,8 +5,9 @@
  * `buildPlanOnlyInstructionsPrompt` / `buildImplementationInstructionsPrompt`
  * in `agents/base2/base2.ts`. The guidance instructs the agent to, for
  * audit-style requests, first assess codebase scope and then shard parallel
- * subagents (file-pickers + code-searchers, 3-6 for focused audits, 8-12 for
- * whole-codebase audits) rather than doing a single surface-level codesearch.
+ * subagents (file-picker + general-agent audit shard pairs, 3-6 for focused
+ * audits, 8-12 for whole-codebase audits) rather than doing a single
+ * surface-level codesearch.
  *
  * This module is pure (no I/O, no side effects) so it is trivially
  * unit-testable, mirroring the design of `deterministic-signals.ts`. The
@@ -83,12 +84,12 @@ export interface PlanShardingSignals {
    */
   filePickerCount: number
   /**
-   * Number of `code-searcher` agents counted for the minimum-shard rule
+   * Number of `general-agent` audit shards counted for the minimum-shard rule
    * (M10.2): the larger of the `subagent_start` records of that type and 1
    * if the type was requested via a `spawn_agents` call. See
    * `evaluateMinimumShardRule`.
    */
-  codeSearcherCount: number
+  auditShardCount: number
 }
 
 /** Verdict for the plan-mode sharding eval. */
@@ -103,17 +104,17 @@ export interface ShardingEvaluation {
 
 /**
  * Result of evaluating the minimum-shard rule (M10.2, SPEC R10.2). A "pair" is
- * one `file-picker` subagent + one `code-searcher` subagent.
+ * one `file-picker` DISCOVERY shard + one `general-agent` AUDIT shard.
  */
 export interface MinimumShardEvaluation {
   /** Required shard pairs: `max(domainCount, 5)` for `broad-audit`, else 0. */
   requiredPairs: number
-  /** Actual shard pairs: `min(filePickerCount, codeSearcherCount)`. */
+  /** Actual shard pairs: `min(filePickerCount, auditShardCount)`. */
   actualPairs: number
   /** Counted `file-picker` agents (see `evaluateMinimumShardRule`). */
   filePickerCount: number
-  /** Counted `code-searcher` agents (see `evaluateMinimumShardRule`). */
-  codeSearcherCount: number
+  /** Counted `general-agent` audit shards (see `evaluateMinimumShardRule`). */
+  auditShardCount: number
   /** True iff `actualPairs >= requiredPairs`. */
   satisfies: boolean
   /** Human-readable explanation. */
@@ -522,10 +523,10 @@ export function computePlanShardingSignals(params: {
     requestedAgentTypes,
     'file-picker',
   )
-  const codeSearcherCount = countAgentType(
+  const auditShardCount = countAgentType(
     subagentStarts,
     requestedAgentTypes,
-    'code-searcher',
+    'general-agent',
   )
 
   const shardedParallely = peakConcurrency >= 2
@@ -547,16 +548,17 @@ export function computePlanShardingSignals(params: {
     topLevelDirectToolCount,
     promptKind: classifyPrompt(prompt),
     filePickerCount,
-    codeSearcherCount,
+    auditShardCount,
   }
 }
 
 /**
  * Minimum-shard rule evaluation (M10.2, SPEC R10.2). For a `broad-audit`
  * request the orchestrator must spawn at least `max(domainCount, 5)` shard
- * pairs, where a pair = one `file-picker` subagent + one `code-searcher`
- * subagent. For non-`broad-audit` breadth the rule is vacuously satisfied
- * (`requiredPairs = 0`).
+ * pairs, where a pair = one `file-picker` DISCOVERY shard + one
+ * `general-agent` AUDIT shard (the audit shard is what emits
+ * `structuralReceipt` via `write_audit_findings`). For non-`broad-audit`
+ * breadth the rule is vacuously satisfied (`requiredPairs = 0`).
  *
  * Pure: no I/O, no side effects. Counts are derived from `signals` (which are
  * themselves derived purely from a trace) and `breadth` (derived purely from
@@ -568,31 +570,31 @@ export function evaluateMinimumShardRule(params: {
 }): MinimumShardEvaluation {
   const { signals, breadth } = params
   const filePickerCount = signals.filePickerCount
-  const codeSearcherCount = signals.codeSearcherCount
+  const auditShardCount = signals.auditShardCount
 
   if (breadth.kind !== 'broad-audit') {
     return {
       requiredPairs: 0,
       actualPairs: 0,
       filePickerCount,
-      codeSearcherCount,
+      auditShardCount,
       satisfies: true,
       reason: 'minimum-shard rule only applies to broad-audit prompts',
     }
   }
 
   const requiredPairs = Math.max(breadth.domainCount, 5)
-  const actualPairs = Math.min(filePickerCount, codeSearcherCount)
+  const actualPairs = Math.min(filePickerCount, auditShardCount)
   const satisfies = actualPairs >= requiredPairs
   const reason = satisfies
     ? `>=${actualPairs} shard pairs (>=${requiredPairs} required) across ${breadth.domainCount} domains`
-    : `only ${actualPairs} shard pair(s) but ${requiredPairs} required (max(domainCount=${breadth.domainCount}, 5)); file-picker=${filePickerCount}, code-searcher=${codeSearcherCount}`
+    : `only ${actualPairs} shard pair(s) but ${requiredPairs} required (max(domainCount=${breadth.domainCount}, 5)); file-picker=${filePickerCount}, general-agent=${auditShardCount}`
 
   return {
     requiredPairs,
     actualPairs,
     filePickerCount,
-    codeSearcherCount,
+    auditShardCount,
     satisfies,
     reason,
   }
@@ -649,7 +651,7 @@ export interface PlannerOutputCoverage {
  *  - For `breadth.kind !== 'broad-audit'`: vacuously satisfied (empty matrix,
  *    `allCovered = true`).
  *  - For `broad-audit`: sort `breadth.domains` alphabetically, compute
- *    `actualPairs = min(signals.filePickerCount, signals.codeSearcherCount)`,
+ *    `actualPairs = min(signals.filePickerCount, signals.auditShardCount)`,
  *    then assign pairs round-robin (pair `i` goes to `domains[i % domainCount]`).
  *    `covered` = `assignedPairs >= 1`. `uncoveredDomains` = entries with
  *    `assignedPairs === 0` (happens when `actualPairs < domainCount`).
@@ -673,10 +675,7 @@ export function buildCoverageMatrix(params: {
     return { entries: [], uncoveredDomains: [], allCovered: true }
   }
 
-  const actualPairs = Math.min(
-    signals.filePickerCount,
-    signals.codeSearcherCount,
-  )
+  const actualPairs = Math.min(signals.filePickerCount, signals.auditShardCount)
 
   const assigned = new Array<number>(domainCount).fill(0)
   for (let pair = 0; pair < actualPairs; pair++) {
@@ -872,12 +871,13 @@ export function evaluateShardingVerdict(
   }
 
   // Minimum-shard rule (M10.2, SPEC R10.2): for `broad-audit` prompts the
-  // orchestrator must spawn >= max(domainCount, 5) (file-picker + code-searcher)
-  // pairs. This is an additional gate layered on top of the base sharding
-  // check. It only applies to `audit`-classified prompts (not `ambiguous`) and
-  // only when a prompt string is supplied so breadth can be classified — when
-  // `prompt` is omitted the check is skipped, preserving backward
-  // compatibility with the single-arg callers (e.g. `run-plan-sharding-eval.ts`).
+  // orchestrator must spawn >= max(domainCount, 5) (file-picker + general-agent
+  // audit shard) pairs. This is an additional gate layered on top of the base
+  // sharding check. It only applies to `audit`-classified prompts (not
+  // `ambiguous`) and only when a prompt string is supplied so breadth can be
+  // classified — when `prompt` is omitted the check is skipped, preserving
+  // backward compatibility with the single-arg callers (e.g.
+  // `run-plan-sharding-eval.ts`).
   if (signals.promptKind === 'audit' && prompt !== undefined) {
     const breadth = classifyBreadth(prompt)
     const minShard = evaluateMinimumShardRule({ signals, breadth })

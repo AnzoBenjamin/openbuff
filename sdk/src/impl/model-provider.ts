@@ -172,9 +172,7 @@ export function selectAdaptiveReasoningEffort(params: {
       ? 'high'
       : /editor|test-writer|general-agent|base2|base$/.test(id)
         ? 'medium'
-        : /file-picker|code-searcher|context-pruner|researcher|synthesizer/.test(
-              id,
-            )
+        : /file-picker|context-pruner|researcher|synthesizer/.test(id)
           ? 'low'
           : 'medium'
   const efforts = params.efforts

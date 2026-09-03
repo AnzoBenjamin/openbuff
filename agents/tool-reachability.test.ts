@@ -8,7 +8,6 @@ import browserUse from './browser-use/browser-use'
 import dependencyManager from './dependency-manager/dependency-manager'
 import docWriter from './doc-writer/doc-writer'
 import { createCodeEditor } from './editor/editor'
-import codeSearcher from './file-explorer/code-searcher'
 import directoryLister from './file-explorer/directory-lister'
 import filePicker from './file-explorer/file-picker'
 import globMatcher from './file-explorer/glob-matcher'
@@ -243,7 +242,6 @@ describe('agent prompt/tool availability alignment', () => {
       basher,
       librarian,
       globMatcher,
-      codeSearcher,
       directoryLister,
       filePicker,
       browserUse,

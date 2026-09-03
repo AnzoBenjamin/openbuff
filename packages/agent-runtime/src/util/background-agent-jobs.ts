@@ -21,8 +21,12 @@
  *   coroutine settle/cancel into core `lifecycle` events.
  *
  * Preserved bounds: 200 buffered events per job (each chunk payload truncated
- * to 64KB), a 30-minute settled-job TTL, 100 total jobs, 32 running jobs, 8
- * running jobs per root run. This adapter shares the process-wide
+ * to 64KB), a 30-minute settled-job TTL, 100 retained adapter views, 32 running
+ * background agents, 8 running background agents per root run. Every one of
+ * those bounds is computed over the registry's 'agent'-kind population only (or,
+ * for the view cap, over this adapter's own views), so shell `process` jobs
+ * sharing the same registry never consume the background-AGENT budget and never
+ * distort the view cap. This adapter shares the process-wide
  * `jobRegistry` singleton — the single source of truth every consumer
  * reads — and the core enforces the agent bounds (the 200-event ring buffer
  * and 30-minute settled TTL) per-kind for 'agent' jobs; the state machine,
@@ -36,6 +40,7 @@ import {
   jobRegistry,
 } from '@codebuff/common/util/job-registry'
 
+import type { AgentState } from '@codebuff/common/types/session-state'
 import type {
   AssertOwnedResult,
   Job,
@@ -53,7 +58,14 @@ import type {
 const MAX_BUFFERED_CHUNKS = 200
 const MAX_BUFFERED_CHUNK_BYTES = 64 * 1024
 const MAX_CONSUMER_CURSORS = 32
-const MAX_BACKGROUND_AGENT_JOBS = 100
+/**
+ * Memory bound on the live adapter views this module retains. Evaluated over
+ * `views` itself rather than over the shared registry population: the registry
+ * also holds shell `process` jobs (and other owners' jobs), so counting them
+ * would both trigger the cap when no view needs evicting and leave the cap
+ * ineffective when the views genuinely grew.
+ */
+const MAX_BACKGROUND_AGENT_VIEWS = 100
 const MAX_RUNNING_BACKGROUND_AGENT_JOBS = 32
 const MAX_RUNNING_BACKGROUND_AGENT_JOBS_PER_ROOT = 8
 
@@ -124,7 +136,7 @@ export interface BackgroundAgentJobOwner extends JobOwner {
 
 export interface BackgroundAgentJob {
   jobId: string
-  /** Agent type string (e.g. 'basher', 'code-searcher'). */
+  /** Agent type string (e.g. 'basher', 'file-picker'). */
   agentType: string
   /** Agent template display name. */
   agentName: string
@@ -216,59 +228,109 @@ function currentChunks(job: BackgroundAgentJob): BackgroundAgentChunk[] {
 }
 
 /**
- * Drop settled jobs past the retention TTL (delegated to the core's sweep)
- * and cap the total registry size by evicting the oldest settled jobs. The
- * core has no single-job drop API, so count-cap eviction removes the
- * adapter's view — making the job invisible to every adapter API — while the
- * core record is left for the TTL sweep to reclaim.
+ * Running jobs of THIS adapter's kind. Concurrency limits are background-AGENT
+ * limits, so a shell `process` job (dev server, watcher, tail) sharing the
+ * process-wide registry must never consume that budget — filtering by kind here
+ * is what keeps a long-lived watcher from blocking every background agent spawn
+ * for a run.
+ */
+function listRunningAgentJobs(owner?: {
+  clientSessionId: string
+  rootRunId: string
+}): Job[] {
+  return registry
+    .listRunning(owner)
+    .filter(
+      (coreJob) => coreJob.kind === 'agent' && coreJob.state === 'running',
+    )
+}
+
+/**
+ * Drop settled jobs past the retention TTL (delegated to the core's sweep) and
+ * cap the number of retained ADAPTER VIEWS by evicting the oldest settled ones.
+ * The count cap is evaluated over `views` and the registry's 'agent'-kind
+ * records only — never the whole shared registry population — so process jobs
+ * and other owners' jobs can neither trigger nor defeat the view bound.
+ *
+ * The core has no single-job drop API, so count-cap eviction removes only the
+ * adapter's view (its buffered chunks), while the core record is left for the
+ * TTL sweep to reclaim. The core is the durable home of the lifecycle state
+ * AND of the settled `result` (stamped there by
+ * {@link attachJobCompletionHandlers}), so a job whose view was evicted still
+ * reports its state and its result to check_background_agent, is still owned,
+ * and is still an idempotent cancel target — never not_found.
+ *
+ * Only SETTLED views are evicted, and that is load-bearing rather than
+ * incidental: the view owns this job's AbortController, so dropping the view
+ * of a job whose core state is non-terminal would leave nothing able to cancel
+ * it. The candidate list below is filtered to terminal core states for exactly
+ * that reason.
  */
 function sweepBackgroundAgentJobs(): void {
-  const coreJobs = registry.list()
-  const liveCoreIds = new Set(coreJobs.map((coreJob) => coreJob.jobId))
+  // Only 'agent' records are backed by a view, so this is the exact population
+  // the view cap bounds.
+  const agentJobsById = new Map(
+    registry
+      .list()
+      .filter((coreJob) => coreJob.kind === 'agent')
+      .map((coreJob) => [coreJob.jobId, coreJob] as const),
+  )
   for (const jobId of views.keys()) {
-    if (!liveCoreIds.has(jobId)) {
+    if (!agentJobsById.has(jobId)) {
       views.delete(jobId)
     }
   }
 
-  if (coreJobs.length <= MAX_BACKGROUND_AGENT_JOBS) return
-  const settled = coreJobs
-    .filter((coreJob) => isTerminalJobState(coreJob.state))
+  if (views.size <= MAX_BACKGROUND_AGENT_VIEWS) return
+  // Eviction candidates are exactly the views whose core state is terminal: a
+  // non-terminal job is still cancellable and its AbortController lives on the
+  // view, so its view must stay reachable no matter how old it is.
+  const settled = [...views.keys()]
+    .flatMap((jobId) => {
+      const coreJob = agentJobsById.get(jobId)
+      return coreJob && isTerminalJobState(coreJob.state) ? [coreJob] : []
+    })
     .sort(
       (a, b) =>
         (a.completedAt ?? a.startedAt ?? a.createdAt) -
         (b.completedAt ?? b.startedAt ?? b.createdAt),
     )
-  let count = coreJobs.length
+  let count = views.size
   for (const coreJob of settled) {
-    if (count <= MAX_BACKGROUND_AGENT_JOBS) break
+    if (count <= MAX_BACKGROUND_AGENT_VIEWS) break
     views.delete(coreJob.jobId)
     count -= 1
   }
 }
 
+/** Fall back to the placeholder owner when a caller has no run identity. */
+function resolveBackgroundAgentJobOwner(
+  owner?: BackgroundAgentJob['owner'],
+): BackgroundAgentJob['owner'] {
+  return (
+    owner ?? {
+      clientSessionId: 'unknown-session',
+      rootRunId: 'unknown-root',
+      parentRunId: 'unknown-parent-run',
+      parentAgentId: 'unknown-parent-agent',
+      userInputId: 'unknown-input',
+    }
+  )
+}
+
 /**
- * Allocate a job id and a pending job record WITHOUT a coroutine promise yet.
- * This split is required because {@link executeSubagent} synchronously fires
- * `onResponseChunk(startEvent)` when invoked — the chunk handler needs a
- * `jobId` to buffer into BEFORE the detached promise exists. The caller must
- * invoke {@link attachBackgroundAgentPromise} immediately after launching the
- * coroutine to wire the settle handlers that transition the status.
+ * Create the core registry record + live adapter view for ONE background
+ * agent job. Deliberately performs no capacity check: the caller owns the
+ * claim, so a whole batch can be claimed atomically
+ * ({@link allocateBackgroundAgentJobBatch}) instead of re-checking the shared
+ * registry once per job.
  */
-export function allocateBackgroundAgentJob(params: {
+function createBackgroundAgentJobRecord(params: {
   agentType: string
   agentName: string
-  owner?: BackgroundAgentJob['owner']
+  owner: BackgroundAgentJob['owner']
 }): BackgroundAgentJob {
-  const owner = params.owner ?? {
-    clientSessionId: 'unknown-session',
-    rootRunId: 'unknown-root',
-    parentRunId: 'unknown-parent-run',
-    parentAgentId: 'unknown-parent-agent',
-    userInputId: 'unknown-input',
-  }
-  assertBackgroundAgentCapacity({ additional: 1, owner })
-  const { agentType, agentName } = params
+  const { agentType, agentName, owner } = params
   // The unified core owns lifecycle/state: create in 'queued' with the
   // adapter's single `bg-agent-` id as the explicit job id, then immediately
   // transition to 'running' so the job is pollable the moment
@@ -300,6 +362,52 @@ export function allocateBackgroundAgentJob(params: {
   return job
 }
 
+/**
+ * Allocate a job id and a pending job record WITHOUT a coroutine promise yet.
+ * This split is required because {@link executeSubagent} synchronously fires
+ * `onResponseChunk(startEvent)` when invoked — the chunk handler needs a
+ * `jobId` to buffer into BEFORE the detached promise exists. The caller must
+ * invoke {@link attachBackgroundAgentPromise} immediately after launching the
+ * coroutine to wire the settle handlers that transition the status.
+ */
+export function allocateBackgroundAgentJob(params: {
+  agentType: string
+  agentName: string
+  owner?: BackgroundAgentJob['owner']
+}): BackgroundAgentJob {
+  const owner = resolveBackgroundAgentJobOwner(params.owner)
+  assertBackgroundAgentCapacity({ additional: 1, owner })
+  return createBackgroundAgentJobRecord({
+    agentType: params.agentType,
+    agentName: params.agentName,
+    owner,
+  })
+}
+
+/**
+ * Allocate a whole batch of background agent jobs under ONE capacity check,
+ * making the batch's claim on the shared registry atomic: a concurrent spawn
+ * can no longer land between a batch preflight and a per-job allocation and
+ * make a mid-batch allocation throw after earlier jobs of the same batch were
+ * already launched. Either every id in the batch exists, or the capacity error
+ * is thrown and no record/view was created at all.
+ *
+ * Same pre-allocate-then-attach contract as
+ * {@link allocateBackgroundAgentJob}: every returned job still needs
+ * {@link attachBackgroundAgentPromise} immediately after its coroutine is
+ * launched.
+ */
+export function allocateBackgroundAgentJobBatch(params: {
+  agents: Array<{ agentType: string; agentName: string }>
+  owner?: BackgroundAgentJob['owner']
+}): BackgroundAgentJob[] {
+  const owner = resolveBackgroundAgentJobOwner(params.owner)
+  assertBackgroundAgentCapacity({ additional: params.agents.length, owner })
+  return params.agents.map(({ agentType, agentName }) =>
+    createBackgroundAgentJobRecord({ agentType, agentName, owner }),
+  )
+}
+
 /** Preflight a logical batch before the caller acquires leases or emits events. */
 export function assertBackgroundAgentCapacity(params: {
   additional: number
@@ -308,9 +416,9 @@ export function assertBackgroundAgentCapacity(params: {
   sweepBackgroundAgentJobs()
   if (params.additional <= 0) return
   const { owner } = params
-  const running = registry
-    .listRunning()
-    .filter((coreJob) => coreJob.state === 'running')
+  // Agent-kind only: shell `process` jobs share this registry but are bounded
+  // separately, so they must not consume the background-agent budget.
+  const running = listRunningAgentJobs()
   if (running.length + params.additional > MAX_RUNNING_BACKGROUND_AGENT_JOBS) {
     throw new Error(
       `Background agent concurrency limit reached (${MAX_RUNNING_BACKGROUND_AGENT_JOBS}). Join or cancel an existing job before spawning another.`,
@@ -376,13 +484,23 @@ export function registerBackgroundAgentJob(params: {
  * unified core as lifecycle(completed) / lifecycle(error) events, then sync
  * the live view. Detached from registration so the caller doesn't need to
  * remember to wire `.then`/`.catch` at every registration site.
+ *
+ * The resolved value is passed THROUGH the lifecycle event as well as stamped
+ * on the view, so the core record owns the settled result and it outlives
+ * count-cap eviction of that view. A job the caller already cancelled keeps
+ * its cancellation receipt: the guard below returns before either stamp (and
+ * the core would reject the transition anyway, since terminal states absorb).
  */
 function attachJobCompletionHandlers(job: BackgroundAgentJob): void {
   job.promise.then(
     (result) => {
       if (job.status === 'cancelled') return
       job.result = result
-      registry.emit(job.jobId, { type: 'lifecycle', state: 'completed' })
+      registry.emit(job.jobId, {
+        type: 'lifecycle',
+        state: 'completed',
+        result,
+      })
       const coreJob = registry.get(job.jobId)
       if (coreJob) syncViewFromCore(job, coreJob)
     },
@@ -462,6 +580,32 @@ export function getBackgroundAgentJob(
   return job
 }
 
+/**
+ * Reconcile a parent's durable {@link AgentState.backgroundAgentJobs} intents
+ * against the live registry: an intent still marked 'running' whose job no
+ * longer exists is recorded as 'interrupted' with a terminal timestamp and
+ * reason. Intents are never dropped — only reconciled — so the parent keeps an
+ * auditable terminal record of detached work.
+ *
+ * Called at `loopAgentSteps` entry AND by the spawn preflight before it counts
+ * the background concurrency budget off these intents, so a job that vanished
+ * mid-turn stops consuming that budget instead of blocking later legitimate
+ * background spawns until the next turn. Idempotent: a reconciled intent is no
+ * longer 'running', so repeated calls within one turn are no-ops.
+ */
+export function reconcileInterruptedBackgroundAgentIntents(
+  state: AgentState,
+): void {
+  for (const job of state.backgroundAgentJobs ?? []) {
+    if (job.status === 'running' && !getBackgroundAgentJob(job.jobId)) {
+      job.status = 'interrupted'
+      job.completedAt = Date.now()
+      job.error =
+        'Background agent host process/session ended before a terminal receipt was recorded.'
+    }
+  }
+}
+
 export function listRunningBackgroundAgentJobs(owner?: {
   clientSessionId: string
   rootRunId: string
@@ -469,9 +613,7 @@ export function listRunningBackgroundAgentJobs(owner?: {
   Pick<BackgroundAgentJob, 'jobId' | 'agentType' | 'agentName' | 'startedAt'>
 > {
   sweepBackgroundAgentJobs()
-  const running = registry
-    .listRunning(owner)
-    .filter((coreJob) => coreJob.state === 'running')
+  const running = listRunningAgentJobs(owner)
   const result: Array<
     Pick<BackgroundAgentJob, 'jobId' | 'agentType' | 'agentName' | 'startedAt'>
   > = []
@@ -530,6 +672,21 @@ export function readBackgroundAgentChunks(params: {
   const droppedChunks = Math.max(0, firstSequence - cursor - 1)
   const available = chunks.filter((chunk) => chunk.sequence > cursor)
   const nextCursor = available.at(-1)?.sequence ?? cursor
+  setConsumerCursor(job, consumerId, nextCursor)
+  return { chunks: available, nextCursor, droppedChunks }
+}
+
+/**
+ * Record `consumerId`'s confirmed position in this job's stream, keeping the
+ * per-job cursor map bounded by {@link MAX_CONSUMER_CURSORS} (oldest insertion
+ * evicted first, never the consumer being written). Single writer for the
+ * cursor store so every path stays bounded the same way.
+ */
+function setConsumerCursor(
+  job: BackgroundAgentJob,
+  consumerId: string,
+  nextCursor: number,
+): void {
   job.consumerCursors.set(consumerId, nextCursor)
   if (job.consumerCursors.size > MAX_CONSUMER_CURSORS) {
     const oldest = job.consumerCursors.keys().next().value
@@ -537,7 +694,48 @@ export function readBackgroundAgentChunks(params: {
       job.consumerCursors.delete(oldest)
     }
   }
-  return { chunks: available, nextCursor, droppedChunks }
+}
+
+/**
+ * This consumer's last confirmed position in the job's event stream, or
+ * undefined when it has never polled (or the settled view was count-cap
+ * evicted). check_background_agent uses it as the effective cursor for a poll
+ * that omits `cursor`, so such a poll returns only the events that consumer
+ * has not consumed instead of replaying the whole retained buffer.
+ *
+ * The stored number is whatever sequence space the consumer polls in — core
+ * EVENT sequences for check_background_agent, chunk-local sequences for
+ * {@link readBackgroundAgentChunks} — so one consumerId must stay on one API.
+ */
+export function getBackgroundAgentConsumerCursor(
+  jobId: string,
+  consumerId: string,
+): number | undefined {
+  return views.get(jobId)?.consumerCursors.get(consumerId)
+}
+
+/**
+ * Advance this consumer's stored position to the cursor the CORE confirmed.
+ * Monotonic and never past `confirmedCursor`: a follow-mode wait that timed out
+ * without new events confirms the cursor it started from, so the consumer keeps
+ * its place instead of skipping the events that arrive later. Bounded by
+ * {@link MAX_CONSUMER_CURSORS} like every other cursor write.
+ */
+export function advanceBackgroundAgentConsumerCursor(
+  jobId: string,
+  consumerId: string,
+  confirmedCursor: number,
+): void {
+  const job = views.get(jobId)
+  if (!job || !Number.isFinite(confirmedCursor)) return
+  setConsumerCursor(
+    job,
+    consumerId,
+    Math.max(
+      job.consumerCursors.get(consumerId) ?? 0,
+      Math.floor(confirmedCursor),
+    ),
+  )
 }
 
 export function backgroundAgentJobOwnedBy(
@@ -556,19 +754,47 @@ export function takeDroppedBackgroundAgentChunkCount(
   return count
 }
 
+/**
+ * The exact reason the adapter aborts a job cancelled through
+ * check_background_agent. Exported so the spawn handler can recognize a
+ * rejection driven by THIS job's own cancellation and record it as a
+ * cancellation instead of relabelling it as a failure.
+ */
+export const BACKGROUND_AGENT_CANCEL_REASON =
+  'Cancelled by check_background_agent.'
+
+/**
+ * Outcome of a cancel request. `cancelled: false` is the IDEMPOTENT no-op case:
+ * the job is already settled (or its settled view was count-cap evicted), so
+ * there is nothing left to abort and the caller's poll can still report the
+ * job's state, events, and result. `errorMessage` is reserved for an id the
+ * unified core no longer knows at all.
+ */
+export type CancelBackgroundAgentJobResult =
+  | { cancelled: true; status: 'cancelled' }
+  | { cancelled: false; status: BackgroundAgentJobStatus }
+  | { errorMessage: string }
+
 export function cancelBackgroundAgentJob(
   jobId: string,
-): { cancelled: true; status: 'cancelled' } | { errorMessage: string } {
-  const job = views.get(jobId)
-  if (!job) {
+): CancelBackgroundAgentJobResult {
+  sweepBackgroundAgentJobs()
+  const coreJob = registry.get(jobId)
+  if (!coreJob) {
     return { errorMessage: `No background agent job found with id "${jobId}".` }
   }
-  if (job.status !== 'running') {
-    return {
-      errorMessage: `Background agent job "${jobId}" is already ${job.status}.`,
-    }
+  const job = views.get(jobId)
+  if (!job) {
+    // Only SETTLED views are ever evicted (the view owns the AbortController),
+    // so an id the core still knows without a view is a settled job. Reporting
+    // it as not_found would contradict the retention invariant, so it is
+    // reported as the idempotent no-op it is.
+    return { cancelled: false, status: jobStateToStatus(coreJob.state) }
   }
-  const error = 'Cancelled by check_background_agent.'
+  if (job.status !== 'running') {
+    return { cancelled: false, status: job.status }
+  }
+  const error = BACKGROUND_AGENT_CANCEL_REASON
   // The core folds lifecycle(cancelled) into its state machine (legal from
   // 'running', absorbing once terminal); the adapter performs the real abort.
   registry.cancel(jobId)
@@ -580,13 +806,90 @@ export function cancelBackgroundAgentJob(
 }
 
 /**
+ * True when this job's OWN cancellation is what settled it: the adapter view or
+ * the core record already says 'cancelled', or this job's AbortController fired
+ * with {@link BACKGROUND_AGENT_CANCEL_REASON}. The spawn handler uses it to
+ * tell an explicit `check_background_agent({ cancel: true })` abort apart from
+ * an ordinary rejection (a subagent timeout, a parent-signal abort, a real
+ * error), so a cancelled job is not relabelled as a failure on the parent's
+ * durable intent and receipt while the registry keeps 'cancelled'.
+ *
+ * A parent-signal abort is deliberately NOT cancellation here: the combined
+ * signal the spawn handler builds never aborts this job's own controller, so
+ * only the adapter's cancel path can satisfy the reason check.
+ */
+export function backgroundAgentJobWasCancelled(
+  job: BackgroundAgentJob,
+): boolean {
+  if (job.status === 'cancelled') return true
+  if (registry.get(job.jobId)?.state === 'cancelled') return true
+  const reason: unknown = job.abortController.signal.aborted
+    ? job.abortController.signal.reason
+    : undefined
+  const message =
+    reason instanceof Error
+      ? reason.message
+      : typeof reason === 'string'
+        ? reason
+        : undefined
+  return message === BACKGROUND_AGENT_CANCEL_REASON
+}
+
+/**
+ * Terminally abandon a job that was allocated but whose coroutine was NEVER
+ * launched. Mirrors {@link cancelBackgroundAgentJob}'s idiom — fold a terminal
+ * lifecycle event into the core, then abort the adapter's controller — and
+ * additionally drops the view, because a pre-launch job still holds the
+ * allocation placeholder promise: no settle handler is wired until
+ * {@link attachBackgroundAgentPromise}, and nothing reaps background agent
+ * jobs, so without this the job stays 'running' forever and permanently
+ * consumes the process-wide (32) and per-root (8) background budget.
+ *
+ * Terminal (`error`) rather than `cancelled`: the spawn failed before the agent
+ * ran, and keeping `cancelled` to mean an explicit cancel is what lets
+ * {@link backgroundAgentJobWasCancelled} stay accurate.
+ *
+ * ONLY legal for a job whose coroutine was never launched — abandoning a live
+ * job would abort a running agent and drop the view that owns its
+ * AbortController.
+ */
+export function abandonPreLaunchBackgroundAgentJob(
+  job: BackgroundAgentJob,
+  reason: string,
+): void {
+  const coreJob = registry.get(job.jobId)
+  // Terminal states absorb in the core, so an already-settled job is a no-op.
+  if (coreJob && !isTerminalJobState(coreJob.state)) {
+    registry.emit(job.jobId, {
+      type: 'lifecycle',
+      state: 'error',
+      error: reason,
+    })
+  }
+  job.status = 'error'
+  job.completedAt = Date.now()
+  job.error = reason
+  if (!job.abortController.signal.aborted) {
+    job.abortController.abort(new Error(reason))
+  }
+  views.delete(job.jobId)
+}
+
+/**
  * Registry-backed ownership check for check_background_agent. Returns the
- * core's tri-state so the handler can distinguish not_found from foreign.
+ * core's tri-state unchanged so the handler can distinguish not_found from
+ * foreign. View presence is deliberately NOT consulted: the core owns both the
+ * lifecycle state and the settled `result`, so a job whose view was count-cap
+ * evicted is owned and still reports its result. Only a job the core no longer
+ * knows about (never allocated, or reclaimed by the settled-job TTL sweep) is
+ * not_found. The sweep runs first so this gate and the caller's subsequent
+ * reads observe the same registry state.
  */
 export function assertBackgroundAgentJobOwned(
   jobId: string,
   owner: { clientSessionId: string; rootRunId: string },
 ): AssertOwnedResult {
+  sweepBackgroundAgentJobs()
   return registry.assertOwned(jobId, owner)
 }
 
@@ -605,8 +908,10 @@ export function snapshotBackgroundAgentJob(
 /**
  * Join/wait primitive over the unified core: resolve when a NEW agent_chunk
  * event (sequence > cursor) satisfies the predicate, or the job reaches a
- * terminal state, or the timeout fires — driven purely off the registry's
- * internal notifications (no sleep-polling).
+ * terminal state, or the timeout fires, or the caller's abort signal fires —
+ * driven purely off the registry's internal notifications (no sleep-polling).
+ * The core clamps the supplied cursor, so a cursor past the job's latest
+ * sequence cannot strand the waiter.
  */
 export function waitForBackgroundAgentJob(
   jobId: string,

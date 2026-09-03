@@ -614,13 +614,14 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
   })
 
   it('bounds ordinary child output before returning it to the parent', () => {
+    const longAnswer = 'x'.repeat(120_000)
     const normalized = normalizeSpawnedAgentOutput(
       {
         type: 'lastMessage',
         value: [
           {
             role: 'assistant',
-            content: [{ type: 'text', text: 'x'.repeat(120_000) }],
+            content: [{ type: 'text', text: longAnswer }],
           },
         ],
       },
@@ -628,8 +629,30 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
     )
 
     const serialized = JSON.stringify(normalized)
-    expect(serialized.length).toBeLessThan(10_000)
+    // `text` is an answer-bearing channel, so it keeps the high-fidelity cap
+    // (32k) rather than the 4k default — still bounded far below the input.
+    expect(serialized.length).toBeLessThan(40_000)
+    expect(serialized.length).toBeLessThan(longAnswer.length / 2)
     expect(serialized).toContain('truncated')
+  })
+
+  it('keeps the default cap for incidental fields while answer fields survive', () => {
+    const normalized = normalizeSpawnedAgentOutput(
+      {
+        type: 'structuredOutput',
+        value: {
+          note: 'y'.repeat(20_000),
+          summary: 'z'.repeat(20_000),
+        },
+      },
+      'general-agent',
+    ) as { value: { note: string; summary: string } }
+
+    // `note` is incidental metadata: still clipped at the 4k default.
+    expect(normalized.value.note.length).toBeLessThan(5_000)
+    expect(normalized.value.note).toContain('[truncated]')
+    // A same-length answer-bearing field survives intact.
+    expect(normalized.value.summary).toHaveLength(20_000)
   })
 
   it('preserves compact diagnostics from deeply nested child output', () => {
@@ -716,6 +739,77 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
     expect(receipt.status).toBe('partial')
     expect(receipt.errors[0]?.message).toContain('task_completed')
     expect(receipt.errors[0]?.retryable).toBe(true)
+  })
+
+  // The generator harvest never sets AgentState.consecutiveTextOnlyWithoutCompletion
+  // (and the step-cap early return never touches it), so completion credit must
+  // come from the harvest flag alone. Otherwise the same harvest suppresses the
+  // retryable 'no task_completed' error on one exit path and not the other.
+  it('credits a harvested-fallback general agent without the text-only counter', () => {
+    const harvestedOutput = {
+      summary: 'Harvested final answer for the parent.',
+      harvestedFromFallback: true,
+    }
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'general-agent',
+      agentId: 'general-harvested-fallback',
+      output: { type: 'structuredOutput', value: harvestedOutput },
+      agentState: {
+        output: harvestedOutput,
+        messageHistory: [
+          {
+            role: 'assistant',
+            content: [
+              { type: 'text', text: 'Harvested final answer for the parent.' },
+            ],
+          },
+        ],
+      } as any,
+    })
+
+    expect(receipt.status).toBe('completed')
+    expect(receipt.errors).toEqual([])
+    expect(
+      receipt.errors.some((error) => error.message.includes('task_completed')),
+    ).toBe(false)
+  })
+
+  // The harvest always emits set_output so the parent never sees value: null,
+  // but an answerless / step-capped run only recovered a placeholder summary
+  // and marks itself with noHarvestedAnswer. Crediting that as explicit
+  // completion would report a step-capped child as completed with zero errors,
+  // leaving the parent no signal to re-spawn.
+  it('does not credit an answerless harvest as explicit completion', () => {
+    const harvestedOutput = {
+      summary:
+        'No answer text was produced before this agent hit its step cap, so there is no harvested final answer to report.',
+      harvestedFromFallback: true,
+      noHarvestedAnswer: true,
+    }
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'general-agent',
+      agentId: 'general-answerless-harvest',
+      output: { type: 'structuredOutput', value: harvestedOutput },
+      agentState: {
+        output: harvestedOutput,
+        messageHistory: [
+          {
+            role: 'assistant',
+            content: [
+              { type: 'text', text: 'Maximum number of steps reached.' },
+            ],
+            tags: ['STEP_CAP_REACHED'],
+          },
+        ],
+      } as any,
+    })
+
+    expect(receipt.status).toBe('partial')
+    expect(
+      receipt.errors.some(
+        (error) => error.retryable && error.message.includes('task_completed'),
+      ),
+    ).toBe(true)
   })
 
   it('RF-2/RF-7/RF-11/RF-16 completes blocked repair-editor output when mutations are attested', () => {
@@ -1041,5 +1135,123 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
     expect(receipt.status).toBe('completed')
     expect(receipt.artifacts).toEqual([artifactPath])
     expect(receipt.errors).toEqual([])
+  })
+
+  it('accepts an already-persisted collision result as the audit gate for a general audit agent', () => {
+    // write_audit_findings creates the artifact exclusively, so an
+    // already-exists rejection means this shard's findings are already durably
+    // at that path. The rejection carries no structuralReceipt, so without the
+    // snapshot-bound already-persisted marker the shard would resolve partial
+    // with a retryable audit-receipt error despite its persisted findings.
+    const artifactPath = '.agents/sessions/readiness/findings/services.md'
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'general-agent',
+      agentId: 'general-audit-collision',
+      spawnParams: {
+        sessionSlug: 'readiness',
+        shardId: 'services',
+        snapshotId: 'snapshot-1',
+      },
+      output: {
+        type: 'lastMessage',
+        value: [
+          {
+            role: 'assistant',
+            content: [
+              { type: 'tool-call', toolName: 'task_completed', input: {} },
+            ],
+          },
+        ],
+      },
+      agentState: {
+        messageHistory: [
+          {
+            role: 'tool',
+            toolName: 'write_audit_findings',
+            content: [
+              {
+                type: 'json',
+                value: {
+                  artifactPath,
+                  errorMessage: `Failed to create file: the file already exists. Shard id "services": this shard's findings are already persisted at ${artifactPath}; treat this as already written and do not write a duplicate.`,
+                  alreadyPersisted: {
+                    schema_version: 1,
+                    shardId: 'services',
+                    artifactPath,
+                    snapshot_id: 'snapshot-1',
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      } as any,
+    })
+
+    expect(receipt.status).toBe('completed')
+    expect(receipt.errors).toEqual([])
+    expect(
+      receipt.errors.some((error) =>
+        error.message.includes('write_audit_findings'),
+      ),
+    ).toBe(false)
+  })
+
+  it('still fails the audit gate when the collision marker names another snapshot', () => {
+    // The snapshot binding must keep the gate unforgeable by any colliding
+    // write, so a marker for a different snapshot stays partial + retryable.
+    const artifactPath = '.agents/sessions/readiness/findings/services.md'
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'general-agent',
+      agentId: 'general-audit-collision-mismatch',
+      spawnParams: {
+        sessionSlug: 'readiness',
+        shardId: 'services',
+        snapshotId: 'snapshot-2',
+      },
+      output: {
+        type: 'lastMessage',
+        value: [
+          {
+            role: 'assistant',
+            content: [
+              { type: 'tool-call', toolName: 'task_completed', input: {} },
+            ],
+          },
+        ],
+      },
+      agentState: {
+        messageHistory: [
+          {
+            role: 'tool',
+            toolName: 'write_audit_findings',
+            content: [
+              {
+                type: 'json',
+                value: {
+                  artifactPath,
+                  errorMessage: 'the file already exists',
+                  alreadyPersisted: {
+                    schema_version: 1,
+                    shardId: 'services',
+                    artifactPath,
+                    snapshot_id: 'snapshot-1',
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      } as any,
+    })
+
+    expect(receipt.status).toBe('partial')
+    expect(
+      receipt.errors.some(
+        (error) =>
+          error.retryable &&
+          error.message.includes('write_audit_findings structuralReceipt'),
+      ),
+    ).toBe(true)
   })
 })

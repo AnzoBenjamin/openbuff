@@ -225,7 +225,7 @@ async function main() {
       topLevelDirectToolCount: signals.topLevelDirectToolCount,
       // M10.2 minimum-shard diagnostic counts.
       filePickerCount: signals.filePickerCount,
-      codeSearcherCount: signals.codeSearcherCount,
+      auditShardCount: signals.auditShardCount,
     },
     // M10.3 coverage matrix (SPEC R10.3): per-domain shard assignment.
     coverageMatrix: {

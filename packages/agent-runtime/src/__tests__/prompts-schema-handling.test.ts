@@ -605,7 +605,7 @@ describe('Schema handling error recovery', () => {
         additionalToolDefinitions: async () => ({}),
         agentTools: {},
         skills: {},
-        spawnableAgentTypes: ['file-picker', 'code-searcher'],
+        spawnableAgentTypes: ['file-picker', 'general-agent'],
       })
 
       const jsonSchema = (
@@ -622,7 +622,7 @@ describe('Schema handling error recovery', () => {
 
       expect(parseAgentType('file-picker').success).toBe(true)
       expect(parseAgentType('file_picker').success).toBe(true)
-      expect(parseAgentType('code-searcher').success).toBe(true)
+      expect(parseAgentType('general-agent').success).toBe(true)
       expect(parseAgentType('file-explorer').success).toBe(false)
       expect(parseAgentType('read_files').success).toBe(false)
     })
