@@ -208,6 +208,7 @@ export type CompactionCategoryDelta = {
     | 'toolResults'
     | 'todos'
     | 'fileReads'
+    | 'boundedFileReads'
     | 'subagents'
     | 'userAssistantMessages'
   beforeTokens: number

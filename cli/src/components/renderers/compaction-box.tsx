@@ -33,6 +33,7 @@ const CATEGORY_LABEL: Record<CompactionCategoryDelta['category'], string> = {
   toolResults: 'tool results',
   todos: 'todos',
   fileReads: 'file reads',
+  boundedFileReads: 'bounded reads',
   subagents: 'subagents',
   userAssistantMessages: 'conversation',
 }

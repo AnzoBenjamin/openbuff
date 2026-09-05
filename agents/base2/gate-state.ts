@@ -323,6 +323,19 @@ export type Base2ActiveWorkState = Base2GateState & {
     summary: string
     assurance: 'full' | 'reduced' | 'none'
     recordedAt: string
+    /**
+     * Phase 4: per-file content markers (readGateFileContentMarker) captured
+     * at the hook pass, keyed by covered file path. Enables receipt reuse:
+     * when the NEWEST entry has full assurance, covers exactly the current
+     * gate-scope file set, and every marker still matches the live bytes, the
+     * hook run is skipped and this entry is kept verbatim (summary and
+     * assurance included). Legacy entries without this field, any marker
+     * mismatch or absence, an `unreadable:*` marker, and any
+     * REDUCED_ASSURANCE / reduced / none entry are NEVER reusable (fail
+     * closed). MUST stay a plain JSON-serializable record (never a Map/Set).
+     * Backward-compatible: older serialized entries lack this field.
+     */
+    fileMarkers?: Record<string, string>
   }>
   lastValidationSummary: string
   nextRequiredAction: string
@@ -441,6 +454,46 @@ export type Base2ActiveWorkState = Base2GateState & {
    * gate rather than reusing unearned credit.
    */
   securityReviewGateFingerprint?: string
+  /**
+   * Phase 4 per-file specialist credit: maps each credited specialist agent
+   * type to a record of normalized reviewable file path → content marker
+   * (readGateFileContentMarker) captured when that file's specialist credit
+   * was stored. When a map exists for a specialist it is AUTHORITATIVE over
+   * specialistReviewGateFingerprints: the specialist stays fresh only while
+   * every currently aux-relevant reviewable file carries a stored marker
+   * equal to its current content marker. A missing entry, a mismatch, or an
+   * unreadable file (`unreadable:*`) reopens that specialist's gate for a
+   * SCOPED re-review of exactly the drifted files instead of the whole set,
+   * and previously stored markers for the other files survive the pass. When
+   * the map is ABSENT for a specialist (legacy serialized state, including
+   * fixtures that seed only the scalar fingerprint), the gate falls back to
+   * the scalar specialistReviewGateFingerprints comparison and a not-fresh
+   * specialist re-reviews the full aux-relevant set (today's behavior). A
+   * state with neither record re-reviews (fail closed). Bounded: the
+   * per-specialist entry (and the scalar entry) are deleted wherever
+   * specialist credit is evicted. MUST stay a plain JSON-serializable
+   * record of plain records (never a Map/Set). Backward-compatible: older
+   * serialized state lacks this field (treated as no per-file credit).
+   */
+  specialistReviewFileMarkers?: Record<string, Record<string, string>>
+  /**
+   * Phase 4 per-file security credit: maps each security-sensitive reviewable
+   * file to the content marker (readGateFileContentMarker) captured when its
+   * security credit was stored. When the map is PRESENT it is authoritative
+   * over securityReviewGateFingerprint: the security gate stays fresh only
+   * while every currently security-sensitive reviewable file carries a
+   * stored marker equal to its current content marker, so a scoped re-review
+   * of exactly the drifted files is spawned instead of the whole set (the
+   * stored scalar is still updated for legacy readers). When the map is
+   * ABSENT, the EXACT legacy scalar semantics apply
+   * (`undefined || === securitySnapshotFingerprint`), so seeded/legacy state
+   * that stores only the scalar keeps round-tripping unchanged. Fail closed
+   * on missing entries, mismatches, and `unreadable:*` markers. Deleted
+   * wherever the scalar security credit is cleared. MUST stay a plain
+   * JSON-serializable record (never a Map/Set). Backward-compatible: older
+   * serialized state lacks this field.
+   */
+  securityReviewFileMarkers?: Record<string, string>
   /**
    * Repair rounds for the specialist -> repair -> re-review loop. Telemetry
    * only by default (unlimited / progress-gated via no-progress and incomplete

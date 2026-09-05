@@ -322,6 +322,100 @@ describe('getContextCategoryTelemetry', () => {
       Object.values(telemetry).reduce((sum, entry) => sum + entry.messages, 0),
     ).toBe(messages.length)
   })
+
+  it('classifies read_files calls with window selectors as bounded reads', () => {
+    spyOn(tokenCounter, 'countTokensJson').mockImplementation(
+      (value) => JSON.stringify(value).length,
+    )
+
+    const messages: Message[] = [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'call-windowed',
+            toolName: 'read_files',
+            input: { windows: [{ path: 'src/big.ts', window: 2 }] },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        toolName: 'read_files',
+        toolCallId: 'call-windowed',
+        content: jsonToolResult([{ path: 'src/big.ts', content: 'block' }]),
+      },
+    ]
+
+    const telemetry = getContextCategoryTelemetry(messages)
+
+    expect(telemetry.boundedFileReads.messages).toBe(1)
+    expect(telemetry.fileReads.messages).toBe(0)
+  })
+
+  it('classifies read_files calls without selectors (paths-only) as whole-file reads', () => {
+    spyOn(tokenCounter, 'countTokensJson').mockImplementation(
+      (value) => JSON.stringify(value).length,
+    )
+
+    const messages: Message[] = [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'call-whole',
+            toolName: 'read_files',
+            input: { paths: ['src/file.ts'] },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        toolName: 'read_files',
+        toolCallId: 'call-whole',
+        content: jsonToolResult([{ path: 'src/file.ts', content: 'whole' }]),
+      },
+    ]
+
+    const telemetry = getContextCategoryTelemetry(messages)
+
+    expect(telemetry.fileReads.messages).toBe(1)
+    expect(telemetry.boundedFileReads.messages).toBe(0)
+  })
+
+  it('classifies read_outline and query_index as bounded reads and read_subtree as whole-file', () => {
+    spyOn(tokenCounter, 'countTokensJson').mockImplementation(
+      (value) => JSON.stringify(value).length,
+    )
+
+    const messages: Message[] = [
+      {
+        role: 'tool',
+        toolName: 'read_outline',
+        toolCallId: 'outline-1',
+        content: jsonToolResult({ outline: 'outline body' }),
+      },
+      {
+        role: 'tool',
+        toolName: 'query_index',
+        toolCallId: 'query-1',
+        content: jsonToolResult({ matches: [] }),
+      },
+      {
+        role: 'tool',
+        toolName: 'read_subtree',
+        toolCallId: 'subtree-1',
+        content: jsonToolResult({ files: [] }),
+      },
+    ]
+
+    const telemetry = getContextCategoryTelemetry(messages)
+
+    expect(telemetry.boundedFileReads.messages).toBe(2)
+    expect(telemetry.fileReads.messages).toBe(1)
+  })
 })
 
 describe('trimMessagesToFitTokenLimit', () => {
@@ -1645,12 +1739,13 @@ describe('trimMessagesToFitTokenLimitWithReport eviction policy', () => {
     mock.restore()
   })
 
-  it('evicts fileReads and toolResults before user+assistant turns', () => {
+  it('evicts bounded file reads and toolResults before user+assistant turns', () => {
     spyOn(tokenCounter, 'countTokensJson').mockImplementation(
       (value) => JSON.stringify(value).length,
     )
 
     expect(CONTEXT_EVICTION_PRIORITY).toEqual([
+      'boundedFileReads',
       'fileReads',
       'toolResults',
       'subagents',
@@ -1706,7 +1801,7 @@ describe('trimMessagesToFitTokenLimitWithReport eviction policy', () => {
       ),
     ).toBe(false)
     expect(report.removedCategories).toEqual(
-      expect.arrayContaining(['fileReads', 'toolResults']),
+      expect.arrayContaining(['boundedFileReads', 'toolResults']),
     )
     expect(report.removedCategories).not.toContain('userAssistantMessages')
     expect(report.fitsBudget).toBe(true)

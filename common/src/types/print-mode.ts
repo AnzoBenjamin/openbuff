@@ -218,10 +218,14 @@ const contextCategoryStatsSchema = z.object({
   messages: z.number(),
 })
 
+// `boundedFileReads` is optional so persisted/replayed compaction events
+// emitted before the bounded-vs-whole-file telemetry split (which lack the
+// key) keep validating; the runtime always emits it for new events.
 const contextCategorySummarySchema = z.object({
   toolResults: contextCategoryStatsSchema,
   todos: contextCategoryStatsSchema,
   fileReads: contextCategoryStatsSchema,
+  boundedFileReads: contextCategoryStatsSchema.optional(),
   subagents: contextCategoryStatsSchema,
   userAssistantMessages: contextCategoryStatsSchema,
 })
@@ -292,6 +296,7 @@ export const printModeContextCompactionSchema = z.object({
       'toolResults',
       'todos',
       'fileReads',
+      'boundedFileReads',
       'subagents',
       'userAssistantMessages',
     ])

@@ -1141,6 +1141,13 @@ ${guideSections}
       // guarantee they are always plain objects so older serialized state
       // (which lacks them) is treated as `{}` and fails closed.
       activeWorkState.specialistReviewGateFingerprints ??= {}
+      // Phase 4 per-file credit records are deliberately NOT defaulted here.
+      // Their ABSENCE is the legacy signal: an absent securityReviewFileMarkers
+      // falls back to the scalar securityReviewGateFingerprint comparison, and
+      // an absent specialistReviewFileMarkers falls back to the scalar
+      // specialistReviewGateFingerprints comparison (seeded test fixtures
+      // depend on this). Both are defaulted lazily with ??= at the write
+      // sites once a fresh pass mints markers. Never seeded to `{}` here.
       activeWorkState.specialistRepairRoundCount ??= 0
       activeWorkState.specialistNoVerdictCounts ??= {}
       activeWorkState.reviewReceipts ??= []
@@ -2231,10 +2238,28 @@ ${guideSections}
         // satisfies the gate; a stored fingerprint re-fires only on real byte
         // drift, so fail-closed drift detection and owed-security revalidation
         // (which never marks done on block) are both preserved.
+        // Phase 4: when securityReviewFileMarkers EXISTS it is authoritative
+        // over the scalar — the credit is fresh only while EVERY currently
+        // security-sensitive reviewable file carries a stored marker equal to
+        // its current content marker; a missing entry, a mismatch, or an
+        // `unreadable:*` marker is NOT fresh (fail closed) and the refire
+        // below is scoped to exactly the drifted subset. When the map is
+        // ABSENT the EXACT legacy scalar comparison applies, so seeded/legacy
+        // state storing only the scalar keeps its behavior.
+        const securityStoredFileMarkers =
+          activeWorkState.securityReviewFileMarkers
         const securityCreditIsFresh =
-          activeWorkState.securityReviewGateFingerprint === undefined ||
-          activeWorkState.securityReviewGateFingerprint ===
-            securitySnapshotFingerprint
+          securityStoredFileMarkers !== undefined
+            ? securitySensitiveReviewableFiles.every(
+                (file) =>
+                  securityStoredFileMarkers[file] !== undefined &&
+                  !securityStoredFileMarkers[file].startsWith('unreadable:') &&
+                  securityStoredFileMarkers[file] ===
+                    readGateFileContentMarker(file),
+              )
+            : activeWorkState.securityReviewGateFingerprint === undefined ||
+              activeWorkState.securityReviewGateFingerprint ===
+                securitySnapshotFingerprint
         const owedReviewers = activeWorkState.owedReviewerRevalidations ?? []
         const securityWouldRefire =
           runValidationGate &&
@@ -2261,6 +2286,12 @@ ${guideSections}
             activeWorkState.preEditSecurityReviewDone = true
             activeWorkState.securityReviewGateFingerprint =
               securitySnapshotFingerprint
+            // Phase 4: publish an (empty) per-file marker map so the
+            // authoritative freshness record exists; the current pending set
+            // is no longer security-sensitive here, and any later
+            // security-sensitive file without a stored marker fails closed
+            // and re-fires the gate.
+            activeWorkState.securityReviewFileMarkers ??= {}
             if (
               activeWorkState.currentPhase === 'blocked' &&
               nextRequired.includes(
@@ -2284,6 +2315,10 @@ ${guideSections}
           activeWorkState.preEditSecurityReviewDone = true
           activeWorkState.securityReviewGateFingerprint =
             securitySnapshotFingerprint
+          // Phase 4: publish an (empty) per-file marker map — the sensitive
+          // reviewable set is empty here, and any later sensitive file
+          // without a stored marker fails closed and re-fires the gate.
+          activeWorkState.securityReviewFileMarkers ??= {}
           if (
             activeWorkState.currentPhase === 'blocked' &&
             (activeWorkState.nextRequiredAction ?? '').includes(
@@ -2300,6 +2335,36 @@ ${guideSections}
           matchesSecuritySensitiveGlob(currentPendingGateFiles) &&
           securityChangedFiles.length > 0
         ) {
+          // Phase 4 scoped re-review: with the marker map present, spawn ONLY
+          // the drifted subset (sensitive reviewable files whose stored marker
+          // is missing or stale) and derive the attestation fingerprint and
+          // deleted-file set from EXACTLY that spawned list so the prompt
+          // file list and the echo contract stay coherent. With the map
+          // absent (legacy), reuse the full sensitive set and the unchanged
+          // full-set fingerprint — byte-identical to the pre-Phase-4 spawn.
+          const securityDriftedFiles =
+            securityStoredFileMarkers !== undefined
+              ? securitySensitiveReviewableFiles.filter(
+                  (file) =>
+                    securityStoredFileMarkers[file] === undefined ||
+                    securityStoredFileMarkers[file] !==
+                      readGateFileContentMarker(file),
+                )
+              : securityChangedFiles
+          const securitySpawnFiles =
+            securityDriftedFiles.length > 0
+              ? securityDriftedFiles
+              : securityChangedFiles
+          const securitySpawnScoped = securitySpawnFiles !== securityChangedFiles
+          const securitySpawnDetails = securitySpawnScoped
+            ? buildGateSnapshotDetails(securitySpawnFiles, '')
+            : securitySnapshotDetails
+          const securitySpawnFingerprint = securitySpawnScoped
+            ? hashGateSnapshotDetails(securitySpawnDetails)
+            : securitySnapshotFingerprint
+          const securitySpawnDeletedFiles = securitySpawnScoped
+            ? collectDeletedFilesFromSnapshotDetails(securitySpawnDetails)
+            : securityDeletedFiles
           auxGateFiredThisIteration = true
           const securityReviewResult = yield {
             toolName: 'spawn_agent_inline',
@@ -2307,13 +2372,13 @@ ${guideSections}
               agent_type: 'security-reviewer',
               prompt: [
                 'Perform the required snapshot-bound security review.',
-                `Pending changed files: ${securityChangedFiles.join(', ')}`,
-                `Snapshot fingerprint: ${securitySnapshotFingerprint}`,
+                `Pending changed files: ${securitySpawnFiles.join(', ')}`,
+                `Snapshot fingerprint: ${securitySpawnFingerprint}`,
                 'Return only the declared structured output.',
               ].join('\n'),
               params: {
-                changed_files: securityChangedFiles,
-                snapshot_fingerprint: securitySnapshotFingerprint,
+                changed_files: securitySpawnFiles,
+                snapshot_fingerprint: securitySpawnFingerprint,
               },
             },
             includeToolCall: false,
@@ -2337,9 +2402,9 @@ ${guideSections}
           )
           const securityAttestationIssues = collectReviewerAttestationIssues(
             securityToolResult,
-            securitySnapshotFingerprint,
-            securityChangedFiles,
-            securityDeletedFiles,
+            securitySpawnFingerprint,
+            securitySpawnFiles,
+            securitySpawnDeletedFiles,
           )
           const securityVerdict =
             getReviewerFinalizationVerdict(securityToolResult)
@@ -2354,7 +2419,7 @@ ${guideSections}
                 const record = correlateReviewerFindingRecord(text, records)
                 return {
                   id: record?.id ?? buildReviewerFindingId(text, index),
-                  gateId: `security-reviewer:${securitySnapshotFingerprint}`,
+                  gateId: `security-reviewer:${securitySpawnFingerprint}`,
                   // The PREFIXED blocker string, like the code-reviewer path:
                   // `reviewerVerdictClass` derives the condone key's verdict
                   // class from this text, so storing the record's unprefixed
@@ -2363,8 +2428,8 @@ ${guideSections}
                   // BLOCKING re-raise. Only the id is adopted from the record.
                   text,
                   status: 'open' as const,
-                  files: securityChangedFiles,
-                  snapshotFingerprint: securitySnapshotFingerprint,
+                  files: securitySpawnFiles,
+                  snapshotFingerprint: securitySpawnFingerprint,
                   reviewer: 'security-reviewer' as const,
                   createdAt: new Date().toISOString(),
                 }
@@ -2386,6 +2451,9 @@ ${guideSections}
             activeWorkState.securityReviewGateDone = false
             activeWorkState.preEditSecurityReviewDone = false
             activeWorkState.securityReviewGateFingerprint = undefined
+            // Phase 4: the per-file marker map is credit; drop it with the
+            // scalar so no stale marker can outlive the cleared credit.
+            delete activeWorkState.securityReviewFileMarkers
             markActiveWorkStateChanged()
             emitGateTelemetry({
               currentPhase: 'repair_loop',
@@ -2554,6 +2622,9 @@ ${guideSections}
             activeWorkState.securityReviewGateDone = false
             activeWorkState.preEditSecurityReviewDone = false
             activeWorkState.securityReviewGateFingerprint = undefined
+            // Phase 4: the per-file marker map is credit; drop it with the
+            // scalar so no stale marker can outlive the cleared credit.
+            delete activeWorkState.securityReviewFileMarkers
             markActiveWorkStateChanged()
             emitGateTelemetry({
               currentPhase: 'blocked',
@@ -2580,7 +2651,7 @@ ${guideSections}
             recordSuccessfulReviewReceipt(
               securityToolResult,
               'security-reviewer',
-              securitySnapshotFingerprint,
+              securitySpawnFingerprint,
             )
             markActiveWorkStateChanged()
             emitGateTelemetry({
@@ -2617,6 +2688,17 @@ ${guideSections}
           // the gate re-fires instead of reusing credit for unreviewed bytes.
           activeWorkState.securityReviewGateFingerprint =
             securitySnapshotFingerprint
+          // Phase 4: record per-file markers for exactly the files this pass
+          // attested, MERGING into any stored map so credit for files reviewed
+          // earlier survives a scoped re-review of the drifted subset. The
+          // marker map is authoritative for freshness; the scalar above stays
+          // written for legacy readers.
+          {
+            const markerMap = (activeWorkState.securityReviewFileMarkers ??= {})
+            for (const file of securitySpawnFiles) {
+              markerMap[file] = readGateFileContentMarker(file)
+            }
+          }
           // The security aux block owns security-family revalidation; clear its
           // owed entry once it passes, but never clobber a code/specialist one.
           clearOwedReviewer('security-reviewer')
@@ -2661,6 +2743,13 @@ ${guideSections}
               delete activeWorkState.specialistReviewGateFingerprints[
                 owedSpecialist
               ]
+              // Phase 4: the per-file marker map is credit too; drop it with
+              // the scalar so no stale marker survives the eviction.
+              if (activeWorkState.specialistReviewFileMarkers) {
+                delete activeWorkState.specialistReviewFileMarkers[
+                  owedSpecialist
+                ]
+              }
               markActiveWorkStateChanged()
             }
           }
@@ -2676,8 +2765,23 @@ ${guideSections}
           // every sweep. The accepted consequence is that byte drift confined to
           // those test files alone does not force a specialist re-review; drift
           // in any aux-relevant source file still does.
+          //
+          // Phase 4: per-file credit via specialistReviewFileMarkers refines
+          // this further. When a marker map exists for a specialist the map is
+          // authoritative, a byte change re-opens only that file's credit, and
+          // the specialist is re-reviewed on exactly the drifted subset (see
+          // specialistCreditIsFresh / specialistDriftedFiles) instead of the
+          // whole aux-relevant set; state without a map keeps the scalar
+          // full-set semantics above unchanged.
           const specialistPendingFiles = selectReviewableGateFiles(
             currentPendingGateFiles,
+          )
+          // Computed once here and threaded into the serialized helpers below
+          // (specialistCreditIsFresh / specialistDriftedFiles live outside
+          // this block's closure, where currentPendingGateFiles does not
+          // exist).
+          const specialistAuxRelevantFiles = selectReviewableGateFiles(
+            selectAuxRelevantFiles(currentPendingGateFiles),
           )
           const specialistCreditFingerprint = hashGateSnapshotDetails(
             buildGateSnapshotDetails(
@@ -2709,8 +2813,43 @@ ${guideSections}
               : baseRoutedSpecialists
           ).filter(
             (agentType) =>
-              !specialistCreditIsFresh(agentType, specialistCreditFingerprint),
+              !specialistCreditIsFresh(
+                agentType,
+                specialistCreditFingerprint,
+                specialistAuxRelevantFiles,
+              ),
           )
+          // Phase 4 scoped re-review: each routed specialist is spawned with
+          // only the subset of aux-relevant reviewable files lacking a fresh
+          // stored marker (the FULL aux-relevant set when its marker map is
+          // absent — legacy), and the expected attestation fingerprint is
+          // computed over EXACTLY that spawned list so the prompt file list
+          // and the echo-attestation contract stay coherent.
+          const specialistScopedFileSets = new Map<string, string[]>()
+          const specialistScopedFingerprints = new Map<string, string>()
+          const specialistScopedDeletedFiles = new Map<string, string[]>()
+          for (const agentType of routedSpecialists) {
+            const driftedFiles = specialistDriftedFiles(
+              agentType,
+              specialistAuxRelevantFiles,
+            )
+            const scopedFiles =
+              driftedFiles.length > 0
+                ? driftedFiles
+                : selectReviewableGateFiles(
+                    selectAuxRelevantFiles(currentPendingGateFiles),
+                  )
+            specialistScopedFileSets.set(agentType, scopedFiles)
+            const scopedDetails = buildGateSnapshotDetails(scopedFiles, '')
+            specialistScopedFingerprints.set(
+              agentType,
+              hashGateSnapshotDetails(scopedDetails),
+            )
+            specialistScopedDeletedFiles.set(
+              agentType,
+              collectDeletedFilesFromSnapshotDetails(scopedDetails),
+            )
+          }
           if (
             routedSpecialists.length > 0 &&
             specialistPendingFiles.length === 0
@@ -2746,7 +2885,18 @@ ${guideSections}
             // Gate-owned v3 fingerprint is the sole specialist attestation
             // token (same family as security/code-reviewer). Fail closed when
             // crypto is unavailable rather than spawning with a bare bundle id.
-            if (!isAttestableSnapshotFingerprint(specialistCreditFingerprint)) {
+            // Each scoped spawn fingerprint must attest independently.
+            const scopedFingerprintsAreAttestable = routedSpecialists.every(
+              (agentType) =>
+                isAttestableSnapshotFingerprint(
+                  specialistScopedFingerprints.get(agentType) ??
+                    specialistCreditFingerprint,
+                ),
+            )
+            if (
+              !isAttestableSnapshotFingerprint(specialistCreditFingerprint) ||
+              !scopedFingerprintsAreAttestable
+            ) {
               activeWorkState.currentPhase = 'blocked'
               activeWorkState.openReviewerBlockers = [
                 'Specialist review cannot attest: gate snapshot fingerprint is non-attestable (crypto unavailable).',
@@ -2797,13 +2947,23 @@ ${guideSections}
                     prompt: buildSpecialistScopedReviewPrompt({
                       title: 'Perform the routed post-edit specialist review.',
                       agentType,
-                      files: specialistPendingFiles,
-                      snapshotFingerprint: specialistCreditFingerprint,
+                      files: specialistScopedFileSets.get(agentType) ?? [],
+                      snapshotFingerprint:
+                        specialistScopedFingerprints.get(agentType) ??
+                        specialistCreditFingerprint,
                       userPrompt: prompt ?? '',
+                      extraLines: buildReviewerRoundLedgerLines(agentType, {
+                        scopeFiles: specialistScopedFileSets.get(agentType) ?? [],
+                        currentFingerprint:
+                          specialistScopedFingerprints.get(agentType) ??
+                          specialistCreditFingerprint,
+                      }),
                     }),
                     params: {
-                      files: specialistPendingFiles,
-                      snapshot_id: specialistCreditFingerprint,
+                      files: specialistScopedFileSets.get(agentType) ?? [],
+                      snapshot_id:
+                        specialistScopedFingerprints.get(agentType) ??
+                        specialistCreditFingerprint,
                     },
                   })),
                 },
@@ -2829,9 +2989,10 @@ ${guideSections}
                 // snapshot drift never triggers a pointless refresh+retry.
                 const attestationIssues = collectReviewerAttestationIssues(
                   result,
-                  specialistCreditFingerprint,
-                  specialistPendingFiles,
-                  specialistDeletedFiles,
+                  specialistScopedFingerprints.get(agentType) ??
+                    specialistCreditFingerprint,
+                  specialistScopedFileSets.get(agentType) ?? [],
+                  specialistScopedDeletedFiles.get(agentType) ?? [],
                 )
                 return (
                   attestationIssues.length > 0 &&
@@ -2886,16 +3047,20 @@ ${guideSections}
                           title:
                             'Retry the routed specialist review after snapshot/file attestation failure.',
                           agentType,
-                          files: specialistPendingFiles,
-                          snapshotFingerprint: retryCreditFingerprint,
+                          files: specialistScopedFileSets.get(agentType) ?? [],
+                          snapshotFingerprint:
+                            specialistScopedFingerprints.get(agentType) ??
+                            specialistCreditFingerprint,
                           userPrompt: prompt ?? '',
                           extraLines: [
                             'Correct the structured output directly; do not request source edits for this protocol error.',
                           ],
                         }),
                         params: {
-                          files: specialistPendingFiles,
-                          snapshot_id: retryCreditFingerprint,
+                          files: specialistScopedFileSets.get(agentType) ?? [],
+                          snapshot_id:
+                            specialistScopedFingerprints.get(agentType) ??
+                            specialistCreditFingerprint,
                         },
                       })),
                     },
@@ -2916,14 +3081,15 @@ ${guideSections}
                 for (const agentType of routedSpecialists) {
                   const expectedSnapshotId =
                     specialistSnapshots.get(agentType) ??
+                    specialistScopedFingerprints.get(agentType) ??
                     specialistCreditFingerprint
                   const specialistToolResult = specialistResults.get(agentType)
                   const specialistAttestationIssues =
                     collectReviewerAttestationIssues(
                       specialistToolResult,
                       expectedSnapshotId,
-                      specialistPendingFiles,
-                      specialistDeletedFiles,
+                      specialistScopedFileSets.get(agentType) ?? [],
+                      specialistScopedDeletedFiles.get(agentType) ?? [],
                     )
                   // Fingerprint-only drift on a fully-attesting review is NOT a
                   // terminal protocol failure: only a FILE-COVERAGE gap or a
@@ -3025,16 +3191,22 @@ ${guideSections}
                     ;(activeWorkState.specialistReviewGateFingerprints ??= {})[
                       agentType
                     ] = specialistCreditFingerprint
-                    if (
-                      activeWorkState.lastReviewerGateSkipReason ===
-                        'specialist-terminal-failure' ||
-                      activeWorkState.lastReviewerGateSkipReason ===
-                        'specialist-rate-limited'
-                    ) {
-                      activeWorkState.lastReviewerGateSkipReason = ''
+                    // Phase 4: merge markers for exactly the files this pass
+                    // attested, PRESERVING previously stored markers for other
+                    // files so their per-file credit survives the re-review.
+                    {
+                      const markerMap = (
+                        (activeWorkState.specialistReviewFileMarkers ??= {})[
+                          agentType
+                        ] ??= {}
+                      )
+                      for (const scopedFile of specialistScopedFileSets.get(
+                        agentType,
+                      ) ?? []) {
+                        markerMap[scopedFile] =
+                          readGateFileContentMarker(scopedFile)
+                      }
                     }
-                    clearOwedReviewer(agentType)
-                    markActiveWorkStateChanged()
                     const parentOwnedPassAdvisories = boundAdvisoryLines(
                       collectReviewerAdvisories(specialistToolResult),
                     )
@@ -3101,6 +3273,13 @@ ${guideSections}
                     ).filter((entry) => entry !== agentType)
                     if (activeWorkState.specialistReviewGateFingerprints) {
                       delete activeWorkState.specialistReviewGateFingerprints[
+                        agentType
+                      ]
+                    }
+                    // Phase 4: the per-file marker entry is credit too; drop
+                    // it with the scalar so no stale marker survives eviction.
+                    if (activeWorkState.specialistReviewFileMarkers) {
+                      delete activeWorkState.specialistReviewFileMarkers[
                         agentType
                       ]
                     }
@@ -3546,6 +3725,22 @@ ${guideSections}
                   ;(activeWorkState.specialistReviewGateFingerprints ??= {})[
                     agentType
                   ] = specialistCreditFingerprint
+                  // Phase 4: merge markers for exactly the files this pass
+                  // attested, PRESERVING previously stored markers for other
+                  // files so their per-file credit survives the re-review.
+                  {
+                    const markerMap = (
+                      (activeWorkState.specialistReviewFileMarkers ??= {})[
+                        agentType
+                      ] ??= {}
+                    )
+                    for (const scopedFile of specialistScopedFileSets.get(
+                      agentType,
+                    ) ?? []) {
+                      markerMap[scopedFile] =
+                        readGateFileContentMarker(scopedFile)
+                    }
+                  }
                   if (
                     activeWorkState.lastReviewerGateSkipReason ===
                       'specialist-terminal-failure' ||
@@ -3896,39 +4091,108 @@ ${guideSections}
           runValidationGate &&
           !validationInfrastructureBypassed
         ) {
-          setGateProgress(
-            `gate: validation hooks running for ${gateScopeFiles.length} file(s)`,
-          )
-          const verify = yield {
-            toolName: 'run_file_change_hooks',
-            input: { files: gateScopeFiles },
-          } as any
-          let failures = collectHookFailures(
-            (verify as any) && (verify as any).toolResult,
-          )
-          if (failures.length === 0) {
-            validationSummary = summarizeHookResults(
-              (verify as any) && (verify as any).toolResult,
-            )
-            activeWorkState.lastValidationSummary = validationSummary
-            activeWorkState.validationAssurance = validationSummary.startsWith(
-              'REDUCED_ASSURANCE:',
-            )
-              ? 'reduced'
-              : 'full'
-            activeWorkState.validationEvidence = [
-              {
-                gateId: reviewSnapshotFingerprint,
-                files: gateScopeFiles,
-                snapshotFingerprint: buildGateFingerprint(
-                  gateScopeFiles,
-                  validationSummary,
-                ),
-                summary: validationSummary,
-                assurance: activeWorkState.validationAssurance,
-                recordedAt: new Date().toISOString(),
-              },
+          // Phase 4 validation receipt reuse: the NEWEST evidence entry is
+          // reused IN PLACE — no hook run, no rewrite — only when it carries
+          // full assurance, covers EXACTLY the current gate-scope file set,
+          // and every captured content marker still matches the live bytes.
+          // Anything else (a legacy entry without markers, a missing or
+          // mismatched or `unreadable:*` marker, reduced/none assurance, or a
+          // REDUCED_ASSURANCE summary) falls through to the fresh hook run
+          // that rewrites the evidence, so the gate-lifecycle cadence only
+          // changes on an exact full-coverage, byte-identical reuse.
+          // Explicit element type via the named state type: without it TS
+          // infers this const through the later
+          // `activeWorkState.validationEvidence = ...` assignment (which
+          // references reusedEvidence) and reports TS7022 circularity. A
+          // `typeof activeWorkState...` annotation is itself circular
+          // (TS2502), so the named imported type is used instead.
+          const newestEvidenceEntry:
+            | NonNullable<
+                Base2ActiveWorkState['validationEvidence']
+              >[number]
+            | undefined =
+            activeWorkState.validationEvidence?.[
+              (activeWorkState.validationEvidence?.length ?? 0) - 1
             ]
+          const evidenceFileMarkers: Record<string, string> | undefined =
+            newestEvidenceEntry?.fileMarkers
+          // Explicit annotations: these consts feed the later
+          // `activeWorkState.validationEvidence = reusedEvidence ? ...`
+          // assignment, and TS's inference walk through the state field
+          // reports TS7022 without them.
+          const evidenceCoversExactScope: boolean =
+            !!newestEvidenceEntry &&
+            gateFileSetsEqual(newestEvidenceEntry.files ?? [], gateScopeFiles)
+          const reusedEvidence:
+            | NonNullable<
+                Base2ActiveWorkState['validationEvidence']
+              >[number]
+            | null =
+            evidenceCoversExactScope &&
+            newestEvidenceEntry.assurance === 'full' &&
+            !newestEvidenceEntry.summary.startsWith('REDUCED_ASSURANCE:') &&
+            evidenceFileMarkers !== undefined &&
+            gateScopeFiles.every(
+              (file) =>
+                evidenceFileMarkers[file] !== undefined &&
+                !evidenceFileMarkers[file].startsWith('unreadable:') &&
+                evidenceFileMarkers[file] === readGateFileContentMarker(file),
+            )
+              ? newestEvidenceEntry
+              : null
+          if (!reusedEvidence) {
+            setGateProgress(
+              `gate: validation hooks running for ${gateScopeFiles.length} file(s)`,
+            )
+          }
+          const verify = reusedEvidence
+            ? null
+            : (yield {
+                toolName: 'run_file_change_hooks',
+                input: { files: gateScopeFiles },
+              } as any)
+          let failures = reusedEvidence
+            ? []
+            : collectHookFailures(
+                (verify as any) && (verify as any).toolResult,
+              )
+          if (failures.length === 0) {
+            if (!reusedEvidence) {
+              validationSummary = summarizeHookResults(
+                (verify as any) && (verify as any).toolResult,
+              )
+              activeWorkState.lastValidationSummary = validationSummary
+              activeWorkState.validationAssurance =
+                validationSummary.startsWith('REDUCED_ASSURANCE:')
+                  ? 'reduced'
+                  : 'full'
+            }
+            activeWorkState.validationEvidence = reusedEvidence
+              ? // Reuse keeps the entry verbatim (summary, assurance,
+                // recordedAt, markers); only the mirrors above advance.
+                activeWorkState.validationEvidence
+              : [
+                  {
+                    gateId: reviewSnapshotFingerprint,
+                    files: gateScopeFiles,
+                    snapshotFingerprint: buildGateFingerprint(
+                      gateScopeFiles,
+                      validationSummary,
+                    ),
+                    summary: validationSummary,
+                    assurance: activeWorkState.validationAssurance,
+                    recordedAt: new Date().toISOString(),
+                    // Phase 4: per-file content markers captured at this
+                    // pass so a later cycle with unchanged covered bytes can
+                    // reuse this receipt instead of re-running hooks.
+                    fileMarkers: Object.fromEntries(
+                      gateScopeFiles.map((file) => [
+                        file,
+                        readGateFileContentMarker(file),
+                      ]),
+                    ),
+                  },
+                ]
             activeWorkState.currentPhase = 'awaiting_review'
             markActiveWorkStateChanged()
           } else {
@@ -4465,9 +4729,14 @@ ${guideSections}
                     'Snapshot details (read for file membership; do not echo):',
                     reviewSnapshotDetails,
                     `Validation gate summary: ${validationSummary}`,
-                    // Re-review ledger; empty on round 0 so no stray heading or
-                    // blank line appears in the first review's prompt.
-                    ...buildReviewerRoundLedgerLines(requiredReviewerAgentType),
+                    // Re-review ledger (repair round + already-attested
+                    // block); empty on round 0 with no prior receipts so no
+                    // stray heading or blank line appears in the first
+                    // review's prompt.
+                    ...buildReviewerRoundLedgerLines(requiredReviewerAgentType, {
+                      scopeFiles: reviewableGateScopeFiles,
+                      currentFingerprint: reviewSnapshotFingerprint,
+                    }),
                     'Read large files via read_files windows (bounded block reads) instead of whole-file reads so your accumulated read context stays bounded; still attest to every pending file in reviewedFiles.',
                     '',
                     'Return the required structured review object. Echo snapshotFingerprint exactly, list every pending changed file in reviewedFiles (including tests), evaluate all review dimensions, and map every user requirement to evidence. Changed tests are first-class review targets and may also be cited as coverage evidence. Use coverage: missing only when no covering test exists in the changed files or elsewhere in the repo.',
@@ -4513,6 +4782,10 @@ ${guideSections}
                       'Snapshot details (read for file membership; do not echo):',
                       reviewSnapshotDetails,
                       `Validation gate summary: ${validationSummary}`,
+                      ...buildReviewerRoundLedgerLines(requiredReviewerAgentType, {
+                        scopeFiles: reviewableGateScopeFiles,
+                        currentFingerprint: reviewSnapshotFingerprint,
+                      }),
                       '',
                       'Protocol errors from the prior response:',
                       ...attestationIssues,
@@ -5989,10 +6262,10 @@ ${guideSections}
       // T1.2(c) re-review ledger for the reviewer spawn packet. The reviewer is
       // stateless across repair rounds, so without this it re-derives every
       // finding from scratch instead of verifying the ones a repair round
-      // already reported as addressed. Returns [] on round 0 so the first
-      // review's prompt is byte-identical to the pre-ledger surface, and reads
-      // ONLY already-persisted state (openReviewerFindings /
-      // reviewerRepairRoundCount) — no new gate state.
+      // already reported as addressed. The repair-round header/findings block
+      // is emitted only when reviewerRepairRoundCount > 0, and the function
+      // reads ONLY already-persisted state (openReviewerFindings /
+      // reviewReceipts / reviewerRepairRoundCount) — no new gate state.
       //
       // Findings are filtered to the spawned reviewer's own family:
       // openReviewerFindings can hold security-reviewer and specialist records,
@@ -6000,29 +6273,108 @@ ${guideSections}
       // scope. `finding.text` is rendered VERBATIM (keeping the
       // NON_BLOCKING:/BLOCKING: prefix and any `[id] ` segment) because that is
       // exactly the string the condone matcher compares a re-raise against.
-      // Inline because handleSteps is serialized via .toString() +
-      // new Function(...), so it must not reference module-scope imports.
-      function buildReviewerRoundLedgerLines(reviewer: string): string[] {
+      //
+      // Phase 4 already-attested ledger: options.scopeFiles bounds the block
+      // to the spawn's review scope (the reviewable gate-scope files for the
+      // final reviewer, the scoped spawn subset for specialists). LOOKS_GOOD
+      // receipts from the SAME reviewer family whose reviewedFiles intersect
+      // that scope are summarized in a handful of bounded lines: files whose
+      // receipt fingerprint still equals options.currentFingerprint are
+      // attested with unchanged bytes; the rest were attested in a prior round
+      // and their bytes may have changed. The reviewer is told to focus review
+      // depth on unattested/drifted files while still reporting any issue
+      // found anywhere. Scope and fingerprint arrive as explicit options (not
+      // closure reads) so the function stays callable from the specialist
+      // block before the reviewer-block `let` bindings initialize. Inline
+      // because handleSteps is serialized via .toString() + new Function(...),
+      // so it must not reference module-scope imports.
+      function buildReviewerRoundLedgerLines(
+        reviewer: string,
+        options?: { scopeFiles?: string[]; currentFingerprint?: string },
+      ): string[] {
+        const lines: string[] = []
         const repairRound = Number(
           activeWorkState.reviewerRepairRoundCount ?? 0,
         )
-        if (!(repairRound > 0)) return []
-        const lines = [`Repair round: ${repairRound}. This is a re-review.`]
-        const ownFindings = (activeWorkState.openReviewerFindings ?? []).filter(
-          (finding) => finding.reviewer === reviewer,
-        )
-        if (ownFindings.length === 0) return lines
-        lines.push(
-          'Findings raised earlier and reported addressed are listed below. Verify each is genuinely fixed and cite the line that fixes it. If a fix is wrong or incomplete, re-raise the finding with its ORIGINAL text repeated VERBATIM and put your reason on a separate line: the gate matches re-raises by exact text (and by stable finding id when you supplied one), so a reworded re-raise is treated as a brand-new finding and the repair loop cannot converge.',
-        )
-        const shown = ownFindings.slice(0, 12)
-        for (const finding of shown) {
-          lines.push(`  - ${finding.text}`)
+        if (repairRound > 0) {
+          lines.push(`Repair round: ${repairRound}. This is a re-review.`)
+          const ownFindings = (
+            activeWorkState.openReviewerFindings ?? []
+          ).filter((finding) => finding.reviewer === reviewer)
+          if (ownFindings.length > 0) {
+            lines.push(
+              'Findings raised earlier and reported addressed are listed below. Verify each is genuinely fixed and cite the line that fixes it. If a fix is wrong or incomplete, re-raise the finding with its ORIGINAL text repeated VERBATIM and put your reason on a separate line: the gate matches re-raises by exact text (and by stable finding id when you supplied one), so a reworded re-raise is treated as a brand-new finding and the repair loop cannot converge.',
+            )
+            const shown = ownFindings.slice(0, 12)
+            for (const finding of shown) {
+              lines.push(`  - ${finding.text}`)
+            }
+            if (ownFindings.length > shown.length) {
+              lines.push(
+                `  - (+${ownFindings.length - shown.length} more earlier findings omitted)`,
+              )
+            }
+          }
         }
-        if (ownFindings.length > shown.length) {
-          lines.push(
-            `  - (+${ownFindings.length - shown.length} more earlier findings omitted)`,
+        // Phase 4 already-attested block. Bounded: at most 12 files per list
+        // plus one count line, so the prompt cannot grow without bound across
+        // a long plan run.
+        const scopeSet = new Set(
+          selectReviewableGateFiles(options?.scopeFiles ?? []),
+        )
+        if (scopeSet.size > 0) {
+          const familyReceipts = (activeWorkState.reviewReceipts ?? []).filter(
+            (receipt) =>
+              receipt &&
+              receipt.reviewer === reviewer &&
+              receipt.verdict === 'LOOKS_GOOD' &&
+              Array.isArray(receipt.reviewedFiles) &&
+              receipt.reviewedFiles.some((file) => scopeSet.has(file)),
           )
+          if (familyReceipts.length > 0) {
+            const unchangedFiles = new Set<string>()
+            const priorFiles = new Set<string>()
+            for (const receipt of familyReceipts) {
+              const matchesCurrentBytes =
+                typeof options?.currentFingerprint === 'string' &&
+                options.currentFingerprint === receipt.snapshotFingerprint
+              for (const file of receipt.reviewedFiles) {
+                if (!scopeSet.has(file)) continue
+                if (matchesCurrentBytes) unchangedFiles.add(file)
+                else priorFiles.add(file)
+              }
+            }
+            const unchangedList = Array.from(unchangedFiles).slice(0, 12)
+            const priorList = Array.from(priorFiles)
+              .filter((file) => !unchangedFiles.has(file))
+              .slice(0, 12)
+            if (unchangedList.length > 0 || priorList.length > 0) {
+              lines.push(
+                'Already attested LOOKS_GOOD by an earlier round of this reviewer family:',
+              )
+              if (unchangedList.length > 0) {
+                lines.push(
+                  `  - attested with unchanged bytes (fingerprint still matches): ${unchangedList.join(', ')}`,
+                )
+              }
+              if (priorList.length > 0) {
+                lines.push(
+                  `  - attested in a prior round; bytes may have changed since: ${priorList.join(', ')}`,
+                )
+              }
+              if (
+                unchangedFiles.size > unchangedList.length ||
+                priorFiles.size > priorList.length
+              ) {
+                lines.push(
+                  `  - (+${unchangedFiles.size - unchangedList.length + priorFiles.size - priorList.length} more already-attested files omitted)`,
+                )
+              }
+              lines.push(
+                'These files were already attested LOOKS_GOOD; focus your review depth on files NOT listed above (unattested or drifted). Still report any issue you find anywhere, including in the listed files.',
+              )
+            }
+          }
         }
         return lines
       }
@@ -6370,11 +6722,29 @@ ${guideSections}
       function specialistCreditIsFresh(
         agentType: string,
         fingerprint: string,
+        auxRelevantReviewableFiles: string[],
       ): boolean {
         if (
           !(activeWorkState.specialistReviewGatesDone ?? []).includes(agentType)
         ) {
           return false
+        }
+        // Phase 4: when a per-file marker map exists for this specialist it
+        // is AUTHORITATIVE over the scalar fingerprint — the credit is fresh
+        // only while EVERY currently aux-relevant reviewable file carries a
+        // stored marker equal to its current content marker. A missing entry,
+        // a mismatch, or an `unreadable:*` marker is NOT fresh (fail closed);
+        // the scoped-drift helper below then narrows the re-review to exactly
+        // those files instead of the whole set.
+        const storedFileMarkers =
+          activeWorkState.specialistReviewFileMarkers?.[agentType]
+        if (storedFileMarkers !== undefined) {
+          return auxRelevantReviewableFiles.every(
+            (file) =>
+              storedFileMarkers[file] !== undefined &&
+              !storedFileMarkers[file].startsWith('unreadable:') &&
+              storedFileMarkers[file] === readGateFileContentMarker(file),
+          )
         }
         const stored = (activeWorkState.specialistReviewGateFingerprints ?? {})[
           agentType
@@ -6384,6 +6754,26 @@ ${guideSections}
         // converges after one fresh review of the current bytes.
         if (stored === undefined) return false
         return stored === fingerprint
+      }
+
+      // Phase 4 scoped re-review: the subset of currently aux-relevant
+      // reviewable files whose stored marker for this specialist is missing
+      // or drifted (fail closed — an `unreadable:*` stored marker is drifted).
+      // Empty when the specialist's per-file map is ABSENT (legacy scalar
+      // state): the full aux-relevant set is then re-reviewed, byte-identical
+      // to the pre-Phase-4 spawn. Inline for the same serialization reason.
+      function specialistDriftedFiles(
+        agentType: string,
+        auxRelevantReviewableFiles: string[],
+      ): string[] {
+        const storedFileMarkers =
+          activeWorkState.specialistReviewFileMarkers?.[agentType]
+        if (storedFileMarkers === undefined) return auxRelevantReviewableFiles
+        return auxRelevantReviewableFiles.filter(
+          (file) =>
+            storedFileMarkers[file] === undefined ||
+            storedFileMarkers[file] !== readGateFileContentMarker(file),
+        )
       }
 
       // T1.5: condoning is keyed on (verdict class, finding identity) rather
@@ -7907,8 +8297,46 @@ function hashGateSnapshotDetails(details: string): string {
           gatePassedFiles.delete(file)
           // A re-edited file leaves the gate-passed ledger; drop its marker so
           // the eviction guard cannot see a stale marker and no orphan remains.
+          // The validation receipt markers covering the file are dropped so
+          // hook reuse fails closed into a fresh hook run for changed bytes.
           if (activeWorkState.gatePassedFileMarkers) {
             delete activeWorkState.gatePassedFileMarkers[file]
+          }
+          // Phase 4: security per-file credit is CONTENT-keyed, so a mere
+          // re-absorption of the same still-dirty path (the scoped git-status
+          // sweep re-reports it every iteration) must NOT evict credit the
+          // aux block just wrote — an unconditional delete here re-fired
+          // security reviews in a loop on unchanged bytes. Evict only on
+          // confirmed byte drift; a genuinely re-edited file loses its marker
+          // immediately, and every freshness check also fails closed on a
+          // mismatch, so no stale credit can be reused. An `unreadable:*`
+          // stored marker is left in place: freshness already fails closed on
+          // it, and eviction would only mask the unreadable condition.
+          if (activeWorkState.securityReviewFileMarkers) {
+            const securityStoredMarker =
+              activeWorkState.securityReviewFileMarkers[file]
+            if (
+              securityStoredMarker !== undefined &&
+              !securityStoredMarker.startsWith('unreadable:') &&
+              readGateFileContentMarker(file) !== securityStoredMarker
+            ) {
+              delete activeWorkState.securityReviewFileMarkers[file]
+            }
+          }
+          if (
+            Array.isArray(activeWorkState.validationEvidence) &&
+            activeWorkState.validationEvidence.length > 0 &&
+            activeWorkState.validationEvidence[
+              activeWorkState.validationEvidence.length - 1
+            ]?.fileMarkers
+          ) {
+            const evidenceEntry =
+              activeWorkState.validationEvidence[
+                activeWorkState.validationEvidence.length - 1
+              ]
+            if (evidenceEntry.fileMarkers && file in evidenceEntry.fileMarkers) {
+              delete evidenceEntry.fileMarkers[file]
+            }
           }
           activeWorkState.gatePassedFiles =
             activeWorkState.gatePassedFiles.filter(
@@ -8620,6 +9048,7 @@ function hashGateSnapshotDetails(details: string): string {
           '- Do NOT treat parent workflow as review requirements: rewriting git commits, running full validation, commit/push, confirming CI/CD green, or other operator/orchestrator duties. Omit those from requirementCoverage (or if mentioned only as context, never mark them missing/uncertain for the gate).',
           `Changed files: ${input.files.join(', ') || '(none)'}`,
           `Snapshot fingerprint (echo exactly): ${input.snapshotFingerprint}`,
+          'Read large files via read_files windows/around/symbol selectors (bounded block reads) instead of whole-file reads so your accumulated read context stays bounded.',
         ]
         if (truncatedIntent) {
           lines.push(
