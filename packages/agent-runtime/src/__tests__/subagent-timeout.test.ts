@@ -3,7 +3,6 @@ import { spyOn, beforeEach, afterEach, describe, expect, it } from 'bun:test'
 
 import * as spawnAgentUtils from '../tools/handlers/tool/spawn-agent-utils'
 import {
-  resolveSubagentTimeoutMs,
   executeSubagent,
   createCombinedAbortSignal,
 } from '../tools/handlers/tool/spawn-agent-utils'
@@ -34,38 +33,6 @@ function makeTemplate(overrides: Partial<AgentTemplate> = {}): AgentTemplate {
     ...overrides,
   } as AgentTemplate
 }
-
-describe('resolveSubagentTimeoutMs', () => {
-  it('uses the explicit per-spawn override when provided', () => {
-    const tpl = makeTemplate({ defaultTimeoutMs: 5 * 60 * 1000 })
-    expect(resolveSubagentTimeoutMs(tpl, 30 * 1000)).toBe(30 * 1000)
-  })
-
-  it('falls back to the agent template defaultTimeoutMs when no override', () => {
-    const tpl = makeTemplate({ defaultTimeoutMs: 5 * 60 * 1000 })
-    expect(resolveSubagentTimeoutMs(tpl, undefined)).toBe(5 * 60 * 1000)
-  })
-
-  it('has no wall-clock timeout when neither override nor template default is set', () => {
-    const tpl = makeTemplate()
-    expect(resolveSubagentTimeoutMs(tpl, undefined)).toBe(-1)
-  })
-
-  it('override takes precedence over template default even when default is -1', () => {
-    const tpl = makeTemplate({ defaultTimeoutMs: -1 })
-    expect(resolveSubagentTimeoutMs(tpl, 1000)).toBe(1000)
-  })
-
-  it('template default of -1 (no timeout) is respected when no override', () => {
-    const tpl = makeTemplate({ defaultTimeoutMs: -1 })
-    expect(resolveSubagentTimeoutMs(tpl, undefined)).toBe(-1)
-  })
-
-  it('explicit override of -1 (no timeout) is respected', () => {
-    const tpl = makeTemplate({ defaultTimeoutMs: 5 * 60 * 1000 })
-    expect(resolveSubagentTimeoutMs(tpl, -1)).toBe(-1)
-  })
-})
 
 describe('withTimeout abort support', () => {
   it('aborts the controller on deadline before rejecting', async () => {
@@ -113,7 +80,7 @@ describe('withTimeout abort support', () => {
   })
 })
 
-describe('spawn_agents timeout_seconds override wiring', () => {
+describe('spawn_agents no longer applies a wall-clock deadline', () => {
   let mockAgentTemplate: AgentTemplate
   let baseParams: any
 
@@ -150,7 +117,7 @@ describe('spawn_agents timeout_seconds override wiring', () => {
     spyOn(spawnAgentUtils, 'executeSubagent').mockRestore?.()
   })
 
-  it('passes timeout_seconds (seconds → ms) as subagentTimeoutMs to executeSubagent', async () => {
+  it('never forwards a subagentTimeoutMs option, even when an entry still carries timeout_seconds', async () => {
     const spy = spyOn(spawnAgentUtils, 'executeSubagent').mockResolvedValue({
       agentState: { ...getInitialAgentState(), agentId: 'sub' },
       output: { type: 'lastMessage' as const, value: [] },
@@ -174,86 +141,7 @@ describe('spawn_agents timeout_seconds override wiring', () => {
     } as any)
 
     expect(spy).toHaveBeenCalledTimes(1)
-    const passedTimeout = spy.mock.calls[0][0].subagentTimeoutMs
-    expect(passedTimeout).toBe(120 * 1000)
-  })
-
-  it('passes undefined when timeout_seconds is omitted (template default applies)', async () => {
-    const spy = spyOn(spawnAgentUtils, 'executeSubagent').mockResolvedValue({
-      agentState: { ...getInitialAgentState(), agentId: 'sub' },
-      output: { type: 'lastMessage' as const, value: [] },
-    } as any)
-
-    await handleSpawnAgents({
-      ...baseParams,
-      toolCall: {
-        toolName: 'spawn_agents',
-        toolCallId: 'c1',
-        input: {
-          agents: [{ agent_type: 'test-agent', prompt: 'do thing' }],
-        },
-      } as any,
-    } as any)
-
-    expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy.mock.calls[0][0].subagentTimeoutMs).toBeUndefined()
-  })
-
-  it('passes -1 → -1000 ms when timeout_seconds is -1 (no timeout)', async () => {
-    const spy = spyOn(spawnAgentUtils, 'executeSubagent').mockResolvedValue({
-      agentState: { ...getInitialAgentState(), agentId: 'sub' },
-      output: { type: 'lastMessage' as const, value: [] },
-    } as any)
-
-    await handleSpawnAgents({
-      ...baseParams,
-      toolCall: {
-        toolName: 'spawn_agents',
-        toolCallId: 'c1',
-        input: {
-          agents: [
-            {
-              agent_type: 'test-agent',
-              prompt: 'long thing',
-              timeout_seconds: -1,
-            },
-          ],
-        },
-      } as any,
-    } as any)
-
-    expect(spy).toHaveBeenCalledTimes(1)
-    // -1 seconds → -1000 ms, which resolveSubagentTimeoutMs treats as
-    // no-timeout (non-positive).
-    expect(spy.mock.calls[0][0].subagentTimeoutMs).toBe(-1000)
-  })
-
-  it('applies the same override to background (detached) spawns', async () => {
-    const spy = spyOn(spawnAgentUtils, 'executeSubagent').mockResolvedValue({
-      agentState: { ...getInitialAgentState(), agentId: 'sub' },
-      output: { type: 'lastMessage' as const, value: [] },
-    } as any)
-
-    await handleSpawnAgents({
-      ...baseParams,
-      toolCall: {
-        toolName: 'spawn_agents',
-        toolCallId: 'c1',
-        input: {
-          agents: [
-            {
-              agent_type: 'test-agent',
-              prompt: 'bg thing',
-              background: true,
-              timeout_seconds: 300,
-            },
-          ],
-        },
-      } as any,
-    } as any)
-
-    expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy.mock.calls[0][0].subagentTimeoutMs).toBe(300 * 1000)
+    expect('subagentTimeoutMs' in spy.mock.calls[0][0]).toBe(false)
   })
 })
 

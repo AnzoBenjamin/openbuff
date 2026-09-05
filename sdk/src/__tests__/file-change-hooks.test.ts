@@ -226,11 +226,33 @@ describe('runFileChangeHooks', () => {
     expect(results).toBeDefined()
     expect(results).toHaveLength(1)
     expect(results![0]).toMatchObject({ hookName: 'slow', exitCode: 0 })
-    // The configured timeout (30s) is forwarded, not the 180s default.
+    // The configured 30s bound is forwarded instead of the unbounded default.
     expect(paramsList).toHaveLength(1)
     expect(paramsList[0]).toMatchObject({
       command: 'tsc',
       timeout_seconds: 30,
+    })
+  })
+
+  test('forwards no timeout to runCommand when a hook omits timeoutSeconds', async () => {
+    const { run, paramsList } = fakeRunner({
+      tsc: { exitCode: 0 },
+    })
+    const out = await runFileChangeHooks({
+      files: ['src/a.ts'],
+      cwd: '/repo',
+      hooks: [{ name: 'typecheck', command: 'tsc' }],
+      runCommand: run,
+    })
+    const results = jsonValue(out)
+    expect(results).toBeDefined()
+    expect(results).toHaveLength(1)
+    expect(results![0]).toMatchObject({ hookName: 'typecheck', exitCode: 0 })
+    // No per-hook bound configured: -1 means the hook runs unbounded.
+    expect(paramsList).toHaveLength(1)
+    expect(paramsList[0]).toMatchObject({
+      command: 'tsc',
+      timeout_seconds: -1,
     })
   })
 

@@ -1,3 +1,0 @@
-{"ts":"2026-08-02T10:29:36.463Z","kind":"append_lesson","summary":"Appended entry \"Session closed — M1–M5 delivered, R7 deferred\" to STATUS.md","payload":{"heading":"Session closed — M1–M5 delivered, R7 deferred","artifact":"STATUS.md"}}
-{"ts":"2026-08-02T10:30:15.315Z","kind":"append_lesson","summary":"Appended entry \"Closure lessons\" to LESSONS.md","payload":{"heading":"Closure lessons","artifact":"LESSONS.md"}}
-{"ts":"2026-08-02T10:30:15.315Z","kind":"session_status","summary":"Session status -> completed","payload":{"status":"completed"}}

@@ -52,7 +52,7 @@ const definition: SecretAgentDefinition = {
           minimum: 1,
           maximum: 1800,
           description:
-            'Bounded timeout for each package-manager command. Defaults to 600 seconds.',
+            'Optional wall-clock bound for each package-manager command. Package-manager commands are unbounded by default.',
         },
       },
       required: ['manager', 'operation'],
@@ -90,9 +90,10 @@ const definition: SecretAgentDefinition = {
       typeof params?.workspace === 'string' ? params.workspace.trim() : ''
     const timeoutSeconds =
       typeof params?.timeout_seconds === 'number' &&
-      Number.isFinite(params.timeout_seconds)
+      Number.isFinite(params.timeout_seconds) &&
+      params.timeout_seconds > 0
         ? Math.max(1, Math.min(1800, Math.floor(params.timeout_seconds)))
-        : 600
+        : -1
     const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`
     const packageArgs = packages.map(quote).join(' ')
     const emit = (

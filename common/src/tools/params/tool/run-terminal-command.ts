@@ -102,10 +102,10 @@ const inputSchema = z
       ),
     timeout_seconds: z
       .number()
-      .default(30)
+      .default(-1)
       .optional()
       .describe(
-        `Set to -1 for no timeout. Does not apply for BACKGROUND commands. Default 30`,
+        `Wall-clock bound in seconds for SYNC commands. Omit or use -1 for no timeout (the default). Does not apply to BACKGROUND commands.`,
       ),
     owner: z
       .object({

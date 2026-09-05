@@ -13,7 +13,7 @@ export function buildSpawnAgentsInputForDirectAgentCall(params: {
 
   const input = parsed as DirectAgentInput
   const entry: DirectAgentInput = { agent_type: params.agentType }
-  for (const key of ['prompt', 'background', 'timeout_seconds']) {
+  for (const key of ['prompt', 'background']) {
     if (Object.prototype.hasOwnProperty.call(input, key)) {
       entry[key] = input[key]
     }
@@ -27,8 +27,7 @@ export function buildSpawnAgentsInputForDirectAgentCall(params: {
   } else {
     const legacyParams = Object.fromEntries(
       Object.entries(input).filter(
-        ([key]) =>
-          !['prompt', 'handoff', 'background', 'timeout_seconds'].includes(key),
+        ([key]) => !['prompt', 'handoff', 'background'].includes(key),
       ),
     )
     if (Object.keys(legacyParams).length > 0) entry.params = legacyParams

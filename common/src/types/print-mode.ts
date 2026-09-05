@@ -132,9 +132,8 @@ export const printModeSubagentFinishSchema = z.object({
   prompt: z.string().optional(),
   spawnToolCallId: z.string().optional(),
   spawnIndex: z.number().int().nonnegative().optional(),
-  // Present when the subagent finished due to an error (e.g. wall-clock
-  // timeout) rather than completing normally. Lets the UI distinguish a
-  // failed finish from a successful one.
+  // Present when the subagent finished due to an error rather than completing
+  // normally. Lets the UI distinguish a failed finish from a successful one.
   error: z.string().optional(),
 })
 export type PrintModeSubagentFinish = z.infer<
@@ -400,6 +399,65 @@ export type PrintModeContextCompactionStatus = z.infer<
 >
 
 /**
+ * Live progress WITHIN an announced context-compaction pass. ADDITIVE,
+ * non-breaking public-contract change: this is a NEW member of the
+ * {@link printModeEventSchema} discriminated union — no existing event variant
+ * is removed, renamed, or retyped, so no consumer migration or deprecation is
+ * required. In particular the `state` enum of
+ * {@link printModeContextCompactionStatusSchema} is deliberately NOT widened to
+ * carry progress: an added enum member would break a consumer that switches
+ * exhaustively over it, while an unknown event `type` is already contractually
+ * a no-op (see the forward-compatibility clause below).
+ *
+ * PRODUCER CONTRACT. This event only ever appears BETWEEN a
+ * `context_compaction_status` `started` and its matching `settled` for the SAME
+ * `runId`. The runtime emits it from deterministic milestones inside the
+ * announced pass — `analyzing` as soon as the pass is announced, `summarizing`
+ * per unit of observed pruner activity, `applying` once the pass has returned —
+ * and emits nothing at all outside an announced pass, so a suppressed or
+ * never-triggered iteration produces no progress events just as it produces
+ * neither half of the status pair. Correlation mirrors
+ * {@link printModeContextCompactionStatusSchema}: `runId` identifies the
+ * emitting run and `ancestorRunIds` is its lineage (empty ONLY for the root
+ * run); both are forwarded verbatim by every hop, while `agentId` is a display
+ * hint only, because the `spawn_agents` forwarding path rewrites it and at
+ * nesting depth >= 2 the delivered value names the nearest forwarding child
+ * rather than the emitter.
+ *
+ * `percent` is a BEST-EFFORT monotonic 0..100 estimate of how far the announced
+ * pass has progressed, never a guarantee. The pruner reports no total, two
+ * producers emit for the same pass (the agent loop and the inline spawn path),
+ * and events can be dropped or replayed, so a consumer MUST clamp for itself —
+ * `Math.max` against the last value it rendered, bounded to 0..100 — rather
+ * than trusting the sequence to arrive ordered or in range. `percent: 100` is
+ * NOT a claim that any space was reclaimed: the terminal
+ * {@link printModeContextCompactionSchema} result remains the ONLY signal that
+ * context was actually reclaimed, exactly as it was before this variant
+ * existed. Progress is telemetry, and no part of the compaction contract is
+ * gated on it.
+ *
+ * Forward-compatibility contract for `handleEvent` consumers: an exhaustive
+ * `switch`/match over `event.type` should treat unknown variants as no-ops
+ * (the SDK's own default handler only branches on `error`, and the CLI handler
+ * uses a catch-all `.otherwise`). Consumers may ignore this variant entirely
+ * and keep their previous behavior.
+ */
+export const printModeContextCompactionProgressSchema = z.object({
+  type: z.literal('context_compaction_progress'),
+  runId: z.string(),
+  ancestorRunIds: z.string().array(),
+  agentId: z.string().optional(),
+  /** Monotonic 0..100 completion estimate for the announced pass. */
+  percent: z.number(),
+  phase: z.enum(['analyzing', 'summarizing', 'applying']),
+  contextTokens: z.number().optional(),
+  targetBudgetTokens: z.number().optional(),
+})
+export type PrintModeContextCompactionProgress = z.infer<
+  typeof printModeContextCompactionProgressSchema
+>
+
+/**
  * Request-time emergency context trim. ADDITIVE, non-breaking public-contract
  * change: this is a NEW member of the {@link printModeEventSchema}
  * discriminated union — no existing event variant is removed, renamed, or
@@ -529,6 +587,7 @@ export const printModeEventSchema = z.discriminatedUnion('type', [
   printModeToolStartSchema,
 
   printModeContextCompactionSchema,
+  printModeContextCompactionProgressSchema,
   printModeContextCompactionStatusSchema,
   printModeContextRequestTrimSchema,
   printModeContextWindowSchema,

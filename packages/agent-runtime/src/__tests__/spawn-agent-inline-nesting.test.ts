@@ -1,6 +1,10 @@
 import { TEST_USER_ID } from '@codebuff/common/old-constants'
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
+import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
+import {
+  getInitialAgentState,
+  getInitialSessionState,
+} from '@codebuff/common/types/session-state'
 import {
   afterEach,
   beforeEach,
@@ -23,6 +27,7 @@ import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 import type { CodebuffToolCall } from '@codebuff/common/tools/list'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+import type { AgentState } from '@codebuff/common/types/session-state'
 
 /**
  * Filters the writeToClient mock's captured calls, returning only the
@@ -1253,5 +1258,121 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
           error.message.includes('write_audit_findings structuralReceipt'),
       ),
     ).toBe(true)
+  })
+})
+
+/**
+ * Finished child state carrying only the context telemetry these cases
+ * exercise. `contextTokenCount` is required on AgentState, so a child whose
+ * runtime never reported one is modelled by dropping the key through a Partial
+ * view rather than loosening the fixture's type.
+ */
+function childContextState(context: {
+  contextTokenCount?: number
+  contextWindowTokens?: number
+}): AgentState {
+  const agentState: AgentState = {
+    ...getInitialAgentState(),
+    contextTokenCount: context.contextTokenCount ?? 0,
+    contextWindowTokens: context.contextWindowTokens,
+  }
+  if (context.contextTokenCount === undefined) {
+    delete (agentState as Partial<AgentState>).contextTokenCount
+  }
+  return agentState
+}
+
+function receiptForChildContext(
+  agentId: string,
+  context: { contextTokenCount?: number; contextWindowTokens?: number },
+) {
+  return buildRuntimeAgentReceipt({
+    agentType: 'file-picker',
+    agentId,
+    output: { type: 'structuredOutput', value: { status: 'completed' } },
+    agentState: childContextState(context),
+  })
+}
+
+describe('buildRuntimeAgentReceipt context usage telemetry', () => {
+  it('reports the child tokens, window, and percent of window', () => {
+    const receipt = receiptForChildContext('file-picker-75', {
+      contextTokenCount: 150_000,
+      contextWindowTokens: 200_000,
+    })
+
+    expect(receipt.contextUsage).toEqual({
+      tokens: 150_000,
+      windowTokens: 200_000,
+      percentOfWindow: 75,
+    })
+  })
+
+  // A child may overrun its declared window, so the percent is clamped rather
+  // than emitted out of range, which would make the whole receipt unparseable.
+  it('clamps percentOfWindow to 100 for a child that overran its window', () => {
+    const receipt = receiptForChildContext('file-picker-overrun', {
+      contextTokenCount: 260_000,
+      contextWindowTokens: 200_000,
+    })
+
+    expect(receipt.contextUsage?.percentOfWindow).toBe(100)
+    expect(agentReceiptSchema.safeParse(receipt).success).toBe(true)
+  })
+
+  it('omits contextUsage when the child never reported a token count', () => {
+    const withoutTokens = receiptForChildContext('file-picker-no-tokens', {
+      contextWindowTokens: 200_000,
+    })
+    const withTokens = receiptForChildContext('file-picker-with-tokens', {
+      contextTokenCount: 10_000,
+      contextWindowTokens: 200_000,
+    })
+
+    expect(withoutTokens.contextUsage).toBeUndefined()
+    expect(JSON.stringify(withoutTokens)).not.toContain('contextUsage')
+    // Presence is driven by the token count, not by the window alone.
+    expect(withTokens.contextUsage).toBeDefined()
+  })
+
+  it('keeps the token count and omits window fields without a usable window', () => {
+    expect(
+      receiptForChildContext('file-picker-no-window', {
+        contextTokenCount: 120_000,
+      }).contextUsage,
+    ).toEqual({ tokens: 120_000 })
+    expect(
+      receiptForChildContext('file-picker-zero-window', {
+        contextTokenCount: 120_000,
+        contextWindowTokens: 0,
+      }).contextUsage,
+    ).toEqual({ tokens: 120_000 })
+  })
+
+  // AgentState carries no compaction counter, so the receipt must never
+  // fabricate one for the parent's shard-sizing decision.
+  it('never invents a compactionCount', () => {
+    const contexts: Array<{
+      contextTokenCount?: number
+      contextWindowTokens?: number
+    }> = [
+      { contextTokenCount: 150_000, contextWindowTokens: 200_000 },
+      { contextTokenCount: 260_000, contextWindowTokens: 200_000 },
+      { contextTokenCount: 120_000 },
+      { contextTokenCount: 120_000, contextWindowTokens: 0 },
+      { contextWindowTokens: 200_000 },
+    ]
+
+    for (const [index, context] of contexts.entries()) {
+      const receipt = receiptForChildContext(`file-picker-${index}`, context)
+
+      // Control: the telemetry itself is emitted whenever tokens are known,
+      // so the missing counter is an omission and not an absent feature.
+      expect(receipt.contextUsage !== undefined).toBe(
+        context.contextTokenCount !== undefined,
+      )
+      expect(receipt.contextUsage?.compactionCount).toBeUndefined()
+      expect(JSON.stringify(receipt)).not.toContain('compactionCount')
+    }
   })
 })

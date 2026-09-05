@@ -24,6 +24,7 @@ import {
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type {
   PrintModeContextCompaction,
+  PrintModeContextCompactionProgress,
   PrintModeEvent,
   PrintModeJobUpdate,
 } from '@codebuff/common/types/print-mode'
@@ -2774,5 +2775,391 @@ describe('sdk-event-handlers', () => {
     // The live stamp is meaningless once the run is over, so it does not
     // persist alongside the terminal state.
     expect(compactionBlocks[0]).not.toHaveProperty('liveSessionId')
+  })
+
+  // Payload fixtures for the live-progress cases below. They build the same
+  // shapes the compaction tests above dispatch inline; only the fields under
+  // test vary per case.
+  const compactionCategories = {
+    toolResults: { tokens: 10, percent: 10, messages: 1 },
+    todos: { tokens: 10, percent: 10, messages: 1 },
+    fileReads: { tokens: 20, percent: 20, messages: 2 },
+    subagents: { tokens: 20, percent: 20, messages: 2 },
+    userAssistantMessages: { tokens: 40, percent: 40, messages: 4 },
+  }
+
+  const startedEvent = (runId = 'root-run', contextTokens = 152_000) => ({
+    type: 'context_compaction_status' as const,
+    state: 'started' as const,
+    runId,
+    ancestorRunIds: [],
+    contextTokens,
+  })
+
+  const progressEvent = (
+    overrides: Partial<PrintModeContextCompactionProgress> = {},
+  ): PrintModeContextCompactionProgress => ({
+    type: 'context_compaction_progress',
+    // Root turn by default: empty lineage is what allows root-level card state.
+    runId: 'root-run',
+    ancestorRunIds: [],
+    percent: 40,
+    phase: 'summarizing',
+    ...overrides,
+  })
+
+  const compactionResultEvent = (
+    overrides: Partial<PrintModeContextCompaction> = {},
+  ): PrintModeContextCompaction => ({
+    type: 'context_compaction',
+    action: 'semantic_compaction',
+    runId: 'root-run',
+    ancestorRunIds: [],
+    before: { tokens: 152_000, messages: 20, categories: compactionCategories },
+    after: { tokens: 60_000, messages: 8, categories: compactionCategories },
+    removedCategories: [],
+    retainedKnowledgeMemory: true,
+    recovery: 'Resume from <knowledge_memory>.',
+    ...overrides,
+  })
+
+  const compactionCards = (
+    messages: ChatMessage[],
+  ): CompactionContentBlock[] =>
+    (messages[0].blocks ?? []).filter(
+      (block): block is CompactionContentBlock => block.type === 'compaction',
+    )
+
+  /**
+   * The single card left behind by one announced root pass that reported
+   * `overrides` as its result. Each call gets a fresh handler context, so the
+   * transient gate below is asserted per outcome rather than across accumulated
+   * state.
+   */
+  const settledCardFor = (
+    overrides: Partial<PrintModeContextCompaction> = {},
+  ): CompactionContentBlock => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    dispatchValidEvent(handleEvent, startedEvent())
+    dispatchValidEvent(handleEvent, progressEvent({ percent: 60 }))
+    dispatchValidEvent(handleEvent, compactionResultEvent(overrides))
+    const cards = compactionCards(getMessages())
+    expect(cards).toHaveLength(1)
+    return cards[0]
+  }
+
+  test('context_compaction_progress raises the pending card progress for the root run', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+
+    dispatchValidEvent(handleEvent, startedEvent())
+    // A freshly announced pass starts its bar at 0; only progress moves it.
+    expect(compactionCards(getMessages())[0]).toMatchObject({
+      status: 'pending',
+      runId: 'root-run',
+      progressPercent: 0,
+    })
+
+    dispatchValidEvent(handleEvent, progressEvent({ percent: 45 }))
+
+    const cards = compactionCards(getMessages())
+    // The live card advances in place rather than gaining a sibling.
+    expect(cards).toHaveLength(1)
+    expect(cards[0]).toMatchObject({
+      status: 'pending',
+      runId: 'root-run',
+      progressPercent: 45,
+    })
+  })
+
+  test('a lower progress percent never rewinds the pending card', () => {
+    const { ctx, getMessages } = createTestContext()
+    const notices: Array<CompactionNotice | null> = []
+    let notice: CompactionNotice | null = null
+    ctx.streaming.setCompactionNotice = (update) => {
+      notice = update(notice)
+      notices.push(notice)
+    }
+    const handleEvent = createEventHandler(ctx)
+
+    dispatchValidEvent(handleEvent, startedEvent())
+    dispatchValidEvent(handleEvent, progressEvent({ percent: 60 }))
+    // Two producers report for one pass, so an out-of-order or duplicated
+    // percent is expected: every write takes the maximum already recorded.
+    dispatchValidEvent(
+      handleEvent,
+      progressEvent({ percent: 25, phase: 'applying' }),
+    )
+
+    expect(compactionCards(getMessages())[0]).toMatchObject({
+      progressPercent: 60,
+    })
+    expect(notices.at(-1)).toEqual({
+      count: 0,
+      action: 'semantic_compaction',
+      degraded: false,
+      pending: true,
+      pendingRunIds: ['root-run'],
+      progressPercent: 60,
+    })
+  })
+
+  test('a non-finite or out-of-range progress percent is clamped instead of thrown on', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+
+    dispatchValidEvent(handleEvent, startedEvent())
+
+    // Garbage percents are dispatched without the schema on purpose: a replayed
+    // or cross-version payload can carry them, and the percent is documented as
+    // best-effort telemetry, so they must degrade to a renderable number.
+    for (const percent of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      -20,
+    ]) {
+      expect(() => handleEvent(progressEvent({ percent }))).not.toThrow()
+    }
+    // Still the announced 0 rather than NaN or a negative bar width.
+    expect(compactionCards(getMessages())[0]).toMatchObject({
+      progressPercent: 0,
+    })
+
+    dispatchValidEvent(
+      handleEvent,
+      progressEvent({ percent: 150, phase: 'applying' }),
+    )
+    // An over-range estimate reads as a finished bar, never as 150%.
+    expect(compactionCards(getMessages())[0]).toMatchObject({
+      progressPercent: 100,
+    })
+  })
+
+  test('a nested progress event advances the shared chip without touching the root card', () => {
+    const { ctx, getMessages } = createTestContext()
+    const notices: Array<CompactionNotice | null> = []
+    let notice: CompactionNotice | null = null
+    ctx.streaming.setCompactionNotice = (update) => {
+      notice = update(notice)
+      notices.push(notice)
+    }
+    const handleEvent = createEventHandler(ctx)
+
+    dispatchValidEvent(handleEvent, startedEvent())
+    // A foreground subagent / inline agent loop renders no root-level card, so
+    // its progress has none to advance -- but the status chip is shared, so it
+    // still reports movement while a pass is live.
+    dispatchValidEvent(
+      handleEvent,
+      progressEvent({
+        runId: 'child-run',
+        ancestorRunIds: ['root-run'],
+        agentId: 'child-agent',
+        percent: 55,
+        phase: 'analyzing',
+      }),
+    )
+
+    const cards = compactionCards(getMessages())
+    expect(cards).toHaveLength(1)
+    expect(cards[0]).toMatchObject({
+      status: 'pending',
+      runId: 'root-run',
+      progressPercent: 0,
+    })
+    expect(notices.at(-1)).toEqual({
+      count: 0,
+      action: 'semantic_compaction',
+      degraded: false,
+      pending: true,
+      pendingRunIds: ['root-run'],
+      progressPercent: 55,
+    })
+  })
+
+  test('a progress event with no pass pending neither creates a notice nor revives a settled one', () => {
+    const { ctx, getMessages } = createTestContext()
+    const notices: Array<CompactionNotice | null> = []
+    let notice: CompactionNotice | null = null
+    ctx.streaming.setCompactionNotice = (update) => {
+      notice = update(notice)
+      notices.push(notice)
+    }
+    const handleEvent = createEventHandler(ctx)
+
+    // Nothing was announced: progress is telemetry, so it must not invent a
+    // live chip or a card of its own. The notice is consulted and left null
+    // rather than being created as a pending one.
+    dispatchValidEvent(
+      handleEvent,
+      progressEvent({ percent: 30, phase: 'analyzing' }),
+    )
+    expect(notices).toEqual([null])
+    expect(compactionCards(getMessages())).toHaveLength(0)
+
+    // A completed pass settles the notice, and its healthy card holds at 100%.
+    dispatchValidEvent(handleEvent, compactionResultEvent())
+    const settledNotice: CompactionNotice = {
+      count: 1,
+      action: 'semantic_compaction',
+      degraded: false,
+    }
+    expect(notices.at(-1)).toEqual(settledNotice)
+    expect(compactionCards(getMessages())[0]).toMatchObject({
+      status: 'complete',
+      progressPercent: 100,
+      transient: true,
+    })
+
+    // A late progress event must not reopen the notice as live, and has no
+    // pending card left to move.
+    dispatchValidEvent(
+      handleEvent,
+      progressEvent({ percent: 70, phase: 'applying' }),
+    )
+    expect(notices.at(-1)).toEqual(settledNotice)
+    const cards = compactionCards(getMessages())
+    expect(cards).toHaveLength(1)
+    expect(cards[0]).toMatchObject({
+      status: 'complete',
+      progressPercent: 100,
+      transient: true,
+    })
+  })
+
+  test('a healthy compaction result settles the card at 100% and marks it transient', () => {
+    // Nothing here needs the user's attention: the bar visibly finishes and the
+    // card is marked for self-dismissal so it never reaches the transcript.
+    expect(
+      settledCardFor({ compactionCount: 1, fitsBudget: true }),
+    ).toMatchObject({
+      status: 'complete',
+      action: 'semantic_compaction',
+      progressPercent: 100,
+      transient: true,
+    })
+  })
+
+  test('an emergency mechanical trim result is never marked transient', () => {
+    const trimmed = settledCardFor({
+      action: 'mechanical_trim',
+      retainedKnowledgeMemory: false,
+      recovery: 'Re-gather exact constraints.',
+    })
+
+    expect(trimmed).toMatchObject({
+      status: 'complete',
+      action: 'mechanical_trim',
+    })
+    // A degraded outcome stays in scrollback as a permanent warning card, so it
+    // gets neither the self-dismissal flag nor a completed bar.
+    expect(trimmed).not.toHaveProperty('transient')
+    expect(trimmed).not.toHaveProperty('progressPercent')
+    // Control: the same path with a healthy result does mark the card, so the
+    // absence above is the degradation gate rather than a missing feature.
+    expect(settledCardFor()).toMatchObject({
+      progressPercent: 100,
+      transient: true,
+    })
+  })
+
+  test('a compaction result that does not fit the budget is never marked transient', () => {
+    const overBudget = settledCardFor({
+      fitsBudget: false,
+      shortfallTokens: 12_400,
+    })
+
+    expect(overBudget).toMatchObject({
+      status: 'complete',
+      action: 'semantic_compaction',
+      fitsBudget: false,
+      shortfallTokens: 12_400,
+    })
+    // Still over budget is exactly what the user must act on.
+    expect(overBudget).not.toHaveProperty('transient')
+    expect(overBudget).not.toHaveProperty('progressPercent')
+    expect(settledCardFor({ fitsBudget: true })).toMatchObject({
+      progressPercent: 100,
+      transient: true,
+    })
+  })
+
+  test('a low-yield compaction streak is never marked transient', () => {
+    const thrashing = settledCardFor({ consecutiveNoProgressCompactions: 2 })
+
+    expect(thrashing).toMatchObject({
+      status: 'complete',
+      action: 'semantic_compaction',
+      consecutiveNoProgressCompactions: 2,
+    })
+    // Compaction that stopped reclaiming space keeps its warning card.
+    expect(thrashing).not.toHaveProperty('transient')
+    expect(thrashing).not.toHaveProperty('progressPercent')
+    // One low-yield pass is still below the streak threshold, so it settles as a
+    // healthy transient card.
+    expect(
+      settledCardFor({ consecutiveNoProgressCompactions: 1 }),
+    ).toMatchObject({
+      progressPercent: 100,
+      transient: true,
+    })
+  })
+
+  test('handleFinish drops a transient compaction card and terminates a still-pending one', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+
+    // Two root passes in one turn: the first is still live, the second
+    // completed healthily and is therefore transient.
+    dispatchValidEvent(handleEvent, startedEvent('run-live'))
+    dispatchValidEvent(handleEvent, startedEvent('run-done', 120_000))
+    dispatchValidEvent(
+      handleEvent,
+      compactionResultEvent({ runId: 'run-done' }),
+    )
+    expect(
+      compactionCards(getMessages()).map((card) => card.transient === true),
+    ).toEqual([false, true])
+
+    dispatchValidEvent(handleEvent, { type: 'finish', totalCost: 0 })
+
+    const cards = compactionCards(getMessages())
+    // The renderer only HIDES a self-dismissing card; the turn boundary is what
+    // keeps it out of the persisted blocks, while the unfinished pass is
+    // terminated rather than deleted.
+    expect(cards).toHaveLength(1)
+    expect(cards[0]).toMatchObject({
+      status: 'interrupted',
+      runId: 'run-live',
+      beforeTokens: 152_000,
+    })
+    expect(cards[0]).not.toHaveProperty('liveSessionId')
+  })
+
+  test('a newly announced pass drops the previous transient card instead of stacking cards', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+
+    dispatchValidEvent(handleEvent, startedEvent('run-1'))
+    dispatchValidEvent(handleEvent, compactionResultEvent({ runId: 'run-1' }))
+    expect(compactionCards(getMessages())[0]).toMatchObject({
+      status: 'complete',
+      transient: true,
+    })
+
+    // The previous pass's card may still be inside its render hold, so the next
+    // announced pass drops it rather than leaving it stacked underneath.
+    dispatchValidEvent(handleEvent, startedEvent('run-2', 120_000))
+
+    const cards = compactionCards(getMessages())
+    expect(cards).toHaveLength(1)
+    expect(cards[0]).toMatchObject({
+      status: 'pending',
+      runId: 'run-2',
+      beforeTokens: 120_000,
+      progressPercent: 0,
+    })
   })
 })

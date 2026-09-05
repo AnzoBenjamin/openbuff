@@ -174,7 +174,6 @@ When you are done, call set_output with status: "answered", your answer, all rel
           shellQuote(repoUrl) +
           ' ' +
           shellQuote(cloneDir),
-        timeout_seconds: 180,
       },
     }
 

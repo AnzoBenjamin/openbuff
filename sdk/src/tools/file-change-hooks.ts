@@ -18,13 +18,15 @@ export type FileChangeHook = {
   command: string
   /** Optional glob; the hook runs only when a changed file matches it. */
   filePattern?: string
-  /** Optional per-hook override of the default 180s hook timeout, in seconds. */
+  /** Optional per-hook wall-clock bound in seconds. Omitted means no timeout. */
   timeoutSeconds?: number
   /** Run the command once per matching changed file instead of project-wide. */
   runPerFile?: boolean
 }
 
-const HOOK_TIMEOUT_SECONDS = 180
+// Hooks are unbounded by default; -1 means no timeout. A project opts into a
+// bound with the per-hook `timeoutSeconds`.
+const HOOK_DEFAULT_TIMEOUT_SECONDS = -1
 const MAX_HOOK_OUTPUT_CHARS = 6000
 const MAX_MANIFEST_BYTES = 512_000
 const MAX_PROJECT_SCAN_ENTRIES = 2_000
@@ -769,7 +771,7 @@ export async function runFileChangeHooks(params: {
         process_type: 'SYNC',
         cwd,
         projectRoot: cwd,
-        timeout_seconds: hook.timeoutSeconds ?? HOOK_TIMEOUT_SECONDS,
+        timeout_seconds: hook.timeoutSeconds ?? HOOK_DEFAULT_TIMEOUT_SECONDS,
         env,
         signal: params.signal,
       })

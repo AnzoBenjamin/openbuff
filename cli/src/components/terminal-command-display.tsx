@@ -54,10 +54,12 @@ export const TerminalCommandDisplay = ({
   const defaultMaxLines = expandable ? 5 : 10
   const maxLines = maxVisibleLines ?? defaultMaxLines
 
-  // Format timeout display - show when provided and not the default (30s)
-  const DEFAULT_TIMEOUT_SECONDS = 30
+  // Format timeout display - show only when a real positive bound exists
+  // (omitted, -1, or a non-finite value means no timeout, so no label)
   const timeoutLabel =
-    timeoutSeconds !== undefined && timeoutSeconds !== DEFAULT_TIMEOUT_SECONDS
+    timeoutSeconds !== undefined &&
+    Number.isFinite(timeoutSeconds) &&
+    timeoutSeconds > 0
       ? formatTimeout(timeoutSeconds)
       : null
 

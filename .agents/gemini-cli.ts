@@ -46,7 +46,6 @@ const definition: AgentDefinition = {
       input: {
         command:
           './scripts/tmux/tmux-cli.sh start --command "' + START_COMMAND + '"',
-        timeout_seconds: 30,
       },
     }
 

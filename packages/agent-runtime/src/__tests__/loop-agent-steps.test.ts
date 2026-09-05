@@ -825,6 +825,104 @@ describe('loopAgentSteps', () => {
     })
   })
 
+  // `context_compaction_progress` is best-effort telemetry emitted from
+  // deterministic milestones INSIDE an announced pass. The next cases pin the
+  // two invariants a consumer relies on: percents never rewind, and no emission
+  // ever falls outside a started/settled pair of the same run.
+  it('emits monotonic compaction progress strictly inside an announced pass', async () => {
+    setup()
+    const events: any[] = []
+    agentState.messageHistory = [
+      userMessage('small-window evidence '.repeat(8_000)),
+      userMessage('Continue from the retained goal.'),
+    ]
+    agentTemplate.handleSteps =
+      contextPruner.handleSteps as AgentTemplate['handleSteps']
+
+    await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      resolveModelContextWindow: mock(() => 32_000),
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    const statusEvents = events.filter(
+      (event) => event.type === 'context_compaction_status',
+    )
+    const started = statusEvents.find((event) => event.state === 'started')
+    const settled = statusEvents.find((event) => event.state === 'settled')
+    expect(started).toBeDefined()
+    expect(settled).toBeDefined()
+
+    const progress = events.filter(
+      (event) => event.type === 'context_compaction_progress',
+    )
+    // Both deterministic milestones: analysis as soon as the pass is announced,
+    // application once the step that owns the pruner has returned.
+    expect(progress.length).toBeGreaterThanOrEqual(2)
+    expect(progress[0]).toMatchObject({
+      phase: 'analyzing',
+      percent: 20,
+      runId: started.runId,
+      agentId: 'test-agent-id',
+      ancestorRunIds: [],
+      contextTokens: expect.any(Number),
+      targetBudgetTokens: 8_400,
+    })
+    expect(progress.at(-1)).toMatchObject({ phase: 'applying', percent: 90 })
+
+    const startedIndex = events.indexOf(started)
+    const settledIndex = events.indexOf(settled)
+    let previousPercent = 0
+    for (const event of progress) {
+      const index = events.indexOf(event)
+      expect(index).toBeGreaterThan(startedIndex)
+      expect(index).toBeLessThan(settledIndex)
+      expect(event.runId).toBe(started.runId)
+      expect(event.percent).toBeGreaterThanOrEqual(previousPercent)
+      expect(event.percent).toBeLessThanOrEqual(100)
+      previousPercent = event.percent
+    }
+  })
+
+  it('emits no compaction progress for an iteration that announces no pass', async () => {
+    setup()
+    const events: any[] = []
+    // A huge window keeps the request below the semantic trigger, so nothing is
+    // announced and a consumer must see no progress for a pass that never ran.
+    agentState.messageHistory = [userMessage('old evidence '.repeat(4_000))]
+    agentTemplate.handleSteps = function* () {
+      yield {
+        toolName: 'set_messages',
+        input: {
+          messages: [
+            userMessage(
+              '<knowledge_memory>\nPinned structured knowledge memory.\n</knowledge_memory>',
+            ),
+          ],
+        },
+        includeToolCall: false,
+      }
+      yield 'STEP'
+    } as () => StepGenerator
+
+    await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      resolveModelContextWindow: mock(() => 1_000_000),
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    expect(
+      events.filter((event) => event.type === 'context_compaction_status'),
+    ).toHaveLength(0)
+    expect(
+      events.filter((event) => event.type === 'context_compaction_progress'),
+    ).toHaveLength(0)
+  })
+
   it('emits a recovery-rich event when emergency mechanical trim is required', async () => {
     setup()
     const events: any[] = []
@@ -984,6 +1082,45 @@ describe('loopAgentSteps', () => {
     })
 
     expect(result.agentState.suppressSemanticCompaction).toBe(true)
+  })
+
+  it('emits compaction progress only while an announced pass is unsettled', async () => {
+    setup()
+    const events: any[] = []
+    // The suppression fixture drives several over-trigger iterations, only the
+    // first two of which announce a pass. Every later (suppressed) iteration
+    // must contribute no progress at all.
+    seedZeroReclaimAnnouncedPasses()
+
+    await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      resolveModelContextWindow: mock(() => 64_000),
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    const started = events.filter(
+      (event) =>
+        event.type === 'context_compaction_status' && event.state === 'started',
+    )
+    expect(started.length).toBeGreaterThanOrEqual(2)
+
+    // Walk the stream: a progress event may only appear while an announced pass
+    // of the SAME run is still unsettled.
+    const liveRunIds = new Set<string>()
+    let progressCount = 0
+    for (const event of events) {
+      if (event.type === 'context_compaction_status') {
+        if (event.state === 'started') liveRunIds.add(event.runId)
+        else liveRunIds.delete(event.runId)
+        continue
+      }
+      if (event.type !== 'context_compaction_progress') continue
+      progressCount++
+      expect(liveRunIds.has(event.runId)).toBe(true)
+    }
+    expect(progressCount).toBeGreaterThanOrEqual(started.length)
   })
 
   it('leaves semantic compaction unsuppressed when a pass genuinely shrinks history', async () => {

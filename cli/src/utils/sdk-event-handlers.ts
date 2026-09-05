@@ -16,6 +16,7 @@ import {
 import { shouldHideAgent } from './constants'
 import {
   createAgentBlock,
+  dropTransientCompactionBlocks,
   extractPlanFromBuffer,
   extractSpawnAgentResultContent,
   findAgentTypeById,
@@ -63,6 +64,7 @@ import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type {
   PrintModeContextWindow,
   PrintModeContextCompaction,
+  PrintModeContextCompactionProgress,
   PrintModeContextCompactionStatus,
   PrintModeContextRequestTrim,
   PrintModeEvent as SDKEvent,
@@ -1505,6 +1507,9 @@ const handleContextCompactionStatus = (
         retainedKnowledgeMemory: false,
         recovery: '',
         categoryDeltas: [],
+        // A freshly announced pass starts its bar at 0; only
+        // `context_compaction_progress` moves it, and only upwards.
+        progressPercent: 0,
         ...(event.resolvedContextWindowTokens !== undefined && {
           resolvedContextWindowTokens: event.resolvedContextWindowTokens,
         }),
@@ -1516,7 +1521,10 @@ const handleContextCompactionStatus = (
         }),
       }
       state.message.updater.updateAiMessageBlocks((blocks) => [
-        ...blocks,
+        // A previous pass's self-dismissing card is dropped rather than left to
+        // stack under the new live one: it is a transient progress affordance,
+        // and its renderer may still be inside its hold timer.
+        ...dropTransientCompactionBlocks(blocks),
         pendingBlock,
       ])
     }
@@ -1561,6 +1569,60 @@ const handleContextCompactionStatus = (
       degraded: previous.degraded,
       ...pendingNoticeFields(pendingRunIds),
     }
+  })
+}
+
+/**
+ * Bounds a producer-supplied percent to the renderable 0..100 whole range. The
+ * event contract calls `percent` a best-effort estimate, so a replayed or
+ * cross-version payload carrying a non-finite or out-of-range value degrades to
+ * a usable number here instead of reaching the renderer.
+ */
+const clampCompactionPercent = (percent: number): number =>
+  Number.isFinite(percent) ? Math.min(100, Math.max(0, Math.round(percent))) : 0
+
+/**
+ * Live progress inside an announced pass (`context_compaction_progress`). The
+ * pruner runs inline and is hidden, so without this the pending card would sit
+ * at a silent 0 for the whole pass.
+ *
+ * Two producers emit for one pass (the agent loop's milestones and the inline
+ * spawn path's activity ticks), so an out-of-order or duplicated percent is
+ * expected: every write takes the MAXIMUM of what is already recorded, which is
+ * what makes the bar monotonic no matter what order the events arrive in. The
+ * original array is returned when nothing changed so React skips a re-render.
+ *
+ * Card updates are root-scoped exactly like {@link handleContextCompactionStatus}
+ * (a nested run renders no root-level card, so it has none to advance), while
+ * the shared status-bar chip tracks progress for root and nested passes alike —
+ * but only while a pass is actually live, so a progress event can never create a
+ * notice or revive a settled one.
+ */
+const handleContextCompactionProgress = (
+  state: EventHandlerState,
+  event: PrintModeContextCompactionProgress,
+) => {
+  const percent = clampCompactionPercent(event.percent)
+
+  if (isRootCompactionEvent(event)) {
+    state.message.updater.updateAiMessageBlocks((blocks) => {
+      const pendingIndex = findLastPendingCompactionIndex(blocks, event.runId)
+      if (pendingIndex === -1) return blocks
+      const block = blocks[pendingIndex]
+      if (block.type !== 'compaction') return blocks
+      const nextPercent = Math.max(block.progressPercent ?? 0, percent)
+      if (nextPercent === block.progressPercent) return blocks
+      const next = [...blocks]
+      next[pendingIndex] = { ...block, progressPercent: nextPercent }
+      return next
+    })
+  }
+
+  state.streaming.setCompactionNotice((previous) => {
+    if (!previous || previous.pending !== true) return previous
+    const nextPercent = Math.max(previous.progressPercent ?? 0, percent)
+    if (nextPercent === previous.progressPercent) return previous
+    return { ...previous, progressPercent: nextPercent }
   })
 }
 
@@ -1640,6 +1702,18 @@ const handleContextRequestTrim = (
     ),
   }))
 }
+
+/**
+ * A pass worth keeping in scrollback: anything the user may need to act on. The
+ * single decision site for {@link CompactionContentBlock.transient}, so a
+ * degraded outcome can never be dismissed as a transient progress affordance.
+ */
+const compactionResultIsDegraded = (block: CompactionContentBlock): boolean =>
+  block.action === 'mechanical_trim' ||
+  block.trimSource === 'request' ||
+  block.fitsBudget === false ||
+  block.escalated === true ||
+  (block.consecutiveNoProgressCompactions ?? 0) >= 2
 
 const handleContextCompaction = (
   state: EventHandlerState,
@@ -1722,15 +1796,26 @@ const handleContextCompaction = (
     ...(event.escalated !== undefined && { escalated: event.escalated }),
   }
 
+  // A healthy pass has nothing the user must act on, so its card is a purely
+  // transient progress affordance: stamped complete at 100% so the bar visibly
+  // finishes, then self-dismissed by the renderer and dropped from the blocks at
+  // turn end so it never persists. A degraded pass gets neither field and stays
+  // in scrollback as a permanent warning card.
+  const settledBlock: CompactionContentBlock = compactionResultIsDegraded(
+    resultBlock,
+  )
+    ? resultBlock
+    : { ...resultBlock, progressPercent: 100, transient: true }
+
   // The live pending card settles into the result in place; with no pending
   // card for this run (e.g. a mechanical trim with no preceding start, or a
   // subagent result while the root card is live) the result appends, which is
   // the pre-existing behavior.
   state.message.updater.updateAiMessageBlocks((blocks) => {
     const pendingIndex = findLastPendingCompactionIndex(blocks, event.runId)
-    if (pendingIndex === -1) return [...blocks, resultBlock]
+    if (pendingIndex === -1) return [...blocks, settledBlock]
     const next = [...blocks]
-    next[pendingIndex] = resultBlock
+    next[pendingIndex] = settledBlock
     return next
   })
 
@@ -1778,7 +1863,13 @@ const handleFinish = (state: EventHandlerState, event: PrintModeFinish) => {
     // result. Kept separate from the recursive agent/tool settling below, which
     // walks nested blocks. A user abort never reaches this handler: the abort
     // listener in hooks/helpers/send-message.ts applies the same rewrite.
-    const rootBlocks = markPendingCompactionInterrupted(blocks)
+    //
+    // Transient cards are dropped in the same composed update: the renderer only
+    // HIDES a self-dismissing card, so this is what keeps it out of the turn's
+    // persisted transcript.
+    const rootBlocks = dropTransientCompactionBlocks(
+      markPendingCompactionInterrupted(blocks),
+    )
     const settledBlocks = settleOrphanedForegroundAgents(rootBlocks, settledIds)
     const summary = computeCompletionSummary(settledBlocks)
     if (!summary) return settledBlocks
@@ -1920,6 +2011,9 @@ export const createEventHandler =
       .with({ type: 'context_window' }, (e) => handleContextWindow(state, e))
       .with({ type: 'context_compaction' }, (e) =>
         handleContextCompaction(state, e),
+      )
+      .with({ type: 'context_compaction_progress' }, (e) =>
+        handleContextCompactionProgress(state, e),
       )
       .with({ type: 'context_compaction_status' }, (e) =>
         handleContextCompactionStatus(state, e),

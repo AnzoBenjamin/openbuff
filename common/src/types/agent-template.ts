@@ -138,15 +138,6 @@ export type AgentTemplate<
    * Undefined = no cap.
    */
   maxTokensPerTurn?: number
-  /**
-   * Optional wall-clock timeout in milliseconds for a single execution of this
-   * agent as a subagent. When set, executeSubagent uses this as the deadline
-   * (overridable per-spawn via spawn_agents' timeout_seconds). Undefined falls
-   * back to the shared DEFAULT_SUBAGENT_TIMEOUT_MS, which is -1 (disabled): by
-   * default there is no wall-clock timeout, so long-running agents run to
-   * completion. Set a positive value to opt this agent into a wall-clock bound.
-   */
-  defaultTimeoutMs?: number
 
   /**
    * Optional maximum nesting depth for this agent when spawned as a subagent.

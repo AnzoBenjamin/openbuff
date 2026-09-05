@@ -1412,13 +1412,48 @@ export async function loopAgentSteps(
   // its session persistence would replay forever. The settle carries this run's
   // correlation, so it can only ever settle the pending state this run started.
   let unsettledCompactionStart = false
+  // Highest progress percent already reported for the CURRENT announced pass.
+  // Declared alongside the pending flag because the two are settled together.
+  let lastCompactionProgressPercent = 0
   const settleCompactionStatus = () => {
     if (!unsettledCompactionStart) return
     unsettledCompactionStart = false
+    // A later pass in this same run announces its own progress from 0 again.
+    lastCompactionProgressPercent = 0
     onResponseChunk({
       type: 'context_compaction_status',
       state: 'settled',
       ...compactionCorrelation,
+    })
+  }
+
+  // Best-effort progress inside an announced pass, carrying this run's own
+  // correlation so it can only ever advance the card this run opened. The
+  // pruner reports no total, so the percent is a deterministic milestone
+  // estimate rather than a measurement: it is clamped to 0..100 and forced
+  // monotonic here, because the inline spawn path emits activity ticks for the
+  // same pass and an 'applying' milestone can otherwise be undercut by a late
+  // tick. Gated on `unsettledCompactionStart` so nothing is emitted outside an
+  // announced pass (a suppressed or below-trigger iteration stays silent, just
+  // as it emits neither half of the status pair). Purely telemetry: it never
+  // gates or aborts a pass.
+  const emitCompactionProgress = (
+    phase: 'analyzing' | 'summarizing' | 'applying',
+    percent: number,
+    extra?: { contextTokens?: number; targetBudgetTokens?: number },
+  ) => {
+    if (!unsettledCompactionStart) return
+    const next = Math.max(
+      lastCompactionProgressPercent,
+      Math.min(100, Math.max(0, Math.round(percent))),
+    )
+    lastCompactionProgressPercent = next
+    onResponseChunk({
+      type: 'context_compaction_progress',
+      ...compactionCorrelation,
+      phase,
+      percent: next,
+      ...extra,
     })
   }
 
@@ -1975,6 +2010,12 @@ export async function loopAgentSteps(
             triggerBudgetTokens: semanticBudget.triggerBudgetTokens,
             targetBudgetTokens: semanticBudget.targetBudgetTokens,
           })
+          // First milestone of the announced pass, so the UI shows real movement
+          // instead of an idle bar while the inline pruner starts up.
+          emitCompactionProgress('analyzing', 20, {
+            contextTokens: contextTokensBeforeProgrammatic,
+            targetBudgetTokens: semanticBudget.targetBudgetTokens,
+          })
         }
 
         // 1. Run programmatic step first if it exists
@@ -2100,8 +2141,15 @@ export async function loopAgentSteps(
             system,
             tools,
             userInputId,
+            onCompactionProgress: emitCompactionProgress,
           })
         }
+
+        // The pruner has returned (or the generator step that owned it has), so
+        // the announced pass is down to applying whatever it produced. Emitted
+        // for a suppressed/unannounced iteration too, where the gate inside the
+        // emitter makes it a no-op.
+        emitCompactionProgress('applying', 90)
 
         // Capture the request goal once per step for the root agent. The
         // compaction branch below scrapes <knowledge_memory> only when a

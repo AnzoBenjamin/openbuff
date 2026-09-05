@@ -203,7 +203,6 @@ type ServerActionToolCallRequest = {
   requestId: string
   toolName: string
   input: unknown
-  timeout?: number
   mcpConfig?: MCPConfig
 }
 

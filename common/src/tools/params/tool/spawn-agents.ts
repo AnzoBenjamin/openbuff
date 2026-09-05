@@ -73,12 +73,6 @@ const spawnAgentEntryFields = {
     .describe(
       'Optional structured handoff; additive — non-consumers still get prompt/params.',
     ),
-  timeout_seconds: z
-    .number()
-    .optional()
-    .describe(
-      'Optional wall-clock deadline seconds; omit or -1 for none. Agent defaultTimeoutMs still applies when set.',
-    ),
   params: z
     .preprocess(
       coerceToObject,
@@ -99,7 +93,7 @@ const spawnAgentEntryFields = {
             .number()
             .optional()
             .describe(
-              'Timeout for command. Set to -1 for no timeout. Default 30 (basher)',
+              'Timeout for command in seconds. Omit or -1 for no timeout (default).',
             ),
           save_full_log: z
             .boolean()

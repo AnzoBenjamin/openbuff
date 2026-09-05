@@ -722,12 +722,7 @@ describe('base2 validation/reviewer coordination prompts', () => {
     expect(base2.systemPrompt).toContain(
       'validation failure/timeout blocks completion even if review looks good',
     )
-    expect(base2.systemPrompt).toContain(
-      'Omit top-level `timeout_seconds` for editor and other productive subagents',
-    )
-    expect(base2.systemPrompt).toContain(
-      'omitted and `-1` mean no wall-clock deadline',
-    )
+    expect(base2.systemPrompt).not.toContain('timeout_seconds` for editor')
     // specialistRoutingSection is relocated to a guide under default-on
     // disclosure; assert the relocation pointer in systemPrompt and keep the
     // verbatim-line contract on the explicit-off surface instead.
@@ -1009,6 +1004,21 @@ describe('base2 validation/reviewer coordination prompts', () => {
     expect(base2.stepPrompt).toContain(
       'After completing the user request, summarize your changes',
     )
+  })
+
+  test('tells the orchestrator to size delegated work to the child window', () => {
+    const base2 = createBase2('default')
+
+    expect(base2.systemPrompt).toContain(
+      "Size work to the child's context window",
+    )
+  })
+
+  test('names the catalog window suffix and the receipt contextUsage field', () => {
+    const base2 = createBase2('default')
+
+    expect(base2.systemPrompt).toContain('[context ~200k]')
+    expect(base2.systemPrompt).toContain('contextUsage')
   })
 })
 
