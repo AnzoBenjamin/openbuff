@@ -530,7 +530,6 @@ esac
       toolName: 'run_terminal_command',
       input: {
         command: setupScript,
-        timeout_seconds: 30,
       },
       includeToolCall: false,
     }

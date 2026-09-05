@@ -208,6 +208,7 @@ export type CompactionCategoryDelta = {
     | 'toolResults'
     | 'todos'
     | 'fileReads'
+    | 'boundedFileReads'
     | 'subagents'
     | 'userAssistantMessages'
   beforeTokens: number
@@ -318,6 +319,27 @@ export type CompactionContentBlock = {
   fitsBudget?: boolean
   shortfallTokens?: number
   escalated?: boolean
+  /**
+   * Monotonic 0..100 completion estimate of a PENDING pass, raised by each
+   * `context_compaction_progress` event of the producing run and never lowered,
+   * so an out-of-order or garbage percent cannot rewind the bar. A settled
+   * healthy pass is stamped 100 so the card reads as complete before it
+   * self-dismisses. Optional: an older CLI replaying a block that carries it
+   * simply ignores the field and renders exactly as it did before.
+   */
+  progressPercent?: number
+  /**
+   * True only for a SETTLED pass with nothing worth keeping in scrollback: such
+   * a card self-dismisses shortly after reaching 100% and is dropped from the
+   * blocks at turn end (and on abort), so it never persists to
+   * chat-messages.json. Degraded outcomes — an emergency/mechanical trim, a
+   * request-time trim, a pass that did not fit the budget, an escalated pass, a
+   * low-yield streak — are NEVER transient, and neither is a `declined` or
+   * `interrupted` pass: those stay as a permanent warning card. Optional: an
+   * older CLI replaying a block that carries it ignores the field, which at
+   * worst leaves one extra completed-pass card in the transcript.
+   */
+  transient?: boolean
 }
 
 /**
@@ -384,6 +406,13 @@ export type CompactionNotice = {
    * pass has no run id to match against.
    */
   pendingRunIds?: string[]
+  /**
+   * Monotonic 0..100 progress of the newest live pass, so the status chip can
+   * report real movement instead of a bare '⇲ compacting…'. Raised only while a
+   * pass is pending and absent once nothing is live, which is also what every
+   * notice produced before this field existed carries.
+   */
+  progressPercent?: number
 }
 
 export type AskUserContentBlock = {

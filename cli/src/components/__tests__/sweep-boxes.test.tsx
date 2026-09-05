@@ -41,6 +41,15 @@ const compactionBlock = (
   ...overrides,
 })
 
+/**
+ * `renderToStaticMarkup` can separate adjacent text children with `<!-- -->`
+ * markers, and the ProgressBar renders its percent as ' ', the number and '%'.
+ * Stripping the markers lets the percent be asserted as the substring it
+ * actually displays as.
+ */
+const withoutTextSeparators = (markup: string): string =>
+  markup.replaceAll('<!-- -->', '')
+
 describe('CompactionBox', () => {
   test('renders headline counts, per-category rows and the retained-memory line', () => {
     const markup = renderToStaticMarkup(
@@ -103,6 +112,89 @@ describe('CompactionBox', () => {
     expect(markup).not.toContain('Context trimmed (emergency)')
     // The budget line is unchanged when both bounds are reported.
     expect(markup).toContain('Window 200k · trigger 150k · target 70k')
+  })
+
+  test('renders a live progress bar for a pending pass', () => {
+    const markup = renderToStaticMarkup(
+      <CompactionBox
+        block={compactionBlock({
+          status: 'pending',
+          liveSessionId: CLI_LIVE_SESSION_ID,
+          beforeTokens: 152_000,
+          afterTokens: 0,
+          beforeMessages: 0,
+          afterMessages: 0,
+          reductionPercent: 0,
+          retainedKnowledgeMemory: false,
+          recovery: '',
+          categoryDeltas: [],
+          progressPercent: 40,
+        })}
+      />,
+    )
+
+    expect(markup).toContain('Compacting context…')
+    // 40% of the 24-column bar: 10 filled cells, 14 empty ones, and the percent
+    // so the pass is not a silent live card.
+    expect(markup).toContain('█'.repeat(10))
+    expect(markup).not.toContain('█'.repeat(11))
+    expect(markup).toContain('░'.repeat(14))
+    expect(withoutTextSeparators(markup)).toContain(' 40%</text>')
+  })
+
+  test('renders the completed bar of a settled transient pass before its hold elapses', () => {
+    const markup = renderToStaticMarkup(
+      <CompactionBox
+        block={compactionBlock({
+          status: 'complete',
+          progressPercent: 100,
+          transient: true,
+        })}
+      />,
+    )
+
+    // A self-dismissing card holds at 100% first, so the bar is full with no
+    // empty cells left and the settled result lines still render.
+    expect(markup).toContain('█'.repeat(24))
+    expect(markup).not.toContain('░')
+    expect(withoutTextSeparators(markup)).toContain(' 100%</text>')
+    expect(markup).toContain('Context compacted')
+    expect(markup).toContain('190k → 120k tokens (−37%)')
+  })
+
+  test('renders no progress bar for a degraded pass and keeps its warning lines', () => {
+    const markup = renderToStaticMarkup(
+      <CompactionBox
+        block={compactionBlock({
+          status: 'complete',
+          action: 'mechanical_trim',
+          retainedKnowledgeMemory: false,
+          fitsBudget: false,
+          shortfallTokens: 12_400,
+          // A replayed degraded block can still carry a percent; it must not
+          // resurrect a bar the pass never earned.
+          progressPercent: 100,
+        })}
+      />,
+    )
+
+    expect(markup).not.toContain('█')
+    expect(markup).not.toContain('░')
+    // The existing warning lines are untouched by the progress affordance.
+    expect(markup).toContain('Context trimmed (emergency)')
+    expect(markup).toContain('Still over budget by 12.4k tokens')
+    expect(markup).toContain('No knowledge memory retained')
+
+    // Control: the same pass marked transient does draw the completed bar, so
+    // the absence above is the degradation gate rather than a renderer that
+    // never draws one.
+    expect(
+      renderToStaticMarkup(
+        <CompactionBox
+          block={compactionBlock({ progressPercent: 100, transient: true })}
+        />,
+      ),
+    ).toContain('█'.repeat(24))
   })
 
   test('renders a replayed pending block as an interrupted pass, never as live', () => {

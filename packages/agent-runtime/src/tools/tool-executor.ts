@@ -3412,9 +3412,6 @@ export function tryTransformAgentToolCall(params: {
   if (Object.hasOwn(input, 'background')) {
     agentEntry.background = input.background
   }
-  if (Object.hasOwn(input, 'timeout_seconds')) {
-    agentEntry.timeout_seconds = input.timeout_seconds
-  }
   const spawnAgentsInput = {
     agents: [agentEntry],
   }

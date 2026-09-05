@@ -261,6 +261,11 @@ export const handleSpawnAgentInline = (async (
   // Extract common context params to avoid bugs from spreading all params
   const contextParams = extractSubagentContextParams(params)
 
+  // Observed pruner chunks, counted only so the parent's announced compaction
+  // pass can report live movement. The chunks themselves are still dropped: see
+  // the `else` branch of `onResponseChunk` below.
+  let prunerChunks = 0
+
   let result: Awaited<ReturnType<typeof executeSubagent>>
   try {
     result = await executeSubagent({
@@ -334,6 +339,25 @@ export const handleSpawnAgentInline = (async (
           }
 
           writeToClient(chunk)
+        } else {
+          // pruner output stays invisible; only a bounded activity tick is
+          // surfaced so the UI can show real progress instead of a silent stall.
+          // Stamped with the PARENT run's correlation, because the announced
+          // compaction pass this progress belongs to is the parent's, not the
+          // pruner child's. Nothing is emitted without a parent runId: there
+          // would be no announced pass to correlate the tick to.
+          prunerChunks += 1
+          const parentRunId = parentAgentState.runId
+          if (parentRunId) {
+            writeToClient({
+              type: 'context_compaction_progress',
+              runId: parentRunId,
+              ancestorRunIds: [...parentAgentState.ancestorRunIds],
+              agentId: parentAgentState.agentId,
+              phase: 'summarizing',
+              percent: Math.min(85, 45 + prunerChunks * 5),
+            })
+          }
         }
       },
       clearUserPromptMessagesAfterResponse: false,

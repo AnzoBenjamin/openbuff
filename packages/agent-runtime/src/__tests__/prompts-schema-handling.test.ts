@@ -233,7 +233,7 @@ describe('Schema handling error recovery', () => {
   })
 
   describe('direct agent control envelope', () => {
-    test('exposes background and timeout controls for every direct agent tool', () => {
+    test('exposes the background control for every direct agent tool', () => {
       const schema = buildAgentToolInputSchema({
         id: 'editor',
         displayName: 'Editor',
@@ -253,7 +253,6 @@ describe('Schema handling error recovery', () => {
         schema.safeParse({
           prompt: 'Implement it',
           background: true,
-          timeout_seconds: 120,
         }).success,
       ).toBe(true)
     })
@@ -442,12 +441,14 @@ describe('Schema handling error recovery', () => {
       })
     })
 
-    test('preserves background and timeout controls on direct agent tool calls', () => {
+    test('preserves the background control on direct agent tool calls', () => {
       const transformed = tryTransformAgentToolCall({
         toolName: 'editor',
         input: {
           prompt: 'Implement the change',
           background: true,
+          // Stray deadline field from an older model habit: it is no longer part
+          // of the spawn entry contract, so it must not be forwarded.
           timeout_seconds: 90,
         },
         spawnableAgents: ['openbuff/editor@1.0.0'],
@@ -461,7 +462,6 @@ describe('Schema handling error recovery', () => {
               agent_type: 'openbuff/editor@1.0.0',
               prompt: 'Implement the change',
               background: true,
-              timeout_seconds: 90,
             },
           ],
         },

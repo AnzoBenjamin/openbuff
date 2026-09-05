@@ -67,7 +67,6 @@ describe('direct agent tool repair', () => {
         input: {
           prompt: 'Run the command',
           background: true,
-          timeout_seconds: 90,
           params: JSON.stringify({
             command: '["literal-shell-token"]',
             what_to_summarize: '{"keep":"as text"}',
@@ -80,7 +79,6 @@ describe('direct agent tool repair', () => {
           agent_type: 'basher',
           prompt: 'Run the command',
           background: true,
-          timeout_seconds: 90,
           params: {
             command: '["literal-shell-token"]',
             what_to_summarize: '{"keep":"as text"}',

@@ -1,8 +1,0 @@
-{"ts":"2026-07-27T09:28:59.884Z","kind":"task_update","summary":"Updated 1 task line(s): M0.1 Dispatch discovery shard pairs","payload":{"matched":["M0.1 Dispatch discovery shard pairs"]}}
-{"ts":"2026-07-27T09:28:59.884Z","kind":"session_status","summary":"Session status -> active","payload":{"status":"active"}}
-{"ts":"2026-07-27T09:28:59.884Z","kind":"current_task","summary":"Current task -> \"M0.1 Dispatch discovery shard pairs\"","payload":{"currentTask":"M0.1 Dispatch discovery shard pairs"}}
-{"ts":"2026-08-01T14:43:39.938Z","kind":"append_lesson","summary":"Appended entry \"M5 Live UI Complete (verified implemented) — 2026-08-01\" to STATUS.md","payload":{"heading":"M5 Live UI Complete (verified implemented) — 2026-08-01","artifact":"STATUS.md"}}
-{"ts":"2026-08-01T14:58:36.879Z","kind":"append_lesson","summary":"Appended entry \"M6 Prompts/Docs/Evals Complete — 2026-08-01\" to STATUS.md","payload":{"heading":"M6 Prompts/Docs/Evals Complete — 2026-08-01","artifact":"STATUS.md"}}
-{"ts":"2026-08-02T08:08:21.265Z","kind":"task_update","summary":"Updated 1 task line(s): M7.1 typecheck all; M7.2 test all touched suites; M7.3 live dev-server smoke; M7.4 coverage gate","payload":{"matched":["M7.1 typecheck all; M7.2 test all touched suites; M7.3 live dev-server smoke; M7.4 coverage gate"]}}
-{"ts":"2026-08-02T08:08:21.265Z","kind":"session_status","summary":"Session status -> completed","payload":{"status":"completed"}}
-{"ts":"2026-08-02T08:08:21.265Z","kind":"current_task","summary":"Current task pointer cleared","payload":{"currentTask":null}}

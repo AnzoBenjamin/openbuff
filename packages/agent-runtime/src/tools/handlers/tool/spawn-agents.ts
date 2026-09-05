@@ -387,7 +387,7 @@ export const handleSpawnAgents = (async (
         subAgentState,
         spawnIndex,
       } = validated
-      const { prompt, timeout_seconds } = validated.input
+      const { prompt } = validated.input
 
       const contextParams = extractSubagentContextParams(params)
 
@@ -397,8 +397,7 @@ export const handleSpawnAgents = (async (
       // listener on BOTH inputs, and neither fires when the job settles
       // normally, so its cleanup() must run on settle or that listener (plus a
       // closure over this job's AbortController) stays attached to the
-      // long-lived parent signal for the rest of the run. Mirrors
-      // executeSubagent's `finally { combinedSignal?.cleanup?.() }`.
+      // long-lived parent signal for the rest of the run.
       const combinedSignal = contextParams.signal
         ? createCombinedAbortSignal(
             contextParams.signal,
@@ -431,9 +430,6 @@ export const handleSpawnAgents = (async (
         fingerprintId,
         spawnToolCallId: toolCall.toolCallId,
         spawnIndex,
-        // Per-spawn wall-clock override (seconds → ms; -1 → no timeout).
-        subagentTimeoutMs:
-          timeout_seconds === undefined ? undefined : timeout_seconds * 1000,
         // Background agents are detached; the parent never waits for them, so
         // the "only child" step-count semantics (tuned for blocking spawns the
         // parent blocks on) never apply. Force false regardless of how many
@@ -620,7 +616,7 @@ export const handleSpawnAgents = (async (
         subAgentState,
         spawnIndex,
       }) => {
-        const { prompt, timeout_seconds } = input
+        const { prompt } = input
 
         // Extract common context params to avoid bugs from spreading all params
         const contextParams = extractSubagentContextParams(params)
@@ -640,9 +636,6 @@ export const handleSpawnAgents = (async (
           spawnToolCallId: toolCall.toolCallId,
           spawnIndex,
           isOnlyChild: foregroundAgents.length === 1,
-          // Per-spawn wall-clock override (seconds → ms; -1 → no timeout).
-          subagentTimeoutMs:
-            timeout_seconds === undefined ? undefined : timeout_seconds * 1000,
           excludeToolFromMessageHistory: false,
           fromHandleSteps: false,
           parentSystemPrompt,

@@ -33,6 +33,7 @@ import compatibilityReviewer from '../../../../../agents/specialists/compatibili
 import { createBase2, GUIDE_POINTERS } from '../../../../../agents/base2/base2'
 
 import type { AgentTemplate } from '../types'
+import type { ResolveModelContextWindow } from '../prompts'
 import type { ContextBudgetLedger } from '../../util/context-budget'
 import type { AgentState } from '@codebuff/common/types/session-state'
 import type { ProjectFileContext } from '@codebuff/common/util/file'
@@ -886,6 +887,227 @@ describe('getAgentPrompt', () => {
           expect(line).toContain('handoff')
         }
       }
+    })
+
+    test('threads a resolved context window into the spawnable agent catalog', async () => {
+      const filePickerTemplate = createMockAgentTemplate({
+        id: 'file-picker',
+        displayName: 'File Picker',
+        spawnerPrompt: 'Spawn to find relevant files in a codebase',
+      })
+
+      const mainAgentTemplate = createMockAgentTemplate({
+        id: 'main-agent',
+        displayName: 'Main Agent',
+        spawnableAgents: ['file-picker'],
+        instructionsPrompt: 'Main agent instructions.',
+      })
+
+      const agentTemplates: Record<string, AgentTemplate> = {
+        'main-agent': mainAgentTemplate,
+        'file-picker': filePickerTemplate,
+      }
+
+      const result = await getAgentPrompt({
+        agentTemplate: mainAgentTemplate,
+        promptType: { type: 'instructionsPrompt' },
+        fileContext: createMockFileContext(),
+        agentState: createMockAgentState('main-agent'),
+        agentTemplates,
+        additionalToolDefinitions: async () => ({}),
+        logger: createMockLogger(),
+        apiKey: TEST_AGENT_RUNTIME_IMPL.apiKey,
+        databaseAgentCache: TEST_AGENT_RUNTIME_IMPL.databaseAgentCache,
+        fetchAgentFromDatabase: TEST_AGENT_RUNTIME_IMPL.fetchAgentFromDatabase,
+        resolveModelContextWindow: () => 200_000,
+      })
+
+      expect(result).toContain('You can spawn the following agents:')
+      expect(result).toContain(
+        '- file-picker: Spawn to find relevant files in a codebase [context ~200k]',
+      )
+    })
+
+    test('keeps the catalog byte-identical when no window resolver is injected', async () => {
+      const filePickerTemplate = createMockAgentTemplate({
+        id: 'file-picker',
+        displayName: 'File Picker',
+        spawnerPrompt: 'Spawn to find relevant files in a codebase',
+      })
+
+      const mainAgentTemplate = createMockAgentTemplate({
+        id: 'main-agent',
+        displayName: 'Main Agent',
+        spawnableAgents: ['file-picker'],
+        instructionsPrompt: 'Main agent instructions.',
+      })
+
+      const agentTemplates: Record<string, AgentTemplate> = {
+        'main-agent': mainAgentTemplate,
+        'file-picker': filePickerTemplate,
+      }
+
+      const withoutResolver = await getAgentPrompt({
+        agentTemplate: mainAgentTemplate,
+        promptType: { type: 'instructionsPrompt' },
+        fileContext: createMockFileContext(),
+        agentState: createMockAgentState('main-agent'),
+        agentTemplates,
+        additionalToolDefinitions: async () => ({}),
+        logger: createMockLogger(),
+        apiKey: TEST_AGENT_RUNTIME_IMPL.apiKey,
+        databaseAgentCache: TEST_AGENT_RUNTIME_IMPL.databaseAgentCache,
+        fetchAgentFromDatabase: TEST_AGENT_RUNTIME_IMPL.fetchAgentFromDatabase,
+      })
+
+      const withResolver = await getAgentPrompt({
+        agentTemplate: mainAgentTemplate,
+        promptType: { type: 'instructionsPrompt' },
+        fileContext: createMockFileContext(),
+        agentState: createMockAgentState('main-agent'),
+        agentTemplates,
+        additionalToolDefinitions: async () => ({}),
+        logger: createMockLogger(),
+        apiKey: TEST_AGENT_RUNTIME_IMPL.apiKey,
+        databaseAgentCache: TEST_AGENT_RUNTIME_IMPL.databaseAgentCache,
+        fetchAgentFromDatabase: TEST_AGENT_RUNTIME_IMPL.fetchAgentFromDatabase,
+        resolveModelContextWindow: () => 200_000,
+      })
+
+      const expectedCatalog = [
+        'Main agent instructions.',
+        '',
+        'You can spawn the following agents:',
+        '',
+        '- file-picker: Spawn to find relevant files in a codebase',
+      ].join('\n')
+
+      expect(withoutResolver).toBe(expectedCatalog)
+      expect(withoutResolver).not.toContain('[context ~')
+      // Control: the only delta an injected resolver adds is the suffix.
+      expect(withResolver).toBe(`${expectedCatalog} [context ~200k]`)
+    })
+
+    test('suffixes only the children whose context window resolves', async () => {
+      const filePickerTemplate = createMockAgentTemplate({
+        id: 'file-picker',
+        displayName: 'File Picker',
+        spawnerPrompt: 'Spawn to find relevant files in a codebase',
+      })
+
+      const globMatcherTemplate = createMockAgentTemplate({
+        id: 'glob-matcher',
+        displayName: 'Glob Matcher',
+        spawnerPrompt: 'Mechanically runs multiple glob pattern matches',
+      })
+
+      const mainAgentTemplate = createMockAgentTemplate({
+        id: 'main-agent',
+        displayName: 'Main Agent',
+        spawnableAgents: ['file-picker', 'glob-matcher'],
+        instructionsPrompt: 'Main agent instructions.',
+      })
+
+      const agentTemplates: Record<string, AgentTemplate> = {
+        'main-agent': mainAgentTemplate,
+        'file-picker': filePickerTemplate,
+        'glob-matcher': globMatcherTemplate,
+      }
+
+      // Only one route has a declared window; the other resolves to undefined.
+      const resolveModelContextWindow: ResolveModelContextWindow = ({
+        agentId,
+      }) => (agentId === 'file-picker' ? 200_000 : undefined)
+
+      const result = await getAgentPrompt({
+        agentTemplate: mainAgentTemplate,
+        promptType: { type: 'instructionsPrompt' },
+        fileContext: createMockFileContext(),
+        agentState: createMockAgentState('main-agent'),
+        agentTemplates,
+        additionalToolDefinitions: async () => ({}),
+        logger: createMockLogger(),
+        apiKey: TEST_AGENT_RUNTIME_IMPL.apiKey,
+        databaseAgentCache: TEST_AGENT_RUNTIME_IMPL.databaseAgentCache,
+        fetchAgentFromDatabase: TEST_AGENT_RUNTIME_IMPL.fetchAgentFromDatabase,
+        resolveModelContextWindow,
+      })
+
+      expect(result).toContain(
+        '- file-picker: Spawn to find relevant files in a codebase [context ~200k]',
+      )
+      expect(result).toContain(
+        '- glob-matcher: Mechanically runs multiple glob pattern matches',
+      )
+      expect((result ?? '').split('[context ~').length - 1).toBe(1)
+    })
+
+    test('compact catalog appends the window after the required-params hint', () => {
+      const gitCommitterTemplate = createMockAgentTemplate({
+        id: 'git-committer',
+        displayName: 'Git Committer',
+        spawnerPrompt: 'Safely delivers task-owned changes through git',
+        inputSchema: {
+          params: z.object({
+            owned_paths: z.array(z.string()),
+          }),
+        },
+      })
+
+      const withoutWindow = formatCompactAgentCatalogLine(
+        'git-committer',
+        gitCommitterTemplate,
+      )
+      const withWindow = formatCompactAgentCatalogLine(
+        'git-committer',
+        gitCommitterTemplate,
+        200_000,
+      )
+
+      // The two-argument call form is unchanged, and the window is appended
+      // after the hint rather than spliced into it.
+      expect(withoutWindow).toBe(
+        '- git-committer: Safely delivers task-owned changes through git Required params: `owned_paths`.',
+      )
+      expect(withWindow).toBe(`${withoutWindow} [context ~200k]`)
+    })
+
+    test('compact catalog appends nothing for an unknown, zero, or non-finite window', () => {
+      const filePickerTemplate = createMockAgentTemplate({
+        id: 'file-picker',
+        displayName: 'File Picker',
+        spawnerPrompt: 'Spawn to find relevant files in a codebase',
+      })
+      const baseline = formatCompactAgentCatalogLine(
+        'file-picker',
+        filePickerTemplate,
+      )
+
+      expect(baseline).toBe(
+        '- file-picker: Spawn to find relevant files in a codebase',
+      )
+      for (const windowTokens of [
+        undefined,
+        0,
+        Number.POSITIVE_INFINITY,
+        Number.NaN,
+      ]) {
+        expect(
+          formatCompactAgentCatalogLine(
+            'file-picker',
+            filePickerTemplate,
+            windowTokens,
+          ),
+        ).toBe(baseline)
+      }
+      // Control: a finite positive window is still honored for this fixture.
+      expect(
+        formatCompactAgentCatalogLine(
+          'file-picker',
+          filePickerTemplate,
+          200_000,
+        ),
+      ).toBe(`${baseline} [context ~200k]`)
     })
   })
 

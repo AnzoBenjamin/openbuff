@@ -938,6 +938,29 @@ export const markPendingCompactionInterrupted = (
 }
 
 /**
+ * Removes every `transient` compaction block. Such a card is a purely transient
+ * progress affordance — a healthy pass that reclaimed space and has nothing the
+ * user must act on — so it must never reach persistence: the renderer only
+ * HIDES it after a short hold, and this is what actually takes it out of state,
+ * composed into the same abort/turn-end block update as
+ * {@link markPendingCompactionInterrupted}. Degraded, declined and interrupted
+ * passes are never marked transient, so they are untouched here and keep their
+ * permanent warning card.
+ *
+ * Returns the ORIGINAL array reference when nothing was dropped so React skips
+ * a re-render. Root-level only: compaction blocks are never nested under an
+ * agent block.
+ */
+export const dropTransientCompactionBlocks = (
+  blocks: ContentBlock[],
+): ContentBlock[] => {
+  const next = blocks.filter(
+    (block) => !(block.type === 'compaction' && block.transient === true),
+  )
+  return next.length === blocks.length ? blocks : next
+}
+
+/**
  * Recursively finds an agent block by ID and returns its agent type.
  * Returns undefined if not found.
  */

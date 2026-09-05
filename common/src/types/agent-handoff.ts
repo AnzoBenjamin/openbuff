@@ -169,6 +169,23 @@ export const agentReceiptSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * Observational telemetry about how much context the finished child
+     * actually used: the tokens it ended on, the window it ran against, and
+     * that ratio as a percent (clamped, so a child that overran its declared
+     * window still produces a valid receipt). Purely informational — the
+     * parent may use it to size later delegations (more, narrower shards when
+     * a child came back near its window). Optional, so every existing receipt
+     * stays valid and no consumer migration is required.
+     */
+    contextUsage: z
+      .object({
+        tokens: z.number().int().min(0),
+        windowTokens: z.number().int().min(0).optional(),
+        percentOfWindow: z.number().int().min(0).max(100).optional(),
+        compactionCount: z.number().int().min(0).optional(),
+      })
+      .optional(),
   })
   .strict()
 

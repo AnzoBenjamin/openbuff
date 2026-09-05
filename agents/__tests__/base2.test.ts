@@ -722,12 +722,7 @@ describe('base2 validation/reviewer coordination prompts', () => {
     expect(base2.systemPrompt).toContain(
       'validation failure/timeout blocks completion even if review looks good',
     )
-    expect(base2.systemPrompt).toContain(
-      'Omit top-level `timeout_seconds` for editor and other productive subagents',
-    )
-    expect(base2.systemPrompt).toContain(
-      'omitted and `-1` mean no wall-clock deadline',
-    )
+    expect(base2.systemPrompt).not.toContain('timeout_seconds` for editor')
     // specialistRoutingSection is relocated to a guide under default-on
     // disclosure; assert the relocation pointer in systemPrompt and keep the
     // verbatim-line contract on the explicit-off surface instead.
@@ -1009,6 +1004,21 @@ describe('base2 validation/reviewer coordination prompts', () => {
     expect(base2.stepPrompt).toContain(
       'After completing the user request, summarize your changes',
     )
+  })
+
+  test('tells the orchestrator to size delegated work to the child window', () => {
+    const base2 = createBase2('default')
+
+    expect(base2.systemPrompt).toContain(
+      "Size work to the child's context window",
+    )
+  })
+
+  test('names the catalog window suffix and the receipt contextUsage field', () => {
+    const base2 = createBase2('default')
+
+    expect(base2.systemPrompt).toContain('[context ~200k]')
+    expect(base2.systemPrompt).toContain('contextUsage')
   })
 })
 
@@ -2282,6 +2292,317 @@ describe('base2 verification and reviewer gates', () => {
       toolName: 'run_file_change_hooks',
       input: { files: ['src/a.ts'] },
     })
+  })
+
+  test('reuses the newest full-assurance validationEvidence receipt for unchanged bytes without re-running hooks', () => {
+    // Phase 4 per-file gate credit: the NEWEST validationEvidence entry with
+    // `assurance: 'full'`, files exactly equal to the gate scope, and content
+    // markers still matching the live bytes is reused IN PLACE — the hook run
+    // is skipped and the entry is kept verbatim (same summary/recordedAt).
+    const base2 = createBase2('default')
+    const tmpDir = makeProjectTempDir('base2-receipt-reuse-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const validationSummary =
+        'Configured file-change hooks passed: typecheck.'
+      const recordedAt = '2025-01-01T00:00:00.000Z'
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          changedFiles: [gateFile],
+          touchedFiles: [gateFile],
+          pendingGateFiles: [gateFile],
+          currentPhase: 'awaiting_validation',
+          latestWorkSummary: 'Pending gate previously validated.',
+          openReviewerBlockers: [],
+          lastValidationSummary: validationSummary,
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          validationEvidence: [
+            {
+              gateId: 'receipt-reuse-gate',
+              files: [gateFile],
+              snapshotFingerprint: 'seed-receipt-snapshot',
+              summary: validationSummary,
+              assurance: 'full',
+              recordedAt,
+              // Markers are built from the live bytes so the Phase-4 reuse
+              // predicate sees a byte-identical covered file set.
+              fileMarkers: { [gateFile]: buildContentMarker(tmpFile) },
+            },
+          ],
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      const maybePinnedState = gen.next().value
+      if (maybePinnedState !== 'STEP') {
+        expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+      expect(
+        gen.next({ stepsComplete: true, toolResult: [], agentState } as any)
+          .value,
+      ).toMatchObject({ toolName: 'git_status' })
+
+      // The receipt is reused: NO run_file_change_hooks yield. The very next
+      // yield is the post-validation dirty-scope re-check (git_status), which
+      // then advances to the code-reviewer gate as in a normal passing pass.
+      const postValidationStatus = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
+      } as any)
+      expect(postValidationStatus.value).not.toMatchObject({
+        toolName: 'run_file_change_hooks',
+      })
+      expect(postValidationStatus.value).toMatchObject({
+        toolName: 'git_status',
+      })
+      const reviewerSpawn = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
+      } as any)
+      expect(reviewerSpawn.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'code-reviewer' }] },
+      })
+
+      // The newest entry is kept verbatim: same summary, recordedAt, and
+      // markers (no hook rewrite replaced it).
+      const kept = (agentState as any).base2ActiveWork
+        .validationEvidence as Array<Record<string, unknown>>
+      expect(kept).toHaveLength(1)
+      expect(kept[0].summary).toBe(validationSummary)
+      expect(kept[0].recordedAt).toBe(recordedAt)
+      expect(kept[0].assurance).toBe('full')
+      expect(kept[0].fileMarkers).toEqual({
+        [gateFile]: buildContentMarker(tmpFile),
+      })
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('does not reuse a validationEvidence receipt whose summary starts with REDUCED_ASSURANCE', () => {
+    const base2 = createBase2('default')
+    const tmpDir = makeProjectTempDir('base2-receipt-reduced-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const reducedSummary =
+        'REDUCED_ASSURANCE: Validation hooks could not run for this snapshot.'
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          changedFiles: [gateFile],
+          touchedFiles: [gateFile],
+          pendingGateFiles: [gateFile],
+          currentPhase: 'awaiting_validation',
+          latestWorkSummary: 'Pending gate previously validated.',
+          openReviewerBlockers: [],
+          lastValidationSummary: reducedSummary,
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          // Matching markers and full assurance are not enough: a
+          // REDUCED_ASSURANCE summary must never be reused.
+          validationEvidence: [
+            {
+              gateId: 'receipt-reduced-gate',
+              files: [gateFile],
+              snapshotFingerprint: 'seed-reduced-snapshot',
+              summary: reducedSummary,
+              assurance: 'full',
+              recordedAt: '2025-01-01T00:00:00.000Z',
+              fileMarkers: { [gateFile]: buildContentMarker(tmpFile) },
+            },
+          ],
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      const maybePinnedState = gen.next().value
+      if (maybePinnedState !== 'STEP') {
+        expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+      expect(
+        gen.next({ stepsComplete: true, toolResult: [], agentState } as any)
+          .value,
+      ).toMatchObject({ toolName: 'git_status' })
+      const next = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
+      } as any)
+
+      // Reduced-assurance summary -> no receipt reuse -> validation hooks rerun.
+      expect(next.value).toMatchObject({
+        toolName: 'run_file_change_hooks',
+        input: { files: [gateFile] },
+      })
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('does not reuse a validationEvidence receipt whose fileMarkers no longer match the live bytes', () => {
+    const base2 = createBase2('default')
+    const tmpDir = makeProjectTempDir('base2-receipt-stale-marker-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const staleMarker = buildContentMarker(tmpFile)
+      // The bytes drift after the receipt was recorded: the stored marker no
+      // longer matches, so the reuse must fail closed and re-run the hooks.
+      writeFileSync(tmpFile, 'export const value = 2\n')
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          changedFiles: [gateFile],
+          touchedFiles: [gateFile],
+          pendingGateFiles: [gateFile],
+          currentPhase: 'awaiting_validation',
+          latestWorkSummary: 'Pending gate previously validated.',
+          openReviewerBlockers: [],
+          lastValidationSummary:
+            'Configured file-change hooks passed: typecheck.',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          validationEvidence: [
+            {
+              gateId: 'receipt-stale-marker-gate',
+              files: [gateFile],
+              snapshotFingerprint: 'seed-stale-marker-snapshot',
+              summary: 'Configured file-change hooks passed: typecheck.',
+              assurance: 'full',
+              recordedAt: '2025-01-01T00:00:00.000Z',
+              fileMarkers: { [gateFile]: staleMarker },
+            },
+          ],
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      const maybePinnedState = gen.next().value
+      if (maybePinnedState !== 'STEP') {
+        expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+      expect(
+        gen.next({ stepsComplete: true, toolResult: [], agentState } as any)
+          .value,
+      ).toMatchObject({ toolName: 'git_status' })
+      const next = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
+      } as any)
+
+      // Marker mismatch -> no receipt reuse -> validation hooks rerun.
+      expect(next.value).toMatchObject({
+        toolName: 'run_file_change_hooks',
+        input: { files: [gateFile] },
+      })
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('does not reuse a legacy validationEvidence receipt that lacks fileMarkers (fail closed)', () => {
+    const base2 = createBase2('default')
+    const tmpDir = makeProjectTempDir('base2-receipt-legacy-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          changedFiles: [gateFile],
+          touchedFiles: [gateFile],
+          pendingGateFiles: [gateFile],
+          currentPhase: 'awaiting_validation',
+          latestWorkSummary: 'Pending gate previously validated.',
+          openReviewerBlockers: [],
+          lastValidationSummary:
+            'Configured file-change hooks passed: typecheck.',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          // Older serialized entries carry no per-file marker map: without
+          // byte evidence the receipt must never be reused.
+          validationEvidence: [
+            {
+              gateId: 'legacy-receipt-gate',
+              files: [gateFile],
+              snapshotFingerprint: 'legacy-receipt-snapshot',
+              summary: 'Configured file-change hooks passed: typecheck.',
+              assurance: 'full',
+              recordedAt: '2025-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next({
+          toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
+        } as any).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      const maybePinnedState = gen.next().value
+      if (maybePinnedState !== 'STEP') {
+        expect(maybePinnedState).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+      expect(
+        gen.next({ stepsComplete: true, toolResult: [], agentState } as any)
+          .value,
+      ).toMatchObject({ toolName: 'git_status' })
+      const next = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${tmpFile}` } }],
+      } as any)
+
+      // No fileMarkers -> no receipt reuse -> validation hooks rerun.
+      expect(next.value).toMatchObject({
+        toolName: 'run_file_change_hooks',
+        input: { files: [gateFile] },
+      })
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
   })
 
   test('hitStepCap breaks out instead of falling through to the validation/reviewer gate', () => {
@@ -9659,6 +9980,15 @@ describe('base2 specialist attestation tolerance', () => {
         (spawn.value as any).input.agents[0].params?.snapshot_id ?? '',
       )
       expect(fingerprint).toMatch(/^v3:[a-f0-9]{64}$/)
+
+      // The specialist brief must steer large-file reads through bounded
+      // read_files block selectors so the reviewer's accumulated read context
+      // stays bounded (mirrors the final-reviewer prompt instruction).
+      expect(
+        String((spawn.value as any).input.agents[0].prompt ?? ''),
+      ).toContain(
+        'Read large files via read_files windows/around/symbol selectors (bounded block reads)',
+      )
 
       // LOOKS_GOOD attesting ONLY the readable file, plus a stale-snapshot
       // finding record. Pre-fix the omitted deleted path was a coverage gap and

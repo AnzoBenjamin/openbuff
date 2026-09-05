@@ -7,10 +7,20 @@ import { z } from 'zod/v4'
 import { getAgentTemplate } from './agent-registry'
 
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
+import type { AgentRuntimeDeps } from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type { AgentTemplateType } from '@codebuff/common/types/session-state'
 import type { ToolSet } from 'ai'
+
+/**
+ * Injected resolver for a child's declared context window, threaded through
+ * `AgentRuntimeDeps`. Synchronous and may return `undefined`, so callers must
+ * never await it and must stay byte-identical when it is absent.
+ */
+export type ResolveModelContextWindow = NonNullable<
+  AgentRuntimeDeps['resolveModelContextWindow']
+>
 
 function ensureJsonSchemaCompatible(schema: z.ZodType): z.ZodType {
   try {
@@ -92,26 +102,43 @@ function formatRequiredSpawnContractHint(
   return `Required params: ${missing.map((key) => '`' + key + '`').join(', ')}.`
 }
 
+/** Compact token rendering for catalog lines: `200_000` -> `200k`. */
+function formatContextWindowTokens(tokens: number): string {
+  return tokens >= 1_000
+    ? `${Math.round(tokens / 1000)}k`
+    : `${Math.round(tokens)}`
+}
+
 /**
  * Compact catalog line for the "You can spawn the following agents" addendum.
  * Appends a one-line required-params/handoff hint when the child's contract
- * is not already named in `spawnerPrompt`.
+ * is not already named in `spawnerPrompt`, then the child's context window as
+ * ` [context ~200k]` when the caller resolved one, so the parent can size
+ * delegated work. An unknown window appends nothing, keeping the catalog
+ * byte-identical for callers that inject no resolver.
  */
 export function formatCompactAgentCatalogLine(
   agentType: AgentTemplateType,
   agentTemplate: AgentTemplate | null | undefined,
+  contextWindowTokens?: number,
 ): string {
-  if (!agentTemplate) return `- ${agentType}`
+  const windowSuffix =
+    typeof contextWindowTokens === 'number' &&
+    Number.isFinite(contextWindowTokens) &&
+    contextWindowTokens > 0
+      ? ` [context ~${formatContextWindowTokens(contextWindowTokens)}]`
+      : ''
+  if (!agentTemplate) return `- ${agentType}${windowSuffix}`
 
   const prompt = agentTemplate.spawnerPrompt
   const hint = formatRequiredSpawnContractHint(agentType, agentTemplate)
   if (prompt) {
     return hint
-      ? `- ${agentType}: ${prompt} ${hint}`
-      : `- ${agentType}: ${prompt}`
+      ? `- ${agentType}: ${prompt} ${hint}${windowSuffix}`
+      : `- ${agentType}: ${prompt}${windowSuffix}`
   }
-  if (hint) return `- ${agentType}: ${hint}`
-  return `- ${agentType}`
+  if (hint) return `- ${agentType}: ${hint}${windowSuffix}`
+  return `- ${agentType}${windowSuffix}`
 }
 
 /**
@@ -158,12 +185,6 @@ export function buildAgentToolInputSchema(
     .boolean()
     .optional()
     .describe('Launch the agent as a background job when true.')
-  schemaFields.timeout_seconds = z
-    .number()
-    .optional()
-    .describe(
-      'Optional per-spawn wall-clock timeout in seconds; -1 disables it.',
-    )
 
   return z
     .object(schemaFields)
@@ -235,6 +256,7 @@ export async function buildAgentToolSet(
 function buildSingleAgentDescription(
   agentType: AgentTemplateType,
   agentTemplate: AgentTemplate | null,
+  contextWindowTokens?: number,
 ): string {
   if (!agentTemplate) {
     // Fallback for unknown agents
@@ -252,7 +274,11 @@ params: None`
     : ['prompt: None', 'params: None'].join('\n')
 
   return buildArray(
-    formatCompactAgentCatalogLine(agentType, agentTemplate),
+    formatCompactAgentCatalogLine(
+      agentType,
+      agentTemplate,
+      contextWindowTokens,
+    ),
     agentTemplate.includeMessageHistory &&
       'This agent can see the current message history.',
     agentTemplate.inheritParentSystemPrompt &&
@@ -270,6 +296,8 @@ export async function buildFullSpawnableAgentsSpec(
     spawnableAgents: AgentTemplateType[]
     agentTemplates: Record<string, AgentTemplate>
     logger: Logger
+    /** Optional; when absent the spec is byte-identical to the pre-window output. */
+    resolveModelContextWindow?: ResolveModelContextWindow
   } & ParamsExcluding<
     typeof getAgentTemplate,
     'agentId' | 'localAgentTemplates'
@@ -285,20 +313,29 @@ export async function buildFullSpawnableAgentsSpec(
 
   const subAgentTypesAndTemplates = await Promise.all(
     spawnableAgents.map(async (agentType) => {
+      const agentTemplate = await getAgentTemplate({
+        ...params,
+        agentId: agentType,
+        localAgentTemplates: agentTemplates,
+      })
       return [
         agentType,
-        await getAgentTemplate({
-          ...params,
-          agentId: agentType,
-          localAgentTemplates: agentTemplates,
+        agentTemplate,
+        params.resolveModelContextWindow?.({
+          agentId: agentTemplate?.id ?? agentType,
+          model: agentTemplate?.model,
         }),
       ] as const
     }),
   )
 
   const agentsDescription = subAgentTypesAndTemplates
-    .map(([agentType, agentTemplate]) =>
-      buildSingleAgentDescription(agentType, agentTemplate),
+    .map(([agentType, agentTemplate, contextWindowTokens]) =>
+      buildSingleAgentDescription(
+        agentType,
+        agentTemplate,
+        contextWindowTokens,
+      ),
     )
     .filter(Boolean)
     .join('\n\n')

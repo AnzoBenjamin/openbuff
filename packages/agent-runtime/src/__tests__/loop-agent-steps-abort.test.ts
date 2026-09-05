@@ -17,12 +17,11 @@ import type { AgentState } from '@codebuff/common/types/session-state'
  * loopAgentSteps. These guard the `signal.aborted` checkpoints at
  * run-agent-step.ts lines ~889, ~1104, and ~1369.
  *
- * The wall-clock timeout fix in spawn-agent-utils.ts relies on these
- * checkpoints: when executeSubagent's timeout controller aborts the
- * combined signal, loopAgentSteps must actually exit (as 'cancelled') so
- * the stuck LLM stream is cancelled rather than orphaned. If a future
- * refactor removes these checks, the timeout will reject the outer
- * promise but the inner stream keeps running — these tests catch that.
+ * These checkpoints are what make user/parent cancellation real: when the
+ * caller aborts the signal a subagent runs on, loopAgentSteps must actually
+ * exit (as 'cancelled') so the in-flight LLM stream is cancelled rather than
+ * orphaned. If a future refactor removes these checks, an abort would resolve
+ * the caller while the inner stream keeps running — these tests catch that.
  */
 describe('loopAgentSteps abort signal handling', () => {
   let agentTemplate: AgentTemplate

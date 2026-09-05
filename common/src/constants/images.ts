@@ -38,6 +38,61 @@ export function getImageMimeType(ext: string): string | null {
 }
 
 /**
+ * Detect an image MIME type from raw bytes by matching magic-number signatures.
+ * Returns null when the bytes do not match a supported image format.
+ */
+export function detectImageMediaTypeFromBytes(
+  bytes: Uint8Array | Buffer,
+): string | null {
+  const hasPrefix = (signature: number[], offset = 0): boolean => {
+    if (bytes.length < offset + signature.length) {
+      return false
+    }
+    for (let i = 0; i < signature.length; i++) {
+      if (bytes[offset + i] !== signature[i]) {
+        return false
+      }
+    }
+    return true
+  }
+  const hasAscii = (text: string, offset = 0): boolean => {
+    if (bytes.length < offset + text.length) {
+      return false
+    }
+    for (let i = 0; i < text.length; i++) {
+      if (bytes[offset + i] !== text.charCodeAt(i)) {
+        return false
+      }
+    }
+    return true
+  }
+
+  if (hasPrefix([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
+    return 'image/png'
+  }
+  if (hasPrefix([0xff, 0xd8, 0xff])) {
+    return 'image/jpeg'
+  }
+  // "GIF8" covers both GIF87a and GIF89a.
+  if (hasAscii('GIF8')) {
+    return 'image/gif'
+  }
+  if (hasAscii('BM')) {
+    return 'image/bmp'
+  }
+  if (hasAscii('RIFF') && hasAscii('WEBP', 8)) {
+    return 'image/webp'
+  }
+  if (
+    hasPrefix([0x49, 0x49, 0x2a, 0x00]) ||
+    hasPrefix([0x4d, 0x4d, 0x00, 0x2a])
+  ) {
+    return 'image/tiff'
+  }
+  return null
+}
+
+/**
  * Image extensions as a regex alternation pattern (without dots)
  * e.g., "jpg|jpeg|png|webp|gif|bmp|tiff|tif"
  */

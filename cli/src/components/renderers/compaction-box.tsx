@@ -1,7 +1,8 @@
-import { memo } from 'react'
+import { memo, useEffect, useState } from 'react'
 
 import { HarnessBox } from './harness-box'
 import { useTheme } from '../../hooks/use-theme'
+import { ProgressBar } from '../progress-bar'
 import { CLI_LIVE_SESSION_ID } from '../../types/chat'
 import { formatStatusTokenCount } from '../../utils/status-bar-chips'
 
@@ -32,6 +33,7 @@ const CATEGORY_LABEL: Record<CompactionCategoryDelta['category'], string> = {
   toolResults: 'tool results',
   todos: 'todos',
   fileReads: 'file reads',
+  boundedFileReads: 'bounded reads',
   subagents: 'subagents',
   userAssistantMessages: 'conversation',
 }
@@ -55,6 +57,18 @@ const isLiveCompaction = (block: CompactionContentBlock): boolean =>
 
 /** Shown for a pass that ended before it reported a result. */
 const INTERRUPTED_TEXT = 'Interrupted before this pass reported a result.'
+
+/** Rendered width of the compaction progress bar, in columns. */
+const PROGRESS_BAR_WIDTH = 24
+
+/**
+ * How long a settled `transient` card stays visible after it reaches 100%
+ * before it hides itself: long enough to see the bar complete, short enough
+ * that a healthy pass does not linger in the transcript. Hiding is purely
+ * visual — the event handler is what removes the block from state (at turn end
+ * or on abort), so the two cannot fight over ownership.
+ */
+const TRANSIENT_COMPACTION_HOLD_MS = 1_200
 
 /**
  * The pending/interrupted/declined triple that both the tone and every rendered
@@ -135,6 +149,24 @@ interface CompactionBoxProps {
 
 export const CompactionBox = memo(({ block }: CompactionBoxProps) => {
   const theme = useTheme()
+  // A healthy settled pass is a transient progress affordance: it holds at 100%
+  // briefly and then renders nothing. The timer lives here rather than in the
+  // event handler so state stays a pure function of the events, and its cleanup
+  // is what makes a card dropped mid-hold harmless.
+  const transient = block.transient === true
+  const [holdExpired, setHoldExpired] = useState(false)
+  useEffect(() => {
+    setHoldExpired(false)
+    if (!transient) return
+    const timeout = setTimeout(
+      () => setHoldExpired(true),
+      TRANSIENT_COMPACTION_HOLD_MS,
+    )
+    return () => clearTimeout(timeout)
+    // Re-armed when the block identity changes, so a card replaced in place by a
+    // later pass gets its own hold instead of inheriting an expired one.
+  }, [transient, block])
+
   const presentation = derivePresentation(block)
   const { unsettled, pending, interrupted, declined } = presentation
   const tone = deriveTone(block, presentation)
@@ -201,6 +233,14 @@ export const CompactionBox = memo(({ block }: CompactionBoxProps) => {
     ? 'Knowledge memory retained'
     : 'No knowledge memory retained'
 
+  // The bar reports live movement for a pending pass and the completed 100% for
+  // a transient one; `sanitizeCount` absorbs a missing or garbage percent from a
+  // replayed block, and `ProgressBar` clamps the upper bound itself.
+  const showProgressBar = pending || transient
+  const progressValue = sanitizeCount(block.progressPercent)
+
+  if (transient && holdExpired) return null
+
   return (
     <HarnessBox tone={tone} title={title} gap={0} paddingBottom={1}>
       {unsettled ? (
@@ -220,6 +260,9 @@ export const CompactionBox = memo(({ block }: CompactionBoxProps) => {
           <span style={{ fg: theme.muted }}>{messagesText}</span>
         </text>
       )}
+      {showProgressBar ? (
+        <ProgressBar value={progressValue} width={PROGRESS_BAR_WIDTH} />
+      ) : null}
       {categoryDeltas.length > 0
         ? categoryDeltas.map((delta, index) => (
             <text

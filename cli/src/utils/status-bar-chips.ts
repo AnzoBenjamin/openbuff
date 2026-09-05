@@ -341,13 +341,28 @@ export const buildContextLabel = (
  * form at 'md'/'lg' that distinguishes a semantic compaction from an emergency
  * mechanical trim. A pass that is still running reports the live state instead
  * of a count, which may still be 0 when nothing has completed yet.
+ *
+ * A live pass with a usable `progressPercent` reports it at 'md'/'lg' ('⇲
+ * compacting 62%') so the chip shows real movement rather than an indefinite
+ * ellipsis. The percent is best-effort telemetry, so a missing, non-finite or
+ * zero value falls back to the previous ellipsis label, and the narrow sizes —
+ * which have no room for it — keep their exact previous labels.
  */
 const buildCompactionLabel = (
   widthSize: StatusBarWidthSize,
-  notice: Pick<CompactionNotice, 'count' | 'action' | 'pending'>,
+  notice: Pick<
+    CompactionNotice,
+    'count' | 'action' | 'pending' | 'progressPercent'
+  >,
 ): string => {
   const narrow = widthSize === 'xs' || widthSize === 'sm'
-  if (notice.pending) return narrow ? '⇲ …' : '⇲ compacting…'
+  if (notice.pending) {
+    if (narrow) return '⇲ …'
+    const percent = notice.progressPercent
+    return typeof percent === 'number' && Number.isFinite(percent) && percent > 0
+      ? `⇲ compacting ${Math.min(100, Math.round(percent))}%`
+      : '⇲ compacting…'
+  }
   if (narrow) return `⇲ ${notice.count}`
   const verb = notice.action === 'mechanical_trim' ? 'trimmed' : 'compacted'
   return `⇲ ${verb} ×${notice.count}`
@@ -499,6 +514,9 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
         count: compactionNotice.count,
         action: compactionNotice.action,
         pending: compactionPending,
+        ...(compactionNotice.progressPercent !== undefined && {
+          progressPercent: compactionNotice.progressPercent,
+        }),
       }),
       // A live pass reads as in-progress, not as a failed one: a degraded
       // earlier pass only tones the chip red once it has settled.

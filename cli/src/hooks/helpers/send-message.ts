@@ -13,6 +13,7 @@ import { logger } from '../../utils/logger'
 import { getFileAttachmentContextMetadata } from '../../utils/pending-attachments'
 import {
   appendInterruptionNotice,
+  dropTransientCompactionBlocks,
   markPendingCompactionInterrupted,
 } from '../../utils/message-block-helpers'
 import { getUserMessage } from '../../utils/message-history'
@@ -377,9 +378,13 @@ export const setupStreamingContext = (params: {
       // A compaction pass that was still running is terminated here, in the
       // same composed update: the SDK drops every post-abort event, so neither
       // `settled` nor `finish` arrives to end the pending state, and this is
-      // the last write before the turn's blocks are persisted.
+      // the last write before the turn's blocks are persisted. A transient
+      // (self-dismissing) card is dropped in the same pass, so an abort mid-hold
+      // cannot persist one either.
       return appendInterruptionNotice(
-        markPendingCompactionInterrupted(cancelledBlocks),
+        dropTransientCompactionBlocks(
+          markPendingCompactionInterrupted(cancelledBlocks),
+        ),
       )
     })
     updater.markComplete()

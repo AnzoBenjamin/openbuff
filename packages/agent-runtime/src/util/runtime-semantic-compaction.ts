@@ -44,6 +44,16 @@ export async function runRuntimeSemanticCompaction(
     /** Parent tool surface, inherited by the pruner child. */
     tools: ToolSet
     userInputId: string
+    /**
+     * Best-effort progress reporter owned by the caller's announced pass. Called
+     * once per observed pruner chunk; the caller clamps and enforces
+     * monotonicity. Optional, and never load-bearing: the pass runs identically
+     * without it.
+     */
+    onCompactionProgress?: (
+      phase: 'analyzing' | 'summarizing' | 'applying',
+      percent: number,
+    ) => void
   } & ParamsExcluding<
     typeof executeSubagent,
     | 'agentState'
@@ -69,6 +79,10 @@ export async function runRuntimeSemanticCompaction(
     userInputId,
   } = params
   const runId = parentAgentState.runId ?? parentAgentState.agentId
+  // Counts observed pruner chunks so the announced pass can report live
+  // movement. The chunks themselves are still discarded (see the reporter passed
+  // to `executeSubagent` below): only the bounded tick is surfaced.
+  let prunerChunks = 0
 
   // Recursion guard: the pruner's own run evaluates this same semantic trigger,
   // so a run that IS the pruner must never drive a nested runtime pass. Matched
@@ -175,8 +189,16 @@ export async function runRuntimeSemanticCompaction(
       parentSystemPrompt: system,
       parentTools: tools,
       // The pruner is infrastructure, not conversation: its output stays
-      // invisible, matching the inline path's pruner-identity suppression.
-      onResponseChunk: () => {},
+      // invisible, matching the inline path's pruner-identity suppression. The
+      // chunk is dropped and only a bounded progress tick is reported, so the UI
+      // can show real movement instead of a silent stall.
+      onResponseChunk: () => {
+        prunerChunks += 1
+        params.onCompactionProgress?.(
+          'summarizing',
+          Math.min(85, 45 + prunerChunks * 5),
+        )
+      },
       clearUserPromptMessagesAfterResponse: false,
     })
 

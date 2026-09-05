@@ -1121,6 +1121,407 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
     })
   })
 
+  test('security per-file marker credit does not re-spawn security-reviewer when attested bytes are unchanged', () => {
+    // Phase 4 regression: after a passing security pass stores
+    // securityReviewFileMarkers, that map is the AUTHORITATIVE freshness
+    // record. A second iteration over the same bytes must NOT re-spawn the
+    // reviewer (the pre-Phase-4 eviction loop re-fired security on its own
+    // fresh credit); the next yield goes straight to the validation hooks.
+    const base2 = createBase2('default')
+    // Seed test/doc done so only security runs on the first aux pass; keep
+    // auxGatesLastPendingFiles aligned so resetAuxGateFlags cannot re-arm the
+    // writers mid-test (same seed shape as the STATUS-path freshness test).
+    const agentState = {
+      agentId: 'base2-custom',
+      base2ActiveWork: {
+        changedFiles: [AUX_TRIPLE_FILE],
+        touchedFiles: [AUX_TRIPLE_FILE],
+        pendingGateFiles: [AUX_TRIPLE_FILE],
+        currentPhase: 'awaiting_validation',
+        openReviewerBlockers: [],
+        openReviewerFindings: [],
+        lastValidationSummary: '',
+        nextRequiredAction: '',
+        lastPinnedStateMessage: '',
+        gatePassedFiles: [],
+        gatePassedPendingFiles: [],
+        gatePassedReviewerVerdict: '',
+        gatePassedValidationSummary: '',
+        gatePassedFingerprint: '',
+        lastReviewerGateSkipReason: '',
+        reviewReceipts: [],
+        testWriterGateDone: true,
+        docWriterGateDone: true,
+        securityReviewGateDone: false,
+        preEditSecurityReviewDone: false,
+        specialistReviewGatesDone: [],
+        auxGatesLastPendingFiles: [AUX_TRIPLE_FILE],
+      },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Please finish the pending auth session gate item.',
+      params: {},
+    } as any)
+
+    // Resumed-state prelude.
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    expect(
+      gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}` })).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+    expect(gen.next().value).toBe('STEP')
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+
+    // First iteration: security-reviewer spawns for the sensitive auth file.
+    const securityReviewerYield = gen.next(
+      feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }),
+    )
+    expect(securityReviewerYield.value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: {
+        agent_type: 'security-reviewer',
+        params: { changed_files: [AUX_TRIPLE_FILE] },
+      },
+      includeToolCall: false,
+    })
+    const securityFingerprint = (securityReviewerYield.value as any).input
+      .params.snapshot_fingerprint as string
+    expect(securityFingerprint).toMatch(/^v3:[a-f0-9]{64}$/)
+
+    // The LOOKS_GOOD pass publishes the per-file marker map.
+    expect(
+      gen.next(reviewerResult(securityFingerprint, [AUX_TRIPLE_FILE])).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    const storedMarkers = (agentState as any).base2ActiveWork
+      .securityReviewFileMarkers as Record<string, string>
+    expect(storedMarkers).toBeDefined()
+    expect(Object.keys(storedMarkers)).toContain(AUX_TRIPLE_FILE)
+
+    // Second iteration with UNCHANGED bytes: the per-file map keeps the credit
+    // fresh, so security-reviewer must not re-spawn. The next yield is the
+    // final validation gate (run_file_change_hooks).
+    expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+    expect(gen.next().value).toBe('STEP')
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+    })
+    const secondIterationNext = gen.next(
+      feedJson({ status: ` M ${AUX_TRIPLE_FILE}` }),
+    )
+    expect((secondIterationNext.value as any)?.input?.agent_type).not.toBe(
+      'security-reviewer',
+    )
+    expect(secondIterationNext.value).toMatchObject({
+      toolName: 'run_file_change_hooks',
+      input: { files: [AUX_TRIPLE_FILE] },
+    })
+    expect((agentState as any).base2ActiveWork).toMatchObject({
+      securityReviewGateDone: true,
+      preEditSecurityReviewDone: true,
+    })
+  })
+
+  test('security per-file marker credit scopes a re-review to the newly drifted security-sensitive file', () => {
+    // A real scratch file backs the second sensitive path so its bytes (and
+    // content marker) can drift between passes; the `auth` path segment is in
+    // SECURITY_SENSITIVE_GLOBS and no specialist router stem matches policy.ts.
+    mkdirSync(`${SPECIALIST_SCRATCH_ROOT}/auth`, { recursive: true })
+    const driftedFile = `${SPECIALIST_SCRATCH_ROOT}/auth/policy.ts`
+    writeFileSync(driftedFile, 'export const policy = "v1"\n')
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2-custom',
+      base2ActiveWork: {
+        changedFiles: [AUX_TRIPLE_FILE, driftedFile],
+        touchedFiles: [AUX_TRIPLE_FILE, driftedFile],
+        pendingGateFiles: [AUX_TRIPLE_FILE, driftedFile],
+        currentPhase: 'awaiting_validation',
+        openReviewerBlockers: [],
+        openReviewerFindings: [],
+        lastValidationSummary: '',
+        nextRequiredAction: '',
+        lastPinnedStateMessage: '',
+        gatePassedFiles: [],
+        gatePassedPendingFiles: [],
+        gatePassedReviewerVerdict: '',
+        gatePassedValidationSummary: '',
+        gatePassedFingerprint: '',
+        lastReviewerGateSkipReason: '',
+        reviewReceipts: [],
+        testWriterGateDone: true,
+        docWriterGateDone: true,
+        securityReviewGateDone: false,
+        preEditSecurityReviewDone: false,
+        specialistReviewGatesDone: [],
+        auxGatesLastPendingFiles: [AUX_TRIPLE_FILE, driftedFile],
+      },
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Please finish the pending auth session gate item.',
+      params: {},
+    } as any)
+
+    // Resumed-state prelude.
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    expect(
+      gen.next(
+        feedJson({ status: ` M ${AUX_TRIPLE_FILE}\n M ${driftedFile}` }),
+      ).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+    expect(gen.next().value).toBe('STEP')
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+
+    // First pass: no marker map exists yet, so the spawn covers BOTH
+    // security-sensitive files (legacy full-set scope).
+    const securityReviewerYield = gen.next(
+      feedJson({ status: ` M ${AUX_TRIPLE_FILE}\n M ${driftedFile}` }),
+    )
+    expect(securityReviewerYield.value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'security-reviewer' },
+      includeToolCall: false,
+    })
+    const firstParams = (securityReviewerYield.value as any).input.params
+    expect((firstParams.changed_files as string[]).sort()).toEqual(
+      [AUX_TRIPLE_FILE, driftedFile].sort(),
+    )
+    const firstFingerprint = firstParams.snapshot_fingerprint as string
+    expect(firstFingerprint).toMatch(/^v3:[a-f0-9]{64}$/)
+
+    // The pass stores markers for exactly the attested file set.
+    expect(
+      gen.next(
+        reviewerResult(firstFingerprint, [AUX_TRIPLE_FILE, driftedFile]),
+      ).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    const markersAfterFirstPass = (agentState as any).base2ActiveWork
+      .securityReviewFileMarkers as Record<string, string>
+    expect(Object.keys(markersAfterFirstPass).sort()).toEqual(
+      [AUX_TRIPLE_FILE, driftedFile].sort(),
+    )
+    const stableMarker = markersAfterFirstPass[AUX_TRIPLE_FILE]
+    // String snapshot BEFORE the drift: markersAfterFirstPass aliases the
+    // live map, so a property read at assertion time would see the refreshed
+    // value and the not.toBe below would compare the map against itself.
+    const driftedMarkerBefore = markersAfterFirstPass[driftedFile]
+
+    // Second iteration: only the drifted file's BYTES change.
+    writeFileSync(driftedFile, 'export const policy = "v2"\n')
+    expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+    expect(gen.next().value).toBe('STEP')
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+    })
+
+    // The re-review spawn is SCOPED to the drifted subset: changed_files
+    // contains ONLY the newly drifted file, and the attestation fingerprint is
+    // derived from exactly that list, so it differs from the first pass.
+    const reReviewSpawn = gen.next(
+      feedJson({ status: ` M ${AUX_TRIPLE_FILE}\n M ${driftedFile}` }),
+    )
+    expect(reReviewSpawn.value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'security-reviewer' },
+      includeToolCall: false,
+    })
+    const reReviewParams = (reReviewSpawn.value as any).input.params
+    expect(reReviewParams.changed_files).toEqual([driftedFile])
+    const reReviewFingerprint = reReviewParams.snapshot_fingerprint as string
+    expect(reReviewFingerprint).toMatch(/^v3:[a-f0-9]{64}$/)
+    expect(reReviewFingerprint).not.toBe(firstFingerprint)
+
+    // The scoped pass MERGES into the map: the unchanged file's stored marker
+    // survives and the drifted file's marker is refreshed.
+    expect(
+      gen.next(reviewerResult(reReviewFingerprint, [driftedFile])).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    const markersAfterReReview = (agentState as any).base2ActiveWork
+      .securityReviewFileMarkers as Record<string, string>
+    expect(markersAfterReReview[AUX_TRIPLE_FILE]).toBe(stableMarker)
+    expect(markersAfterReReview[driftedFile]).not.toBe(driftedMarkerBefore)
+  })
+
+  test('specialist per-file marker credit re-reviews only the drifted file and retains the unchanged marker', () => {
+    // Two real reliability-routed files (state/ dir + session/queue stems) so
+    // one specialist pass attests BOTH with real, drift-able bytes on disk.
+    mkdirSync(`${SPECIALIST_SCRATCH_ROOT}/state`, { recursive: true })
+    const unchangedFile = `${SPECIALIST_SCRATCH_ROOT}/state/queue.ts`
+    writeFileSync(SPECIALIST_FILE, 'export const session = "v1"\n')
+    writeFileSync(unchangedFile, 'export const queue = "v1"\n')
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2-custom',
+      base2ActiveWork: specialistSeed({
+        changedFiles: [SPECIALIST_FILE, unchangedFile],
+        touchedFiles: [SPECIALIST_FILE, unchangedFile],
+        pendingGateFiles: [SPECIALIST_FILE, unchangedFile],
+        auxGatesLastPendingFiles: [SPECIALIST_FILE, unchangedFile],
+      }),
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Please finish the pending reliability finding.',
+      params: {},
+    } as any)
+
+    // Resumed-state prelude.
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    expect(
+      gen.next(
+        feedJson({ status: ` M ${SPECIALIST_FILE}\n M ${unchangedFile}` }),
+      ).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+    expect(gen.next().value).toBe('STEP')
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+
+    // First specialist pass: no marker map yet, so the spawn covers BOTH
+    // routed files and the bundle freezes before the spawn.
+    expect(
+      gen.next(
+        feedJson({ status: ` M ${SPECIALIST_FILE}\n M ${unchangedFile}` }),
+      ).value,
+    ).toMatchObject({
+      toolName: 'get_change_review_bundle',
+      includeToolCall: false,
+    })
+    const firstSpawn = gen.next(
+      feedJson({
+        snapshotId: 'specialist-credit-snapshot',
+        files: [SPECIALIST_FILE, unchangedFile],
+      }),
+    )
+    expect(firstSpawn.value).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      includeToolCall: false,
+    })
+    const firstParams = (firstSpawn.value as any).input.agents[0].params
+    expect((firstParams.files as string[]).sort()).toEqual(
+      [SPECIALIST_FILE, unchangedFile].sort(),
+    )
+    const firstFingerprint = specialistFingerprintFromSpawn(firstSpawn.value)
+
+    // The passing pass stores per-specialist markers for exactly the files
+    // this pass attested.
+    expect(
+      gen.next(
+        spawnedReviewerResult('reliability-reviewer', firstFingerprint, [
+          SPECIALIST_FILE,
+          unchangedFile,
+        ]),
+      ).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    const markersAfterFirstPass = (agentState as any).base2ActiveWork
+      .specialistReviewFileMarkers?.[
+        'reliability-reviewer'
+      ] as Record<string, string>
+    expect(Object.keys(markersAfterFirstPass).sort()).toEqual(
+      [SPECIALIST_FILE, unchangedFile].sort(),
+    )
+    const unchangedMarker = markersAfterFirstPass[unchangedFile]
+    const driftedMarkerBefore = markersAfterFirstPass[SPECIALIST_FILE]
+    expect(unchangedMarker).toBeDefined()
+    expect(driftedMarkerBefore).toBeDefined()
+
+    // Only the drifted file's bytes change before the second iteration.
+    writeFileSync(SPECIALIST_FILE, 'export const session = "v2"\n')
+    expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+    expect(gen.next().value).toBe('STEP')
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+    })
+
+    // The re-review spawn is SCOPED: params.files contains ONLY the drifted
+    // file, and its scoped attestation fingerprint differs from the first pass.
+    expect(
+      gen.next(
+        feedJson({ status: ` M ${SPECIALIST_FILE}\n M ${unchangedFile}` }),
+      ).value,
+    ).toMatchObject({
+      toolName: 'get_change_review_bundle',
+      includeToolCall: false,
+    })
+    const secondSpawn = gen.next(
+      feedJson({
+        snapshotId: 'specialist-credit-snapshot-refreshed',
+        files: [SPECIALIST_FILE],
+      }),
+    )
+    expect(secondSpawn.value).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      includeToolCall: false,
+    })
+    const secondParams = (secondSpawn.value as any).input.agents[0].params
+    expect(secondParams.files).toEqual([SPECIALIST_FILE])
+    const secondFingerprint = specialistFingerprintFromSpawn(secondSpawn.value)
+    expect(secondFingerprint).not.toBe(firstFingerprint)
+
+    // The scoped pass MERGES markers: the unchanged file RETAINS its stored
+    // marker and the drifted file's marker is refreshed.
+    expect(
+      gen.next(
+        spawnedReviewerResult('reliability-reviewer', secondFingerprint, [
+          SPECIALIST_FILE,
+        ]),
+      ).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    const markersAfterSecondPass = (agentState as any).base2ActiveWork
+      .specialistReviewFileMarkers?.[
+        'reliability-reviewer'
+      ] as Record<string, string>
+    expect(markersAfterSecondPass[unchangedFile]).toBe(unchangedMarker)
+    expect(markersAfterSecondPass[SPECIALIST_FILE]).not.toBe(
+      driftedMarkerBefore,
+    )
+  })
+
   test('revalidates an owed specialist reviewer as aux-owned across turns before the final code-reviewer', () => {
     const base2 = createBase2('default')
     // Seed the turn so the marker is already owed to a specialist, simulating

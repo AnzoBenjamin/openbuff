@@ -825,6 +825,104 @@ describe('loopAgentSteps', () => {
     })
   })
 
+  // `context_compaction_progress` is best-effort telemetry emitted from
+  // deterministic milestones INSIDE an announced pass. The next cases pin the
+  // two invariants a consumer relies on: percents never rewind, and no emission
+  // ever falls outside a started/settled pair of the same run.
+  it('emits monotonic compaction progress strictly inside an announced pass', async () => {
+    setup()
+    const events: any[] = []
+    agentState.messageHistory = [
+      userMessage('small-window evidence '.repeat(8_000)),
+      userMessage('Continue from the retained goal.'),
+    ]
+    agentTemplate.handleSteps =
+      contextPruner.handleSteps as AgentTemplate['handleSteps']
+
+    await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      resolveModelContextWindow: mock(() => 32_000),
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    const statusEvents = events.filter(
+      (event) => event.type === 'context_compaction_status',
+    )
+    const started = statusEvents.find((event) => event.state === 'started')
+    const settled = statusEvents.find((event) => event.state === 'settled')
+    expect(started).toBeDefined()
+    expect(settled).toBeDefined()
+
+    const progress = events.filter(
+      (event) => event.type === 'context_compaction_progress',
+    )
+    // Both deterministic milestones: analysis as soon as the pass is announced,
+    // application once the step that owns the pruner has returned.
+    expect(progress.length).toBeGreaterThanOrEqual(2)
+    expect(progress[0]).toMatchObject({
+      phase: 'analyzing',
+      percent: 20,
+      runId: started.runId,
+      agentId: 'test-agent-id',
+      ancestorRunIds: [],
+      contextTokens: expect.any(Number),
+      targetBudgetTokens: 8_400,
+    })
+    expect(progress.at(-1)).toMatchObject({ phase: 'applying', percent: 90 })
+
+    const startedIndex = events.indexOf(started)
+    const settledIndex = events.indexOf(settled)
+    let previousPercent = 0
+    for (const event of progress) {
+      const index = events.indexOf(event)
+      expect(index).toBeGreaterThan(startedIndex)
+      expect(index).toBeLessThan(settledIndex)
+      expect(event.runId).toBe(started.runId)
+      expect(event.percent).toBeGreaterThanOrEqual(previousPercent)
+      expect(event.percent).toBeLessThanOrEqual(100)
+      previousPercent = event.percent
+    }
+  })
+
+  it('emits no compaction progress for an iteration that announces no pass', async () => {
+    setup()
+    const events: any[] = []
+    // A huge window keeps the request below the semantic trigger, so nothing is
+    // announced and a consumer must see no progress for a pass that never ran.
+    agentState.messageHistory = [userMessage('old evidence '.repeat(4_000))]
+    agentTemplate.handleSteps = function* () {
+      yield {
+        toolName: 'set_messages',
+        input: {
+          messages: [
+            userMessage(
+              '<knowledge_memory>\nPinned structured knowledge memory.\n</knowledge_memory>',
+            ),
+          ],
+        },
+        includeToolCall: false,
+      }
+      yield 'STEP'
+    } as () => StepGenerator
+
+    await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      resolveModelContextWindow: mock(() => 1_000_000),
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    expect(
+      events.filter((event) => event.type === 'context_compaction_status'),
+    ).toHaveLength(0)
+    expect(
+      events.filter((event) => event.type === 'context_compaction_progress'),
+    ).toHaveLength(0)
+  })
+
   it('emits a recovery-rich event when emergency mechanical trim is required', async () => {
     setup()
     const events: any[] = []
@@ -984,6 +1082,45 @@ describe('loopAgentSteps', () => {
     })
 
     expect(result.agentState.suppressSemanticCompaction).toBe(true)
+  })
+
+  it('emits compaction progress only while an announced pass is unsettled', async () => {
+    setup()
+    const events: any[] = []
+    // The suppression fixture drives several over-trigger iterations, only the
+    // first two of which announce a pass. Every later (suppressed) iteration
+    // must contribute no progress at all.
+    seedZeroReclaimAnnouncedPasses()
+
+    await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      resolveModelContextWindow: mock(() => 64_000),
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    const started = events.filter(
+      (event) =>
+        event.type === 'context_compaction_status' && event.state === 'started',
+    )
+    expect(started.length).toBeGreaterThanOrEqual(2)
+
+    // Walk the stream: a progress event may only appear while an announced pass
+    // of the SAME run is still unsettled.
+    const liveRunIds = new Set<string>()
+    let progressCount = 0
+    for (const event of events) {
+      if (event.type === 'context_compaction_status') {
+        if (event.state === 'started') liveRunIds.add(event.runId)
+        else liveRunIds.delete(event.runId)
+        continue
+      }
+      if (event.type !== 'context_compaction_progress') continue
+      progressCount++
+      expect(liveRunIds.has(event.runId)).toBe(true)
+    }
+    expect(progressCount).toBeGreaterThanOrEqual(started.length)
   })
 
   it('leaves semantic compaction unsuppressed when a pass genuinely shrinks history', async () => {
@@ -1714,5 +1851,118 @@ describe('loopAgentSteps', () => {
     expect(agentState.contextBudgetLedger!.byCategory).toEqual(
       ledger!.byCategory,
     )
+  })
+
+  // Regression: a structured agent that never populates output used to get only
+  // one retry. The fix introduces MAX_MISSING_OUTPUT_RETRIES (= 3) so the loop
+  // retries the missing-output nudge up to the cap before handing back null.
+  it('retries the missing-output nudge up to the cap and then returns null value', async () => {
+    setup()
+    let llmCallCount = 0
+    agentTemplate.handleSteps = undefined
+    agentTemplate.toolNames = ['read_files']
+    agentTemplate.outputSchema = z.object({ result: z.string() })
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCallCount++
+      // The LLM only ever returns prose — it never calls set_output.
+      yield { type: 'text' as const, text: 'Still no structured output.' }
+      return promptSuccess(`mock-message-${llmCallCount}`)
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      // More steps than the retry budget so the loop ends because the retry cap
+      // is hit, not because steps ran out.
+      agentState: { ...agentState, stepsRemaining: 20 },
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    // 1 initial call + 3 retries = MAX_MISSING_OUTPUT_RETRIES (hard-coded 4;
+    // the constant is module-private in run-agent-step.ts). The old one-shot
+    // behavior yielded 2.
+    expect(llmCallCount).toBe(4)
+    // The structured-output envelope is returned with a null/absent value
+    // rather than throwing.
+    expect(result.output).toEqual({
+      type: 'structuredOutput',
+      value: null,
+    })
+  })
+
+  // Regression: when a set_output call is rejected (schema validation), the
+  // missing-output retry must name the actual rejection so the model can fix
+  // the reported fields, instead of a generic reminder.
+  it('injects a retry message that names the recorded set_output rejection', async () => {
+    setup()
+    let llmCallCount = 0
+    agentTemplate.handleSteps = undefined
+    agentTemplate.toolNames = ['read_files', 'set_output']
+    agentTemplate.outputSchema = z.object({ result: z.string() })
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCallCount++
+      // Always call set_output with a payload that FAILS the outputSchema
+      // (number where a string is required), so output stays unset.
+      yield createToolCallChunk('set_output', { result: 42 })
+      return promptSuccess(`mock-message-${llmCallCount}`)
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      // The set_output handler resolves the outputSchema from
+      // agentState.agentType (not params.agentType), so the state must name
+      // the registered template id or validation is silently skipped.
+      agentState: {
+        ...agentState,
+        agentType: 'test-agent',
+        stepsRemaining: 20,
+      },
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    // The injected nudge is appended to message history (not onResponseChunk),
+    // so observe it there.
+    const history = result.agentState.messageHistory
+      .map((message) =>
+        typeof message.content === 'string'
+          ? message.content
+          : JSON.stringify(message.content),
+      )
+      .join('\n')
+    expect(history).toContain('Your set_output call was rejected')
+    expect(history).toContain('Output validation error')
+  })
+
+  // Regression: when the agent simply never calls set_output (no recorded
+  // rejection), the retry must fall back to the generic wording.
+  it('injects the generic missing-output message when there is no recorded rejection', async () => {
+    setup()
+    let llmCallCount = 0
+    agentTemplate.handleSteps = undefined
+    agentTemplate.toolNames = ['read_files']
+    agentTemplate.outputSchema = z.object({ result: z.string() })
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCallCount++
+      yield { type: 'text' as const, text: 'Just prose, no tool call.' }
+      return promptSuccess(`mock-message-${llmCallCount}`)
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentState: { ...agentState, stepsRemaining: 20 },
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    const history = result.agentState.messageHistory
+      .map((message) =>
+        typeof message.content === 'string'
+          ? message.content
+          : JSON.stringify(message.content),
+      )
+      .join('\n')
+    expect(history).toContain('does not populate structured output')
+    expect(history).not.toContain('Your set_output call was rejected')
   })
 })

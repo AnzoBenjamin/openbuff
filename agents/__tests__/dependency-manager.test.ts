@@ -135,7 +135,7 @@ describe('dependency-manager', () => {
     expect(advancePastSnapshotRead(generator, environment).value).toMatchObject(
       {
         toolName: 'run_terminal_command',
-        input: { command: expected, timeout_seconds: 600 },
+        input: { command: expected, timeout_seconds: -1 },
       },
     )
   })

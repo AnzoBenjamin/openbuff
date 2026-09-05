@@ -98,10 +98,6 @@ import {
   writeAuditFindings,
 } from './tools/write-audit-findings'
 import { createNodeFileSystem } from './tools/node-filesystem'
-import {
-  createToolExecutionDeadline,
-  getDefaultToolExecutionTimeoutMs,
-} from './tool-execution-deadline'
 import type { FilesystemAuthorityPolicy } from './tools/filesystem-authority'
 
 import type { CustomToolDefinition } from './custom-tool'
@@ -999,119 +995,108 @@ async function runOnce({
           if (cloneMatch?.[1]) ownedLibrarianCloneDirs.add(cloneMatch[1])
         }
       }
-      const timeoutMs = getDefaultToolExecutionTimeoutMs(toolName)
-      const deadline = createToolExecutionDeadline({
-        parentSignal: toolSignal ?? runSignal,
-        timeoutMs,
-        toolName,
+      const handled = await handleToolCall({
+        action: {
+          type: 'tool-call-request',
+          requestId: callId ?? crypto.randomUUID(),
+          userInputId,
+          toolName,
+          input,
+          mcpConfig,
+        },
+        overrides: overrideTools ?? {},
+        onFilesChanged,
+        onFilesystemMutation,
+        verifyExternalMutation,
+        customToolDefinitions: customToolDefinitions
+          ? Object.fromEntries(
+              customToolDefinitions.map((def) => [def.toolName, def]),
+            )
+          : {},
+        cwd,
+        fs,
+        fileFilter,
+        filesystemPolicy,
+        trustedJobOwner,
+        logger,
+        capabilityIssuer: cwd
+          ? {
+              projectId: cwd,
+              runId:
+                sessionState.mainAgentState.runId ??
+                sessionState.mainAgentState.agentId,
+            }
+          : undefined,
+        env,
+        harnessStateDir: resolvedHarnessStateDir,
+        approvalReceiptIds,
+        approvalMode,
+        requestApproval,
+        approvalService,
+        harnessWorkspaceIdentity: workspaceJournal
+          ? {
+              repositoryId: workspaceJournal.repositoryId,
+              workspaceId: workspaceJournal.workspaceId,
+            }
+          : undefined,
+        getWorkspaceState: () => sessionState.mainAgentState.workspaceState,
+        setWorkspaceState: (state) => {
+          sessionState.mainAgentState.workspaceState = state
+        },
+        advanceWorkspaceJournal: workspaceJournal
+          ? (change) =>
+              (() => {
+                if (!workspaceJournal) {
+                  return advanceWorkspaceState(
+                    sessionState.mainAgentState.workspaceState,
+                    change,
+                  )
+                }
+                try {
+                  return workspaceJournal.advance({
+                    runId:
+                      sessionState.mainAgentState.runId ??
+                      sessionState.mainAgentState.agentId,
+                    ...change,
+                  })
+                } catch (error) {
+                  logger?.warn(
+                    { error },
+                    'Workspace journal write failed; continuing with in-memory workspace state',
+                  )
+                  workspaceJournal = undefined
+                  return advanceWorkspaceState(
+                    sessionState.mainAgentState.workspaceState,
+                    change,
+                  )
+                }
+              })()
+          : undefined,
+        signal: toolSignal ?? runSignal,
       })
-      try {
-        const handled = await handleToolCall({
-          action: {
-            type: 'tool-call-request',
-            requestId: callId ?? crypto.randomUUID(),
-            userInputId,
-            toolName,
-            input,
-            timeout: timeoutMs,
-            mcpConfig,
-          },
-          overrides: overrideTools ?? {},
-          onFilesChanged,
-          onFilesystemMutation,
-          verifyExternalMutation,
-          customToolDefinitions: customToolDefinitions
-            ? Object.fromEntries(
-                customToolDefinitions.map((def) => [def.toolName, def]),
-              )
-            : {},
-          cwd,
-          fs,
-          fileFilter,
-          filesystemPolicy,
-          trustedJobOwner,
-          logger,
-          capabilityIssuer: cwd
-            ? {
-                projectId: cwd,
-                runId:
-                  sessionState.mainAgentState.runId ??
-                  sessionState.mainAgentState.agentId,
-              }
-            : undefined,
-          env,
-          harnessStateDir: resolvedHarnessStateDir,
-          approvalReceiptIds,
-          approvalMode,
-          requestApproval,
-          approvalService,
-          harnessWorkspaceIdentity: workspaceJournal
-            ? {
-                repositoryId: workspaceJournal.repositoryId,
-                workspaceId: workspaceJournal.workspaceId,
-              }
-            : undefined,
-          getWorkspaceState: () => sessionState.mainAgentState.workspaceState,
-          setWorkspaceState: (state) => {
-            sessionState.mainAgentState.workspaceState = state
-          },
-          advanceWorkspaceJournal: workspaceJournal
-            ? (change) =>
-                (() => {
-                  if (!workspaceJournal) {
-                    return advanceWorkspaceState(
-                      sessionState.mainAgentState.workspaceState,
-                      change,
-                    )
-                  }
-                  try {
-                    return workspaceJournal.advance({
-                      runId:
-                        sessionState.mainAgentState.runId ??
-                        sessionState.mainAgentState.agentId,
-                      ...change,
-                    })
-                  } catch (error) {
-                    logger?.warn(
-                      { error },
-                      'Workspace journal write failed; continuing with in-memory workspace state',
-                    )
-                    workspaceJournal = undefined
-                    return advanceWorkspaceState(
-                      sessionState.mainAgentState.workspaceState,
-                      change,
-                    )
-                  }
-                })()
-            : undefined,
-          signal: deadline.signal,
-        })
-        // Intercept the single dispatch path (model- and agent-initiated calls
-        // alike) so an unchanged list_jobs digest doesn't re-inject the full
-        // table into the conversation every step. The gate owns the returned
-        // output; the per-turn fingerprint lives in this closure.
-        if (toolName === 'list_jobs') {
-          const gated = applyListJobsDigestGate(
-            lastListJobsFingerprint,
-            handled.output,
-          )
-          lastListJobsFingerprint = gated.nextFingerprint
-          return { ...handled, output: gated.output }
-        } else if (toolName === 'git_status') {
-          // This interception runs AFTER the tool executed (`handled.output`),
-          // so every git_status observation still runs; only its context
-          // encoding is compacted when the worktree is byte-identical.
-          const gated = applyGitStatusGate(
-            lastGitStatusFingerprint,
-            handled.output,
-          )
-          lastGitStatusFingerprint = gated.nextFingerprint
-          return { ...handled, output: gated.output }
-        }
-        return handled
-      } finally {
-        deadline.dispose()
+      // Intercept the single dispatch path (model- and agent-initiated calls
+      // alike) so an unchanged list_jobs digest doesn't re-inject the full
+      // table into the conversation every step. The gate owns the returned
+      // output; the per-turn fingerprint lives in this closure.
+      if (toolName === 'list_jobs') {
+        const gated = applyListJobsDigestGate(
+          lastListJobsFingerprint,
+          handled.output,
+        )
+        lastListJobsFingerprint = gated.nextFingerprint
+        return { ...handled, output: gated.output }
+      } else if (toolName === 'git_status') {
+        // This interception runs AFTER the tool executed (`handled.output`),
+        // so every git_status observation still runs; only its context
+        // encoding is compacted when the worktree is byte-identical.
+        const gated = applyGitStatusGate(
+          lastGitStatusFingerprint,
+          handled.output,
+        )
+        lastGitStatusFingerprint = gated.nextFingerprint
+        return { ...handled, output: gated.output }
       }
+      return handled
     },
     requestMcpToolData: async ({ mcpConfig, toolNames }) => {
       const mcpClientId = await getMCPClient(mcpConfig)

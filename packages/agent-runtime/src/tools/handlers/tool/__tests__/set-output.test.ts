@@ -556,4 +556,149 @@ describe('handleSetOutput', () => {
     expect(output).toEqual([{ type: 'json', value: { message: 'Output set' } }])
     expect(agentState.output).toEqual(inner)
   })
+
+  test('records a schema-validation rejection on agentState.lastSetOutputError', async () => {
+    const template: AgentTemplate = {
+      id: 'reviewer-error-test',
+      displayName: 'Reviewer Error Test',
+      spawnerPrompt: 'Review code',
+      model: 'claude-3-5-sonnet-20241022',
+      inputSchema: {},
+      outputMode: 'structured_output',
+      outputSchema: z.object({ reviewedFiles: z.array(z.string()) }),
+      includeMessageHistory: false,
+      inheritParentSystemPrompt: false,
+      mcpServers: {},
+      toolNames: ['set_output'],
+      spawnableAgents: [],
+      systemPrompt: 'Test system prompt',
+      instructionsPrompt: 'Test instructions',
+      stepPrompt: 'Test step prompt',
+    }
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    agentState.agentType = template.id
+    const toolCall = {
+      toolName: 'set_output',
+      toolCallId: 'invalid-review-output',
+      input: { reviewedFiles: 'not-json' },
+    } as unknown as CodebuffToolCall<'set_output'>
+
+    const { output } = await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    const message = output[0]?.type === 'json' ? output[0].value.message : ''
+    expect(typeof agentState.lastSetOutputError).toBe('string')
+    expect(agentState.lastSetOutputError).toContain('Output validation error')
+    // The recorded error must be exactly the message handed back to the model,
+    // so the loop's retry nudge and the tool result cannot drift apart.
+    expect(agentState.lastSetOutputError).toBe(message)
+  })
+
+  test('clears lastSetOutputError once a later set_output succeeds', async () => {
+    const template: AgentTemplate = {
+      id: 'reviewer-error-test',
+      displayName: 'Reviewer Error Test',
+      spawnerPrompt: 'Review code',
+      model: 'claude-3-5-sonnet-20241022',
+      inputSchema: {},
+      outputMode: 'structured_output',
+      outputSchema: z.object({ reviewedFiles: z.array(z.string()) }),
+      includeMessageHistory: false,
+      inheritParentSystemPrompt: false,
+      mcpServers: {},
+      toolNames: ['set_output'],
+      spawnableAgents: [],
+      systemPrompt: 'Test system prompt',
+      instructionsPrompt: 'Test instructions',
+      stepPrompt: 'Test step prompt',
+    }
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    agentState.agentType = template.id
+
+    // Drive a rejecting call first so the error field is populated.
+    const rejectingCall = {
+      toolName: 'set_output',
+      toolCallId: 'invalid-review-output',
+      input: { reviewedFiles: 'not-json' },
+    } as unknown as CodebuffToolCall<'set_output'>
+
+    await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: rejectingCall,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    expect(agentState.lastSetOutputError).toBeDefined()
+
+    // A subsequent successful call on the SAME agentState must supersede the
+    // earlier rejection: a stale rejection must never leak into a later
+    // missing-output retry message.
+    const validCall = {
+      toolName: 'set_output',
+      toolCallId: 'valid-review-output',
+      input: { reviewedFiles: ['src/a.ts'] },
+    } as unknown as CodebuffToolCall<'set_output'>
+
+    await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: validCall,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    expect(agentState.lastSetOutputError).toBeUndefined()
+    expect(agentState.output).toEqual({ reviewedFiles: ['src/a.ts'] })
+  })
+
+  test('records a malformed-JSON rejection on agentState.lastSetOutputError', async () => {
+    const template: AgentTemplate = {
+      id: 'reviewer-test',
+      displayName: 'Reviewer Test',
+      spawnerPrompt: 'Review code',
+      model: 'claude-3-5-sonnet-20241022',
+      inputSchema: {},
+      outputMode: 'structured_output',
+      outputSchema: z.object({ verdict: z.string() }),
+      includeMessageHistory: false,
+      inheritParentSystemPrompt: false,
+      mcpServers: {},
+      toolNames: ['set_output'],
+      spawnableAgents: [],
+      systemPrompt: 'Test system prompt',
+      instructionsPrompt: 'Test instructions',
+      stepPrompt: 'Test step prompt',
+    }
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    agentState.agentType = template.id
+    const toolCall = {
+      toolName: 'set_output',
+      toolCallId: 'incomplete-review-output',
+      input: { data: '{"foo":' },
+    } as unknown as CodebuffToolCall<'set_output'>
+
+    await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    expect(agentState.lastSetOutputError).toContain(
+      'malformed or incomplete JSON text',
+    )
+    expect(agentState.output).toBeUndefined()
+  })
 })

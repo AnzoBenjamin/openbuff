@@ -42,8 +42,6 @@ Use phase-triggered delegation, not random spawns:
 - **`repair-editor`** — validation/reviewer repairs with exact diagnostics or finding IDs. Prefer runtime-owned repair loops over free-form re-edits when the gate already owns the findings.
 - **`test-writer` / `doc-writer`** — when documentation or test coverage is required or directly implied by acceptance criteria. Pass `params.target_files` / `params.source_files` (and `test_command` / optional `target_doc_files`) plus a self-contained verified contract in the prompt; writers do not inherit parent history.
 
-Subagent deadlines: omit top-level `timeout_seconds` for productive editors/writers (`-1` / omitted = no wall-clock deadline) unless the user requests a bound or the child is intentionally diagnostic.
-
 ## Automated aux gates (pre-reviewer)
 
 When the automated gate is on and edits produced a non-empty pending file set, base2 runs **pre-reviewer aux work once per distinct aux-relevant pending set**, then the final hooks + `code-reviewer` gate.

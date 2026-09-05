@@ -7,7 +7,6 @@ import {
   normalizeAgentIdForLookup,
   parseAgentId,
 } from '@codebuff/common/util/agent-id-parsing'
-import { withTimeout } from '@codebuff/common/util/promise'
 import { generateCompactId } from '@codebuff/common/util/string'
 import { containsStructuralAuditReceipt } from '@codebuff/common/util/audit-receipt'
 import {
@@ -1295,6 +1294,46 @@ function extractReceiptEvidence(params: {
   return evidence.slice(-128)
 }
 
+/**
+ * Observational context telemetry for the parent: how much of its window the
+ * finished child actually used. Built only from fields the child state already
+ * carries (`contextTokenCount` / `contextWindowTokens`) — there is no
+ * compaction counter on AgentState, so `compactionCount` is never invented.
+ * Omitted entirely when the token count is not a finite non-negative number,
+ * and `percentOfWindow` is clamped to 100 so a child that overran its declared
+ * window still yields a receipt that validates.
+ */
+function buildReceiptContextUsage(
+  agentState?: AgentState,
+): AgentReceipt['contextUsage'] {
+  const rawTokens = agentState?.contextTokenCount
+  if (
+    typeof rawTokens !== 'number' ||
+    !Number.isFinite(rawTokens) ||
+    rawTokens < 0
+  ) {
+    return undefined
+  }
+  const tokens = Math.round(rawTokens)
+  const rawWindow = agentState?.contextWindowTokens
+  const windowTokens =
+    typeof rawWindow === 'number' && Number.isFinite(rawWindow) && rawWindow > 0
+      ? Math.round(rawWindow)
+      : undefined
+  return {
+    tokens,
+    ...(windowTokens === undefined
+      ? {}
+      : {
+          windowTokens,
+          percentOfWindow: Math.min(
+            100,
+            Math.round((tokens / windowTokens) * 100),
+          ),
+        }),
+  }
+}
+
 export function buildRuntimeAgentReceipt(params: {
   agentType: string
   agentId: string
@@ -1480,6 +1519,7 @@ export function buildRuntimeAgentReceipt(params: {
           },
         }
     : normalizedOutput
+  const contextUsage = buildReceiptContextUsage(params.agentState)
   const receipt = agentReceiptSchema.parse({
     schemaVersion: 1,
     receiptId: generateCompactId(),
@@ -1521,6 +1561,7 @@ export function buildRuntimeAgentReceipt(params: {
     artifacts: extractReceiptStringArray(receiptSources, 'artifacts'),
     errors,
     output: reconciledOutput as any,
+    ...(contextUsage ? { contextUsage } : {}),
   })
   return receipt
 }
@@ -1963,33 +2004,6 @@ export function logAgentSpawn(params: {
 }
 
 /**
- * Shared wall-clock default for a single subagent execution.
- *
- * Productive subagents are unlimited by default. Callers can opt into a
- * deadline with timeout_seconds or a positive template-specific timeout.
- */
-const DEFAULT_SUBAGENT_TIMEOUT_MS = -1
-
-/**
- * Resolves the wall-clock timeout (ms) for a subagent execution, in precedence
- * order: explicit per-spawn override > agent template default > shared
- * DEFAULT_SUBAGENT_TIMEOUT_MS. A non-positive explicit or template value
- * (-1, 0) disables the timeout entirely.
- */
-export function resolveSubagentTimeoutMs(
-  agentTemplate: AgentTemplate,
-  subagentTimeoutMs?: number,
-): number {
-  if (subagentTimeoutMs !== undefined) {
-    return subagentTimeoutMs
-  }
-  if (agentTemplate.defaultTimeoutMs !== undefined) {
-    return agentTemplate.defaultTimeoutMs
-  }
-  return DEFAULT_SUBAGENT_TIMEOUT_MS
-}
-
-/**
  * Executes a subagent using loopAgentSteps
  */
 export async function executeSubagent(
@@ -2001,7 +2015,6 @@ export async function executeSubagent(
       onResponseChunk: (chunk: string | PrintModeEvent) => void
       isOnlyChild?: boolean
       ancestorRunIds: string[]
-      subagentTimeoutMs?: number
       spawnToolCallId?: string
       spawnIndex?: number
     } & ParamsExcluding<typeof loopAgentSteps, 'agentType' | 'ancestorRunIds'>,
@@ -2021,7 +2034,6 @@ export async function executeSubagent(
     ancestorRunIds,
     prompt,
     spawnParams,
-    subagentTimeoutMs,
     spawnToolCallId,
     spawnIndex,
   } = withDefaults
@@ -2055,59 +2067,29 @@ export async function executeSubagent(
   }
   onResponseChunk(startEvent)
 
-  // Thread an AbortController through withTimeout so the deadline actually
-  // cancels the underlying loopAgentSteps stream. The subagent's signal is the
-  // combination of the parent's signal (so a user/parent-level abort still
-  // propagates) and the timeout controller (so the deadline cancels this
-  // subagent without affecting its siblings). AbortSignal.any is available in
-  // Node 20+ and Bun. If unavailable at runtime, fall back to a manual
-  // EventTarget bridge so this stays safe on older runtimes.
-  const resolvedTimeoutMs = resolveSubagentTimeoutMs(
-    agentTemplate,
-    subagentTimeoutMs,
-  )
-  const timeoutController =
-    resolvedTimeoutMs > 0 ? new AbortController() : undefined
-  const parentSignal = withDefaults.signal
-  let combinedSignal: (AbortSignal & { cleanup?: () => void }) | undefined
-  const subagentSignal =
-    timeoutController && parentSignal
-      ? (AbortSignal as any).any
-        ? (AbortSignal as any).any([parentSignal, timeoutController.signal])
-        : (combinedSignal = createCombinedAbortSignal(
-            parentSignal,
-            timeoutController.signal,
-          ))
-      : timeoutController
-        ? timeoutController.signal
-        : parentSignal
-
+  // The subagent runs on the parent's signal (carried by ...withDefaults), so
+  // user/parent cancellation still propagates. There is no wall-clock deadline:
+  // productive subagents are bounded only by cancellation, the repeated-step
+  // watchdog, spawn depth, and cost/token budgets.
   let result
-  let timedOut = false
+  let failed = false
   try {
-    result = await withTimeout(
-      loopAgentSteps({
-        ...withDefaults,
-        signal: subagentSignal as AbortSignal,
-        onResponseChunk,
-        // Don't propagate parent's image content to subagents.
-        // If subagents need to see images, they get them through includeMessageHistory,
-        // not by creating new image-containing messages for their prompts.
-        content: undefined,
-        ancestorRunIds: [...ancestorRunIds, parentAgentState.runId ?? ''],
-        agentType: agentTemplate.id,
-      }),
-      resolvedTimeoutMs,
-      `Subagent ${agentTemplate.id} exceeded wall-clock timeout of ${resolvedTimeoutMs}ms`,
-      timeoutController ? { controller: timeoutController } : {},
-    )
+    result = await loopAgentSteps({
+      ...withDefaults,
+      onResponseChunk,
+      // Don't propagate parent's image content to subagents.
+      // If subagents need to see images, they get them through includeMessageHistory,
+      // not by creating new image-containing messages for their prompts.
+      content: undefined,
+      ancestorRunIds: [...ancestorRunIds, parentAgentState.runId ?? ''],
+      agentType: agentTemplate.id,
+    })
   } catch (error) {
-    // withTimeout rejects on deadline and has already aborted timeoutController,
-    // which cancels loopAgentSteps via the combined signal (loopAgentSteps checks
-    // signal.aborted at lines 889/1104/1369). Emit a finish event so the UI
-    // doesn't show a subagent that started but never finished, then re-throw so
-    // the parent sees the error via Promise.allSettled.
-    timedOut = true
+    // Any subagent failure (cancellation, budget exhaustion, thrown error) must
+    // still emit a finish event so the UI never shows a subagent that started
+    // but never finished. Re-throw so the parent sees the error via
+    // Promise.allSettled.
+    failed = true
     onResponseChunk({
       type: 'subagent_finish',
       agentId: withDefaults.agentState.agentId,
@@ -2122,13 +2104,9 @@ export async function executeSubagent(
       error: error instanceof Error ? error.message : String(error),
     })
     throw error
-  } finally {
-    // RF-2: remove fallback listeners when neither signal fires to avoid
-    // retention on long-lived parentSignal.
-    combinedSignal?.cleanup?.()
   }
 
-  if (!timedOut) {
+  if (!failed) {
     onResponseChunk({
       type: 'subagent_finish',
       agentId: result.agentState.agentId,

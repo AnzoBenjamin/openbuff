@@ -599,6 +599,126 @@ describe('selectStatusBarChips', () => {
     expect(degradedPending?.tone).toBe('warning')
   })
 
+  // Same (widthSize, notice) shape as the `compactionAt` helper of the
+  // label/tone test above, hoisted so the progress cases below share it.
+  const compactionChipAt = (
+    widthSize: 'xs' | 'sm' | 'md' | 'lg',
+    notice: NonNullable<SelectStatusBarChipsInput['compactionNotice']>,
+  ) =>
+    byId(
+      selectStatusBarChips({
+        ...full,
+        widthSize,
+        terminalWidth: 400,
+        compactionNotice: notice,
+      }).chips,
+    ).compaction
+
+  test('a live pass reports its progress percent at md and lg', () => {
+    const pendingWithProgress = {
+      count: 0,
+      action: 'semantic_compaction',
+      degraded: false,
+      pending: true,
+      progressPercent: 62,
+    } as const
+
+    // The wide sizes have room to report real movement instead of an
+    // indefinite ellipsis.
+    expect(compactionChipAt('md', pendingWithProgress)?.label).toBe(
+      '⇲ compacting 62%',
+    )
+    expect(compactionChipAt('lg', pendingWithProgress)?.label).toBe(
+      '⇲ compacting 62%',
+    )
+    // A live pass still reads as in progress rather than as a failed one.
+    expect(compactionChipAt('lg', pendingWithProgress)?.tone).toBe('warning')
+
+    // The narrow sizes have no room for the percent, so they keep their exact
+    // previous label.
+    expect(compactionChipAt('xs', pendingWithProgress)?.label).toBe('⇲ …')
+    expect(compactionChipAt('sm', pendingWithProgress)?.label).toBe('⇲ …')
+  })
+
+  test('a live percent is rounded and clamped to the renderable range', () => {
+    const labelFor = (progressPercent: number) =>
+      compactionChipAt('lg', {
+        count: 0,
+        action: 'semantic_compaction',
+        degraded: false,
+        pending: true,
+        progressPercent,
+      })?.label
+
+    expect(labelFor(62.6)).toBe('⇲ compacting 63%')
+    expect(labelFor(150)).toBe('⇲ compacting 100%')
+  })
+
+  test('a live pass with no usable percent falls back to the ellipsis label', () => {
+    const base = {
+      count: 0,
+      action: 'semantic_compaction',
+      degraded: false,
+      pending: true,
+    } as const
+
+    // Absent, zero, negative and non-finite all mean "no usable estimate": the
+    // percent is best-effort telemetry, so the chip keeps its previous label.
+    expect(compactionChipAt('md', base)?.label).toBe('⇲ compacting…')
+    expect(compactionChipAt('lg', base)?.label).toBe('⇲ compacting…')
+    for (const progressPercent of [
+      0,
+      -5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+    ]) {
+      expect(compactionChipAt('md', { ...base, progressPercent })?.label).toBe(
+        '⇲ compacting…',
+      )
+      expect(compactionChipAt('lg', { ...base, progressPercent })?.label).toBe(
+        '⇲ compacting…',
+      )
+    }
+
+    // Control: a usable percent does reach the label, so the fallbacks above
+    // are the no-estimate branch rather than a chip that never reports one.
+    const usable = compactionChipAt('lg', { ...base, progressPercent: 62 })
+    expect(usable?.label).toBe('⇲ compacting 62%')
+  })
+
+  test('a settled notice ignores a carried progress percent', () => {
+    // Progress only ever describes a live pass, so a settled notice that still
+    // carries one keeps its exact count labels.
+    expect(
+      compactionChipAt('md', {
+        count: 2,
+        action: 'semantic_compaction',
+        degraded: false,
+        progressPercent: 62,
+      })?.label,
+    ).toBe('⇲ compacted ×2')
+    expect(
+      compactionChipAt('lg', {
+        count: 3,
+        action: 'mechanical_trim',
+        degraded: true,
+        progressPercent: 62,
+      })?.label,
+    ).toBe('⇲ trimmed ×3')
+
+    // Control: the same percent on a PENDING notice is reported, so the
+    // settled labels above are unchanged by choice rather than by accident.
+    expect(
+      compactionChipAt('lg', {
+        count: 2,
+        action: 'semantic_compaction',
+        degraded: false,
+        pending: true,
+        progressPercent: 62,
+      })?.label,
+    ).toBe('⇲ compacting 62%')
+  })
+
   test('an idle run stops reporting a pending pass as live', () => {
     // The run aborted mid-compaction, so no settling event will ever arrive.
     // The chip must not keep claiming a compaction is running.

@@ -181,10 +181,6 @@ export const DynamicAgentDefinitionSchema = z.object({
   // turn if a single step's total input tokens exceed this threshold.
   maxTokensPerTurn: z.number().int().positive().optional(),
 
-  // Optional wall-clock timeout (ms) for a single subagent execution. -1
-  // disables the timeout. Undefined falls back to the shared
-  // DEFAULT_SUBAGENT_TIMEOUT_MS, which is -1 (disabled) by default.
-  defaultTimeoutMs: z.number().optional(),
   maxSpawnDepth: z.number().int().min(0).optional(),
 
   // Tools and spawnable agents

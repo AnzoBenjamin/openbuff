@@ -211,6 +211,7 @@ export type ContextCategory =
   | 'toolResults'
   | 'todos'
   | 'fileReads'
+  | 'boundedFileReads'
   | 'subagents'
   | 'userAssistantMessages'
 
@@ -223,11 +224,52 @@ const emptyContextCategorySummary = (): ContextCategorySummary => ({
   toolResults: { tokens: 0, percent: 0, messages: 0 },
   todos: { tokens: 0, percent: 0, messages: 0 },
   fileReads: { tokens: 0, percent: 0, messages: 0 },
+  boundedFileReads: { tokens: 0, percent: 0, messages: 0 },
   subagents: { tokens: 0, percent: 0, messages: 0 },
   userAssistantMessages: { tokens: 0, percent: 0, messages: 0 },
 })
 
-function getContextCategory(message: Message): ContextCategory {
+/**
+ * Assistant tool-call inputs indexed by toolCallId. Tool-result messages carry
+ * only `toolName`/`toolCallId`, so classifying a read_files result as bounded
+ * or whole-file requires replaying the paired assistant call's input.
+ */
+function buildToolCallInputsByCallId(
+  messages: Message[],
+): Map<string, Record<string, unknown>> {
+  const inputsByCallId = new Map<string, Record<string, unknown>>()
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue
+    for (const part of message.content) {
+      if (part.type === 'tool-call') {
+        inputsByCallId.set(part.toolCallId, part.input)
+      }
+    }
+  }
+  return inputsByCallId
+}
+
+/** Selector keys whose non-empty presence makes a read_files call bounded. */
+const BOUNDED_READ_SELECTOR_KEYS = [
+  'windows',
+  'around',
+  'symbol',
+  'symbols',
+] as const
+
+function isBoundedReadFilesCall(input: unknown): boolean {
+  if (!input || typeof input !== 'object') return false
+  const record = input as Record<string, unknown>
+  return BOUNDED_READ_SELECTOR_KEYS.some((key) => {
+    const selectors = record[key]
+    return Array.isArray(selectors) && selectors.length > 0
+  })
+}
+
+function getContextCategory(
+  message: Message,
+  toolCallInputsByCallId: ReadonlyMap<string, Record<string, unknown>>,
+): ContextCategory {
   if (message.role !== 'tool') {
     return 'userAssistantMessages'
   }
@@ -237,12 +279,22 @@ function getContextCategory(message: Message): ContextCategory {
   }
 
   if (
-    message.toolName === 'read_files' ||
-    message.toolName === 'find_files' ||
-    message.toolName === 'read_subtree' ||
     message.toolName === 'read_outline' ||
-    message.toolName === 'query_index'
+    message.toolName === 'query_index' ||
+    message.toolName === 'find_files'
   ) {
+    return 'boundedFileReads'
+  }
+
+  if (message.toolName === 'read_files') {
+    return isBoundedReadFilesCall(
+      toolCallInputsByCallId.get(message.toolCallId),
+    )
+      ? 'boundedFileReads'
+      : 'fileReads'
+  }
+
+  if (message.toolName === 'read_subtree') {
     return 'fileReads'
   }
 
@@ -253,8 +305,14 @@ function getContextCategory(message: Message): ContextCategory {
   return 'toolResults'
 }
 
-/** Eviction order: cheapest-to-recover context first, conversation last. */
+/**
+ * Eviction order: cheapest-to-recover context first, conversation last.
+ * Bounded block reads (read_files windows/around/symbol selectors, plus
+ * read_outline, query_index, find_files) re-fetch cheapest, so they evict
+ * before whole-file reads; both precede generic tool results and conversation.
+ */
 export const CONTEXT_EVICTION_PRIORITY: readonly ContextCategory[] = [
+  'boundedFileReads',
   'fileReads',
   'toolResults',
   'subagents',
@@ -266,10 +324,11 @@ export function getContextCategoryTelemetry(
   messages: Message[],
 ): ContextCategorySummary {
   const summary = emptyContextCategorySummary()
+  const toolCallInputsByCallId = buildToolCallInputsByCallId(messages)
   let totalTokens = 0
 
   for (const message of messages) {
-    const category = getContextCategory(message)
+    const category = getContextCategory(message, toolCallInputsByCallId)
     const tokens = countTokensJson(message)
     summary[category].tokens += tokens
     summary[category].messages += 1
@@ -509,6 +568,10 @@ export function trimMessagesToFitTokenLimitWithReport(params: {
   }
 
   const initialContextCategoryTelemetry = getContextCategoryTelemetry(messages)
+  // Built from the ORIGINAL history once: read_files results classify as
+  // bounded vs whole-file by replaying the paired assistant call's input, and
+  // reconciliation later in the trim may drop assistant tool-call parts.
+  const toolCallInputsByCallId = buildToolCallInputsByCallId(messages)
 
   const shortenedMessages: Message[] = []
   let numKept = 0
@@ -611,7 +674,8 @@ export function trimMessagesToFitTokenLimitWithReport(params: {
       const message = shortenedMessages[index]
       if (message.keepDuringTruncation || removedIndices.has(index)) continue
       if (answersPinnedToolResult(message)) continue
-      if (getContextCategory(message) !== category) continue
+      if (getContextCategory(message, toolCallInputsByCallId) !== category)
+        continue
       const mergesPrevious = removedIndices.has(index - 1)
       const mergesNext = removedIndices.has(index + 1)
       removedIndices.add(index)
@@ -704,7 +768,8 @@ export function trimMessagesToFitTokenLimitWithReport(params: {
         if (runningTokens <= maxMessageTokens) break
         const message = trimmedMessages[index]
         if (escalationRemoved.has(index)) continue
-        if (getContextCategory(message) !== category) continue
+        if (getContextCategory(message, toolCallInputsByCallId) !== category)
+          continue
         if (!isEvictableDuringEscalation(message)) continue
         escalationRemoved.add(index)
         // Maintain the running total per drop instead of recounting the whole

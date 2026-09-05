@@ -39,6 +39,7 @@ import { applyMeasure } from '../util/context-budget'
 import { parseUserMessage } from '../util/messages'
 
 import type { AgentTemplate, PlaceholderValue } from './types'
+import type { ResolveModelContextWindow } from './prompts'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ContextBudgetLedger } from '../util/context-budget'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
@@ -338,6 +339,9 @@ export async function getAgentPrompt<T extends StringField>(
     additionalToolDefinitions: () => Promise<CustomToolDefinitions>
     logger: Logger
     useParentTools?: boolean
+    /** Injected by the runtime (BYOK routing). Absent for tests and non-BYOK
+     * callers, in which case the catalog output stays byte-identical. */
+    resolveModelContextWindow?: ResolveModelContextWindow
   } & ParamsExcluding<
     typeof formatPrompt,
     'prompt' | 'tools' | 'spawnableAgents'
@@ -406,7 +410,14 @@ export async function getAgentPrompt<T extends StringField>(
             agentId: agentType,
             localAgentTemplates: agentTemplates,
           })
-          return formatCompactAgentCatalogLine(agentType, template)
+          return formatCompactAgentCatalogLine(
+            agentType,
+            template,
+            params.resolveModelContextWindow?.({
+              agentId: template?.id ?? agentType,
+              model: template?.model,
+            }),
+          )
         }),
       )
       addendum += `\n\nYou can spawn the following agents:\n\n${agentDescriptions.join('\n')}`

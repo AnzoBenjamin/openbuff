@@ -49,7 +49,8 @@ const basher: AgentDefinition = {
         },
         timeout_seconds: {
           type: 'number',
-          description: 'Set to -1 for no timeout. Default 30',
+          description:
+            'Optional wall-clock bound in seconds. Omit or -1 for no timeout (the default).',
         },
         process_type: {
           type: 'string',

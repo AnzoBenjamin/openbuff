@@ -1412,13 +1412,48 @@ export async function loopAgentSteps(
   // its session persistence would replay forever. The settle carries this run's
   // correlation, so it can only ever settle the pending state this run started.
   let unsettledCompactionStart = false
+  // Highest progress percent already reported for the CURRENT announced pass.
+  // Declared alongside the pending flag because the two are settled together.
+  let lastCompactionProgressPercent = 0
   const settleCompactionStatus = () => {
     if (!unsettledCompactionStart) return
     unsettledCompactionStart = false
+    // A later pass in this same run announces its own progress from 0 again.
+    lastCompactionProgressPercent = 0
     onResponseChunk({
       type: 'context_compaction_status',
       state: 'settled',
       ...compactionCorrelation,
+    })
+  }
+
+  // Best-effort progress inside an announced pass, carrying this run's own
+  // correlation so it can only ever advance the card this run opened. The
+  // pruner reports no total, so the percent is a deterministic milestone
+  // estimate rather than a measurement: it is clamped to 0..100 and forced
+  // monotonic here, because the inline spawn path emits activity ticks for the
+  // same pass and an 'applying' milestone can otherwise be undercut by a late
+  // tick. Gated on `unsettledCompactionStart` so nothing is emitted outside an
+  // announced pass (a suppressed or below-trigger iteration stays silent, just
+  // as it emits neither half of the status pair). Purely telemetry: it never
+  // gates or aborts a pass.
+  const emitCompactionProgress = (
+    phase: 'analyzing' | 'summarizing' | 'applying',
+    percent: number,
+    extra?: { contextTokens?: number; targetBudgetTokens?: number },
+  ) => {
+    if (!unsettledCompactionStart) return
+    const next = Math.max(
+      lastCompactionProgressPercent,
+      Math.min(100, Math.max(0, Math.round(percent))),
+    )
+    lastCompactionProgressPercent = next
+    onResponseChunk({
+      type: 'context_compaction_progress',
+      ...compactionCorrelation,
+      phase,
+      percent: next,
+      ...extra,
     })
   }
 
@@ -1713,7 +1748,7 @@ export async function loopAgentSteps(
     }
 
     let shouldEndTurn = false
-    let hasRetriedOutputSchema = false
+    let outputSchemaRetryCount = 0
     let currentPrompt = prompt
     let currentParams = spawnParams
     let totalSteps = 0
@@ -1975,6 +2010,12 @@ export async function loopAgentSteps(
             triggerBudgetTokens: semanticBudget.triggerBudgetTokens,
             targetBudgetTokens: semanticBudget.targetBudgetTokens,
           })
+          // First milestone of the announced pass, so the UI shows real movement
+          // instead of an idle bar while the inline pruner starts up.
+          emitCompactionProgress('analyzing', 20, {
+            contextTokens: contextTokensBeforeProgrammatic,
+            targetBudgetTokens: semanticBudget.targetBudgetTokens,
+          })
         }
 
         // 1. Run programmatic step first if it exists
@@ -2100,8 +2141,15 @@ export async function loopAgentSteps(
             system,
             tools,
             userInputId,
+            onCompactionProgress: emitCompactionProgress,
           })
         }
+
+        // The pruner has returned (or the generator step that owned it has), so
+        // the announced pass is down to applying whatever it produced. Emitted
+        // for a suppressed/unannounced iteration too, where the gate inside the
+        // emitter makes it a no-op.
+        emitCompactionProgress('applying', 90)
 
         // Capture the request goal once per step for the root agent. The
         // compaction branch below scrapes <knowledge_memory> only when a
@@ -2384,21 +2432,32 @@ export async function loopAgentSteps(
           !agentTemplate.handleSteps &&
           currentAgentState.output === undefined &&
           shouldEndTurn &&
-          !hasRetriedOutputSchema
+          outputSchemaRetryCount < MAX_MISSING_OUTPUT_RETRIES
         ) {
-          hasRetriedOutputSchema = true
+          outputSchemaRetryCount += 1
+          // The set_output handler records its rejection on this same agent
+          // state object, so the retry names the real validation failure
+          // instead of a generic reminder the model cannot act on.
+          const rejection = currentAgentState.lastSetOutputError
           logger.warn(
             {
               agentType,
               agentId: currentAgentState.agentId,
               runId,
+              outputSchemaRetryCount,
+              // Flag only: the rejection text embeds the original output value
+              // and can be large.
+              hadSetOutputRejection: rejection !== undefined,
             },
             'Agent finished without setting required output, restarting loop',
           )
 
           // Add system message instructing to use set_output
+          const attemptSuffix = `(attempt ${outputSchemaRetryCount} of ${MAX_MISSING_OUTPUT_RETRIES})`
           const outputSchemaMessage = withSystemTags(
-            `You must use the "set_output" tool to provide a result that matches the output schema before ending your turn. The output schema is required for this agent.`,
+            rejection
+              ? `Your set_output call was rejected and your output is still unset ${attemptSuffix}. Fix exactly the reported fields and call set_output again with native object/array values. Rejection: ${rejection}`
+              : `You must use the "set_output" tool to provide a result that matches the output schema before ending your turn ${attemptSuffix}. A prose answer or a Markdown JSON block does not populate structured output; the parent receives null.`,
           )
 
           currentAgentState.messageHistory = [
@@ -2644,6 +2703,15 @@ const buildCompactionNoProgressClause = (
   `Compaction is not reclaiming space: ${consecutiveNoProgressCompactions} consecutive compactions reclaimed under ${Math.round(
     COMPACTION_NO_PROGRESS_FRACTION * 100,
   )}%.`
+
+/**
+ * Bounded retries for a structured-output agent that ended its turn without
+ * setting required output. A failed `set_output` ends the turn (set_output is in
+ * TOOLS_WHICH_WONT_FORCE_NEXT_STEP), so a single retry left a reviewer that
+ * botched one field with no step to act on the validation error, and the parent
+ * received `value: null`. Bounded, not unlimited: each retry is one more LLM step.
+ */
+const MAX_MISSING_OUTPUT_RETRIES = 3
 
 /**
  * How many steps before the cap the one-time near-cap checkpoint nudge fires.

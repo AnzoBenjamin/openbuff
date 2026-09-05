@@ -794,7 +794,7 @@ export interface RunTerminalCommandParams {
   detach?: boolean
   /** The working directory to run the command in. Default is the project root. */
   cwd?: string
-  /** Set to -1 for no timeout. Does not apply for BACKGROUND commands. Default 30 */
+  /** Wall-clock bound in seconds for SYNC commands. Omit or use -1 for no timeout (the default). Does not apply to BACKGROUND commands. */
   timeout_seconds?: number
   /** Runtime-managed background job owner; agents must omit. */
   owner?: {
@@ -945,15 +945,13 @@ export interface SpawnAgentsParams {
           constraints?: string[]
         }
       | Record<string, any>
-    /** Optional wall-clock deadline seconds; omit or -1 for none. Agent defaultTimeoutMs still applies when set. */
-    timeout_seconds?: number
     /** Parameters object for the agent */
     params?: {
       /** Terminal command to run (basher, tmux-cli) */
       command?: string
       /** What information from the command output is desired (basher) */
       what_to_summarize?: string
-      /** Timeout for command. Set to -1 for no timeout. Default 30 (basher) */
+      /** Timeout for command in seconds. Omit or -1 for no timeout (default). */
       timeout_seconds?: number
       /** Save full command output to a /tmp log and extract failure lines for long SYNC command output (basher) */
       save_full_log?: boolean
