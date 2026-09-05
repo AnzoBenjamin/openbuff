@@ -37,11 +37,14 @@ export const handleSetOutput = (async (params: {
   const rawOutput = toolCall.input as Record<string, unknown>
   const decodedData = decodeJsonObjectString(rawOutput?.data)
   if (typeof rawOutput?.data === 'string' && decodedData === rawOutput.data) {
+    const malformedJsonMessage =
+      'Output was not set because data contained malformed or incomplete JSON text. Retry set_output with a real object value, not JSON.stringify(...). Keep findings and evidence concise enough to complete one tool call.'
+    // Recorded on agent state because this rejection also ends the turn
+    // (set_output is in TOOLS_WHICH_WONT_FORCE_NEXT_STEP), so the loop's
+    // missing-output retry is the only place that can report it to the model.
+    agentState.lastSetOutputError = malformedJsonMessage
     return {
-      output: jsonToolResult({
-        message:
-          'Output was not set because data contained malformed or incomplete JSON text. Retry set_output with a real object value, not JSON.stringify(...). Keep findings and evidence concise enough to complete one tool call.',
-      }),
+      output: jsonToolResult({ message: malformedJsonMessage }),
     }
   }
   const decodedOutput =
@@ -167,6 +170,7 @@ export const handleSetOutput = (async (params: {
         },
         'set_output validation error',
       )
+      agentState.lastSetOutputError = errorMessage
       return { output: jsonToolResult({ message: errorMessage }) }
     }
   } else {
@@ -179,6 +183,9 @@ export const handleSetOutput = (async (params: {
 
   // Set the output (completely replaces previous output)
   agentState.output = finalOutput as Record<string, unknown>
+  // A successful receipt supersedes any earlier rejection, so a later generic
+  // missing-output retry can never quote a stale one.
+  agentState.lastSetOutputError = undefined
 
   return { output: jsonToolResult({ message: 'Output set' }) }
 }) satisfies CodebuffToolHandlerFunction<ToolName>

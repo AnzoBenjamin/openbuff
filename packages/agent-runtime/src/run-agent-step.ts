@@ -1748,7 +1748,7 @@ export async function loopAgentSteps(
     }
 
     let shouldEndTurn = false
-    let hasRetriedOutputSchema = false
+    let outputSchemaRetryCount = 0
     let currentPrompt = prompt
     let currentParams = spawnParams
     let totalSteps = 0
@@ -2432,21 +2432,32 @@ export async function loopAgentSteps(
           !agentTemplate.handleSteps &&
           currentAgentState.output === undefined &&
           shouldEndTurn &&
-          !hasRetriedOutputSchema
+          outputSchemaRetryCount < MAX_MISSING_OUTPUT_RETRIES
         ) {
-          hasRetriedOutputSchema = true
+          outputSchemaRetryCount += 1
+          // The set_output handler records its rejection on this same agent
+          // state object, so the retry names the real validation failure
+          // instead of a generic reminder the model cannot act on.
+          const rejection = currentAgentState.lastSetOutputError
           logger.warn(
             {
               agentType,
               agentId: currentAgentState.agentId,
               runId,
+              outputSchemaRetryCount,
+              // Flag only: the rejection text embeds the original output value
+              // and can be large.
+              hadSetOutputRejection: rejection !== undefined,
             },
             'Agent finished without setting required output, restarting loop',
           )
 
           // Add system message instructing to use set_output
+          const attemptSuffix = `(attempt ${outputSchemaRetryCount} of ${MAX_MISSING_OUTPUT_RETRIES})`
           const outputSchemaMessage = withSystemTags(
-            `You must use the "set_output" tool to provide a result that matches the output schema before ending your turn. The output schema is required for this agent.`,
+            rejection
+              ? `Your set_output call was rejected and your output is still unset ${attemptSuffix}. Fix exactly the reported fields and call set_output again with native object/array values. Rejection: ${rejection}`
+              : `You must use the "set_output" tool to provide a result that matches the output schema before ending your turn ${attemptSuffix}. A prose answer or a Markdown JSON block does not populate structured output; the parent receives null.`,
           )
 
           currentAgentState.messageHistory = [
@@ -2692,6 +2703,15 @@ const buildCompactionNoProgressClause = (
   `Compaction is not reclaiming space: ${consecutiveNoProgressCompactions} consecutive compactions reclaimed under ${Math.round(
     COMPACTION_NO_PROGRESS_FRACTION * 100,
   )}%.`
+
+/**
+ * Bounded retries for a structured-output agent that ended its turn without
+ * setting required output. A failed `set_output` ends the turn (set_output is in
+ * TOOLS_WHICH_WONT_FORCE_NEXT_STEP), so a single retry left a reviewer that
+ * botched one field with no step to act on the validation error, and the parent
+ * received `value: null`. Bounded, not unlimited: each retry is one more LLM step.
+ */
+const MAX_MISSING_OUTPUT_RETRIES = 3
 
 /**
  * How many steps before the cap the one-time near-cap checkpoint nudge fires.

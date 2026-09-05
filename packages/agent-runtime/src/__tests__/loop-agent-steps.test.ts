@@ -1852,4 +1852,117 @@ describe('loopAgentSteps', () => {
       ledger!.byCategory,
     )
   })
+
+  // Regression: a structured agent that never populates output used to get only
+  // one retry. The fix introduces MAX_MISSING_OUTPUT_RETRIES (= 3) so the loop
+  // retries the missing-output nudge up to the cap before handing back null.
+  it('retries the missing-output nudge up to the cap and then returns null value', async () => {
+    setup()
+    let llmCallCount = 0
+    agentTemplate.handleSteps = undefined
+    agentTemplate.toolNames = ['read_files']
+    agentTemplate.outputSchema = z.object({ result: z.string() })
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCallCount++
+      // The LLM only ever returns prose — it never calls set_output.
+      yield { type: 'text' as const, text: 'Still no structured output.' }
+      return promptSuccess(`mock-message-${llmCallCount}`)
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      // More steps than the retry budget so the loop ends because the retry cap
+      // is hit, not because steps ran out.
+      agentState: { ...agentState, stepsRemaining: 20 },
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    // 1 initial call + 3 retries = MAX_MISSING_OUTPUT_RETRIES (hard-coded 4;
+    // the constant is module-private in run-agent-step.ts). The old one-shot
+    // behavior yielded 2.
+    expect(llmCallCount).toBe(4)
+    // The structured-output envelope is returned with a null/absent value
+    // rather than throwing.
+    expect(result.output).toEqual({
+      type: 'structuredOutput',
+      value: null,
+    })
+  })
+
+  // Regression: when a set_output call is rejected (schema validation), the
+  // missing-output retry must name the actual rejection so the model can fix
+  // the reported fields, instead of a generic reminder.
+  it('injects a retry message that names the recorded set_output rejection', async () => {
+    setup()
+    let llmCallCount = 0
+    agentTemplate.handleSteps = undefined
+    agentTemplate.toolNames = ['read_files', 'set_output']
+    agentTemplate.outputSchema = z.object({ result: z.string() })
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCallCount++
+      // Always call set_output with a payload that FAILS the outputSchema
+      // (number where a string is required), so output stays unset.
+      yield createToolCallChunk('set_output', { result: 42 })
+      return promptSuccess(`mock-message-${llmCallCount}`)
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      // The set_output handler resolves the outputSchema from
+      // agentState.agentType (not params.agentType), so the state must name
+      // the registered template id or validation is silently skipped.
+      agentState: {
+        ...agentState,
+        agentType: 'test-agent',
+        stepsRemaining: 20,
+      },
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    // The injected nudge is appended to message history (not onResponseChunk),
+    // so observe it there.
+    const history = result.agentState.messageHistory
+      .map((message) =>
+        typeof message.content === 'string'
+          ? message.content
+          : JSON.stringify(message.content),
+      )
+      .join('\n')
+    expect(history).toContain('Your set_output call was rejected')
+    expect(history).toContain('Output validation error')
+  })
+
+  // Regression: when the agent simply never calls set_output (no recorded
+  // rejection), the retry must fall back to the generic wording.
+  it('injects the generic missing-output message when there is no recorded rejection', async () => {
+    setup()
+    let llmCallCount = 0
+    agentTemplate.handleSteps = undefined
+    agentTemplate.toolNames = ['read_files']
+    agentTemplate.outputSchema = z.object({ result: z.string() })
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCallCount++
+      yield { type: 'text' as const, text: 'Just prose, no tool call.' }
+      return promptSuccess(`mock-message-${llmCallCount}`)
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentState: { ...agentState, stepsRemaining: 20 },
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    const history = result.agentState.messageHistory
+      .map((message) =>
+        typeof message.content === 'string'
+          ? message.content
+          : JSON.stringify(message.content),
+      )
+      .join('\n')
+    expect(history).toContain('does not populate structured output')
+    expect(history).not.toContain('Your set_output call was rejected')
+  })
 })
