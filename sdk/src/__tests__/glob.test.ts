@@ -1,5 +1,10 @@
 import * as projectFileTree from '@codebuff/common/project-file-tree'
-import { describe, test, expect, afterEach, spyOn } from 'bun:test'
+import {
+  makeOutsideRoot,
+  outsideRootsUsable,
+  removeScratchParentIfEmpty,
+} from '@codebuff/common/testing'
+import { describe, test, expect, afterAll, afterEach, spyOn } from 'bun:test'
 import nodeFs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -7,6 +12,8 @@ import path from 'node:path'
 import { glob } from '../tools/glob'
 
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+
+afterAll(removeScratchParentIfEmpty)
 
 const PROJECT_PATH = '/project'
 
@@ -179,10 +186,12 @@ describe('glob tool', () => {
   })
 
   test('rejects a cwd symlink that escapes the project', async () => {
+    if (!outsideRootsUsable()) return
     const projectRoot = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'glob-root-'))
-    const outsideRoot = nodeFs.mkdtempSync(
-      path.join(os.tmpdir(), 'glob-outside-'),
-    )
+    // The symlink TARGET must sit outside the OS temp roots too, or the
+    // widened temp exception would legitimately admit this cwd and the
+    // escape refusal would never fire.
+    const outsideRoot = makeOutsideRoot('glob-outside-')
     nodeFs.symlinkSync(outsideRoot, path.join(projectRoot, 'escape'))
     mockFileTree(['src/a.ts'])
 

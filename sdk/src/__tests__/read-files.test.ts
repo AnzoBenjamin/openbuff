@@ -399,18 +399,43 @@ describe('getFilesStructured', () => {
         cwd: '/project',
         fs: mockFs,
         // An allow-everything host filter proves the refusal comes from the
-        // mandatory blocklist, not from host policy.
+        // mandatory sensitive policy, not from host policy.
         fileFilter: () => ({ status: 'allow' }),
       })
 
+      // The containment resolver's fail-closed mandatory-sensitive refusal
+      // fires FIRST: it returns no resolution at all, so the handler reports
+      // the outside-project code. (Pinned on that specific code: if the
+      // resolver refusal were removed, the read-only resolver would resolve
+      // these as owned-temp and the handler's alias blocklist would answer
+      // `blocked` instead — either way this assertion fails and the refusal
+      // regression is caught.)
       expect(result.results[0]).toMatchObject({
         status: 'error',
-        error: { code: 'blocked' },
+        error: { code: 'outside_project' },
       })
       expect(result.results[1]).toMatchObject({
         status: 'error',
-        error: { code: 'blocked' },
+        error: { code: 'outside_project' },
       })
+
+      // Attribution guard: a non-sensitive neighbour in the SAME temp
+      // directory still reads, so the refusals above are attributable to the
+      // sensitive policy rather than to temp paths being unreachable.
+      const neighbour = path.join(
+        ownedTempRoot,
+        'openbuff-readfiles-secrets',
+        'notes.txt',
+      )
+      const allowed = await getFilesStructured({
+        filePaths: [neighbour],
+        cwd: '/project',
+        fs: createMockFs({
+          files: { [neighbour]: { content: 'scratch\n' } },
+        }),
+        fileFilter: () => ({ status: 'allow' }),
+      })
+      expect(allowed.results[0]).toMatchObject({ status: 'ok' })
     })
 
     test('[COR-M11] returns typed binary and unsupported-encoding failures without capabilities', async () => {

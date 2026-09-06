@@ -5,8 +5,9 @@ import os from 'os'
 import path from 'path'
 
 import {
-  OWNED_TEMP_SEGMENT_PATTERNS,
   configureExternalReadRoots,
+  getOwnedTempRoots,
+  isOwnedTempPath,
   resetExternalReadRootsForTesting,
 } from '@codebuff/common/util/project-path-containment'
 
@@ -284,11 +285,6 @@ function expectContainmentRejection(
   )
 }
 
-/** True when `segment` is an owned-temp top-level segment per the shared list. */
-function isOwnedTempSegment(segment: string): boolean {
-  return OWNED_TEMP_SEGMENT_PATTERNS.some((pattern) => pattern.test(segment))
-}
-
 describe('listDirectory containment', () => {
   test('rejects sibling /project-evil when project is /project', async () => {
     const result = await listDirectory({
@@ -376,10 +372,14 @@ describe('listDirectory containment', () => {
     // pins the entry-filter behaviour for that shape, including the mandatory
     // sensitive-path block ('.env' must not survive the exact arrays below).
     const ownedTempSegment = 'openbuff-xyz'
-    // Precondition: the segment really is owned-temp per the shared pattern
-    // list. Without this the case would silently degrade into a plain
-    // containment reject if the owned-temp prefix ever changed.
-    expect(isOwnedTempSegment(ownedTempSegment)).toBe(true)
+    // Precondition keyed off the ACTUAL gate: any path strictly inside the
+    // temp root resolves as owned-temp, so this must come back true. Without
+    // it the case would silently degrade into a plain containment reject if
+    // temp-root containment ever changed. (The old per-segment pattern list
+    // is documentation only and gates nothing.)
+    expect(
+      isOwnedTempPath(path.join(getOwnedTempRoots()[0], ownedTempSegment)),
+    ).toBe(true)
 
     const ownedTempDir = path.join(os.tmpdir(), ownedTempSegment)
     const fs = makeFs({
@@ -400,16 +400,47 @@ describe('listDirectory containment', () => {
     expect(value.path).toBe(ownedTempDir)
   })
 
-  test('rejects a non-owned temp sibling outside the project', async () => {
-    // Negative counterpart to the owned-temp case: an equally out-of-project
-    // temp sibling whose segment matches no owned-temp pattern must still be
-    // rejected, so the allow above is attributable to owned-temp scope rather
-    // than to temp paths being generally reachable.
+  test('lists a non-openbuff temp directory outside the project', async () => {
+    // Positive counterpart to the owned-temp case: with containment widened to
+    // the WHOLE temp root, a temp directory whose segment matches no
+    // openbuff-owned pattern is reachable exactly like an owned one, and the
+    // listing runs with the same absolute-relativePath entry-filter shape.
     const foreignTempSegment = 'not-owned-xyz'
-    expect(isOwnedTempSegment(foreignTempSegment)).toBe(false)
+    // Precondition keyed off the ACTUAL gate: the widened whole-root scope
+    // admits this path exactly like an openbuff-named one, so the allow below
+    // is attributable to that scope rather than to any name pattern. (The old
+    // per-segment pattern list is documentation only and gates nothing.)
+    expect(
+      isOwnedTempPath(path.join(getOwnedTempRoots()[0], foreignTempSegment)),
+    ).toBe(true)
 
+    const foreignTempDir = path.join(os.tmpdir(), foreignTempSegment)
+    const fs = makeFs({
+      readdir: makeReaddir([
+        dirent('job.log'),
+        dirent('.env'),
+        dirent('nested', 'dir'),
+      ]),
+    })
     const result = await listDirectory({
-      directoryPath: path.join(os.tmpdir(), foreignTempSegment),
+      directoryPath: foreignTempDir,
+      projectPath: '/virtual/repo',
+      fs,
+    })
+    const value = expectListing(result)
+    expect(value.files).toEqual(['job.log'])
+    // The mandatory sensitive-path block still applies to temp entries.
+    expect(value.directories).toEqual(['nested'])
+    // `value.path` is the absolute temp directory, mirroring the owned-temp
+    // listing above.
+    expect(value.path).toBe(foreignTempDir)
+  })
+
+  test('still rejects the temp root itself (strictly-inside rule)', async () => {
+    // Negative counterpart: the root itself is never inside ANY scope, so the
+    // allow above stays attributable to strictly-inside containment.
+    const result = await listDirectory({
+      directoryPath: os.tmpdir(),
       projectPath: '/virtual/repo',
       fs: rejectingFs(),
     })
@@ -802,8 +833,8 @@ describe('listDirectory listing behaviour', () => {
 
 describe('listDirectory allowlisted external read roots', () => {
   // Synthetic absolute root: every filesystem call goes through the stub
-  // filesystem, and the name deliberately avoids the `openbuff-` owned-temp
-  // patterns so an allow here can only come from the external read allowlist.
+  // filesystem, and the root deliberately sits outside every temp root so an
+  // allow here can only come from the external read allowlist.
   const externalRoot = path.resolve('/external-read-root')
   // Strictly inside the root: the root itself is deliberately not readable.
   const externalDir = path.join(externalRoot, 'logs')

@@ -42,11 +42,46 @@ const BACKGROUND_JOB_FILE_PATTERN = /^openbuff-(.+)\.(?:log|json)$/
 const TMUX_CAPTURE_DIR_PATTERN = /^tmux-captures-.+$/
 
 /**
+ * Win32 aliasing guard for the owned-temp refusals below: the OS strips
+ * trailing dots/spaces from EVERY path segment, so the lexical alias
+ * `<tmp>/payload.sh ` creates the real `payload.sh` while
+ * `path.extname('payload.sh ')` is `.sh ` and misses
+ * `OWNED_TEMP_REFUSED_EXTENSIONS` — and an aliased
+ * `<tmp>/openbuff-job-1.log ` basename or `<tmp>/tmux-captures-x /` segment
+ * would dodge `BACKGROUND_JOB_FILE_PATTERN` / `TMUX_CAPTURE_DIR_PATTERN` the
+ * same way. Splits on BOTH separators (win32 `path.sep` is a backslash),
+ * strips trailing dots/spaces from every segment, and joins with '/'. Mirrors
+ * `refusesWin32AliasedSensitivePath` in
+ * `common/src/util/project-path-containment.ts` so the two cannot drift in
+ * approach; a no-op when no segment carries a trailing dot/space (the common
+ * case, and the universal case on POSIX).
+ */
+function win32NormalizeSegments(value: string): string {
+  return value
+    .split(/[\\/]+/)
+    .map((segment) => segment.replace(/[ .]+$/, ''))
+    .join('/')
+}
+
+/**
  * Owned temp space is exempt from the terminal command policy's outside-path
  * check (every `/tmp/...` token is allowed there), so a tool-side write of an
  * executable-extension basename would turn a plain file write into arbitrary
  * command execution. Refuse those basenames instead of relying on the terminal
  * policy to catch them later.
+ *
+ * This is now the ONLY defense against a file-changing tool staging a script
+ * anywhere under an OS temp root for a later command to execute. Containment
+ * in `common/src/util/project-path-containment.ts` admits the whole temp root
+ * and no longer excludes any name — including the chmod +x'd tmux helper
+ * script `tmux-helper-<session>.sh`, which run_terminal_command executes.
+ * Interpreter scripts are covered for the same reason: read-only terminal
+ * profiles refuse interpreter one-liners (`node -e`, `python3 -c`) but permit
+ * `node /tmp/x.js` / `python3 /tmp/x.py`, and the same `/tmp/...` token
+ * exemption carries that command — so a staged `.js`/`.py` file would be
+ * executed one step later. Removing or narrowing this set therefore re-opens
+ * a terminal-policy bypass; do not weaken it, and keep the refusal applied to
+ * create/overwrite/move.
  */
 const OWNED_TEMP_REFUSED_EXTENSIONS = new Set([
   '.sh',
@@ -57,7 +92,39 @@ const OWNED_TEMP_REFUSED_EXTENSIONS = new Set([
   '.bat',
   '.cmd',
   '.ps1',
+  // Interpreter-executed extensions (`node <file>`, `python3 <file>`, ...).
+  '.js',
+  '.mjs',
+  '.cjs',
+  '.jsx',
+  '.ts',
+  '.tsx',
+  '.mts',
+  '.cts',
+  '.py',
+  '.pyw',
+  '.pl',
+  '.rb',
+  '.lua',
+  '.php',
+  '.r',
+  '.jl',
+  '.tcl',
 ])
+
+/**
+ * Single append+trim path for a bounded receipt log, shared by
+ * `recordCanonicalReceipt` and `retainReceipt`. The splice form drops however
+ * many entries are over the cap (a lone `shift()` drops exactly one and can
+ * leave the array over cap), so the log stays bounded by whatever cap the
+ * caller passes.
+ */
+function appendBounded<T>(list: T[], item: T, cap: number): void {
+  list.push(item)
+  if (list.length > cap) {
+    list.splice(0, list.length - cap)
+  }
+}
 
 export type FilesystemCapability =
   | 'baseline'
@@ -237,14 +304,19 @@ export class FilesystemAuthority {
     )
     if (!resolved) return { allowed: false, code: 'path_outside_project' }
 
-    // The owned-temp namespace is now mutable so tools can manage their own
-    // scratch artifacts (mkdtemp dirs and their contents): create, overwrite,
+    // The owned-temp scope covers ANY path strictly inside an OS temp root, and
+    // it is mutable so tools can manage their own scratch artifacts (mkdtemp
+    // dirs and their contents, plus ordinary temp files): create, overwrite,
     // delete and move are permitted there. The exceptions refused below are
     // live background-job log/metadata files, tmux capture evidence, and
     // executable-extension basenames.
-    // /tmp is world-writable, so owned-temp mutations rely on (i) the anchored
-    // full-segment owned patterns, (ii) single-realpath containment validated
-    // in `common/src/util/project-path-containment.ts`, and (iii) the same
+    // /tmp is world-writable, so owned-temp mutations rely on (i) STRICTLY
+    // INSIDE temp-root containment with a SINGLE realpath dereference, both
+    // validated in `common/src/util/project-path-containment.ts` (there is no
+    // longer any owned-name pattern doing part of this work), (ii) the
+    // fail-closed mandatory-sensitive refusal in that same resolver, which is
+    // what keeps `<tmp>/.env` and `<tmp>/credentials.json` unwritable, (iii)
+    // the refusals in `ownedTempMutationRefusal` below, and (iv) the same
     // conditional-commit / expected-state revalidation every project write
     // goes through.
     const ownedTempRefusal = this.ownedTempMutationRefusal(resolved, operation)
@@ -659,13 +731,20 @@ export class FilesystemAuthority {
    * capture would let a subagent forge its own evidence. They get the same
    * read-only treatment as job artifacts.
    *
-   * Every other owned-temp path (openbuff mkdtemp directories and their nested
-   * contents) permits create, overwrite, delete and move, except that an
-   * executable-extension basename cannot be created, overwritten or moved.
-   * Deleting such a file remains allowed so tools can clean up.
+   * Every other owned-temp path (openbuff mkdtemp directories, ordinary temp
+   * files, and any nested contents) permits create, overwrite, delete and move,
+   * except that an executable-extension basename cannot be created,
+   * overwritten or moved — including `tmux-helper-<session>.sh`, which
+   * containment no longer excludes. Deleting such a file remains allowed so
+   * tools can clean up.
    *
-   * The basename/segment checks run on the RESOLVED path so alias forms cannot
-   * dodge them.
+   * The basename/segment checks run on the RESOLVED path AND its
+   * Win32-normalized form (`win32NormalizeSegments` strips trailing
+   * dots/spaces from EVERY segment, as the OS does on win32), so alias forms
+   * cannot dodge them: a lexical `payload.sh ` creates the real `payload.sh`
+   * while `path.extname('payload.sh ')` is `.sh `, and the same alias would
+   * slip `openbuff-job-1.log ` and `tmux-captures-x ` past the read-only
+   * artifact patterns.
    */
   private ownedTempMutationRefusal(
     resolved: ResolvedOperationPath,
@@ -673,20 +752,34 @@ export class FilesystemAuthority {
   ): { allowed: false; code: string } | undefined {
     if (resolved.scope !== 'owned-temp' || operation === 'read')
       return undefined
-    const basename = path.basename(resolved.operationPath)
-    if (BACKGROUND_JOB_FILE_PATTERN.test(basename)) {
+    const operationPath = resolved.operationPath
+    const basename = path.basename(operationPath)
+    const normalizedPath = win32NormalizeSegments(operationPath)
+    const normalizedBasename = path.basename(normalizedPath)
+    if (
+      BACKGROUND_JOB_FILE_PATTERN.test(basename) ||
+      BACKGROUND_JOB_FILE_PATTERN.test(normalizedBasename)
+    ) {
       return { allowed: false, code: 'owned_temp_job_artifact_read_only' }
     }
     if (
-      resolved.operationPath
+      operationPath
         .split(path.sep)
+        .some((segment) => TMUX_CAPTURE_DIR_PATTERN.test(segment)) ||
+      normalizedPath
+        .split('/')
         .some((segment) => TMUX_CAPTURE_DIR_PATTERN.test(segment))
     ) {
       return { allowed: false, code: 'owned_temp_capture_read_only' }
     }
     if (
       operation !== 'delete' &&
-      OWNED_TEMP_REFUSED_EXTENSIONS.has(path.extname(basename).toLowerCase())
+      (OWNED_TEMP_REFUSED_EXTENSIONS.has(
+        path.extname(basename).toLowerCase(),
+      ) ||
+        OWNED_TEMP_REFUSED_EXTENSIONS.has(
+          path.extname(normalizedBasename).toLowerCase(),
+        ))
     ) {
       return {
         allowed: false,
@@ -702,10 +795,9 @@ export class FilesystemAuthority {
     phase: FilesystemPolicyPhase,
   ): Promise<PathAuthorizationResult> {
     // Fail closed on the read-only `external-read` scope: this authority only
-    // covers the project tree and the openbuff-owned temp namespace, which are
-    // the only scopes the operation resolvers
-    // (`resolveFilePathFor*Operation`) can produce. The check keeps
-    // `AuthorizedFilesystemPath.scope` narrow instead of widening a
+    // covers the project tree and the OS-temp scope, which are the only scopes
+    // the operation resolvers (`resolveFilePathFor*Operation`) can produce. The
+    // check keeps `AuthorizedFilesystemPath.scope` narrow instead of widening a
     // mutation-side type with a read-only scope.
     if (resolved.scope === 'external-read') {
       return { allowed: false, code: 'external_read_scope_unsupported' }
@@ -773,23 +865,11 @@ export class FilesystemAuthority {
    * the log stays bounded by MAX_COMMIT_RECEIPTS_PER_RUN whatever the caller.
    */
   private recordCanonicalReceipt(receipt: CommitReceiptV1): void {
-    this.canonicalReceipts.push(receipt)
-    if (this.canonicalReceipts.length > MAX_COMMIT_RECEIPTS_PER_RUN) {
-      this.canonicalReceipts.splice(
-        0,
-        this.canonicalReceipts.length - MAX_COMMIT_RECEIPTS_PER_RUN,
-      )
-    }
+    appendBounded(this.canonicalReceipts, receipt, MAX_COMMIT_RECEIPTS_PER_RUN)
   }
 
   private retainReceipt(receipt: CommitReceipt): void {
-    this.receipts.push(receipt)
-    if (this.receipts.length > MAX_COMMIT_RECEIPTS_PER_RUN) {
-      this.receipts.splice(
-        0,
-        this.receipts.length - MAX_COMMIT_RECEIPTS_PER_RUN,
-      )
-    }
+    appendBounded(this.receipts, receipt, MAX_COMMIT_RECEIPTS_PER_RUN)
   }
 
   private pruneTerminalOperations(): void {

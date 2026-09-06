@@ -54,6 +54,21 @@ export {
 export type { TestAgentRuntimeParams } from './fixtures/agent-runtime'
 
 // ============================================================================
+// Containment Test Fixtures
+// ============================================================================
+
+/**
+ * Filesystem fixtures for suites that create directories outside the project
+ * root and every OS temp root (see `makeOutsideRoot` for why).
+ */
+export {
+  cleanupOutsideRoots,
+  makeOutsideRoot,
+  outsideRootsUsable,
+  removeScratchParentIfEmpty,
+} from './fixtures/containment-fixtures'
+
+// ============================================================================
 // Error Utilities
 // ============================================================================
 

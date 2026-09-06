@@ -3,17 +3,31 @@ import * as os from 'os'
 import * as path from 'path'
 
 import { FILE_READ_STATUS } from '@codebuff/common/old-constants'
+import {
+  makeOutsideRoot,
+  outsideRootsUsable,
+  removeScratchParentIfEmpty,
+} from '@codebuff/common/testing'
 import { createNodeError } from '@codebuff/common/testing/errors'
 import {
   configureExternalReadRoots,
   resetExternalReadRootsForTesting,
 } from '@codebuff/common/util/project-path-containment'
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from 'bun:test'
 
 import { readImages } from '../tools/read-image'
 
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { PathLike } from 'node:fs'
+
+afterAll(removeScratchParentIfEmpty)
 
 function createMockFs(files: Record<string, Buffer>): CodebuffFileSystem {
   return {
@@ -134,8 +148,12 @@ describe('readImages', () => {
   })
 
   test('rejects in-project symlinks pointing outside the project root', async () => {
+    if (!outsideRootsUsable()) return
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'readimg-root-'))
-    const tmpOutside = fs.mkdtempSync(path.join(os.tmpdir(), 'readimg-out-'))
+    // The symlink TARGET must sit outside the OS temp roots too, or the
+    // widened temp exception would legitimately admit this read and the
+    // escape refusal would never fire.
+    const tmpOutside = makeOutsideRoot('readimg-out-')
     try {
       const projectRoot = fs.realpathSync(tmpRoot)
       const outsideDir = fs.realpathSync(tmpOutside)

@@ -3,6 +3,12 @@ import * as os from 'os'
 import * as path from 'path'
 import * as analytics from '@codebuff/common/analytics'
 import { TEST_USER_ID } from '@codebuff/common/old-constants'
+import {
+  cleanupOutsideRoots,
+  makeOutsideRoot,
+  outsideRootsUsable,
+  removeScratchParentIfEmpty,
+} from '@codebuff/common/testing'
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { promptSuccess } from '@codebuff/common/util/error'
@@ -297,6 +303,8 @@ describe('runAgentStep - set_output tool', () => {
 
   afterAll(() => {
     clearAgentGeneratorCache()
+    cleanupOutsideRoots()
+    removeScratchParentIfEmpty()
   })
 
   const mockFileContext: ProjectFileContext = {
@@ -2151,15 +2159,20 @@ describe('runAgentStep - set_output tool', () => {
     )
   })
 
-  it('still hard-blocks writes to an openbuff-owned temp path', async () => {
-    // The owned-temp exception is read-only by construction: the SDK's
-    // filesystem-authority.ts owns the narrower owned-temp mutation policy
-    // (tmux captures are verification evidence a subagent must not forge), so
-    // this backstop must never pre-authorize a write there.
-    const ownedTempWrite = path.join(
+  it('does not hard-block writes to a temp path via the write exemption', async () => {
+    // The widened owned-temp exception admits WRITES under an OS temp root for
+    // the tools in OWNED_TEMP_WRITE_EXEMPT_TOOLS: their SDK write handlers are
+    // the authoritative containment layer (strictly-inside temp-root
+    // containment, fail-closed mandatory-sensitive refusal, and
+    // ownedTempMutationRefusal for live job artifacts / tmux capture evidence /
+    // executable basenames), so this backstop must not pre-refuse. Asserting
+    // BOTH halves keeps the pass attributable: no scope error chunk AND the
+    // tool call actually published (not silently swallowed for some other
+    // reason).
+    const tempWrite = path.join(
       getOwnedTempRoots()[0],
-      'tmux-captures-session-1',
-      'capture-001.txt',
+      'openbuff-agent-runtime-write',
+      'notes.txt',
     )
     const chunks: unknown[] = []
     runAgentStepBaseParams = {
@@ -2168,9 +2181,9 @@ describe('runAgentStep - set_output tool', () => {
     }
     runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
       yield createToolCallChunk('write_file', {
-        path: ownedTempWrite,
-        instructions: 'Forge tmux capture evidence',
-        content: 'export const blocked = true\n',
+        path: tempWrite,
+        instructions: 'Scratch write under an OS temp root',
+        content: 'export const allowed = true\n',
       })
       yield createToolCallChunk('end_turn', {})
       return promptSuccess('mock-message-id')
@@ -2191,18 +2204,19 @@ describe('runAgentStep - set_output tool', () => {
       localAgentTemplates: { 'unscoped-agent': unscopedAgent },
       agentTemplate: unscopedAgent,
       agentState,
-      prompt: 'Write into the owned temp namespace',
+      prompt: 'Write into an OS temp root',
     })
 
-    expect(chunks).toContainEqual(
+    // No filesystem write scope error chunk...
+    expect(chunks).not.toContainEqual(
       expect.objectContaining({
         type: 'error',
-        message: expect.stringContaining(
-          'was blocked by the unscoped-agent filesystem write scope',
-        ),
+        message: expect.stringContaining('filesystem write scope'),
       }),
     )
-    expect(chunks).not.toContainEqual(
+    // ...and the write is published as a tool call, so the pass cannot come
+    // from the call never having been dispatched at all.
+    expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'tool_call',
         toolName: 'write_file',
@@ -2210,10 +2224,69 @@ describe('runAgentStep - set_output tool', () => {
     )
   })
 
-  it('still hard-blocks reads of a non-owned absolute temp sibling', async () => {
-    // Attribution guard: the allow above must come from owned-temp SCOPE, not
-    // from "any absolute temp path". This first segment matches no
-    // OWNED_TEMP_SEGMENT_PATTERNS entry, so the read stays hard-blocked.
+  it('still hard-blocks a non-exempt read tool with a temp cwd (code_search)', async () => {
+    // Companion pinning the exemption as TOOL-scoped: code_search is absent
+    // from EXTERNAL_READ_EXEMPT_TOOLS (its handler realpaths the caller cwd and
+    // spawns ripgrep there with no containment resolution at all), so a temp
+    // cwd is still hard-blocked even though the same path would be allowed for
+    // read_files above. Remove code_search's exclusion and this refusal
+    // disappears, which is exactly the regression this test exists to catch.
+    const tempSearchCwd = path.join(
+      getOwnedTempRoots()[0],
+      'openbuff-agent-runtime-search',
+    )
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('code_search', {
+        pattern: 'apiKey',
+        cwd: tempSearchCwd,
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['code_search', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'unscoped-agent',
+      localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+      agentTemplate: unscopedAgent,
+      agentState,
+      prompt: 'Grep inside an OS temp root with a non-exempt tool',
+    })
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining(
+          'was blocked by the unscoped-agent filesystem read scope',
+        ),
+      }),
+    )
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'code_search',
+      }),
+    )
+  })
+
+  it('does not hard-block reads of a non-openbuff absolute temp sibling', async () => {
+    // Positive counterpart to the owned-temp read test: with the widened
+    // whole-root scope, a temp path whose first segment matches no
+    // openbuff-owned pattern is reachable exactly like an owned one.
     const nonOwnedTempRead = path.join(
       getOwnedTempRoots()[0],
       'not-openbuff-owned',
@@ -2247,7 +2320,63 @@ describe('runAgentStep - set_output tool', () => {
       localAgentTemplates: { 'unscoped-agent': unscopedAgent },
       agentTemplate: unscopedAgent,
       agentState,
-      prompt: 'Read an unowned absolute temp path',
+      prompt: 'Read an ordinary absolute temp path',
+    })
+
+    // No read-scope error chunk...
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining('filesystem read scope'),
+      }),
+    )
+    // ...and the read is published as a tool call.
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_call',
+        toolName: 'read_files',
+      }),
+    )
+  })
+
+  it('still hard-blocks a read path outside both the project and every temp root', async () => {
+    // Attribution guard for the two temp-read allows above: they must come from
+    // owned-temp SCOPE, not from "any absolute path". This fixture root sits
+    // outside BOTH the project root and every OS temp root, so the absolute
+    // escape stays hard-blocked.
+    if (!outsideRootsUsable()) return
+    const outsideRoot = makeOutsideRoot('agent-runtime-read-out-')
+    const outsideRead = path.join(outsideRoot, 'file.txt')
+    fs.writeFileSync(outsideRead, 'outside\n')
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+    }
+    runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
+      yield createToolCallChunk('read_files', {
+        paths: [outsideRead],
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const unscopedAgent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['read_files', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: 'unscoped-agent',
+      localAgentTemplates: { 'unscoped-agent': unscopedAgent },
+      agentTemplate: unscopedAgent,
+      agentState,
+      prompt: 'Read an absolute path outside every boundary',
     })
 
     expect(chunks).toContainEqual(
@@ -2272,9 +2401,9 @@ describe('runAgentStep - set_output tool', () => {
     // `readableRoots`), so this runtime backstop must not refuse them. The SDK
     // resolvers stay authoritative — including the fail-closed
     // mandatory-sensitive refusal — this layer only stops pre-dispatch refusal.
-    const externalRoot = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'external-read-backstop-'),
-    )
+    // The root must sit outside the OS temp roots too, or the widened temp
+    // write/read exception would cover it before the allowlist is consulted.
+    const externalRoot = makeOutsideRoot('external-read-backstop-')
     const externalRead = path.join(externalRoot, 'notes.txt')
     fs.writeFileSync(externalRead, 'notes\n')
     // Module state: reset before configuring so a differing set from an earlier
@@ -2340,10 +2469,11 @@ describe('runAgentStep - set_output tool', () => {
   it('still hard-blocks writes to an allowlisted external path', async () => {
     // The external allowlist is READ-only by construction (there is no
     // external-write scope), so this backstop must never pre-authorize a write
-    // there — the exception stays gated on access === 'read'.
-    const externalRoot = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'external-read-backstop-write-'),
-    )
+    // there — the exception stays gated on access === 'read'. The root must
+    // sit outside the OS temp roots too: the write exemption deliberately does
+    // not consult isExternalReadPath, so a temp-rooted fixture would be allowed
+    // by the temp write path instead of blocked for the external reason.
+    const externalRoot = makeOutsideRoot('external-read-backstop-write-')
     const externalWrite = path.join(externalRoot, 'notes.txt')
     fs.writeFileSync(externalWrite, 'notes\n')
     resetExternalReadRootsForTesting()
@@ -2406,10 +2536,10 @@ describe('runAgentStep - set_output tool', () => {
   it('still hard-blocks reads of a non-allowlisted external sibling', async () => {
     // Attribution guard: the allow above must come from the ALLOWLIST, not from
     // "any absolute path outside the project". The sibling directory shares the
-    // allowlisted root's prefix, which a naive startsWith check would admit.
-    const externalRoot = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'external-read-backstop-sibling-'),
-    )
+    // allowlisted root's prefix, which a naive startsWith check would admit, and
+    // both sit outside the OS temp roots so the temp exception stays out of the
+    // picture.
+    const externalRoot = makeOutsideRoot('external-read-backstop-sibling-')
     const siblingRoot = `${externalRoot}-evil`
     fs.mkdirSync(siblingRoot)
     const siblingRead = path.join(siblingRoot, 'notes.txt')
@@ -2477,9 +2607,7 @@ describe('runAgentStep - set_output tool', () => {
     // EXTERNAL_READ_EXEMPT_TOOLS and stays hard-blocked even for a configured
     // allowlisted root — otherwise code_search({ cwd: '<configDir>/projects' })
     // would recursively grep other projects' persisted transcripts.
-    const externalRoot = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'external-read-code-search-'),
-    )
+    const externalRoot = makeOutsideRoot('external-read-code-search-')
     fs.writeFileSync(path.join(externalRoot, 'notes.txt'), 'notes\n')
     resetExternalReadRootsForTesting()
     configureExternalReadRoots([externalRoot])
@@ -2543,9 +2671,7 @@ describe('runAgentStep - set_output tool', () => {
     // migrated tool (its SDK handler resolves through the read-only containment
     // resolvers), so the same configured root that code_search cannot reach
     // stays readable here.
-    const externalRoot = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'external-read-exempt-read-files-'),
-    )
+    const externalRoot = makeOutsideRoot('external-read-exempt-read-files-')
     const externalRead = path.join(externalRoot, 'notes.txt')
     fs.writeFileSync(externalRead, 'notes\n')
     resetExternalReadRootsForTesting()
