@@ -164,17 +164,24 @@ export class OpenRouterChatLanguageModel implements LanguageModelV2 {
     }
 
     if (tools && tools.length > 0) {
-      // TODO: support built-in tools
       const mappedTools = tools
-        .filter((tool) => tool.type === 'function')
-        .map((tool) => ({
-          type: 'function' as const,
-          function: {
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.inputSchema,
-          },
-        }))
+        .map((tool) => {
+          if (tool.type === 'provider-defined') {
+            return {
+              type: 'provider-defined' as const,
+              id: tool.id,
+              name: tool.name,
+            }
+          }
+          return {
+            type: 'function' as const,
+            function: {
+              name: tool.name,
+              description: tool.description,
+              parameters: tool.inputSchema,
+            },
+          }
+        })
 
       return {
         ...baseArgs,

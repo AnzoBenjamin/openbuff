@@ -93,6 +93,7 @@ import type {
   ProjectFileContext,
 } from '@codebuff/common/util/file'
 import type { ToolCallPart, ToolSet } from 'ai'
+import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
 
 export type CustomToolCall = {
   toolName: string
@@ -186,6 +187,92 @@ export function buildSpawnAgentsHandlerFailureOutput(
       }
     }),
   )
+}
+
+type SpawnGateFilterResult = {
+  agents: unknown
+  aborted: boolean
+  abortValue: Promise<void> | null
+}
+
+/**
+ * Deterministically blocks git-committer spawns until the validation/reviewer
+ * gate has passed. canSuggestFollowups is false precisely when the gate is
+ * not green (edits pending review). This mirrors the suggest_followups guard
+ * in executeToolCall and enforces the harness ordering: commit only after
+ * review is green. When canSuggestFollowups is undefined (gate system not
+ * active, e.g. non-base2 agents), this helper is NOT called by the caller.
+ *
+ * Only the git-committer entry is filtered; co-batched legitimate agents
+ * proceed normally. Extracted into a dedicated helper so the pre-gate
+ * refusal is unit-testable and re-used by any spawn_agents entry point.
+ */
+function filterSpawnAgentsGate(params: {
+  agents: unknown
+onResponseChunk: (chunk: string | PrintModeEvent) => void
+}): SpawnGateFilterResult {
+  const { agents: inputAgents, onResponseChunk } = params
+  if (!Array.isArray(inputAgents)) {
+    return { agents: inputAgents, aborted: false, abortValue: null }
+  }
+  const filteredAgents = inputAgents.filter(
+    (agent) =>
+      !(
+        agent &&
+        typeof agent === 'object' &&
+        typeof (agent as Record<string, unknown>).agent_type === 'string' &&
+        // Match on the resolved agent id so a git-committer alias cannot
+        // bypass the pre-gate block (consistent with spawn resolution).
+        normalizeSpawnAgentType(
+          String((agent as Record<string, unknown>).agent_type),
+        ) === 'git-committer'
+      ),
+  )
+  if (filteredAgents.length === inputAgents.length) {
+    return { agents: inputAgents, aborted: false, abortValue: null }
+  }
+  onResponseChunk({
+    type: 'error',
+    message:
+      'git-committer withheld: GATE: PENDING (need GATE: PASSED / phase=final_response_allowed). End your turn; do not retry or predict gate progress. Spawn git-committer once after GATE: PASSED.',
+    userMessage: GIT_COMMITTER_WITHHELD_USER_MESSAGE,
+    autoRecovering: true,
+  })
+  if (filteredAgents.length === 0) {
+    return {
+      agents: filteredAgents,
+      aborted: true,
+      abortValue: Promise.resolve(),
+    }
+  }
+  return { agents: filteredAgents, aborted: false, abortValue: null }
+}
+
+/**
+ * Wrapper that returns abortablePreviousToolCallFinished when the gate
+ * blocks all agents. The early-return value must match executeToolCall's
+ * Promise<void> return type, so callers can `return` it directly.
+ */
+function resolveSpawnGateAbort(
+  result: SpawnGateFilterResult,
+  abortablePreviousToolCallFinished: Promise<void>,
+): {
+  agents: unknown
+  shouldReturn: boolean
+  returnValue: Promise<void>
+} {
+  if (result.aborted) {
+    return {
+      agents: result.agents,
+      shouldReturn: true,
+      returnValue: abortablePreviousToolCallFinished,
+    }
+  }
+  return {
+    agents: result.agents,
+    shouldReturn: false,
+    returnValue: abortablePreviousToolCallFinished,
+  }
 }
 
 export function normalizeNativeToolOutput<T extends ToolName>(params: {
@@ -2267,47 +2354,26 @@ export async function executeToolCall<T extends ToolName>(
       false
   }
 
-  // TODO: Allow tools to provide a validation function, and move this logic into the spawn_agents validation function.
-  // Pre-validate spawn_agents to filter out non-existent agents before streaming
+  // Pre-validate spawn_agents to filter out non-existent agents before
+  // streaming. The git-committer gate filter is extracted into a dedicated
+  // helper so it can be unit-tested and re-used by any spawn_agents entry
+  // point.
   let effectiveInput = toolCall.input as Record<string, unknown>
 
-  // Deterministically block git-committer spawns until the validation/reviewer
-  // gate has passed. canSuggestFollowups is false precisely when the gate is
-  // not green (edits pending review). This mirrors the suggest_followups guard
-  // above and enforces the harness ordering: commit only after review is green.
-  // When canSuggestFollowups is undefined (gate system not active, e.g. non-base2
-  // agents), the check is skipped so custom agents are unaffected.
-  // Only the git-committer entry is filtered; co-batched legitimate agents
-  // proceed normally, consistent with the spawn_agents pre-validation pattern.
   if (toolName === 'spawn_agents' && canSuggestFollowups === false) {
-    const agents = effectiveInput.agents
-    if (Array.isArray(agents)) {
-      const filteredAgents = agents.filter(
-        (agent) =>
-          !(
-            agent &&
-            typeof agent === 'object' &&
-            typeof (agent as Record<string, unknown>).agent_type === 'string' &&
-            // Match on the resolved agent id so a git-committer alias cannot
-            // bypass the pre-gate block (consistent with spawn resolution).
-            normalizeSpawnAgentType(
-              String((agent as Record<string, unknown>).agent_type),
-            ) === 'git-committer'
-          ),
-      )
-      if (filteredAgents.length < agents.length) {
-        onResponseChunk({
-          type: 'error',
-          message:
-            'git-committer withheld: GATE: PENDING (need GATE: PASSED / phase=final_response_allowed). End your turn; do not retry or predict gate progress. Spawn git-committer once after GATE: PASSED.',
-          userMessage: GIT_COMMITTER_WITHHELD_USER_MESSAGE,
-          autoRecovering: true,
-        })
-        if (filteredAgents.length === 0) {
-          return abortablePreviousToolCallFinished
-        }
-        effectiveInput = { ...effectiveInput, agents: filteredAgents }
-      }
+    const gateResult = filterSpawnAgentsGate({
+      agents: effectiveInput.agents,
+      onResponseChunk,
+    })
+    const resolved = resolveSpawnGateAbort(
+      gateResult,
+      abortablePreviousToolCallFinished,
+    )
+    if (resolved.shouldReturn) {
+      return resolved.returnValue
+    }
+    if (resolved.agents !== effectiveInput.agents) {
+      effectiveInput = { ...effectiveInput, agents: resolved.agents }
     }
   }
 
