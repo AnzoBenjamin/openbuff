@@ -249,11 +249,11 @@ describe('checkJob', () => {
     expect(job.readOffset).toBe(offsetAfterLiveDrain)
   })
 
-  test('wait_for matches only via peekJobLineCarry for an unterminated partial line', async () => {
-    // Documented live-drainer match-vs-events lag: a needle drained into
-    // lineCarry (no trailing newline yet) is matchable via peekJobLineCarry
-    // even though no complete per-line registry `output` event has been
-    // emitted for it yet. matched can be true while events/outputText lag.
+  test('wait_for matches via peekJobLineCarry for an unterminated partial line and force-emits the carry', async () => {
+    // A needle drained into lineCarry (no trailing newline yet) is matchable
+    // via peekJobLineCarry. When the match is found in the carry, checkJob
+    // force-emits the carry as a registry output event so the returned events
+    // are consistent with matched: true — the needle appears in outputText.
     const job = makeJob()
     const partial = 'Ready > Listening on :3000'
     fs.appendFileSync(job.logFile, partial)
@@ -281,9 +281,10 @@ describe('checkJob', () => {
     expect(result.matched).toBe(true)
     expect(result.state).toBe('running')
     expect(result.timedOut).toBeUndefined()
-    // Carry still holds the unterminated needle; events need not include it.
-    expect(peekJobLineCarry(job)).toContain('Listening on')
-    expect(outputText(result)).not.toContain('Listening on')
+    // Carry was force-emitted as a registry output event, so the needle is
+    // now present in the returned events/outputText and the carry is cleared.
+    expect(peekJobLineCarry(job)).toBe('')
+    expect(outputText(result)).toContain('Listening on')
   })
 
   test('follow mode returns matched=true once the pattern is present', async () => {

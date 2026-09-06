@@ -288,6 +288,40 @@ export function safeOpenJobLogForRead(
   }
 }
 
+/**
+ * Truncate a background-job log file to at most `maxBytes` by dropping the
+ * HEAD (oldest bytes) and keeping the TAIL (newest bytes). The newest output
+ * is the most diagnostically useful for a job terminated due to log quota —
+ * errors, build failures, and recent status messages live there. No-op when
+ * the file is already within quota. Opens the file safely (O_NOFOLLOW) and
+ * rewrites the tail in place to avoid leaving a sparse/holey file behind
+ * (truncating a live append-only fd below its write offset is undefined per
+ * POSIX).
+ */
+function truncateLogToTail(logFile: string, maxBytes: number): void {
+  let fd: number | undefined
+  try {
+    fd = fs.openSync(logFile, fs.constants.O_RDWR | O_NOFOLLOW_FLAG)
+    const size = fs.fstatSync(fd).size
+    if (size <= maxBytes) return
+    const keepStart = size - maxBytes
+    const buf = Buffer.alloc(maxBytes)
+    const bytesRead = fs.readSync(fd, buf, 0, maxBytes, keepStart)
+    fs.ftruncateSync(fd, 0)
+    fs.writeSync(fd, buf.subarray(0, bytesRead), 0, bytesRead, 0)
+  } catch {
+    // best-effort truncation; the exit path owns final cleanup
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd)
+      } catch {
+        // already closed
+      }
+    }
+  }
+}
+
 function safeReadJobMetadataFile(metadataFile: string): string | undefined {
   let fd: number | undefined
   try {
@@ -697,11 +731,12 @@ export function startBackgroundJob(params: {
       // Keep trimming while the process is unwinding so a chatty child cannot
       // regrow a sparse/oversized log between SIGTERM and exit.
       //
-      // Deliberate tradeoff: truncation keeps the HEAD (oldest bytes) and drops
-      // the newest output. The job is being terminated for exceeding its log
-      // quota, and the startup/context head is the most diagnostically useful
-      // part; losing the tail is a known, accepted cost.
-      fs.truncateSync(logFile, MAX_BACKGROUND_LOG_BYTES)
+      // Deliberate tradeoff: truncation keeps the TAIL (newest bytes) and drops
+      // the oldest output. The job is being terminated for exceeding its log
+      // quota, and the newest output is the most diagnostically useful — errors,
+      // build failures, and recent status messages live in the tail; losing the
+      // head is a known, accepted cost.
+      truncateLogToTail(logFile, MAX_BACKGROUND_LOG_BYTES)
     } catch {
       // The process exit/error handlers own final cleanup.
     }
@@ -732,11 +767,11 @@ export function startBackgroundJob(params: {
           ? 'completed'
           : 'error'
     if (quotaExceeded) {
-      // See the log-quota monitor above: truncation keeps the HEAD (oldest
-      // bytes) and drops the newest output. Known, accepted tradeoff for a
+      // See the log-quota monitor above: truncation keeps the TAIL (newest
+      // bytes) and drops the oldest output. Known, accepted tradeoff for a
       // job terminated for exceeding its log quota.
       try {
-        fs.truncateSync(logFile, MAX_BACKGROUND_LOG_BYTES)
+        truncateLogToTail(logFile, MAX_BACKGROUND_LOG_BYTES)
       } catch {
         // best-effort truncation; the exit path owns final cleanup
       }

@@ -1,4 +1,5 @@
 import {
+  flushJobLineCarry,
   getBackgroundJob,
   killBackgroundJob,
   peekJobLineCarry,
@@ -244,18 +245,28 @@ export async function checkJob(params: {
     // yet emitted as a per-line registry `output` event — is still matchable;
     // the carry is NOT folded into `collected` (that must stay bounded and
     // event-derived, or it would double-count once the line is later emitted).
-    // For a live job (hasLiveDrainer) this `wait_for` window includes the
-    // pending lineCarry, so checkJob can return matched:true while the
-    // corresponding needle has NOT yet appeared in the returned events/
-    // outputText for that same response — the event is emitted on the next
-    // drain (≤250ms). This transient inconsistency is intentional and bounded
-    // by MAX_LINE_BYTES, not a bug.
-    if (
-      waitFor &&
-      !matched &&
-      (collected + chunk + peekJobLineCarry(job)).includes(waitFor)
-    ) {
-      matched = true
+    // When the needle is found in the pending partial line (carry), force-emit
+    // the carry as a registry output event so the returned events are consistent
+    // with matched: true. Without this, a needle in an unterminated partial line
+    // could be reported as matched while being absent from the returned events/
+    // outputText. The re-snapshot from entryCursor picks up the flushed event,
+    // so it appears in the returned events. The cursor variable in the follow
+    // loop is not updated by the flush, but this is fine because (a) the
+    // re-snapshot uses entryCursor not cursor, and (b) matched is now true so
+    // the loop exits.
+    if (waitFor && !matched) {
+      const matchWindow = collected + chunk + peekJobLineCarry(job)
+      if (matchWindow.includes(waitFor)) {
+        matched = true
+        // If the needle is in the pending partial line (carry) that has not
+        // yet been emitted as a registry output event, force-emit it now so
+        // the returned events are consistent with matched: true. Without this,
+        // a needle in an unterminated partial line could be reported as matched
+        // while being absent from the returned events/outputText.
+        if (peekJobLineCarry(job).includes(waitFor)) {
+          flushJobLineCarry(job)
+        }
+      }
     }
     // Bound the match window so a chatty long-running job can't grow
     // `collected` without limit (OOM) across many poll iterations.
