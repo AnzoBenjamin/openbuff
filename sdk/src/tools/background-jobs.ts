@@ -71,8 +71,6 @@ export function terminateProcessTree(
 
 export interface BackgroundJob {
   jobId: string
-  /** Registry-side id backing this job (recovered/test jobs are remapped). */
-  registryJobId?: string
   command: string
   child: ChildProcess
   logFile: string
@@ -466,10 +464,6 @@ function writeBackgroundJobMetadata(job: BackgroundJob): void {
   }
 }
 
-/** Registry-side id backing `job` (recovered jobs are remapped; see above). */
-function registryJobIdFor(job: BackgroundJob): string {
-  return job.registryJobId ?? job.jobId
-}
 
 /**
  * Fold a terminal lifecycle transition into the registry and mirror it onto
@@ -494,7 +488,7 @@ function settleBackgroundJob(
   if (job.settledAt === undefined) {
     job.settledAt = Date.now()
   }
-  jobRegistry.emit(registryJobIdFor(job), {
+  jobRegistry.emit(job.jobId, {
     type: 'lifecycle',
     state: status,
     exitCode,
@@ -525,7 +519,7 @@ export function pruneSettledJobs(now: number = Date.now()): void {
 /** Mirror a chunk of streamed log bytes into the registry as an output event. */
 function emitJobOutput(job: BackgroundJob, data: string): void {
   if (data.length === 0) return
-  jobRegistry.emit(registryJobIdFor(job), { type: 'output', data })
+  jobRegistry.emit(job.jobId, { type: 'output', data })
 }
 
 /**
@@ -832,31 +826,13 @@ function resolveRestampedOwner(
 }
 
 /**
- * Resolve a process adapter for a *registry* job id (list_jobs iteration).
- *
- * The adapter Map is keyed by the user-facing jobId. Live spawns use the same
- * id for both Map key and registry. Recovered / `__registerJobForTest` jobs
- * remap: Map key = disk/user jobId, `registryJobId` = fresh registry id. A
- * direct `jobs.get(registryId)` therefore misses remapped adapters — reverse-
- * scan by `registryJobId ?? jobId` so list_jobs can read `lastCheckCursor` /
- * lineCarry and expose the user-facing `adapter.jobId` that check_job/kill_job
- * resolve via `getBackgroundJob`.
+ * Read-only adapter lookup by jobId (no recovery, no ownership changes).
+ * list_jobs uses this to read `lastCheckCursor` / `lineCarry` from the
+ * adapter without triggering recovery or ownership restamping.
  */
-export function getBackgroundJobForRegistryId(
-  registryJobId: string,
-): BackgroundJob | undefined {
+export function getBackgroundJobAdapter(jobId: string): BackgroundJob | undefined {
   pruneSettledJobs()
-  const direct = jobs.get(registryJobId)
-  if (direct !== undefined) {
-    const backing = direct.registryJobId ?? direct.jobId
-    if (backing === registryJobId) return direct
-  }
-  for (const job of jobs.values()) {
-    if ((job.registryJobId ?? job.jobId) === registryJobId) {
-      return job
-    }
-  }
-  return undefined
+  return jobs.get(jobId)
 }
 
 export function getBackgroundJob(
@@ -878,13 +854,12 @@ export function getBackgroundJob(
     // this, the cached-job early return skips the re-stamp and the trusted
     // caller is locked out of its own job by assertOwned. Gate on the
     // REGISTRY record's current owner being unknown (SEC-2).
-    const registryJobId = existing.registryJobId ?? existing.jobId
-    const registryJob = jobRegistry.get(registryJobId)
+    const registryJob = jobRegistry.get(jobId)
     const upgraded = registryJob
       ? resolveRestampedOwner(registryJob.owner, opts?.restampOwner)
       : undefined
     if (upgraded) {
-      jobRegistry.restampOwner(registryJobId, upgraded)
+      jobRegistry.restampOwner(jobId, upgraded)
       existing.owner = upgraded
     }
     return existing
@@ -903,28 +878,42 @@ export function getBackgroundJob(
       return undefined
     }
 
-    jobs.set(jobId, recovered)
     // Re-emit the recovered job into the registry, which is the live source
-    // of truth for state/ownership. The registry allocates its own ids, so
-    // the disk-derived jobId is remapped onto a fresh registry id stored on
-    // the adapter object. Cross-session re-attach: a supplied restampOwner
-    // UPGRADES ownership only when the disk metadata carries a placeholder /
-    // missing owner. A job already stamped with a real owner keeps it, so a
-    // re-attaching run can never launder ownership of another session's job
-    // (assertOwned then refuses it as foreign) — this mirrors the cached-job
-    // branch above (SEC-2). Same-process callers pass no opts, so the
-    // original owner is preserved either way.
+    // of truth for state/ownership. The disk-derived jobId is passed as the
+    // explicit registry id so the registry record and adapter Map share one
+    // key. Cross-session re-attach: a supplied restampOwner UPGRADES ownership
+    // only when the disk metadata carries a placeholder / missing owner. A job
+    // already stamped with a real owner keeps it, so a re-attaching run can
+    // never launder ownership of another session's job (assertOwned then
+    // refuses it as foreign) — this mirrors the cached-job branch above
+    // (SEC-2). Same-process callers pass no opts, so the original owner is
+    // preserved either way.
     const owner =
       resolveRestampedOwner(recovered.owner, opts?.restampOwner) ??
       recovered.owner ??
       UNKNOWN_JOB_OWNER
     recovered.owner = owner
-    const registryJobId = jobRegistry.create({
-      kind: 'process',
-      label: recovered.command,
-      owner,
-    }).jobId
-    recovered.registryJobId = registryJobId
+    // Pass the disk-derived jobId as the explicit registry id so the
+    // registry record and adapter Map share one key. On collision (another
+    // job with the same id already registered), fall back to a fresh
+    // registry-allocated id (preserving old behavior for that rare case).
+    let registryJobId: string
+    try {
+      registryJobId = jobRegistry.create({
+        kind: 'process',
+        label: recovered.command,
+        owner,
+        jobId: recovered.jobId,
+      }).jobId
+    } catch {
+      registryJobId = jobRegistry.create({
+        kind: 'process',
+        label: recovered.command,
+        owner,
+      }).jobId
+    }
+    recovered.jobId = registryJobId
+    jobs.set(registryJobId, recovered)
     jobRegistry.start(registryJobId)
     if (recovered.status !== 'running') {
       // A settled recovered job is folded straight into its terminal state so
@@ -1233,15 +1222,27 @@ export function readNewJobOutput(job: BackgroundJob): string {
 
 /** Test-only: register a job backed by an existing log file (no real process). */
 export function __registerJobForTest(job: BackgroundJob): void {
-  jobs.set(job.jobId, job)
-  // Mirror the job into the registry (under a fresh registry id, like a
-  // recovered job) so registry-backed lookups see the same state.
-  const registryJobId = jobRegistry.create({
-    kind: 'process',
-    label: job.command,
-    owner: job.owner ?? UNKNOWN_JOB_OWNER,
-  }).jobId
-  job.registryJobId = registryJobId
+  // Pass the adapter's jobId as the explicit registry id so the registry
+  // record and adapter Map share one key. On collision (another job with
+  // the same id already registered), fall back to a fresh registry-allocated
+  // id (preserving old behavior for that rare case).
+  let registryJobId: string
+  try {
+    registryJobId = jobRegistry.create({
+      kind: 'process',
+      label: job.command,
+      owner: job.owner ?? UNKNOWN_JOB_OWNER,
+      jobId: job.jobId,
+    }).jobId
+  } catch {
+    registryJobId = jobRegistry.create({
+      kind: 'process',
+      label: job.command,
+      owner: job.owner ?? UNKNOWN_JOB_OWNER,
+    }).jobId
+  }
+  job.jobId = registryJobId
+  jobs.set(registryJobId, job)
   jobRegistry.start(registryJobId)
   if (job.status !== 'running') {
     jobRegistry.emit(registryJobId, {
@@ -1253,9 +1254,8 @@ export function __registerJobForTest(job: BackgroundJob): void {
 }
 
 /**
- * Test-only: set/create a Map adapter keyed by registry jobId (production id shape).
- * Used only by tests so list_jobs can observe a same-id lastCheckCursor without
- * `__registerJobForTest`'s dual-id remapping.
+ * Test-only: set/create a Map adapter keyed by jobId (production id shape).
+ * Used only by tests so list_jobs can observe a same-id lastCheckCursor.
  */
 export function __setLastCheckCursorForTest(
   jobId: string,
@@ -1271,7 +1271,6 @@ export function __setLastCheckCursorForTest(
   // registry row under the same jobId as production live spawns).
   jobs.set(jobId, {
     jobId,
-    registryJobId: jobId,
     command: 'test',
     child: {} as ChildProcess,
     logFile: path.join(os.tmpdir(), `openbuff-${jobId}.log`),

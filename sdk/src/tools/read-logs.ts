@@ -38,11 +38,6 @@ const MAX_TAIL_SCAN_CHARS_MULTIPLE = 8
  */
 const BACKGROUND_JOB_FILE_PATTERN = /^openbuff-(.+)\.(log|json)$/
 
-/** Registry-side id backing this adapter job (recovered jobs are remapped). */
-function registryIdFor(job: { jobId: string; registryJobId?: string }): string {
-  return job.registryJobId ?? job.jobId
-}
-
 type ReadLogsParams = {
   cwd: string
   path?: string
@@ -90,7 +85,7 @@ export async function readLogs(
 
     // Ownership gate before serving the log tail: a foreign job is refused
     // with the same generic not_found error as an unknown id.
-    const ownership = jobRegistry.assertOwned(registryIdFor(job), params.owner)
+    const ownership = jobRegistry.assertOwned(job.jobId, params.owner)
     if (!ownership.ok) {
       return [
         {
@@ -205,7 +200,7 @@ export async function readLogs(
   if (jobFileMatch) {
     const jobId = jobFileMatch[1]
     const job = getBackgroundJob(jobId)
-    if (job && !jobRegistry.assertOwned(registryIdFor(job), params.owner).ok) {
+    if (job && !jobRegistry.assertOwned(job.jobId, params.owner).ok) {
       return [
         {
           type: 'json',

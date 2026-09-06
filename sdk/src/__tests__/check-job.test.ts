@@ -22,6 +22,7 @@ import {
   appendBoundedCollected,
   checkJob,
 } from '../tools/check-job'
+import { listJobs } from '../tools/list-jobs'
 import {
   SETTLED_JOB_TTL_MS,
   jobRegistry,
@@ -146,8 +147,7 @@ describe('readNewJobOutput', () => {
     }
 
     expect(peekJobLineCarry(job)).toBe('')
-    const registryId = job.registryJobId ?? job.jobId
-    const snapshot = jobRegistry.snapshot(registryId, 0)
+    const snapshot = jobRegistry.snapshot(job.jobId, 0)
     const outputEvents = (snapshot?.events ?? []).filter(
       (event) => event.payload.type === 'output',
     )
@@ -261,8 +261,7 @@ describe('checkJob', () => {
     expect(readNewJobOutput(job)).toBe(partial)
     expect(peekJobLineCarry(job)).toContain('Listening on')
 
-    const registryId = job.registryJobId ?? job.jobId
-    const preMatchSnapshot = jobRegistry.snapshot(registryId, 0)
+    const preMatchSnapshot = jobRegistry.snapshot(job.jobId, 0)
     const preMatchOutput = (preMatchSnapshot?.events ?? [])
       .filter((event) => event.payload.type === 'output')
       .map((event) =>
@@ -1023,12 +1022,10 @@ describe('checkJob', () => {
     // The unified jobRegistry is now the source of truth for live
     // state/ownership (the pending-background-jobs mirror is the legacy
     // store M4 removes). A recovered job is re-emitted into the registry
-    // under a fresh registry id stored on the adapter object, carrying the
-    // preserved owner.
+    // under the disk-derived jobId (passed as explicit registry id), carrying
+    // the preserved owner.
     const recovered = getBackgroundJob(jobId)
-    const registryJob = recovered?.registryJobId
-      ? jobRegistry.get(recovered.registryJobId)
-      : undefined
+    const registryJob = jobRegistry.get(jobId)
     expect(registryJob?.owner).toEqual(owner)
   })
 

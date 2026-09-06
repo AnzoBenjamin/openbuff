@@ -13,7 +13,7 @@ import {
 } from '@codebuff/common/util/job-registry'
 
 import {
-  getBackgroundJobForRegistryId,
+  getBackgroundJobAdapter,
   peekJobLineCarry,
 } from './background-jobs'
 
@@ -61,12 +61,7 @@ export async function listJobs(params: {
   }))
   const selected = selectListJobsRows(candidates)
   const rows: ListJobsViewRow[] = selected.rows.map(({ entry }) => {
-    // Resolve process adapters by *registry* id (not a direct Map get on the
-    // registry id alone). Live spawns share one id; recovered /
-    // `__registerJobForTest` remaps (Map key = user/disk jobId,
-    // registryJobId = fresh registry id). Reverse-scan so lastCheckCursor and
-    // lineCarry are visible, and emit the user-facing adapter.jobId so
-    // rediscovered ids work with check_job/kill_job.
+    // Resolve process adapters by jobId (Map key = registry id = jobId).
     //
     // `pending` line buckets count only registry events with
     // `payload.type === 'output'` relative to the process adapter's
@@ -77,7 +72,7 @@ export async function listJobs(params: {
     // ring truncation at the snapshot cursor for any kind.
     //
     // The lineCarry +1 counting rationale lives on `countPendingOutputLines`.
-    const adapter = getBackgroundJobForRegistryId(entry.jobId)
+    const adapter = getBackgroundJobAdapter(entry.jobId)
     const cursor = adapter?.lastCheckCursor ?? 0
     const snap = jobRegistry.snapshot(entry.jobId, cursor)
     const lineCarry =
@@ -89,8 +84,6 @@ export async function listJobs(params: {
       }),
     )
     const gap = snap?.truncated ?? false
-    // Prefer user-facing adapter.jobId when remapped; agents/no-adapter keep
-    // the registry id (the only id they have).
     const row: ListJobsViewRow = {
       jobId: adapter?.jobId ?? entry.jobId,
       kind: entry.kind,
