@@ -85,7 +85,9 @@ export async function listJobs(params: {
     )
     const gap = snap?.truncated ?? false
     const row: ListJobsViewRow = {
-      jobId: adapter?.jobId ?? entry.jobId,
+      // Single-id invariant: the adapter Map key, the registry id, and the
+      // user-facing jobId are the same string, so emit entry.jobId directly.
+      jobId: entry.jobId,
       kind: entry.kind,
       command: entry.label,
       status: entry.state,

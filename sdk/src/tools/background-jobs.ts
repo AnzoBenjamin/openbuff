@@ -894,32 +894,28 @@ export function getBackgroundJob(
       UNKNOWN_JOB_OWNER
     recovered.owner = owner
     // Pass the disk-derived jobId as the explicit registry id so the
-    // registry record and adapter Map share one key. On collision (another
-    // job with the same id already registered), fall back to a fresh
-    // registry-allocated id (preserving old behavior for that rare case).
-    let registryJobId: string
-    try {
-      registryJobId = jobRegistry.create({
-        kind: 'process',
-        label: recovered.command,
-        owner,
-        jobId: recovered.jobId,
-      }).jobId
-    } catch {
-      registryJobId = jobRegistry.create({
-        kind: 'process',
-        label: recovered.command,
-        owner,
-      }).jobId
+    // registry record and adapter Map share one key (single-id invariant).
+    // A collision means a live job already owns this id — a cross-session
+    // recovery must NOT silently remap onto a fresh id (that would desync the
+    // adapter from the on-disk log/metadata file names and make the caller's
+    // requested id unresolvable), so refuse the recovery and leave the id
+    // pointing at the live record. getBackgroundJob reports not-found.
+    if (jobRegistry.get(recovered.jobId) !== undefined) {
+      return undefined
     }
-    recovered.jobId = registryJobId
-    jobs.set(registryJobId, recovered)
-    jobRegistry.start(registryJobId)
+    jobRegistry.create({
+      kind: 'process',
+      label: recovered.command,
+      owner,
+      jobId: recovered.jobId,
+    })
+    jobs.set(recovered.jobId, recovered)
+    jobRegistry.start(recovered.jobId)
     if (recovered.status !== 'running') {
       // A settled recovered job is folded straight into its terminal state so
       // the re-attaching run can serve its final output/exit code from the
       // registry.
-      jobRegistry.emit(registryJobId, {
+      jobRegistry.emit(recovered.jobId, {
         type: 'lifecycle',
         state: recovered.status,
         exitCode: recovered.exitCode,
@@ -1223,29 +1219,25 @@ export function readNewJobOutput(job: BackgroundJob): string {
 /** Test-only: register a job backed by an existing log file (no real process). */
 export function __registerJobForTest(job: BackgroundJob): void {
   // Pass the adapter's jobId as the explicit registry id so the registry
-  // record and adapter Map share one key. On collision (another job with
-  // the same id already registered), fall back to a fresh registry-allocated
-  // id (preserving old behavior for that rare case).
-  let registryJobId: string
-  try {
-    registryJobId = jobRegistry.create({
-      kind: 'process',
-      label: job.command,
-      owner: job.owner ?? UNKNOWN_JOB_OWNER,
-      jobId: job.jobId,
-    }).jobId
-  } catch {
-    registryJobId = jobRegistry.create({
-      kind: 'process',
-      label: job.command,
-      owner: job.owner ?? UNKNOWN_JOB_OWNER,
-    }).jobId
+  // record and adapter Map share one key (single-id invariant). A collision
+  // means the test registered two adapters under one id — that is a test bug
+  // and must fail loudly instead of silently remapping onto a fresh id (which
+  // would break every assertion made on the original jobId).
+  if (jobRegistry.get(job.jobId) !== undefined) {
+    throw new Error(
+      `__registerJobForTest: job id '${job.jobId}' is already registered`,
+    )
   }
-  job.jobId = registryJobId
-  jobs.set(registryJobId, job)
-  jobRegistry.start(registryJobId)
+  jobRegistry.create({
+    kind: 'process',
+    label: job.command,
+    owner: job.owner ?? UNKNOWN_JOB_OWNER,
+    jobId: job.jobId,
+  })
+  jobs.set(job.jobId, job)
+  jobRegistry.start(job.jobId)
   if (job.status !== 'running') {
-    jobRegistry.emit(registryJobId, {
+    jobRegistry.emit(job.jobId, {
       type: 'lifecycle',
       state: job.status,
       exitCode: job.exitCode,
