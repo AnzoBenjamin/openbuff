@@ -115,6 +115,36 @@ export function boundEventsToOutputTail(
 }
 
 /**
+ * Resolve the one-shot settlement dirty delta the first time a settled
+ * observation is returned. Stores `[]` when snapshot/git is missing so
+ * re-polls stay idempotent and never re-attribute post-settle dirt.
+ * Returns paths to emit only on the resolving observation (omit on
+ * subsequent polls and while still running).
+ */
+async function resolveSettlementTouchedPaths(job: {
+  settlementTouchedPaths?: string[]
+  dirtyBeforePaths?: string[]
+  projectRoot?: string
+}): Promise<string[] | undefined> {
+  if (job.settlementTouchedPaths !== undefined) {
+    // Already resolved on a prior settled check_job — do not re-emit.
+    return undefined
+  }
+  if (job.dirtyBeforePaths !== undefined && job.projectRoot !== undefined) {
+    const dirtyAfter = await listDirtyPaths(job.projectRoot)
+    const touched =
+      dirtyAfter !== null
+        ? dirtyDelta(new Set(job.dirtyBeforePaths), dirtyAfter)
+        : []
+    job.settlementTouchedPaths = touched
+    return touched
+  }
+  // Soft-fail: recovered jobs / no git snapshot — lock out recompute.
+  job.settlementTouchedPaths = []
+  return undefined
+}
+
+/**
  * Join (poll) or wait (follow) on a background job started by
  * run_terminal_command.
  *
@@ -258,12 +288,14 @@ export async function checkJob(params: {
       const matchWindow = collected + chunk + peekJobLineCarry(job)
       if (matchWindow.includes(waitFor)) {
         matched = true
-        // If the needle is in the pending partial line (carry) that has not
-        // yet been emitted as a registry output event, force-emit it now so
-        // the returned events are consistent with matched: true. Without this,
-        // a needle in an unterminated partial line could be reported as matched
-        // while being absent from the returned events/outputText.
-        if (peekJobLineCarry(job).includes(waitFor)) {
+        // If the needle depends on the carry (not fully present in the
+        // already-emitted collected + chunk), force-emit the carry so the
+        // returned events are consistent with matched: true. This covers both
+        // the case where the needle is entirely in the carry and where it spans
+        // the boundary between chunk and carry. Without this, a needle in an
+        // unterminated partial line could be reported as matched while being
+        // absent from the returned events/outputText.
+        if (!(collected + chunk).includes(waitFor)) {
           flushJobLineCarry(job)
         }
       }
@@ -329,37 +361,6 @@ export async function checkJob(params: {
         logFile: job.logFile,
       }
 
-      /**
-       * Resolve the one-shot settlement dirty delta the first time a settled
-       * observation is returned. Stores `[]` when snapshot/git is missing so
-       * re-polls stay idempotent and never re-attribute post-settle dirt.
-       * Returns paths to emit only on the resolving observation (omit on
-       * subsequent polls and while still running).
-       */
-      const resolveSettlementTouchedPaths = async (): Promise<
-        string[] | undefined
-      > => {
-        if (job.settlementTouchedPaths !== undefined) {
-          // Already resolved on a prior settled check_job — do not re-emit.
-          return undefined
-        }
-        if (
-          job.dirtyBeforePaths !== undefined &&
-          job.projectRoot !== undefined
-        ) {
-          const dirtyAfter = await listDirtyPaths(job.projectRoot)
-          const touched =
-            dirtyAfter !== null
-              ? dirtyDelta(new Set(job.dirtyBeforePaths), dirtyAfter)
-              : []
-          job.settlementTouchedPaths = touched
-          return touched
-        }
-        // Soft-fail: recovered jobs / no git snapshot — lock out recompute.
-        job.settlementTouchedPaths = []
-        return undefined
-      }
-
       if (timedOut && job.status === 'running' && killOnTimeout) {
         const killResult = killBackgroundJob(jobId, 'SIGTERM')
         if ('killed' in killResult) {
@@ -371,7 +372,7 @@ export async function checkJob(params: {
             postKillJob?.exitCode ?? killResult.exitCode ?? undefined
           // Kill settles the job; credit dirty delta on this first settled
           // observation (same one-shot path as natural finish).
-          const killTouched = await resolveSettlementTouchedPaths()
+          const killTouched = await resolveSettlementTouchedPaths(job)
           const killValue = {
             ...baseValue,
             state: postKillState,
@@ -407,7 +408,7 @@ export async function checkJob(params: {
       }
 
       const settlementTouched = finished
-        ? await resolveSettlementTouchedPaths()
+        ? await resolveSettlementTouchedPaths(job)
         : undefined
       const resultValue =
         settlementTouched !== undefined

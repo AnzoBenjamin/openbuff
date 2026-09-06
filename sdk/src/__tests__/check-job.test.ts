@@ -287,6 +287,58 @@ describe('checkJob', () => {
     expect(outputText(result)).toContain('Listening on')
   })
 
+  test('wait_for force-emits the carry when the needle spans the chunk/carry boundary', async () => {
+    // A needle that spans the boundary between chunk (already emitted to the
+    // registry) and carry (not yet emitted) must still be fully present in the
+    // returned events. The carry must be force-emitted so the returned events
+    // are consistent with matched: true.
+    const job = makeJob()
+    // Write a complete line followed by a partial line (no newline at end).
+    // After draining, the complete line is in the registry (chunk) and the
+    // partial line is in the carry.
+    fs.appendFileSync(job.logFile, 'foo bar\nbaz')
+    expect(readNewJobOutput(job)).toBe('foo bar\nbaz')
+    expect(peekJobLineCarry(job)).toBe('baz')
+
+    const result = value(
+      await checkJob({
+        jobId: job.jobId,
+        wait_for: 'bar\nbaz',
+        owner: TRUSTED_OWNER,
+      }),
+    )
+    expect(result.matched).toBe(true)
+    expect(result.state).toBe('running')
+    // The carry was force-emitted, so the needle is fully present in the
+    // returned events.
+    expect(peekJobLineCarry(job)).toBe('')
+    expect(outputText(result)).toContain('bar\nbaz')
+  })
+
+  test('wait_for does not force-emit the carry when the needle is fully in the chunk', async () => {
+    // When the needle is fully present in chunk (already emitted to the
+    // registry), the carry must NOT be force-emitted. This keeps the original
+    // path unchanged for the common case and verifies the new boundary check
+    // only flushes the carry when the needle depends on it.
+    const job = makeJob()
+    fs.appendFileSync(job.logFile, 'prefix\nListening on :3000\nsuffix')
+    expect(readNewJobOutput(job)).toBe('prefix\nListening on :3000\nsuffix')
+    expect(peekJobLineCarry(job)).toBe('suffix')
+
+    const result = value(
+      await checkJob({
+        jobId: job.jobId,
+        wait_for: 'Listening on :3000',
+        owner: TRUSTED_OWNER,
+      }),
+    )
+    expect(result.matched).toBe(true)
+    expect(result.state).toBe('running')
+    // Carry must be untouched because the needle was fully in the chunk.
+    expect(peekJobLineCarry(job)).toBe('suffix')
+    expect(outputText(result)).toContain('Listening on :3000')
+  })
+
   test('follow mode returns matched=true once the pattern is present', async () => {
     const job = makeJob()
     fs.appendFileSync(job.logFile, 'starting...\nListening on :3000\n')
