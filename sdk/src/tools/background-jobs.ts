@@ -464,7 +464,6 @@ function writeBackgroundJobMetadata(job: BackgroundJob): void {
   }
 }
 
-
 /**
  * Fold a terminal lifecycle transition into the registry and mirror it onto
  * the adapter object + the write-only disk projection. All terminal paths
@@ -623,11 +622,17 @@ export function startBackgroundJob(params: {
   // safeCreateJobLogFile/safeWriteJobMetadata also use O_EXCL + O_NOFOLLOW so
   // pre-created regular files and TOCTOU symlink swaps are rejected at open().
   let outFd: number | undefined
+  // True only once safeCreateJobLogFile has returned, i.e. this spawn
+  // exclusively created logFile via O_CREAT|O_EXCL. Throws from
+  // rejectIfSymlink or O_EXCL EEXIST leave it false: the path then holds a
+  // foreign/pre-existing file this process must never delete.
+  let logFileCreatedByThisSpawn = false
   let child: ChildProcess
   try {
     rejectIfSymlink(logFile)
     rejectIfSymlink(metadataFile)
     outFd = safeCreateJobLogFile(logFile)
+    logFileCreatedByThisSpawn = true
     child = spawn(shell, [...shellArgs, command], {
       cwd,
       env,
@@ -645,13 +650,15 @@ export function startBackgroundJob(params: {
         // already closed
       }
     }
-    // The log file was created exclusively for this spawn (O_EXCL); on a failed
-    // spawn nobody else can own it, so remove it best-effort rather than leaving
-    // an empty temp file behind until the 24h+ orphan sweep.
-    try {
-      fs.unlinkSync(logFile)
-    } catch {
-      // best-effort; the orphan sweep will clean it up if removal fails
+    // Remove the log file ONLY when this spawn created it (safeCreateJobLogFile
+    // succeeded). If the throw came from rejectIfSymlink or from O_EXCL EEXIST,
+    // the path belongs to a foreign/pre-existing file this process did NOT
+    // create, and deleting it would clobber another owner's file in the shared
+    // temp dir. removeFileIfPresent re-lstats immediately before unlinking so
+    // a TOCTOU symlink swap fails closed; a failed removal still leaves the
+    // empty file for the 24h+ orphan sweep.
+    if (logFileCreatedByThisSpawn) {
+      removeFileIfPresent(logFile)
     }
     // Fold the failed spawn into the registry so the freshly-created id does
     // not linger as a queued job (queued only transitions via running).

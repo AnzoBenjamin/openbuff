@@ -15,9 +15,8 @@ import {
 import {
   getBackgroundJobAdapter,
   peekJobLineCarry,
+  type BackgroundJobOwner,
 } from './background-jobs'
-
-import type { BackgroundJobOwner } from './background-jobs'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 
 /** Last ≤10 non-empty output lines from buffered events (terminal peek only). */
@@ -40,7 +39,10 @@ export async function listJobs(params: {
    */
   owner: BackgroundJobOwner
 }): Promise<CodebuffToolOutput<'list_jobs'>> {
-  const owner = {
+  // Narrow the trusted owner to the registry's ownership key: list_jobs is
+  // scoped by (clientSessionId, rootRunId) only; parentRunId/parentAgentId are
+  // diagnostic and deliberately excluded from the ownership filter.
+  const scopeOwner = {
     clientSessionId: params.owner.clientSessionId,
     rootRunId: params.owner.rootRunId,
   }
@@ -54,7 +56,7 @@ export async function listJobs(params: {
   // the same fallback the row build below uses, keeping order/tie-break
   // parity), so adapter reverse-resolution, snapshot, pending, and tail work
   // runs only for the ≤LIST_JOBS_MAX_ROWS rows actually emitted.
-  const candidates = jobRegistry.list(owner).map((entry) => ({
+  const candidates = jobRegistry.list(scopeOwner).map((entry) => ({
     entry,
     status: entry.state,
     startedAt: entry.startedAt ?? entry.createdAt,
