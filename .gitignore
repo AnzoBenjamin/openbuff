@@ -38,6 +38,9 @@ docs/bot-detection.md
 # Base2 gate-test scratch
 .base2-test-scratch/
 
+# Containment test escape-target scratch (outside the OS temp roots)
+.containment-test-scratch/
+
 # Local agent state (task memory, gate telemetry JSONL sink)
 .openbuff/
 

@@ -527,6 +527,123 @@ describe('FilesystemAuthority owned-temp namespace permits CRUD except live job 
     },
   )
 
+  test.each([
+    ['create', '.js'],
+    ['move', '.js'],
+    ['create', '.py'],
+    ['move', '.py'],
+  ] as const)(
+    'refuses %s of a plain non-openbuff owned-temp path ending in %s',
+    async (operation, extension) => {
+      // With containment admitting the whole temp root, this refusal is the
+      // only defense against a file-changing tool staging a script that a
+      // later `node /tmp/x.js` / `python3 /tmp/x.py` executes: read-only
+      // terminal profiles refuse interpreter one-liners but permit
+      // `node <file>`, and the /tmp/... token exemption carries the command.
+      // A plain segment directly under the temp root — no openbuff naming —
+      // pins that the interpreter-extension refusal does not depend on any
+      // owned-name pattern. `move` authorizes the DESTINATION path here,
+      // matching how change_file authorizes both ends of a move.
+      const result = await authority.authorizePath(
+        path.join(ownedTempRoot, `payload-${uniqueSuffix()}${extension}`),
+        operation,
+      )
+      expect(result).toEqual({
+        allowed: false,
+        code: 'owned_temp_executable_extension_refused',
+      })
+    },
+  )
+
+  test.each([
+    ['create', '.sh '],
+    ['move', '.sh '],
+    ['create', '.py.'],
+    ['move', '.py.'],
+  ] as const)(
+    'refuses %s of an aliased plain owned-temp executable name ending in %s',
+    async (operation, aliasedSuffix) => {
+      // Win32 strips trailing dots/spaces from the final path segment, so the
+      // lexical alias `payload-<id>.sh ` / `payload-<id>.py.` creates the real
+      // `payload-<id>.sh` / `payload-<id>.py` while its raw extname (`.sh ` /
+      // `.`) misses OWNED_TEMP_REFUSED_EXTENSIONS. The refusal must also run
+      // on the Win32-normalized basename, or the alias dodges the only
+      // defense against the terminal-policy bypass the non-aliased tests
+      // above document.
+      const result = await authority.authorizePath(
+        path.join(ownedTempRoot, `payload-${uniqueSuffix()}${aliasedSuffix}`),
+        operation,
+      )
+      expect(result).toEqual({
+        allowed: false,
+        code: 'owned_temp_executable_extension_refused',
+      })
+    },
+  )
+
+  test('refuses overwrite of a Win32-aliased background-job log name', async () => {
+    // `openbuff-job-<id>.log ` fails BACKGROUND_JOB_FILE_PATTERN raw (the
+    // trailing space sits before the pattern's `$`), but Win32 creates the
+    // real `openbuff-job-<id>.log`, so the aliased basename must be
+    // normalized before the job-artifact refusal or a tool-side overwrite
+    // could clobber a live job log through its alias.
+    const result = await authority.authorizePath(
+      path.join(ownedTempDir, `openbuff-job-${uniqueSuffix()}.log `),
+      'overwrite',
+    )
+    expect(result).toEqual({
+      allowed: false,
+      code: 'owned_temp_job_artifact_read_only',
+    })
+  })
+
+  test('refuses create under a Win32-aliased tmux-captures segment', async () => {
+    // `tmux-captures-<id> ` fails TMUX_CAPTURE_DIR_PATTERN raw (trailing
+    // space before the `$`), but Win32 creates the real `tmux-captures-<id>`
+    // directory, so the segment check must also run on the normalized form or
+    // capture evidence could be forged under the alias. The aliased directory
+    // is deliberately NOT created: create authorization resolves
+    // not-yet-existing segments lexically, which is exactly the alias form
+    // being refused.
+    const result = await authority.authorizePath(
+      path.join(
+        ownedTempRoot,
+        `tmux-captures-${uniqueSuffix()} `,
+        'capture-0001.txt',
+      ),
+      'create',
+    )
+    expect(result).toEqual({
+      allowed: false,
+      code: 'owned_temp_capture_read_only',
+    })
+  })
+
+  test('still allows create of a plain non-executable owned-temp payload name', async () => {
+    // Positive control for the aliased refusals above: the Win32-normalized
+    // check must not widen the refusal to ordinary payload names.
+    const result = await authority.authorizePath(
+      path.join(ownedTempRoot, `payload-${uniqueSuffix()}.txt`),
+      'create',
+    )
+    expect(result).toMatchObject({ allowed: true })
+    if (!result.allowed) throw new Error(result.code)
+    expect(result.path.scope).toBe('owned-temp')
+  })
+
+  test('still allows delete of a Win32-aliased payload.sh name (cleanup carve-out)', async () => {
+    // The extension refusal stops STAGING a script; deleting one is cleanup
+    // and stays allowed even in aliased form — the delete carve-out is
+    // preserved unchanged by the normalization repair.
+    const result = await authority.authorizePath(
+      path.join(ownedTempRoot, `payload-${uniqueSuffix()}.sh `),
+      'delete',
+    )
+    expect(result).toMatchObject({ allowed: true })
+    if (!result.allowed) throw new Error(result.code)
+    expect(result.path.scope).toBe('owned-temp')
+  })
+
   test.each(['create', 'overwrite', 'delete', 'move'] as const)(
     'refuses %s on a live background-job log',
     async (operation) => {

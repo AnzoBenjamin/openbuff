@@ -93,6 +93,7 @@ import type {
   ProjectFileContext,
 } from '@codebuff/common/util/file'
 import type { ToolCallPart, ToolSet } from 'ai'
+import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
 
 export type CustomToolCall = {
   toolName: string
@@ -186,6 +187,92 @@ export function buildSpawnAgentsHandlerFailureOutput(
       }
     }),
   )
+}
+
+type SpawnGateFilterResult = {
+  agents: unknown
+  aborted: boolean
+  abortValue: Promise<void> | null
+}
+
+/**
+ * Deterministically blocks git-committer spawns until the validation/reviewer
+ * gate has passed. canSuggestFollowups is false precisely when the gate is
+ * not green (edits pending review). This mirrors the suggest_followups guard
+ * in executeToolCall and enforces the harness ordering: commit only after
+ * review is green. When canSuggestFollowups is undefined (gate system not
+ * active, e.g. non-base2 agents), this helper is NOT called by the caller.
+ *
+ * Only the git-committer entry is filtered; co-batched legitimate agents
+ * proceed normally. Extracted into a dedicated helper so the pre-gate
+ * refusal is unit-testable and re-used by any spawn_agents entry point.
+ */
+function filterSpawnAgentsGate(params: {
+  agents: unknown
+onResponseChunk: (chunk: string | PrintModeEvent) => void
+}): SpawnGateFilterResult {
+  const { agents: inputAgents, onResponseChunk } = params
+  if (!Array.isArray(inputAgents)) {
+    return { agents: inputAgents, aborted: false, abortValue: null }
+  }
+  const filteredAgents = inputAgents.filter(
+    (agent) =>
+      !(
+        agent &&
+        typeof agent === 'object' &&
+        typeof (agent as Record<string, unknown>).agent_type === 'string' &&
+        // Match on the resolved agent id so a git-committer alias cannot
+        // bypass the pre-gate block (consistent with spawn resolution).
+        normalizeSpawnAgentType(
+          String((agent as Record<string, unknown>).agent_type),
+        ) === 'git-committer'
+      ),
+  )
+  if (filteredAgents.length === inputAgents.length) {
+    return { agents: inputAgents, aborted: false, abortValue: null }
+  }
+  onResponseChunk({
+    type: 'error',
+    message:
+      'git-committer withheld: GATE: PENDING (need GATE: PASSED / phase=final_response_allowed). End your turn; do not retry or predict gate progress. Spawn git-committer once after GATE: PASSED.',
+    userMessage: GIT_COMMITTER_WITHHELD_USER_MESSAGE,
+    autoRecovering: true,
+  })
+  if (filteredAgents.length === 0) {
+    return {
+      agents: filteredAgents,
+      aborted: true,
+      abortValue: Promise.resolve(),
+    }
+  }
+  return { agents: filteredAgents, aborted: false, abortValue: null }
+}
+
+/**
+ * Wrapper that returns abortablePreviousToolCallFinished when the gate
+ * blocks all agents. The early-return value must match executeToolCall's
+ * Promise<void> return type, so callers can `return` it directly.
+ */
+function resolveSpawnGateAbort(
+  result: SpawnGateFilterResult,
+  abortablePreviousToolCallFinished: Promise<void>,
+): {
+  agents: unknown
+  shouldReturn: boolean
+  returnValue: Promise<void>
+} {
+  if (result.aborted) {
+    return {
+      agents: result.agents,
+      shouldReturn: true,
+      returnValue: abortablePreviousToolCallFinished,
+    }
+  }
+  return {
+    agents: result.agents,
+    shouldReturn: false,
+    returnValue: abortablePreviousToolCallFinished,
+  }
 }
 
 export function normalizeNativeToolOutput<T extends ToolName>(params: {
@@ -1721,6 +1808,38 @@ const EXTERNAL_READ_EXEMPT_TOOLS = new Set([
   'list_directory',
 ])
 
+// Tools whose SDK handler is the authoritative containment layer for the
+// owned-temp WRITE relaxation in executeToolCall (OS temp roots resolve as
+// `scope: 'owned-temp'`).
+//
+// INVARIANT: a tool belongs here ONLY if its SDK handler routes every
+// caller-supplied path through the write resolvers
+// (`resolveFilePathFor*Operation` in `sdk/src/tools/path-utils.ts`, or
+// `FilesystemAuthority.authorizePath`, which itself resolves through them).
+// Those resolvers remain authoritative: they apply strictly-inside temp-root
+// containment with a single realpath dereference, the fail-closed
+// mandatory-sensitive refusal (so `<tmp>/.env` and `<tmp>/credentials.json`
+// stay unwritable), `ownedTempMutationRefusal` (live background-job artifacts,
+// tmux capture evidence, executable-extension basenames) and the same
+// conditional-commit / expected-state revalidation project writes get. This
+// backstop is NOT that layer — it defers to the handler — so exempting a tool
+// whose handler does not contain would remove the only check that exists for
+// it.
+//
+// `write_audit_findings` is DELIBERATELY ABSENT: it derives a project-relative
+// `.agents/sessions/<slug>/findings/<shard>.md` path and never accepts an
+// absolute one, so it has no temp path to exempt.
+const OWNED_TEMP_WRITE_EXEMPT_TOOLS = new Set([
+  'apply_patch',
+  'apply_smart_patch',
+  'edit_3d_asset',
+  'edit_transaction',
+  'replace_range',
+  'rewrite_symbol',
+  'str_replace',
+  'write_file',
+])
+
 const MAX_CUSTOM_INPUT_SCAN_DEPTH = 6
 const MAX_CUSTOM_INPUT_SCAN_STRINGS = 1000
 
@@ -2046,35 +2165,40 @@ export async function executeToolCall<T extends ToolName>(
           // lexical scope for missing paths so create operations still work.
         }
       }
-      // READ-ONLY owned-temp and external-read exceptions. The SDK
-      // deliberately permits reads under the openbuff-owned OS temp namespace
-      // (see read-files.ts `authorizeReadTarget` and read-logs.ts): that is how
-      // a parent agent reads back tmux capture evidence and background-job
-      // logs. It equally permits reads strictly inside a root the user
-      // explicitly allowlisted (the openbuff config directory for logs/state,
-      // plus any `readableRoots` entry in openbuff.json). This backstop has no
-      // notion of either namespace, so without the exceptions it refuses reads
-      // the SDK is designed to allow.
+      // READ-ONLY owned-temp and external-read exceptions, plus the WRITE-side
+      // owned-temp exception. The SDK deliberately permits reads under the OS
+      // temp roots (see read-files.ts `authorizeReadTarget` and read-logs.ts):
+      // that is how a parent agent reads back tmux capture evidence and
+      // background-job logs, and since containment widened to the whole temp
+      // root it is also how an agent reads an ordinary `<tmp>/notes.txt`. It
+      // equally permits reads strictly inside a root the user explicitly
+      // allowlisted (the openbuff config directory for logs/state, plus any
+      // `readableRoots` entry in openbuff.json). This backstop has no notion of
+      // either namespace, so without the exceptions it refuses reads the SDK is
+      // designed to allow.
       //
-      // The SDK read handlers of the EXEMPT tools (see
-      // EXTERNAL_READ_EXEMPT_TOOLS) remain AUTHORITATIVE for both: they run
-      // the real containment resolution (symlink dereferencing,
-      // strictly-inside checks, and the fail-closed mandatory-sensitive
-      // refusal that keeps `credentials.json` unreadable inside an allowlisted
-      // config root). This layer only stops pre-dispatch refusal of paths
-      // those handlers will validate themselves, so a tool whose handler does
-      // NOT contain (e.g. code_search) is never exempted.
+      // The SDK handlers of the EXEMPT tools (see EXTERNAL_READ_EXEMPT_TOOLS
+      // and OWNED_TEMP_WRITE_EXEMPT_TOOLS) remain AUTHORITATIVE: they run the
+      // real containment resolution (symlink dereferencing, strictly-inside
+      // checks, and the fail-closed mandatory-sensitive refusal that keeps
+      // `credentials.json` unreadable and unwritable), and the write handlers
+      // additionally apply `ownedTempMutationRefusal` plus the usual
+      // conditional-commit revalidation. This layer only stops pre-dispatch
+      // refusal of paths those handlers will validate themselves, so a tool
+      // whose handler does NOT contain (e.g. code_search, glob,
+      // find_files_matching_content — they resolve an arbitrary caller `cwd`
+      // and spawn a search there) is never exempted, for reads or writes.
       //
-      // Access-scoped AND tool-scoped. Access: a WRITE to an owned-temp or
-      // allowlisted-external path keeps hard-blocking here. The
-      // (narrower) owned-temp mutation policy is owned by the SDK's
-      // filesystem-authority.ts `ownedTempMutationRefusal` — tmux captures are
-      // verification evidence a subagent must not be able to forge — and the
-      // external allowlist is READ-only by construction (there is no
-      // `external-write` scope), so this layer must not pre-authorize any
-      // mutation of either.
+      // Access-scoped AND tool-scoped:
+      //  - `isExternalReadPath` MUST NOT be consulted for writes. The external
+      //    allowlist is READ-only by construction (there is no
+      //    `external-write` scope), so a write into an allowlisted root stays
+      //    hard-blocked here.
+      //  - the owned-temp write exemption is tool-scoped for exactly the same
+      //    reason the read one is: membership in the Set is a claim about the
+      //    handler, not about the path.
       //
-      // Both predicates get the RAW caller path: each resolves its own input
+      // Every predicate gets the RAW caller path: each resolves its own input
       // and refuses any raw `..` segment itself, which is exactly the guard we
       // want. The project-relative `normalized` form would be a meaningless
       // `../..`-style string here.
@@ -2082,25 +2206,34 @@ export async function executeToolCall<T extends ToolName>(
         filesystemAccess.access === 'read' &&
         EXTERNAL_READ_EXEMPT_TOOLS.has(toolName) &&
         (isOwnedTempPath(rawPath) || isExternalReadPath(rawPath))
+      // Ordering is deliberate on this hot path: the cheap access/Set checks
+      // short-circuit before the filesystem-touching predicate, and
+      // `isOwnedTempPath` only runs for paths that already failed the
+      // in-project check.
+      const ownedTempWriteAllowed =
+        filesystemAccess.access === 'write' &&
+        OWNED_TEMP_WRITE_EXEMPT_TOOLS.has(toolName) &&
+        isOwnedTempPath(rawPath)
+      const containmentExempt = externalReadAllowed || ownedTempWriteAllowed
       // A path "escapes" the project when it traverses above the root or is
       // absolute (either lexically or after canonicalization). Escapes are the
       // real containment boundary: an agent must never read or write outside
-      // the project, so these are always hard-blocked regardless of access —
-      // except for the owned-temp / allowlisted-external reads above.
+      // the project, so these are always hard-blocked — except for the exempt
+      // owned-temp / allowlisted-external cases above.
       const escapesProject =
-        !externalReadAllowed &&
+        !containmentExempt &&
         (normalizedEscapesProject(normalized) ||
           normalizedEscapesProject(canonical))
       // An in-project path is a scope mismatch when it stays inside the project
       // but does not match the agent's declared filesystemScope patterns. Only
       // meaningful when the agent declared a scope for this access type. An
-      // owned-temp or allowlisted-external read is not in-project, so it is
-      // never pattern-matched against filesystemScope globs: it is neither
+      // exempt owned-temp or allowlisted-external path is not in-project, so it
+      // is never pattern-matched against filesystemScope globs: it is neither
       // hard-blocked above nor spuriously warned about below.
       const scopeMismatch =
         allowedPatterns !== undefined &&
         !escapesProject &&
-        !externalReadAllowed &&
+        !containmentExempt &&
         !allowedPatterns.some(
           (pattern) =>
             scopePatternMatches(normalized, pattern) &&
@@ -2221,47 +2354,26 @@ export async function executeToolCall<T extends ToolName>(
       false
   }
 
-  // TODO: Allow tools to provide a validation function, and move this logic into the spawn_agents validation function.
-  // Pre-validate spawn_agents to filter out non-existent agents before streaming
+  // Pre-validate spawn_agents to filter out non-existent agents before
+  // streaming. The git-committer gate filter is extracted into a dedicated
+  // helper so it can be unit-tested and re-used by any spawn_agents entry
+  // point.
   let effectiveInput = toolCall.input as Record<string, unknown>
 
-  // Deterministically block git-committer spawns until the validation/reviewer
-  // gate has passed. canSuggestFollowups is false precisely when the gate is
-  // not green (edits pending review). This mirrors the suggest_followups guard
-  // above and enforces the harness ordering: commit only after review is green.
-  // When canSuggestFollowups is undefined (gate system not active, e.g. non-base2
-  // agents), the check is skipped so custom agents are unaffected.
-  // Only the git-committer entry is filtered; co-batched legitimate agents
-  // proceed normally, consistent with the spawn_agents pre-validation pattern.
   if (toolName === 'spawn_agents' && canSuggestFollowups === false) {
-    const agents = effectiveInput.agents
-    if (Array.isArray(agents)) {
-      const filteredAgents = agents.filter(
-        (agent) =>
-          !(
-            agent &&
-            typeof agent === 'object' &&
-            typeof (agent as Record<string, unknown>).agent_type === 'string' &&
-            // Match on the resolved agent id so a git-committer alias cannot
-            // bypass the pre-gate block (consistent with spawn resolution).
-            normalizeSpawnAgentType(
-              String((agent as Record<string, unknown>).agent_type),
-            ) === 'git-committer'
-          ),
-      )
-      if (filteredAgents.length < agents.length) {
-        onResponseChunk({
-          type: 'error',
-          message:
-            'git-committer withheld: GATE: PENDING (need GATE: PASSED / phase=final_response_allowed). End your turn; do not retry or predict gate progress. Spawn git-committer once after GATE: PASSED.',
-          userMessage: GIT_COMMITTER_WITHHELD_USER_MESSAGE,
-          autoRecovering: true,
-        })
-        if (filteredAgents.length === 0) {
-          return abortablePreviousToolCallFinished
-        }
-        effectiveInput = { ...effectiveInput, agents: filteredAgents }
-      }
+    const gateResult = filterSpawnAgentsGate({
+      agents: effectiveInput.agents,
+      onResponseChunk,
+    })
+    const resolved = resolveSpawnGateAbort(
+      gateResult,
+      abortablePreviousToolCallFinished,
+    )
+    if (resolved.shouldReturn) {
+      return resolved.returnValue
+    }
+    if (resolved.agents !== effectiveInput.agents) {
+      effectiveInput = { ...effectiveInput, agents: resolved.agents }
     }
   }
 

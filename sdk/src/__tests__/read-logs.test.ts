@@ -1,8 +1,14 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
+import {
+  cleanupOutsideRoots,
+  makeOutsideRoot,
+  outsideRootsUsable,
+  removeScratchParentIfEmpty,
+} from '@codebuff/common/testing'
 import {
   configureExternalReadRoots,
   isOwnedTempPath,
@@ -23,6 +29,11 @@ import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 
 const tempDirs: string[] = []
 const tempFiles: string[] = []
+
+/** `describe`, skipped whole when outside-root fixtures cannot be produced. */
+const describeWithOutsideFixtures = outsideRootsUsable() ? describe : describe.skip
+
+afterAll(removeScratchParentIfEmpty)
 
 /** Trusted owner injected into readLogs by the run/session layer in tests. */
 const TRUSTED_OWNER = {
@@ -81,6 +92,7 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true })
   }
+  cleanupOutsideRoots()
   for (const file of tempFiles.splice(0)) {
     fs.rmSync(file, { force: true })
   }
@@ -122,6 +134,9 @@ describe('readLogs', () => {
     const result = value(
       await readLogs({
         cwd,
+        // A `..` segment survives into the raw input, and a traversal-free raw
+        // input is a hard requirement of the temp-root exception, so this stays
+        // refused even though the collapsed path lands under the temp root.
         path: path.relative(cwd, path.join(outside, 'secret.log')),
         owner: TRUSTED_OWNER,
       }),
@@ -131,8 +146,11 @@ describe('readLogs', () => {
   })
 
   test('rejects absolute paths outside cwd', async () => {
+    if (!outsideRootsUsable()) return
     const cwd = makeTempDir()
-    const outside = makeTempDir()
+    // An absolute escape target must sit outside the OS temp roots too, or
+    // the widened temp exception would legitimately admit this read.
+    const outside = makeOutsideRoot('read-logs-out-')
     const outsideFile = path.join(outside, 'secret.log')
     fs.writeFileSync(outsideFile, 'secret\n')
 
@@ -144,8 +162,11 @@ describe('readLogs', () => {
   })
 
   test('rejects symlinks that resolve outside cwd', async () => {
+    if (!outsideRootsUsable()) return
     const cwd = makeTempDir()
-    const outside = makeTempDir()
+    // The symlink target must sit outside the OS temp roots too, or the
+    // widened temp exception would legitimately admit this read.
+    const outside = makeOutsideRoot('read-logs-out-')
     const outsideFile = path.join(outside, 'secret.log')
     fs.writeFileSync(outsideFile, 'secret\n')
     fs.symlinkSync(outsideFile, path.join(cwd, 'link.log'))
@@ -181,17 +202,57 @@ describe('readLogs', () => {
     expect(result.content).toBe('two\nthree\n')
   })
 
-  test('rejects a non-owned temp path outside cwd', async () => {
+  test('reads a plain temp log outside cwd', async () => {
+    // Containment covers the WHOLE OS temp root, so a temp log whose name
+    // matches no openbuff namespace is reachable exactly like an owned one.
     const cwd = makeTempDir()
-    const notOwned = tempFilePath('not-owned')
-    fs.writeFileSync(notOwned, 'secret\n')
+    const plainLog = tempFilePath('not-owned')
+    fs.writeFileSync(plainLog, 'one\ntwo\nthree\n')
 
     const result = value(
-      await readLogs({ cwd, path: notOwned, owner: TRUSTED_OWNER }),
+      await readLogs({
+        cwd,
+        path: plainLog,
+        lines: 2,
+        max_chars: 1_000,
+        owner: TRUSTED_OWNER,
+      }),
+    )
+
+    expect(result.errorMessage).toBeUndefined()
+    // Compared against the realpath, matching the owned-temp test above: on
+    // macOS `os.tmpdir()` is a symlinked `/var/folders/...` path.
+    expect(result.resolvedPath).toBe(fs.realpathSync(plainLog))
+    expect(result.content).toBe('two\nthree\n')
+  })
+
+  test('still refuses a sensitive basename inside a temp directory', async () => {
+    // The widened scope must not expose a dropped-in credential file: the
+    // containment resolver applies the fail-closed mandatory-sensitive refusal,
+    // so the read fails with the same outside-project message as any
+    // unresolvable path.
+    const cwd = makeTempDir()
+    const tempDir = makeTempDir()
+    const sensitive = path.join(tempDir, '.env')
+    fs.writeFileSync(sensitive, 'API_KEY=secret\n')
+
+    const result = value(
+      await readLogs({ cwd, path: sensitive, owner: TRUSTED_OWNER }),
     )
 
     expect(result.errorMessage).toContain('outside the project directory')
     expect(result.content).toBeUndefined()
+
+    // A non-sensitive neighbour in the same temp directory still reads, so the
+    // refusal above is attributable to the sensitive policy rather than to temp
+    // paths being unreachable.
+    const neighbour = path.join(tempDir, 'app.log')
+    fs.writeFileSync(neighbour, 'one\ntwo\n')
+    const allowed = value(
+      await readLogs({ cwd, path: neighbour, owner: TRUSTED_OWNER }),
+    )
+    expect(allowed.errorMessage).toBeUndefined()
+    expect(allowed.content).toBe('one\ntwo\n')
   })
 
   test('reads a background job log by jobId', async () => {
@@ -458,7 +519,11 @@ describe('readLogs', () => {
   })
 })
 
-describe('readLogs — allowlisted external read roots', () => {
+// Every `externalRoot` in this describe must sit outside BOTH the project root
+// and the OS temp roots: a temp-rooted root would resolve as `owned-temp`
+// before the external-read branch is ever consulted, so neither the configured
+// allow nor the unconfigured refusal would prove anything about the registry.
+describeWithOutsideFixtures('readLogs — allowlisted external read roots', () => {
   beforeEach(() => {
     // The registry is configure-once per PROCESS, and `run.ts` legitimately
     // configures it (with the openbuff config dir) as soon as any suite in this
@@ -476,7 +541,7 @@ describe('readLogs — allowlisted external read roots', () => {
 
   test('reads a log inside an allowlisted external root', async () => {
     const cwd = makeTempDir()
-    const externalRoot = makeTempDir()
+    const externalRoot = makeOutsideRoot('read-logs-ext-')
     const externalLog = path.join(externalRoot, 'external.log')
     fs.writeFileSync(externalLog, 'one\ntwo\nthree\n')
 
@@ -501,7 +566,7 @@ describe('readLogs — allowlisted external read roots', () => {
 
   test('refuses the same log while the registry is unconfigured', async () => {
     const cwd = makeTempDir()
-    const externalRoot = makeTempDir()
+    const externalRoot = makeOutsideRoot('read-logs-ext-')
     const externalLog = path.join(externalRoot, 'external.log')
     fs.writeFileSync(externalLog, 'one\ntwo\nthree\n')
 
@@ -515,7 +580,7 @@ describe('readLogs — allowlisted external read roots', () => {
 
   test('a host fileFilter blocks a log inside an allowlisted external root', async () => {
     const cwd = makeTempDir()
-    const externalRoot = makeTempDir()
+    const externalRoot = makeOutsideRoot('read-logs-ext-')
     const externalLog = path.join(externalRoot, 'external.log')
     fs.writeFileSync(externalLog, 'one\ntwo\nthree\n')
 

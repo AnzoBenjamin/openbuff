@@ -1,8 +1,19 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from 'bun:test'
+import {
+  makeOutsideRoot,
+  outsideRootsUsable,
+  removeScratchParentIfEmpty,
+} from '@codebuff/common/testing'
 import {
   configureExternalReadRoots,
   resetExternalReadRootsForTesting,
@@ -20,6 +31,8 @@ import {
 } from '../tools/path-utils'
 
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+
+afterAll(removeScratchParentIfEmpty)
 
 describe('[SEC-H01] isSafeProjectRelativePath', () => {
   test('rejects traversal, drive, UNC, and NUL inputs; allows in-project absolute POSIX form', () => {
@@ -107,7 +120,7 @@ describe('resolveFilePathWithinProject — symlink containment', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'path-utils-'))
-    outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'outside-'))
+    outsideDir = makeOutsideRoot('outside-')
     // In-project symlink that escapes: tmpDir/evil -> outsideDir
     fs.symlinkSync(outsideDir, path.join(tmpDir, 'evil'))
     // Legit in-project symlink: tmpDir/link -> tmpDir/real
@@ -121,11 +134,13 @@ describe('resolveFilePathWithinProject — symlink containment', () => {
   })
 
   test('rejects a symlink that points outside the project', () => {
+    if (!outsideRootsUsable()) return
     expect(resolveFilePathWithinProject(tmpDir, 'evil')).toBeNull()
     expect(resolveFilePathWithinProject(tmpDir, 'evil/file.ts')).toBeNull()
   })
 
   test('rejects an outside symlink even when the target file does not exist', () => {
+    if (!outsideRootsUsable()) return
     expect(
       resolveFilePathWithinProject(tmpDir, 'evil/nonexistent.ts'),
     ).toBeNull()
@@ -192,6 +207,9 @@ test('filesystem operations resolve symlinks through the injected filesystem', a
 })
 
 describe('read-only operation resolvers', () => {
+  // The externalRoot fixture is anchored outside the OS temp roots (see
+  // `makeOutsideRoot`), so this describe skips whole when the checkout cannot
+  // provide such a fixture rather than asserting a scope that cannot hold.
   let projectDir: string
   let externalRoot: string
   let externalFile: string
@@ -204,7 +222,11 @@ describe('read-only operation resolvers', () => {
   beforeEach(() => {
     resetExternalReadRootsForTesting()
     projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-resolver-proj-'))
-    externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'read-resolver-ext-'))
+    // Outside both the project root and the OS temp roots: a temp-rooted
+    // externalRoot would resolve as `owned-temp` before the external-read
+    // branch is consulted, and the unconfigured refusal below would never
+    // fire.
+    externalRoot = makeOutsideRoot('read-resolver-ext-')
     externalFile = path.join(externalRoot, 'notes.txt')
     fs.writeFileSync(externalFile, 'notes\n')
     fs.writeFileSync(
@@ -266,6 +288,7 @@ describe('read-only operation resolvers', () => {
   })
 
   test('refuses the external file while the registry is unconfigured', () => {
+    if (!outsideRootsUsable()) return
     expect(resolveFilePathForReadOperation(projectDir, externalFile)).toBeNull()
   })
 })

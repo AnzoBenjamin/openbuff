@@ -1822,6 +1822,67 @@ function hasUnsafeTmuxGitCommand(command: string): boolean {
   )
 }
 
+/**
+ * Character ranges — start inclusive, end exclusive — covering the CONTENT of
+ * each single- or double-quoted region of `command`. A quote of the other kind
+ * inside an open region is literal text (`"` inside `'…'`, `'` inside `"…"`),
+ * so the scanner tracks which quote opened the region; outside single quotes a
+ * backslash escapes the next character, matching the other quote scanners in
+ * this module.
+ *
+ * Deliberately not a full shell lexer: an unterminated quote contributes NO
+ * range, so `ls '/` keeps counting as a real `/` operand. Anything the scanner
+ * cannot settle must fail toward not-quoted, because its only caller uses a
+ * quoted region to WAIVE a containment check.
+ */
+function quotedContentRanges(command: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = []
+  let quote: "'" | '"' | null = null
+  let contentStart = 0
+  let escaped = false
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (char === '\\' && quote !== "'") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (char === quote) {
+        ranges.push([contentStart, index])
+        quote = null
+      }
+      continue
+    }
+    if (char === "'" || char === '"') {
+      quote = char
+      contentStart = index + 1
+    }
+  }
+  return ranges
+}
+
+/** True when `index` lands inside one of the quoted content ranges. */
+function isInsideQuotedRegion(
+  ranges: Array<[number, number]>,
+  index: number,
+): boolean {
+  return ranges.some(([start, end]) => index >= start && index < end)
+}
+
+/**
+ * Filesystem-mutation executables whose quoted root-only operand is a real
+ * target, optionally elevated through sudo/doas. Anchored at the command
+ * start so a mutator named elsewhere (a file argument, a path segment)
+ * cannot turn a quoted delimiter in an unrelated command into a refusal:
+ * `awk -F'/' … cp.log` stays allowed while `rm -rf '/'` does not.
+ */
+const MUTATION_EXECUTABLE_COMMAND_PATTERN =
+  /^\s*(?:(?:sudo|doas)\s+)?(?:rm|mv|cp|chmod|chown|chgrp|dd|shred|truncate|ln|install)\b/i
+
 function findOutsideAbsolutePath(
   command: string,
   projectRoot: string,
@@ -1839,13 +1900,51 @@ function findOutsideAbsolutePath(
     )
   })
   if (outsideShellToken) return outsideShellToken
-  const tokens = [
-    ...command.matchAll(
-      /(?:^|[\s"'=(])((?:[A-Za-z]:\\|\/(?!\/))[^\s"'|;&)]*)/g,
-    ),
-  ].map((match) => match[1])
-  for (const rawToken of tokens) {
-    const token = rawToken.replace(/[),.:]+$/, '')
+  // One linear quote scan per command (never per token) feeds the root-only
+  // check below.
+  const quotedRanges = quotedContentRanges(command)
+  for (const match of command.matchAll(
+    /(?:^|[\s"'=(])((?:[A-Za-z]:\\|\/(?!\/))[^\s"'|;&)]*)/g,
+  )) {
+    const token = match[1].replace(/[),.:]+$/, '')
+    // The pattern consumes at most one leading delimiter character before the
+    // capture (start-of-string consumes none), so the token begins at the tail
+    // of the whole match. matchAll always reports an index; NaN would keep the
+    // token out of every range, i.e. treated as an unquoted operand.
+    const tokenIndex =
+      (match.index ?? Number.NaN) + (match[0].length - match[1].length)
+    // A bare `/` inside quotes is a sed/awk expression delimiter, not a path
+    // operand: `sed 's/^/RESULT commit: /'` ends in `: /`, so the scan captures
+    // a space-preceded `/` that resolves to the filesystem root. Only that
+    // exact shape is ignored. Skipping quoted words wholesale would admit an
+    // absolute path hidden in a quoted string (`cat '/etc/passwd'`,
+    // `bash -c 'cat /etc/passwd'`), and an UNQUOTED bare `/` operand (`ls /`,
+    // `du -sh /`) must stay refused too. path.parse keeps the comparison
+    // platform-correct (`/` on POSIX, `C:\` on win32). A deliberately quoted
+    // bare root (`ls '/'`) is waived by the same shape for non-mutating
+    // commands: that is the accepted cost of ignoring only the root-only
+    // token.
+    if (
+      token === path.parse(token).root &&
+      isInsideQuotedRegion(quotedRanges, tokenIndex)
+    ) {
+      // The quoted-root skip exists for `sed 's/^/X /'`-style expression
+      // delimiters. A quoted root as an OPERAND of a filesystem-mutating
+      // command is the dangerous shape the skip would otherwise admit:
+      // `rm -rf '/'` was refused before the skip (the outside-path check
+      // caught the bare root), and the WORKSPACE_DENY_PATTERNS root-deletion
+      // regex misses it because the quote breaks its `\s+\/` anchor. Return
+      // the root token so the caller emits the standard outside-project
+      // denial. Safe at every profile that uses this helper: read-only
+      // profiles already refuse these executables via their mutation checks,
+      // so this can only turn a would-be allow into a deny, and a quoted
+      // word that is not ENTIRELY the root token (sed's `s/^/R: /` body)
+      // never reaches this branch.
+      if (MUTATION_EXECUTABLE_COMMAND_PATTERN.test(command)) {
+        return token
+      }
+      continue
+    }
     if (token.startsWith('/dev/null')) continue
     if (token.startsWith('/bin/') || token.startsWith('/usr/bin/')) continue
     const resolved = path.resolve(token)

@@ -285,7 +285,8 @@ export const handleSpawnAgentInline = (async (
       parentSystemPrompt: system,
       parentTools,
       onResponseChunk: (chunk: string | PrintModeEvent) => {
-        // Inherits parent's onResponseChunk, except for context-pruner (TODO: add an option for it to be silent?)
+        // Inherits parent's onResponseChunk, except for context-pruner (keeps
+        // progress tick only — see the `else` branch below).
         if (!isContextPruner) {
           if (typeof chunk === 'string') {
             writeToClient(chunk)

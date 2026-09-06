@@ -1,3 +1,7 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
 import { isReadFilesResultV1 } from '@codebuff/common/tools/results/filesystem'
 import { jsonToolResult } from '@codebuff/common/util/messages'
 
@@ -24,9 +28,52 @@ import type {
 import type { AgentState } from '@codebuff/common/types/session-state'
 import type { ProjectFileContext } from '@codebuff/common/util/file'
 
-// Turn this on to collect full file context, using Claude-4-Opus to pick which files to send up
-// TODO: We might want to be able to turn this on on a per-repo basis.
-const COLLECT_FULL_FILE_CONTEXT = false
+// Whether to collect full file context (using Claude-4-Opus to pick which
+// files to send up). Defaults off; enable per-repo by setting the
+// OPENBUFF_COLLECT_FULL_FILE_CONTEXT env var to "1"/"true"/"yes"/"on"
+// (case-insensitive), or by adding
+// `"collectFullFileContext": true` to the project's openbuff.json under
+// `experimental`.
+const OPENBUFF_CONFIG_FILE_NAME = 'openbuff.json'
+// Maximum number of ancestor directories to scan for openbuff.json. Mirrors
+// the SDK's provider-config bound: a monorepo workspace root is typically
+// 3-5 levels above a subpackage, so 10 comfortably covers legitimate cases
+// while guaranteeing the walk terminates before reaching the filesystem root.
+const MAX_ANCESTOR_SCAN_DEPTH = 10
+function isFullFileContextEnabled(): boolean {
+  const envValue = process.env.OPENBUFF_COLLECT_FULL_FILE_CONTEXT
+  if (envValue !== undefined) {
+    return /^(1|true|yes|on)$/i.test(envValue.trim())
+  }
+  // Env var unset: check openbuff.json in the project root or ancestor
+  // directories for experimental.collectFullFileContext. Bounded walk that
+  // stops at the home directory boundary (security: never walk above the
+  // user's home, matching the SDK's provider-config behavior).
+  let currentDir = path.resolve(process.cwd())
+  const home = os.homedir()
+  for (let depth = 0; depth < MAX_ANCESTOR_SCAN_DEPTH; depth++) {
+    const configPath = path.join(currentDir, OPENBUFF_CONFIG_FILE_NAME)
+    if (fs.existsSync(configPath)) {
+      try {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+        if (config?.experimental?.collectFullFileContext === true) {
+          return true
+        }
+      } catch {
+        // Malformed config at this level — skip and keep walking.
+      }
+    }
+    if (currentDir === home) {
+      return false
+    }
+    const parentDir = path.dirname(currentDir)
+    if (parentDir === currentDir) {
+      return false
+    }
+    currentDir = parentDir
+  }
+  return false
+}
 
 export const handleFindFiles = (async (
   params: {
@@ -47,7 +94,7 @@ export const handleFindFiles = (async (
     'messages' | 'system' | 'assistantPrompt'
   > &
     ParamsExcluding<
-      typeof uploadExpandedFileContextForTraining,
+      typeof prepareExpandedFileContextForTraining,
       'messages' | 'system' | 'assistantPrompt'
     > &
     ParamsExcluding<typeof getFileReadingUpdates, 'requestedFiles'>,
@@ -103,8 +150,8 @@ export const handleFindFiles = (async (
         : [],
     )
 
-    if (COLLECT_FULL_FILE_CONTEXT && addedFiles.length > 0) {
-      uploadExpandedFileContextForTraining({
+    if (isFullFileContextEnabled() && addedFiles.length > 0) {
+      prepareExpandedFileContextForTraining({
         ...params,
         messages: agentState.messageHistory,
         system,
@@ -112,7 +159,7 @@ export const handleFindFiles = (async (
       }).catch((error) => {
         logger.error(
           { error },
-          'Error uploading expanded file context for training',
+          'Error preparing expanded file context for training',
         )
       })
     }
@@ -138,7 +185,7 @@ export const handleFindFiles = (async (
   }
 }) satisfies CodebuffToolHandlerFunction<'find_files'>
 
-async function uploadExpandedFileContextForTraining(
+async function prepareExpandedFileContextForTraining(
   params: {
     requestFiles: RequestFilesFn
   } & ParamsOf<typeof requestRelevantFilesForTraining>,
@@ -148,7 +195,7 @@ async function uploadExpandedFileContextForTraining(
 
   const loadedFiles = await requestFiles({ filePaths: files })
 
-  // Upload a map of:
+  // Prepare a map of:
   // {file_path: {content, token_count}}
   // up to 50k tokens
   const filesToUpload: Record<string, { content: string; tokens: number }> = {}
@@ -177,4 +224,9 @@ async function uploadExpandedFileContextForTraining(
     }
     filesToUpload[file] = { content, tokens }
   }
+
+  // TODO: Upload mechanism not yet implemented. filesToUpload is prepared
+  // (file_path -> {content, tokens}, capped at 50k tokens per file) but the
+  // upload endpoint/API/storage target is unknown. Re-enable this upload
+  // once the upload mechanism is defined.
 }

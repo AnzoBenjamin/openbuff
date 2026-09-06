@@ -274,6 +274,156 @@ describe('terminal command permission policy', () => {
     }
   })
 
+  it('ignores a quoted bare slash but keeps real absolute operands denied', () => {
+    for (const command of [
+      // A `/` inside a quoted sed/awk expression is an expression delimiter,
+      // not a path operand: `s/^/RESULT commit: /` ends in `: /`, so the token
+      // scan captures a space-preceded `/` that resolves to the root.
+      "git log --oneline -3 HEAD | sed 's/^/RESULT commit: /'",
+      "git status --porcelain | sed 's/^/CLI /'",
+      'git status --porcelain | sed "s/^/X /"',
+      'git status --porcelain | sed "s|^|X |"',
+      "awk -F'/' '{print $2}' notes.txt",
+      // A quote of the other kind inside an open region is literal text: the
+      // `"hi"` must not close the single-quoted region early, which would push
+      // the trailing `/` outside every range and re-deny the command.
+      'sed \'s/^/say "hi": /\' notes.txt',
+      // Mirror case: a `'` inside a double-quoted region is literal too, so the
+      // closing `"` still ends the region at the right offset.
+      'sed "s/^/it\'s /" notes.txt',
+      // The resolved /tmp exemption is untouched by the quoted-slash skip.
+      "stat -c '%a %U' /tmp",
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'workspace-write',
+          projectRoot,
+        }),
+      ).toEqual({ allowed: true })
+    }
+    // The same helper backs the read-only family, so the pipeline that first
+    // hit this false positive is allowed there too.
+    expect(
+      evaluateTerminalCommandPolicy({
+        command: "git log --oneline -3 HEAD | sed 's/^/RESULT commit: /'",
+        mode: 'assistant',
+        permissionProfile: 'read-only',
+        projectRoot,
+      }),
+    ).toEqual({ allowed: true })
+    for (const [command, token] of [
+      // An UNQUOTED bare `/` is still an absolute operand outside the project.
+      ['ls /', '/'],
+      ['du -sh /', '/'],
+      // An unterminated quote reports no region, so the operand stays checked.
+      ["ls '/", '/'],
+      // The quoted expression ends where it should: a bare `/` operand AFTER a
+      // quoted region is still outside the project.
+      ["sed 's/x/y/' /", '/'],
+      // A quoted token whose content IS an absolute path stays refused; that is
+      // why the skip is narrowed to the root-only token.
+      ["cat '/etc/passwd'", '/etc/passwd'],
+      ['cat "/etc/passwd"', '/etc/passwd'],
+      // An absolute path embedded in a quoted multi-word string, reached
+      // through this helper rather than the shell-indirection guard.
+      ["xargs -I{} echo '/etc/passwd here'", '/etc/passwd'],
+      ['rg --file=/etc/passwd TODO src', '/etc/passwd'],
+    ] as const) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'workspace-write',
+          projectRoot,
+        }),
+      ).toEqual({
+        allowed: false,
+        reason: `absolute path is outside the project: ${token}`,
+      })
+    }
+    for (const command of [
+      // Refused earlier by the shell-indirection guard; the absolute path
+      // embedded in the quoted script must never become allowed either.
+      "bash -c 'cat /etc/passwd'",
+      'cat /etc/passwd',
+      'cat ~/secrets',
+      'cat $HOME/secrets',
+      'cat ${HOME}/x',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'workspace-write',
+          projectRoot,
+        }).allowed,
+      ).toBe(false)
+    }
+    // dependency-mutation shares the same helper, so an unquoted bare `/`
+    // operand stays refused at that call site too.
+    expect(
+      evaluateTerminalCommandPolicy({
+        command: 'npm install --prefix /',
+        mode: 'assistant',
+        permissionProfile: 'dependency-mutation',
+        projectRoot,
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: 'absolute path is outside the project: /',
+    })
+  })
+
+  it('refuses a quoted root-only operand of a filesystem-mutation command', () => {
+    // The quoted-region skip waives a root-only token (`/`) inside quotes,
+    // and the root-deletion deny pattern misses `rm -rf '/'` because the
+    // quote breaks its `\s+\/` anchor — so a mutating command carrying a
+    // quoted root OPERAND must be re-refused with the standard
+    // outside-project denial.
+    for (const command of ["rm -rf '/'", "cp x '/'"]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'workspace-write',
+          projectRoot,
+        }),
+      ).toEqual({
+        allowed: false,
+        reason: 'absolute path is outside the project: /',
+      })
+    }
+    // workspace-write refuses `sudo ...` earlier via its privilege-escalation
+    // deny pattern, so the elevated shape is pinned through tmux-test — the
+    // one profile that reaches the outside-path helper without the deny
+    // patterns and without refusing `rm` outright.
+    expect(
+      evaluateTerminalCommandPolicy({
+        command: "sudo rm -rf '/'",
+        mode: 'assistant',
+        permissionProfile: 'tmux-test',
+        projectRoot,
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: 'absolute path is outside the project: /',
+    })
+    // A quoted root-only token with NO mutation executable stays allowed:
+    // the sed delimiter shape and an echo payload are inert data.
+    for (const command of ["git log | sed 's/^/R: /'", 'echo "path:/']) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'workspace-write',
+          projectRoot,
+        }),
+      ).toEqual({ allowed: true })
+    }
+  })
+
   it('denies process environment dumps under tmux-test without re-enabling workspace deny patterns', () => {
     for (const command of [
       'printenv',

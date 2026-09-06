@@ -9,7 +9,19 @@
       "bun": "./src/*.ts",
       "import": "./src/*.ts",
       "types": "./src/*.ts",
-      "default": "./src/*.ts"
+      "default": "./src*.ts"
+    },
+    "./testing": {
+      "bun": "./src/testing/index.ts",
+      "import": "./src/testing/index.ts",
+      "types": "./src/testing/index.ts",
+      "default": "./src/testing/index.ts"
+    },
+    "./testing/*": {
+      "bun": "./src/testing/*.ts",
+      "import": "./src/testing/*.ts",
+      "types": "./src/testing/*.ts",
+      "default": "./src/testing/*.ts"
     }
   },
   "scripts": {

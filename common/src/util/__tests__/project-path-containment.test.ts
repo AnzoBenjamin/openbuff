@@ -11,6 +11,12 @@ import {
 } from 'bun:test'
 
 import {
+  makeOutsideRoot,
+  outsideRootsUsable,
+  removeScratchParentIfEmpty,
+} from '@codebuff/common/testing'
+
+import {
   configureExternalReadRoots,
   ensureExternalReadRootsConfigured,
   getExternalReadRoots,
@@ -23,6 +29,15 @@ import {
   resolveProjectPathForFileSystemRead,
   resolveProjectPathForRead,
 } from '../project-path-containment'
+
+/**
+ * `describe`, skipped whole when outside-root fixtures cannot be produced. The
+ * runtime describe exposes `.skip` but the local bun:test typings do not model
+ * it, so the narrow cast is deliberate.
+ */
+const describeWithOutsideFixtures: typeof describe = outsideRootsUsable()
+  ? describe
+  : (describe as unknown as { skip: typeof describe }).skip
 
 describe('isPathInsideProject', () => {
   test('accepts project-relative paths', () => {
@@ -119,7 +134,7 @@ describe('isPathInsideProject — symlink containment', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'path-contain-'))
-    outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'outside-'))
+    outsideDir = makeOutsideRoot('outside-')
     // In-project symlink that escapes: tmpDir/evil -> outsideDir
     fs.symlinkSync(outsideDir, path.join(tmpDir, 'evil'))
     // Legit in-project symlink: tmpDir/link -> tmpDir/real
@@ -132,16 +147,21 @@ describe('isPathInsideProject — symlink containment', () => {
     fs.rmSync(outsideDir, { recursive: true, force: true })
   })
 
+  afterAll(removeScratchParentIfEmpty)
+
   test('rejects a symlink that points outside the project', () => {
+    if (!outsideRootsUsable()) return
     expect(isPathInsideProject(tmpDir, 'evil')).toBe(false)
     expect(isPathInsideProject(tmpDir, 'evil/file.ts')).toBe(false)
   })
 
   test('rejects an outside symlink even when the target does not exist', () => {
+    if (!outsideRootsUsable()) return
     expect(isPathInsideProject(tmpDir, 'evil/nonexistent.ts')).toBe(false)
   })
 
   test('rejects a missing descendant below a symlink whose nearest existing ancestor is outside', () => {
+    if (!outsideRootsUsable()) return
     const missingDescendant = path.join('evil', 'missing', 'deep', 'file.ts')
     expect(resolveProjectPath(tmpDir, missingDescendant)).toBeNull()
     expect(isPathInsideProject(tmpDir, missingDescendant)).toBe(false)
@@ -152,12 +172,16 @@ describe('isPathInsideProject — symlink containment', () => {
   })
 })
 
-describe('openbuff-owned OS temp namespace exception', () => {
+describe('OS temp root containment exception', () => {
+  // The exception covers the WHOLE temp root: any path strictly inside it
+  // resolves with `scope: 'owned-temp'` whatever its segment names. The name
+  // patterns in `OWNED_TEMP_SEGMENT_PATTERNS` are documentation only.
+  //
   // `os.tmpdir()` is used for the primary cases: on macOS it is a symlinked
   // `/var/folders/...` path, so hardcoding `/tmp` would compare the wrong
-  // strings. Literal `/tmp` assertions are guarded on it being an owned root.
+  // strings. Literal `/tmp` assertions are guarded on it being a temp root.
   const tempRoot = getOwnedTempRoots()[0]
-  // Literal `/tmp` assertions only run where `/tmp` really is an owned root
+  // Literal `/tmp` assertions only run where `/tmp` really is a temp root
   // (POSIX); `getOwnedTempRoots()[0]` covers every platform.
   const literalTmpIsOwnedRoot = isOwnedTempPath('/tmp/openbuff-probe.log')
   const uniqueSuffix = () =>
@@ -189,8 +213,92 @@ describe('openbuff-owned OS temp namespace exception', () => {
 
   afterEach(cleanupCreated)
   afterAll(cleanupCreated)
+  afterAll(removeScratchParentIfEmpty)
 
-  describe('accepts openbuff-owned temp paths', () => {
+  describe('accepts any path strictly inside an OS temp root', () => {
+    /** Asserts the widened contract through the predicate AND the resolver. */
+    const expectTempScoped = (target: string) => {
+      expect(isOwnedTempPath(target)).toBe(true)
+      const result = resolveProjectPath('/some/project', target)
+      expect(result).not.toBeNull()
+      expect(result!.scope).toBe('owned-temp')
+      // Outside the project, so `relativePath` is the absolute resolved path.
+      expect(result!.relativePath).toBe(path.resolve(target))
+      expect(path.isAbsolute(result!.relativePath)).toBe(true)
+    }
+
+    test('accepts a plain temp file whose name matches no openbuff pattern', () => {
+      expectTempScoped(path.join(tempRoot, 'notes.txt'))
+
+      if (literalTmpIsOwnedRoot) {
+        expect(isOwnedTempPath('/tmp/notes.txt')).toBe(true)
+      }
+    })
+
+    test('accepts an unrelated tool\u2019s temp subtree', () => {
+      expectTempScoped(path.join(tempRoot, 'other-tool-cache', 'x.log'))
+
+      if (literalTmpIsOwnedRoot) {
+        expect(isOwnedTempPath('/tmp/other-tool-cache/x.log')).toBe(true)
+      }
+    })
+
+    test('accepts a nested path whose first segment matches no openbuff pattern', () => {
+      expectTempScoped(path.join(tempRoot, 'nested', 'deep', 'file.json'))
+      expectTempScoped(path.join(tempRoot, 'nested', 'openbuff-foo.log'))
+
+      if (literalTmpIsOwnedRoot) {
+        expect(isOwnedTempPath('/tmp/nested/deep/file.json')).toBe(true)
+        expect(isOwnedTempPath('/tmp/nested/openbuff-foo.log')).toBe(true)
+      }
+    })
+
+    test('accepts a name that merely resembles an openbuff namespace', () => {
+      // Previously refused because `notopenbuff-foo.log` failed the anchored
+      // first-segment pattern; names are no longer part of the decision.
+      expectTempScoped(path.join(tempRoot, 'notopenbuff-foo.log'))
+
+      if (literalTmpIsOwnedRoot) {
+        expect(isOwnedTempPath('/tmp/notopenbuff-foo.log')).toBe(true)
+      }
+    })
+
+    test('accepts openbuff-prefixed names with any extension', () => {
+      // Containment no longer restricts the extension. The defense against
+      // WRITING an executable-extension basename lives in
+      // `ownedTempMutationRefusal` / `OWNED_TEMP_REFUSED_EXTENSIONS` in
+      // `sdk/src/tools/filesystem-authority.ts`, not here.
+      expectTempScoped(path.join(tempRoot, 'openbuff-evil.sh'))
+      expectTempScoped(path.join(tempRoot, 'openbuff-x.log.sh'))
+      expectTempScoped(path.join(tempRoot, 'openbuff-x.txt'))
+      expect(
+        isOwnedTempPath(path.join(tempRoot, 'openbuff-evil.sh', 'payload')),
+      ).toBe(true)
+      expect(
+        isPathInsideProject(
+          '/some/project',
+          path.join(tempRoot, 'openbuff-evil.sh'),
+        ),
+      ).toBe(true)
+
+      if (literalTmpIsOwnedRoot) {
+        expect(isOwnedTempPath('/tmp/openbuff-evil.sh')).toBe(true)
+        expect(isOwnedTempPath('/tmp/openbuff-x.log.sh')).toBe(true)
+        expect(isOwnedTempPath('/tmp/openbuff-x.txt')).toBe(true)
+      }
+    })
+
+    test('accepts the tmux helper script name', () => {
+      // Formerly excluded by containment. The executable-basename defense now
+      // lives ENTIRELY in the SDK filesystem authority, which refuses
+      // create/overwrite/move for `.sh` under a temp root.
+      expectTempScoped(path.join(tempRoot, 'tmux-helper-abc.sh'))
+
+      if (literalTmpIsOwnedRoot) {
+        expect(isOwnedTempPath('/tmp/tmux-helper-abc.sh')).toBe(true)
+      }
+    })
+
     test('accepts background-job log and metadata names', () => {
       expect(isOwnedTempPath(path.join(tempRoot, 'openbuff-job-abc.log'))).toBe(
         true,
@@ -232,20 +340,6 @@ describe('openbuff-owned OS temp namespace exception', () => {
         expect(
           isOwnedTempPath('/tmp/tmux-captures-mysession/capture-001-boot.txt'),
         ).toBe(true)
-      }
-    })
-
-    test('rejects a tmux helper script name', () => {
-      // The executable tmux helper script is deliberately NOT an owned temp
-      // namespace: it is chmod +x'd and then EXECUTED by
-      // run_terminal_command, so granting write access there would turn a
-      // file write into arbitrary command execution.
-      expect(isOwnedTempPath(path.join(tempRoot, 'tmux-helper-abc.sh'))).toBe(
-        false,
-      )
-
-      if (literalTmpIsOwnedRoot) {
-        expect(isOwnedTempPath('/tmp/tmux-helper-abc.sh')).toBe(false)
       }
     })
 
@@ -330,7 +424,7 @@ describe('openbuff-owned OS temp namespace exception', () => {
     })
   })
 
-  describe('rejects paths outside the owned namespaces', () => {
+  describe('refusals containment still enforces', () => {
     test('rejects the temp root itself (strictly-inside rule)', () => {
       expect(isOwnedTempPath(os.tmpdir())).toBe(false)
       expect(isOwnedTempPath(tempRoot)).toBe(false)
@@ -342,68 +436,96 @@ describe('openbuff-owned OS temp namespace exception', () => {
       }
     })
 
-    test('rejects a first segment that matches no owned pattern', () => {
-      const foreign = path.join(tempRoot, 'other-tool-cache', 'x.log')
-      expect(isOwnedTempPath(foreign)).toBe(false)
-      expect(resolveProjectPath('/some/project', foreign)).toBeNull()
+    test('refuses mandatory-sensitive basenames inside a temp root', () => {
+      // Widening to the whole temp root would otherwise expose a dropped-in
+      // credential file to every temp consumer, for reads AND writes, with no
+      // name pattern incidentally blocking it. The refusal lives in the
+      // resolver, so the predicate and the resolver must agree.
+      const sensitive = [
+        path.join(tempRoot, '.env'),
+        path.join(tempRoot, 'credentials.json'),
+        path.join(tempRoot, 'x', 'id_rsa'),
+      ]
+      for (const target of sensitive) {
+        expect(isOwnedTempPath(target)).toBe(false)
+        expect(resolveProjectPath('/some/project', target)).toBeNull()
+      }
+
+      // A non-sensitive neighbour under the same root stays reachable, so the
+      // refusals above are attributable to the sensitive policy.
+      expect(isOwnedTempPath(path.join(tempRoot, 'env-notes.txt'))).toBe(true)
 
       if (literalTmpIsOwnedRoot) {
-        expect(isOwnedTempPath('/tmp/other-tool-cache/x.log')).toBe(false)
+        expect(isOwnedTempPath('/tmp/.env')).toBe(false)
+        expect(isOwnedTempPath('/tmp/credentials.json')).toBe(false)
       }
     })
 
-    test('requires the owned prefix at the start of the segment', () => {
-      const substringMatch = path.join(tempRoot, 'notopenbuff-foo.log')
-      expect(isOwnedTempPath(substringMatch)).toBe(false)
-      expect(resolveProjectPath('/some/project', substringMatch)).toBeNull()
-
-      if (literalTmpIsOwnedRoot) {
-        expect(isOwnedTempPath('/tmp/notopenbuff-foo.log')).toBe(false)
+    test('refuses a Win32-aliased sensitive basename (trailing dot/space)', () => {
+      // Win32 strips trailing dots/spaces from path segments, so `<tmp>\.env `
+      // resolves to the real `.env` on Windows while its basename fails the
+      // exact sensitive match above. The alias guard in the resolver refuses
+      // when the NORMALIZED basename would be sensitive. Paths are built by
+      // concatenation (not `path.join`) so the raw alias survives into the
+      // input on every platform.
+      const aliased = [`${tempRoot}/.env `, `${tempRoot}/.env.`]
+      for (const target of aliased) {
+        expect(isOwnedTempPath(target)).toBe(false)
+        expect(resolveProjectPath('/some/project', target)).toBeNull()
       }
-    })
 
-    test('requires the owned prefix on the first segment under the root', () => {
-      const nested = path.join(tempRoot, 'nested', 'openbuff-foo.log')
-      expect(isOwnedTempPath(nested)).toBe(false)
-      expect(resolveProjectPath('/some/project', nested)).toBeNull()
-
-      if (literalTmpIsOwnedRoot) {
-        expect(isOwnedTempPath('/tmp/nested/openbuff-foo.log')).toBe(false)
-      }
-    })
-
-    test('rejects an openbuff-prefixed file with a non-log/json extension', () => {
-      // The tightened patterns are anchored full-segment shapes: the
-      // file pattern only admits `.log`/`.json`, and the mkdtemp DIRECTORY
-      // pattern excludes dots, so it must not rescue a dotted name. This is
-      // asserted on the predicate/resolver, never on filesystem state.
-      const evil = path.join(tempRoot, 'openbuff-evil.sh')
-      expect(isOwnedTempPath(evil)).toBe(false)
-      expect(resolveProjectPath('/some/project', evil)).toBeNull()
-      expect(isPathInsideProject('/some/project', evil)).toBe(false)
-
-      // Also rejected for a nested path beneath the same segment.
+      // A non-sensitive neighbour whose basename merely ENDS in a dot stays
+      // reachable: the guard only refuses when normalization lands on a
+      // sensitive name, so the refusals above are attributable to the
+      // sensitive policy rather than to trailing-dot names in general.
+      expect(isOwnedTempPath(`${tempRoot}/notes.txt.`)).toBe(true)
       expect(
-        isOwnedTempPath(path.join(tempRoot, 'openbuff-evil.sh', 'payload')),
-      ).toBe(false)
-
-      if (literalTmpIsOwnedRoot) {
-        expect(isOwnedTempPath('/tmp/openbuff-evil.sh')).toBe(false)
-      }
+        resolveProjectPath('/some/project', `${tempRoot}/notes.txt.`),
+      ).not.toBeNull()
     })
 
-    test('rejects other non-log/json extensions on an owned-looking name', () => {
-      const doubleExtension = path.join(tempRoot, 'openbuff-x.log.sh')
-      const textExtension = path.join(tempRoot, 'openbuff-x.txt')
+    test('refuses a Win32-aliased INTERMEDIATE directory (trailing dot/space in a parent segment)', async () => {
+      // Win32 strips trailing dots/spaces from EVERY segment, not only the
+      // basename: `<tmp>/.aws /config` opens the real `.aws/config` on
+      // Windows while neither the exact sensitive match (parent is `.aws `)
+      // nor a basename-only alias guard (`config` normalizes to itself)
+      // fires. Paths are built by concatenation so the raw alias survives
+      // into the input on every platform.
+      const aliased = [
+        `${tempRoot}/.aws /config`,
+        `${tempRoot}/.kube ./config`,
+      ]
+      for (const target of aliased) {
+        expect(isOwnedTempPath(target)).toBe(false)
+        expect(resolveProjectPath('/some/project', target)).toBeNull()
+      }
 
-      expect(isOwnedTempPath(doubleExtension)).toBe(false)
-      expect(isOwnedTempPath(textExtension)).toBe(false)
-      expect(resolveProjectPath('/some/project', doubleExtension)).toBeNull()
-      expect(resolveProjectPath('/some/project', textExtension)).toBeNull()
+      // The async injected-filesystem resolver must refuse the same shape so
+      // the sync and async twins never disagree about an aliased parent.
+      expect(
+        await resolveProjectPathForFileSystemRead(
+          '/some/project',
+          `${tempRoot}/.aws /config`,
+          fs.promises,
+        ),
+      ).toBeNull()
+
+      // A non-sensitive neighbour under a trailing-dot directory stays
+      // reachable, so the refusals above are attributable to the sensitive
+      // policy rather than to trailing-dot segments in general.
+      expect(isOwnedTempPath(`${tempRoot}/notes./file.txt`)).toBe(true)
+    })
+
+    test('refuses a path-aware credential carrier inside a temp root', () => {
+      // `config` is far too generic to block on its basename alone; it is the
+      // PARENT directory that makes `<tmp>/.aws/config` a credential store, so
+      // the resolver must pass full paths to the sensitive check.
+      const awsConfig = path.join(tempRoot, '.aws', 'config')
+      expect(isOwnedTempPath(awsConfig)).toBe(false)
+      expect(resolveProjectPath('/some/project', awsConfig)).toBeNull()
 
       if (literalTmpIsOwnedRoot) {
-        expect(isOwnedTempPath('/tmp/openbuff-x.log.sh')).toBe(false)
-        expect(isOwnedTempPath('/tmp/openbuff-x.txt')).toBe(false)
+        expect(isOwnedTempPath('/tmp/.aws/config')).toBe(false)
       }
     })
 
@@ -460,6 +582,29 @@ describe('openbuff-owned OS temp namespace exception', () => {
         expect(resolveProjectPath('/some/project', link)).toBeNull()
       }
     })
+
+    test('rejects a NON-openbuff-named symlink that dereferences outside the temp root', () => {
+      // Attribution guard for the widened scope: with names no longer part of
+      // the decision, the refusal must come from the DEREFERENCED-path
+      // containment check rather than from the basename failing a pattern.
+      const escapeTarget = fs.realpathSync(process.cwd())
+      const targetIsOutsideTempRoots = getOwnedTempRoots().every((root) => {
+        const relative = path.relative(fs.realpathSync(root), escapeTarget)
+        return (
+          relative === '..' ||
+          relative.startsWith('..' + path.sep) ||
+          path.isAbsolute(relative)
+        )
+      })
+
+      const link = track(path.join(tempRoot, `notes-${uniqueSuffix()}.txt`))
+      fs.symlinkSync(escapeTarget, link)
+
+      if (targetIsOutsideTempRoots) {
+        expect(isOwnedTempPath(link)).toBe(false)
+        expect(resolveProjectPath('/some/project', link)).toBeNull()
+      }
+    })
   })
 
   describe('project containment is preserved', () => {
@@ -474,12 +619,11 @@ describe('openbuff-owned OS temp namespace exception', () => {
     })
 
     test('still rejects an in-project symlink that dereferences outside the project', () => {
+      if (!outsideRootsUsable()) return
       const projectDir = track(
         fs.mkdtempSync(path.join(os.tmpdir(), 'path-contain-project-')),
       )
-      const outsideDir = track(
-        fs.mkdtempSync(path.join(os.tmpdir(), 'path-contain-outside-')),
-      )
+      const outsideDir = track(makeOutsideRoot('path-contain-outside-'))
       const outsideFile = path.join(outsideDir, 'secret.ts')
       fs.writeFileSync(outsideFile, 'secret\n')
       fs.symlinkSync(outsideFile, path.join(projectDir, 'evil.ts'))
@@ -493,7 +637,12 @@ describe('openbuff-owned OS temp namespace exception', () => {
   })
 })
 
-describe('external read root allowlist', () => {
+// Every fixture in this describe must sit outside BOTH the project root and
+// the OS temp roots, so the external-read allowlist is exercised in isolation
+// from the widened temp exception (a temp-adjacent fixture would resolve as
+// `owned-temp` before the external-read branch is ever consulted). The whole
+// suite skips when the checkout cannot provide such a fixture.
+describeWithOutsideFixtures('external read root allowlist', () => {
   const projectRoot = '/repo'
   let allowedRoot: string
   let siblingRoot: string
@@ -514,13 +663,13 @@ describe('external read root allowlist', () => {
     // would leave an open read boundary for every later test in the process.
     resetExternalReadRootsForTesting()
 
-    allowedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'external-read-'))
+    allowedRoot = makeOutsideRoot('external-read-')
     cleanupPaths.push(allowedRoot)
     // Sibling directory sharing the allowlisted root's prefix.
     siblingRoot = `${allowedRoot}-evil`
     fs.mkdirSync(siblingRoot)
     cleanupPaths.push(siblingRoot)
-    outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'external-outside-'))
+    outsideDir = makeOutsideRoot('external-outside-')
     cleanupPaths.push(outsideDir)
 
     allowedFile = path.join(allowedRoot, 'notes.txt')
@@ -533,6 +682,8 @@ describe('external read root allowlist', () => {
     resetExternalReadRootsForTesting()
     removeTracked()
   })
+
+  afterAll(removeScratchParentIfEmpty)
 
   describe('default-closed posture', () => {
     test('is unconfigured and refuses outside paths', () => {
@@ -632,8 +783,51 @@ describe('external read root allowlist', () => {
       expect(isExternalReadPath(credentials)).toBe(false)
       expect(resolveProjectPathForRead(projectRoot, credentials)).toBeNull()
 
+      // Win32 aliasing must NOT slip past the refusal: the OS strips trailing
+      // dots/spaces from segments, so `<allowlistedRoot>/.env ` resolves to the
+      // real `.env` on Windows. Paths built by concatenation (not `path.join`)
+      // so the raw alias survives into the input on every platform, matching
+      // the owned-temp twin's refusal of the identical shape.
+      const aliased = [`${allowedRoot}/.env `, `${allowedRoot}/credentials.json `]
+      for (const target of aliased) {
+        expect(isExternalReadPath(target)).toBe(false)
+        expect(resolveProjectPathForRead(projectRoot, target)).toBeNull()
+      }
+
+      // A non-sensitive neighbour whose basename merely ENDS in a dot stays
+      // reachable: the guard only refuses when normalization lands on a
+      // sensitive name, so the refusals above are attributable to the
+      // sensitive policy rather than to trailing-dot names in general.
+      expect(isExternalReadPath(`${allowedRoot}/notes.txt.`)).toBe(true)
+
       // A non-sensitive neighbour in the same root stays readable.
       expect(isExternalReadPath(allowedFile)).toBe(true)
+    })
+
+    test('refuses a Win32-aliased INTERMEDIATE directory inside the root', async () => {
+      // Same intermediate-segment alias as the owned-temp twin: Win32 strips
+      // trailing dots/spaces from EVERY segment, so `<root>/.aws /config`
+      // opens the real `.aws/config` while the basename (`config`) and the
+      // raw parent (`.aws `) each miss the sensitive policy on their own.
+      const aliased = [
+        `${allowedRoot}/.aws /config`,
+        `${allowedRoot}/.kube ./config`,
+      ]
+      for (const target of aliased) {
+        expect(isExternalReadPath(target)).toBe(false)
+        expect(resolveProjectPathForRead(projectRoot, target)).toBeNull()
+        expect(
+          await resolveProjectPathForFileSystemRead(
+            projectRoot,
+            target,
+            fs.promises,
+          ),
+        ).toBeNull()
+      }
+
+      // A non-sensitive neighbour under a trailing-dot directory stays
+      // reachable, keeping the refusals attributable to the sensitive policy.
+      expect(isExternalReadPath(`${allowedRoot}/notes./notes.txt`)).toBe(true)
     })
 
     test('WRITE-PATH INVARIANT: resolveProjectPath never reaches an allowlisted external root', () => {
@@ -672,6 +866,17 @@ describe('external read root allowlist', () => {
         await resolveProjectPathForFileSystemRead(
           projectRoot,
           credentials,
+          fs.promises,
+        ),
+      ).toBeNull()
+
+      // The injected-filesystem twin must refuse the Win32-aliased shape too,
+      // so the sync and async resolvers never disagree about an alias like
+      // `<allowlistedRoot>/.env ` (trailing space survives into the input).
+      expect(
+        await resolveProjectPathForFileSystemRead(
+          projectRoot,
+          `${allowedRoot}/.env `,
           fs.promises,
         ),
       ).toBeNull()

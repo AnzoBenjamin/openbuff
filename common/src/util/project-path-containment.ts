@@ -26,10 +26,15 @@ export type ContainedProjectPath = {
   realFullPath: string
   relativePath: string
   /**
-   * 'project' for in-project paths; 'owned-temp' for the openbuff-owned OS
-   * temp namespace exception; 'external-read' for a path inside an explicitly
+   * 'project' for in-project paths; 'owned-temp' for the OS-temp-root
+   * exception (ANY path strictly inside `getOwnedTempRoots()`, whatever its
+   * segment names); 'external-read' for a path inside an explicitly
    * allowlisted read-only root outside the project (reachable only through
    * `resolveProjectPathForRead` / `resolveProjectPathForFileSystemRead`).
+   *
+   * The 'owned-temp' NAME is retained because every consumer branches on it;
+   * it no longer implies an openbuff-owned segment name (see
+   * `OWNED_TEMP_SEGMENT_PATTERNS`, which is documentation only).
    */
   scope: 'project' | 'owned-temp' | 'external-read'
 }
@@ -61,9 +66,9 @@ function escapesRoot(root: string, target: string): boolean {
  * Contract for the owned-temp exception (see `isOwnedTempPath`): the RAW
  * caller input must be free of `..` segments.
  *
- * Traversal through an openbuff-owned temp namespace is never a legitimate
- * access pattern, so it is refused BEFORE any collapsing happens — even when
- * the collapsed path would land back inside the namespace. This check lives at
+ * Traversal through an OS temp root is never a legitimate access pattern, so
+ * it is refused BEFORE any collapsing happens — even when the collapsed path
+ * would land back inside that root. This check lives at
  * the entry points (`isOwnedTempPath`, `resolveProjectPath`,
  * `resolveProjectPathForFileSystem`) rather than inside the owned-temp
  * resolver: the resolvers call `path.resolve` first, so a check further down
@@ -188,23 +193,29 @@ async function realpathCachedForFileSystemRoot(
   return real
 }
 
-// First-segment patterns for temp namespaces openbuff itself creates and
-// writes into. Writers: `sdk/src/tools/background-jobs.ts`
-// (`openbuff-<jobId>.log` / `.json`, `openbuff-job-*`),
-// `agents/basher.ts` (`openbuff-basher-<uuid>.log`) and `agents/tmux-cli.ts`
-// (`tmux-captures-<session>/`).
+// DOCUMENTATION ONLY — NOT a containment gate. This list ENUMERATES the
+// first-segment temp namespaces openbuff itself creates and writes into:
+// `sdk/src/tools/background-jobs.ts` (`openbuff-<jobId>.log` / `.json`,
+// `openbuff-job-*`), `agents/basher.ts` (`openbuff-basher-<uuid>.log`) and
+// `agents/tmux-cli.ts` (`tmux-captures-<session>/`). Tests and readers use it
+// to name those namespaces; containment never consults it.
 //
-// The executable tmux helper script (`tmux-helper-<session>.sh`) is
-// DELIBERATELY EXCLUDED: it is chmod +x'd and then executed by
-// run_terminal_command, whose policy also exempts `/tmp/...` tokens. Granting
-// write access there would turn a plain file write into arbitrary command
-// execution, i.e. a terminal-policy bypass.
+// WHY the distinction matters: reachability under an OS temp root is decided
+// SOLELY by `isInsideTempRoot` (strictly-inside containment applied to both
+// the lexical and the dereferenced path) plus the fail-closed
+// mandatory-sensitive refusal in `resolveOwnedTempRealPath`. A path whose
+// first segment matches nothing here — `<tmp>/notes.txt`,
+// `<tmp>/other-tool-cache/x.log`, `<tmp>/notopenbuff-foo.log` — is fully
+// reachable, so reading this list as a filter would describe a boundary that
+// no longer exists.
 //
-// These are ANCHORED FULL-SEGMENT patterns, so an attacker-chosen suffix on an
-// otherwise owned-looking name does not qualify: `openbuff-x/../y` never
-// reaches here (raw `..` is refused up front) and `openbuff-evil.sh` matches
-// neither the `.log|.json` file pattern nor the extension-free directory
-// pattern.
+// Concretely: the executable tmux helper script (`tmux-helper-<session>.sh`)
+// is NO LONGER excluded by containment. The defense against writing an
+// executable-extension basename anywhere under the temp root now lives
+// ENTIRELY in `ownedTempMutationRefusal` / `OWNED_TEMP_REFUSED_EXTENSIONS` in
+// `sdk/src/tools/filesystem-authority.ts`. That refusal — not this list — is
+// what stops a plain file write from becoming arbitrary command execution
+// through run_terminal_command's `/tmp/...` token exemption.
 export const OWNED_TEMP_SEGMENT_PATTERNS: RegExp[] = [
   // Background-job log/metadata + basher full logs: `openbuff-<id>.log|.json`.
   /^openbuff-[A-Za-z0-9._-]+\.(?:log|json)$/,
@@ -218,7 +229,13 @@ let ownedTempRootsCache: string[] | undefined
 let ownedTempComparisonRootsCache: string[] | undefined
 
 /**
- * Temp roots openbuff itself writes into.
+ * OS temp roots path-taking tools may reach, for READS and WRITES alike.
+ *
+ * SCOPE: the whole root, not a name-gated namespace. Any path STRICTLY inside
+ * one of these roots resolves with `scope: 'owned-temp'` regardless of its
+ * segment names (`<tmp>/notes.txt` exactly as much as
+ * `<tmp>/openbuff-job-1.log`), except for mandatory-sensitive paths. The root
+ * ITSELF never resolves, for any scope.
  *
  * INJECTED-FILESYSTEM CAVEAT: these root NAMES always come from the host
  * process (`os.tmpdir()` and, on POSIX, `/tmp`), including when containment is
@@ -226,7 +243,7 @@ let ownedTempComparisonRootsCache: string[] | undefined
  * those names is done through the adapter (see
  * `resolveProjectPathForFileSystem`). For a virtual or sandboxed filesystem in
  * which those names denote something other than the host temp dir, the
- * owned-temp exception therefore grants reach to whatever the adapter maps
+ * temp-root exception therefore grants reach to whatever the adapter maps
  * them to. Adapters that must not expose host-named temp paths have to refuse
  * them themselves; this module cannot discover an adapter's temp root.
  */
@@ -247,9 +264,10 @@ export function getOwnedTempRoots(): string[] {
 }
 
 /**
- * Owned temp roots in both lexical and symlink-dereferenced form. On macOS
- * `os.tmpdir()` is a symlinked `/var/folders/...` path, so an owned file's
- * realpath only lands under the dereferenced root.
+ * Temp roots in both lexical and symlink-dereferenced form. On macOS
+ * `os.tmpdir()` is a symlinked `/var/folders/...` path, so a temp file's
+ * realpath only lands under the dereferenced root — which is why containment
+ * compares against this PAIR instead of string-prefixing a single root.
  */
 function getOwnedTempComparisonRoots(): string[] {
   if (!ownedTempComparisonRootsCache) {
@@ -278,26 +296,54 @@ async function getOwnedTempComparisonRootsForFileSystem(
 }
 
 /**
- * True when `target` is strictly inside one of `roots` and its first segment
- * below that root matches an openbuff-owned namespace pattern. The temp root
- * itself never qualifies.
+ * True when `target` is STRICTLY inside one of `roots`. The temp root itself
+ * never qualifies: it is not a readable file, and admitting it would silently
+ * widen directory-listing consumers to the root entry itself.
+ *
+ * WHY the rename from `isInsideOwnedTempNamespace`: the gate is now plain root
+ * containment, NOT an openbuff-owned name. The old helper additionally
+ * required the first segment below the root to match
+ * `OWNED_TEMP_SEGMENT_PATTERNS`, which made `<tmp>/notes.txt` unreadable and
+ * every absolute temp write unreachable. Names are no longer part of the
+ * decision, so a helper named after a namespace would misdescribe it.
+ *
+ * Containment goes through `escapesRoot`, which is `path.relative`-based, so a
+ * sibling-prefix directory like `/tmpfoo` is correctly refused where a naive
+ * `startsWith` check would admit it.
  */
-function isInsideOwnedTempNamespace(target: string, roots: string[]): boolean {
+function isInsideTempRoot(target: string, roots: string[]): boolean {
   return roots.some((root) => {
     const relative = path.relative(root, target)
-    if (relative === '' || escapesRoot(root, target)) return false
-    const firstSegment = relative.split(path.sep)[0]
-    return OWNED_TEMP_SEGMENT_PATTERNS.some((pattern) =>
-      pattern.test(firstSegment),
-    )
+    return relative !== '' && !escapesRoot(root, target)
   })
+}
+
+/**
+ * Win32 aliasing guard: the OS strips trailing dots/spaces from EVERY path
+ * segment, so `<tmp>\.env ` resolves to the real `.env` while its basename
+ * fails the exact sensitive match — and an aliased INTERMEDIATE directory
+ * like `<allowlistedRoot>/.aws /config` opens the real `.aws/config` with an
+ * untouched basename. Refuse when the Win32-normalized path (ALL segments,
+ * not just the last) would be sensitive. No-op cost when no segment carries
+ * a trailing dot/space — the common case, and the universal case on POSIX,
+ * where such names are pathological.
+ */
+function refusesWin32AliasedSensitivePath(path: string): boolean {
+  const segments = path.split(/[\\/]+/)
+  const normalizedPath = segments
+    .map((segment) => segment.replace(/[ .]+$/, ''))
+    .join('/')
+  if (normalizedPath === segments.join('/')) return false
+  return isMandatorySensitiveReadPath(normalizedPath)
 }
 
 /**
  * Resolve the ALREADY-RESOLVED absolute `fullPath` to the ONE real path that
  * is both validated here and used by callers for the actual filesystem
- * operation. Returns `null` when the path is not inside an openbuff-owned temp
- * namespace.
+ * operation. Returns `null` when the path is not STRICTLY inside an OS temp
+ * root (`getOwnedTempRoots()`), when it is a mandatory-sensitive path, or
+ * when its Win32-normalized path would be mandatory-sensitive (see
+ * `refusesWin32AliasedSensitivePath`).
  *
  * The raw-input `..` policy is enforced by the entry points (see
  * `hasTraversalSegment`), never here: this function only ever sees collapsed
@@ -310,24 +356,63 @@ function isInsideOwnedTempNamespace(target: string, roots: string[]): boolean {
  */
 function resolveOwnedTempRealPath(fullPath: string): string | null {
   const roots = getOwnedTempComparisonRoots()
-  if (!isInsideOwnedTempNamespace(fullPath, roots)) return null
+  if (!isInsideTempRoot(fullPath, roots)) return null
 
-  // Critical guard: a symlink like `/tmp/openbuff-evil.log -> /etc/passwd`
-  // passes the lexical checks, so the dereferenced path must satisfy both
-  // root containment and the owned-namespace prefix as well.
+  // Critical guard: a symlink like `/tmp/notes.txt -> /etc/passwd` passes the
+  // lexical check, so the dereferenced path must satisfy root containment too.
   const realFullPath = realpathOrLexical(fullPath)
-  if (!isInsideOwnedTempNamespace(realFullPath, roots)) return null
+  if (!isInsideTempRoot(realFullPath, roots)) return null
+
+  // Fail-closed sensitive refusal, checked on BOTH the lexical and the
+  // dereferenced path (a benign-looking temp name may link to
+  // `credentials.json` and vice versa) — the same shape
+  // `resolveExternalReadRealPath` uses below.
+  //
+  // WHY it lives in the resolver rather than in each handler: containment now
+  // admits the WHOLE temp root, so `<tmp>/.env` and `<tmp>/credentials.json`
+  // would otherwise be exposed to every current and future temp consumer, for
+  // reads AND writes. Unlike the retired first-segment namespace gate there is
+  // no longer any name pattern incidentally blocking them, so a handler that
+  // forgot the check would be the only thing between an agent and a
+  // dropped-in credential file.
+  //
+  // The FULL paths are passed (not just the basenames) so the path-aware
+  // credential carriers `isMandatorySensitiveReadPath` recognizes —
+  // `.kube/config`, `.docker/config.json`, `gh/hosts.yml`, `.aws/config` — are
+  // refused too. Those basenames are far too generic to block on their own, so
+  // a basename-only call would silently expose them under the temp root.
+  //
+  // `refusesWin32AliasedSensitivePath` extends the same refusal to Win32
+  // aliasing (trailing dot/space), checked on the same two strings the caller
+  // opens so any refusal stays attributable to one of them.
+  if (
+    isMandatorySensitiveReadPath(fullPath) ||
+    isMandatorySensitiveReadPath(realFullPath) ||
+    refusesWin32AliasedSensitivePath(fullPath) ||
+    refusesWin32AliasedSensitivePath(realFullPath)
+  ) {
+    return null
+  }
 
   return realFullPath
 }
 
 /**
- * True when `input` resolves inside an openbuff-owned temp namespace.
+ * True when `input` resolves STRICTLY inside an OS temp root
+ * (`getOwnedTempRoots()`), whatever its segment names: `<tmp>/notes.txt` and
+ * `<tmp>/other-tool-cache/x.log` qualify exactly like
+ * `<tmp>/openbuff-job-1.log`.
  *
- * Contract: a raw input containing a `..` segment is refused outright, even
- * when it would collapse back into the namespace. `resolveProjectPath` and
- * `resolveProjectPathForFileSystem` apply the same rule to their owned-temp
- * fallback, so all three agree on any given input.
+ * Still FALSE for: the temp root itself (strictly-inside rule), a raw input
+ * containing a `..` segment (even one that collapses back inside the root), a
+ * temp-named path whose realpath escapes every temp root, and a
+ * mandatory-sensitive path such as `<tmp>/.env` or `<tmp>/credentials.json`
+ * (refused inside `resolveOwnedTempRealPath`, so the predicate and the
+ * resolvers can never disagree).
+ *
+ * Contract: the `..` rule is enforced here, above `path.resolve`.
+ * `resolveProjectPath` and `resolveProjectPathForFileSystem` apply the same
+ * rule to their owned-temp fallback, so all three agree on any given input.
  */
 export function isOwnedTempPath(input: string): boolean {
   if (!input || hasTraversalSegment(input)) return false
@@ -340,7 +425,7 @@ async function resolveOwnedTempRealPathForFileSystem(
   fileSystem: CodebuffFileSystem,
 ): Promise<string | null> {
   const roots = await getOwnedTempComparisonRootsForFileSystem(fileSystem)
-  if (!isInsideOwnedTempNamespace(fullPath, roots)) return null
+  if (!isInsideTempRoot(fullPath, roots)) return null
 
   // Resolved once, exactly like the sync helper: the validated string is the
   // string callers operate on.
@@ -348,16 +433,53 @@ async function resolveOwnedTempRealPathForFileSystem(
     fullPath,
     fileSystem,
   )
-  if (!isInsideOwnedTempNamespace(realFullPath, roots)) return null
+  if (!isInsideTempRoot(realFullPath, roots)) return null
+
+  // Identical fail-closed sensitive refusal as the sync resolver, on the same
+  // FULL paths. The two MUST NOT disagree: an operation routed through an
+  // injected filesystem would otherwise be the one place `<tmp>/.env` or
+  // `<tmp>/.aws/config` stayed reachable. The Win32-alias extension of the
+  // refusal (`refusesWin32AliasedSensitivePath`) runs on the same strings.
+  if (
+    isMandatorySensitiveReadPath(fullPath) ||
+    isMandatorySensitiveReadPath(realFullPath) ||
+    refusesWin32AliasedSensitivePath(fullPath) ||
+    refusesWin32AliasedSensitivePath(realFullPath)
+  ) {
+    return null
+  }
 
   return realFullPath
 }
 
 /**
- * Build the containment result for an owned temp path. `relativePath` is the
- * absolute resolved path: owned temp paths live outside the project, so a
- * project-relative form would be meaningless (and would look like a traversal
- * escape). Returning the absolute path keeps display and lookup honest.
+ * Async counterpart of `isOwnedTempPath` for injected filesystems.
+ *
+ * Exported so the SDK does not keep a private duplicate: the FS-aware
+ * re-validation `sdk/src/tools/path-utils.ts` needs for its synthesized
+ * top-level unlink candidate is exactly this predicate (adapter `realpath`
+ * plus fs-aware comparison roots), and a copy would have to be widened in
+ * lockstep with every change here.
+ */
+export async function isOwnedTempPathForFileSystem(
+  input: string,
+  fileSystem: CodebuffFileSystem,
+): Promise<boolean> {
+  if (!input || hasTraversalSegment(input)) return false
+  return (
+    (await resolveOwnedTempRealPathForFileSystem(
+      path.resolve(input),
+      fileSystem,
+    )) !== null
+  )
+}
+
+/**
+ * Build the containment result for a path inside an OS temp root
+ * (`scope: 'owned-temp'`). `relativePath` is the absolute resolved path: temp
+ * paths live outside the project, so a project-relative form would be
+ * meaningless (and would look like a traversal escape). Returning the absolute
+ * path keeps display and lookup honest.
  *
  * Takes the ALREADY-RESOLVED absolute path from the caller: re-resolving the
  * raw input here would resolve a relative input against `process.cwd()`
@@ -655,7 +777,9 @@ function isInsideExternalReadRoot(target: string, roots: string[]): boolean {
  * is both validated here and used by callers for the actual read. Returns
  * `null` when the path is not strictly inside a configured external read root
  * — including whenever the registry is unconfigured, since the comparison root
- * list is then empty.
+ * list is then empty — and, like `resolveOwnedTempRealPath`, whenever the path
+ * is mandatory-sensitive or its Win32-normalized path would be (see
+ * `refusesWin32AliasedSensitivePath`).
  *
  * The raw-input `..` policy is enforced by the entry points (see
  * `hasTraversalSegment`), never here: this function only ever sees collapsed
@@ -692,9 +816,15 @@ function resolveExternalReadRealPath(fullPath: string): string | null {
   // are refused too. Those basenames are far too generic to block on their own,
   // so a basename-only call would silently expose them inside an allowlisted
   // home-directory root.
+  //
+  // `refusesWin32AliasedSensitivePath` extends the same refusal to Win32
+  // aliasing (trailing dot/space), so `<allowlistedRoot>/.env ` cannot read
+  // through as the real `.env` on Windows — matching the owned-temp resolver.
   if (
     isMandatorySensitiveReadPath(fullPath) ||
-    isMandatorySensitiveReadPath(realFullPath)
+    isMandatorySensitiveReadPath(realFullPath) ||
+    refusesWin32AliasedSensitivePath(fullPath) ||
+    refusesWin32AliasedSensitivePath(realFullPath)
   ) {
     return null
   }
@@ -719,11 +849,14 @@ async function resolveExternalReadRealPathForFileSystem(
   if (!isInsideExternalReadRoot(realFullPath, roots)) return null
 
   // Identical fail-closed sensitive refusal as the sync resolver, on the same
-  // FULL paths; the two must never disagree about `credentials.json` or about a
-  // path-aware carrier like `.docker/config.json`.
+  // FULL paths; the two must never disagree about `credentials.json`, about a
+  // path-aware carrier like `.docker/config.json`, or about a Win32-aliased
+  // sensitive basename like `<allowlistedRoot>/.env `.
   if (
     isMandatorySensitiveReadPath(fullPath) ||
-    isMandatorySensitiveReadPath(realFullPath)
+    isMandatorySensitiveReadPath(realFullPath) ||
+    refusesWin32AliasedSensitivePath(fullPath) ||
+    refusesWin32AliasedSensitivePath(realFullPath)
   ) {
     return null
   }
@@ -817,14 +950,18 @@ async function externalReadContainedPathForFileSystem(
  * - the symlink-dereferenced path resolves to a location outside the real
  *   project root (e.g. an in-project symlink that points outside the repo).
  *
- * Exception: paths inside an openbuff-owned OS temp namespace (see
- * `isOwnedTempPath` — `openbuff-*` or `tmux-captures-*` directly under the
- * temp root) are allowed even though they are outside the project, so
- * path-taking tools can reach background-job logs, basher full logs and tmux
- * captures. Such results carry `scope: 'owned-temp'` and an absolute
- * `relativePath`; consumers must branch on `scope`. That exception
- * additionally requires a traversal-free raw input, exactly like
- * `isOwnedTempPath`.
+ * Exception: ANY path strictly inside an OS temp root (see `isOwnedTempPath`)
+ * is allowed even though it is outside the project, whatever its segment
+ * names — background-job logs, basher full logs and tmux captures, but
+ * equally an ordinary `<tmp>/notes.txt` scratch file. Such results carry
+ * `scope: 'owned-temp'` and an absolute `relativePath`; consumers must branch
+ * on `scope`, never on absoluteness. The exception additionally requires a
+ * traversal-free raw input and refuses mandatory-sensitive paths
+ * (`<tmp>/.env`, `<tmp>/credentials.json`), exactly like `isOwnedTempPath`.
+ *
+ * BRANCH ORDER is load-bearing: the project check runs FIRST, so a project
+ * root that itself lives under the temp dir (common in tests) keeps resolving
+ * as `scope: 'project'` and keeps its in-project policy.
  *
  * This is the canonical, package-boundary-safe containment check. The SDK
  * (`sdk/src/tools/path-utils.ts`) and the agent runtime
@@ -871,8 +1008,11 @@ export function resolveProjectPath(
  * filesystem instance; otherwise a virtual or wrapped filesystem could expose
  * symlinks that the host filesystem cannot see.
  *
- * The owned-temp exception behaves exactly as in `resolveProjectPath`, with
- * the host-derived root names caveat documented on `getOwnedTempRoots`.
+ * The temp-root exception (`scope: 'owned-temp'`) behaves exactly as in
+ * `resolveProjectPath` — whole-root strictly-inside containment, a
+ * traversal-free raw input, and the same fail-closed mandatory-sensitive
+ * refusal — with the host-derived root names caveat documented on
+ * `getOwnedTempRoots`.
  */
 export async function resolveProjectPathForFileSystem(
   projectRoot: string,
