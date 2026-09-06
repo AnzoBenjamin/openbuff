@@ -71,6 +71,8 @@ export function terminateProcessTree(
 
 export interface BackgroundJob {
   jobId: string
+  /** Registry-side id backing this job (recovered/test jobs are remapped). */
+  registryJobId?: string
   command: string
   child: ChildProcess
   logFile: string
@@ -122,14 +124,6 @@ export interface BackgroundJob {
    * before a group-kill (pid reuse guard); undefined on non-Linux hosts.
    */
   childProcessStartTime?: string
-  /**
-   * Registry-side id backing this job when it differs from `jobId`. The
-   * registry allocates its own ids, so a cross-session-recovered job (whose
-   * `jobId` comes from the on-disk metadata file name) is re-emitted into
-   * the registry under a fresh id recorded here. Jobs spawned by this
-   * process use the registry-issued id directly and leave this undefined.
-   */
-  registryJobId?: string
   /**
    * Project root used for the pre-start dirty snapshot (BACKGROUND start).
    * In-memory only — not written to recovery metadata. Recovered jobs omit it.
