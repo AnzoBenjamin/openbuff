@@ -22,6 +22,7 @@ import {
   appendBoundedCollected,
   checkJob,
 } from '../tools/check-job'
+import { listJobs } from '../tools/list-jobs'
 import {
   SETTLED_JOB_TTL_MS,
   jobRegistry,
@@ -146,8 +147,7 @@ describe('readNewJobOutput', () => {
     }
 
     expect(peekJobLineCarry(job)).toBe('')
-    const registryId = job.registryJobId ?? job.jobId
-    const snapshot = jobRegistry.snapshot(registryId, 0)
+    const snapshot = jobRegistry.snapshot(job.jobId, 0)
     const outputEvents = (snapshot?.events ?? []).filter(
       (event) => event.payload.type === 'output',
     )
@@ -249,11 +249,11 @@ describe('checkJob', () => {
     expect(job.readOffset).toBe(offsetAfterLiveDrain)
   })
 
-  test('wait_for matches only via peekJobLineCarry for an unterminated partial line', async () => {
-    // Documented live-drainer match-vs-events lag: a needle drained into
-    // lineCarry (no trailing newline yet) is matchable via peekJobLineCarry
-    // even though no complete per-line registry `output` event has been
-    // emitted for it yet. matched can be true while events/outputText lag.
+  test('wait_for matches via peekJobLineCarry for an unterminated partial line and force-emits the carry', async () => {
+    // A needle drained into lineCarry (no trailing newline yet) is matchable
+    // via peekJobLineCarry. When the match is found in the carry, checkJob
+    // force-emits the carry as a registry output event so the returned events
+    // are consistent with matched: true — the needle appears in outputText.
     const job = makeJob()
     const partial = 'Ready > Listening on :3000'
     fs.appendFileSync(job.logFile, partial)
@@ -261,8 +261,7 @@ describe('checkJob', () => {
     expect(readNewJobOutput(job)).toBe(partial)
     expect(peekJobLineCarry(job)).toContain('Listening on')
 
-    const registryId = job.registryJobId ?? job.jobId
-    const preMatchSnapshot = jobRegistry.snapshot(registryId, 0)
+    const preMatchSnapshot = jobRegistry.snapshot(job.jobId, 0)
     const preMatchOutput = (preMatchSnapshot?.events ?? [])
       .filter((event) => event.payload.type === 'output')
       .map((event) =>
@@ -281,9 +280,62 @@ describe('checkJob', () => {
     expect(result.matched).toBe(true)
     expect(result.state).toBe('running')
     expect(result.timedOut).toBeUndefined()
-    // Carry still holds the unterminated needle; events need not include it.
-    expect(peekJobLineCarry(job)).toContain('Listening on')
-    expect(outputText(result)).not.toContain('Listening on')
+    // Carry was force-emitted as a registry output event, so the needle is
+    // now present in the returned events/outputText and the carry is cleared.
+    expect(peekJobLineCarry(job)).toBe('')
+    expect(outputText(result)).toContain('Listening on')
+  })
+
+  test('wait_for force-emits the carry when the needle spans the chunk/carry boundary', async () => {
+    // A needle that spans the boundary between chunk (already emitted to the
+    // registry) and carry (not yet emitted) must still be fully present in the
+    // returned events. The carry must be force-emitted so the returned events
+    // are consistent with matched: true.
+    const job = makeJob()
+    // Write a complete line followed by a partial line (no newline at end).
+    // After draining, the complete line is in the registry (chunk) and the
+    // partial line is in the carry.
+    fs.appendFileSync(job.logFile, 'foo bar\nbaz')
+    expect(readNewJobOutput(job)).toBe('foo bar\nbaz')
+    expect(peekJobLineCarry(job)).toBe('baz')
+
+    const result = value(
+      await checkJob({
+        jobId: job.jobId,
+        wait_for: 'bar\nbaz',
+        owner: TRUSTED_OWNER,
+      }),
+    )
+    expect(result.matched).toBe(true)
+    expect(result.state).toBe('running')
+    // The carry was force-emitted, so the needle is fully present in the
+    // returned events.
+    expect(peekJobLineCarry(job)).toBe('')
+    expect(outputText(result)).toContain('bar\nbaz')
+  })
+
+  test('wait_for does not force-emit the carry when the needle is fully in the chunk', async () => {
+    // When the needle is fully present in chunk (already emitted to the
+    // registry), the carry must NOT be force-emitted. This keeps the original
+    // path unchanged for the common case and verifies the new boundary check
+    // only flushes the carry when the needle depends on it.
+    const job = makeJob()
+    fs.appendFileSync(job.logFile, 'prefix\nListening on :3000\nsuffix')
+    expect(readNewJobOutput(job)).toBe('prefix\nListening on :3000\nsuffix')
+    expect(peekJobLineCarry(job)).toBe('suffix')
+
+    const result = value(
+      await checkJob({
+        jobId: job.jobId,
+        wait_for: 'Listening on :3000',
+        owner: TRUSTED_OWNER,
+      }),
+    )
+    expect(result.matched).toBe(true)
+    expect(result.state).toBe('running')
+    // Carry must be untouched because the needle was fully in the chunk.
+    expect(peekJobLineCarry(job)).toBe('suffix')
+    expect(outputText(result)).toContain('Listening on :3000')
   })
 
   test('follow mode returns matched=true once the pattern is present', async () => {
@@ -970,12 +1022,10 @@ describe('checkJob', () => {
     // The unified jobRegistry is now the source of truth for live
     // state/ownership (the pending-background-jobs mirror is the legacy
     // store M4 removes). A recovered job is re-emitted into the registry
-    // under a fresh registry id stored on the adapter object, carrying the
-    // preserved owner.
+    // under the disk-derived jobId (passed as explicit registry id), carrying
+    // the preserved owner.
     const recovered = getBackgroundJob(jobId)
-    const registryJob = recovered?.registryJobId
-      ? jobRegistry.get(recovered.registryJobId)
-      : undefined
+    const registryJob = jobRegistry.get(jobId)
     expect(registryJob?.owner).toEqual(owner)
   })
 

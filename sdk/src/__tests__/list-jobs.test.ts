@@ -301,17 +301,17 @@ describe('listJobs', () => {
     expect(entry!.tail).toEqual(emitted.slice(-10))
   })
 
-  test('dual-id remapped process job: list_jobs exposes user jobId; pending uses adapter cursor; listed id works with check_job', async () => {
-    // Recovered / __registerJobForTest jobs remap: adapter Map key = user/
-    // disk jobId, registryJobId = fresh registry id. list_jobs must reverse-
-    // resolve the adapter, emit the user-facing id, and honor lastCheckCursor
-    // so rediscovery works with check_job/kill_job.
-    const userJobId = 'job-dual-id-user'
+  test('registered process job: list_jobs exposes jobId; pending uses adapter cursor; listed id works with check_job', async () => {
+    // After the id collapse, __registerJobForTest passes the adapter's jobId
+    // as the explicit registry id, so the registry record and adapter Map
+    // share one key. list_jobs must resolve the adapter, emit the id, and
+    // honor lastCheckCursor so rediscovery works with check_job/kill_job.
+    const userJobId = 'job-registered-user'
     const logFile = path.join(os.tmpdir(), `openbuff-${userJobId}.log`)
     fs.writeFileSync(logFile, '')
     const adapter: BackgroundJob = {
       jobId: userJobId,
-      command: 'dual-id-cmd',
+      command: 'registered-cmd',
       child: { pid: 4242 } as BackgroundJob['child'],
       logFile,
       metadataFile: path.join(os.tmpdir(), `openbuff-${userJobId}.json`),
@@ -322,16 +322,15 @@ describe('listJobs', () => {
       owner,
     }
     __registerJobForTest(adapter)
-    const registryJobId = adapter.registryJobId
-    expect(registryJobId).toBeDefined()
-    expect(registryJobId).not.toBe(userJobId)
+    // After collapse: registry id === adapter.jobId (no remapping).
+    expect(adapter.jobId).toBe(userJobId)
 
-    // Emit on the *registry* id (where process output is mirrored).
-    jobRegistry.emit(registryJobId!, { type: 'output', data: 'line-1\n' })
-    jobRegistry.emit(registryJobId!, { type: 'output', data: 'line-2\n' })
-    jobRegistry.emit(registryJobId!, { type: 'output', data: 'line-3\n' })
+    // Emit on the jobId (where process output is mirrored).
+    jobRegistry.emit(userJobId, { type: 'output', data: 'line-1\n' })
+    jobRegistry.emit(userJobId, { type: 'output', data: 'line-2\n' })
+    jobRegistry.emit(userJobId, { type: 'output', data: 'line-3\n' })
 
-    // Advance lastCheckCursor via check_job on the user-facing id.
+    // Advance lastCheckCursor via check_job on the id.
     const checkResult = (await checkJob({ jobId: userJobId, owner }))[0]
       .value as {
       jobId: string
@@ -348,19 +347,18 @@ describe('listJobs', () => {
       gap: boolean
       command: string
     }>
-    // Must expose user-facing id, never the internal remapped registry id.
+    // Must expose the id.
     expect(listed.map((j) => j.jobId)).toContain(userJobId)
-    expect(listed.map((j) => j.jobId)).not.toContain(registryJobId)
 
     const entry = listed.find((j) => j.jobId === userJobId)
-    expect(entry?.command).toBe('dual-id-cmd')
+    expect(entry?.command).toBe('registered-cmd')
     // Cursor advanced by check_job → pending none at adapter cursor; no gap.
     expect(entry?.pending).toBe('none')
     expect(entry?.gap).toBe(false)
 
-    // New output after the listed cursor should re-bucket pending, still under
-    // the user-facing id, and check_job must still resolve that listed id.
-    jobRegistry.emit(registryJobId!, { type: 'output', data: 'line-4\n' })
+    // New output after the listed cursor should re-bucket pending, and
+    // check_job must still resolve that listed id.
+    jobRegistry.emit(userJobId, { type: 'output', data: 'line-4\n' })
     const afterMore = (
       value(await listJobs({ owner })).jobs as Array<{
         jobId: string

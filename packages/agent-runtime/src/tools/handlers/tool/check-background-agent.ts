@@ -17,7 +17,11 @@ import type {
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
 import type { AgentState } from '@codebuff/common/types/session-state'
-import type { JobEvent } from '@codebuff/common/util/job-registry'
+import type {
+  JobEvent,
+  JobSnapshot,
+  WaitJobResult,
+} from '@codebuff/common/util/job-registry'
 
 type ToolName = 'check_background_agent'
 
@@ -87,6 +91,54 @@ function eventToSearchString(event: JobEvent): string {
     }
   }
   return chunkType
+}
+
+/**
+ * Build the structured poll/follow result from the raw wait result and the
+ * wait_for predicate. Computes the common output fields (state, events,
+ * nextCursor, truncated, dropped, matched, timedOut) shared by poll and
+ * follow modes. Advances the per-consumer cursor for cursorless polls as a
+ * side effect. Agent-specific fields (result/error/cancelled) are resolved
+ * separately by the caller from the core/view.
+ */
+function buildAgentPollResult(params: {
+  /** Poll mode yields a JobSnapshot; follow mode yields a WaitJobResult. */
+  result: WaitJobResult | JobSnapshot | undefined
+  predicate: ((event: JobEvent) => boolean) | undefined
+  fallbackState: string
+  jobId: string
+  consumerId: string
+  cursorOmitted: boolean
+}): {
+  state: string
+  events: JobEvent[]
+  nextCursor: number
+  truncated: boolean
+  dropped: number
+  matched: boolean | undefined
+  timedOut: boolean
+} {
+  const { result, predicate, fallbackState, jobId, consumerId, cursorOmitted } =
+    params
+  const events = result?.events ?? []
+  // Falls back to 0 rather than echoing the caller's cursor: the owned job
+  // always yields a result here, and reporting a cursor the core did not
+  // confirm could pin a consumer past every future event.
+  const nextCursor = result?.nextCursor ?? 0
+  // Only a cursorless poll owns the stored position, and it advances only as
+  // far as the core confirmed: a follow-mode timeout that returned no events
+  // confirms the cursor it started from, so events that land later are still
+  // delivered to this consumer.
+  if (cursorOmitted) {
+    advanceBackgroundAgentConsumerCursor(jobId, consumerId, nextCursor)
+  }
+  const state = result?.state ?? fallbackState
+  const dropped = result?.dropped ?? 0
+  const truncated =
+    result && 'truncated' in result ? result.truncated : dropped > 0
+  const matched = predicate ? events.some(predicate) : undefined
+  const timedOut = result && 'timedOut' in result ? result.timedOut : false
+  return { state, events, nextCursor, truncated, dropped, matched, timedOut }
 }
 
 /**
@@ -223,24 +275,15 @@ export const handleCheckBackgroundAgent = (async ({
       })
     : (snapshotBackgroundAgentJob(jobId, effectiveCursor) ?? undefined)
 
-  const events = result?.events ?? []
-  // Falls back to 0 rather than echoing the caller's cursor: the owned job
-  // always yields a result here, and reporting a cursor the core did not
-  // confirm could pin a consumer past every future event.
-  const nextCursor = result?.nextCursor ?? 0
-  // Only a cursorless poll owns the stored position, and it advances only as
-  // far as the core confirmed: a follow-mode timeout that returned no events
-  // confirms the cursor it started from, so events that land later are still
-  // delivered to this consumer.
-  if (cursorOmitted) {
-    advanceBackgroundAgentConsumerCursor(jobId, consumerId, nextCursor)
-  }
-  const state = result?.state ?? owned.job.state
-  const dropped = result?.dropped ?? 0
-  const truncated =
-    result && 'truncated' in result ? result.truncated : dropped > 0
-  const matched = predicate ? events.some(predicate) : undefined
-  const timedOut = result && 'timedOut' in result ? result.timedOut : false
+  const { state, events, nextCursor, truncated, dropped, matched, timedOut } =
+    buildAgentPollResult({
+      result,
+      predicate,
+      fallbackState: owned.job.state,
+      jobId,
+      consumerId,
+      cursorOmitted,
+    })
 
   // Both the settled error and the settled result are folded into the core
   // lifecycle, so they are resolved from the core first and fall back to the

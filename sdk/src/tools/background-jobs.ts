@@ -123,14 +123,6 @@ export interface BackgroundJob {
    */
   childProcessStartTime?: string
   /**
-   * Registry-side id backing this job when it differs from `jobId`. The
-   * registry allocates its own ids, so a cross-session-recovered job (whose
-   * `jobId` comes from the on-disk metadata file name) is re-emitted into
-   * the registry under a fresh id recorded here. Jobs spawned by this
-   * process use the registry-issued id directly and leave this undefined.
-   */
-  registryJobId?: string
-  /**
    * Project root used for the pre-start dirty snapshot (BACKGROUND start).
    * In-memory only — not written to recovery metadata. Recovered jobs omit it.
    */
@@ -288,6 +280,40 @@ export function safeOpenJobLogForRead(
   }
 }
 
+/**
+ * Truncate a background-job log file to at most `maxBytes` by dropping the
+ * HEAD (oldest bytes) and keeping the TAIL (newest bytes). The newest output
+ * is the most diagnostically useful for a job terminated due to log quota —
+ * errors, build failures, and recent status messages live there. No-op when
+ * the file is already within quota. Opens the file safely (O_NOFOLLOW) and
+ * rewrites the tail in place to avoid leaving a sparse/holey file behind
+ * (truncating a live append-only fd below its write offset is undefined per
+ * POSIX).
+ */
+function truncateLogToTail(logFile: string, maxBytes: number): void {
+  let fd: number | undefined
+  try {
+    fd = fs.openSync(logFile, fs.constants.O_RDWR | O_NOFOLLOW_FLAG)
+    const size = fs.fstatSync(fd).size
+    if (size <= maxBytes) return
+    const keepStart = size - maxBytes
+    const buf = Buffer.alloc(maxBytes)
+    const bytesRead = fs.readSync(fd, buf, 0, maxBytes, keepStart)
+    fs.ftruncateSync(fd, 0)
+    fs.writeSync(fd, buf.subarray(0, bytesRead), 0, bytesRead, 0)
+  } catch {
+    // best-effort truncation; the exit path owns final cleanup
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd)
+      } catch {
+        // already closed
+      }
+    }
+  }
+}
+
 function safeReadJobMetadataFile(metadataFile: string): string | undefined {
   let fd: number | undefined
   try {
@@ -438,11 +464,6 @@ function writeBackgroundJobMetadata(job: BackgroundJob): void {
   }
 }
 
-/** Registry-side id backing `job` (recovered jobs are remapped; see above). */
-function registryJobIdFor(job: BackgroundJob): string {
-  return job.registryJobId ?? job.jobId
-}
-
 /**
  * Fold a terminal lifecycle transition into the registry and mirror it onto
  * the adapter object + the write-only disk projection. All terminal paths
@@ -466,7 +487,7 @@ function settleBackgroundJob(
   if (job.settledAt === undefined) {
     job.settledAt = Date.now()
   }
-  jobRegistry.emit(registryJobIdFor(job), {
+  jobRegistry.emit(job.jobId, {
     type: 'lifecycle',
     state: status,
     exitCode,
@@ -497,7 +518,7 @@ export function pruneSettledJobs(now: number = Date.now()): void {
 /** Mirror a chunk of streamed log bytes into the registry as an output event. */
 function emitJobOutput(job: BackgroundJob, data: string): void {
   if (data.length === 0) return
-  jobRegistry.emit(registryJobIdFor(job), { type: 'output', data })
+  jobRegistry.emit(job.jobId, { type: 'output', data })
 }
 
 /**
@@ -601,11 +622,17 @@ export function startBackgroundJob(params: {
   // safeCreateJobLogFile/safeWriteJobMetadata also use O_EXCL + O_NOFOLLOW so
   // pre-created regular files and TOCTOU symlink swaps are rejected at open().
   let outFd: number | undefined
+  // True only once safeCreateJobLogFile has returned, i.e. this spawn
+  // exclusively created logFile via O_CREAT|O_EXCL. Throws from
+  // rejectIfSymlink or O_EXCL EEXIST leave it false: the path then holds a
+  // foreign/pre-existing file this process must never delete.
+  let logFileCreatedByThisSpawn = false
   let child: ChildProcess
   try {
     rejectIfSymlink(logFile)
     rejectIfSymlink(metadataFile)
     outFd = safeCreateJobLogFile(logFile)
+    logFileCreatedByThisSpawn = true
     child = spawn(shell, [...shellArgs, command], {
       cwd,
       env,
@@ -623,13 +650,15 @@ export function startBackgroundJob(params: {
         // already closed
       }
     }
-    // The log file was created exclusively for this spawn (O_EXCL); on a failed
-    // spawn nobody else can own it, so remove it best-effort rather than leaving
-    // an empty temp file behind until the 24h+ orphan sweep.
-    try {
-      fs.unlinkSync(logFile)
-    } catch {
-      // best-effort; the orphan sweep will clean it up if removal fails
+    // Remove the log file ONLY when this spawn created it (safeCreateJobLogFile
+    // succeeded). If the throw came from rejectIfSymlink or from O_EXCL EEXIST,
+    // the path belongs to a foreign/pre-existing file this process did NOT
+    // create, and deleting it would clobber another owner's file in the shared
+    // temp dir. removeFileIfPresent re-lstats immediately before unlinking so
+    // a TOCTOU symlink swap fails closed; a failed removal still leaves the
+    // empty file for the 24h+ orphan sweep.
+    if (logFileCreatedByThisSpawn) {
+      removeFileIfPresent(logFile)
     }
     // Fold the failed spawn into the registry so the freshly-created id does
     // not linger as a queued job (queued only transitions via running).
@@ -697,11 +726,12 @@ export function startBackgroundJob(params: {
       // Keep trimming while the process is unwinding so a chatty child cannot
       // regrow a sparse/oversized log between SIGTERM and exit.
       //
-      // Deliberate tradeoff: truncation keeps the HEAD (oldest bytes) and drops
-      // the newest output. The job is being terminated for exceeding its log
-      // quota, and the startup/context head is the most diagnostically useful
-      // part; losing the tail is a known, accepted cost.
-      fs.truncateSync(logFile, MAX_BACKGROUND_LOG_BYTES)
+      // Deliberate tradeoff: truncation keeps the TAIL (newest bytes) and drops
+      // the oldest output. The job is being terminated for exceeding its log
+      // quota, and the newest output is the most diagnostically useful — errors,
+      // build failures, and recent status messages live in the tail; losing the
+      // head is a known, accepted cost.
+      truncateLogToTail(logFile, MAX_BACKGROUND_LOG_BYTES)
     } catch {
       // The process exit/error handlers own final cleanup.
     }
@@ -732,11 +762,11 @@ export function startBackgroundJob(params: {
           ? 'completed'
           : 'error'
     if (quotaExceeded) {
-      // See the log-quota monitor above: truncation keeps the HEAD (oldest
-      // bytes) and drops the newest output. Known, accepted tradeoff for a
+      // See the log-quota monitor above: truncation keeps the TAIL (newest
+      // bytes) and drops the oldest output. Known, accepted tradeoff for a
       // job terminated for exceeding its log quota.
       try {
-        fs.truncateSync(logFile, MAX_BACKGROUND_LOG_BYTES)
+        truncateLogToTail(logFile, MAX_BACKGROUND_LOG_BYTES)
       } catch {
         // best-effort truncation; the exit path owns final cleanup
       }
@@ -803,31 +833,13 @@ function resolveRestampedOwner(
 }
 
 /**
- * Resolve a process adapter for a *registry* job id (list_jobs iteration).
- *
- * The adapter Map is keyed by the user-facing jobId. Live spawns use the same
- * id for both Map key and registry. Recovered / `__registerJobForTest` jobs
- * remap: Map key = disk/user jobId, `registryJobId` = fresh registry id. A
- * direct `jobs.get(registryId)` therefore misses remapped adapters — reverse-
- * scan by `registryJobId ?? jobId` so list_jobs can read `lastCheckCursor` /
- * lineCarry and expose the user-facing `adapter.jobId` that check_job/kill_job
- * resolve via `getBackgroundJob`.
+ * Read-only adapter lookup by jobId (no recovery, no ownership changes).
+ * list_jobs uses this to read `lastCheckCursor` / `lineCarry` from the
+ * adapter without triggering recovery or ownership restamping.
  */
-export function getBackgroundJobForRegistryId(
-  registryJobId: string,
-): BackgroundJob | undefined {
+export function getBackgroundJobAdapter(jobId: string): BackgroundJob | undefined {
   pruneSettledJobs()
-  const direct = jobs.get(registryJobId)
-  if (direct !== undefined) {
-    const backing = direct.registryJobId ?? direct.jobId
-    if (backing === registryJobId) return direct
-  }
-  for (const job of jobs.values()) {
-    if ((job.registryJobId ?? job.jobId) === registryJobId) {
-      return job
-    }
-  }
-  return undefined
+  return jobs.get(jobId)
 }
 
 export function getBackgroundJob(
@@ -849,13 +861,12 @@ export function getBackgroundJob(
     // this, the cached-job early return skips the re-stamp and the trusted
     // caller is locked out of its own job by assertOwned. Gate on the
     // REGISTRY record's current owner being unknown (SEC-2).
-    const registryJobId = existing.registryJobId ?? existing.jobId
-    const registryJob = jobRegistry.get(registryJobId)
+    const registryJob = jobRegistry.get(jobId)
     const upgraded = registryJob
       ? resolveRestampedOwner(registryJob.owner, opts?.restampOwner)
       : undefined
     if (upgraded) {
-      jobRegistry.restampOwner(registryJobId, upgraded)
+      jobRegistry.restampOwner(jobId, upgraded)
       existing.owner = upgraded
     }
     return existing
@@ -874,34 +885,44 @@ export function getBackgroundJob(
       return undefined
     }
 
-    jobs.set(jobId, recovered)
     // Re-emit the recovered job into the registry, which is the live source
-    // of truth for state/ownership. The registry allocates its own ids, so
-    // the disk-derived jobId is remapped onto a fresh registry id stored on
-    // the adapter object. Cross-session re-attach: a supplied restampOwner
-    // UPGRADES ownership only when the disk metadata carries a placeholder /
-    // missing owner. A job already stamped with a real owner keeps it, so a
-    // re-attaching run can never launder ownership of another session's job
-    // (assertOwned then refuses it as foreign) — this mirrors the cached-job
-    // branch above (SEC-2). Same-process callers pass no opts, so the
-    // original owner is preserved either way.
+    // of truth for state/ownership. The disk-derived jobId is passed as the
+    // explicit registry id so the registry record and adapter Map share one
+    // key. Cross-session re-attach: a supplied restampOwner UPGRADES ownership
+    // only when the disk metadata carries a placeholder / missing owner. A job
+    // already stamped with a real owner keeps it, so a re-attaching run can
+    // never launder ownership of another session's job (assertOwned then
+    // refuses it as foreign) — this mirrors the cached-job branch above
+    // (SEC-2). Same-process callers pass no opts, so the original owner is
+    // preserved either way.
     const owner =
       resolveRestampedOwner(recovered.owner, opts?.restampOwner) ??
       recovered.owner ??
       UNKNOWN_JOB_OWNER
     recovered.owner = owner
-    const registryJobId = jobRegistry.create({
+    // Pass the disk-derived jobId as the explicit registry id so the
+    // registry record and adapter Map share one key (single-id invariant).
+    // A collision means a live job already owns this id — a cross-session
+    // recovery must NOT silently remap onto a fresh id (that would desync the
+    // adapter from the on-disk log/metadata file names and make the caller's
+    // requested id unresolvable), so refuse the recovery and leave the id
+    // pointing at the live record. getBackgroundJob reports not-found.
+    if (jobRegistry.get(recovered.jobId) !== undefined) {
+      return undefined
+    }
+    jobRegistry.create({
       kind: 'process',
       label: recovered.command,
       owner,
-    }).jobId
-    recovered.registryJobId = registryJobId
-    jobRegistry.start(registryJobId)
+      jobId: recovered.jobId,
+    })
+    jobs.set(recovered.jobId, recovered)
+    jobRegistry.start(recovered.jobId)
     if (recovered.status !== 'running') {
       // A settled recovered job is folded straight into its terminal state so
       // the re-attaching run can serve its final output/exit code from the
       // registry.
-      jobRegistry.emit(registryJobId, {
+      jobRegistry.emit(recovered.jobId, {
         type: 'lifecycle',
         state: recovered.status,
         exitCode: recovered.exitCode,
@@ -1204,18 +1225,26 @@ export function readNewJobOutput(job: BackgroundJob): string {
 
 /** Test-only: register a job backed by an existing log file (no real process). */
 export function __registerJobForTest(job: BackgroundJob): void {
-  jobs.set(job.jobId, job)
-  // Mirror the job into the registry (under a fresh registry id, like a
-  // recovered job) so registry-backed lookups see the same state.
-  const registryJobId = jobRegistry.create({
+  // Pass the adapter's jobId as the explicit registry id so the registry
+  // record and adapter Map share one key (single-id invariant). A collision
+  // means the test registered two adapters under one id — that is a test bug
+  // and must fail loudly instead of silently remapping onto a fresh id (which
+  // would break every assertion made on the original jobId).
+  if (jobRegistry.get(job.jobId) !== undefined) {
+    throw new Error(
+      `__registerJobForTest: job id '${job.jobId}' is already registered`,
+    )
+  }
+  jobRegistry.create({
     kind: 'process',
     label: job.command,
     owner: job.owner ?? UNKNOWN_JOB_OWNER,
-  }).jobId
-  job.registryJobId = registryJobId
-  jobRegistry.start(registryJobId)
+    jobId: job.jobId,
+  })
+  jobs.set(job.jobId, job)
+  jobRegistry.start(job.jobId)
   if (job.status !== 'running') {
-    jobRegistry.emit(registryJobId, {
+    jobRegistry.emit(job.jobId, {
       type: 'lifecycle',
       state: job.status,
       exitCode: job.exitCode,
@@ -1224,9 +1253,8 @@ export function __registerJobForTest(job: BackgroundJob): void {
 }
 
 /**
- * Test-only: set/create a Map adapter keyed by registry jobId (production id shape).
- * Used only by tests so list_jobs can observe a same-id lastCheckCursor without
- * `__registerJobForTest`'s dual-id remapping.
+ * Test-only: set/create a Map adapter keyed by jobId (production id shape).
+ * Used only by tests so list_jobs can observe a same-id lastCheckCursor.
  */
 export function __setLastCheckCursorForTest(
   jobId: string,
@@ -1242,7 +1270,6 @@ export function __setLastCheckCursorForTest(
   // registry row under the same jobId as production live spawns).
   jobs.set(jobId, {
     jobId,
-    registryJobId: jobId,
     command: 'test',
     child: {} as ChildProcess,
     logFile: path.join(os.tmpdir(), `openbuff-${jobId}.log`),

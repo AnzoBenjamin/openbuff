@@ -1,4 +1,5 @@
 import {
+  flushJobLineCarry,
   getBackgroundJob,
   killBackgroundJob,
   peekJobLineCarry,
@@ -25,11 +26,6 @@ const POLL_INTERVAL_MS = 200
  */
 export const CHECK_JOB_POLL_ACCUMULATION_CAP = CHECK_JOB_OUTPUT_LIMIT * 2
 const COLLECTED_TAIL_KEEP = Math.floor(CHECK_JOB_OUTPUT_LIMIT / 4)
-
-/** Registry-side id backing this adapter job (recovered jobs are remapped). */
-function registryIdFor(job: { jobId: string; registryJobId?: string }): string {
-  return job.registryJobId ?? job.jobId
-}
 
 /** True when a job can no longer produce output. */
 function jobSettled(job: { status: string }): boolean {
@@ -114,6 +110,134 @@ export function boundEventsToOutputTail(
 }
 
 /**
+ * Resolve the one-shot settlement dirty delta the first time a settled
+ * observation is returned. Stores `[]` when snapshot/git is missing so
+ * re-polls stay idempotent and never re-attribute post-settle dirt.
+ * Returns paths to emit only on the resolving observation (omit on
+ * subsequent polls and while still running).
+ */
+async function resolveSettlementTouchedPaths(job: {
+  settlementTouchedPaths?: string[]
+  dirtyBeforePaths?: string[]
+  projectRoot?: string
+}): Promise<string[] | undefined> {
+  if (job.settlementTouchedPaths !== undefined) {
+    // Already resolved on a prior settled check_job — do not re-emit.
+    return undefined
+  }
+  if (job.dirtyBeforePaths !== undefined && job.projectRoot !== undefined) {
+    const dirtyAfter = await listDirtyPaths(job.projectRoot)
+    const touched =
+      dirtyAfter !== null
+        ? dirtyDelta(new Set(job.dirtyBeforePaths), dirtyAfter)
+        : []
+    job.settlementTouchedPaths = touched
+    return touched
+  }
+  // Soft-fail: recovered jobs / no git snapshot — lock out recompute.
+  job.settlementTouchedPaths = []
+  return undefined
+}
+
+/**
+ * Resolve the follow deadline for a check_job call. The deadline is computed
+ * at ENTRY, before any registry calls: both getBackgroundJob (on recovery)
+ * and assertOwned invoke sweep() → Date.now(), so computing the deadline
+ * afterward would base it on a later clock read and could push the follow
+ * window out indefinitely (a mocked or fast-advancing clock would then never
+ * satisfy `Date.now() >= deadline`).
+ */
+function resolveCheckJobWaitBounds(params: {
+  timeoutSeconds?: number
+}): { timeoutMs: number; deadline: number } {
+  const timeoutMs = Math.max(0, (params.timeoutSeconds ?? 0) * 1000)
+  return { timeoutMs, deadline: Date.now() + timeoutMs }
+}
+
+/**
+ * Build the structured poll/follow result from the raw follow state. Computes
+ * the common output fields (state, events, nextCursor, truncated, dropped,
+ * matched, exitCode) shared by poll and follow modes. Advances the per-adapter
+ * consumer cursor (lastCheckCursor) as a side effect. The presentation-level
+ * output cap (boundEventsToOutputTail) is applied here; the caller folds the
+ * returned `timedOut` into its kill/return logic.
+ */
+function buildCheckJobPollResult(params: {
+  jobId: string
+  job: {
+    status: JobState
+    exitCode?: number | null
+    logFile: string
+    lastCheckCursor?: number
+  }
+  waitFor?: string
+  matched: boolean
+  entryCursor: number
+  newEvents: JobEvent[]
+  cursor: number
+  truncated: boolean
+}): {
+  jobId: string
+  state: JobState
+  events: JobEvent[]
+  nextCursor: number
+  truncated: boolean
+  dropped: number
+  exitCode?: number
+  matched?: boolean
+  logFile: string
+} {
+  const {
+    jobId,
+    job,
+    waitFor,
+    matched,
+    entryCursor,
+    newEvents,
+    cursor,
+    truncated: truncatedSoFar,
+  } = params
+  const registryJob = jobRegistry.get(jobId)
+  const state = registryJob?.state ?? job.status
+  const exitCode = registryJob?.exitCode ?? job.exitCode ?? undefined
+  // Re-snapshot from the entry cursor so the returned `events` cover the
+  // FULL window [entryCursor, nextCursor) — every `output` event drained
+  // during this follow, not just the final iteration's batch. This keeps
+  // `events` consistent with `matched` (computed over the accumulated
+  // `collected` window) and with `nextCursor`, so the caller receives all
+  // output it would otherwise never be able to refetch. Bounded by the
+  // registry's per-job event/byte ring buffer.
+  const finalSnapshot = jobRegistry.snapshot(jobId, entryCursor)
+  const rawEvents = finalSnapshot?.events ?? newEvents
+  const boundedResult = boundEventsToOutputTail(
+    rawEvents,
+    CHECK_JOB_OUTPUT_LIMIT,
+  )
+  const events = boundedResult.events
+  const nextCursor = finalSnapshot?.nextCursor ?? cursor
+  // Advance the per-adapter consumer cursor so the next check_job does not
+  // re-serve these events. Mirrored-by-live-drainer is not the same as
+  // consumed-by-check_job; only this advance marks consumption.
+  job.lastCheckCursor = nextCursor
+  const finalDropped = finalSnapshot?.dropped ?? 0
+  const finalTruncated =
+    truncatedSoFar ||
+    (finalSnapshot?.truncated ?? false) ||
+    boundedResult.truncated
+  return {
+    jobId,
+    state,
+    events,
+    nextCursor,
+    truncated: finalTruncated,
+    dropped: finalDropped,
+    ...(exitCode !== undefined && exitCode !== null ? { exitCode } : {}),
+    ...(waitFor ? { matched } : {}),
+    logFile: job.logFile,
+  }
+}
+
+/**
  * Join (poll) or wait (follow) on a background job started by
  * run_terminal_command.
  *
@@ -150,7 +274,6 @@ export async function checkJob(params: {
   owner: BackgroundJobOwner
 }): Promise<CodebuffToolOutput<'check_job'>> {
   const { jobId, wait_for: waitFor, owner } = params
-  const timeoutMs = Math.max(0, (params.timeout_seconds ?? 0) * 1000)
   // Observation must be non-destructive by default. Callers can explicitly
   // request termination when a follow timeout represents a hard deadline.
   const killOnTimeout = params.kill_on_timeout ?? false
@@ -159,7 +282,9 @@ export async function checkJob(params: {
   // so computing the deadline afterward would base it on a later clock read and
   // could push the follow window out indefinitely (a mocked or fast-advancing
   // clock would then never satisfy `Date.now() >= deadline`).
-  const deadline = Date.now() + timeoutMs
+  const { timeoutMs, deadline } = resolveCheckJobWaitBounds({
+    timeoutSeconds: params.timeout_seconds,
+  })
 
   // Cross-session recovery re-stamps the registry record with THIS trusted
   // owner (never a model-supplied one).
@@ -179,8 +304,7 @@ export async function checkJob(params: {
   // Ownership gate: the registry is the source of truth for who owns this
   // job. A foreign job is refused with the SAME generic not_found error as
   // an unknown id so the caller cannot probe for other sessions' jobs.
-  const registryJobId = registryIdFor(job)
-  const ownership = jobRegistry.assertOwned(registryJobId, owner)
+  const ownership = jobRegistry.assertOwned(jobId, owner)
   if (!ownership.ok) {
     return [
       {
@@ -227,7 +351,7 @@ export async function checkJob(params: {
     // Recovered and test-registered jobs have no interval, so they still drain
     // here.
     if (!job.hasLiveDrainer) readNewJobOutput(job)
-    const snapshot = jobRegistry.snapshot(registryJobId, cursor)
+    const snapshot = jobRegistry.snapshot(jobId, cursor)
     const newEvents = snapshot?.events ?? []
     if (snapshot) {
       cursor = snapshot.nextCursor
@@ -244,27 +368,36 @@ export async function checkJob(params: {
     // yet emitted as a per-line registry `output` event — is still matchable;
     // the carry is NOT folded into `collected` (that must stay bounded and
     // event-derived, or it would double-count once the line is later emitted).
-    // For a live job (hasLiveDrainer) this `wait_for` window includes the
-    // pending lineCarry, so checkJob can return matched:true while the
-    // corresponding needle has NOT yet appeared in the returned events/
-    // outputText for that same response — the event is emitted on the next
-    // drain (≤250ms). This transient inconsistency is intentional and bounded
-    // by MAX_LINE_BYTES, not a bug.
-    if (
-      waitFor &&
-      !matched &&
-      (collected + chunk + peekJobLineCarry(job)).includes(waitFor)
-    ) {
-      matched = true
+    // When the needle is found in the pending partial line (carry), force-emit
+    // the carry as a registry output event so the returned events are consistent
+    // with matched: true. Without this, a needle in an unterminated partial line
+    // could be reported as matched while being absent from the returned events/
+    // outputText. The re-snapshot from entryCursor picks up the flushed event,
+    // so it appears in the returned events. The cursor variable in the follow
+    // loop is not updated by the flush, but this is fine because (a) the
+    // re-snapshot uses entryCursor not cursor, and (b) matched is now true so
+    // the loop exits.
+    if (waitFor && !matched) {
+      const matchWindow = collected + chunk + peekJobLineCarry(job)
+      if (matchWindow.includes(waitFor)) {
+        matched = true
+        // If the needle depends on the carry (not fully present in the
+        // already-emitted collected + chunk), force-emit the carry so the
+        // returned events are consistent with matched: true. This covers both
+        // the case where the needle is entirely in the carry and where it spans
+        // the boundary between chunk and carry. Without this, a needle in an
+        // unterminated partial line could be reported as matched while being
+        // absent from the returned events/outputText.
+        if (!(collected + chunk).includes(waitFor)) {
+          flushJobLineCarry(job)
+        }
+      }
     }
     // Bound the match window so a chatty long-running job can't grow
     // `collected` without limit (OOM) across many poll iterations.
     collected = appendBoundedCollected(collected, chunk)
     const finished = jobSettled(job)
     if (matched || finished || Date.now() >= deadline) {
-      const registryJob = jobRegistry.get(registryJobId)
-      const state = registryJob?.state ?? job.status
-      const exitCode = registryJob?.exitCode ?? job.exitCode ?? undefined
       // The follow-timeout fired (deadline reached, pattern NOT matched, job
       // NOT finished, and still running) and only in follow mode (timeoutMs > 0).
       // Poll mode (timeoutMs === 0) must never kill even though its deadline
@@ -272,95 +405,29 @@ export async function checkJob(params: {
       // there — but guard with timeoutMs > 0 to be explicit and safe.
       const timedOut =
         timeoutMs > 0 && !matched && !finished && Date.now() >= deadline
-      // Re-snapshot from the entry cursor so the returned `events` cover the
-      // FULL window [entryCursor, nextCursor) — every `output` event drained
-      // during this follow, not just the final iteration's batch. This keeps
-      // `events` consistent with `matched` (computed over the accumulated
-      // `collected` window) and with `nextCursor`, so the caller receives all
-      // output it would otherwise never be able to refetch. Bounded by the
-      // registry's per-job event/byte ring buffer.
-      const finalSnapshot = jobRegistry.snapshot(registryJobId, entryCursor)
-      const rawEvents = finalSnapshot?.events ?? newEvents
-      const boundedResult = boundEventsToOutputTail(
-        rawEvents,
-        CHECK_JOB_OUTPUT_LIMIT,
-      )
-      const events = boundedResult.events
-      const nextCursor = finalSnapshot?.nextCursor ?? cursor
-      // Advance the per-adapter consumer cursor so the next check_job does not
-      // re-serve these events. Mirrored-by-live-drainer is not the same as
-      // consumed-by-check_job; only this advance marks consumption.
-      job.lastCheckCursor = nextCursor
-      const finalDropped = finalSnapshot?.dropped ?? 0
-      const finalTruncated =
-        truncated ||
-        (finalSnapshot?.truncated ?? false) ||
-        boundedResult.truncated
-      const baseValue: {
-        jobId: string
-        state: JobState
-        events: JobEvent[]
-        nextCursor: number
-        truncated: boolean
-        dropped: number
-        exitCode?: number
-        matched?: boolean
-        logFile: string
-      } = {
+      const baseValue = buildCheckJobPollResult({
         jobId,
-        state,
-        events,
-        nextCursor,
-        truncated: finalTruncated,
-        dropped: finalDropped,
-        ...(exitCode !== undefined && exitCode !== null ? { exitCode } : {}),
-        ...(waitFor ? { matched } : {}),
-        logFile: job.logFile,
-      }
-
-      /**
-       * Resolve the one-shot settlement dirty delta the first time a settled
-       * observation is returned. Stores `[]` when snapshot/git is missing so
-       * re-polls stay idempotent and never re-attribute post-settle dirt.
-       * Returns paths to emit only on the resolving observation (omit on
-       * subsequent polls and while still running).
-       */
-      const resolveSettlementTouchedPaths = async (): Promise<
-        string[] | undefined
-      > => {
-        if (job.settlementTouchedPaths !== undefined) {
-          // Already resolved on a prior settled check_job — do not re-emit.
-          return undefined
-        }
-        if (
-          job.dirtyBeforePaths !== undefined &&
-          job.projectRoot !== undefined
-        ) {
-          const dirtyAfter = await listDirtyPaths(job.projectRoot)
-          const touched =
-            dirtyAfter !== null
-              ? dirtyDelta(new Set(job.dirtyBeforePaths), dirtyAfter)
-              : []
-          job.settlementTouchedPaths = touched
-          return touched
-        }
-        // Soft-fail: recovered jobs / no git snapshot — lock out recompute.
-        job.settlementTouchedPaths = []
-        return undefined
-      }
+        job,
+        waitFor,
+        matched,
+        entryCursor,
+        newEvents,
+        cursor,
+        truncated,
+      })
 
       if (timedOut && job.status === 'running' && killOnTimeout) {
         const killResult = killBackgroundJob(jobId, 'SIGTERM')
         if ('killed' in killResult) {
           // killBackgroundJob updates the in-memory job status; prefer the
           // fresh kill-result state/exitCode over the stale local snapshot.
-          const postKillJob = jobRegistry.get(registryJobId)
+          const postKillJob = jobRegistry.get(jobId)
           const postKillState = postKillJob?.state ?? killResult.status
           const postKillExitCode =
             postKillJob?.exitCode ?? killResult.exitCode ?? undefined
           // Kill settles the job; credit dirty delta on this first settled
           // observation (same one-shot path as natural finish).
-          const killTouched = await resolveSettlementTouchedPaths()
+          const killTouched = await resolveSettlementTouchedPaths(job)
           const killValue = {
             ...baseValue,
             state: postKillState,
@@ -396,7 +463,7 @@ export async function checkJob(params: {
       }
 
       const settlementTouched = finished
-        ? await resolveSettlementTouchedPaths()
+        ? await resolveSettlementTouchedPaths(job)
         : undefined
       const resultValue =
         settlementTouched !== undefined
@@ -429,7 +496,7 @@ export async function checkJob(params: {
     // before ever reaching this line, so wait() never blocks a poll. No
     // predicate is passed and the return value is ignored.
     const remaining = deadline - Date.now()
-    await jobRegistry.wait(registryJobId, {
+    await jobRegistry.wait(jobId, {
       timeoutMs: Math.min(POLL_INTERVAL_MS, remaining),
       cursor,
     })

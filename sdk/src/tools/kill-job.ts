@@ -5,11 +5,6 @@ import { getBackgroundJob, killBackgroundJob } from './background-jobs'
 import type { BackgroundJobOwner } from './background-jobs'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 
-/** Registry-side id backing this adapter job (recovered jobs are remapped). */
-function registryIdFor(job: { jobId: string; registryJobId?: string }): string {
-  return job.registryJobId ?? job.jobId
-}
-
 export async function killJob(params: {
   jobId: string
   signal?: 'SIGTERM' | 'SIGKILL'
@@ -38,7 +33,7 @@ export async function killJob(params: {
   // Ownership gate BEFORE any kill path: a foreign job is refused with the
   // same generic not_found error as an unknown id (no existence leak), and
   // terminateProcessTree is never reached for another session's job.
-  const ownership = jobRegistry.assertOwned(registryIdFor(job), params.owner)
+  const ownership = jobRegistry.assertOwned(job.jobId, params.owner)
   if (!ownership.ok) {
     return [
       {
