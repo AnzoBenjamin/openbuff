@@ -2,11 +2,17 @@ import { spawnSync } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it, spyOn } from 'bun:test'
 
+import { jobRegistry } from '@codebuff/common/util/job-registry'
 import { getOwnedTempRoots } from '@codebuff/common/util/project-path-containment'
 
-import { getBackgroundJob, killBackgroundJob } from '../tools/background-jobs'
+import {
+  __clearJobsForTest,
+  getBackgroundJob,
+  killBackgroundJob,
+  startBackgroundJob,
+} from '../tools/background-jobs'
 import {
   findWindowsBash,
   runTerminalCommand,
@@ -470,5 +476,63 @@ describe('runTerminalCommand BACKGROUND dirty snapshot at start', () => {
     } finally {
       fs.rmSync(projectRoot, { recursive: true, force: true })
     }
+  })
+})
+
+describe('startBackgroundJob failed-spawn log file preservation', () => {
+  const FORCED_ID = 'job-test-forced-eexist'
+  const FOREIGN_CONTENT = 'foreign log data that must survive\n'
+  let foreignLogFile: string | undefined
+  let createSpy: { mockRestore(): void } | undefined
+
+  afterEach(() => {
+    createSpy?.mockRestore()
+    createSpy = undefined
+    if (foreignLogFile !== undefined) {
+      fs.rmSync(foreignLogFile, { force: true })
+      foreignLogFile = undefined
+    }
+    __clearJobsForTest()
+  })
+
+  it('preserves a pre-existing foreign log when creation hits EEXIST', () => {
+    foreignLogFile = path.join(os.tmpdir(), `openbuff-${FORCED_ID}.log`)
+    fs.writeFileSync(foreignLogFile, FOREIGN_CONTENT)
+
+    // Force the registry to allocate exactly the id whose log file already
+    // exists, so safeCreateJobLogFile's O_EXCL create fails with EEXIST and
+    // the catch block runs before spawn is ever reached.
+    const realCreate = jobRegistry.create.bind(jobRegistry)
+    const spy = spyOn(jobRegistry, 'create').mockImplementation((opts) => {
+      realCreate({ ...opts, jobId: FORCED_ID })
+      return jobRegistry.get(FORCED_ID)!
+    })
+    createSpy = spy
+
+    try {
+      expect(() =>
+        startBackgroundJob({
+          command: 'sleep 30',
+          shell: 'sh',
+          shellArgs: ['-c'],
+          cwd: process.cwd(),
+          env: { ...process.env },
+          owner: {
+            clientSessionId: 'session-eexist',
+            rootRunId: 'root-eexist',
+            parentRunId: 'parent-eexist',
+            parentAgentId: 'agent-eexist',
+          },
+        }),
+      ).toThrow()
+    } finally {
+      spy.mockRestore()
+      createSpy = undefined
+    }
+
+    // The failed-spawn cleanup must not delete a pre-existing/foreign log
+    // file this spawn never created (logFileCreatedByThisSpawn guard).
+    expect(fs.existsSync(foreignLogFile)).toBe(true)
+    expect(fs.readFileSync(foreignLogFile, 'utf8')).toBe(FOREIGN_CONTENT)
   })
 })
