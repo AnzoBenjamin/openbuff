@@ -93,6 +93,220 @@ describe('grammar WASM repair', () => {
     ).toBeNull()
   })
 
+  test('retries transient network failures and succeeds on a later attempt', async () => {
+    const targetDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-grammar-repair-'),
+    )
+    roots.push(targetDir)
+    const sourcePath =
+      require.resolve('tree-sitter-wasms/out/tree-sitter-javascript.wasm')
+    const bytes = fs.readFileSync(sourcePath)
+    let fetchCalls = 0
+
+    const repaired = await repairGrammarWasm({
+      wasmFile: 'tree-sitter-javascript.wasm',
+      targetDir,
+      retryDelayMs: 0,
+      fetchImpl: async () => {
+        fetchCalls++
+        if (fetchCalls === 1) throw new Error('socket hang up')
+        return new Response(bytes) as Response
+      },
+    })
+
+    expect(fetchCalls).toBe(2)
+    expect(repaired).toBe(path.join(targetDir, 'tree-sitter-javascript.wasm'))
+    expect(fs.readFileSync(repaired!)).toEqual(bytes)
+  })
+
+  test('retries retryable 5xx and 429 responses before succeeding', async () => {
+    const targetDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-grammar-repair-'),
+    )
+    roots.push(targetDir)
+    const sourcePath =
+      require.resolve('tree-sitter-wasms/out/tree-sitter-javascript.wasm')
+    const bytes = fs.readFileSync(sourcePath)
+    let fetchCalls = 0
+
+    const repaired = await repairGrammarWasm({
+      wasmFile: 'tree-sitter-javascript.wasm',
+      targetDir,
+      retryDelayMs: 0,
+      fetchImpl: async () => {
+        fetchCalls++
+        if (fetchCalls === 1) {
+          return new Response('service unavailable', {
+            status: 503,
+          }) as Response
+        }
+        if (fetchCalls === 2) {
+          return new Response('too many requests', { status: 429 }) as Response
+        }
+        return new Response(bytes) as Response
+      },
+    })
+
+    expect(fetchCalls).toBe(3)
+    expect(repaired).toBe(path.join(targetDir, 'tree-sitter-javascript.wasm'))
+    expect(fs.readFileSync(repaired!)).toEqual(bytes)
+  })
+
+  test('does not retry a sha256 mismatch and reports the distinct reason', async () => {
+    const targetDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-grammar-repair-'),
+    )
+    roots.push(targetDir)
+    let fetchCalls = 0
+    const failureReasons: string[] = []
+
+    const repaired = await repairGrammarWasm({
+      wasmFile: 'tree-sitter-javascript.wasm',
+      targetDir,
+      retryDelayMs: 0,
+      fetchImpl: async () => {
+        fetchCalls++
+        return new Response('not a grammar') as Response
+      },
+      onFailure: (reason) => {
+        failureReasons.push(reason)
+      },
+    })
+
+    expect(fetchCalls).toBe(1)
+    expect(repaired).toBeNull()
+    expect(failureReasons).toEqual([
+      'downloaded bytes failed sha256 verification',
+    ])
+  })
+
+  test('gives up after three attempts and reports the last retryable status', async () => {
+    const targetDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-grammar-repair-'),
+    )
+    roots.push(targetDir)
+    let fetchCalls = 0
+    const failureReasons: string[] = []
+
+    const repaired = await repairGrammarWasm({
+      wasmFile: 'tree-sitter-javascript.wasm',
+      targetDir,
+      retryDelayMs: 0,
+      fetchImpl: async () => {
+        fetchCalls++
+        return new Response('overloaded', { status: 503 }) as Response
+      },
+      onFailure: (reason) => {
+        failureReasons.push(reason)
+      },
+    })
+
+    expect(fetchCalls).toBe(3)
+    expect(repaired).toBeNull()
+    expect(failureReasons).toEqual(['HTTP 503 after 3 attempts'])
+  })
+
+  test('reports the last observable failure when a network error precedes retryable statuses', async () => {
+    const targetDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-grammar-repair-'),
+    )
+    roots.push(targetDir)
+    let fetchCalls = 0
+    const failureReasons: string[] = []
+
+    const repaired = await repairGrammarWasm({
+      wasmFile: 'tree-sitter-javascript.wasm',
+      targetDir,
+      retryDelayMs: 0,
+      fetchImpl: async () => {
+        fetchCalls++
+        if (fetchCalls === 1) throw new Error('socket hang up')
+        return new Response('overloaded', { status: 503 }) as Response
+      },
+      onFailure: (reason) => {
+        failureReasons.push(reason)
+      },
+    })
+
+    expect(fetchCalls).toBe(3)
+    expect(repaired).toBeNull()
+    expect(failureReasons).toEqual(['HTTP 503 after 3 attempts'])
+  })
+
+  test('reports the last observable failure when retryable statuses precede a network error', async () => {
+    const targetDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-grammar-repair-'),
+    )
+    roots.push(targetDir)
+    let fetchCalls = 0
+    const failureReasons: string[] = []
+
+    const repaired = await repairGrammarWasm({
+      wasmFile: 'tree-sitter-javascript.wasm',
+      targetDir,
+      retryDelayMs: 0,
+      fetchImpl: async () => {
+        fetchCalls++
+        if (fetchCalls < 3) {
+          return new Response('overloaded', { status: 503 }) as Response
+        }
+        throw new Error('connection reset by peer')
+      },
+      onFailure: (reason) => {
+        failureReasons.push(reason)
+      },
+    })
+
+    expect(fetchCalls).toBe(3)
+    expect(repaired).toBeNull()
+    expect(failureReasons).toEqual([
+      'network error after 3 attempts: connection reset by peer',
+    ])
+  })
+
+  test('releases discarded response bodies for retryable and non-retryable failures', async () => {
+    const targetDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-grammar-repair-'),
+    )
+    roots.push(targetDir)
+    const cancelCountGetters: Array<() => number> = []
+    const trackedFailureResponse = (status: number): Response => {
+      let cancelCount = 0
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('discarded body'))
+          controller.close()
+        },
+        cancel() {
+          cancelCount++
+        },
+      })
+      cancelCountGetters.push(() => cancelCount)
+      return new Response(body, { status }) as Response
+    }
+
+    const retryable = await repairGrammarWasm({
+      wasmFile: 'tree-sitter-javascript.wasm',
+      targetDir,
+      retryDelayMs: 0,
+      fetchImpl: async () => trackedFailureResponse(503),
+    })
+    expect(retryable).toBeNull()
+    expect(cancelCountGetters.map((getCount) => getCount())).toEqual([
+      1, 1, 1,
+    ])
+
+    cancelCountGetters.length = 0
+    const nonRetryable = await repairGrammarWasm({
+      wasmFile: 'tree-sitter-javascript.wasm',
+      targetDir,
+      retryDelayMs: 0,
+      fetchImpl: async () => trackedFailureResponse(404),
+    })
+    expect(nonRetryable).toBeNull()
+    expect(cancelCountGetters.map((getCount) => getCount())).toEqual([1])
+  })
+
   test('uses checksum-pinned repair when installed package candidates are missing', async () => {
     const targetDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'openbuff-grammar-resolver-'),
@@ -156,6 +370,34 @@ describe('grammar WASM repair', () => {
     })
 
     expect(resolved).toBe(repairedPath)
+  })
+
+  test('explains why checksum-pinned repair failed when retries are exhausted', async () => {
+    const targetDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-grammar-resolver-'),
+    )
+    roots.push(targetDir)
+    let fetchCalls = 0
+
+    await expect(
+      resolveGrammarWasmSource({
+        wasmFile: 'tree-sitter-gdscript.wasm',
+        candidates: [path.join(targetDir, 'missing.wasm')],
+        repairDir: targetDir,
+        repairImpl: async (repairParams) =>
+          repairGrammarWasm({
+            ...repairParams,
+            retryDelayMs: 0,
+            fetchImpl: async () => {
+              fetchCalls++
+              throw new Error('connection reset by peer')
+            },
+          }),
+      }),
+    ).rejects.toThrow(
+      'checksum-pinned repair failed: network error after 3 attempts: connection reset by peer',
+    )
+    expect(fetchCalls).toBe(3)
   })
 
   test('fails closed when neither package candidates nor pinned repair exist', async () => {
