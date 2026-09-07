@@ -89,55 +89,67 @@ describe('runTerminalCommand cwd containment', () => {
       parentRunId: 'parent-1',
       parentAgentId: 'agent-1',
     }
-    const result = await runTerminalCommand({
-      command: 'sleep 30',
-      process_type: 'BACKGROUND',
-      cwd: process.cwd(),
-      projectRoot: process.cwd(),
-      timeout_seconds: 5,
-      signal: controller.signal,
-      owner,
-    })
-    const value = result[0].value as { jobId?: string; detached?: boolean }
-    expect(value.detached).toBe(false)
-    expect(value.jobId).toBeDefined()
+    let value: { jobId?: string; detached?: boolean } | undefined
+    try {
+      const result = await runTerminalCommand({
+        command: 'sleep 30',
+        process_type: 'BACKGROUND',
+        cwd: process.cwd(),
+        projectRoot: process.cwd(),
+        timeout_seconds: 5,
+        signal: controller.signal,
+        owner,
+      })
+      value = result[0].value as { jobId?: string; detached?: boolean }
+      expect(value.detached).toBe(false)
+      expect(value.jobId).toBeDefined()
 
-    const runningJob = getBackgroundJob(value.jobId!)
-    expect(runningJob?.owner).toEqual(owner)
-    expect(
-      JSON.parse(fs.readFileSync(runningJob!.metadataFile, 'utf8')).owner,
-    ).toEqual(owner)
+      const runningJob = getBackgroundJob(value.jobId!)
+      expect(runningJob?.owner).toEqual(owner)
+      expect(
+        JSON.parse(fs.readFileSync(runningJob!.metadataFile, 'utf8')).owner,
+      ).toEqual(owner)
 
-    controller.abort()
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    const job = getBackgroundJob(value.jobId!)
-    // An abort-initiated kill is an intentional stop, recorded as 'stopped'
-    // (distinct from an error/non-zero natural exit).
-    expect(job?.status).toBe('stopped')
-    killBackgroundJob(value.jobId!, 'SIGKILL')
+      controller.abort()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      const job = getBackgroundJob(value.jobId!)
+      // An abort-initiated kill is an intentional stop, recorded as 'stopped'
+      // (distinct from an error/non-zero natural exit).
+      expect(job?.status).toBe('stopped')
+    } finally {
+      if (value?.jobId !== undefined) {
+        killBackgroundJob(value.jobId, 'SIGKILL')
+      }
+    }
   })
 
   it('terminates a background job that exceeds the bounded log quota', async () => {
-    const result = await runTerminalCommand({
-      command: 'yes x | head -c 12000000; sleep 30',
-      process_type: 'BACKGROUND',
-      cwd: process.cwd(),
-      projectRoot: process.cwd(),
-      timeout_seconds: 5,
-    })
-    const value = result[0].value as { jobId?: string }
-    expect(value.jobId).toBeDefined()
+    let value: { jobId?: string } | undefined
+    try {
+      const result = await runTerminalCommand({
+        command: 'yes x | head -c 12000000; sleep 30',
+        process_type: 'BACKGROUND',
+        cwd: process.cwd(),
+        projectRoot: process.cwd(),
+        timeout_seconds: 5,
+      })
+      value = result[0].value as { jobId?: string }
+      expect(value.jobId).toBeDefined()
 
-    const deadline = Date.now() + 5_000
-    let job = getBackgroundJob(value.jobId!)
-    while (job?.status === 'running' && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 25))
-      job = getBackgroundJob(value.jobId!)
+      const deadline = Date.now() + 5_000
+      let job = getBackgroundJob(value.jobId!)
+      while (job?.status === 'running' && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25))
+        job = getBackgroundJob(value.jobId!)
+      }
+
+      expect(job?.status).toBe('error')
+      expect(fs.statSync(job!.logFile).size).toBeLessThanOrEqual(10 * 1024 * 1024)
+    } finally {
+      if (value?.jobId !== undefined) {
+        killBackgroundJob(value.jobId, 'SIGKILL')
+      }
     }
-
-    expect(job?.status).toBe('error')
-    expect(fs.statSync(job!.logFile).size).toBeLessThanOrEqual(10 * 1024 * 1024)
-    killBackgroundJob(value.jobId!, 'SIGKILL')
   })
 
   it('accepts the project root itself as cwd', async () => {
@@ -298,28 +310,23 @@ describe('runTerminalCommand cwd containment', () => {
   })
 })
 
-describe('runTerminalCommand SYNC dirty-delta touchedPaths', () => {
-  function initTempGitRepo(): string {
-    const projectRoot = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'terminal-dirty-'),
-    )
-    const run = (args: string[]) =>
-      spawnSync('git', args, {
-        cwd: projectRoot,
-        encoding: 'utf8',
-      })
-    expect(run(['init']).status).toBe(0)
-    run(['config', 'user.email', 'test@example.com'])
-    run(['config', 'user.name', 'Test'])
-    // Optional initial commit keeps porcelain stable across git versions.
-    fs.writeFileSync(path.join(projectRoot, 'README'), 'seed\n')
-    run(['add', 'README'])
-    run(['commit', '-m', 'seed'])
-    return projectRoot
-  }
+function initTempGitRepo(prefix: string): string {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  const run = (args: string[]) =>
+    spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8' })
+  expect(run(['init']).status).toBe(0)
+  run(['config', 'user.email', 'test@example.com'])
+  run(['config', 'user.name', 'Test'])
+  // Optional initial commit keeps porcelain stable across git versions.
+  fs.writeFileSync(path.join(projectRoot, 'README'), 'seed\n')
+  run(['add', 'README'])
+  run(['commit', '-m', 'seed'])
+  return projectRoot
+}
 
+describe('runTerminalCommand SYNC dirty-delta touchedPaths', () => {
   it('reports newly created project files in touchedPaths', async () => {
-    const projectRoot = initTempGitRepo()
+    const projectRoot = initTempGitRepo('terminal-dirty-')
     try {
       // Pre-existing dirt must not appear in the delta.
       fs.writeFileSync(path.join(projectRoot, 'already-dirty.txt'), 'old\n')
@@ -346,7 +353,7 @@ describe('runTerminalCommand SYNC dirty-delta touchedPaths', () => {
   })
 
   it('attributes paths relative to projectRoot when cwd is a subdirectory', async () => {
-    const projectRoot = initTempGitRepo()
+    const projectRoot = initTempGitRepo('terminal-dirty-')
     try {
       const sub = path.join(projectRoot, 'pkg')
       fs.mkdirSync(sub)
@@ -396,26 +403,13 @@ describe('runTerminalCommand SYNC dirty-delta touchedPaths', () => {
 })
 
 describe('runTerminalCommand BACKGROUND dirty snapshot at start', () => {
-  function initTempGitRepo(): string {
-    const projectRoot = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'terminal-bg-dirty-'),
-    )
-    const run = (args: string[]) =>
-      spawnSync('git', args, {
-        cwd: projectRoot,
-        encoding: 'utf8',
-      })
-    expect(run(['init']).status).toBe(0)
-    run(['config', 'user.email', 'test@example.com'])
-    run(['config', 'user.name', 'Test'])
-    fs.writeFileSync(path.join(projectRoot, 'README'), 'seed\n')
-    run(['add', 'README'])
-    run(['commit', '-m', 'seed'])
-    return projectRoot
-  }
-
   it('stores pre-start dirty snapshot on the job without emitting touchedPaths', async () => {
-    const projectRoot = initTempGitRepo()
+    const projectRoot = initTempGitRepo('terminal-bg-dirty-')
+    let value: {
+      jobId?: string
+      touchedPaths?: string[]
+      backgroundProcessStatus?: string
+    } | undefined
     try {
       fs.writeFileSync(path.join(projectRoot, 'already-dirty.txt'), 'old\n')
 
@@ -426,7 +420,7 @@ describe('runTerminalCommand BACKGROUND dirty snapshot at start', () => {
         projectRoot,
         timeout_seconds: 5,
       })
-      const value = result[0].value as {
+      value = result[0].value as {
         jobId?: string
         touchedPaths?: string[]
         backgroundProcessStatus?: string
@@ -442,9 +436,10 @@ describe('runTerminalCommand BACKGROUND dirty snapshot at start', () => {
       expect(job?.dirtyBeforePaths).toContain('already-dirty.txt')
       expect(job?.dirtyBeforePaths).not.toContain('created-by-bg.txt')
       expect(job?.settlementTouchedPaths).toBeUndefined()
-
-      killBackgroundJob(value.jobId!, 'SIGKILL')
     } finally {
+      if (value?.jobId !== undefined) {
+        killBackgroundJob(value.jobId, 'SIGKILL')
+      }
       fs.rmSync(projectRoot, { recursive: true, force: true })
     }
   })
@@ -453,6 +448,7 @@ describe('runTerminalCommand BACKGROUND dirty snapshot at start', () => {
     const projectRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), 'terminal-bg-nongit-'),
     )
+    let value: { jobId?: string; touchedPaths?: string[] } | undefined
     try {
       const result = await runTerminalCommand({
         command: 'sleep 30',
@@ -461,7 +457,7 @@ describe('runTerminalCommand BACKGROUND dirty snapshot at start', () => {
         projectRoot,
         timeout_seconds: 5,
       })
-      const value = result[0].value as {
+      value = result[0].value as {
         jobId?: string
         touchedPaths?: string[]
       }
@@ -471,9 +467,10 @@ describe('runTerminalCommand BACKGROUND dirty snapshot at start', () => {
       const job = getBackgroundJob(value.jobId!)
       expect(job?.projectRoot).toBe(projectRoot)
       expect(job?.dirtyBeforePaths).toBeUndefined()
-
-      killBackgroundJob(value.jobId!, 'SIGKILL')
     } finally {
+      if (value?.jobId !== undefined) {
+        killBackgroundJob(value.jobId, 'SIGKILL')
+      }
       fs.rmSync(projectRoot, { recursive: true, force: true })
     }
   })
