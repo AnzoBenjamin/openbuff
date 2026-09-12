@@ -289,6 +289,56 @@ describe('task memory', () => {
     ).toContain('target file behavior')
   })
 
+  test('current request terms pull older relevant evidence ahead of newer unrelated evidence', () => {
+    const memory = commitTaskMemory({
+      draft: {
+        ...draft,
+        evidence: [
+          {
+            id: 'older-auth-evidence',
+            kind: 'validation' as const,
+            summary: 'Authentication websocket regression reproduced',
+            verifiedAt: 1,
+          },
+          ...Array.from({ length: 8 }, (_, index) => ({
+            id: `newer-unrelated-${index}`,
+            kind: 'note' as const,
+            summary: `Unrelated formatting observation ${index}`,
+            verifiedAt: 100 + index,
+          })),
+        ],
+      },
+      expectedRevision: -1,
+      now: 5,
+    })
+    const compileParams = {
+      memory,
+      agentType: 'editor',
+      contextWindowTokens: 8_000,
+      rootAgent: false,
+    }
+
+    const legacy = compileTaskMemoryContext(compileParams)
+    expect(legacy).not.toContain('Authentication websocket regression')
+    // An omitted or sanitized-empty query preserves the exact legacy output.
+    expect(
+      compileTaskMemoryContext({ ...compileParams, currentRequest: '   ' }),
+    ).toBe(legacy)
+
+    const ranked = compileTaskMemoryContext({
+      ...compileParams,
+      currentRequest: 'Fix the websocket authentication regression',
+    })
+    expect(ranked).toContain('Authentication websocket regression')
+    // Ranking and score ties remain deterministic.
+    expect(
+      compileTaskMemoryContext({
+        ...compileParams,
+        currentRequest: 'Fix the websocket authentication regression',
+      }),
+    ).toBe(ranked)
+  })
+
   test('focus matching ignores near-miss filenames and honors directory prefixes', () => {
     const memory = commitTaskMemory({
       draft: {
@@ -666,31 +716,42 @@ describe('task memory', () => {
     })
   })
 
-  test('ensureTaskMemoryGoal captures the goal once and never burns repeat revisions', () => {
-    // Nothing observed and nothing stored: no record is worth creating.
+  test('ensureTaskMemoryGoal replaces a stale goal once and never burns repeat revisions', () => {
+    // Nothing substantive observed and nothing stored: no record is worth creating.
     expect(ensureTaskMemoryGoal({ goal: '   ' })).toBeUndefined()
+    expect(ensureTaskMemoryGoal({ goal: '/compact' })).toBeUndefined()
 
-    const withoutGoal = commitTaskMemory({
-      draft: { ...draft, goal: '' },
+    const hydrated = commitTaskMemory({
+      draft: { ...draft, goal: 'Unrelated goal from the previous request' },
       expectedRevision: -1,
       now: 1,
     })
     const captured = ensureTaskMemoryGoal({
-      current: withoutGoal,
-      goal: '  Capture the goal outside compaction  ',
+      current: hydrated,
+      goal: '  Capture the trusted current request  ',
       workspaceState: createInitialWorkspaceState(0),
     })
-    expect(captured?.goal).toBe('Capture the goal outside compaction')
-    expect(captured?.revision).toBe(withoutGoal.revision + 1)
+    expect(captured?.goal).toBe('Capture the trusted current request')
+    expect(captured?.revision).toBe(hydrated.revision + 1)
     expect(captured?.workspaceRevision).toBe(0)
     expect(captured?.workspaceSnapshotId).toBe('workspace.v1.0.00000000')
-    // Other fields survive the goal-only commit.
-    expect(captured?.requirements).toEqual(withoutGoal.requirements)
+    // Other hydrated fields survive the goal-only replacement.
+    expect(captured?.requirements).toEqual(hydrated.requirements)
 
-    // Repeat steps must reuse the same object so no revision is spent.
+    // Repeat steps and non-substantive commands reuse the same object, so no
+    // further revision is spent and the active goal cannot be erased.
     expect(
-      ensureTaskMemoryGoal({ current: captured, goal: 'A different phrasing' }),
+      ensureTaskMemoryGoal({
+        current: captured,
+        goal: 'Capture the trusted current request',
+      }),
     ).toBe(captured)
+    expect(ensureTaskMemoryGoal({ current: captured, goal: 'compact' })).toBe(
+      captured,
+    )
+    expect(ensureTaskMemoryGoal({ current: captured, goal: '   ' })).toBe(
+      captured,
+    )
   })
 
   test('recordToolEvidenceInTaskMemory records root-level reads', () => {

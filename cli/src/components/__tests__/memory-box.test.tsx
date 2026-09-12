@@ -51,6 +51,22 @@ const makeStatusBlock = (
 })
 
 describe('MemoryBox', () => {
+  test('renders generic V2 report lines and safe insert commands', () => {
+    const block: MemoryContentBlock = {
+      type: 'memory',
+      state: 'report',
+      title: 'Memory V2 query',
+      tone: 'warning',
+      lines: ['Verified: 2', 'Reread required: 1'],
+      insertCommands: [{ label: 'Apply correction', command: '/memory correct obs replacement --apply' }],
+    }
+    const markup = renderToStaticMarkup(<MemoryBox block={block} />)
+    expect(markup).toContain('Memory V2 query')
+    expect(markup).toContain('Verified: 2')
+    expect(markup).toContain('Reread required: 1')
+    expect(markup).toContain('Apply correction')
+  })
+
   test('empty renders without throwing and contains empty messages', () => {
     const block: MemoryContentBlock = { type: 'memory', state: 'empty' }
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)

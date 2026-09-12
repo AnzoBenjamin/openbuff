@@ -10,6 +10,18 @@ import type { DiscoveryCoverageV1 } from './discovery-coverage'
 import type { AgentReceipt } from './agent-handoff'
 import type { WorkspaceStateV1 } from './workspace-state'
 import { createInitialWorkspaceState } from './workspace-state'
+import type {
+  MemoryAuthorityMode,
+  MemoryEventId,
+  MemorySessionId,
+  MemoryTurnContextV2,
+  ProjectId,
+  QueryCategoryCounts,
+  QueryDegradationSummary,
+  QueryId,
+  TaskId,
+  TaskStatus,
+} from './memory-v2'
 
 export const toolCallSchema = z.object({
   toolName: z.string(),
@@ -116,6 +128,147 @@ export interface ContextBudgetLedger {
    * note when this flag is set.
    */
   compactedAtTurn?: boolean
+}
+
+export type MemoryAuthorityReasonCode =
+  | 'invalid-authority'
+  | 'json-v1-selected'
+  | 'shadow-v2-selected'
+  | 'migration-checksum-mismatch'
+  | 'migration-rejected'
+  | 'migration-failed'
+  | 'lifecycle-append-rejected'
+  | 'lifecycle-append-failed'
+  | 'query-rejected'
+  | 'query-failed'
+  | 'query-threw'
+  | 'query-invalid-result'
+  /** Shared decision S4: repository/storage could not be reached this turn. */
+  | 'backend-unavailable'
+
+export type MemoryV1ImportWarningCode =
+  | 'goal-excluded'
+  | 'observation-cap-reached'
+  | 'legacy-evidence-unverified'
+  | 'stale-evidence-omitted'
+  | 'unsafe-path-omitted'
+  | 'empty-field-omitted'
+  | 'text-truncated'
+
+export type MemoryV1ImportState =
+  | { status: 'not-required' | 'no-record' }
+  | {
+      status: 'imported' | 'no-op'
+      revision: number
+      checksum: string
+      identity: string
+      importedObservations: number
+      omittedFields: number
+      warningCodes: MemoryV1ImportWarningCode[]
+    }
+  | {
+      status: 'failed'
+      revision?: number
+      checksum?: string
+      reason: Extract<
+        MemoryAuthorityReasonCode,
+        'migration-checksum-mismatch' | 'migration-rejected' | 'migration-failed'
+      >
+    }
+
+export interface MemoryParityCountsV2 {
+  v1: {
+    requirements: number
+    decisions: number
+    filesInspected: number
+    editsMade: number
+    validationResults: number
+    reviewReceipts: number
+    blockers: number
+    nextActions: number
+    historicalSummary: number
+    evidenceFresh: number
+    evidenceStale: number
+  }
+  v2: {
+    matched: number
+    verified: number
+    reusable: number
+    reread: number
+    historical: number
+    importedCoverage: number
+  }
+}
+
+export interface MemoryParityStateV2 {
+  revision: number
+  checksum: string
+  classification: 'match' | 'v1-ahead' | 'v2-ahead' | 'diverged' | 'unavailable'
+  reasonCodes: Array<
+    | 'coverage-equivalent'
+    | 'v1-counts-greater'
+    | 'v2-counts-greater'
+    | 'mixed-count-difference'
+    | 'import-unavailable'
+  >
+  counts: MemoryParityCountsV2
+}
+
+/** Plain-JSON authority and parity state for the current trusted turn. */
+export interface MemoryAuthorityStateV2 {
+  schemaVersion: 1
+  userInputId: string
+  requested: MemoryAuthorityMode
+  active: MemoryAuthorityMode
+  fallbackOccurred: boolean
+  reason?: MemoryAuthorityReasonCode
+  v1CompatibilityShadowAvailable: boolean
+  v1Import: MemoryV1ImportState
+  parity?: MemoryParityStateV2
+}
+
+/** Plain-JSON Memory V2 correlation state persisted with checkpoints. */
+export interface MemoryRuntimeStateV2 {
+  schemaVersion: 2
+  projectId: ProjectId
+  sessionId: MemorySessionId
+  sessionStartedAt: string
+  lastEventId?: MemoryEventId
+  activeTask: {
+    taskId: TaskId
+    status: TaskStatus
+  }
+  turn: {
+    userInputId: string
+    queryId: QueryId
+    startedAt: string
+    /** 'finishing' = terminal decision parked; terminal batch not yet committed. */
+    status: 'active' | 'finishing' | 'completed' | 'failed' | 'cancelled'
+  }
+  /**
+   * Terminal decision whose lifecycle batch has not been confirmed appended
+   * yet (reliability:terminal-state-precedes-terminal-append). Set when the
+   * turn enters 'finishing' and cleared once the terminal batch commits (or is
+   * confirmed idempotent on replay), so a later finishTurn can replay the same
+   * deterministic batch after a storage failure. Optional, so existing
+   * serialized states keep parsing unchanged.
+   */
+  pendingTerminal?: {
+    status: 'completed' | 'failed' | 'cancelled'
+    endedAt: string
+    /** Exact bounded query terminal decision used to rebuild the parked batch. */
+    query:
+      | {
+          outcome: 'completed'
+          counts: QueryCategoryCounts
+          degradation: QueryDegradationSummary
+        }
+      | {
+          outcome: 'failed'
+          error: string
+          retryable: boolean
+        }
+  }
 }
 
 export type AgentState = {
@@ -245,6 +398,12 @@ export type AgentState = {
   }>
   /** Typed operational memory compiled into each model request independently of chat summaries. */
   taskMemory?: TaskMemoryV1
+  /** Opt-in runtime-neutral Memory V2 lifecycle state. */
+  memoryV2?: MemoryRuntimeStateV2
+  /** Requested and effective memory authority for the current trusted turn. */
+  memoryAuthority?: MemoryAuthorityStateV2
+  /** Validated retrieval context for the current trusted turn only. */
+  memoryV2Context?: MemoryTurnContextV2
   /** Monotonic workspace state shared by reads, mutations, indexing, validation, and review. */
   workspaceState?: WorkspaceStateV1
   /**
@@ -435,6 +594,9 @@ export function getInitialAgentState(): AgentState {
     confirmedPostEditAnchorsByPath: {},
     editRereadRequirementsByPath: {},
     taskMemory: undefined,
+    memoryV2: undefined,
+    memoryAuthority: undefined,
+    memoryV2Context: undefined,
     workspaceState: createInitialWorkspaceState(),
     backgroundAgentJobs: [],
   }

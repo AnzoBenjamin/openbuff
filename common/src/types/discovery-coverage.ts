@@ -4,8 +4,10 @@ export const discoveryCoverageV1Schema = z.object({
   schemaVersion: z.literal(1),
   revision: z.number().int().nonnegative(),
   workspaceRevision: z.number().int().nonnegative().optional(),
+  taskId: z.string().min(1).optional(),
   queryHash: z.string().min(1),
   indexSnapshotId: z.string().optional(),
+  workspaceSnapshotId: z.string().optional(),
   candidates: z.array(
     z.object({
       path: z.string().min(1),
@@ -22,6 +24,7 @@ export const discoveryCoverageV1Schema = z.object({
       agentType: z.string().min(1),
       question: z.string().min(1),
       status: z.enum(['active', 'completed', 'failed', 'interrupted']),
+      taskId: z.string().min(1).optional(),
       assignedAt: z.number().int().nonnegative(),
       completedAt: z.number().int().nonnegative().optional(),
     }),

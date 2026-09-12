@@ -5,6 +5,8 @@ import { getStubProjectFileContext } from '@codebuff/common/util/file'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
 import { RetryError } from 'ai'
+import { ProjectIdSchema, type MemoryAppendOutcome } from '@codebuff/common/types/memory-v2'
+import type { MemoryRepositoryV2 } from '../services/memory-v2/types'
 
 // Type for tool call content blocks in message history
 interface ToolCallContentBlock {
@@ -1391,4 +1393,83 @@ describe('Run Cancellation Handling', () => {
     })
     expect(lateChunks).toEqual([])
   })
+
+  it.each(['timeout', 'external'] as const)(
+    'abandons staged Memory V2 preparation on $case cancellation',
+    async (kind) => {
+      spyOn(databaseModule, 'getUserInfoFromApiKey').mockResolvedValue({
+        id: 'user-123', email: 'test@example.com', discord_id: null,
+        stripe_customer_id: null, banned: false,
+        created_at: new Date('2024-01-01T00:00:00Z'),
+      })
+      const gate = (() => {
+        let resolve!: () => void
+        const promise = new Promise<void>((done) => { resolve = done })
+        return { promise, resolve }
+      })()
+      let appendStarted!: () => void
+      const started = new Promise<void>((done) => { appendStarted = done })
+      let appends = 0
+      const repository: MemoryRepositoryV2 = {
+        async append(request): Promise<MemoryAppendOutcome> {
+          appends++
+          appendStarted()
+          await gate.promise
+          return {
+            outcome: 'appended',
+            entries: request.events.map((event, sequence) => ({
+              eventId: event.eventId, sequence, duplicate: false,
+            })),
+            lastEventId: request.events.at(-1)!.eventId,
+          }
+        },
+        async query() { throw new Error('query must not run') },
+        async verify() { throw new Error('unused') },
+        async rebuild() { throw new Error('unused') },
+        async health() { throw new Error('unused') },
+        async export() { throw new Error('unused') },
+      }
+      let modelCalls = 0
+      spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(async () => {
+        modelCalls++
+        throw new Error('must not run')
+      })
+      const abortController = new AbortController()
+      const client = new OpenbuffClient({
+        apiKey: 'test-key',
+        runTimeoutMs: kind === 'timeout' ? 5 : undefined,
+        memoryV2: {
+          repository,
+          projectId: ProjectIdSchema.parse('project:cancellation'),
+          authority: 'sqlite-v2-opt-in',
+          capture: 'safe',
+        },
+      })
+      const runPromise = client.run({
+        agent: 'base2',
+        prompt: 'cancel before model',
+        signal: abortController.signal,
+      })
+      await started
+      if (kind === 'external') abortController.abort(new Error('external cancel'))
+      const result = await runPromise
+      const memoryFields = JSON.stringify({
+        memoryV2: result.sessionState?.mainAgentState.memoryV2,
+        memoryV2Context: result.sessionState?.mainAgentState.memoryV2Context,
+        memoryAuthority: result.sessionState?.mainAgentState.memoryAuthority,
+      })
+      expect(result.output.type).toBe('error')
+      expect(modelCalls).toBe(0)
+      expect(appends).toBe(1)
+      gate.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(JSON.stringify({
+        memoryV2: result.sessionState?.mainAgentState.memoryV2,
+        memoryV2Context: result.sessionState?.mainAgentState.memoryV2Context,
+        memoryAuthority: result.sessionState?.mainAgentState.memoryAuthority,
+      })).toBe(memoryFields)
+      expect(appends).toBe(1)
+    },
+  )
 })

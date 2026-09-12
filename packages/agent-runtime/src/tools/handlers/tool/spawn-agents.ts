@@ -34,6 +34,7 @@ import {
   buildDiscoveryQuestion,
   claimDiscoveryShard,
   completeDiscoveryShard,
+  recordDiscoveryResult,
 } from '../../../orchestration/discovery-coordinator'
 
 import type { BackgroundAgentJob } from '../../../util/background-agent-jobs'
@@ -255,6 +256,8 @@ export const handleSpawnAgents = (async (
           spawnParams: validated.runtimeSpawnParams,
         }),
         workspaceRevision: parentAgentState.workspaceState?.revision,
+        taskId: validated.handoff?.taskId ?? parentAgentState.runId ?? parentAgentState.agentId,
+        workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
       })
       nextDiscoveryCoverage = claimed.state
       validated.discoveryShardKey = claimed.shardKey
@@ -494,6 +497,19 @@ export const handleSpawnAgents = (async (
               intent.receipt = receipt
             }
             releaseWorkspacePathLease(parentAgentState, validated.leaseId)
+            parentAgentState.discoveryCoverage = recordDiscoveryResult({
+              existing: parentAgentState.discoveryCoverage,
+              agentType,
+              question: buildDiscoveryQuestion({
+                agentType,
+                prompt: validated.input.prompt,
+                objective: validated.handoff?.objective,
+                spawnParams: validated.runtimeSpawnParams,
+              }),
+              result: result.output,
+              workspaceRevision: parentAgentState.workspaceState?.revision,
+              workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
+            })
             parentAgentState.discoveryCoverage = completeDiscoveryShard({
               existing: parentAgentState.discoveryCoverage,
               shardKey: validated.discoveryShardKey,
@@ -764,6 +780,21 @@ export const handleSpawnAgents = (async (
         parentAgentState,
         foregroundAgents[index].leaseId,
       )
+      if (result.status === 'fulfilled') {
+        parentAgentState.discoveryCoverage = recordDiscoveryResult({
+          existing: parentAgentState.discoveryCoverage,
+          agentType: foregroundAgents[index].agentType,
+          question: buildDiscoveryQuestion({
+            agentType: foregroundAgents[index].agentType,
+            prompt: foregroundAgents[index].input.prompt,
+            objective: foregroundAgents[index].handoff?.objective,
+            spawnParams: foregroundAgents[index].runtimeSpawnParams,
+          }),
+          result: result.value.output,
+          workspaceRevision: parentAgentState.workspaceState?.revision,
+          workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
+        })
+      }
       parentAgentState.discoveryCoverage = completeDiscoveryShard({
         existing: parentAgentState.discoveryCoverage,
         shardKey: foregroundAgents[index].discoveryShardKey,

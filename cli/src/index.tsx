@@ -394,7 +394,7 @@ async function main(): Promise<void> {
 
         try {
           await switchProjectContext(newProjectPath)
-          resetCodebuffClient()
+          await resetCodebuffClient()
           if (isPublishCommand || !hasAgentOverride) {
             await initializeAgentRegistry({ trustProjectAgents })
           }
@@ -422,7 +422,7 @@ async function main(): Promise<void> {
           setShowProjectPickerScreen(false)
         } catch (error) {
           await switchProjectContext(previousProjectRoot)
-          resetCodebuffClient()
+          await resetCodebuffClient()
           logger.error({ error }, 'Failed to switch projects')
           throw error
         }

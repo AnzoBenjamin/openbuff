@@ -520,10 +520,23 @@ export type PlanStatusContentBlock = {
   isStatusReport: boolean
 }
 
+export type MemoryReportTone = 'success' | 'error' | 'warning' | 'secondary'
+
+export type MemoryReportContentBlock = {
+  type: 'memory'
+  state: 'report'
+  title: string
+  tone: MemoryReportTone
+  lines: string[]
+  insertCommands?: Array<{ label: string; command: string }>
+}
+
 export type MemoryContentBlock =
+  | MemoryReportContentBlock
   | {
       type: 'memory'
       state: 'empty'
+      v2Lines?: string[]
     }
   | {
       type: 'memory'
@@ -548,6 +561,7 @@ export type MemoryContentBlock =
       }
       stalePaths: string[]
       totalStaleCount: number
+      v2Lines?: string[]
     }
   | {
       type: 'memory'

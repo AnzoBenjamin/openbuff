@@ -75,7 +75,28 @@ export const getCliEnv = (): CliEnv => ({
   CODEBUFF_SCROLL_MULTIPLIER: process.env.CODEBUFF_SCROLL_MULTIPLIER,
   CODEBUFF_PERF_TEST: process.env.CODEBUFF_PERF_TEST,
   OPENBUFF_CONFIG_DIR: process.env.OPENBUFF_CONFIG_DIR,
+  OPENBUFF_MEMORY_AUTHORITY: process.env.OPENBUFF_MEMORY_AUTHORITY,
 })
+
+export type MemoryAuthoritySelection = {
+  requested: string
+  effective: 'json-v1' | 'shadow-v2' | 'sqlite-v2-opt-in'
+  reason?: 'invalid-authority'
+}
+
+export function getMemoryAuthoritySelection(
+  raw = getCliEnv().OPENBUFF_MEMORY_AUTHORITY,
+): MemoryAuthoritySelection {
+  const requested = raw?.trim() || 'shadow-v2'
+  if (
+    requested === 'json-v1' ||
+    requested === 'shadow-v2' ||
+    requested === 'sqlite-v2-opt-in'
+  ) {
+    return { requested, effective: requested }
+  }
+  return { requested: requested.slice(0, 128), effective: 'json-v1', reason: 'invalid-authority' }
+}
 
 /**
  * Get the raw system process.env object.

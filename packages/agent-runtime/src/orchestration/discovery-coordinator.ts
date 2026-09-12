@@ -92,6 +92,7 @@ export function planDiscoveryBatch(params: {
   query: string
   result: unknown
   workspaceRevision?: number
+  workspaceSnapshotId?: string
 }): DiscoveryCoverageV1 {
   const queryHash = hash(
     params.query
@@ -131,6 +132,7 @@ export function planDiscoveryBatch(params: {
     revision: (params.existing?.revision ?? -1) + 1,
     workspaceRevision: params.workspaceRevision,
     queryHash,
+    workspaceSnapshotId: params.workspaceSnapshotId,
     candidates: [...previousByPath.values()].slice(-512),
     shards: params.existing?.shards ?? [],
     coveredDomains: params.existing?.coveredDomains ?? [],
@@ -171,6 +173,8 @@ export function claimDiscoveryShard(params: {
   agentType: string
   question: string
   workspaceRevision?: number
+  taskId?: string
+  workspaceSnapshotId?: string
 }): { state: DiscoveryCoverageV1; shardKey: string } {
   const question =
     params.question.trim() ||
@@ -183,7 +187,7 @@ export function claimDiscoveryShard(params: {
       workspaceRevision: params.workspaceRevision,
     })
   const shardKey = hash(
-    `${params.agentType}:${normalizeQuestion(question)}:${params.workspaceRevision ?? 'unknown'}`,
+    `${params.agentType}:${normalizeQuestion(question)}:${params.workspaceRevision ?? 'unknown'}:${params.taskId ?? 'no-task'}`,
   )
   const duplicate = existing.shards.find(
     (shard) =>
@@ -198,12 +202,14 @@ export function claimDiscoveryShard(params: {
   const state = discoveryCoverageV1Schema.parse({
     ...existing,
     revision: existing.revision + 1,
+    workspaceSnapshotId: params.workspaceSnapshotId ?? existing.workspaceSnapshotId,
     shards: [
       ...existing.shards,
       {
         key: shardKey,
         agentType: params.agentType,
         question,
+        taskId: params.taskId,
         status: 'active',
         assignedAt: Date.now(),
       },
@@ -226,6 +232,27 @@ export function completeDiscoveryShard(params: {
         ? { ...shard, status: params.status, completedAt: Date.now() }
         : shard,
     ),
+  })
+}
+
+/**
+ * Extract candidates from a completed discovery agent's output and merge them
+ * into the parent's discovery coverage via {@link planDiscoveryBatch}.
+ */
+export function recordDiscoveryResult(params: {
+  existing?: DiscoveryCoverageV1
+  agentType: string
+  question: string
+  result: unknown
+  workspaceRevision?: number
+  workspaceSnapshotId?: string
+}): DiscoveryCoverageV1 {
+  return planDiscoveryBatch({
+    existing: params.existing,
+    query: params.question,
+    result: params.result,
+    workspaceRevision: params.workspaceRevision,
+    workspaceSnapshotId: params.workspaceSnapshotId,
   })
 }
 

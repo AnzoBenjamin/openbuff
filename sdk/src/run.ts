@@ -47,6 +47,8 @@ import {
 import { WorkspaceJournalService } from './services/workspace-journal'
 import { WorkspaceMutationBroker } from './services/workspace-mutation-broker'
 import { LocalHarnessStore } from './services/local-harness-store'
+import { MemoryV2Coordinator } from './services/memory-v2/coordinator'
+import type { MemoryV2ClientConfig } from './services/memory-v2/types'
 import {
   HarnessApprovalService,
   evaluateHarnessActionPolicy,
@@ -253,6 +255,9 @@ export type OpenbuffClientOptions = {
   fsSource?: Source<CodebuffFileSystem>
   spawnSource?: Source<CodebuffSpawn>
   logger?: Logger
+
+  /** Runtime-neutral Memory V2 configuration. Authority defaults from legacy mode (shadow when omitted). */
+  memoryV2?: MemoryV2ClientConfig
 
   /** Overall wall-clock timeout for a single run, in milliseconds. When set,
    *  the returned promise settles with an error RunState if the run has not
@@ -575,6 +580,7 @@ async function runOnce({
   fsSource,
   spawnSource,
   logger,
+  memoryV2,
 
   agent,
   prompt,
@@ -779,6 +785,9 @@ async function runOnce({
   // final memory into it. The runtime replaces this property rather than
   // mutating it in place, so holding the reference is sufficient.
   const hydratedTaskMemory = sessionState.mainAgentState.taskMemory
+  const memoryV2Coordinator = memoryV2
+    ? new MemoryV2Coordinator(memoryV2, logger)
+    : undefined
   // Trusted ownership identity for every process-job operation. Derived
   // ONLY from run/session state (the per-run promptId + the runtime's own
   // run/agent ids) — NEVER from model or tool input — and injected into
@@ -826,6 +835,10 @@ async function runOnce({
     }
   }
 
+  // The combined run signal and the run timeout arm HERE, before memory
+  // preparation, so a slow or hung Memory V2 repository is bounded by the run
+  // timeout instead of extending it
+  // (reliability:memory-preparation-is-outside-timeout).
   const timeoutAbortController = new AbortController()
   const timeoutEnabled = typeof runTimeoutMs === 'number' && runTimeoutMs > 0
   const runSignal = timeoutEnabled
@@ -912,6 +925,50 @@ async function runOnce({
     }
   }
 
+  if (timeoutEnabled) {
+    timeoutHandle = setTimeout(() => {
+      const message = `Run timed out after ${runTimeoutMs}ms`
+      abortRun(new Error(message))
+      resolveTerminal(getCancelledRunState(message))
+    }, runTimeoutMs)
+    timeoutHandle.unref?.()
+  }
+
+  // Race memory preparation against the run signal: an abort (user cancel or
+  // run timeout) rejects here and the run proceeds through its normal
+  // degraded/cancelled paths instead of hanging or crashing. prepareTurn
+  // itself never rejects — its own failures degrade the turn internally — so
+  // the caught rejection below can only come from the abort race.
+  if (memoryV2Coordinator) {
+    try {
+      await raceAgainstAbort(
+        memoryV2Coordinator.prepareTurn({
+          agentState: sessionState.mainAgentState,
+          trustedUserInputId: promptId,
+          query: prompt,
+          workspaceState: sessionState.mainAgentState.workspaceState,
+          resumeInterruptedTurn,
+          signal: runSignal,
+        }),
+        runSignal,
+      )
+    } catch (error) {
+      logger?.warn(
+        { error },
+        'Memory V2 turn preparation was aborted or failed; continuing without injected memory',
+      )
+    }
+  }
+
+  if (runSignal.aborted) {
+    resolveTerminal(getCancelledRunState(createAbortError(runSignal).message))
+    const terminalState = await terminalPromise
+    callbacksEnabled = false
+    unsubscribeJobEvents()
+    if (timeoutHandle) clearTimeout(timeoutHandle)
+    return terminalState
+  }
+
   const onResponseChunk = async (
     action: ServerAction<'response-chunk'>,
   ): Promise<void> => {
@@ -995,10 +1052,11 @@ async function runOnce({
           if (cloneMatch?.[1]) ownedLibrarianCloneDirs.add(cloneMatch[1])
         }
       }
+      const trustedCallId = callId ?? crypto.randomUUID()
       const handled = await handleToolCall({
         action: {
           type: 'tool-call-request',
-          requestId: callId ?? crypto.randomUUID(),
+          requestId: trustedCallId,
           userInputId,
           toolName,
           input,
@@ -1073,6 +1131,27 @@ async function runOnce({
               })()
           : undefined,
         signal: toolSignal ?? runSignal,
+      })
+      const directOverride =
+        toolName === 'read_files'
+          ? overrideTools?.read_files
+          : overrideTools?.[toolName as Exclude<PublishedToolName, 'read_files'>]
+      const fallbackWriteOverride =
+        (toolName === 'str_replace' || toolName === 'create_plan') &&
+        overrideTools?.write_file
+      await memoryV2Coordinator?.recordToolObservation({
+        toolName,
+        callId: trustedCallId,
+        userInputId,
+        input,
+        output: handled.output,
+        workspaceState: sessionState.mainAgentState.workspaceState,
+        native:
+          toolNames.includes(toolName as ToolName) &&
+          !customToolDefinitions?.some((definition) => definition.toolName === toolName) &&
+          !directOverride &&
+          !fallbackWriteOverride,
+        mcp: Boolean(mcpConfig),
       })
       // Intercept the single dispatch path (model- and agent-initiated calls
       // alike) so an unchanged list_jobs digest doesn't re-inject the full
@@ -1237,15 +1316,6 @@ async function runOnce({
     },
   })
 
-  if (timeoutEnabled) {
-    timeoutHandle = setTimeout(() => {
-      const message = `Run timed out after ${runTimeoutMs}ms`
-      abortRun(new Error(message))
-      resolveTerminal(getCancelledRunState(message))
-    }, runTimeoutMs)
-    timeoutHandle.unref?.()
-  }
-
   // Send input
   const userInfo = await agentRuntimeImpl.getUserInfoFromApiKey({
     ...agentRuntimeImpl,
@@ -1254,7 +1324,18 @@ async function runOnce({
   })
   if (!userInfo) {
     if (timeoutHandle) clearTimeout(timeoutHandle)
-    return getCancelledRunState('Invalid API key or user not found')
+    const terminalState = getCancelledRunState('Invalid API key or user not found')
+    if (memoryV2Coordinator) {
+      await raceAgainstAbort(
+        memoryV2Coordinator.finishTurn({
+          agentState: terminalState.sessionState!.mainAgentState,
+          output: terminalState.output,
+          signal: runSignal,
+        }),
+        runSignal,
+      ).catch(() => {})
+    }
+    return terminalState
   }
 
   const userId = userInfo.id
@@ -1266,6 +1347,16 @@ async function runOnce({
     callbacksEnabled = false
     unsubscribeJobEvents()
     if (timeoutHandle) clearTimeout(timeoutHandle)
+    if (terminalState.sessionState && memoryV2Coordinator) {
+      await raceAgainstAbort(
+        memoryV2Coordinator.finishTurn({
+          agentState: terminalState.sessionState.mainAgentState,
+          output: terminalState.output,
+          signal: runSignal,
+        }),
+        runSignal,
+      ).catch(() => {})
+    }
     return terminalState
   }
 
@@ -1362,6 +1453,16 @@ async function runOnce({
       { error: callbackFailure },
       'Run completed after one or more client callbacks failed',
     )
+  }
+  if (terminalState.sessionState && memoryV2Coordinator) {
+    await raceAgainstAbort(
+      memoryV2Coordinator.finishTurn({
+        agentState: terminalState.sessionState.mainAgentState,
+        output: terminalState.output,
+        signal: runSignal,
+      }),
+      runSignal,
+    ).catch(() => {})
   }
   // Persist task memory whenever a cwd is set. The gate lives in
   // persistRunTaskMemory and deliberately ignores output.type, so cancelled,

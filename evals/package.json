@@ -13,6 +13,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
     "test": "bun test",
+    "test:memory-retention": "bun test memory-retention/scenario.test.ts",
     "test:manifold": "bun test manifold.test.ts",
     "test:pglite": "bun test pglite-demo.test.ts",
     "test:swe-bench": "bun test swe-bench.test.ts",
@@ -39,6 +40,7 @@
     "@codebuff/code-map": "workspace:*",
     "@codebuff/common": "workspace:*",
     "@codebuff/internal": "workspace:*",
+    "@codebuff/agent-runtime": "workspace:*",
     "@openbuff/sdk": "workspace:*",
     "@oclif/core": "^4.4.0",
     "@oclif/parser": "^3.8.17",
