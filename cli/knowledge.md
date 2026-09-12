@@ -9,6 +9,14 @@
 - Public agent/tool type changes must also run the repository-root generator (`bun scripts/generate-tool-definitions.ts`); CI verifies `cli/src/data/initial-agent-type-sources.generated.ts` is committed.
 - `read_files` selector caps (window `windowSize` ≤ 5000, `around` `contextLines` ≤ 2000) are reflected in generated tool type sources; regenerate after any public read-tool param change so CI's tool-definition freshness check stays green. (The `read_blocks` tool was removed; its selectors are now read_files `windows`/`around`/`symbols`.)
 
+## Memory V2 and Discovery Coverage
+
+- Cross-session task memory lives in `.openbuff/memory/task-memory.json` (gitignored local state) and is backed by an append-only event store; the Bun SQLite repository (`cli/src/services/memory-v2/bun-sqlite-memory-repository.ts`) implements append/query/verify/rebuild/health/export with schema-validated outcomes, hardened local storage (contained DB path, symlink/ownership rejection, `0700`/`0600` perms), and generic fail-closed error classification that never leaks paths.
+- `evaluate_audit_coverage` tool results are recorded as `coverage.recorded` events by the Memory V2 coordinator (`sdk/src/services/memory-v2/coordinator.ts`), bound to the current workspace revision/snapshot so stale coverage is never reused across edits.
+- The SQLite repository projects the latest `coverage.recorded` event per `(taskId, dimension)` into the `currentCoverage` retrieval category, filtered by exact workspace revision/snapshot freshness and optional `taskId` narrowing.
+- The `query_index` tool handler (`packages/agent-runtime/src/tools/handlers/tool/query-index.ts`) records its results into `agentState.discoveryCoverage` via `recordDiscoveryResult` with a bounded (4000-char) question string; recording is wrapped in try/catch so a coverage failure can never break the tool call.
+- When testing tool handlers that import a function to spy on, prefer `spyOn(namespaceImport, 'fn')` over `mock.module()` (repo convention in `docs/testing.md`/`CONTRIBUTING.md`); a relative `mock.module` specifier resolves from the test file's directory and silently misses the module the subject under test imports when the two live at different depths.
+
 ## Slash Commands and Plan Mode
 
 - Durable planning is entered through `mode:plan`; the standalone `/plan` command is intentionally absent from `COMMAND_REGISTRY` and `SLASH_COMMANDS` so there is one plan-entry path.
