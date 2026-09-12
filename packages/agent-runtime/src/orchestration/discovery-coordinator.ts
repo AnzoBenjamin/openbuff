@@ -192,7 +192,11 @@ export function claimDiscoveryShard(params: {
   const duplicate = existing.shards.find(
     (shard) =>
       shard.key === shardKey &&
-      (shard.status === 'active' || shard.status === 'completed'),
+      (shard.status === 'active' || (
+        shard.status === 'completed' &&
+        shard.taskId === params.taskId &&
+        (!params.workspaceSnapshotId || !existing.workspaceSnapshotId || params.workspaceSnapshotId === existing.workspaceSnapshotId)
+      )),
   )
   if (duplicate) {
     throw new Error(

@@ -1095,6 +1095,42 @@ describe('MemoryV2Coordinator lifecycle', () => {
     expect(checkpoint.memoryV2!.pendingTerminal).toBeUndefined()
   })
 
+  test('emits coverage.recorded events from evaluate_audit_coverage results', async () => {
+    const repository = new RepositoryStub()
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(config(repository), undefined, () => generatedAt)
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:coverage',
+      query: 'capture',
+    })
+    const before = allEvents(repository).length
+    await coordinator.recordToolObservation({
+      toolName: 'evaluate_audit_coverage',
+      callId: 'call:coverage',
+      userInputId: 'input:coverage',
+      input: {},
+      output: [{ type: 'json', value: { status: 'complete', features: [{ feature: 'auth' }] } }],
+      native: true,
+      workspaceState: { schemaVersion: 1 as const, revision: 5, snapshotId: 'snap:5', updatedAt: Date.now(), changes: [] },
+    })
+    const newEvents = allEvents(repository).slice(before)
+    const observationEvents = newEvents.filter((e) => e.eventType === 'observation.recorded')
+    const coverageEvents = newEvents.filter((e) => e.eventType === 'coverage.recorded')
+    expect(observationEvents).toHaveLength(1)
+    expect(coverageEvents).toHaveLength(1)
+    const coveragePayload = coverageEvents[0]!.payload
+    expect(coveragePayload).toMatchObject({
+      payloadSchemaVersion: 1,
+      dimension: 'validation',
+      state: 'covered',
+      workspaceRevision: 5,
+      workspaceSnapshotId: 'snap:5',
+    })
+    expect(coveragePayload.selectors).toEqual([{ kind: 'file', path: 'auth' }])
+    expect(coveragePayload.notes).toContain('complete')
+  })
+
   test('fails closed when conflict tail export cannot produce a valid page', async () => {
     const failures: Array<unknown> = [
       { outcome: 'failed', error: { code: 'unavailable', message: 'no', retryable: true } },

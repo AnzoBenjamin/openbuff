@@ -43,6 +43,58 @@ describe('discovery coordinator', () => {
     expect(claimed.state.shards[0].question).toBe('file-picker discovery')
   })
 
+  test('completed shard with different workspaceSnapshotId allows re-claim', () => {
+    const first = claimDiscoveryShard({
+      agentType: 'file-picker',
+      question: 'find tests',
+      workspaceRevision: 1,
+      taskId: 'task-1',
+      workspaceSnapshotId: 'snap-1',
+    })
+    const completed = completeDiscoveryShard({
+      existing: first.state,
+      shardKey: first.shardKey,
+      status: 'completed',
+    })!
+    // Same task, different workspace snapshot → should allow re-claim
+    expect(() =>
+      claimDiscoveryShard({
+        existing: completed,
+        agentType: 'file-picker',
+        question: 'find tests',
+        workspaceRevision: 1,
+        taskId: 'task-1',
+        workspaceSnapshotId: 'snap-2',
+      }),
+    ).not.toThrow()
+  })
+
+  test('completed shard with same identity still suppresses re-claim', () => {
+    const first = claimDiscoveryShard({
+      agentType: 'file-picker',
+      question: 'find tests',
+      workspaceRevision: 1,
+      taskId: 'task-1',
+      workspaceSnapshotId: 'snap-1',
+    })
+    const completed = completeDiscoveryShard({
+      existing: first.state,
+      shardKey: first.shardKey,
+      status: 'completed',
+    })!
+    // Same task, same workspace snapshot → should throw
+    expect(() =>
+      claimDiscoveryShard({
+        existing: completed,
+        agentType: 'file-picker',
+        question: 'find tests',
+        workspaceRevision: 1,
+        taskId: 'task-1',
+        workspaceSnapshotId: 'snap-1',
+      }),
+    ).toThrow(/Duplicate discovery shard/)
+  })
+
   test('deduplicates candidates and merges evidence reasons', () => {
     const state = planDiscoveryBatch({
       query: 'find parser files',

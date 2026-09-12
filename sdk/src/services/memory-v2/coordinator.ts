@@ -17,6 +17,8 @@ import {
   type MemoryEventId,
   type MemoryJsonValue,
   type MemoryRetrievalResult,
+  type MemorySessionId,
+  type TaskId,
 } from '@codebuff/common/types/memory-v2'
 import type {
   AgentOutput,
@@ -1124,6 +1126,68 @@ export class MemoryV2Coordinator {
     })
     if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState) return
     await this.append([event], runtimeState, preparation)
+
+    // After the observation append, check if this is an audit coverage result
+    // and emit coverage.recorded events for each covered dimension.
+    if (params.toolName === 'evaluate_audit_coverage') {
+      const coverageEvents = this.extractCoverageEvents({
+        values,
+        runtimeState,
+        userInputId: params.userInputId,
+        callId: params.callId,
+        observedAt,
+        workspaceState: params.workspaceState,
+      })
+      if (coverageEvents.length > 0 && this.isCurrent(preparation) && this.runtimeState === runtimeState) {
+        await this.append(coverageEvents, runtimeState, preparation)
+      }
+    }
+  }
+
+  private extractCoverageEvents(params: {
+    values: Record<string, unknown>[]
+    runtimeState: { sessionId: MemorySessionId; activeTask: { taskId: TaskId } }
+    userInputId: string
+    callId: string
+    observedAt: string
+    workspaceState?: WorkspaceStateV1
+  }): MemoryEventDraft[] {
+    const drafts: MemoryEventDraft[] = []
+    for (const value of params.values) {
+      // evaluate_audit_coverage returns { status: 'complete'|'incomplete', ... }
+      if (typeof value.status !== 'string') continue
+      const features = Array.isArray(value.features) ? value.features : []
+      // Only emit coverage for complete evaluations
+      if (value.status !== 'complete' && value.status !== 'incomplete') continue
+      const state = value.status === 'complete' ? 'covered' : 'partial'
+      const draft = createMemoryEventDraft({
+        projectId: this.config.projectId,
+        sessionId: params.runtimeState.sessionId,
+        userInputId: params.userInputId,
+        callId: params.callId,
+        occurredAt: params.observedAt,
+        eventType: 'coverage.recorded',
+        payload: {
+          payloadSchemaVersion: 1,
+          taskId: params.runtimeState.activeTask.taskId,
+          dimension: 'validation' as const,
+          state: state as 'covered' | 'partial',
+          selectors: features
+            .filter((f: unknown): f is { feature: string } =>
+              typeof f === 'object' && f !== null && typeof (f as Record<string, unknown>).feature === 'string'
+            )
+            .slice(0, 64)
+            .map((f: { feature: string }) => ({ kind: 'file' as const, path: f.feature.slice(0, 512) })),
+          notes: `Audit coverage evaluation: ${value.status}. Features evaluated: ${features.length}.`.slice(0, 4_096),
+          ...(params.workspaceState ? {
+            workspaceRevision: params.workspaceState.revision,
+            workspaceSnapshotId: params.workspaceState.snapshotId,
+          } : {}),
+        },
+      })
+      drafts.push(draft)
+    }
+    return drafts.slice(0, 5)
   }
 
   async finishTurn(params: {
