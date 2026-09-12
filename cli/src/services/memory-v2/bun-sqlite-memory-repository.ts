@@ -2058,6 +2058,39 @@ function buildLexicalResult(
   const reusableDiscovery = reusableCandidates.slice(0, limit).map(({ state, ranking }) => ({ observation: state.observation, reuseGuidance: state.pinned ? 'Pinned discovery; verify selectors before reuse.' : 'Verify selectors before reusing this discovery.', score: ranking.score, reasons: ranking.reasons }))
   const rereadRequired = rereadCandidates.slice(0, limit)
   const historicalContext = historicalCandidates.slice(0, limit).map(({ state, ranking }) => ({ taskId: state.observation.taskId, summary: state.observation.summary, eventIds: [state.sourceEventId], score: ranking.score, reasons: [...ranking.reasons, reason('historical-only', -0.1, 'This observation is historical only.')].slice(0, 16) }))
+  const latestCoverageByKey = new Map<string, { payload: Extract<MemoryEventEnvelope, { eventType: 'coverage.recorded' }>['payload']; sequence: number }>()
+  for (const event of events) {
+    if (event.eventType !== 'coverage.recorded') continue
+    const key = `${event.payload.taskId}:${event.payload.dimension}`
+    const prior = latestCoverageByKey.get(key)
+    if (!prior || event.sequence > prior.sequence) {
+      latestCoverageByKey.set(key, { payload: event.payload, sequence: event.sequence })
+    }
+  }
+  const currentCoverage = [...latestCoverageByKey.entries()]
+    .filter(([, entry]) => {
+      if (request.taskId !== undefined && entry.payload.taskId !== request.taskId) return false
+      const requestHasContext = request.workspaceRevision !== undefined || request.workspaceSnapshotId !== undefined
+      const payloadHasContext = entry.payload.workspaceRevision !== undefined || entry.payload.workspaceSnapshotId !== undefined
+      if (requestHasContext || payloadHasContext) {
+        return request.workspaceRevision === entry.payload.workspaceRevision
+          && request.workspaceSnapshotId === entry.payload.workspaceSnapshotId
+      }
+      return true
+    })
+    .sort(([leftKey], [rightKey]) => compareUnicodeCodePoints(leftKey, rightKey))
+    .slice(0, 5)
+    .map(([, entry]) => {
+      const item: { dimension: typeof entry.payload.dimension; state: typeof entry.payload.state; taskId: typeof entry.payload.taskId; notes?: string; workspaceRevision?: number; workspaceSnapshotId?: string } = {
+        dimension: entry.payload.dimension,
+        state: entry.payload.state,
+        taskId: entry.payload.taskId,
+        notes: entry.payload.notes.slice(0, 1024),
+      }
+      if (entry.payload.workspaceRevision !== undefined) item.workspaceRevision = entry.payload.workspaceRevision
+      if (entry.payload.workspaceSnapshotId !== undefined) item.workspaceSnapshotId = entry.payload.workspaceSnapshotId
+      return item
+    })
   const categories = { matchedTasks, verifiedKnowledge, reusableDiscovery, rereadRequired, historicalContext }
   const rankingReasons = [
     ...matchedTasks.map((value) => ({ category: 'matchedTasks' as const, targetId: value.taskId, reasons: value.reasons })),
@@ -2082,6 +2115,7 @@ function buildLexicalResult(
     projectId: request.projectId,
     generatedAt: events.at(-1)?.occurredAt ?? '1970-01-01T00:00:00.000Z',
     ...categories,
+    currentCoverage,
     degradation: degradationReasons.length > 0 ? { state: 'degraded', reasons: degradationReasons } : { state: 'none' },
     rankingReasons: rankingReasons.slice(0, limit * 5),
   })

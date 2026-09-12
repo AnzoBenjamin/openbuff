@@ -18,6 +18,7 @@ import {
   MemoryRetrievalRequestSchema,
   MemoryVerifyOutcomeSchema,
   MemoryVerifyRequestSchema,
+  TaskIdSchema,
   type MemoryAppendRequest,
   type MemoryEventDraft,
 } from '../../../../../common/src/types/memory-v2'
@@ -1454,5 +1455,51 @@ describe('BunSQLiteMemoryRepository', () => {
     } finally {
       database.close()
     }
+  })
+
+  test('returns latest coverage per dimension with exact workspace context', async () => {
+    const repository = await open(temporaryRepository())
+    const coverage = (eventId: string, dimension: string, state: string) =>
+      canonicalDraft('coverage.recorded', eventId, {
+        payloadSchemaVersion: 1,
+        taskId: 'task-1',
+        dimension,
+        state,
+        selectors: [],
+        notes: `${dimension}-${state}-notes`,
+        workspaceRevision: 3,
+        workspaceSnapshotId: 'snapshot-3',
+      })
+    expect((await repository.append(MemoryAppendRequestSchema.parse({
+      schemaVersion: 2,
+      projectId: 'project-1',
+      events: [
+        coverage('coverage-tests-old', 'tests', 'partial'),
+        coverage('coverage-tests-new', 'tests', 'covered'),
+        coverage('coverage-risk', 'risk', 'partial'),
+      ],
+    }))).outcome).toBe('appended')
+
+    const matching = await repository.query(MemoryRetrievalRequestSchema.parse({
+      schemaVersion: 2, queryId: 'coverage-match', projectId: 'project-1', sessionId: 'session-1',
+      query: 'coverage', selectors: [], artifactKinds: [], includeHistorical: false,
+      maxResultsPerCategory: 10, workspaceRevision: 3, workspaceSnapshotId: 'snapshot-3',
+    }))
+    expect(matching.outcome).toBe('result')
+    if (matching.outcome !== 'result') return
+    const taskId = TaskIdSchema.parse('task-1')
+    expect(matching.result.currentCoverage).toEqual([
+      { dimension: 'risk', state: 'partial', taskId, notes: 'risk-partial-notes', workspaceRevision: 3, workspaceSnapshotId: 'snapshot-3' },
+      { dimension: 'tests', state: 'covered', taskId, notes: 'tests-covered-notes', workspaceRevision: 3, workspaceSnapshotId: 'snapshot-3' },
+    ])
+
+    const mismatched = await repository.query(MemoryRetrievalRequestSchema.parse({
+      schemaVersion: 2, queryId: 'coverage-mismatch', projectId: 'project-1', sessionId: 'session-1',
+      query: 'coverage', selectors: [], artifactKinds: [], includeHistorical: false,
+      maxResultsPerCategory: 10, workspaceRevision: 4, workspaceSnapshotId: 'snapshot-3',
+    }))
+    expect(mismatched.outcome).toBe('result')
+    if (mismatched.outcome !== 'result') return
+    expect(mismatched.result.currentCoverage).toEqual([])
   })
 })
