@@ -16,6 +16,7 @@
 - The SQLite repository projects the latest `coverage.recorded` event per `(taskId, dimension)` into the `currentCoverage` retrieval category, filtered by exact workspace revision/snapshot freshness and optional `taskId` narrowing.
 - The `query_index` tool handler (`packages/agent-runtime/src/tools/handlers/tool/query-index.ts`) records its results into `agentState.discoveryCoverage` via `recordDiscoveryResult` with a bounded (4000-char) question string; recording is wrapped in try/catch so a coverage failure can never break the tool call.
 - When testing tool handlers that import a function to spy on, prefer `spyOn(namespaceImport, 'fn')` over `mock.module()` (repo convention in `docs/testing.md`/`CONTRIBUTING.md`); a relative `mock.module` specifier resolves from the test file's directory and silently misses the module the subject under test imports when the two live at different depths.
+- Memory V2 authority is selected by `OPENBUFF_MEMORY_AUTHORITY` via `getMemoryAuthoritySelection` (`cli/src/utils/env.ts`); the default is `sqlite-v2-opt-in` (fail-closed — no V1 fallback), with `json-v1` as an explicit opt-out escape hatch and `shadow-v2` as an explicit shadow mode. The provider (`cli/src/services/memory-v2/provider.ts`) keys its shadow-vs-fail-closed behavior off `authority.effective`, so flipping the default flips which degradation path default runs take.
 
 ## Slash Commands and Plan Mode
 
