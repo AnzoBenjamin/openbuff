@@ -44,6 +44,10 @@ docs/bot-detection.md
 # Local agent state (task memory, gate telemetry JSONL sink)
 .openbuff/
 
+# Local plan-session runtime artifacts (sessions are runtime state, not source)
+.agents/sessions/**/EVENTS.jsonl
+.agents/sessions/**/STATE.json
+
 # Local image/screenshot scratch
 󰎞_*.webp
 

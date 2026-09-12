@@ -97,37 +97,125 @@ export function getPinnedGrammarAssetUrl(wasmFile: string): string | null {
   )
 }
 
+// Transient network failures are retried so one flaky fetch can no longer
+// fail a release build. Only network-level problems retry: fetch throwing,
+// the per-attempt abort/timeout, and retryable HTTP statuses (5xx and 429).
+// Worst-case added latency stays bounded at 3 attempts x 30s plus two short
+// retry delays. A sha256 mismatch is deterministic corruption of the
+// downloaded bytes, so it fails immediately without retrying.
+const MAX_REPAIR_ATTEMPTS = 3
+const ATTEMPT_TIMEOUT_MS = 30_000
+const DEFAULT_RETRY_DELAY_MS = 2_000
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms))
+
+// Discarded error responses are never read, so their bodies are cancelled
+// before the attempt ends: an undrained body can hold its socket open
+// indefinitely and block connection reuse, and the per-attempt timeout is
+// already cleared once headers arrive. Cancellation is best-effort:
+// cancel() rejects for a body that already errored, and that must not be
+// misreported as a network failure.
+const releaseBody = async (response: Response): Promise<void> => {
+  try {
+    await response.body?.cancel()
+  } catch {
+    // Nothing left to release; keep the attempt's real failure reason.
+  }
+}
+
 export async function repairGrammarWasm(params: {
   wasmFile: string
   targetDir: string
   fetchImpl?: typeof fetch
+  retryDelayMs?: number
+  onFailure?: (reason: string) => void
 }): Promise<string | null> {
+  const fail = (reason: string): null => {
+    params.onFailure?.(reason)
+    return null
+  }
+
   const asset = PINNED_GRAMMAR_ASSETS[params.wasmFile]
-  if (!asset || !path.isAbsolute(params.targetDir)) return null
+  if (!asset) return fail(`no pinned checksum exists for ${params.wasmFile}`)
+  if (!path.isAbsolute(params.targetDir)) {
+    return fail(`repair target ${params.targetDir} is not an absolute path`)
+  }
   const sourceUrl = getPinnedGrammarAssetUrl(params.wasmFile)
-  if (!sourceUrl) return null
+  if (!sourceUrl) {
+    return fail(`no pinned download URL exists for ${params.wasmFile}`)
+  }
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 30_000)
+  const fetchFn = params.fetchImpl ?? fetch
+  const retryDelayMs = params.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS
+  let lastErrorMessage: string | null = null
+  let lastHttpStatus: number | null = null
+  let verifiedBytes: Uint8Array | null = null
+
+  // Each attempt re-downloads, so the hash always checks fresh bytes. Only
+  // the network phase lives inside the retry loop: verified bytes break out
+  // of the loop before persistence, so disk failures are never retried and
+  // never misreported as network errors.
+  for (let attempt = 1; attempt <= MAX_REPAIR_ATTEMPTS; attempt++) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUT_MS)
+    try {
+      const response = await fetchFn(sourceUrl, { signal: controller.signal })
+      if (response.ok) {
+        const bytes = new Uint8Array(await response.arrayBuffer())
+        const actualHash = createHash('sha256').update(bytes).digest('hex')
+        if (actualHash !== asset.sha256) {
+          // Retry cannot fix wrong bytes: fail immediately with a
+          // distinct reason instead of burning more attempts.
+          return fail('downloaded bytes failed sha256 verification')
+        }
+        verifiedBytes = bytes
+        break
+      } else if (response.status >= 500 || response.status === 429) {
+        // Transient server-side condition: record it, release the body,
+        // and try again. Clearing the network message keeps the final
+        // diagnostic tied to the most recent attempt rather than an
+        // earlier fetch throw.
+        lastHttpStatus = response.status
+        lastErrorMessage = null
+        await releaseBody(response)
+      } else {
+        await releaseBody(response)
+        return fail(`HTTP ${response.status} response`)
+      }
+    } catch (error) {
+      // Fetch throwing covers network errors and the per-attempt abort
+      // timeout; both are transient, so record the message and try again.
+      lastErrorMessage = error instanceof Error ? error.message : String(error)
+    } finally {
+      clearTimeout(timeout)
+    }
+    // Delay only between attempts to keep the worst-case latency bounded.
+    if (attempt < MAX_REPAIR_ATTEMPTS) {
+      await sleep(retryDelayMs)
+    }
+  }
+
+  if (verifiedBytes === null) {
+    if (lastErrorMessage !== null) {
+      return fail(
+        `network error after ${MAX_REPAIR_ATTEMPTS} attempts: ${lastErrorMessage}`,
+      )
+    }
+    return fail(`HTTP ${lastHttpStatus} after ${MAX_REPAIR_ATTEMPTS} attempts`)
+  }
+
   try {
-    const response = await (params.fetchImpl ?? fetch)(sourceUrl, {
-      signal: controller.signal,
-    })
-    if (!response.ok) return null
-    const bytes = new Uint8Array(await response.arrayBuffer())
-    const actualHash = createHash('sha256').update(bytes).digest('hex')
-    if (actualHash !== asset.sha256) return null
-
     await fs.mkdir(params.targetDir, { recursive: true, mode: 0o700 })
     const targetPath = path.join(params.targetDir, params.wasmFile)
     const tempPath = `${targetPath}.tmp.${process.pid}.${randomUUID()}`
-    await fs.writeFile(tempPath, bytes, { mode: 0o600 })
+    await fs.writeFile(tempPath, verifiedBytes, { mode: 0o600 })
     await fs.rename(tempPath, targetPath)
     return targetPath
-  } catch {
-    return null
-  } finally {
-    clearTimeout(timeout)
+  } catch (error) {
+    return fail(
+      `failed to persist repaired bytes: ${error instanceof Error ? error.message : String(error)}`,
+    )
   }
 }
 
@@ -155,9 +243,15 @@ export async function resolveGrammarWasmSource(params: {
     }
   }
 
+  // Capture the last repair failure reason so the final error below can
+  // state WHY checksum-pinned repair failed.
+  let failureReason: string | undefined
   const repaired = await (params.repairImpl ?? repairGrammarWasm)({
     wasmFile: params.wasmFile,
     targetDir: params.repairDir,
+    onFailure: (reason) => {
+      failureReason = reason
+    },
   })
   if (repaired) {
     try {
@@ -169,6 +263,6 @@ export async function resolveGrammarWasmSource(params: {
   }
 
   throw new Error(
-    `Missing required tree-sitter asset ${params.wasmFile}; searched ${params.candidates.join(', ')} and checksum-pinned repair failed`,
+    `Missing required tree-sitter asset ${params.wasmFile}; searched ${params.candidates.join(', ')} and checksum-pinned repair failed${failureReason ? `: ${failureReason}` : ''}`,
   )
 }

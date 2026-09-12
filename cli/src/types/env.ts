@@ -14,6 +14,7 @@ import type { BaseEnv, ClientEnv } from '@codebuff/common/types/contracts/env'
  */
 export type CliEnv = BaseEnv & {
   OPENBUFF_CONFIG_DIR?: string
+  OPENBUFF_MEMORY_AUTHORITY?: string
   // Terminal detection (for tmux/screen passthrough)
   TERM?: string
   TMUX?: string

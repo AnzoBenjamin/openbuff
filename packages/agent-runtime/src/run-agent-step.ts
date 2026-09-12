@@ -2,6 +2,7 @@ import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
 import { supportsCacheControl } from '@codebuff/common/old-constants'
 import { TOOLS_WHICH_WONT_FORCE_NEXT_STEP } from '@codebuff/common/tools/constants'
 import { buildArray } from '@codebuff/common/util/array'
+import { MemoryTurnContextV2Schema } from '@codebuff/common/types/memory-v2'
 import {
   AbortError,
   extractApiErrorDetails,
@@ -90,6 +91,7 @@ import {
   flushBufferedToolEvidenceIntoTaskMemory,
   mergeTaskMemoryDraft,
 } from './util/task-memory'
+import { compileMemoryV2Context } from './util/memory-v2-context'
 
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 import type { TrackEventFn } from '@codebuff/common/types/contracts/analytics'
@@ -319,6 +321,8 @@ export const runAgentStep = async (
     agentTemplate: AgentTemplate
     fileContext: ProjectFileContext
     agentState: AgentState
+    /** Ephemeral compiled memory messages rebuilt by loopAgentSteps for this request. */
+    memoryContextMessages?: Message[]
     localAgentTemplates: Record<string, AgentTemplate>
 
     prompt: string | undefined
@@ -525,6 +529,7 @@ export const runAgentStep = async (
 
   const agentMessagesUntruncated = buildArray<Message>(
     ...expireMessages(agentState.messageHistory, 'agentStep'),
+    ...(params.memoryContextMessages ?? []),
 
     stepPrompt &&
       userMessage({
@@ -1271,6 +1276,7 @@ export async function loopAgentSteps(
       | 'additionalToolDefinitions'
       | 'agentState'
       | 'agentTemplate'
+      | 'memoryContextMessages'
       | 'prompt'
       | 'runId'
       | 'spawnParams'
@@ -1926,8 +1932,20 @@ export async function loopAgentSteps(
           logger,
           additionalToolDefinitions: additionalToolDefinitionsWithCache,
         })
+        const getCorrelatedAuthoritativeV2 = (state: AgentState) => {
+          if (
+            state.memoryAuthority?.active !== 'sqlite-v2-opt-in' ||
+            state.memoryAuthority.userInputId !== userInputId
+          ) {
+            return undefined
+          }
+          const parsed = MemoryTurnContextV2Schema.safeParse(state.memoryV2Context)
+          return parsed.success && parsed.data.userInputId === userInputId
+            ? parsed.data
+            : undefined
+        }
         const buildCompiledTaskMemoryMessage = (state: AgentState) =>
-          state.taskMemory
+          state.taskMemory && !getCorrelatedAuthoritativeV2(state)
             ? userMessage({
                 content: withSystemTags(
                   compileTaskMemoryContext({
@@ -1936,18 +1954,33 @@ export async function loopAgentSteps(
                     contextWindowTokens: state.contextWindowTokens,
                     rootAgent: !state.parentId,
                     // Rank evidence toward the files this run has just read or
-                    // edited, so relevance rather than raw recency decides what
+                    // edited and the bounded terms in this loop's trusted
+                    // request, so relevance rather than raw recency decides what
                     // survives the compiled budget.
                     focusPaths: deriveTaskMemoryFocusPaths(state.taskMemory),
+                    currentRequest: prompt,
                   }),
                 ),
                 tags: ['TASK_MEMORY_CONTEXT'],
+                timeToLive: 'agentStep' as const,
                 keepDuringTruncation: true,
               })
             : false
+        const buildCompiledMemoryV2Message = (state: AgentState) => {
+          const context = getCorrelatedAuthoritativeV2(state)
+          return context
+            ? userMessage({
+                content: withSystemTags(compileMemoryV2Context(context)),
+                tags: ['MEMORY_V2_CONTEXT'],
+                timeToLive: 'agentStep' as const,
+                keepDuringTruncation: true,
+              })
+            : false
+        }
         let messagesWithStepPrompt = buildArray(
           ...currentAgentState.messageHistory,
           buildCompiledTaskMemoryMessage(currentAgentState),
+          buildCompiledMemoryV2Message(currentAgentState),
           stepPrompt &&
             userMessage({
               content: stepPrompt,
@@ -2151,49 +2184,26 @@ export async function loopAgentSteps(
         // emitter makes it a no-op.
         emitCompactionProgress('applying', 90)
 
-        // Capture the request goal once per step for the root agent. The
-        // compaction branch below scrapes <knowledge_memory> only when a
-        // session actually compacts, so a session that never compacts used to
-        // persist a record with an empty goal. Derivation matches that branch's
-        // boundedGoal exactly so both paths record the same text.
+        // Capture the current root request directly from loopAgentSteps' trusted
+        // prompt. Never infer it from messageHistory: that transcript also holds
+        // tool output, system wrappers, and compiled task-memory messages that
+        // must not become the active goal. A fresh substantive request replaces
+        // an unrelated hydrated goal once; repeat iterations return by identity.
         //
         // Deliberately after the programmatic step: a `set_messages`-yielding
         // generator (the context pruner) guards its transcript replacement with
         // `expectedTaskMemoryRevision`, and its view of the persisted revision
-        // is injected by template id. Creating a revision-0 record before that
-        // step makes the guard fail, so semantic compaction would be rejected
-        // and the run would fall back to the mechanical emergency brake. The
-        // compiled memory message is rebuilt below, so the goal still reaches
-        // this step's request.
+        // is injected by template id. Creating a revision before that step makes
+        // the guard fail, so semantic compaction would be rejected. The compiled
+        // memory message is rebuilt below, so the goal still reaches this step.
         if (!currentAgentState.parentId) {
           try {
-            let derivedGoal = ''
-            for (
-              let index = currentAgentState.messageHistory.length - 1;
-              index >= 0;
-              index--
-            ) {
-              const message = currentAgentState.messageHistory[index]
-              if (message.role !== 'user') continue
-              const plainText = message.content
-                .filter((part) => part.type === 'text')
-                .map((part) => part.text)
-                .join('\n')
-                .replace(/<[^>]+>/g, ' ')
-                .replace(/\s+/g, ' ')
-                .trim()
-              if (!plainText || /^(?:\/compact|compact)$/i.test(plainText)) {
-                continue
-              }
-              derivedGoal = plainText
-              break
-            }
             const nextTaskMemory = ensureTaskMemoryGoal({
               current: currentAgentState.taskMemory,
-              goal: derivedGoal,
+              goal: prompt ?? '',
               workspaceState: currentAgentState.workspaceState,
             })
-            // Identity result means the goal was already captured: assigning
+            // Identity result means this request was already captured: assigning
             // would be a no-op write, so only a genuinely new value is stored.
             if (
               nextTaskMemory &&
@@ -2214,6 +2224,7 @@ export async function loopAgentSteps(
         messagesWithStepPrompt = buildArray(
           ...currentAgentState.messageHistory,
           buildCompiledTaskMemoryMessage(currentAgentState),
+          buildCompiledMemoryV2Message(currentAgentState),
           stepPrompt &&
             userMessage({
               content: stepPrompt,
@@ -2333,6 +2344,7 @@ export async function loopAgentSteps(
           messagesWithStepPrompt = buildArray(
             ...pruningResult.messages,
             buildCompiledTaskMemoryMessage(currentAgentState),
+            buildCompiledMemoryV2Message(currentAgentState),
             stepPrompt &&
               userMessage({
                 content: stepPrompt,
@@ -2489,6 +2501,10 @@ export async function loopAgentSteps(
           ...params,
 
           agentState: currentAgentState,
+          memoryContextMessages: buildArray(
+            buildCompiledTaskMemoryMessage(currentAgentState),
+            buildCompiledMemoryV2Message(currentAgentState),
+          ),
           // Projected progressive surface so executeToolCall (which gates via
           // getEffectiveAgentToolNames without agentState) accepts unlocked
           // model tools and rejects still-locked ones for this step.

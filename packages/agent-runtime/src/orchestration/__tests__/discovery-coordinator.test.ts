@@ -6,6 +6,7 @@ import {
   completeDiscoveryShard,
   planDiscoveryBatch,
   reconcileInterruptedDiscoveryShards,
+  recordDiscoveryResult,
 } from '../discovery-coordinator'
 
 describe('discovery coordinator', () => {
@@ -40,6 +41,58 @@ describe('discovery coordinator', () => {
     })
 
     expect(claimed.state.shards[0].question).toBe('file-picker discovery')
+  })
+
+  test('completed shard with different workspaceSnapshotId allows re-claim', () => {
+    const first = claimDiscoveryShard({
+      agentType: 'file-picker',
+      question: 'find tests',
+      workspaceRevision: 1,
+      taskId: 'task-1',
+      workspaceSnapshotId: 'snap-1',
+    })
+    const completed = completeDiscoveryShard({
+      existing: first.state,
+      shardKey: first.shardKey,
+      status: 'completed',
+    })!
+    // Same task, different workspace snapshot → should allow re-claim
+    expect(() =>
+      claimDiscoveryShard({
+        existing: completed,
+        agentType: 'file-picker',
+        question: 'find tests',
+        workspaceRevision: 1,
+        taskId: 'task-1',
+        workspaceSnapshotId: 'snap-2',
+      }),
+    ).not.toThrow()
+  })
+
+  test('completed shard with same identity still suppresses re-claim', () => {
+    const first = claimDiscoveryShard({
+      agentType: 'file-picker',
+      question: 'find tests',
+      workspaceRevision: 1,
+      taskId: 'task-1',
+      workspaceSnapshotId: 'snap-1',
+    })
+    const completed = completeDiscoveryShard({
+      existing: first.state,
+      shardKey: first.shardKey,
+      status: 'completed',
+    })!
+    // Same task, same workspace snapshot → should throw
+    expect(() =>
+      claimDiscoveryShard({
+        existing: completed,
+        agentType: 'file-picker',
+        question: 'find tests',
+        workspaceRevision: 1,
+        taskId: 'task-1',
+        workspaceSnapshotId: 'snap-1',
+      }),
+    ).toThrow(/Duplicate discovery shard/)
   })
 
   test('deduplicates candidates and merges evidence reasons', () => {
@@ -203,6 +256,47 @@ describe('discovery coordinator', () => {
     ).not.toThrow()
   })
 
+  test('taskId and workspaceSnapshotId appear in the shard record after claim', () => {
+    const claimed = claimDiscoveryShard({
+      agentType: 'file-picker',
+      question: 'identity fields',
+      workspaceRevision: 10,
+      taskId: 'task-abc-123',
+      workspaceSnapshotId: 'snap-xyz-789',
+    })
+
+    expect(claimed.state.shards[0].taskId).toBe('task-abc-123')
+    expect(claimed.state.workspaceSnapshotId).toBe('snap-xyz-789')
+  })
+
+  test('different taskIds produce different shard keys for the same question', () => {
+    const claimA = claimDiscoveryShard({
+      agentType: 'file-picker',
+      question: 'same question',
+      workspaceRevision: 1,
+      taskId: 'task-a',
+    })
+    const claimB = claimDiscoveryShard({
+      agentType: 'file-picker',
+      question: 'same question',
+      workspaceRevision: 1,
+      taskId: 'task-b',
+    })
+
+    expect(claimA.shardKey).not.toBe(claimB.shardKey)
+  })
+
+  test('workspaceSnapshotId is carried through planDiscoveryBatch', () => {
+    const state = planDiscoveryBatch({
+      query: 'snapshot batch',
+      result: ['src/file.ts'],
+      workspaceRevision: 1,
+      workspaceSnapshotId: 'snap-batch-001',
+    })
+
+    expect(state.workspaceSnapshotId).toBe('snap-batch-001')
+  })
+
   test('leaves settled shards and missing coverage untouched', () => {
     const claimed = claimDiscoveryShard({
       agentType: 'file-picker',
@@ -224,5 +318,40 @@ describe('discovery coordinator', () => {
     expect(reconcileInterruptedDiscoveryShards(reconciledOnce)).toBe(
       reconciledOnce,
     )
+  })
+
+  test('recordDiscoveryResult delegates to planDiscoveryBatch and returns updated coverage', () => {
+    const initial = planDiscoveryBatch({
+      query: 'initial search',
+      workspaceRevision: 1,
+      result: ['src/existing.ts'],
+    })
+
+    const updated = recordDiscoveryResult({
+      existing: initial,
+      agentType: 'file-picker',
+      question: 'find auth files',
+      result: { files: ['src/auth.ts', 'src/login.ts'] },
+      workspaceRevision: 2,
+      workspaceSnapshotId: 'snap-001',
+    })
+
+    expect(updated.candidates.map((c) => c.path)).toContain('src/auth.ts')
+    expect(updated.candidates.map((c) => c.path)).toContain('src/login.ts')
+    expect(updated.workspaceRevision).toBe(2)
+    expect(updated.workspaceSnapshotId).toBe('snap-001')
+    expect(updated.revision).toBeGreaterThan(initial.revision)
+  })
+
+  test('recordDiscoveryResult works without existing coverage', () => {
+    const result = recordDiscoveryResult({
+      agentType: 'file-lister',
+      question: 'list test files',
+      result: ['tests/auth.test.ts'],
+      workspaceRevision: 1,
+    })
+
+    expect(result.candidates).toHaveLength(1)
+    expect(result.candidates[0].path).toBe('tests/auth.test.ts')
   })
 })

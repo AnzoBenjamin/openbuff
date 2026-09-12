@@ -16,6 +16,8 @@ import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
 const ROOT_CONTEXT_CHARS = 36_000
 const CHILD_CONTEXT_CHARS = 14_000
 const TASK_MEMORY_REVIEW_RECEIPT_MAX_CHARS = 4_000
+const CURRENT_REQUEST_MAX_CHARS = 8_000
+const CURRENT_REQUEST_TERM_CAP = 32
 
 // Kept equal to TASK_MEMORY_LIST_CAPS.evidence in
 // @codebuff/common/types/task-memory so persisted evidence never exceeds what
@@ -54,6 +56,27 @@ function boundText(value: string, maxChars: number): string {
   if (normalized.length <= maxChars) return normalized
   if (maxChars <= 24) return normalized.slice(0, maxChars)
   return `${normalized.slice(0, maxChars - 15)}...[truncated]`
+}
+
+function normalizeTrustedRequestText(value: string): string {
+  const normalized = boundText(value, CURRENT_REQUEST_MAX_CHARS)
+  if (!normalized || /^(?:\/compact|compact)$/i.test(normalized)) return ''
+  return normalized
+}
+
+function currentRequestRankingTerms(value: string | undefined): string[] {
+  const normalized = boundText(value ?? '', CURRENT_REQUEST_MAX_CHARS).toLowerCase()
+  if (!normalized) return []
+  const seen = new Set<string>()
+  const terms: string[] = []
+  for (const match of normalized.matchAll(/[a-z0-9][a-z0-9_./\\-]*/g)) {
+    const term = match[0]
+    if (term.length < 2 || seen.has(term)) continue
+    seen.add(term)
+    terms.push(term)
+    if (terms.length >= CURRENT_REQUEST_TERM_CAP) break
+  }
+  return terms
 }
 
 function findStructuredReviewOutput(
@@ -442,13 +465,13 @@ export function mergeAgentReceiptIntoTaskMemory(params: {
 }
 
 /**
- * Captures the request goal outside compaction. `deriveTaskMemoryDraftFromMessages`
- * only runs when a session compacts, so a session that never compacts used to
- * persist a record with an empty goal — unusable for the next session.
+ * Captures the trusted request goal outside compaction. The caller supplies the
+ * current root prompt directly; message history is deliberately not consulted,
+ * because it also contains system wrappers, tool output, and compiled memory.
  *
- * Returns `undefined` when there is nothing worth committing (no goal observed
- * and no existing memory), and returns `current` unchanged once a goal is
- * already stored so repeat steps burn no revision.
+ * A different substantive request replaces a hydrated goal once. Blank and
+ * compact-only prompts are ignored, while an identical normalized request
+ * returns `current` by reference so repeated loop steps spend no revision.
  */
 export function ensureTaskMemoryGoal(params: {
   current?: TaskMemoryV1
@@ -456,11 +479,11 @@ export function ensureTaskMemoryGoal(params: {
   workspaceState?: WorkspaceStateV1
 }): TaskMemoryV1 | undefined {
   const { current, workspaceState } = params
-  const goal = boundText(params.goal, 8_000)
-  if (!goal && !current) return undefined
+  const goal = normalizeTrustedRequestText(params.goal)
+  if (!goal) return current
   // Identity return: the caller compares by reference and skips the write, so
-  // an already-captured goal costs no revision, checksum, or updatedAt churn.
-  if (current?.goal) return current
+  // repeated steps for this request cost no revision, checksum, or updatedAt.
+  if (current?.goal === goal) return current
   const incoming = taskMemoryDraftV1Schema.parse({
     schemaVersion: 1,
     goal,
@@ -1051,6 +1074,23 @@ function evidenceRelevanceScore(
   return score
 }
 
+function evidenceQueryRelevanceScore(
+  item: TaskMemoryEvidenceV1,
+  queryTerms: string[],
+): number {
+  if (queryTerms.length === 0) return 0
+  const evidenceTerms = new Set(
+    currentRequestRankingTerms(
+      [item.summary, item.path, item.source].filter(Boolean).join(' '),
+    ),
+  )
+  let score = 0
+  for (const term of queryTerms) {
+    if (evidenceTerms.has(term)) score += 1
+  }
+  return score
+}
+
 /**
  * Focus paths for `compileTaskMemoryContext`: the files the current request is
  * actually working on, newest first, taken from the most recent non-stale
@@ -1085,6 +1125,7 @@ function compileBoundedMemoryObject(params: {
   contextWindowTokens?: number
   rootAgent?: boolean
   focusPaths?: string[]
+  currentRequest?: string
   maxChars: number
 }): Record<string, unknown> {
   const { memory, maxChars, rootAgent } = params
@@ -1110,32 +1151,38 @@ function compileBoundedMemoryObject(params: {
     evidenceIsFresh(item, memory.workspaceRevision),
   )
   const focusPaths = params.focusPaths
-  // Recency alone drops evidence about the files this request is actually
-  // about, so rank by relevance when the caller names focus paths. Ties break
-  // on verifiedAt then original index, so equal-timestamp receipt bursts stay
-  // deterministic; emission order is still oldest -> newest either way.
-  const selectedEvidence =
-    focusPaths && focusPaths.length > 0
-      ? fresh
-          .map((item, index) => ({
-            item,
-            index,
-            score: evidenceRelevanceScore(item, focusPaths),
-          }))
-          .sort(
-            (a, b) =>
-              b.score - a.score ||
-              (b.item.verifiedAt ?? 0) - (a.item.verifiedAt ?? 0) ||
-              b.index - a.index,
-          )
-          .slice(0, evidenceLimit)
-          .sort(
-            (a, b) =>
-              (a.item.verifiedAt ?? 0) - (b.item.verifiedAt ?? 0) ||
-              a.index - b.index,
-          )
-          .map((entry) => entry.item)
-      : fresh.slice(-evidenceLimit)
+  const queryTerms = currentRequestRankingTerms(params.currentRequest)
+  const shouldRank =
+    (focusPaths !== undefined && focusPaths.length > 0) || queryTerms.length > 0
+  // Recency alone drops evidence about the files and terms this request is
+  // actually about. Path score is multiplied above the maximum additive query
+  // score, preserving exact/segment path precedence while query matches break
+  // relevance ties. Recency and original index remain deterministic tie-breaks;
+  // emission order is still oldest -> newest either way.
+  const selectedEvidence = shouldRank
+    ? fresh
+        .map((item, index) => ({
+          item,
+          index,
+          score:
+            evidenceRelevanceScore(item, focusPaths ?? []) *
+              (CURRENT_REQUEST_TERM_CAP + 1) +
+            evidenceQueryRelevanceScore(item, queryTerms),
+        }))
+        .sort(
+          (a, b) =>
+            b.score - a.score ||
+            (b.item.verifiedAt ?? 0) - (a.item.verifiedAt ?? 0) ||
+            b.index - a.index,
+        )
+        .slice(0, evidenceLimit)
+        .sort(
+          (a, b) =>
+            (a.item.verifiedAt ?? 0) - (b.item.verifiedAt ?? 0) ||
+            a.index - b.index,
+        )
+        .map((entry) => entry.item)
+    : fresh.slice(-evidenceLimit)
   const evidence = selectedEvidence.map((item) => ({
     ...item,
     summary: truncateMemoryText(item.summary, Math.max(160, 600 * scale)),
@@ -1176,6 +1223,7 @@ export function compileTaskMemoryContext(params: {
   contextWindowTokens?: number
   rootAgent?: boolean
   focusPaths?: string[]
+  currentRequest?: string
 }): string {
   const fixedMax = params.rootAgent ? ROOT_CONTEXT_CHARS : CHILD_CONTEXT_CHARS
   const modelScaledMax = params.contextWindowTokens

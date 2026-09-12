@@ -91,6 +91,39 @@ export type {
   TaskMemoryV1,
 } from '@codebuff/common/types/task-memory'
 
+// Additive Memory V2 contracts. V1 remains exported above for compatibility.
+export * from '@codebuff/common/types/memory-v2'
+export {
+  classifyMemoryArtifactPath,
+  isMemoryArtifactPersistenceAllowed,
+  normalizeMemoryArtifactPath,
+} from '@codebuff/common/util/memory-artifact-policy'
+export type {
+  MemoryArtifactPathKind,
+  MemoryArtifactPolicyDecision,
+  MemoryGeneratedArtifactProvenance,
+  MemoryGeneratedDisposition,
+} from '@codebuff/common/util/memory-artifact-policy'
+export type * from './services/memory-v2/types'
+export { MemoryV2Coordinator } from './services/memory-v2/coordinator'
+export {
+  getV1MigrationIdentity,
+  importTaskMemoryV1,
+} from './services/memory-v2/v1-migration'
+export type {
+  V1MigrationOutcome,
+  V1MigrationWarningCode,
+} from './services/memory-v2/v1-migration'
+export { MemoryV2OperatorService } from './services/memory-v2/operator-service'
+export {
+  createMemoryEventDraft,
+  deriveMemoryEventId,
+  deriveMemorySessionId,
+  deriveObservationId,
+  deriveQueryId,
+  deriveTaskId,
+} from './services/memory-v2/event-factory'
+
 export type {
   ClientToolCall,
   ClientToolName,

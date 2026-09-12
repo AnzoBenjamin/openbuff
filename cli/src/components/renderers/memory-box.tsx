@@ -37,6 +37,34 @@ export const MemoryBox = memo(
     const [goalExpanded, setGoalExpanded] = useState(false)
     const [staleExpanded, setStaleExpanded] = useState(false)
 
+    if (block.state === 'report') {
+      return (
+        <HarnessBox tone={block.tone} title={block.title} gap={1} paddingBottom={1}>
+          {block.lines.map((line, index) => (
+            <text key={`${index}-${line}`} style={{ wrapMode: 'word', fg: theme.foreground }}>
+              {line}
+            </text>
+          ))}
+          {block.insertCommands?.map(({ label, command }) => (
+            <Button
+              key={command}
+              style={{
+                alignSelf: 'flex-start',
+                paddingLeft: 1,
+                paddingRight: 1,
+                borderStyle: 'single',
+                borderColor: theme.secondary,
+                customBorderChars: BORDER_CHARS,
+              }}
+              onClick={() => onInsertCommand(command)}
+            >
+              <text style={{ fg: theme.secondary, wrapMode: 'word' }}>{label}</text>
+            </Button>
+          ))}
+        </HarnessBox>
+      )
+    }
+
     if (block.state === 'empty') {
       return (
         <HarnessBox tone="secondary" gap={1} paddingBottom={1}>
@@ -46,6 +74,9 @@ export const MemoryBox = memo(
           <text style={{ wrapMode: 'word', fg: theme.muted }}>
             It is written after your first successful run completes.
           </text>
+          {block.v2Lines?.map((line, index) => (
+            <text key={`v2-empty-${index}`} style={{ wrapMode: 'word', fg: theme.secondary }}>{line}</text>
+          ))}
         </HarnessBox>
       )
     }
@@ -69,6 +100,9 @@ export const MemoryBox = memo(
 
       return (
         <HarnessBox tone={tone} title={header} gap={1} paddingBottom={1}>
+          {block.v2Lines?.map((line, index) => (
+            <text key={`v2-${index}`} style={{ wrapMode: 'word', fg: theme.secondary }}>{line}</text>
+          ))}
           <box style={{ flexDirection: 'column', gap: 0 }}>
             <text style={{ wrapMode: 'word', fg: theme.secondary }}>Goal</text>
             <text style={{ wrapMode: 'word', fg: theme.foreground }}>

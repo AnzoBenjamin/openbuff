@@ -483,7 +483,7 @@ async function fixEsmExportRenames() {
  */
 async function fixToolHelpers() {
   const toolHelpersDef =
-    'var ToolHelpers = { runTerminalCommand, codeSearch, findFilesMatchingContent, glob, listDirectory, getFiles, getFilesStructured, replaceRange, runFileChangeHooks, changeFile };'
+    'var ToolHelpers = { runTerminalCommand, codeSearch, findFilesMatchingContent, glob, listDirectory, getFilesStructured, replaceRange, runFileChangeHooks, changeFile, changeFiles, readImages, inspect3dAsset, render3dPreview, edit3dAsset, writeAuditFindings, listJobs };'
 
   // --- ESM bundle ---
   const esmPath = 'dist/index.mjs'

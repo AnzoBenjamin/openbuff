@@ -59,7 +59,7 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
   {
     id: 'memory',
     label: 'memory',
-    description: 'Show or prune persisted cross-session task memory',
+    description: 'Inspect, query, diagnose, export, or maintain project memory',
     aliases: ['mem'],
   },
   {
