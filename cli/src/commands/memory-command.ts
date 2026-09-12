@@ -1,10 +1,11 @@
 /**
- * `/memory` — inspect and prune persisted cross-session task memory for the
- * current project root. Read-only by default; `prune` drops stale evidence.
+ * `/memory` — inspect, audit, and prune persisted cross-session task memory for
+ * the current project root. Read-only by default; `prune` drops stale evidence.
  */
 import { createHash } from 'node:crypto'
 
 import {
+  auditTaskMemoryV1Migration,
   collectWorkspaceMoves,
   getHarnessStateDir,
   loadPersistedTaskMemory,
@@ -27,13 +28,18 @@ import {
 import { getProjectMemoryV2Provider } from '../services/memory-v2/provider'
 import { formatAge, pluralizeEntries } from '../utils/format-helpers'
 
-import type { TaskMemoryPruneOutcome, WorkspaceMoveRecord } from '@openbuff/sdk'
+import type {
+  TaskMemoryPruneOutcome,
+  V1MigrationAuditOutcome,
+  WorkspaceMoveRecord,
+} from '@openbuff/sdk'
 
 export type MemoryCommandDeps = {
   getRootDir: () => string
   loadPersistedTaskMemory: typeof loadPersistedTaskMemory
   reconcileTaskMemoryEvidence: typeof reconcileTaskMemoryEvidence
   pruneStaleTaskMemoryEvidence: typeof pruneStaleTaskMemoryEvidence
+  auditTaskMemoryV1Migration: typeof auditTaskMemoryV1Migration
   /**
    * Journal-recorded file moves for this project. Both subcommands reconcile
    * evidence, and reconciliation without moves reports a renamed file's
@@ -70,6 +76,7 @@ const defaultDeps: MemoryCommandDeps = {
   loadPersistedTaskMemory,
   reconcileTaskMemoryEvidence,
   pruneStaleTaskMemoryEvidence,
+  auditTaskMemoryV1Migration,
   getWorkspaceMoves: loadWorkspaceMoves,
   getMemoryV2: getProjectMemoryV2Provider,
 }
@@ -196,7 +203,8 @@ function memoryBlockToString(
   }
 }
 
-const MEMORY_USAGE = 'Usage: /memory [status|authority|diagnose|query <text>|inspect [eventId]|consolidate [--apply] [--task <id>]|repair [--apply]|revalidate <observationId> <path> [--apply]|correct <observationId> <replacement-summary> [--apply]|forget <observationId...> [--apply]|pin <observationId> [--apply]|export [--format json|markdown] [--include-stale]|import <project-relative-json-path> [--apply]|prune]'
+const MEMORY_USAGE = 'Usage: /memory [status|authority|diagnose|audit-migration|query <text>|inspect [eventId]|consolidate [--apply] [--task <id>]|repair [--apply]|revalidate <observationId> <path> [--apply]|correct <observationId> <replacement-summary> [--apply]|forget <observationId...> [--apply]|pin <observationId> [--apply]|export [--format json|markdown] [--include-stale]|import <project-relative-json-path> [--apply]|prune]'
+const RELEASE_N_AUTHORITY_WARNING = 'Release N: json-v1 and shadow-v2 remain supported but are deprecated; sqlite-v2-opt-in is the default and replacement.'
 const CLI_SESSION_ID = 'memory-cli'
 const EXPORT_MAX_BYTES = 8 * 1024 * 1024
 
@@ -242,6 +250,93 @@ function deterministicId(prefix: string, value: string): string {
   return `${prefix}:${createHash('sha256').update(value).digest('hex').slice(0, 24)}`
 }
 
+const AUDIT_INCOMPLETE_REASONS: Record<
+  Extract<V1MigrationAuditOutcome, { outcome: 'incomplete' | 'mismatch' }>['reason'],
+  string
+> = {
+  'reservation-only': 'Only the migration reservation was found.',
+  'legacy-marker-unverifiable': 'The legacy migration marker cannot verify this source record.',
+  'missing-imported-task': 'The imported task body is missing.',
+  'missing-imported-observations': 'One or more imported observations are missing.',
+  'imported-body-mismatch': 'The imported body or provenance does not match the source marker.',
+  'revision-conflict': 'Conflicting migration evidence exists for this source revision.',
+  'checksum-conflict': 'Conflicting migration evidence exists for this source checksum.',
+}
+
+const AUDIT_FAILURE_REASONS: Record<
+  Extract<V1MigrationAuditOutcome, { outcome: 'rejected' | 'failed' }>['reason'],
+  string
+> = {
+  'checksum-mismatch': 'The V1 source record failed checksum validation.',
+  'repository-rejected': 'The audit read was rejected safely.',
+  'repository-failed': 'The audit read could not be completed safely.',
+  'invalid-export': 'The audit could not validate the exported migration evidence.',
+  'wrong-project': 'The exported migration evidence belongs to another project.',
+  'pagination-invalid': 'The exported migration evidence did not form a valid bounded sequence.',
+  'page-limit-exceeded': 'The migration evidence exceeded the bounded audit scan.',
+}
+
+function renderMigrationAudit(
+  outcome: V1MigrationAuditOutcome,
+): import('../types/chat').MemoryContentBlock {
+  if (outcome.outcome === 'no-record') {
+    return report('Memory V1 migration audit', [
+      'Outcome: no-record.',
+      'No currently loaded V1 task-memory record is available to audit.',
+      'No writes were performed.',
+    ], 'secondary')
+  }
+  if (outcome.outcome === 'exact') {
+    const truncatedFields = outcome.truncatedFields ?? 0
+    const warningCount = outcome.warnings.length
+    const lossless = outcome.omittedFields === 0 && truncatedFields === 0 && warningCount === 0
+    return report('Memory V1 migration audit', [
+      'Outcome: exact.',
+      `Source revision: ${outcome.revision}.`,
+      `Source checksum: ${outcome.checksum}.`,
+      'Marker verification: exact; imported body/provenance verification: exact.',
+      `Imported observations: ${outcome.importedObservationIds.length}.`,
+      `Omitted fields: ${outcome.omittedFields}.`,
+      `Truncated fields: ${truncatedFields}.`,
+      `Warnings: ${warningCount}${warningCount ? ` (${outcome.warnings.slice(0, 100).join(', ')})` : ' (none)'}.`,
+      `Lossless migration evidence: ${lossless ? 'yes' : 'no'}.`,
+      'No writes were performed.',
+    ], lossless ? 'success' : 'warning')
+  }
+  if (outcome.outcome === 'not-migrated') {
+    return report('Memory V1 migration audit', [
+      'Outcome: not-migrated.',
+      `Source revision: ${outcome.revision}.`,
+      `Source checksum: ${outcome.checksum}.`,
+      'No matching migration marker was found in the bounded V2 audit.',
+      'No writes were performed.',
+    ], 'warning')
+  }
+  if (outcome.outcome === 'incomplete' || outcome.outcome === 'mismatch') {
+    return report('Memory V1 migration audit', [
+      `Outcome: ${outcome.outcome}.`,
+      `Source revision: ${outcome.revision}.`,
+      `Source checksum: ${outcome.checksum}.`,
+      AUDIT_INCOMPLETE_REASONS[outcome.reason],
+      'No writes were performed.',
+    ], outcome.outcome === 'mismatch' ? 'error' : 'warning')
+  }
+  if (outcome.outcome === 'rejected' || outcome.outcome === 'failed') {
+    return report('Memory V1 migration audit', [
+      `Outcome: ${outcome.outcome}.`,
+      AUDIT_FAILURE_REASONS[outcome.reason],
+      ...(outcome.revision === undefined ? [] : [`Source revision: ${outcome.revision}.`]),
+      ...(outcome.checksum === undefined ? [] : [`Source checksum: ${outcome.checksum}.`]),
+      'No writes were performed.',
+    ], outcome.outcome === 'failed' ? 'error' : 'warning')
+  }
+  return report(
+    'Memory V1 migration audit',
+    ['The audit returned an unsupported outcome.', 'No writes were performed.'],
+    'error',
+  )
+}
+
 async function getV2(deps: MemoryCommandDeps) {
   return deps.getMemoryV2
     ? deps.getMemoryV2(deps.getRootDir())
@@ -263,22 +358,33 @@ function parseArgs(rawArgs: string): { command: string; args: string[]; apply: b
 
 async function runV2Command(rawArgs: string, deps: MemoryCommandDeps): Promise<import('../types/chat').MemoryContentBlock> {
   const parsed = parseArgs(rawArgs)
-  if (!['authority', 'diagnose', 'query', 'inspect', 'consolidate', 'repair', 'revalidate', 'correct', 'forget', 'pin', 'export', 'import'].includes(parsed.command)) return commandError(MEMORY_USAGE)
+  if (!['authority', 'diagnose', 'audit-migration', 'query', 'inspect', 'consolidate', 'repair', 'revalidate', 'correct', 'forget', 'pin', 'export', 'import'].includes(parsed.command)) return commandError(MEMORY_USAGE)
   const v2 = await getV2(deps)
   try {
     if (parsed.command === 'authority') {
     return report('Memory authority', [
       'Valid values: json-v1, shadow-v2, sqlite-v2-opt-in.',
+      RELEASE_N_AUTHORITY_WARNING,
       `Requested: ${v2.requestedAuthority}; effective: ${v2.effectiveAuthority}.`,
       'Switch via OPENBUFF_MEMORY_AUTHORITY or the SDK authority option, then reset/restart the client.',
     ])
   }
   if (v2.status === 'unavailable') return report('Memory V2 unavailable', [
     `Requested authority: ${v2.requestedAuthority}; active authority: ${v2.effectiveAuthority}.`,
+    RELEASE_N_AUTHORITY_WARNING,
     safeOperationMessage(v2.degradation),
   ], 'warning')
   const scope = { schemaVersion: 2 as const, projectId: v2.projectId, sessionId: MemorySessionIdSchema.parse(CLI_SESSION_ID) }
   const now = new Date().toISOString()
+
+  if (parsed.command === 'audit-migration') {
+    const memory = await deps.loadPersistedTaskMemory({ rootDir: deps.getRootDir() })
+    return renderMigrationAudit(await deps.auditTaskMemoryV1Migration({
+      memory,
+      projectId: v2.projectId,
+      repository: v2.repository,
+    }))
+  }
 
   if (parsed.command === 'diagnose') {
     const [health, kernel, capabilities, inventory] = await Promise.all([
@@ -290,6 +396,7 @@ async function runV2Command(rawArgs: string, deps: MemoryCommandDeps): Promise<i
     const events = inventory.events
     return report('Memory V2 diagnosis', [
       `Requested authority: ${v2.requestedAuthority}; active authority: ${v2.effectiveAuthority}.`,
+      RELEASE_N_AUTHORITY_WARNING,
       'V1 compatibility shadow: available when task-memory.json is hydrated and remains normally persisted.',
       `Health: ${health.status}; repository authority: ${health.authority.kind}.`,
       `Backend: ${health.backend.backendId}; capabilities: ${health.backend.capabilities.join(', ')}.`,
@@ -592,6 +699,7 @@ async function runStatusBlock(
           : undefined
         v2Lines = [
           `Memory authority: requested ${v2.requestedAuthority}; active ${v2.effectiveAuthority}.`,
+          RELEASE_N_AUTHORITY_WARNING,
           `V1 compatibility shadow: ${context ? 'available' : 'not yet available'}.`,
           `Memory V2: ${health.status}; repository authority ${health.authority.kind}; backend ${health.backend.backendId}.`,
           migrationPayload?.success
@@ -604,6 +712,7 @@ async function runStatusBlock(
       } else {
         v2Lines = [
           `Memory authority: requested ${v2.requestedAuthority}; active ${v2.effectiveAuthority}.`,
+          RELEASE_N_AUTHORITY_WARNING,
           `V1 compatibility shadow: ${context ? 'available' : 'not yet available'}.`,
           `Memory V2: ${safeOperationMessage(v2.degradation)}`,
         ]

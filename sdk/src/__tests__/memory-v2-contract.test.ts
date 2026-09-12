@@ -16,12 +16,16 @@ import type {
   MemoryRetrievalRequest,
   MemoryVerifyOutcome,
   MemoryVerifyRequest,
+  V1MigrationAuditOutcome,
+  V1MigrationAuditReader,
 } from '../index'
 import {
+  auditTaskMemoryV1Migration,
   MemoryAppendRequestSchema,
   MemoryEventDraftSchema,
   MemoryEventEnvelopeSchema,
   MemoryRetrievalRequestSchema,
+  ProjectIdSchema,
 } from '../index'
 
 const timestamp = '2026-09-10T19:41:53.753Z'
@@ -151,6 +155,23 @@ class FakeMemoryRepositoryV2 implements MemoryRepositoryV2 {
 }
 
 describe('MemoryRepositoryV2 public contract', () => {
+  test('the V1 migration audit accepts an export-only reader', async () => {
+    let exportCalls = 0
+    const reader: V1MigrationAuditReader = {
+      async export() {
+        exportCalls++
+        return { outcome: 'page', events: [], nextAfterEventId: null }
+      },
+    }
+    const outcome: V1MigrationAuditOutcome = await auditTaskMemoryV1Migration({
+      projectId: ProjectIdSchema.parse('project:demo'),
+      repository: reader,
+    })
+
+    expect(outcome).toEqual({ outcome: 'no-record' })
+    expect(exportCalls).toBe(0)
+  })
+
   test('supports a compile-time and runtime fake implementation', async () => {
     const event = MemoryEventDraftSchema.parse({
       schemaVersion: 2,

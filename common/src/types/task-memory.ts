@@ -7,6 +7,8 @@ const boundedText = (max: number) => z.string().max(max)
  * consumers (e.g. the SDK task-memory store) merge against the exact
  * limits this schema enforces instead of hand-mirroring them and
  * drifting silently.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
  */
 export const TASK_MEMORY_LIST_CAPS = {
   requirements: 64,
@@ -20,6 +22,9 @@ export const TASK_MEMORY_LIST_CAPS = {
   evidence: 256,
 } as const
 
+/**
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
+ */
 export const taskMemoryEvidenceV1Schema = z.object({
   id: z.string().min(1).max(160),
   kind: z.enum([
@@ -43,6 +48,9 @@ export const taskMemoryEvidenceV1Schema = z.object({
   stale: z.boolean().optional(),
 })
 
+/**
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
+ */
 export const taskMemoryDraftV1Schema = z.object({
   schemaVersion: z.literal(1),
   goal: boundedText(8_000).default(''),
@@ -87,12 +95,24 @@ export const taskMemoryDraftV1Schema = z.object({
   workspaceSnapshotId: boundedText(256).optional(),
 })
 
+/**
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
+ */
 export const taskMemoryV1Schema = taskMemoryDraftV1Schema.extend({
   revision: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
   checksum: z.string().min(1).max(64),
 })
 
+/**
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
+ */
 export type TaskMemoryEvidenceV1 = z.infer<typeof taskMemoryEvidenceV1Schema>
+/**
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
+ */
 export type TaskMemoryDraftV1 = z.infer<typeof taskMemoryDraftV1Schema>
+/**
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
+ */
 export type TaskMemoryV1 = z.infer<typeof taskMemoryV1Schema>

@@ -16,6 +16,9 @@ import type {
   TaskMemoryV1,
 } from '@codebuff/common/types/task-memory'
 
+/**
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
+ */
 export interface WorkspaceMoveRecord {
   from: string
   to: string
@@ -29,6 +32,8 @@ type FsModule = typeof nodeFsPromises
  * them as the full `FsModule` would let callers invoke anything else (e.g.
  * `copyFile`) and hit a silent runtime `undefined` instead of a compile
  * error.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
  */
 export interface TaskMemoryStoreFs {
   mkdir(
@@ -106,6 +111,8 @@ const LOCK_STALE_MS = 10_000
  * Load and schema-validate the persisted task memory for a project root,
  * re-verifying the stored checksum against the loaded payload. Missing,
  * corrupt, or checksum-mismatched data yields undefined; never throws.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
  */
 export async function loadPersistedTaskMemory(params: {
   rootDir: string
@@ -286,6 +293,8 @@ async function isPathInsideRoot(
  * Re-evaluate each evidence item against current disk state. Missing or
  * changed files mark the entry stale; a matching workspace move rebinds the
  * path to its destination before evaluating. Entries are never deleted.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
  */
 export async function reconcileTaskMemoryEvidence(params: {
   memory: TaskMemoryV1
@@ -393,6 +402,8 @@ function collectDroppedEvidenceIds(
  * longer carries but the caller's hydrated snapshot still does is treated as
  * deliberately dropped by the other writer and filtered out of the run's
  * still-hydrated `evidence` instead of being merged back in.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
  */
 export async function saveMergedTaskMemory(params: {
   rootDir: string
@@ -699,6 +710,8 @@ async function acquireRecordLock(
  * user as "nothing to prune". On `failed`, `removed`/`remaining` describe the
  * prune that WOULD have been written, so the record still holds `removed`
  * stale entries.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
  */
 export type TaskMemoryPruneOutcome =
   | { status: 'pruned'; removed: number; remaining: number }
@@ -734,6 +747,8 @@ export type TaskMemoryPruneOutcome =
  * that can see workspace moves must pass them, or evidence bound to a renamed
  * file reconciles stale and is permanently deleted instead of rebinding to
  * its destination.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
  */
 export async function pruneStaleTaskMemoryEvidence(params: {
   rootDir: string
@@ -841,6 +856,8 @@ export async function pruneStaleTaskMemoryEvidence(params: {
  * rather than a non-atomic write. A native `open` on the host (real node
  * fs) is forwarded so oversized evidence hashing streams leading bytes
  * instead of buffering the file.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
  */
 export function codebuffFsToNodePromises(
   codebuffFs: CodebuffFileSystem,
