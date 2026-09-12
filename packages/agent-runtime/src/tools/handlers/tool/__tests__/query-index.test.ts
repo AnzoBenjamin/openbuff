@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
 
+import * as discoveryCoordinator from '../../../../orchestration/discovery-coordinator'
 import { handleQueryIndex } from '../query-index'
 
 import type {
@@ -53,11 +54,15 @@ function buildOutput(): CodebuffToolOutput<'query_index'> {
 }
 
 describe('handleQueryIndex', () => {
+  afterEach(() => {
+    mock.restore()
+  })
+
   test('records results into discovery coverage candidates', async () => {
     const agentState = buildAgentState()
     const output = buildOutput()
 
-    await handleQueryIndex({
+    const { output: returned } = await handleQueryIndex({
       previousToolCallFinished: Promise.resolve(),
       toolCall: buildToolCall(),
       requestClientToolCall: async (
@@ -66,10 +71,11 @@ describe('handleQueryIndex', () => {
       agentState,
     } as unknown as Parameters<typeof handleQueryIndex>[0])
 
-    const candidates = agentState.discoveryCoverage?.candidates ?? []
-    expect(candidates.map((candidate) => candidate.path)).toContain(
-      'src/auth/login.ts',
+    expect(returned).toEqual(output)
+    const candidatePaths = agentState.discoveryCoverage?.candidates.map(
+      (candidate) => candidate.path,
     )
+    expect(candidatePaths).toContain('src/auth/login.ts')
   })
 
   test('returns the output unchanged', async () => {
@@ -91,7 +97,11 @@ describe('handleQueryIndex', () => {
   test('a failing coverage update does not break the tool', async () => {
     const output = buildOutput()
     const agentState = buildAgentState()
-    Object.freeze(agentState)
+    spyOn(discoveryCoordinator, 'recordDiscoveryResult').mockImplementation(
+      () => {
+        throw new Error('simulated coverage update failure')
+      },
+    )
 
     const { output: returned } = await handleQueryIndex({
       previousToolCallFinished: Promise.resolve(),
@@ -103,5 +113,7 @@ describe('handleQueryIndex', () => {
     } as unknown as Parameters<typeof handleQueryIndex>[0])
 
     expect(returned).toEqual(output)
+    // The throw happened before any coverage could be recorded.
+    expect(agentState.discoveryCoverage).toBeUndefined()
   })
 })
