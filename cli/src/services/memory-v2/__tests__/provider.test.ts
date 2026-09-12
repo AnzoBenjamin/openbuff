@@ -6,6 +6,7 @@ import { join } from 'node:path'
 
 import { BunSQLiteMemoryRepository } from '../bun-sqlite-memory-repository'
 import { ProjectMemoryV2Provider } from '../provider'
+import { getMemoryAuthoritySelection } from '../../../utils/env'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -121,6 +122,21 @@ describe('ProjectMemoryV2Provider', () => {
     expect(reopened.status).toBe('available')
     expect(calls).toBe(2)
     if (reopened.status === 'available') await reopened.release()
+    await provider.close()
+  })
+
+  test('default authority selection fails closed without V1 fallback', async () => {
+    const defaultAuthority = getMemoryAuthoritySelection(undefined)
+    expect(defaultAuthority).toEqual({ requested: 'sqlite-v2-opt-in', effective: 'sqlite-v2-opt-in' })
+    const provider = new ProjectMemoryV2Provider(async () => ({
+      status: 'error',
+      error: { kind: 'io', message: '/secret/database.sqlite', retryable: false },
+    }))
+    const result = await provider.open('/project', defaultAuthority)
+    expect(result).toMatchObject({ status: 'unavailable', effectiveAuthority: 'sqlite-v2-opt-in' })
+    if (result.status === 'unavailable') {
+      expect(result.degradation).toContain('V1 remains disabled')
+    }
     await provider.close()
   })
 

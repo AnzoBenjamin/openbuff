@@ -87,7 +87,7 @@ export type MemoryAuthoritySelection = {
 export function getMemoryAuthoritySelection(
   raw = getCliEnv().OPENBUFF_MEMORY_AUTHORITY,
 ): MemoryAuthoritySelection {
-  const requested = raw?.trim() || 'shadow-v2'
+  const requested = raw?.trim() || 'sqlite-v2-opt-in'
   if (
     requested === 'json-v1' ||
     requested === 'shadow-v2' ||

@@ -97,7 +97,7 @@ describe('cli/utils/env', () => {
 
   describe('memory authority', () => {
     test('defaults, accepts valid values, and safely degrades invalid values', () => {
-      expect(getMemoryAuthoritySelection(undefined)).toEqual({ requested: 'shadow-v2', effective: 'shadow-v2' })
+      expect(getMemoryAuthoritySelection(undefined)).toEqual({ requested: 'sqlite-v2-opt-in', effective: 'sqlite-v2-opt-in' })
       for (const value of ['json-v1', 'shadow-v2', 'sqlite-v2-opt-in'] as const) {
         expect(getMemoryAuthoritySelection(value)).toEqual({ requested: value, effective: value })
       }
