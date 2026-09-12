@@ -53,6 +53,21 @@ function buildOutput(): CodebuffToolOutput<'query_index'> {
   ] as unknown as CodebuffToolOutput<'query_index'>
 }
 
+function invoke(params: {
+  agentState: AgentState
+  output: CodebuffToolOutput<'query_index'>
+}): Promise<{ output: CodebuffToolOutput<'query_index'> }> {
+  const { agentState, output } = params
+  return handleQueryIndex({
+    previousToolCallFinished: Promise.resolve(),
+    toolCall: buildToolCall(),
+    requestClientToolCall: async (
+      _clientToolCall: ClientToolCall<'query_index'>,
+    ) => output,
+    agentState,
+  } as unknown as Parameters<typeof handleQueryIndex>[0])
+}
+
 describe('handleQueryIndex', () => {
   afterEach(() => {
     mock.restore()
@@ -62,14 +77,7 @@ describe('handleQueryIndex', () => {
     const agentState = buildAgentState()
     const output = buildOutput()
 
-    const { output: returned } = await handleQueryIndex({
-      previousToolCallFinished: Promise.resolve(),
-      toolCall: buildToolCall(),
-      requestClientToolCall: async (
-        _clientToolCall: ClientToolCall<'query_index'>,
-      ) => output,
-      agentState,
-    } as unknown as Parameters<typeof handleQueryIndex>[0])
+    const { output: returned } = await invoke({ agentState, output })
 
     expect(returned).toEqual(output)
     const candidatePaths = agentState.discoveryCoverage?.candidates.map(
@@ -82,14 +90,7 @@ describe('handleQueryIndex', () => {
     const agentState = buildAgentState()
     const output = buildOutput()
 
-    const { output: returned } = await handleQueryIndex({
-      previousToolCallFinished: Promise.resolve(),
-      toolCall: buildToolCall(),
-      requestClientToolCall: async (
-        _clientToolCall: ClientToolCall<'query_index'>,
-      ) => output,
-      agentState,
-    } as unknown as Parameters<typeof handleQueryIndex>[0])
+    const { output: returned } = await invoke({ agentState, output })
 
     expect(returned).toEqual(output)
   })
@@ -103,14 +104,7 @@ describe('handleQueryIndex', () => {
       },
     )
 
-    const { output: returned } = await handleQueryIndex({
-      previousToolCallFinished: Promise.resolve(),
-      toolCall: buildToolCall(),
-      requestClientToolCall: async (
-        _clientToolCall: ClientToolCall<'query_index'>,
-      ) => output,
-      agentState,
-    } as unknown as Parameters<typeof handleQueryIndex>[0])
+    const { output: returned } = await invoke({ agentState, output })
 
     expect(returned).toEqual(output)
     // The throw happened before any coverage could be recorded.
