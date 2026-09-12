@@ -107,11 +107,15 @@ export type {
 export type * from './services/memory-v2/types'
 export { MemoryV2Coordinator } from './services/memory-v2/coordinator'
 export {
+  auditTaskMemoryV1Migration,
   getV1MigrationIdentity,
   importTaskMemoryV1,
 } from './services/memory-v2/v1-migration'
 export type {
+  V1MigrationAuditOutcome,
+  V1MigrationAuditReader,
   V1MigrationOutcome,
+  V1MigrationSourceItemCounts,
   V1MigrationWarningCode,
 } from './services/memory-v2/v1-migration'
 export { MemoryV2OperatorService } from './services/memory-v2/operator-service'

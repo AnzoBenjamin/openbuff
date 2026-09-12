@@ -396,7 +396,11 @@ export type AgentState = {
     childRunId?: string
     receipt?: AgentReceipt
   }>
-  /** Typed operational memory compiled into each model request independently of chat summaries. */
+  /**
+   * Typed operational memory compiled into each model request independently of chat summaries.
+   *
+   * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
+   */
   taskMemory?: TaskMemoryV1
   /** Opt-in runtime-neutral Memory V2 lifecycle state. */
   memoryV2?: MemoryRuntimeStateV2

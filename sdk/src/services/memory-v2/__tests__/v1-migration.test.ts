@@ -2,8 +2,11 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   MemoryAppendRequestSchema,
+  MemoryEventEnvelopeSchema,
+  MemoryEventIdSchema,
   MemorySessionIdSchema,
   ProjectIdSchema,
+  TaskIdSchema,
   type MemoryEventEnvelope,
 } from '@codebuff/common/types/memory-v2'
 import {
@@ -12,7 +15,12 @@ import {
 } from '@codebuff/common/types/task-memory'
 import { stableHash } from '@codebuff/common/util/stable-hash'
 
-import { getV1MigrationIdentity, importTaskMemoryV1 } from '../v1-migration'
+import {
+  auditTaskMemoryV1Migration,
+  getV1MigrationIdentity,
+  importTaskMemoryV1,
+  type V1MigrationAuditReader,
+} from '../v1-migration'
 import type { MemoryRepositoryV2 } from '../types'
 
 const projectId = ProjectIdSchema.parse('project:migration-test')
@@ -56,6 +64,7 @@ class Repository implements MemoryRepositoryV2 {
   events = new Map<string, MemoryEventEnvelope>()
   sequence = 0
   appendCalls = 0
+  exportCalls = 0
   failAppendCall: number | undefined
   failAppendAsConflict = false
   appendRequests: Array<ReturnType<typeof MemoryAppendRequestSchema.parse>> = []
@@ -122,6 +131,7 @@ class Repository implements MemoryRepositoryV2 {
   }
 
   async export(input: Parameters<MemoryRepositoryV2['export']>[0]) {
+    this.exportCalls++
     const events = [...this.events.values()]
     const afterIndex = input.afterEventId
       ? events.findIndex((event) => event.eventId === input.afterEventId)
@@ -151,6 +161,14 @@ class Repository implements MemoryRepositoryV2 {
 
 const run = (repository: Repository, value?: TaskMemoryV1) =>
   importTaskMemoryV1({ memory: value, projectId, sessionId, repository })
+
+const audit = (repository: V1MigrationAuditReader, value?: TaskMemoryV1) =>
+  auditTaskMemoryV1Migration({ memory: value, projectId, repository })
+
+const cloneEvent = (
+  event: MemoryEventEnvelope,
+  overrides: Partial<MemoryEventEnvelope>,
+): MemoryEventEnvelope => MemoryEventEnvelopeSchema.parse({ ...event, ...overrides })
 
 const migrationReservations = (repository: Repository) =>
   [...repository.events.values()].filter(
@@ -491,5 +509,359 @@ describe('V1 memory migration', () => {
     if (outcome.outcome === 'imported') {
       expect(outcome.lastEventId).toBe(markerPage.events[0]!.eventId)
     }
+  })
+})
+
+describe('V1 memory migration audit', () => {
+  test('no record and checksum mismatch make no repository calls', async () => {
+    const repository = new Repository()
+    expect(await audit(repository)).toEqual({ outcome: 'no-record' })
+    expect(await audit(repository, memory({ checksum: 'invalid' }))).toMatchObject({
+      outcome: 'rejected',
+      reason: 'checksum-mismatch',
+    })
+    expect(repository.exportCalls).toBe(0)
+    expect(repository.appendCalls).toBe(0)
+  })
+
+  test('reports not-migrated from a complete empty scan', async () => {
+    const repository = new Repository()
+    const source = memory()
+    expect(await audit(repository, source)).toEqual({
+      outcome: 'not-migrated',
+      revision: source.revision,
+      checksum: source.checksum,
+    })
+    expect(repository.appendCalls).toBe(0)
+  })
+
+  test('certifies an imported body without writes and preserves lossy metadata', async () => {
+    const repository = new Repository()
+    const source = memory({ historicalSummary: 'h'.repeat(1_100) })
+    const imported = await run(repository, source)
+    expect(imported.outcome).toBe('imported')
+    const appendCalls = repository.appendCalls
+
+    const outcome = await audit(repository, source)
+    expect(outcome).toMatchObject({
+      outcome: 'exact',
+      revision: source.revision,
+      checksum: source.checksum,
+      identity: getV1MigrationIdentity({
+        projectId,
+        revision: source.revision,
+        checksum: source.checksum,
+      }),
+      repositoryLastEventId: [...repository.events.values()].at(-1)!.eventId,
+      warnings: expect.arrayContaining([
+        'goal-excluded',
+        'legacy-evidence-unverified',
+        'text-truncated',
+      ]),
+      truncatedFields: 1,
+    })
+    if (outcome.outcome === 'exact' && imported.outcome === 'imported') {
+      expect(outcome.markerEventId).toBe([...migrationMarkers(repository)][0]!.eventId)
+      expect(outcome.importedTaskId).toBe(imported.importedTaskId)
+      expect(outcome.importedObservationIds).toEqual(imported.importedObservationIds)
+      expect(outcome.omittedFields).toBe(imported.omittedFields)
+      expect(outcome.sourceItemCounts).toEqual(imported.sourceItemCounts)
+    }
+    expect(repository.appendCalls).toBe(appendCalls)
+  })
+
+  test('reports a reservation-only partial import as incomplete', async () => {
+    const repository = new Repository()
+    const source = memory()
+    repository.failAppendCall = 2
+    expect(await run(repository, source)).toMatchObject({ outcome: 'failed' })
+
+    expect(await audit(repository, source)).toMatchObject({
+      outcome: 'incomplete',
+      reason: 'reservation-only',
+      repositoryLastEventId: migrationReservations(repository)[0]!.eventId,
+    })
+  })
+
+  test('reports same-revision checksum ownership as a mismatch', async () => {
+    const repository = new Repository()
+    const first = memory()
+    expect((await run(repository, first)).outcome).toBe('imported')
+    const changed = memory({
+      revision: first.revision,
+      updatedAt: first.updatedAt + 1,
+      decisions: [...first.decisions, 'changed'],
+    })
+
+    expect(await audit(repository, changed)).toMatchObject({
+      outcome: 'mismatch',
+      reason: 'checksum-conflict',
+      checksum: changed.checksum,
+    })
+  })
+
+  test('detects missing imported task and observation bodies', async () => {
+    const missingTaskRepository = new Repository()
+    const source = memory()
+    const taskImport = await run(missingTaskRepository, source)
+    expect(taskImport.outcome).toBe('imported')
+    const taskEvent = [...missingTaskRepository.events.values()].find(
+      (event) => event.eventType === 'task.created',
+    )!
+    missingTaskRepository.events.delete(taskEvent.eventId)
+    expect(await audit(missingTaskRepository, source)).toMatchObject({
+      outcome: 'incomplete',
+      reason: 'missing-imported-task',
+    })
+
+    const repository = new Repository()
+    const imported = await run(repository, source)
+    expect(imported.outcome).toBe('imported')
+    if (imported.outcome !== 'imported') return
+    const removed = [...repository.events.values()].find(
+      (event) =>
+        event.eventType === 'observation.recorded' &&
+        event.payload.observation.observationId === imported.importedObservationIds[0],
+    )!
+    repository.events.delete(removed.eventId)
+
+    expect(await audit(repository, source)).toMatchObject({
+      outcome: 'incomplete',
+      reason: 'missing-imported-observations',
+    })
+  })
+
+  test('detects mismatched imported observation provenance', async () => {
+    const repository = new Repository()
+    const source = memory()
+    const imported = await run(repository, source)
+    expect(imported.outcome).toBe('imported')
+    if (imported.outcome !== 'imported') return
+    const original = [...repository.events.values()].find(
+      (event) =>
+        event.eventType === 'observation.recorded' &&
+        event.payload.observation.observationId === imported.importedObservationIds[0],
+    )!
+    if (original.eventType !== 'observation.recorded') return
+    const mutated = MemoryEventEnvelopeSchema.parse({
+      ...original,
+      payload: {
+        ...original.payload,
+        observation: {
+          ...original.payload.observation,
+          provenance: {
+            ...original.payload.observation.provenance,
+            metadata: {
+              ...original.payload.observation.provenance?.metadata,
+              checksum: 'different',
+            },
+          },
+        },
+      },
+    })
+    repository.events.set(original.eventId, mutated)
+
+    expect(await audit(repository, source)).toMatchObject({
+      outcome: 'mismatch',
+      reason: 'imported-body-mismatch',
+    })
+  })
+
+  test('treats a legacy marker without source proof as unverifiable', async () => {
+    const repository = new Repository()
+    const source = memory()
+    expect((await run(repository, source)).outcome).toBe('imported')
+    const marker = migrationMarkers(repository)[0]!
+    if (marker.eventType !== 'migration.v1.imported') return
+    const {
+      sourceRevision: _sourceRevision,
+      sourceChecksum: _sourceChecksum,
+      ...legacyPayload
+    } = marker.payload
+    repository.events.set(
+      marker.eventId,
+      MemoryEventEnvelopeSchema.parse({ ...marker, payload: legacyPayload }),
+    )
+
+    expect(await audit(repository, source)).toMatchObject({
+      outcome: 'incomplete',
+      reason: 'legacy-marker-unverifiable',
+      markerEventId: marker.eventId,
+    })
+  })
+
+  test('maps repository failures and fails closed on malformed or wrong-project output', async () => {
+    const source = memory()
+    const repository = new Repository()
+    await run(repository, source)
+    const event = [...repository.events.values()][0]!
+    const otherProjectEvent = cloneEvent(event, {
+      projectId: ProjectIdSchema.parse('project:other'),
+    })
+    const cases: Array<{
+      reader: V1MigrationAuditReader
+      expected: { outcome: string; reason: string }
+    }> = [
+      {
+        reader: {
+          async export() {
+            return {
+              outcome: 'rejected',
+              error: { code: 'invalid-request', message: 'no', retryable: false },
+            }
+          },
+        },
+        expected: { outcome: 'rejected', reason: 'repository-rejected' },
+      },
+      {
+        reader: {
+          async export() {
+            return {
+              outcome: 'failed',
+              error: { code: 'unavailable', message: 'no', retryable: true },
+            }
+          },
+        },
+        expected: { outcome: 'failed', reason: 'repository-failed' },
+      },
+      {
+        reader: {
+          async export(): Promise<never> {
+            throw new Error('private failure')
+          },
+        },
+        expected: { outcome: 'failed', reason: 'repository-failed' },
+      },
+      {
+        reader: {
+          async export() {
+            return { outcome: 'page', events: 'invalid', nextAfterEventId: null }
+          },
+        } as unknown as V1MigrationAuditReader,
+        expected: { outcome: 'failed', reason: 'invalid-export' },
+      },
+      {
+        reader: {
+          async export() {
+            return { outcome: 'page', events: [otherProjectEvent], nextAfterEventId: null }
+          },
+        },
+        expected: { outcome: 'failed', reason: 'wrong-project' },
+      },
+    ]
+
+    for (const { reader, expected } of cases) {
+      expect(await audit(reader, source)).toMatchObject(expected)
+    }
+  })
+
+  test('rejects empty, non-tail, and repeated pagination cursors', async () => {
+    const source = memory()
+    const repository = new Repository()
+    await run(repository, source)
+    const first = [...repository.events.values()][0]!
+    const second = cloneEvent(first, {
+      eventId: MemoryEventIdSchema.parse('event:audit-second'),
+      sequence: first.sequence + 1,
+    })
+    const cursor = first.eventId
+    const readers: V1MigrationAuditReader[] = [
+      {
+        async export() {
+          return { outcome: 'page', events: [], nextAfterEventId: cursor }
+        },
+      },
+      {
+        async export() {
+          return {
+            outcome: 'page',
+            events: [first],
+            nextAfterEventId: second.eventId,
+          }
+        },
+      },
+      {
+        async export(request) {
+          return request.afterEventId
+            ? { outcome: 'page', events: [second], nextAfterEventId: cursor }
+            : { outcome: 'page', events: [first], nextAfterEventId: cursor }
+        },
+      },
+      {
+        async export(request) {
+          return request.afterEventId
+            ? { outcome: 'page', events: [first], nextAfterEventId: null }
+            : { outcome: 'page', events: [first], nextAfterEventId: cursor }
+        },
+      },
+    ]
+    for (const reader of readers) {
+      expect(await audit(reader, source)).toMatchObject({
+        outcome: 'failed',
+        reason: 'pagination-invalid',
+      })
+    }
+  })
+
+  test('fails rather than certifying a scan with a tenth continuation page', async () => {
+    const source = memory()
+    const repository = new Repository()
+    await run(repository, source)
+    const template = [...repository.events.values()][0]!
+    let page = 0
+    const reader: V1MigrationAuditReader = {
+      async export() {
+        const event = cloneEvent(template, {
+          eventId: MemoryEventIdSchema.parse(`event:audit-page-${page}`),
+          sequence: page + 1,
+        })
+        page++
+        return { outcome: 'page', events: [event], nextAfterEventId: event.eventId }
+      },
+    }
+
+    expect(await audit(reader, source)).toMatchObject({
+      outcome: 'failed',
+      reason: 'page-limit-exceeded',
+    })
+    expect(page).toBe(10)
+  })
+
+  test('allows a full final page to be followed by an empty terminal page', async () => {
+    const source = memory()
+    const repository = new Repository()
+    expect((await run(repository, source)).outcome).toBe('imported')
+    const canonical = [...repository.events.values()]
+    const template = canonical.find(
+      (event) => event.eventType === 'task.created',
+    )!
+    const padding = Array.from({ length: 1_000 - canonical.length }, (_, index) =>
+      cloneEvent(template, {
+        eventId: MemoryEventIdSchema.parse(`event:audit-padding-${index}`),
+        sequence: canonical.length + index + 1,
+        sessionId: MemorySessionIdSchema.parse(`session:audit-padding-${index}`),
+        payload: {
+          ...template.payload,
+          taskId: TaskIdSchema.parse(`task:audit-padding-${index}`),
+        },
+      }),
+    )
+    const events = [...canonical, ...padding]
+    let calls = 0
+    const reader: V1MigrationAuditReader = {
+      async export(request) {
+        calls++
+        return request.afterEventId
+          ? { outcome: 'page', events: [], nextAfterEventId: null }
+          : {
+              outcome: 'page',
+              events,
+              nextAfterEventId: events.at(-1)!.eventId,
+            }
+      },
+    }
+
+    expect(await audit(reader, source)).toMatchObject({ outcome: 'exact' })
+    expect(calls).toBe(2)
   })
 })

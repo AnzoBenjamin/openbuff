@@ -2,9 +2,11 @@ import {
   MemoryAppendOutcomeSchema,
   MemoryAppendRequestSchema,
   MemoryEventIdSchema,
+  MemoryExportOutcomeSchema,
   ObservationIdSchema,
   TaskIdSchema,
   type MemoryEventDraft,
+  type MemoryEventEnvelope,
   type MemoryEventId,
   type MemorySessionId,
   type ObservationId,
@@ -41,7 +43,7 @@ const MIGRATION_CATEGORIES = [
 ] as const
 
 type V1MigrationCategory = (typeof MIGRATION_CATEGORIES)[number]
-type V1MigrationSourceItemCounts = Record<V1MigrationCategory, number>
+export type V1MigrationSourceItemCounts = Record<V1MigrationCategory, number>
 
 function newSourceItemCounts(): V1MigrationSourceItemCounts {
   return Object.fromEntries(
@@ -60,6 +62,9 @@ function markerSourceItemCounts(
   return normalized
 }
 
+/**
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
+ */
 export type V1MigrationWarningCode =
   | 'goal-excluded'
   | 'observation-cap-reached'
@@ -69,6 +74,9 @@ export type V1MigrationWarningCode =
   | 'empty-field-omitted'
   | 'text-truncated'
 
+/**
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
+ */
 export type V1MigrationOutcome =
   | { outcome: 'no-record' }
   | {
@@ -105,6 +113,9 @@ const boundedText = (
 const hashToken = (value: string): string =>
   stableHash(value).replace(/[^A-Za-z0-9._:-]/g, '').slice(0, 96)
 
+/**
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
+ */
 export function getV1MigrationIdentity(params: {
   projectId: ProjectId
   revision: number
@@ -275,6 +286,360 @@ function outcomeFromMarker(params: {
   }
 }
 
+export type V1MigrationAuditReader = Pick<MemoryRepositoryV2, 'export'>
+
+export type V1MigrationAuditOutcome =
+  | { outcome: 'no-record' }
+  | {
+      outcome: 'not-migrated'
+      revision: number
+      checksum: string
+      repositoryLastEventId?: MemoryEventId
+    }
+  | {
+      outcome: 'exact'
+      revision: number
+      checksum: string
+      identity: string
+      markerEventId: MemoryEventId
+      repositoryLastEventId: MemoryEventId
+      importedTaskId: TaskId
+      importedObservationIds: ObservationId[]
+      omittedFields: number
+      warnings: V1MigrationWarningCode[]
+      sourceItemCounts?: V1MigrationSourceItemCounts
+      truncatedFields?: number
+    }
+  | {
+      outcome: 'incomplete' | 'mismatch'
+      reason:
+        | 'reservation-only'
+        | 'legacy-marker-unverifiable'
+        | 'missing-imported-task'
+        | 'missing-imported-observations'
+        | 'imported-body-mismatch'
+        | 'revision-conflict'
+        | 'checksum-conflict'
+      revision: number
+      checksum: string
+      repositoryLastEventId?: MemoryEventId
+      markerEventId?: MemoryEventId
+      missingEventIds?: MemoryEventId[]
+    }
+  | {
+      outcome: 'rejected' | 'failed'
+      reason:
+        | 'checksum-mismatch'
+        | 'repository-rejected'
+        | 'repository-failed'
+        | 'invalid-export'
+        | 'wrong-project'
+        | 'pagination-invalid'
+        | 'page-limit-exceeded'
+      revision?: number
+      checksum?: string
+    }
+
+type V1MigrationAuditScan =
+  | {
+      outcome: 'complete'
+      events: MemoryEventEnvelope[]
+      repositoryLastEventId?: MemoryEventId
+    }
+  | Extract<V1MigrationAuditOutcome, { outcome: 'rejected' | 'failed' }>
+
+type ImportedMarkerEvent = Extract<
+  MemoryEventEnvelope,
+  { eventType: 'migration.v1.imported' }
+>
+type RecordedObservationEvent = Extract<
+  MemoryEventEnvelope,
+  { eventType: 'observation.recorded' }
+>
+
+async function scanV1MigrationAuditEvents(
+  repository: V1MigrationAuditReader,
+  projectId: ProjectId,
+): Promise<V1MigrationAuditScan> {
+  const events: MemoryEventEnvelope[] = []
+  const eventIds = new Set<MemoryEventId>()
+  const cursors = new Set<MemoryEventId>()
+  let afterEventId: MemoryEventId | undefined
+  let repositoryLastEventId: MemoryEventId | undefined
+
+  for (let page = 0; page < MAX_EXPORT_PAGES; page++) {
+    let raw: unknown
+    try {
+      raw = await repository.export({
+        schemaVersion: 2,
+        projectId,
+        ...(afterEventId ? { afterEventId } : {}),
+        limit: 1_000,
+      })
+    } catch {
+      return { outcome: 'failed', reason: 'repository-failed' }
+    }
+    const parsed = MemoryExportOutcomeSchema.safeParse(raw)
+    if (!parsed.success) return { outcome: 'failed', reason: 'invalid-export' }
+    const exported = parsed.data
+    if (exported.outcome !== 'page') {
+      return {
+        outcome: exported.outcome,
+        reason:
+          exported.outcome === 'rejected'
+            ? 'repository-rejected'
+            : 'repository-failed',
+      }
+    }
+
+    for (const event of exported.events) {
+      if (event.projectId !== projectId) {
+        return { outcome: 'failed', reason: 'wrong-project' }
+      }
+      if (eventIds.has(event.eventId)) {
+        return { outcome: 'failed', reason: 'pagination-invalid' }
+      }
+      eventIds.add(event.eventId)
+      events.push(event)
+      repositoryLastEventId = event.eventId
+    }
+
+    const nextAfterEventId = exported.nextAfterEventId ?? undefined
+    if (!nextAfterEventId) {
+      return { outcome: 'complete', events, repositoryLastEventId }
+    }
+    const pageLastEventId = exported.events.at(-1)?.eventId
+    if (
+      !pageLastEventId ||
+      nextAfterEventId !== pageLastEventId ||
+      nextAfterEventId === afterEventId ||
+      cursors.has(nextAfterEventId)
+    ) {
+      return { outcome: 'failed', reason: 'pagination-invalid' }
+    }
+    cursors.add(nextAfterEventId)
+    afterEventId = nextAfterEventId
+  }
+
+  return { outcome: 'failed', reason: 'page-limit-exceeded' }
+}
+
+function auditMigrationMarkerBody(params: {
+  marker: ImportedMarkerEvent
+  events: MemoryEventEnvelope[]
+  revision: number
+  checksum: string
+  identity: string
+  repositoryLastEventId: MemoryEventId
+}): V1MigrationAuditOutcome {
+  const {
+    marker,
+    events,
+    revision,
+    checksum,
+    identity,
+    repositoryLastEventId,
+  } = params
+  const markerResult = (outcome: 'incomplete' | 'mismatch', reason:
+    | 'missing-imported-task'
+    | 'missing-imported-observations'
+    | 'imported-body-mismatch'): V1MigrationAuditOutcome => ({
+    outcome,
+    reason,
+    revision,
+    checksum,
+    repositoryLastEventId,
+    markerEventId: marker.eventId,
+  })
+
+  if (marker.payload.legacyRecordKey !== identity) {
+    return markerResult('mismatch', 'imported-body-mismatch')
+  }
+  const taskExists = events.some(
+    (event) =>
+      event.eventType === 'task.created' &&
+      event.payload.taskId === marker.payload.importedTaskId,
+  )
+  if (!taskExists) return markerResult('incomplete', 'missing-imported-task')
+  if (
+    new Set(marker.payload.importedObservationIds).size !==
+    marker.payload.importedObservationIds.length
+  ) {
+    return markerResult('mismatch', 'imported-body-mismatch')
+  }
+
+  const observations = new Map<ObservationId, RecordedObservationEvent[]>()
+  for (const event of events) {
+    if (event.eventType !== 'observation.recorded') continue
+    const observationId = event.payload.observation.observationId
+    const matching = observations.get(observationId) ?? []
+    matching.push(event)
+    observations.set(observationId, matching)
+  }
+
+  let missing = false
+  for (const observationId of marker.payload.importedObservationIds) {
+    const matching = observations.get(observationId) ?? []
+    if (matching.length === 0) {
+      missing = true
+      continue
+    }
+    if (matching.length !== 1) {
+      return markerResult('mismatch', 'imported-body-mismatch')
+    }
+    const observation = matching[0]!.payload.observation
+    if (
+      observation.taskId !== marker.payload.importedTaskId ||
+      observation.provenance?.origin !== 'migration' ||
+      observation.provenance.metadata?.revision !== revision ||
+      observation.provenance.metadata?.checksum !== checksum ||
+      !observation.tags.includes('legacy-v1')
+    ) {
+      return markerResult('mismatch', 'imported-body-mismatch')
+    }
+  }
+  if (missing) {
+    return markerResult('incomplete', 'missing-imported-observations')
+  }
+
+  return {
+    outcome: 'exact',
+    revision,
+    checksum,
+    identity,
+    markerEventId: marker.eventId,
+    repositoryLastEventId,
+    importedTaskId: marker.payload.importedTaskId,
+    importedObservationIds: [...marker.payload.importedObservationIds],
+    omittedFields: marker.payload.omittedFields ?? 0,
+    warnings: marker.payload.warnings.filter(isV1MigrationWarningCode),
+    ...(marker.payload.sourceItemCounts
+      ? {
+          sourceItemCounts: markerSourceItemCounts(
+            marker.payload.sourceItemCounts,
+          ),
+        }
+      : {}),
+    ...(marker.payload.truncatedFields === undefined
+      ? {}
+      : { truncatedFields: marker.payload.truncatedFields }),
+  }
+}
+
+export async function auditTaskMemoryV1Migration(params: {
+  memory?: TaskMemoryV1
+  projectId: ProjectId
+  repository: V1MigrationAuditReader
+}): Promise<V1MigrationAuditOutcome> {
+  const { memory, projectId, repository } = params
+  if (!memory) return { outcome: 'no-record' }
+
+  const { revision, updatedAt, checksum, ...candidateDraft } = memory
+  const parsedDraft = taskMemoryDraftV1Schema.safeParse(candidateDraft)
+  if (!parsedDraft.success) {
+    return { outcome: 'rejected', reason: 'checksum-mismatch', revision, checksum }
+  }
+  const recomputed = stableHash(
+    JSON.stringify({ revision, updatedAt, memory: parsedDraft.data }),
+  )
+  if (recomputed !== checksum) {
+    return { outcome: 'rejected', reason: 'checksum-mismatch', revision, checksum }
+  }
+
+  const scanned = await scanV1MigrationAuditEvents(repository, projectId)
+  if (scanned.outcome !== 'complete') {
+    return { ...scanned, revision, checksum }
+  }
+  const identity = getV1MigrationIdentity({ projectId, revision, checksum })
+  const matchingReservations = scanned.events.filter(
+    (event) =>
+      event.eventType === 'migration.v1.reserved' &&
+      event.payload.sourceRevision === revision &&
+      event.payload.sourceChecksum === checksum &&
+      event.payload.migrationId === identity,
+  )
+  const conflictingReservation = scanned.events.some(
+    (event) =>
+      event.eventType === 'migration.v1.reserved' &&
+      event.payload.sourceRevision === revision &&
+      (event.payload.sourceChecksum !== checksum ||
+        event.payload.migrationId !== identity),
+  )
+  const exactMarkers = scanned.events.filter(
+    (event): event is ImportedMarkerEvent =>
+      event.eventType === 'migration.v1.imported' &&
+      event.payload.sourceRevision === revision &&
+      event.payload.sourceChecksum === checksum,
+  )
+  const conflictingMarker = scanned.events.some(
+    (event) =>
+      event.eventType === 'migration.v1.imported' &&
+      event.payload.sourceRevision === revision &&
+      event.payload.sourceChecksum !== undefined &&
+      event.payload.sourceChecksum !== checksum,
+  )
+  const legacyMarkers = scanned.events.filter(
+    (event): event is ImportedMarkerEvent =>
+      event.eventType === 'migration.v1.imported' &&
+      event.payload.legacyRecordKey === identity &&
+      (event.payload.sourceRevision === undefined ||
+        event.payload.sourceChecksum === undefined),
+  )
+  const unverifiableRevisionMarker = scanned.events.some(
+    (event) =>
+      event.eventType === 'migration.v1.imported' &&
+      event.payload.sourceRevision === revision &&
+      event.payload.sourceChecksum === undefined,
+  )
+  const auditEvidence = {
+    revision,
+    checksum,
+    ...(scanned.repositoryLastEventId
+      ? { repositoryLastEventId: scanned.repositoryLastEventId }
+      : {}),
+  }
+
+  if (conflictingReservation || conflictingMarker) {
+    return { outcome: 'mismatch', reason: 'checksum-conflict', ...auditEvidence }
+  }
+  if (
+    exactMarkers.length > 1 ||
+    matchingReservations.length > 1 ||
+    legacyMarkers.length > 1 ||
+    (unverifiableRevisionMarker && exactMarkers.length > 0)
+  ) {
+    return { outcome: 'mismatch', reason: 'revision-conflict', ...auditEvidence }
+  }
+  if (exactMarkers.length === 1) {
+    return auditMigrationMarkerBody({
+      marker: exactMarkers[0]!,
+      events: scanned.events,
+      revision,
+      checksum,
+      identity,
+      repositoryLastEventId: scanned.repositoryLastEventId!,
+    })
+  }
+  if (legacyMarkers.length === 1) {
+    return {
+      outcome: 'incomplete',
+      reason: 'legacy-marker-unverifiable',
+      markerEventId: legacyMarkers[0]!.eventId,
+      ...auditEvidence,
+    }
+  }
+  if (unverifiableRevisionMarker) {
+    return { outcome: 'mismatch', reason: 'revision-conflict', ...auditEvidence }
+  }
+  if (matchingReservations.length === 1) {
+    return { outcome: 'incomplete', reason: 'reservation-only', ...auditEvidence }
+  }
+  return { outcome: 'not-migrated', ...auditEvidence }
+}
+
+/**
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
+ */
 export async function importTaskMemoryV1(params: {
   memory?: TaskMemoryV1
   projectId: ProjectId
