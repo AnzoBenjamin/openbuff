@@ -232,6 +232,281 @@ function isV1MigrationCategory(value: unknown): value is V1MigrationCategory {
   )
 }
 
+type ImportedObservationEvent = Extract<
+  MemoryEventEnvelope,
+  { eventType: 'observation.recorded' }
+>
+
+type CanonicalMarkerSourceItemCounts = NonNullable<
+  ImportedMarkerEvent['payload']['sourceItemCounts']
+>
+
+/**
+ * The marker payload must carry the V1 source fields every remaining
+ * ownership check depends on.
+ */
+function hasCanonicalMarkerSourceFields(
+  payload: ImportedMarkerEvent['payload'],
+): payload is ImportedMarkerEvent['payload'] & {
+  sourceRevision: number
+  sourceChecksum: string
+  sourceItemCounts: CanonicalMarkerSourceItemCounts
+} {
+  return (
+    payload.sourceRevision !== undefined &&
+    payload.sourceChecksum !== undefined &&
+    payload.sourceItemCounts !== undefined
+  )
+}
+
+/**
+ * The marker payload must reproduce the deterministic identities, payload
+ * schema versions, and observation id sequence emitted by this migration.
+ */
+function hasCanonicalMarkerPayloadShape(params: {
+  marker: ImportedMarkerEvent
+  projectId: ProjectId
+  identity: string
+  expectedTaskId: TaskId
+  expectedObservationIds: ObservationId[]
+}): boolean {
+  const {
+    marker,
+    projectId,
+    identity,
+    expectedTaskId,
+    expectedObservationIds,
+  } = params
+  return !(
+    marker.payload.legacyRecordKey !== identity ||
+    marker.projectId !== projectId ||
+    marker.eventId !== eventId(identity, MAX_OBSERVATIONS + 1) ||
+    marker.payload.payloadSchemaVersion !== 1 ||
+    marker.payload.sourceSchemaVersion !== 1 ||
+    marker.payload.importedTaskId !== expectedTaskId ||
+    expectedObservationIds.some(
+      (observationId, index) =>
+        observationId !== marker.payload.importedObservationIds[index],
+    )
+  )
+}
+
+/**
+ * Exactly one canonical reservation event must exist, matching the marker
+ * envelope and the V1 source fields.
+ */
+function hasValidMigrationReservation(params: {
+  marker: ImportedMarkerEvent
+  events: MemoryEventEnvelope[]
+  projectId: ProjectId
+  identity: string
+  sourceRevision: number
+  sourceChecksum: string
+}): boolean {
+  const {
+    marker,
+    events,
+    projectId,
+    identity,
+    sourceRevision,
+    sourceChecksum,
+  } = params
+  const reservations = events.filter(
+    (event) => event.eventId === reservationEventId(identity),
+  )
+  if (reservations.length !== 1) return false
+  const reservation = reservations[0]!
+  return !(
+    reservation.eventType !== 'migration.v1.reserved' ||
+    reservation.projectId !== projectId ||
+    reservation.sessionId !== marker.sessionId ||
+    reservation.occurredAt !== marker.occurredAt ||
+    reservation.payload.payloadSchemaVersion !== 1 ||
+    reservation.payload.migrationId !== identity ||
+    reservation.payload.sourceRevision !== sourceRevision ||
+    reservation.payload.sourceChecksum !== sourceChecksum
+  )
+}
+
+/**
+ * Exactly one canonical task.created event must exist for the imported task,
+ * matching the marker envelope and the deterministic import text.
+ */
+function hasValidImportedTaskEvent(params: {
+  marker: ImportedMarkerEvent
+  events: MemoryEventEnvelope[]
+  projectId: ProjectId
+  bodyIdentity: string
+  expectedTaskId: TaskId
+  sourceRevision: number
+}): boolean {
+  const {
+    marker,
+    events,
+    projectId,
+    bodyIdentity,
+    expectedTaskId,
+    sourceRevision,
+  } = params
+  const expectedTaskEventId = eventId(bodyIdentity, 0)
+  const taskEvents = events.filter(
+    (event) => event.eventId === expectedTaskEventId,
+  )
+  if (taskEvents.length !== 1) return false
+  const task = taskEvents[0]!
+  return !(
+    task.eventType !== 'task.created' ||
+    task.projectId !== projectId ||
+    task.sessionId !== marker.sessionId ||
+    task.occurredAt !== marker.occurredAt ||
+    task.payload.payloadSchemaVersion !== 1 ||
+    task.payload.taskId !== expectedTaskId ||
+    task.payload.title !==
+      `Imported legacy task memory revision ${sourceRevision}` ||
+    task.payload.objective !==
+      'Preserve bounded legacy operational memory without importing its goal.' ||
+    task.payload.initialStatus !== 'created'
+  )
+}
+
+/**
+ * A single imported observation event must match the deterministic body shape
+ * for its category, within the source item counts and canonical ordering.
+ */
+function hasValidImportedObservationEvent(params: {
+  marker: ImportedMarkerEvent
+  event: ImportedObservationEvent
+  projectId: ProjectId
+  expectedTaskId: TaskId
+  observationId: ObservationId
+  category: V1MigrationCategory
+  categoryIndex: number
+  occurrences: number
+  previousCategoryIndex: number
+  sourceRevision: number
+  sourceChecksum: string
+  sourceItemCounts: CanonicalMarkerSourceItemCounts
+}): boolean {
+  const {
+    marker,
+    event,
+    projectId,
+    expectedTaskId,
+    observationId,
+    category,
+    categoryIndex,
+    occurrences,
+    previousCategoryIndex,
+    sourceRevision,
+    sourceChecksum,
+    sourceItemCounts,
+  } = params
+  const observation = event.payload.observation
+  const expectedSummary =
+    category === 'path-evidence'
+      ? 'Legacy path evidence requires reread'
+      : category === 'historical-summary'
+        ? 'Legacy historical summary'
+        : `Legacy ${category} items (${sourceItemCounts[category] ?? 0})`
+  if (
+    categoryIndex < previousCategoryIndex ||
+    (occurrences > 1 && category !== 'path-evidence') ||
+    (sourceItemCounts[category] ?? 0) < occurrences ||
+    event.projectId !== projectId ||
+    event.sessionId !== marker.sessionId ||
+    event.occurredAt !== marker.occurredAt ||
+    event.payload.payloadSchemaVersion !== 1 ||
+    observation.observationId !== observationId ||
+    observation.taskId !== expectedTaskId ||
+    observation.kind !== (category === 'blockers' ? 'warning' : 'discovery') ||
+    observation.summary !== expectedSummary ||
+    observation.detail.length > MAX_AGGREGATE_DETAIL ||
+    observation.confidence !== 0.25 ||
+    observation.evidence.length !== 0 ||
+    observation.observedAt !== marker.occurredAt ||
+    observation.provenance?.origin !== 'migration' ||
+    observation.provenance.recordedBy !== 'sdk-memory-v1-import' ||
+    observation.provenance.sourceEventIds.length !== 0 ||
+    observation.provenance.sourceSessionId !== marker.sessionId ||
+    observation.provenance.metadata.revision !== sourceRevision ||
+    observation.provenance.metadata.checksum !== sourceChecksum ||
+    JSON.stringify(observation.tags) !==
+      JSON.stringify(['legacy-v1', category, 'unverified'])
+  )
+    return false
+  const selectors = observation.selectors ?? []
+  if (category === 'path-evidence') {
+    if (selectors.length !== 1 || selectors[0]?.kind !== 'file') return false
+    const decision = classifyMemoryArtifactPath(selectors[0].path)
+    if (!decision.allowed || !decision.normalizedPath) return false
+  } else if (selectors.length !== 0) {
+    return false
+  }
+  return true
+}
+
+/**
+ * Every expected observation event must exist exactly once, in canonical
+ * category order and within the per-category source item counts.
+ */
+function hasValidImportedObservationEvents(params: {
+  marker: ImportedMarkerEvent
+  events: MemoryEventEnvelope[]
+  projectId: ProjectId
+  bodyIdentity: string
+  expectedTaskId: TaskId
+  expectedObservationIds: ObservationId[]
+  sourceRevision: number
+  sourceChecksum: string
+  sourceItemCounts: CanonicalMarkerSourceItemCounts
+}): boolean {
+  const {
+    marker,
+    events,
+    projectId,
+    bodyIdentity,
+    expectedTaskId,
+    expectedObservationIds,
+    sourceRevision,
+    sourceChecksum,
+    sourceItemCounts,
+  } = params
+  let previousCategoryIndex = -1
+  const categoryOccurrences = new Map<V1MigrationCategory, number>()
+  for (const [index, observationId] of expectedObservationIds.entries()) {
+    const expectedEventId = eventId(bodyIdentity, index + 1)
+    const matching = events.filter((event) => event.eventId === expectedEventId)
+    if (matching.length !== 1) return false
+    const event = matching[0]!
+    if (event.eventType !== 'observation.recorded') return false
+    const observation = event.payload.observation
+    const category = observation.provenance?.metadata.category
+    if (!isV1MigrationCategory(category)) return false
+    const categoryIndex = MIGRATION_CATEGORIES.indexOf(category)
+    const occurrences = (categoryOccurrences.get(category) ?? 0) + 1
+    categoryOccurrences.set(category, occurrences)
+    if (
+      !hasValidImportedObservationEvent({
+        marker,
+        event,
+        projectId,
+        expectedTaskId,
+        observationId,
+        category,
+        categoryIndex,
+        occurrences,
+        previousCategoryIndex,
+        sourceRevision,
+        sourceChecksum,
+        sourceItemCounts,
+      })
+    )
+      return false
+    previousCategoryIndex = categoryIndex
+  }
+  return true
+}
+
 /**
  * Return cleanup authority only for a canonical marker whose reservation and
  * complete referenced body have the deterministic shape emitted by this
@@ -245,14 +520,8 @@ function validatedMigrationOwnedMarkerMetadata(params: {
   projectId: ProjectId
 }): MigrationMarkerMetadata | undefined {
   const { marker, events, projectId } = params
-  const { sourceRevision, sourceChecksum, legacyRecordKey, sourceItemCounts } =
-    marker.payload
-  if (
-    sourceRevision === undefined ||
-    sourceChecksum === undefined ||
-    sourceItemCounts === undefined
-  )
-    return undefined
+  if (!hasCanonicalMarkerSourceFields(marker.payload)) return undefined
+  const { sourceRevision, sourceChecksum, sourceItemCounts } = marker.payload
 
   const identity = getV1MigrationIdentity({
     projectId,
@@ -269,115 +538,51 @@ function validatedMigrationOwnedMarkerMetadata(params: {
     (_, index) => ObservationIdFor(bodyIdentity, index),
   )
   if (
-    legacyRecordKey !== identity ||
-    marker.projectId !== projectId ||
-    marker.eventId !== eventId(identity, MAX_OBSERVATIONS + 1) ||
-    marker.payload.payloadSchemaVersion !== 1 ||
-    marker.payload.sourceSchemaVersion !== 1 ||
-    marker.payload.importedTaskId !== expectedTaskId ||
-    expectedObservationIds.some(
-      (observationId, index) =>
-        observationId !== marker.payload.importedObservationIds[index],
-    )
+    !hasCanonicalMarkerPayloadShape({
+      marker,
+      projectId,
+      identity,
+      expectedTaskId,
+      expectedObservationIds,
+    })
   )
     return undefined
-
-  const reservations = events.filter(
-    (event) => event.eventId === reservationEventId(identity),
-  )
-  if (reservations.length !== 1) return undefined
-  const reservation = reservations[0]!
   if (
-    reservation.eventType !== 'migration.v1.reserved' ||
-    reservation.projectId !== projectId ||
-    reservation.sessionId !== marker.sessionId ||
-    reservation.occurredAt !== marker.occurredAt ||
-    reservation.payload.payloadSchemaVersion !== 1 ||
-    reservation.payload.migrationId !== identity ||
-    reservation.payload.sourceRevision !== sourceRevision ||
-    reservation.payload.sourceChecksum !== sourceChecksum
+    !hasValidMigrationReservation({
+      marker,
+      events,
+      projectId,
+      identity,
+      sourceRevision,
+      sourceChecksum,
+    })
   )
     return undefined
-
-  const expectedTaskEventId = eventId(bodyIdentity, 0)
-  const taskEvents = events.filter(
-    (event) => event.eventId === expectedTaskEventId,
-  )
-  if (taskEvents.length !== 1) return undefined
-  const task = taskEvents[0]!
   if (
-    task.eventType !== 'task.created' ||
-    task.projectId !== projectId ||
-    task.sessionId !== marker.sessionId ||
-    task.occurredAt !== marker.occurredAt ||
-    task.payload.payloadSchemaVersion !== 1 ||
-    task.payload.taskId !== expectedTaskId ||
-    task.payload.title !==
-      `Imported legacy task memory revision ${sourceRevision}` ||
-    task.payload.objective !==
-      'Preserve bounded legacy operational memory without importing its goal.' ||
-    task.payload.initialStatus !== 'created'
+    !hasValidImportedTaskEvent({
+      marker,
+      events,
+      projectId,
+      bodyIdentity,
+      expectedTaskId,
+      sourceRevision,
+    })
   )
     return undefined
-
-  let previousCategoryIndex = -1
-  const categoryOccurrences = new Map<V1MigrationCategory, number>()
-  for (const [index, observationId] of expectedObservationIds.entries()) {
-    const expectedEventId = eventId(bodyIdentity, index + 1)
-    const matching = events.filter((event) => event.eventId === expectedEventId)
-    if (matching.length !== 1) return undefined
-    const event = matching[0]!
-    if (event.eventType !== 'observation.recorded') return undefined
-    const observation = event.payload.observation
-    const category = observation.provenance?.metadata.category
-    if (!isV1MigrationCategory(category)) return undefined
-    const categoryIndex = MIGRATION_CATEGORIES.indexOf(category)
-    const occurrences = (categoryOccurrences.get(category) ?? 0) + 1
-    categoryOccurrences.set(category, occurrences)
-    const expectedSummary =
-      category === 'path-evidence'
-        ? 'Legacy path evidence requires reread'
-        : category === 'historical-summary'
-          ? 'Legacy historical summary'
-          : `Legacy ${category} items (${sourceItemCounts[category] ?? 0})`
-    if (
-      categoryIndex < previousCategoryIndex ||
-      (occurrences > 1 && category !== 'path-evidence') ||
-      (sourceItemCounts[category] ?? 0) < occurrences ||
-      event.projectId !== projectId ||
-      event.sessionId !== marker.sessionId ||
-      event.occurredAt !== marker.occurredAt ||
-      event.payload.payloadSchemaVersion !== 1 ||
-      observation.observationId !== observationId ||
-      observation.taskId !== expectedTaskId ||
-      observation.kind !==
-        (category === 'blockers' ? 'warning' : 'discovery') ||
-      observation.summary !== expectedSummary ||
-      observation.detail.length > MAX_AGGREGATE_DETAIL ||
-      observation.confidence !== 0.25 ||
-      observation.evidence.length !== 0 ||
-      observation.observedAt !== marker.occurredAt ||
-      observation.provenance?.origin !== 'migration' ||
-      observation.provenance.recordedBy !== 'sdk-memory-v1-import' ||
-      observation.provenance.sourceEventIds.length !== 0 ||
-      observation.provenance.sourceSessionId !== marker.sessionId ||
-      observation.provenance.metadata.revision !== sourceRevision ||
-      observation.provenance.metadata.checksum !== sourceChecksum ||
-      JSON.stringify(observation.tags) !==
-        JSON.stringify(['legacy-v1', category, 'unverified'])
-    )
-      return undefined
-    const selectors = observation.selectors ?? []
-    if (category === 'path-evidence') {
-      if (selectors.length !== 1 || selectors[0]?.kind !== 'file')
-        return undefined
-      const decision = classifyMemoryArtifactPath(selectors[0].path)
-      if (!decision.allowed || !decision.normalizedPath) return undefined
-    } else if (selectors.length !== 0) {
-      return undefined
-    }
-    previousCategoryIndex = categoryIndex
-  }
+  if (
+    !hasValidImportedObservationEvents({
+      marker,
+      events,
+      projectId,
+      bodyIdentity,
+      expectedTaskId,
+      expectedObservationIds,
+      sourceRevision,
+      sourceChecksum,
+      sourceItemCounts,
+    })
+  )
+    return undefined
 
   return markerMetadata(marker)
 }
