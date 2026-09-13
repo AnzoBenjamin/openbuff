@@ -965,6 +965,53 @@ describe('V1 memory migration audit', () => {
     expect(repository.appendCalls).toBe(appendCalls)
   })
 
+  test('certifies exact after a JSON round-trip that sorts record-valued payload keys', async () => {
+    // Regression: the Bun SQLite repository persists payloads via stableJson,
+    // which recursively sorts object keys, and export() re-parses from that
+    // sorted JSON. The marker's sourceItemCounts (a z.record) therefore comes
+    // back in alphabetical order while the in-memory draft keeps insertion
+    // order. equalEventDraft must compare content, not key order, or the real
+    // provider always reports imported-body-mismatch. This subclass mimics
+    // that round-trip by re-parsing each exported event with sorted keys.
+    class SortedJsonRepository extends Repository {
+      override async export(
+        input: Parameters<MemoryRepositoryV2['export']>[0],
+      ) {
+        const page = await super.export(input)
+        if (page.outcome !== 'page') return page
+        return {
+          ...page,
+          events: page.events.map((event) =>
+            MemoryEventEnvelopeSchema.parse(
+              JSON.parse(
+                JSON.stringify(event, (_key, value) =>
+                  value !== null &&
+                  typeof value === 'object' &&
+                  !Array.isArray(value)
+                    ? Object.fromEntries(
+                        Object.entries(value as Record<string, unknown>).sort(
+                          ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0),
+                        ),
+                      )
+                    : value,
+                ),
+              ),
+            ),
+          ),
+        }
+      }
+    }
+
+    const repository = new SortedJsonRepository()
+    const source = memory({ requirements: ['req-1'], decisions: ['dec-1'] })
+    expect((await run(repository, source)).outcome).toBe('imported')
+    expect(await audit(repository, source)).toMatchObject({
+      outcome: 'exact',
+      revision: source.revision,
+      checksum: source.checksum,
+    })
+  })
+
   test('reports a reservation-only partial import as incomplete', async () => {
     const repository = new Repository()
     const source = memory()

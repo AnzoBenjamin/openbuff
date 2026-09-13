@@ -111,6 +111,13 @@ const boundedText = (
   return { value: trimmed.slice(0, limit), truncated: trimmed.length > limit }
 }
 
+/**
+ * stableHash is FNV-1a 32-bit -> a fixed 8-hex-char token. The sanitizing
+ * regex strips nothing from that output, so the slice(0, 96) cap is a no-op
+ * safeguard. Collision tolerance is governed by the 32-bit hash space
+ * (birthday-bound collisions become non-negligible around ~2^16 distinct
+ * tokens), not by the 96-char cap, which never further shortens the token.
+ */
 const hashToken = (value: string): string =>
   stableHash(value)
     .replace(/[^A-Za-z0-9._:-]/g, '')
@@ -600,6 +607,9 @@ async function findMigrationMarker(
   let reserved = false
   const events: MemoryEventEnvelope[] = []
   const priorCandidates: ImportedMarkerEvent[] = []
+  // Loop-invariant: projectId, revision, and checksum are function params, so
+  // compute the migration identity once instead of per reservation event.
+  const identity = getV1MigrationIdentity({ projectId, revision, checksum })
 
   for (let page = 0; page < MAX_EXPORT_PAGES; page++) {
     const outcome = await repository.export({
@@ -617,8 +627,7 @@ async function findMigrationMarker(
       if (event.eventType === 'migration.v1.reserved') {
         if (event.payload.sourceRevision === revision) {
           if (
-            event.payload.migrationId ===
-              getV1MigrationIdentity({ projectId, revision, checksum }) &&
+            event.payload.migrationId === identity &&
             event.payload.sourceChecksum === checksum
           )
             reserved = true
@@ -711,13 +720,37 @@ function normalizedEventDraft(event: MemoryEventEnvelope): MemoryEventDraft {
   return MemoryEventDraftSchema.parse(draft)
 }
 
+/**
+ * Canonicalize a value for order-insensitive comparison: plain-object keys are
+ * emitted in sorted order (matching the recursive key-sort the Bun SQLite
+ * repository applies via stableJson before persisting), arrays keep their
+ * order, and primitives pass through. Without this, a record-valued payload
+ * field (e.g. sourceItemCounts) survives a stableJson round-trip with
+ * alphabetically sorted keys while the in-memory draft keeps insertion order,
+ * so a naive JSON.stringify comparison would always report a mismatch on the
+ * real provider even though both sides carry identical content.
+ */
+function canonicalizeForCompare(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeForCompare)
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    const sorted: Record<string, unknown> = {}
+    for (const key of Object.keys(record).sort()) {
+      sorted[key] = canonicalizeForCompare(record[key])
+    }
+    return sorted
+  }
+  return value
+}
+
 function equalEventDraft(
   expected: MemoryEventDraft,
   actual: MemoryEventEnvelope,
 ): boolean {
   return (
-    JSON.stringify(MemoryEventDraftSchema.parse(expected)) ===
-    JSON.stringify(normalizedEventDraft(actual))
+    JSON.stringify(
+      canonicalizeForCompare(MemoryEventDraftSchema.parse(expected)),
+    ) === JSON.stringify(canonicalizeForCompare(normalizedEventDraft(actual)))
   )
 }
 
