@@ -1202,6 +1202,58 @@ ${guideSections}
       // serialized state lacks this field, which is what makes the
       // condonedFindingTexts fallback below conditional on it being empty.
       activeWorkState.condonedFindingKeys ??= []
+      // Deleted-file finding prune. A pending gate file DELETED before any
+      // snapshot captured its bytes resolves to the `missing` content marker
+      // (readGateFileContentMarker) and is attested-by-absence, so an open
+      // finding whose ENTIRE file set is now missing can never be cleared by a
+      // fresh matching review: the reviewer cannot read a deleted file and
+      // keeps returning `BLOCKING: ...assigned-file-unreadable...`, which
+      // re-creates the finding and re-spawns its specialist forever (the
+      // scripts/perf-probe-tmp.ts loop). Remove such findings — and their
+      // verbatim blocker strings, matched by the same text-containment rule
+      // mergeReviewerFindings uses to keep blockers and findings in sync —
+      // BEFORE the owed-set rehydration below so a pruned finding's reviewer
+      // family is not rehydrated into another re-review. A finding naming ANY
+      // still-existing file is kept untouched: genuinely
+      // unreadable-but-present files (permissions, EISDIR, symlink escape)
+      // produce `unreadable:*` markers, never `missing`, so fail-closed
+      // re-review for them is preserved.
+      {
+        const openFindings = activeWorkState.openReviewerFindings ?? []
+        const missingFileFindings = openFindings.filter((finding) => {
+          const findingFiles = Array.isArray(finding.files)
+            ? finding.files.filter(
+                (file): file is string =>
+                  typeof file === 'string' && file.length > 0,
+              )
+            : []
+          return (
+            findingFiles.length > 0 &&
+            findingFiles.every(
+              (file) => readGateFileContentMarker(file) === 'missing',
+            )
+          )
+        })
+        if (missingFileFindings.length > 0) {
+          const prunedFindingSet = new Set(missingFileFindings)
+          activeWorkState.openReviewerFindings = openFindings.filter(
+            (finding) => !prunedFindingSet.has(finding),
+          )
+          const prunedFindingTexts = missingFileFindings
+            .map((finding) => finding.text)
+            .filter(
+              (text): text is string =>
+                typeof text === 'string' && text.length > 0,
+            )
+          activeWorkState.openReviewerBlockers = (
+            activeWorkState.openReviewerBlockers ?? []
+          ).filter(
+            (blocker) =>
+              !prunedFindingTexts.some((text) => blocker.includes(text)),
+          )
+          markActiveWorkStateChanged()
+        }
+      }
       if (activeWorkState.openReviewerFindings.length > 0) {
         // Rehydrate the owed set from EVERY open finding, not just findings[0]:
         // serialized state can carry open findings from several reviewers and
@@ -10602,9 +10654,12 @@ function hashGateSnapshotDetails(details: string): string {
        * Resolve a normalized gate file path against process.cwd() and return
        * a deterministic content marker for fingerprinting. Regular files are
        * hashed in fixed-size chunks; symlink markers additionally bind the link
-       * path to bytes read from its resolved target. Never throws: scope, read,
-       * or stat failures become `unreadable:<code>` markers so stale credit
-       * fails closed.
+       * path to bytes read from its resolved target. A path that does not exist
+       * on disk returns the exact marker `missing` (attested-by-absence — the
+       * same marker a snapshotted-then-deleted file gets from the ENOENT catch
+       * below, now also produced for a file deleted before its first snapshot).
+       * Never throws: every other scope, read, or stat failure becomes an
+       * `unreadable:<code>` marker so stale credit fails closed.
        */
       function readGateFileContentMarker(normalizedPath: string): string {
         if (!normalizedPath) return 'unreadable:empty-path'
@@ -10653,6 +10708,34 @@ function hashGateSnapshotDetails(details: string): string {
           return 'unreadable:outside-project'
         }
         try {
+          // True nonexistence is attested-by-absence, NOT an unreadable file:
+          // a pending gate file deleted before any snapshot captured its bytes
+          // must resolve to the existing `missing` marker so
+          // collectDeletedFilesFromSnapshotDetails recognizes the deletion and
+          // per-file credit treats it as stable (a never-snapshotted deletion
+          // otherwise re-triggers specialist review forever). Probe existence
+          // BEFORE the component walk; the walk's lstatSync (or the open below)
+          // still throws ENOENT for the TOCTOU case — deleted between this
+          // probe and the read — and the catch below maps ENOENT to `missing`
+          // too. A path that EXISTS (regular file, directory, or symlink) falls
+          // through unchanged, so present-but-not-a-file stays
+          // `unreadable:not-a-file` and an escaping symlink stays
+          // `unreadable:outside-project-symlink`: only true absence yields
+          // `missing`.
+          // Use lstatSync (not existsSync) for the probe: existsSync follows a
+          // dangling symlink to its nonexistent target and would wrongly report
+          // `missing`, whereas lstatSync sees the link entry itself as present
+          // (ENOENT only when the path truly does not exist).
+          try {
+            fs.lstatSync(absolutePath)
+          } catch (probeError) {
+            if ((probeError as NodeJS.ErrnoException).code === 'ENOENT') {
+              return 'missing'
+            }
+            // A present path that cannot be stated (permissions, etc.) stays
+            // fail-closed as unreadable rather than being mistaken for absent.
+            return 'unreadable:lstat-failed'
+          }
           const pathSegments = projectRelativePath
             .split(path.sep)
             .filter(Boolean)

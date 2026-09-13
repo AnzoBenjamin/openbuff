@@ -10397,13 +10397,17 @@ describe('base2 reviewer re-review round ledger', () => {
     return String(reviewCall.input.agents[0].prompt)
   }
 
-  function codeReviewerFinding(text: string, index: number) {
+  // `files` must name REAL on-disk paths: the turn-start prune drops findings
+  // whose every file resolves to the `missing` content marker, so a virtual
+  // path here would prune the seeded findings before the review packet is
+  // built and silently empty the ledger under test.
+  function codeReviewerFinding(text: string, index: number, files: string[]) {
     return {
       id: `RF-${index + 1}-0000000${index}`,
       gateId: 'code-reviewer:prior-snapshot',
       text,
       status: 'open' as const,
-      files: ['src/a.ts'],
+      files,
       snapshotFingerprint: 'prior-snapshot',
       reviewer: 'code-reviewer' as const,
       createdAt: '2025-01-01T00:00:00.000Z',
@@ -10452,10 +10456,13 @@ describe('base2 reviewer re-review round ledger', () => {
       const gateFile = normalizeGateFilePath(join(tmpDir, 'a.ts'))
       writeFileSync(join(tmpDir, 'a.ts'), 'export const value = 1\n')
       const codeFindings = [
-        codeReviewerFinding('NON_BLOCKING: Tighten the early-return guard.', 0),
+        codeReviewerFinding('NON_BLOCKING: Tighten the early-return guard.', 0, [
+          gateFile,
+        ]),
         codeReviewerFinding(
           'BLOCKING: [code-reviewer:tests:missing-case] Add a case for the empty payload.',
           1,
+          [gateFile],
         ),
       ]
       const securityFinding = {
@@ -10514,7 +10521,9 @@ describe('base2 reviewer re-review round ledger', () => {
       const openReviewerFindings = Array.from(
         { length: 14 },
         (_unused, index) =>
-          codeReviewerFinding(`NON_BLOCKING: Finding number ${index}.`, index),
+          codeReviewerFinding(`NON_BLOCKING: Finding number ${index}.`, index, [
+            gateFile,
+          ]),
       )
       const prompt = driveSeededStateToReviewPrompt(
         gateFile,
@@ -12893,5 +12902,269 @@ describe('base2 EXECUTE_PLAN gate-issued plan-task receipts', () => {
     expect(executePlan.stepPrompt).toContain(
       'never reuse an ID from an earlier gate-pass message',
     )
+  })
+})
+
+describe('base2 deleted-before-first-snapshot gate files', () => {
+  // Regression for the live scripts/perf-probe-tmp.ts loop: a pending gate
+  // file that is DELETED before any snapshot captured its bytes spawned a
+  // specialist that could only return `BLOCKING: ...assigned-file-unreadable...`,
+  // and the open finding that review recorded was never cleared — every turn
+  // rehydrated it into an owed revalidation, which evicted the specialist's
+  // credit and re-spawned it forever. Deletion now resolves to the `missing`
+  // content marker (attested-by-absence, so a `missing`-keyed credit stays
+  // fresh), and open findings whose files are ALL missing are pruned at turn
+  // start, before the owed-set rehydration can re-arm the reviewer family.
+  test('prunes stale unreadable findings for a deleted-never-snapshotted file and never re-spawns its specialist', () => {
+    const tmpDir = makeProjectTempDir('base2-deleted-before-snapshot-')
+    try {
+      // The parent directory exists; only the leaf file is gone (never
+      // created, never tracked, never committed — exactly the live bug).
+      mkdirSync(join(tmpDir, 'scripts'), { recursive: true })
+      const deletedFile = normalizeGateFilePath(
+        join(tmpDir, 'scripts', 'perf-probe-tmp.ts'),
+      )
+      const staleBlocker =
+        'BLOCKING: performance-specialist assigned-file-unreadable: scripts/perf-probe-tmp.ts'
+      const base2 = createBase2('default')
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          changedFiles: [deletedFile],
+          touchedFiles: [deletedFile],
+          pendingGateFiles: [deletedFile],
+          currentPhase: 'awaiting_validation',
+          latestWorkSummary: '',
+          openReviewerBlockers: [staleBlocker],
+          // The stale finding the live bug could never clear: its only file is
+          // deleted, so every fresh review returned the same unreadable
+          // blocker and the finding was re-created each time.
+          openReviewerFindings: [
+            {
+              id: 'RF-1-deadbeef',
+              gateId: 'performance-specialist:prior-snapshot',
+              text: staleBlocker,
+              status: 'open' as const,
+              files: [deletedFile],
+              snapshotFingerprint: 'prior-snapshot',
+              reviewer: 'performance-specialist',
+              createdAt: '2025-01-01T00:00:00.000Z',
+            },
+          ],
+          lastValidationSummary: '',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+          gatePassedFiles: [],
+          gatePassedPendingFiles: [],
+          gatePassedReviewerVerdict: '',
+          gatePassedValidationSummary: '',
+          gatePassedFingerprint: '',
+          lastReviewerGateSkipReason: '',
+          reviewReceipts: [],
+          owedReviewerRevalidations: [],
+          testWriterGateDone: true,
+          docWriterGateDone: true,
+          securityReviewGateDone: true,
+          preEditSecurityReviewDone: true,
+          // The specialist already passed once against the deleted bytes, so
+          // its per-file credit marker is the stable `missing` marker. Before
+          // the fix the marker was not `missing`, so credit freshness treated
+          // it as stale on every sweep — the other half of the loop.
+          specialistReviewGatesDone: ['performance-specialist'],
+          specialistReviewGateFingerprints: {
+            'performance-specialist': buildFingerprint(
+              [{ file: deletedFile, contentMarker: 'missing' }],
+              '',
+            ),
+          },
+          specialistReviewFileMarkers: {
+            'performance-specialist': { [deletedFile]: 'missing' },
+          },
+          auxGatesLastPendingFiles: [deletedFile],
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Please finish the pending performance finding.',
+        params: {},
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      // Turn start, BEFORE the owed-set rehydration: the all-missing finding
+      // and its verbatim blocker are pruned, so nothing re-arms a
+      // performance-specialist revalidation from stale serialized state.
+      const turnStartWork = (agentState as any).base2ActiveWork
+      expect(turnStartWork.openReviewerFindings).toEqual([])
+      expect(turnStartWork.openReviewerBlockers).toEqual([])
+      expect(turnStartWork.owedReviewerRevalidations).toEqual([])
+      expect(turnStartWork.requiredReviewerRevalidation).toBeUndefined()
+
+      // The file is untracked and deleted, so git status is clean.
+      expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+        input: { agent_type: 'context-pruner' },
+      })
+      const maybePinned = gen.next().value
+      if (maybePinned !== 'STEP') {
+        expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+      expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      // No specialist spawn: the fresh `missing`-marker credit routes nothing.
+      // Validation hooks run next for the still-pending (deleted) file.
+      const hooksCall = gen.next(feedJson({ status: '' }))
+      expect(hooksCall.value).toMatchObject({
+        toolName: 'run_file_change_hooks',
+        input: { files: [deletedFile] },
+      })
+      expect(gen.next(feedJson([])).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      const reviewCall = gen.next(feedJson({ status: '' })).value as any
+      expect(reviewCall).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'code-reviewer' }] },
+      })
+      const spawnedAgentTypes = (
+        reviewCall.input.agents as Array<{ agent_type: string }>
+      ).map((agent) => agent.agent_type)
+      expect(spawnedAgentTypes).not.toContain('performance-specialist')
+      // The snapshot binds the deleted file through the `missing` marker...
+      const reviewPrompt = String(reviewCall.input.agents[0].prompt)
+      expect(reviewPrompt).toContain(`${deletedFile}\tmissing`)
+      const snapshotFingerprint =
+        reviewPrompt.match(
+          /Snapshot fingerprint \(echo exactly\): ([^\n]+)/,
+        )?.[1] ?? ''
+      // ...so the reviewer attests-by-absence: reviewedFiles legitimately
+      // omits the deleted file and the review still passes.
+      expect(
+        gen.next({
+          toolResult: [
+            {
+              type: 'json',
+              value: [
+                {
+                  schemaVersion: 1,
+                  verdict: 'LOOKS_GOOD',
+                  snapshotFingerprint,
+                  reviewedFiles: [],
+                  findings: [],
+                  coverage: 'covered',
+                  dimensions: {},
+                  requirementCoverage: [],
+                },
+              ],
+            },
+          ],
+        } as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      const gatePassed = gen.next(feedJson({ status: '' }))
+      expect(gatePassed.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      expect((gatePassed.value as any).input.content).toMatch(
+        /reviewer gate passed with LOOKS_GOOD/i,
+      )
+      const finalWork = (agentState as any).base2ActiveWork
+      expect(finalWork.currentPhase).toBe('final_response_allowed')
+      expect(finalWork.openReviewerBlockers).toEqual([])
+      expect(finalWork.openReviewerFindings).toEqual([])
+      // The deletion is credited as a stable gate-passed state, so later turns
+      // do not re-arm on it either.
+      expect(finalWork.gatePassedFiles).toEqual([deletedFile])
+      expect(finalWork.specialistReviewGatesDone).toContain(
+        'performance-specialist',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('keeps open findings that name any still-existing or unreadable-but-present file', () => {
+    const tmpDir = makeProjectTempDir('base2-prune-missing-findings-keep-')
+    try {
+      const presentFile = join(tmpDir, 'exists.ts')
+      writeFileSync(presentFile, 'export const here = 1\n')
+      const presentGateFile = normalizeGateFilePath(presentFile)
+      const missingGateFile = normalizeGateFilePath(join(tmpDir, 'gone.ts'))
+      // A present-but-not-a-file path (a directory): the fail-closed
+      // `unreadable:not-a-file` marker, which must never be read as deleted.
+      mkdirSync(join(tmpDir, 'adir.ts'), { recursive: true })
+      const directoryGateFile = normalizeGateFilePath(join(tmpDir, 'adir.ts'))
+      const finding = (id: string, text: string, files: string[]) => ({
+        id,
+        gateId: 'code-reviewer:prior-snapshot',
+        text,
+        status: 'open' as const,
+        files,
+        snapshotFingerprint: 'prior-snapshot',
+        reviewer: 'code-reviewer' as const,
+        createdAt: '2025-01-01T00:00:00.000Z',
+      })
+      const prunedText =
+        'BLOCKING: assigned-file-unreadable for the deleted probe.'
+      const keptTexts = [
+        'BLOCKING: still-present file issue.',
+        'BLOCKING: mixed deleted-and-present file set issue.',
+        'BLOCKING: legacy finding with no files.',
+        'BLOCKING: present-but-unreadable directory path issue.',
+      ]
+      const base2 = createBase2('default')
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          changedFiles: [presentGateFile],
+          touchedFiles: [presentGateFile],
+          pendingGateFiles: [presentGateFile],
+          currentPhase: 'repair_loop',
+          latestWorkSummary: '',
+          openReviewerBlockers: [prunedText, ...keptTexts],
+          openReviewerFindings: [
+            // All files missing -> pruned (the loop-breaking case).
+            finding('find-missing-only', prunedText, [missingGateFile]),
+            // Still exists -> kept.
+            finding('find-present', keptTexts[0], [presentGateFile]),
+            // ANY still-existing file -> kept.
+            finding('find-mixed', keptTexts[1], [
+              missingGateFile,
+              presentGateFile,
+            ]),
+            // No file list at all -> kept (fail closed).
+            finding('find-no-files', keptTexts[2], []),
+            // Present but not a regular file -> kept (fail closed).
+            finding('find-directory', keptTexts[3], [directoryGateFile]),
+          ],
+          lastValidationSummary: '',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      // The prune runs during turn-start hydration, before the first yield.
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      const activeWork = (agentState as any).base2ActiveWork
+      expect(
+        (activeWork.openReviewerFindings as Array<{ id: string }>).map(
+          (entry) => entry.id,
+        ),
+      ).toEqual([
+        'find-present',
+        'find-mixed',
+        'find-no-files',
+        'find-directory',
+      ])
+      expect(activeWork.openReviewerBlockers).toEqual(keptTexts)
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
   })
 })
