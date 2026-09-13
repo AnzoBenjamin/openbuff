@@ -1,8 +1,8 @@
 # STATUS — Dynamic Cross-Session Memory V2 Repair
 
-Status: ready for implementation; source work is incomplete and reviewer-blocked.
-Current phase: R0 — contract freeze.
-Current task: MEM2-R0-T1 Freeze and align canonical contracts.
+Status: implementation largely complete; final gate is MEM2-R1-T2 (race-resistant SQLite open).
+Current phase: R1 — SQLite kernel / storage security.
+Current task: MEM2-R1-T2 Resolve race-resistant SQLite open support (typed-unsupported fallback; full closure needs native-addon authorization).
 
 ## Implemented and locally validated before this plan refresh
 
@@ -138,3 +138,32 @@ All declared workflow items complete.
 - reliability-reviewer: 4 findings repaired (export retry, bounded finishTurn, generation-gated observations, leaf error masking)
 
 **Discovery coverage vertical slice** shipped: taskId + workspaceSnapshotId in schema, coordinator, spawn wiring, and 3 new tests.
+
+<!-- update_plan_status:appended -->
+## Plan tracking re-verified against live worktree — 2026-09-12
+
+Re-verified the durable plan's stale tracking against the live worktree. Focused suites are green: MEM2-R3-T1 migration/operator/coordinator 96/96; MEM2-R1-T1 SQLite kernel 44/44. The only remaining gate is MEM2-R1-T2 (race-resistant SQLite open). Verified fact: race-free WAL/SHM open is provably impossible in pure JS with bun:sqlite (SQLite opens the -wal/-shm sidecars by derived pathname internally; bun:sqlite accepts a path string only — no fd, no dirfd-relative open). R1-T2 therefore resolves via its typed-unsupported fail-closed fallback (report a typed unavailable outcome, perform no SQLite mutation where race-resistance cannot be proven); full race closure is deferred pending explicit native-addon/dependency authorization (SPEC decision #9, option C).
+
+<!-- update_plan_status:appended -->
+## R1-T2 typed-unsupported secure-open + R7 integration matrix — 2026-09-13T19:33:12.321Z
+
+MEM2-R1-T2 resolved via its typed-unsupported fail-closed fallback. Verified fact: race-free SQLite open is provably impossible in pure JS with bun:sqlite (path-only constructor; -wal/-shm sidecars open by derived pathname internally, no fd/dirfd support). Implemented a hybrid: a strict `requireSecureOpen` opt-in gate in `BunSQLiteMemoryRepository.open()` that fails closed with a typed non-retryable `unsupported-open` error and performs zero SQLite mutation, plus a default-on honest `openPosture: 'pathname-best-effort-unverified-open'` visibility field on the open result and `kernelHealth`. Default open path and all pre-existing pathname hardening are unchanged. No dependency added (SPEC #9 respected); full WAL/SHM race closure deferred pending native-addon authorization (option C).
+
+Security review: LOOKS_GOOD, 0 findings (strict gate prevents all mutation; no path/SQL/secret leak; no false security claim; default path unregressed).
+
+R7 integration matrix re-run against this state (all green):
+- SDK Memory V2: 117/117 (coordinator, v1-migration, operator-service, contract, run-cancellation)
+- CLI Memory V2: 201/201 across 9 files (SQLite repo 47 incl. 3 new strict-secure-open tests, contained-file-io, provider, roundtrip, memory-command, codebuff-client, env, slash-commands, memory-box)
+- common Memory V2 contracts: 42/42
+- agent-runtime: 39/39 (task-memory, memory-v2-context)
+- Monorepo typecheck: 11/11 packages pass
+
+
+<!-- update_plan_status:appended -->
+## Projection replay cap + R2 verification — 2026-09-13T19:53:39.176Z
+
+Addressed the gate advisory that rebuildProjections/replayProjections had no event cap. Added `MAX_REPLAY_EVENTS = 10_000` (consistent with `MAX_QUERY_EVENTS`); `replayProjections(database, maxEvents)` now stops the paged replay loop at the cap, and on truncation sets the projection cursor to the last replayed sequence and returns `truncated: true` rather than throwing or falsely claiming the canonical tail. `rebuildProjections()` surfaces `truncated: boolean` on its ok-result. v1→v2 `migrate()` passes `Number.MAX_SAFE_INTEGER` so migration replay stays complete; rollback-on-failure unchanged. Backward-compatible and additive.
+
+R2 (SDK run/coordinator reliability) verified green: coordinator + run-cancellation 53/53.
+
+Validation: SQLite focused suite 49/49 (2 new cap tests + 1 updated), V1→V2 round-trip 1/1, cli typecheck clean, Prettier clean.
