@@ -133,6 +133,20 @@ function gateFileMarker(path: string): string {
     ) {
       return 'unreadable:outside-project'
     }
+    // Existence probe BEFORE the component walk (mirrors production): a
+    // nonexistent absolute path — missing leaf OR missing intermediate
+    // directory — is attested-by-absence ('missing') without ever reaching
+    // realpathSync/readFileSync; a present-but-unstatable path stays
+    // fail-closed. lstatSync (not existsSync) so a dangling symlink's link
+    // entry still counts as present.
+    try {
+      lstatSync(absolutePath)
+    } catch (probeError) {
+      if ((probeError as { code?: unknown }).code === 'ENOENT') {
+        return 'missing'
+      }
+      return 'unreadable:lstat-failed'
+    }
     const pathSegments = projectRelativePath.split(sep).filter(Boolean)
     const symlinkParts: string[] = []
     let entryPath = cwd
@@ -220,8 +234,33 @@ function loadProductionGateFileContentMarker(): (path: string) => string {
     base2JavaScript,
     'readGateFileContentMarker',
   )
+  // readGateFileContentMarker references the hoisted in-handleSteps const
+  // GATE_FILE_MISSING_CONTENT_MARKER (the 'missing' deletion sentinel). That
+  // binding sits OUTSIDE the extracted function span, so the standalone
+  // `new Function` reconstruction would leave it undefined and the ENOENT
+  // probe would throw a ReferenceError (surfacing as `unreadable:unknown`
+  // instead of `missing`). Slice the hoisted declaration from the transpiled
+  // source and prepend it to the evaluated scope, exactly as
+  // specialist-router-parity.test.ts does for hoisted constants. The value is
+  // pulled verbatim from production source, so the parity property is kept.
+  const hoistStart = base2JavaScript.indexOf(
+    'const GATE_FILE_MISSING_CONTENT_MARKER',
+  )
+  const inlineFnStart = base2JavaScript.indexOf(
+    'function readGateFileContentMarker(',
+  )
+  if (hoistStart < 0 || inlineFnStart < 0 || hoistStart > inlineFnStart) {
+    throw new Error(
+      'Unable to find hoisted GATE_FILE_MISSING_CONTENT_MARKER before readGateFileContentMarker',
+    )
+  }
+  const hoistEnd = base2JavaScript.indexOf(';', hoistStart)
+  if (hoistEnd < 0) {
+    throw new Error('Unable to find the end of the GATE_FILE_MISSING_CONTENT_MARKER declaration')
+  }
+  const hoistedConstSource = base2JavaScript.slice(hoistStart, hoistEnd + 1)
   const fn = new Function(
-    `"use strict";\n${helperSource}\nreturn readGateFileContentMarker`,
+    `"use strict";\n${hoistedConstSource}\n${helperSource}\nreturn readGateFileContentMarker`,
   ) as () => (path: string) => string
   return fn()
 }
