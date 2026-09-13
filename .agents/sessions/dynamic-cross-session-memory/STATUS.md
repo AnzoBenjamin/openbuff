@@ -1,8 +1,8 @@
 # STATUS — Dynamic Cross-Session Memory V2 Repair
 
-Status: implementation largely complete; final gate is MEM2-R1-T2 (race-resistant SQLite open).
-Current phase: R1 — SQLite kernel / storage security.
-Current task: MEM2-R1-T2 Resolve race-resistant SQLite open support (typed-unsupported fallback; full closure needs native-addon authorization).
+Status: implementation complete; MEM2-R1-T2 resolved (typed-unsupported secure-open fallback) and validated green.
+Current phase: R7 — integration / finalization.
+Current task: MEM2-R7 — obtain stable exact-snapshot reviews; full race-free WAL/SHM open deferred pending native-addon authorization (option C).
 
 ## Implemented and locally validated before this plan refresh
 
@@ -167,3 +167,9 @@ Addressed the gate advisory that rebuildProjections/replayProjections had no eve
 R2 (SDK run/coordinator reliability) verified green: coordinator + run-cancellation 53/53.
 
 Validation: SQLite focused suite 49/49 (2 new cap tests + 1 updated), V1→V2 round-trip 1/1, cli typecheck clean, Prettier clean.
+
+<!-- update_plan_status:appended -->
+## projectId index advisory evaluated — no change warranted — 2026-09-13T20:17:06.358Z
+
+Evaluated the reviewer advisory that `scanQueryRows`/`readLastEventIdForProject` use unindexed `json_extract` projectId filters. Benchmarked at the current 10k-event cap (50 iterations each): 250-row filtered query mean 0.815ms unindexed vs 0.671ms with an expression index (within noise); tail query 0.009ms vs 0.008ms. EXPLAIN QUERY PLAN confirms the expression index is used when present, but the absolute cost is already sub-millisecond at the cap. Decision: no schema/index change now; revisit only if the event cap grows materially. Recorded as a data-backed no-change decision.
+
