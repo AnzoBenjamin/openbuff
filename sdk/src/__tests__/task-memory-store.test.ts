@@ -6,6 +6,8 @@ import {
   readFile,
   rm,
   stat,
+  symlink,
+  utimes,
   writeFile,
 } from 'node:fs/promises'
 import * as nodeFsPromises from 'node:fs/promises'
@@ -20,6 +22,7 @@ import { stableHash } from '@codebuff/common/util/stable-hash'
 import { collectWorkspaceMoves, persistRunTaskMemory } from '../run'
 import {
   codebuffFsToNodePromises,
+  inspectPersistedTaskMemoryV1,
   loadPersistedTaskMemory,
   pruneStaleTaskMemoryEvidence,
   reconcileTaskMemoryEvidence,
@@ -81,6 +84,77 @@ describe('task-memory-store', () => {
 
   afterEach(async () => {
     await rm(rootDir, { recursive: true, force: true })
+  })
+
+  test('inspector distinguishes absent, valid, invalid, and unreadable without writes', async () => {
+    expect(await inspectPersistedTaskMemoryV1({ rootDir })).toEqual({
+      status: 'absent',
+    })
+
+    const saved = await saveMergedTaskMemory({
+      rootDir,
+      runMemory: makeMemory(),
+    })
+    if (!saved) throw new Error('expected saved memory')
+    expect(await inspectPersistedTaskMemoryV1({ rootDir })).toEqual({
+      status: 'valid',
+      memory: saved,
+    })
+    const memoryPath = path.join(
+      rootDir,
+      '.openbuff',
+      'memory',
+      'task-memory.json',
+    )
+    await writeFile(memoryPath, '{private malformed contents')
+    expect(await inspectPersistedTaskMemoryV1({ rootDir })).toEqual({
+      status: 'invalid',
+      reason: 'malformed-json',
+    })
+    await writeFile(memoryPath, JSON.stringify({ schemaVersion: 1 }))
+    expect(await inspectPersistedTaskMemoryV1({ rootDir })).toEqual({
+      status: 'invalid',
+      reason: 'schema-invalid',
+    })
+    await writeFile(memoryPath, JSON.stringify({ ...saved, checksum: 'wrong' }))
+    expect(await inspectPersistedTaskMemoryV1({ rootDir })).toEqual({
+      status: 'invalid',
+      reason: 'checksum-mismatch',
+    })
+
+    let writeCalls = 0
+    const readOnlyFs = {
+      readFile: async () => {
+        throw Object.assign(new Error('/private/path denied'), {
+          code: 'EACCES',
+        })
+      },
+      mkdir: async () => {
+        writeCalls++
+      },
+      rename: async () => {
+        writeCalls++
+      },
+      stat: async () => {
+        throw new Error('unused')
+      },
+      unlink: async () => {
+        writeCalls++
+      },
+      writeFile: async () => {
+        writeCalls++
+      },
+    } as unknown as import('../services/task-memory-store').TaskMemoryStoreFs
+    await expect(
+      inspectPersistedTaskMemoryV1({ rootDir, fs: readOnlyFs }),
+    ).resolves.toEqual({
+      status: 'unreadable',
+      reason: 'read-failed',
+    })
+    expect(writeCalls).toBe(0)
+    expect(
+      await loadPersistedTaskMemory({ rootDir, fs: readOnlyFs }),
+    ).toBeUndefined()
   })
 
   test('AC1: save then load+reconcile verifies fresh evidence', async () => {
@@ -332,6 +406,139 @@ describe('task-memory-store', () => {
     }
   })
 
+  test('ancestor symlink escapes go stale without reading outside the project', async () => {
+    if (process.platform === 'win32') return
+    const outsideDir = await mkdtemp(
+      path.join(tmpdir(), 'task-memory-symlink-outside-'),
+    )
+    try {
+      const outsideContents = 'outside through ancestor link'
+      await writeFile(path.join(outsideDir, 'secret.ts'), outsideContents)
+      await symlink(outsideDir, path.join(rootDir, 'linked'))
+
+      const readFileCalls: string[] = []
+      const spyingFs = new Proxy(nodeFsPromises, {
+        get(target, prop) {
+          if (prop === 'readFile') {
+            return async (
+              ...args: Parameters<typeof nodeFsPromises.readFile>
+            ) => {
+              readFileCalls.push(String(args[0]))
+              return nodeFsPromises.readFile(...args)
+            }
+          }
+          return Reflect.get(target, prop)
+        },
+      })
+      const reconciled = await reconcileTaskMemoryEvidence({
+        memory: makeMemory({
+          evidence: [
+            makeEvidence({
+              id: 'ev-ancestor-link',
+              path: 'linked/secret.ts',
+              freshnessHash: sha256(outsideContents),
+            }),
+          ],
+        }),
+        rootDir,
+        fs: spyingFs,
+      })
+
+      expect(reconciled.evidence[0]!.stale).toBe(true)
+      expect(readFileCalls).toEqual([])
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  test('ancestor replacement after realpath cannot redirect descriptor hashing outside', async () => {
+    if (process.platform === 'win32') return
+    const outsideDir = await mkdtemp(
+      path.join(tmpdir(), 'task-memory-race-outside-'),
+    )
+    try {
+      await mkdir(path.join(rootDir, 'inside'))
+      await writeFile(path.join(rootDir, 'inside', 'secret.ts'), 'inside body')
+      await writeFile(path.join(outsideDir, 'secret.ts'), 'outside secret')
+      const linkedPath = path.join(rootDir, 'linked')
+      await symlink(path.join(rootDir, 'inside'), linkedPath)
+      const candidate = path.join(linkedPath, 'secret.ts')
+      let replaced = false
+      const racingFs = new Proxy(nodeFsPromises, {
+        get(target, prop) {
+          if (prop === 'realpath') {
+            return async (requested: string) => {
+              const resolved = await nodeFsPromises.realpath(requested)
+              if (
+                !replaced &&
+                path.resolve(requested) === path.resolve(candidate)
+              ) {
+                replaced = true
+                await rm(linkedPath)
+                await symlink(outsideDir, linkedPath)
+              }
+              return resolved
+            }
+          }
+          return Reflect.get(target, prop)
+        },
+      })
+
+      const reconciled = await reconcileTaskMemoryEvidence({
+        memory: makeMemory({
+          evidence: [
+            makeEvidence({
+              id: 'ev-raced-link',
+              path: 'linked/secret.ts',
+              freshnessHash: sha256('outside secret'),
+            }),
+          ],
+        }),
+        rootDir,
+        fs: racingFs,
+      })
+
+      expect(replaced).toBe(true)
+      expect(reconciled.evidence[0]!.stale).toBe(true)
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  test('small evidence uses bounded descriptor reads rather than pathname readFile', async () => {
+    const contents = 'small stable body'
+    await writeFile(path.join(rootDir, 'small.ts'), contents)
+    let readFileCalls = 0
+    const boundedFs = new Proxy(nodeFsPromises, {
+      get(target, prop) {
+        if (prop === 'readFile') {
+          return async () => {
+            readFileCalls++
+            return Buffer.alloc(2_000_000)
+          }
+        }
+        return Reflect.get(target, prop)
+      },
+    })
+
+    const reconciled = await reconcileTaskMemoryEvidence({
+      memory: makeMemory({
+        evidence: [
+          makeEvidence({
+            id: 'ev-small-bounded',
+            path: 'small.ts',
+            freshnessHash: sha256(contents),
+          }),
+        ],
+      }),
+      rootDir,
+      fs: boundedFs,
+    })
+
+    expect(reconciled.evidence[0]!.stale).toBe(false)
+    expect(readFileCalls).toBe(0)
+  })
+
   test('saveMergedTaskMemory never throws on schema-invalid run memory', async () => {
     const saved = await saveMergedTaskMemory({
       rootDir,
@@ -363,19 +570,27 @@ describe('task-memory-store', () => {
 
   test('concurrent saves serialize: unique tmp names, distinct monotonic revisions', async () => {
     const writtenPaths: string[] = []
-    const spyingFs = new Proxy(nodeFsPromises, {
-      get(target, prop) {
-        if (prop === 'writeFile') {
-          return async (
-            ...args: Parameters<typeof nodeFsPromises.writeFile>
-          ) => {
-            writtenPaths.push(String(args[0]))
-            return nodeFsPromises.writeFile(...args)
+    const spyingFs = {
+      ...new Proxy(nodeFsPromises, {
+        get(target, prop) {
+          if (prop === 'writeFile') {
+            return async (
+              ...args: Parameters<typeof nodeFsPromises.writeFile>
+            ) => {
+              writtenPaths.push(String(args[0]))
+              return nodeFsPromises.writeFile(...args)
+            }
           }
-        }
-        return Reflect.get(target, prop)
+          return Reflect.get(target, prop)
+        },
+      }),
+      createFileExclusive: async (
+        file: Parameters<typeof writeFile>[0],
+        data: Parameters<typeof writeFile>[1],
+      ) => {
+        await writeFile(file, data, { flag: 'wx', mode: 0o600 })
       },
-    })
+    }
 
     const [savedA, savedB] = await Promise.all([
       saveMergedTaskMemory({
@@ -420,6 +635,98 @@ describe('task-memory-store', () => {
     expect([...reloaded!.decisions].sort()).toEqual(['Save A', 'Save B'])
   })
 
+  test('an old live lock fails closed without stealing or committing', async () => {
+    const initial = await saveMergedTaskMemory({
+      rootDir,
+      runMemory: makeMemory({ decisions: ['Initial'] }),
+    })
+    const memoryPath = path.join(
+      rootDir,
+      '.openbuff',
+      'memory',
+      'task-memory.json',
+    )
+    const lockPath = `${memoryPath}.lock`
+    const owner = `${JSON.stringify({
+      token: 'external-owner',
+      pid: process.pid,
+      createdAt: Date.now() - 60_000,
+    })}\n`
+    await writeFile(lockPath, owner, { flag: 'wx', mode: 0o600 })
+    const old = new Date(Date.now() - 60_000)
+    await utimes(lockPath, old, old)
+
+    const blocked = await saveMergedTaskMemory({
+      rootDir,
+      runMemory: makeMemory({ decisions: ['Must not commit'] }),
+    })
+
+    expect(blocked).toBeUndefined()
+    expect(await readFile(lockPath, 'utf8')).toBe(owner)
+    const reloaded = await loadPersistedTaskMemory({ rootDir })
+    expect(reloaded?.revision).toBe(initial?.revision)
+    expect(reloaded?.decisions).toEqual(['Initial'])
+    await rm(lockPath)
+  })
+
+  test('an old orphaned lock fails closed instead of risking replacement-owner deletion', async () => {
+    const memoryPath = path.join(
+      rootDir,
+      '.openbuff',
+      'memory',
+      'task-memory.json',
+    )
+    await mkdir(path.dirname(memoryPath), { recursive: true })
+    const lockPath = `${memoryPath}.lock`
+    await writeFile(
+      lockPath,
+      `${JSON.stringify({
+        token: 'crashed-owner',
+        pid: 2_147_483_647,
+        createdAt: Date.now() - 60_000,
+      })}\n`,
+      { flag: 'wx', mode: 0o600 },
+    )
+    const old = new Date(Date.now() - 60_000)
+    await utimes(lockPath, old, old)
+
+    const saved = await saveMergedTaskMemory({
+      rootDir,
+      runMemory: makeMemory({ decisions: ['Recovered'] }),
+    })
+
+    expect(saved).toBeUndefined()
+    expect(await readFile(lockPath, 'utf8')).toContain('crashed-owner')
+  })
+
+  test('adapter that ignores wx cannot enter persistence without explicit exclusive create', async () => {
+    let renameCalls = 0
+    const unsafeAdapter = {
+      mkdir: async () => {},
+      readFile: async () => {
+        throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+      },
+      rename: async () => {
+        renameCalls++
+      },
+      stat: async () => {
+        throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+      },
+      unlink: async () => {},
+      // Deliberately accepts and ignores the wx option.
+      writeFile: async () => {},
+    } as unknown as import('../services/task-memory-store').TaskMemoryStoreFs
+
+    expect(
+      await saveMergedTaskMemory({
+        rootDir,
+        runMemory: makeMemory(),
+        fs: unsafeAdapter,
+      }),
+    ).toBeUndefined()
+    expect(renameCalls).toBe(0)
+  })
+
   test('missing renameFile capability degrades to a skipped save with no tmp litter', async () => {
     // Adapter without the optional renameFile capability (only the members
     // the store consumes): mirrors virtual-fs hosts that cannot rename
@@ -445,9 +752,11 @@ describe('task-memory-store', () => {
     expect(await readdir(memoryDir)).toEqual([])
   })
 
-  test('oversized evidence hashing streams leading bytes instead of buffering the whole file', async () => {
+  test('large evidence uses a streamed whole-content hash and detects tail changes', async () => {
     const prefix = 'b'.repeat(1_000_000)
-    await writeFile(path.join(rootDir, 'huge.ts'), `${prefix}tail-beyond-cap`)
+    const original = `${prefix}original-tail`
+    const filePath = path.join(rootDir, 'huge.ts')
+    await writeFile(filePath, original)
 
     const readFileCalls: string[] = []
     const spyingFs = new Proxy(nodeFsPromises, {
@@ -463,33 +772,37 @@ describe('task-memory-store', () => {
         return Reflect.get(target, prop)
       },
     })
-
     const memory = makeMemory({
       evidence: [
         makeEvidence({
           id: 'ev-huge',
           path: 'huge.ts',
-          freshnessHash: sha256(prefix),
+          freshnessHash: sha256(original),
         }),
       ],
     })
+
     const reconciled = await reconcileTaskMemoryEvidence({
       memory,
       rootDir,
       fs: spyingFs,
     })
-    // Digest still honors the leading-bytes contract AND the whole-file
-    // buffered read was never taken on the default node fs path.
     expect(reconciled.evidence[0]!.stale).toBe(false)
     expect(readFileCalls).toEqual([])
+
+    await writeFile(filePath, `${prefix}changed-tail`)
+    const changed = await reconcileTaskMemoryEvidence({
+      memory,
+      rootDir,
+      fs: spyingFs,
+    })
+    expect(changed.evidence[0]!.stale).toBe(true)
   })
 
-  test('codebuffFsToNodePromises forwards host open so adapter-backed hashing streams', async () => {
+  test('codebuffFsToNodePromises forwards host open for whole-content streaming', async () => {
     const prefix = 'c'.repeat(1_000_000)
-    await writeFile(
-      path.join(rootDir, 'huge-adapter.ts'),
-      `${prefix}tail-beyond-cap`,
-    )
+    const contents = `${prefix}tail-beyond-cap`
+    await writeFile(path.join(rootDir, 'huge-adapter.ts'), contents)
 
     // Host carrying `open` beyond its published type — what a spread of
     // fs.promises / createNodeFileSystem() looks like — plus a readFile spy.
@@ -517,15 +830,15 @@ describe('task-memory-store', () => {
           makeEvidence({
             id: 'ev-huge-adapter',
             path: 'huge-adapter.ts',
-            freshnessHash: sha256(prefix),
+            freshnessHash: sha256(contents),
           }),
         ],
       }),
       rootDir,
       fs: storeFs,
     })
-    // Digest honors the leading-bytes contract AND the buffered whole-file
-    // read was never taken on the adapter path either.
+    // The canonical whole-content digest is produced without a buffered
+    // read on the adapter path.
     expect(reconciled.evidence[0]!.stale).toBe(false)
     expect(readFileCalls).toEqual([])
   })
@@ -562,10 +875,155 @@ describe('task-memory-store', () => {
       rootDir,
       fs: codebuffFsToNodePromises(codebuffFs),
     })
-    // Fail-closed: without a partial-read primitive the multi-GB body is
-    // never buffered; the unverified entry goes stale instead.
+    // Fail closed without declaring the evidence stale: inability to verify is
+    // not proof that the file changed, and prune must preserve it.
     expect(readFileCalls).toEqual([])
-    expect(reconciled.evidence[0]!.stale).toBe(true)
+    expect(reconciled.evidence[0]!.stale).not.toBe(true)
+  })
+
+  test('legacy large-file prefix hashes validate and backfill to versioned whole hashes', async () => {
+    const prefix = 'p'.repeat(1_000_000)
+    const contents = `${prefix}legacy-tail`
+    await writeFile(path.join(rootDir, 'legacy-large.ts'), contents)
+    const legacyMemory = makeMemory({
+      evidence: [
+        makeEvidence({
+          id: 'ev-legacy-large',
+          path: 'legacy-large.ts',
+          freshnessHash: sha256(prefix),
+        }),
+      ],
+    })
+
+    const reconciled = await reconcileTaskMemoryEvidence({
+      memory: legacyMemory,
+      rootDir,
+    })
+    expect(reconciled.evidence[0]).toMatchObject({
+      stale: false,
+      freshnessHash: `sha256-whole:${sha256(contents)}`,
+    })
+
+    await saveMergedTaskMemory({ rootDir, runMemory: legacyMemory })
+    expect(await pruneStaleTaskMemoryEvidence({ rootDir })).toEqual({
+      status: 'pruned',
+      removed: 0,
+      remaining: 1,
+    })
+    const persisted = await loadPersistedTaskMemory({ rootDir })
+    expect(persisted?.evidence[0]?.freshnessHash).toBe(
+      `sha256-whole:${sha256(contents)}`,
+    )
+  })
+
+  test('prune preserves stale large evidence when an unversioned hash does not match', async () => {
+    const currentContents = `${'c'.repeat(1_000_000)}current-tail`
+    await writeFile(path.join(rootDir, 'legacy-algorithm.ts'), currentContents)
+    await saveMergedTaskMemory({
+      rootDir,
+      runMemory: makeMemory({
+        evidence: [
+          makeEvidence({
+            id: 'ev-unversioned-mismatch',
+            path: 'legacy-algorithm.ts',
+            // Above the historical boundary, a bare digest cannot say whether
+            // this mismatch reflects changed content or a legacy prefix
+            // algorithm. Even an inherited stale verdict is therefore
+            // insufficient authority for destructive pruning.
+            freshnessHash: sha256(`${'l'.repeat(1_000_000)}legacy-tail`),
+            stale: true,
+          }),
+        ],
+      }),
+    })
+
+    const persistedBeforePrune = (await loadPersistedTaskMemory({ rootDir }))!
+    const reconciled = await reconcileTaskMemoryEvidence({
+      memory: persistedBeforePrune,
+      rootDir,
+    })
+    expect(reconciled.evidence[0]?.stale).toBe(true)
+
+    // Reconciliation truthfully reports the mismatch, but prune must not use
+    // an ambiguous unversioned algorithm as sole authority to delete a present
+    // file's evidence.
+    expect(await pruneStaleTaskMemoryEvidence({ rootDir })).toEqual({
+      status: 'pruned',
+      removed: 0,
+      remaining: 1,
+    })
+    expect((await loadPersistedTaskMemory({ rootDir }))?.evidence[0]?.id).toBe(
+      'ev-unversioned-mismatch',
+    )
+  })
+
+  test('unknown and malformed hash formats cannot turn inherited stale flags into prune authority', async () => {
+    await writeFile(path.join(rootDir, 'unknown-format.ts'), 'contents')
+    await writeFile(path.join(rootDir, 'malformed-version.ts'), 'contents')
+    await saveMergedTaskMemory({
+      rootDir,
+      runMemory: makeMemory({
+        evidence: [
+          makeEvidence({
+            id: 'ev-unknown-format',
+            path: 'unknown-format.ts',
+            freshnessHash: 'future-digest-format:value',
+            stale: true,
+          }),
+          makeEvidence({
+            id: 'ev-malformed-version',
+            path: 'malformed-version.ts',
+            freshnessHash: 'sha256-whole:not-a-valid-digest',
+            stale: true,
+          }),
+          {
+            id: 'ev-pathless-legacy',
+            kind: 'read',
+            summary: 'Legacy evidence without a path',
+            freshnessHash: 'legacy-unknown-format',
+            stale: true,
+          },
+        ],
+      }),
+    })
+
+    expect(await pruneStaleTaskMemoryEvidence({ rootDir })).toEqual({
+      status: 'pruned',
+      removed: 0,
+      remaining: 3,
+    })
+    expect(
+      (await loadPersistedTaskMemory({ rootDir }))?.evidence.map(
+        (item) => item.id,
+      ),
+    ).toEqual([
+      'ev-unknown-format',
+      'ev-malformed-version',
+      'ev-pathless-legacy',
+    ])
+  })
+
+  test('an explicit versioned mismatch authorizes pruning changed present evidence', async () => {
+    await writeFile(path.join(rootDir, 'changed-versioned.ts'), 'new contents')
+    await saveMergedTaskMemory({
+      rootDir,
+      runMemory: makeMemory({
+        evidence: [
+          makeEvidence({
+            id: 'ev-versioned-mismatch',
+            path: 'changed-versioned.ts',
+            freshnessHash: `sha256-whole:${sha256('old contents')}`,
+          }),
+        ],
+      }),
+    })
+
+    expect(await pruneStaleTaskMemoryEvidence({ rootDir })).toEqual({
+      status: 'pruned',
+      removed: 1,
+      remaining: 0,
+    })
+    expect((await loadPersistedTaskMemory({ rootDir }))?.evidence).toEqual([])
   })
 
   test('batched reconciliation preserves order and per-item verdicts past one chunk', async () => {
@@ -580,10 +1038,10 @@ describe('task-memory-store', () => {
         makeEvidence({
           id: `ev-${index}`,
           path: name,
-          // Odd indexes carry a mismatching hash and must flip stale even
-          // when they land in later batches.
+          // Odd indexes carry a valid but mismatching whole-content hash and
+          // must flip stale even when they land in later batches.
           ...(index % 2 === 1
-            ? { freshnessHash: 'mismatched' }
+            ? { freshnessHash: '0'.repeat(64) }
             : { freshnessHash: sha256(contents) }),
         }),
       )
@@ -600,29 +1058,20 @@ describe('task-memory-store', () => {
     })
   })
 
-  test('AC7: oversized evidence files hash only their leading bytes', async () => {
-    const prefix = 'a'.repeat(1_000_000)
+  test('AC7: the streaming boundary retains the whole-content hash contract', async () => {
+    const contents = 'a'.repeat(1_000_001)
     const memory = makeMemory({
       evidence: [
         makeEvidence({
           id: 'ev-big',
           path: 'big.ts',
-          freshnessHash: sha256(prefix),
+          freshnessHash: sha256(contents),
         }),
       ],
     })
-    await writeFile(path.join(rootDir, 'big.ts'), prefix)
+    await writeFile(path.join(rootDir, 'big.ts'), contents)
     const reconciled = await reconcileTaskMemoryEvidence({ memory, rootDir })
     expect(reconciled.evidence[0]!.stale).toBe(false)
-
-    // Documented trade-off: mutations beyond the size cap do not flip
-    // staleness because only the leading bytes feed the digest.
-    await writeFile(path.join(rootDir, 'big.ts'), `${prefix}tail-changed`)
-    const afterBeyondCap = await reconcileTaskMemoryEvidence({
-      memory,
-      rootDir,
-    })
-    expect(afterBeyondCap.evidence[0]!.stale).toBe(false)
   })
 })
 
@@ -877,6 +1326,15 @@ describe('run integration gates', () => {
           }
           files.delete(oldPath)
           files.set(newPath, contents)
+        },
+        createFileExclusive: async (
+          filePath: string,
+          data: string | Buffer,
+        ) => {
+          if (files.has(filePath)) {
+            throw Object.assign(new Error('exists'), { code: 'EEXIST' })
+          }
+          files.set(filePath, String(data))
         },
         stat: async () => ({ size: 0, mode: 0o600 }),
         unlink: async (filePath: string) => {
@@ -1151,17 +1609,57 @@ describe('pruneStaleTaskMemoryEvidence', () => {
       ),
     ).toEqual(['ev-moved'])
 
-    // Without them the same record reconciles stale and the entry is lost —
-    // which is exactly why callers must pass the moves they know about.
+    // The successful compatibility backfill persists the rebound path and
+    // versioned whole-content hash. A later prune no longer needs the journal
+    // move to preserve the same evidence.
     expect(await pruneStaleTaskMemoryEvidence({ rootDir })).toEqual({
       status: 'pruned',
-      removed: 1,
-      remaining: 0,
+      removed: 0,
+      remaining: 1,
     })
-    expect((await loadPersistedTaskMemory({ rootDir }))?.evidence).toEqual([])
+    expect(
+      (await loadPersistedTaskMemory({ rootDir }))?.evidence[0],
+    ).toMatchObject({
+      id: 'ev-moved',
+      path: 'nested/new.ts',
+      freshnessHash: `sha256-whole:${sha256('moved body')}`,
+    })
   })
 
-  test('returns zero removals for a fully fresh record without rewriting', async () => {
+  test('pruning treats evidence through an escaping ancestor symlink as stale', async () => {
+    if (process.platform === 'win32') return
+    const outsideDir = await mkdtemp(
+      path.join(tmpdir(), 'task-memory-prune-outside-'),
+    )
+    try {
+      const outsideContents = 'outside prune target'
+      await writeFile(path.join(outsideDir, 'secret.ts'), outsideContents)
+      await symlink(outsideDir, path.join(rootDir, 'linked'))
+      await saveMergedTaskMemory({
+        rootDir,
+        runMemory: makeMemory({
+          evidence: [
+            makeEvidence({
+              id: 'ev-prune-link',
+              path: 'linked/secret.ts',
+              freshnessHash: sha256(outsideContents),
+            }),
+          ],
+        }),
+      })
+
+      expect(await pruneStaleTaskMemoryEvidence({ rootDir })).toEqual({
+        status: 'pruned',
+        removed: 1,
+        remaining: 0,
+      })
+      expect((await loadPersistedTaskMemory({ rootDir }))?.evidence).toEqual([])
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  test('returns zero removals for a fully fresh versioned record without rewriting', async () => {
     await writeFile(path.join(rootDir, 'ok.ts'), 'ok')
     const saved = await saveMergedTaskMemory({
       rootDir,
@@ -1170,7 +1668,7 @@ describe('pruneStaleTaskMemoryEvidence', () => {
           makeEvidence({
             id: 'ev-ok',
             path: 'ok.ts',
-            freshnessHash: sha256('ok'),
+            freshnessHash: `sha256-whole:${sha256('ok')}`,
           }),
         ],
       }),
@@ -1199,6 +1697,14 @@ describe('pruneStaleTaskMemoryEvidence', () => {
       mkdir: nodeFsPromises.mkdir.bind(nodeFsPromises),
       readFile: nodeFsPromises.readFile.bind(nodeFsPromises),
       stat: nodeFsPromises.stat.bind(nodeFsPromises),
+      realpath: nodeFsPromises.realpath.bind(nodeFsPromises),
+      createFileExclusive: async (
+        file: Parameters<typeof writeFile>[0],
+        data: Parameters<typeof writeFile>[1],
+      ) => {
+        await writeFile(file, data, { flag: 'wx', mode: 0o600 })
+      },
+      open: nodeFsPromises.open.bind(nodeFsPromises),
       unlink: nodeFsPromises.unlink.bind(nodeFsPromises),
       writeFile: nodeFsPromises.writeFile.bind(nodeFsPromises),
     } as unknown as CodebuffFileSystem
@@ -1235,28 +1741,48 @@ describe('pruneStaleTaskMemoryEvidence', () => {
     })
     const before = (await loadPersistedTaskMemory({ rootDir }))!
 
-    // Simulate a concurrent save landing while reconciliation hashes evidence:
-    // the stat call for the (missing) evidence file is the reconcile step, so
-    // advance the record from there.
+    // Simulate a concurrent save landing after prune reads its initial record.
+    // Intercept only task-memory.json (never the ownership-token lock file),
+    // return the original bytes to prune, and publish the newer revision before
+    // prune's guarded reload inside the lock.
+    const memoryPath = path.resolve(
+      rootDir,
+      '.openbuff',
+      'memory',
+      'task-memory.json',
+    )
     let advanced = false
-    const racingFs: typeof nodeFsPromises = new Proxy(nodeFsPromises, {
-      get(target, prop) {
-        if (prop === 'stat') {
-          return async (...args: Parameters<typeof nodeFsPromises.stat>) => {
-            if (!advanced) {
-              advanced = true
-              await saveMergedTaskMemory({
-                rootDir,
-                runMemory: makeMemory({ decisions: ['Concurrent save'] }),
-                priorMemory: before,
-              })
+    const racingFs = {
+      ...new Proxy(nodeFsPromises, {
+        get(target, prop) {
+          if (prop === 'readFile') {
+            return async (
+              ...args: Parameters<typeof nodeFsPromises.readFile>
+            ) => {
+              const requestedPath = path.resolve(String(args[0]))
+              if (!advanced && requestedPath === memoryPath) {
+                const original = await nodeFsPromises.readFile(...args)
+                advanced = true
+                await saveMergedTaskMemory({
+                  rootDir,
+                  runMemory: makeMemory({ decisions: ['Concurrent save'] }),
+                  priorMemory: before,
+                })
+                return original
+              }
+              return nodeFsPromises.readFile(...args)
             }
-            return nodeFsPromises.stat(...args)
           }
-        }
-        return Reflect.get(target, prop)
+          return Reflect.get(target, prop)
+        },
+      }),
+      createFileExclusive: async (
+        file: Parameters<typeof writeFile>[0],
+        data: Parameters<typeof writeFile>[1],
+      ) => {
+        await writeFile(file, data, { flag: 'wx', mode: 0o600 })
       },
-    })
+    } as import('../services/task-memory-store').TaskMemoryStoreFs
 
     const result = await pruneStaleTaskMemoryEvidence({
       rootDir,

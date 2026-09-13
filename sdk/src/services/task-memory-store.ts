@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import type { Stats } from 'node:fs'
+import type { PathLike, Stats } from 'node:fs'
 import * as nodeFsPromises from 'node:fs/promises'
 import path from 'node:path'
 
@@ -8,14 +8,21 @@ import {
   taskMemoryDraftV1Schema,
   taskMemoryV1Schema,
 } from '@codebuff/common/types/task-memory'
+import { errorCode } from '@codebuff/common/util/error'
 import { stableHash } from '@codebuff/common/util/stable-hash'
 
-import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import type {
+  CodebuffFileContent,
+  CodebuffFileSystem,
+} from '@codebuff/common/types/filesystem'
 import type {
   TaskMemoryEvidenceV1,
   TaskMemoryV1,
 } from '@codebuff/common/types/task-memory'
 
+/**
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
+ */
 export interface WorkspaceMoveRecord {
   from: string
   to: string
@@ -29,6 +36,8 @@ type FsModule = typeof nodeFsPromises
  * them as the full `FsModule` would let callers invoke anything else (e.g.
  * `copyFile`) and hit a silent runtime `undefined` instead of a compile
  * error.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
  */
 export interface TaskMemoryStoreFs {
   mkdir(
@@ -37,10 +46,15 @@ export interface TaskMemoryStoreFs {
   ): Promise<void>
   readFile(file: Parameters<FsModule['readFile']>[0]): Promise<Buffer>
   /**
-   * Partial-read primitive; exposing it enables streamed hashing of
-   * oversized evidence files. Stores without it never buffer past
-   * MAX_EVIDENCE_HASH_BYTES: hashFile treats an oversized target as
-   * unverifiable (stale) rather than reading it whole.
+   * Explicit atomic-create capability used for cross-process locking. Merely
+   * accepting node's `wx` write option is not sufficient: virtual adapters
+   * have historically ignored it while reporting a successful write.
+   */
+  createFileExclusive?(file: PathLike, data: CodebuffFileContent): Promise<void>
+  /**
+   * Partial-read primitive used to hash large evidence files incrementally.
+   * Stores without it treat large targets as unverifiable rather than change
+   * the digest contract or buffer an unbounded body.
    */
   open?: FsModule['open']
   rename(
@@ -48,9 +62,7 @@ export interface TaskMemoryStoreFs {
     newPath: Parameters<FsModule['rename']>[1],
   ): Promise<void>
   stat(path: Parameters<FsModule['stat']>[0]): Promise<Stats>
-  lstat?(path: Parameters<FsModule['stat']>[0]): Promise<Stats>
   realpath?(path: Parameters<FsModule['stat']>[0]): Promise<string>
-  readlink?(path: Parameters<FsModule['stat']>[0]): Promise<string>
   unlink(path: Parameters<FsModule['unlink']>[0]): Promise<void>
   writeFile(
     file: Parameters<FsModule['writeFile']>[0],
@@ -72,14 +84,14 @@ function truncateToCap<T>(values: T[], cap: number): T[] {
   return values.length > cap ? values.slice(-cap) : values
 }
 
-/**
- * Upper bound for hashing a single evidence target during reconciliation
- * (same spirit as MAX_DISCOVERED_PROJECT_READ_BYTES in run-state.ts).
- * Freshness digests only need a stable prefix; capping bounds memory and
- * cold-cache read cost per evidence item. Known trade-off: mutations beyond
- * the cap do not flip staleness.
- */
-const MAX_EVIDENCE_HASH_BYTES = 1_000_000
+/** Files above this size are hashed incrementally instead of buffered whole. */
+const EVIDENCE_STREAM_THRESHOLD_BYTES = 1_000_000
+const WHOLE_CONTENT_HASH_PREFIX = 'sha256-whole:'
+const LEGACY_PREFIX_HASH_PREFIX = 'sha256-prefix-1m:'
+const SHA256_HEX = /^[0-9a-f]{64}$/
+
+/** Fixed working buffer for whole-content hashing of large evidence files. */
+const EVIDENCE_HASH_BUFFER_BYTES = 64 * 1024
 
 /** Evidence reads processed per Promise.all batch during reconciliation. */
 const EVIDENCE_HASH_CONCURRENCY = 16
@@ -91,57 +103,97 @@ const EVIDENCE_HASH_CONCURRENCY = 16
  */
 const IN_PROCESS_MEMORY_LOCKS = new Map<string, Promise<void>>()
 
-/** Bounded wait for another process's lock: 50 * 20ms ≈ 1s, then degrade. */
+/** Bounded wait for another process's lock: failure skips the write. */
 const LOCK_ACQUIRE_ATTEMPTS = 50
 const LOCK_RETRY_DELAY_MS = 20
 
-/**
- * A lock older than this is treated as abandoned by a crashed writer and
- * reclaimed. Locked sections are short (one load plus one rename), so a
- * lock this old cannot belong to a live writer.
- */
-const LOCK_STALE_MS = 10_000
+const DEFAULT_TASK_MEMORY_FS: TaskMemoryStoreFs = {
+  ...nodeFsPromises,
+  createFileExclusive: async (file, data) => {
+    await nodeFsPromises.writeFile(file, data, { flag: 'wx', mode: 0o600 })
+  },
+}
+
+function taskMemoryFs(fs: TaskMemoryStoreFs | undefined): TaskMemoryStoreFs {
+  if (!fs) return DEFAULT_TASK_MEMORY_FS
+  // Direct node:fs/promises adapters have native exclusive-create semantics.
+  // Virtual adapters must instead opt in through createFileExclusive.
+  if (fs === nodeFsPromises && typeof fs.createFileExclusive !== 'function') {
+    return {
+      ...fs,
+      createFileExclusive: DEFAULT_TASK_MEMORY_FS.createFileExclusive,
+    }
+  }
+  return fs
+}
+
+export type TaskMemoryV1Inspection =
+  | { status: 'absent' }
+  | { status: 'valid'; memory: TaskMemoryV1 }
+  | {
+      status: 'invalid'
+      reason: 'malformed-json' | 'schema-invalid' | 'checksum-mismatch'
+    }
+  | { status: 'unreadable'; reason: 'read-failed' }
 
 /**
- * Load and schema-validate the persisted task memory for a project root,
- * re-verifying the stored checksum against the loaded payload. Missing,
- * corrupt, or checksum-mismatched data yields undefined; never throws.
+ * Inspect the persisted V1 record without mutating storage. The bounded result
+ * deliberately exposes no path, contents, validation issues, or raw read
+ * error. Only ENOENT proves absence; every other read failure is unreadable.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
+ */
+export async function inspectPersistedTaskMemoryV1(params: {
+  rootDir: string
+  fs?: Pick<TaskMemoryStoreFs, 'readFile'>
+}): Promise<TaskMemoryV1Inspection> {
+  const fs = params.fs ?? nodeFsPromises
+  let raw: Buffer
+  try {
+    raw = await fs.readFile(getMemoryFilePath(params.rootDir))
+  } catch (error) {
+    return errorCode(error) === 'ENOENT'
+      ? { status: 'absent' }
+      : { status: 'unreadable', reason: 'read-failed' }
+  }
+
+  let candidate: unknown
+  try {
+    candidate = JSON.parse(raw.toString('utf8'))
+  } catch {
+    return { status: 'invalid', reason: 'malformed-json' }
+  }
+
+  const parsed = taskMemoryV1Schema.safeParse(candidate)
+  if (!parsed.success) return { status: 'invalid', reason: 'schema-invalid' }
+  const parsedDraft = taskMemoryDraftV1Schema.safeParse(parsed.data)
+  if (!parsedDraft.success)
+    return { status: 'invalid', reason: 'schema-invalid' }
+  const expectedChecksum = stableHash(
+    JSON.stringify({
+      revision: parsed.data.revision,
+      updatedAt: parsed.data.updatedAt,
+      memory: parsedDraft.data,
+    }),
+  )
+  if (expectedChecksum !== parsed.data.checksum) {
+    return { status: 'invalid', reason: 'checksum-mismatch' }
+  }
+  return { status: 'valid', memory: parsed.data }
+}
+
+/**
+ * Load and schema-validate persisted task memory. Compatibility callers keep
+ * the historical behavior: every non-valid inspection collapses to undefined.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
  */
 export async function loadPersistedTaskMemory(params: {
   rootDir: string
   fs?: TaskMemoryStoreFs
 }): Promise<TaskMemoryV1 | undefined> {
-  const fs = params.fs ?? nodeFsPromises
-  try {
-    const raw = await fs.readFile(getMemoryFilePath(params.rootDir))
-    const parsed = taskMemoryV1Schema.safeParse(
-      JSON.parse(raw.toString('utf8')),
-    )
-    if (!parsed.success) return undefined
-    // A corrupted-but-schema-valid file must not hydrate silently: recompute
-    // the checksum over the same draft-shaped payload saveMergedTaskMemory
-    // hashed (memory WITHOUT the revision/updatedAt/checksum envelope) and
-    // reject mismatches.
-    //
-    // Compatibility: records written before checksum enforcement are also
-    // rejected here (fail-closed). No pre-checksum format was ever deployed
-    // — this store shipped alongside enforcement — so tolerate-and-upgrade
-    // would only weaken the corruption guard above. Revisit only if a
-    // deployed legacy format ever materializes.
-    const parsedDraft = taskMemoryDraftV1Schema.safeParse(parsed.data)
-    if (!parsedDraft.success) return undefined
-    const expectedChecksum = stableHash(
-      JSON.stringify({
-        revision: parsed.data.revision,
-        updatedAt: parsed.data.updatedAt,
-        memory: parsedDraft.data,
-      }),
-    )
-    if (expectedChecksum !== parsed.data.checksum) return undefined
-    return parsed.data
-  } catch {
-    return undefined
-  }
+  const inspected = await inspectPersistedTaskMemoryV1(params)
+  return inspected.status === 'valid' ? inspected.memory : undefined
 }
 
 // Evidence paths and journal destinations are stored with forward slashes;
@@ -181,52 +233,135 @@ function resolveMoveTarget(
   return visited.size > 1 ? current : relativePath
 }
 
+type EvidenceFileHashes =
+  | { status: 'hashed'; whole: string; legacyPrefix?: string }
+  | { status: 'missing' }
+  | { status: 'outside' }
+  | { status: 'unverifiable' }
+
+/**
+ * Open, contain, and hash one stable file descriptor. Opening before canonical
+ * validation closes the check/use gap: even if an ancestor pathname is
+ * replaced while realpath runs, descriptor identity must still match the
+ * contained canonical target before any bytes are read. Every size uses the
+ * same fixed buffer, and reads stop at the descriptor's initial size so growth
+ * cannot turn a small-file stat into an unbounded allocation or read.
+ */
 async function hashFile(
   fs: TaskMemoryStoreFs,
+  rootDir: string,
   absolutePath: string,
-): Promise<string | undefined> {
-  try {
-    const stats = await fs.stat(absolutePath)
-    if (stats.size > MAX_EVIDENCE_HASH_BYTES) {
-      if (typeof fs.open !== 'function') {
-        // Oversized target with no partial-read primitive: refuse to buffer
-        // a multi-GB body just to feed the digest. Returning undefined marks
-        // the entry stale (unverifiable) instead of risking OOM at session
-        // start.
-        return undefined
-      }
-      // Read only the leading bytes so a multi-GB evidence file never gets
-      // buffered whole just to feed the digest.
-      const handle = await fs.open(absolutePath, 'r')
-      try {
-        const leading = Buffer.alloc(MAX_EVIDENCE_HASH_BYTES)
-        const { bytesRead } = await handle.read(
-          leading,
-          0,
-          MAX_EVIDENCE_HASH_BYTES,
-          0,
-        )
-        return createHash('sha256')
-          .update(leading.subarray(0, bytesRead))
-          .digest('hex')
-      } finally {
-        try {
-          await handle.close()
-        } catch {
-          // Ignore: the digest is already computed.
-        }
-      }
-    }
-    let contents = await fs.readFile(absolutePath)
-    if (contents.length > MAX_EVIDENCE_HASH_BYTES) {
-      // Growth raced past the cap between stat and read: still digest only
-      // the leading bytes.
-      contents = contents.subarray(0, MAX_EVIDENCE_HASH_BYTES)
-    }
-    return createHash('sha256').update(contents).digest('hex')
-  } catch {
-    return undefined
+): Promise<EvidenceFileHashes> {
+  if (!isPathInsideRootLexical(rootDir, absolutePath)) {
+    return { status: 'outside' }
   }
+  if (typeof fs.open !== 'function' || typeof fs.realpath !== 'function') {
+    return { status: 'unverifiable' }
+  }
+
+  let handle: Awaited<ReturnType<FsModule['open']>> | undefined
+  try {
+    handle = await fs.open(absolutePath, 'r')
+    const realRoot = await fs.realpath(rootDir)
+    const realCandidate = await fs.realpath(absolutePath)
+    if (!isPathInsideRootLexical(realRoot, realCandidate)) {
+      return { status: 'outside' }
+    }
+
+    const [openedStats, canonicalStats] = await Promise.all([
+      handle.stat(),
+      fs.stat(realCandidate),
+    ])
+    if (
+      !openedStats.isFile() ||
+      openedStats.dev !== canonicalStats.dev ||
+      openedStats.ino !== canonicalStats.ino ||
+      !Number.isSafeInteger(openedStats.size) ||
+      openedStats.size < 0
+    ) {
+      return { status: 'unverifiable' }
+    }
+
+    const wholeDigest = createHash('sha256')
+    const legacyPrefixDigest = createHash('sha256')
+    const buffer = Buffer.allocUnsafe(EVIDENCE_HASH_BUFFER_BYTES)
+    let position = 0
+    let legacyBytes = 0
+    while (position < openedStats.size) {
+      const length = Math.min(buffer.length, openedStats.size - position)
+      const { bytesRead } = await handle.read(buffer, 0, length, position)
+      if (bytesRead === 0) return { status: 'unverifiable' }
+      const bytes = buffer.subarray(0, bytesRead)
+      wholeDigest.update(bytes)
+      if (legacyBytes < EVIDENCE_STREAM_THRESHOLD_BYTES) {
+        const prefixBytes = Math.min(
+          bytesRead,
+          EVIDENCE_STREAM_THRESHOLD_BYTES - legacyBytes,
+        )
+        legacyPrefixDigest.update(bytes.subarray(0, prefixBytes))
+        legacyBytes += prefixBytes
+      }
+      position += bytesRead
+    }
+
+    const finalStats = await handle.stat()
+    if (
+      finalStats.dev !== openedStats.dev ||
+      finalStats.ino !== openedStats.ino ||
+      finalStats.size !== openedStats.size ||
+      finalStats.mtimeMs !== openedStats.mtimeMs ||
+      finalStats.ctimeMs !== openedStats.ctimeMs
+    ) {
+      return { status: 'unverifiable' }
+    }
+    return {
+      status: 'hashed',
+      whole: wholeDigest.digest('hex'),
+      legacyPrefix: legacyPrefixDigest.digest('hex'),
+    }
+  } catch (error) {
+    return handle === undefined && errorCode(error) === 'ENOENT'
+      ? { status: 'missing' }
+      : { status: 'unverifiable' }
+  } finally {
+    await handle?.close().catch(() => {})
+  }
+}
+
+function reconcileFreshnessHash(
+  recorded: string | undefined,
+  hashes: Extract<EvidenceFileHashes, { status: 'hashed' }>,
+): { status: 'fresh' | 'stale' | 'unverifiable'; freshnessHash?: string } {
+  if (recorded === undefined) return { status: 'fresh' }
+
+  let expected: string
+  let matches: boolean
+  if (recorded.startsWith(WHOLE_CONTENT_HASH_PREFIX)) {
+    expected = recorded.slice(WHOLE_CONTENT_HASH_PREFIX.length)
+    if (!SHA256_HEX.test(expected)) return { status: 'unverifiable' }
+    matches = expected === hashes.whole
+  } else if (recorded.startsWith(LEGACY_PREFIX_HASH_PREFIX)) {
+    expected = recorded.slice(LEGACY_PREFIX_HASH_PREFIX.length)
+    if (!SHA256_HEX.test(expected)) return { status: 'unverifiable' }
+    // For files at or below the historical prefix limit, the prefix digest is
+    // identical to the whole-content digest and hashFile need not produce both.
+    matches = expected === (hashes.legacyPrefix ?? hashes.whole)
+  } else if (SHA256_HEX.test(recorded)) {
+    // Unversioned records may be either the historical one-megabyte prefix
+    // digest or the newer whole-content digest. A match can be upgraded. A
+    // mismatch is still reported stale by reconciliation, but prune separately
+    // refuses to delete a present file on this ambiguous evidence alone.
+    matches = recorded === hashes.whole || recorded === hashes.legacyPrefix
+  } else {
+    return { status: 'unverifiable' }
+  }
+
+  return matches
+    ? {
+        status: 'fresh',
+        freshnessHash: `${WHOLE_CONTENT_HASH_PREFIX}${hashes.whole}`,
+      }
+    : { status: 'stale' }
 }
 
 function isPathInsideRootLexical(
@@ -246,46 +381,11 @@ function isPathInsideRootLexical(
 }
 
 /**
- * True when candidatePath resolves inside rootDir. Evidence paths originate
- * from persisted state and journal destinations, so anything resolving
- * outside the project root is treated as untrusted and never read.
- *
- * Lexical check is followed by a symlink-escape guard when the filesystem
- * exposes lstat/realpath: a symlink planted inside rootDir that points
- * outside is treated as outside and never hashed. Exposure on adapters
- * without those primitives remains limited to feeding outside bytes into the
- * freshness digest (contents are never surfaced to callers). Degrades to
- * lexical-only when those primitives are unavailable or the target is
- * missing (hashFile will then mark stale).
- */
-async function isPathInsideRoot(
-  rootDir: string,
-  candidatePath: string,
-  fs: TaskMemoryStoreFs,
-): Promise<boolean> {
-  if (!isPathInsideRootLexical(rootDir, candidatePath)) return false
-  if (typeof fs.lstat !== 'function' || typeof fs.realpath !== 'function') {
-    return true
-  }
-  try {
-    const lst = await fs.lstat(candidatePath)
-    const isSymlink =
-      typeof (lst as unknown as { isSymbolicLink?: () => boolean })
-        .isSymbolicLink === 'function'
-        ? (lst as unknown as { isSymbolicLink: () => boolean }).isSymbolicLink()
-        : false
-    if (!isSymlink) return true
-    const real = await fs.realpath(candidatePath)
-    return isPathInsideRootLexical(rootDir, real)
-  } catch {
-    return true
-  }
-}
-
-/**
  * Re-evaluate each evidence item against current disk state. Missing or
  * changed files mark the entry stale; a matching workspace move rebinds the
  * path to its destination before evaluating. Entries are never deleted.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
  */
 export async function reconcileTaskMemoryEvidence(params: {
   memory: TaskMemoryV1
@@ -293,7 +393,7 @@ export async function reconcileTaskMemoryEvidence(params: {
   fs?: TaskMemoryStoreFs
   workspaceMoves?: WorkspaceMoveRecord[]
 }): Promise<TaskMemoryV1> {
-  const fs = params.fs ?? nodeFsPromises
+  const fs = taskMemoryFs(params.fs)
   const reconcileItem = async (
     item: TaskMemoryEvidenceV1,
   ): Promise<TaskMemoryEvidenceV1> => {
@@ -302,24 +402,43 @@ export async function reconcileTaskMemoryEvidence(params: {
     }
     const boundPath = resolveMoveTarget(item.path, params.workspaceMoves)
     const absolutePath = path.join(params.rootDir, boundPath)
-    if (!(await isPathInsideRoot(params.rootDir, absolutePath, fs))) {
-      // evidence.path comes from persisted state and journal destinations;
-      // refuse to read (or adopt) any path resolving outside the root,
-      // including symlink-escape when the filesystem exposes lstat/realpath.
+    const hashes = await hashFile(fs, params.rootDir, absolutePath)
+    if (hashes.status === 'outside') {
+      // A proven lexical or descriptor-validated canonical escape is stale and
+      // no bytes from the opened target are read.
       return { ...item, stale: true }
     }
-    const digest = await hashFile(fs, absolutePath)
-    const isFresh =
-      digest !== undefined &&
-      (item.freshnessHash === undefined || digest === item.freshnessHash)
-    return isFresh
-      ? { ...item, path: boundPath, stale: false, verifiedAt: Date.now() }
+    if (hashes.status === 'missing') {
+      // ENOENT while opening is positive evidence that the file is gone.
+      return { ...item, path: boundPath, stale: true }
+    }
+    if (hashes.status === 'unverifiable') {
+      // Capability/read failures and unknown hash formats are not evidence
+      // that the file changed. Preserve the prior verdict so prune cannot
+      // destroy evidence merely because this adapter cannot validate it.
+      return { ...item, path: boundPath }
+    }
+    const freshness = reconcileFreshnessHash(item.freshnessHash, hashes)
+    if (freshness.status === 'unverifiable') {
+      // Unknown formats and read-capability failures cannot establish a new
+      // verdict. Preserve the prior state; prune treats them non-destructively.
+      return { ...item, path: boundPath }
+    }
+    return freshness.status === 'fresh'
+      ? {
+          ...item,
+          path: boundPath,
+          ...(freshness.freshnessHash
+            ? { freshnessHash: freshness.freshnessHash }
+            : {}),
+          stale: false,
+          verifiedAt: Date.now(),
+        }
       : { ...item, path: boundPath, stale: true }
   }
-  // Evidence lists are capped (LIST_CAPS.evidence), but each item may read
-  // up to MAX_EVIDENCE_HASH_BYTES, so hashing every entry concurrently
-  // spiked ~256MB of transient buffers on a cold cache. Chunks keep reads
-  // pipelined while bounding peak memory; output order follows input.
+  // Evidence lists are capped (LIST_CAPS.evidence), and large files use a
+  // fixed streaming buffer. Chunks bound the number of simultaneous file
+  // descriptors and buffered small-file reads while preserving output order.
   const evidence: TaskMemoryEvidenceV1[] = []
   for (
     let start = 0;
@@ -393,6 +512,8 @@ function collectDroppedEvidenceIds(
  * longer carries but the caller's hydrated snapshot still does is treated as
  * deliberately dropped by the other writer and filtered out of the run's
  * still-hydrated `evidence` instead of being merged back in.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
  */
 export async function saveMergedTaskMemory(params: {
   rootDir: string
@@ -402,7 +523,7 @@ export async function saveMergedTaskMemory(params: {
 }): Promise<TaskMemoryV1 | undefined> {
   const { runMemory } = params
   if (!runMemory) return undefined
-  const fs = params.fs ?? nodeFsPromises
+  const fs = taskMemoryFs(params.fs)
   // Load, revision derivation and commit run as one serialized section: the
   // revision this save reads from disk must not also be publishable by the
   // other writer (see withMemoryFileLock).
@@ -576,64 +697,44 @@ async function writeRecordAtomically(
 
 /**
  * Serialize the load→revision→commit section shared by both task-memory
- * writers.
+ * writers. The in-process chain covers callers in this process, while an
+ * exclusive-create lock covers other processes.
  *
- * `saveMergedTaskMemory` and `pruneStaleTaskMemoryEvidence` each read the
- * record, derive the next `revision` from what they read, and commit by
- * rename. With no mutual exclusion those windows interleave — a save landing
- * between prune's revision check and its rename, or two saves loading the
- * same record — and both writers publish the SAME revision with different
- * payloads, which is exactly what the record's monotonic-and-unique revision
- * contract forbids.
- *
- * Two layers, because neither alone covers the writers:
- * - an in-process promise chain keyed by the resolved record path, which
- *   handles the common case (a CLI `/memory prune` and an SDK save in one
- *   process) without needing any filesystem support;
- * - an exclusive-create (`wx`) lock file for other processes sharing the
- *   project, reclaimed after {@link LOCK_STALE_MS} so a crashed writer cannot
- *   block later ones forever.
- *
- * The cross-process layer is advisory: an adapter that ignores the `flag`
- * option, or a lock that cannot be taken within the bounded attempt budget,
- * degrades to running the section unlocked rather than dropping the write.
- * Both callers keep their own on-disk re-read (save) and revision guard
- * (prune), so the degraded path is exactly as safe as before this lock
- * existed.
- *
- * Evidence reconciliation deliberately stays OUTSIDE the section: it hashes
- * every evidence file, so holding the lock across it would stall the other
- * writer, and a run finishing mid-prune (which reconciliation's own IO can
- * trigger) would deadlock against it.
+ * Cross-process exclusion is mandatory: failure to acquire the lock returns
+ * `undefined` and the write is skipped. Acquisition requires an explicit
+ * atomic-create capability, rather than trusting an adapter's handling of
+ * `writeFile(..., { flag: 'wx' })`. An old same-host lock is reclaimed only
+ * after its recorded owner process is proven dead; age alone never steals a
+ * live writer's lock. Automatic stale-lock deletion is deliberately avoided:
+ * portable filesystem APIs cannot atomically compare ownership and unlink, so
+ * reclaiming could remove a replacement owner's lock. The unique token is
+ * checked before release.
  */
 async function withMemoryFileLock<T>(
   fs: TaskMemoryStoreFs,
   filePath: string,
   section: () => Promise<T>,
-): Promise<T> {
+): Promise<T | undefined> {
   const key = path.resolve(filePath)
   const previous = IN_PROCESS_MEMORY_LOCKS.get(key) ?? Promise.resolve()
-  const run = async (): Promise<T> => {
-    // The lock file sits beside the record, so its directory must exist first.
-    // A failing mkdir is not fatal here: the section's own write path creates
-    // the directory and reports the failure through its normal outcome.
+  const run = async (): Promise<T | undefined> => {
     await fs.mkdir(path.dirname(filePath), { recursive: true }).catch(() => {})
     const lockPath = `${filePath}.lock`
-    const locked = await acquireRecordLock(fs, lockPath)
+    const token = await acquireRecordLock(fs, lockPath)
+    if (!token) return undefined
     try {
       return await section()
     } finally {
-      if (locked) {
-        await fs.unlink(lockPath).catch(() => {
-          // Ignore: a reclaimed or already-removed lock is not this writer's
-          // problem, and the section has already committed.
-        })
+      const currentToken = await fs
+        .readFile(lockPath)
+        .then((contents) => contents.toString('utf8'))
+        .catch(() => undefined)
+      if (currentToken === token) {
+        await fs.unlink(lockPath).catch(() => {})
       }
     }
   }
   const result = previous.then(run, run)
-  // Keep the chain alive across failures: one rejected section must not
-  // poison every later writer in this process.
   const settled = result.then(
     () => {},
     () => {},
@@ -647,47 +748,41 @@ async function withMemoryFileLock<T>(
   return result
 }
 
+type RecordLockPayload = {
+  token: string
+  pid: number
+  createdAt: number
+}
+
 /**
- * Take the cross-process lock file, or report that this writer is proceeding
- * without it. Returns true only when the lock was created here, so the caller
- * never unlinks a lock it does not hold.
+ * Take the cross-process lock and return its ownership bytes. Contention is
+ * bounded, but exhaustion and adapters without explicit atomic create fail
+ * closed: callers never enter the mutation section without proven exclusion.
  */
 async function acquireRecordLock(
   fs: TaskMemoryStoreFs,
   lockPath: string,
-): Promise<boolean> {
-  let missingLockObservations = 0
+): Promise<string | undefined> {
+  if (typeof fs.createFileExclusive !== 'function') return undefined
+  const payload: RecordLockPayload = {
+    token: randomUUID(),
+    pid: process.pid,
+    createdAt: Date.now(),
+  }
+  const token = `${JSON.stringify(payload)}\n`
   for (let attempt = 0; attempt < LOCK_ACQUIRE_ATTEMPTS; attempt += 1) {
     try {
-      await fs.writeFile(lockPath, `${process.pid}\n`, {
-        flag: 'wx',
-        mode: 0o600,
-      })
-      return true
+      await fs.createFileExclusive(lockPath, token)
+      const observed = await fs.readFile(lockPath)
+      if (observed.toString('utf8') !== token) return undefined
+      return token
     } catch {
-      const stats = await fs.stat(lockPath).catch(() => undefined)
-      if (!stats) {
-        // Nothing holds the lock, so the rejection was not contention: this
-        // adapter does not honor exclusive-create. Give up after a second
-        // observation (which absorbs a holder releasing between the write and
-        // this stat) instead of burning the whole budget on every write.
-        missingLockObservations += 1
-        if (missingLockObservations >= 2) return false
-        continue
+      if (attempt + 1 < LOCK_ACQUIRE_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS))
       }
-      missingLockObservations = 0
-      // Reclaim a lock abandoned by a crashed writer. A stat without a usable
-      // mtime keeps waiting rather than stealing a possibly-live lock.
-      if (Date.now() - stats.mtimeMs > LOCK_STALE_MS) {
-        await fs.unlink(lockPath).catch(() => {
-          // Ignore: another writer may have reclaimed it first.
-        })
-        continue
-      }
-      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS))
     }
   }
-  return false
+  return undefined
 }
 
 /**
@@ -699,6 +794,8 @@ async function acquireRecordLock(
  * user as "nothing to prune". On `failed`, `removed`/`remaining` describe the
  * prune that WOULD have been written, so the record still holds `removed`
  * stale entries.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
  */
 export type TaskMemoryPruneOutcome =
   | { status: 'pruned'; removed: number; remaining: number }
@@ -709,6 +806,53 @@ export type TaskMemoryPruneOutcome =
       removed: number
       remaining: number
     }
+
+/**
+ * Decide whether the current disk state supplies format-compatible authority
+ * to remove one reconciled item. A persisted or inherited `stale` flag is
+ * never sufficient by itself: older writers used unversioned hashes, and
+ * future writers may introduce formats this process cannot interpret.
+ *
+ * Missing and escaping targets are independently destructive-safe. For a
+ * present contained target, only a syntactically valid, explicitly versioned
+ * digest can prove a content mismatch. Bare and unknown digests are always
+ * preserved, as are pathless items and any item whose current bytes cannot be
+ * read. This deliberately repeats the bounded hash after reconciliation so a
+ * transient read failure cannot turn an inherited stale verdict into deletion
+ * authority.
+ */
+async function canPruneReconciledEvidence(params: {
+  item: TaskMemoryEvidenceV1
+  recordedHash: string | undefined
+  rootDir: string
+  fs: TaskMemoryStoreFs
+}): Promise<boolean> {
+  const { item, recordedHash, rootDir, fs } = params
+  if (item.stale !== true || !item.path) return false
+
+  const absolutePath = path.join(rootDir, item.path)
+  const hashes = await hashFile(fs, rootDir, absolutePath)
+  if (hashes.status === 'missing' || hashes.status === 'outside') return true
+  if (hashes.status !== 'hashed' || recordedHash === undefined) return false
+
+  let expected: string
+  let algorithm: 'whole' | 'legacy-prefix'
+  if (recordedHash.startsWith(WHOLE_CONTENT_HASH_PREFIX)) {
+    expected = recordedHash.slice(WHOLE_CONTENT_HASH_PREFIX.length)
+    algorithm = 'whole'
+  } else if (recordedHash.startsWith(LEGACY_PREFIX_HASH_PREFIX)) {
+    expected = recordedHash.slice(LEGACY_PREFIX_HASH_PREFIX.length)
+    algorithm = 'legacy-prefix'
+  } else {
+    // Unversioned and unknown formats cannot authorize destructive pruning.
+    return false
+  }
+  if (!SHA256_HEX.test(expected)) return false
+
+  const actual =
+    algorithm === 'whole' ? hashes.whole : (hashes.legacyPrefix ?? hashes.whole)
+  return expected !== actual
+}
 
 /**
  * Drop stale evidence from the persisted record and rewrite it atomically
@@ -734,6 +878,8 @@ export type TaskMemoryPruneOutcome =
  * that can see workspace moves must pass them, or evidence bound to a renamed
  * file reconciles stale and is permanently deleted instead of rebinding to
  * its destination.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
  */
 export async function pruneStaleTaskMemoryEvidence(params: {
   rootDir: string
@@ -747,7 +893,7 @@ export async function pruneStaleTaskMemoryEvidence(params: {
    */
   workspaceMoves?: WorkspaceMoveRecord[]
 }): Promise<TaskMemoryPruneOutcome> {
-  const fs = params.fs ?? nodeFsPromises
+  const fs = taskMemoryFs(params.fs)
   const persisted = await loadPersistedTaskMemory({
     rootDir: params.rootDir,
     fs,
@@ -762,10 +908,28 @@ export async function pruneStaleTaskMemoryEvidence(params: {
     fs,
     workspaceMoves: params.workspaceMoves,
   })
-  const kept = memory.evidence.filter((item) => item.stale !== true)
+  const persistedById = new Map(
+    persisted.evidence.map((item) => [item.id, item] as const),
+  )
+  const kept: TaskMemoryEvidenceV1[] = []
+  for (const item of memory.evidence) {
+    const removalSafe = await canPruneReconciledEvidence({
+      item,
+      recordedHash: persistedById.get(item.id)?.freshnessHash,
+      rootDir: params.rootDir,
+      fs,
+    })
+    if (!removalSafe) kept.push(item)
+  }
   const removed = memory.evidence.length - kept.length
   const remaining = kept.length
-  if (removed === 0) return { status: 'pruned', removed: 0, remaining }
+  const needsHashBackfill = memory.evidence.some(
+    (item, index) =>
+      item.freshnessHash !== persisted.evidence[index]?.freshnessHash,
+  )
+  if (removed === 0 && !needsHashBackfill) {
+    return { status: 'pruned', removed: 0, remaining }
+  }
 
   const parsedDraft = taskMemoryDraftV1Schema.safeParse({
     ...memory,
@@ -777,7 +941,7 @@ export async function pruneStaleTaskMemoryEvidence(params: {
 
   // Serialized section: the revision check and the commit must not straddle
   // another writer's commit (reconciliation above is deliberately outside it).
-  return withMemoryFileLock(
+  const outcome = await withMemoryFileLock(
     fs,
     getMemoryFilePath(params.rootDir),
     async (): Promise<TaskMemoryPruneOutcome> => {
@@ -827,6 +991,9 @@ export async function pruneStaleTaskMemoryEvidence(params: {
       return { status: 'pruned', removed, remaining }
     },
   )
+  return (
+    outcome ?? { status: 'failed', reason: 'write-failed', removed, remaining }
+  )
 }
 
 /**
@@ -839,8 +1006,10 @@ export async function pruneStaleTaskMemoryEvidence(params: {
  * require the optional `renameFile` capability; without it, persistence
  * degrades to a skipped save (saveMergedTaskMemory returns undefined)
  * rather than a non-atomic write. A native `open` on the host (real node
- * fs) is forwarded so oversized evidence hashing streams leading bytes
- * instead of buffering the file.
+ * fs) is forwarded so large evidence files receive the same whole-content
+ * digest as buffered files without unbounded memory use.
+ *
+ * @deprecated Memory V1 compatibility surface; use Memory V2. Removal will occur only after the documented compatibility window and migration audit.
  */
 export function codebuffFsToNodePromises(
   codebuffFs: CodebuffFileSystem,
@@ -854,18 +1023,15 @@ export function codebuffFsToNodePromises(
       }
   // CodebuffFileSystem's published type omits `open`, but node-fs-backed
   // hosts (spreads of fs.promises, createNodeFileSystem()) still carry it at
-  // runtime. Detect and forward it so oversized evidence hashing streams
-  // leading bytes instead of taking the buffered fallback.
+  // runtime. Detect and forward it for bounded whole-content streaming.
   const maybeOpen = (codebuffFs as { open?: FsModule['open'] }).open
   const open: TaskMemoryStoreFs['open'] =
     typeof maybeOpen === 'function'
       ? (file, flags, mode) => maybeOpen(file, flags, mode)
       : undefined
-  const maybeLstat = (codebuffFs as { lstat?: FsModule['stat'] }).lstat
-  const lstat: TaskMemoryStoreFs['lstat'] =
-    typeof maybeLstat === 'function'
-      ? (p) =>
-          (maybeLstat as unknown as (p: string) => Promise<Stats>)(p as string)
+  const createFileExclusive: TaskMemoryStoreFs['createFileExclusive'] =
+    typeof codebuffFs.createFileExclusive === 'function'
+      ? (file, data) => codebuffFs.createFileExclusive!(file, data)
       : undefined
   const maybeRealpath = (
     codebuffFs as { realpath?: (p: string) => Promise<string> }
@@ -874,13 +1040,6 @@ export function codebuffFsToNodePromises(
     typeof maybeRealpath === 'function'
       ? (p) => maybeRealpath(p as string)
       : undefined
-  const maybeReadlink = (
-    codebuffFs as { readlink?: (p: string) => Promise<string> }
-  ).readlink
-  const readlink: TaskMemoryStoreFs['readlink'] =
-    typeof maybeReadlink === 'function'
-      ? (p) => maybeReadlink(p as string)
-      : undefined
   return {
     // Discard recursive mkdir's first-created-path result; the store only
     // needs completion, and TaskMemoryStoreFs declares Promise<void>.
@@ -888,11 +1047,10 @@ export function codebuffFsToNodePromises(
       await codebuffFs.mkdir(path, options)
     },
     readFile: (file) => codebuffFs.readFile(file) as Promise<Buffer>,
+    createFileExclusive,
     rename,
     open,
-    lstat,
     realpath,
-    readlink,
     stat: (path) => codebuffFs.stat(path),
     unlink: (path) => codebuffFs.unlink(path),
     writeFile: (file, data, options) =>

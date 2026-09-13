@@ -40,7 +40,7 @@ describe('slash-commands module', () => {
       expect(command).toBeDefined()
       expect(command!.label).toBe('memory')
       expect(command!.description).toBe(
-        'Inspect, query, diagnose, export, or maintain project memory',
+        'Inspect, query, audit migrations, export, or maintain project memory',
       )
       expect(command!.aliases).toEqual(['mem'])
       // Stateful command: must not fire without an explicit leading slash.

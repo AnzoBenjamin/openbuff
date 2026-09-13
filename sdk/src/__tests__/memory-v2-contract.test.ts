@@ -16,12 +16,19 @@ import type {
   MemoryRetrievalRequest,
   MemoryVerifyOutcome,
   MemoryVerifyRequest,
+  TaskMemoryV1,
+  TaskMemoryV1Inspection,
+  V1MigrationAuditOutcome,
+  V1MigrationAuditReader,
 } from '../index'
 import {
+  auditTaskMemoryV1Migration,
+  inspectPersistedTaskMemoryV1,
   MemoryAppendRequestSchema,
   MemoryEventDraftSchema,
   MemoryEventEnvelopeSchema,
   MemoryRetrievalRequestSchema,
+  ProjectIdSchema,
 } from '../index'
 
 const timestamp = '2026-09-10T19:41:53.753Z'
@@ -41,26 +48,38 @@ class FakeMemoryRepositoryV2 implements MemoryRepositoryV2 {
         },
       }
     }
-    const projectEvents = this.events.filter((event) => event.projectId === request.projectId)
-    const currentLastEventId = projectEvents.at(-1)?.eventId
-    const expectedTail = request.expectedTail ?? (
-      request.expectedLastEventId === undefined
-        ? { kind: 'any' as const }
-        : { kind: 'event' as const, eventId: request.expectedLastEventId }
+    const projectEvents = this.events.filter(
+      (event) => event.projectId === request.projectId,
     )
-    const tailMatches = expectedTail.kind === 'any'
-      || (expectedTail.kind === 'empty' && currentLastEventId === undefined)
-      || (expectedTail.kind === 'event' && expectedTail.eventId === currentLastEventId)
+    const currentLastEventId = projectEvents.at(-1)?.eventId
+    const expectedTail =
+      request.expectedTail ??
+      (request.expectedLastEventId === undefined
+        ? { kind: 'any' as const }
+        : { kind: 'event' as const, eventId: request.expectedLastEventId })
+    const tailMatches =
+      expectedTail.kind === 'any' ||
+      (expectedTail.kind === 'empty' && currentLastEventId === undefined) ||
+      (expectedTail.kind === 'event' &&
+        expectedTail.eventId === currentLastEventId)
     if (!tailMatches) {
       return {
         outcome: 'rejected',
-        error: { code: 'conflict', message: 'The memory store changed.', retryable: true },
+        error: {
+          code: 'conflict',
+          message: 'The memory store changed.',
+          retryable: true,
+        },
       }
     }
 
     const stagedDrafts = new Map(this.drafts)
     const pending: MemoryEventEnvelope[] = []
-    const entries: Array<{ eventId: MemoryEventDraft['eventId']; sequence: number; duplicate: boolean }> = []
+    const entries: Array<{
+      eventId: MemoryEventDraft['eventId']
+      sequence: number
+      duplicate: boolean
+    }> = []
     for (const draft of request.events) {
       const existingDraft = stagedDrafts.get(draft.eventId)
       const existingEvent = [...this.events, ...pending].find(
@@ -70,10 +89,18 @@ class FakeMemoryRepositoryV2 implements MemoryRepositoryV2 {
         if (JSON.stringify(existingDraft) !== JSON.stringify(draft)) {
           return {
             outcome: 'rejected',
-            error: { code: 'conflict', message: 'The event ID already exists.', retryable: false },
+            error: {
+              code: 'conflict',
+              message: 'The event ID already exists.',
+              retryable: false,
+            },
           }
         }
-        entries.push({ eventId: draft.eventId, sequence: existingEvent.sequence, duplicate: true })
+        entries.push({
+          eventId: draft.eventId,
+          sequence: existingEvent.sequence,
+          duplicate: true,
+        })
         continue
       }
 
@@ -83,7 +110,11 @@ class FakeMemoryRepositoryV2 implements MemoryRepositoryV2 {
       })
       stagedDrafts.set(draft.eventId, draft)
       pending.push(event)
-      entries.push({ eventId: draft.eventId, sequence: event.sequence, duplicate: false })
+      entries.push({
+        eventId: draft.eventId,
+        sequence: event.sequence,
+        duplicate: false,
+      })
     }
 
     this.events.push(...pending)
@@ -117,12 +148,20 @@ class FakeMemoryRepositoryV2 implements MemoryRepositoryV2 {
   async verify(_request: MemoryVerifyRequest): Promise<MemoryVerifyOutcome> {
     return {
       outcome: 'failed',
-      error: { code: 'not-found', message: 'Observation not found', retryable: false },
+      error: {
+        code: 'not-found',
+        message: 'Observation not found',
+        retryable: false,
+      },
     }
   }
 
   async rebuild(request: MemoryRebuildRequest): Promise<MemoryRebuildOutcome> {
-    return { outcome: 'rebuilt', rebuildId: request.rebuildId, processedEvents: this.events.length }
+    return {
+      outcome: 'rebuilt',
+      rebuildId: request.rebuildId,
+      processedEvents: this.events.length,
+    }
   }
 
   async health(_request: MemoryHealthRequest): Promise<MemoryHealth> {
@@ -135,7 +174,14 @@ class FakeMemoryRepositoryV2 implements MemoryRepositoryV2 {
         backendId: 'fake',
         kind: 'in-memory',
         persistence: 'ephemeral',
-        capabilities: ['append', 'query', 'verify', 'rebuild', 'health', 'export'],
+        capabilities: [
+          'append',
+          'query',
+          'verify',
+          'rebuild',
+          'health',
+          'export',
+        ],
       },
       issues: [],
     }
@@ -151,6 +197,49 @@ class FakeMemoryRepositoryV2 implements MemoryRepositoryV2 {
 }
 
 describe('MemoryRepositoryV2 public contract', () => {
+  test('exports the four-state V1 inspector with a nameable exhaustive union', async () => {
+    const result: TaskMemoryV1Inspection = await inspectPersistedTaskMemoryV1({
+      rootDir: '/absent-contract-record',
+      fs: {
+        readFile: async () => {
+          throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+        },
+      } as never,
+    })
+    const describe = (inspection: TaskMemoryV1Inspection): string => {
+      switch (inspection.status) {
+        case 'absent':
+          return 'absent'
+        case 'valid': {
+          const memory: TaskMemoryV1 = inspection.memory
+          return String(memory.revision)
+        }
+        case 'invalid':
+          return inspection.reason
+        case 'unreadable':
+          return inspection.reason
+      }
+    }
+    expect(describe(result)).toBe('absent')
+  })
+
+  test('the V1 migration audit accepts an export-only reader', async () => {
+    let exportCalls = 0
+    const reader: V1MigrationAuditReader = {
+      async export() {
+        exportCalls++
+        return { outcome: 'page', events: [], nextAfterEventId: null }
+      },
+    }
+    const outcome: V1MigrationAuditOutcome = await auditTaskMemoryV1Migration({
+      projectId: ProjectIdSchema.parse('project:demo'),
+      repository: reader,
+    })
+
+    expect(outcome).toEqual({ outcome: 'no-record' })
+    expect(exportCalls).toBe(0)
+  })
+
   test('supports a compile-time and runtime fake implementation', async () => {
     const event = MemoryEventDraftSchema.parse({
       schemaVersion: 2,
@@ -187,10 +276,12 @@ describe('MemoryRepositoryV2 public contract', () => {
     const repository: MemoryRepositoryV2 = new FakeMemoryRepositoryV2()
 
     const appendOutcome = await repository.append(appendRequest)
-    const staleEmpty = await repository.append(MemoryAppendRequestSchema.parse({
-      ...appendRequest,
-      expectedTail: { kind: 'empty' },
-    }))
+    const staleEmpty = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        ...appendRequest,
+        expectedTail: { kind: 'empty' },
+      }),
+    )
     const duplicateOutcome = await repository.append(appendRequest)
     const queryOutcome = await repository.query(queryRequest)
     const exportOutcome = await repository.export({

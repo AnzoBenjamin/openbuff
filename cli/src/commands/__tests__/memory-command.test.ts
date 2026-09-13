@@ -89,6 +89,10 @@ function createDeps(options: {
       if (options.loadThrows) throw new Error('load exploded')
       return options.memory
     },
+    inspectPersistedTaskMemoryV1: async () =>
+      options.memory
+        ? { status: 'valid' as const, memory: options.memory }
+        : { status: 'absent' as const },
     reconcileTaskMemoryEvidence: async (params: {
       workspaceMoves?: WorkspaceMoveRecord[]
     }) => {
@@ -120,6 +124,22 @@ describe('/memory command', () => {
 
     expect(result).toContain('No persisted task memory')
     expect(result).toContain('first successful run')
+  })
+
+  test('legacy typed dependency injectors may omit the V1 inspector', async () => {
+    const { deps } = createDeps({ memory: undefined })
+    const {
+      inspectPersistedTaskMemoryV1: _newInspector,
+      ...legacyDependencies
+    } = deps
+    const compatibleDependencies: MemoryCommandDeps = legacyDependencies
+
+    const result = await handleMemoryCommand(
+      'audit-migration',
+      compatibleDependencies,
+    )
+
+    expect(result).toContain('Outcome: absent')
   })
 
   test('status summarizes counts and lists stale evidence paths', async () => {
@@ -333,10 +353,10 @@ describe('/memory command', () => {
     const { deps, calls } = createDeps({ memory: makeMemory() })
 
     expect(await handleMemoryCommand('wat', deps)).toContain(
-      'Usage: /memory [status|authority|diagnose|query <text>',
+      'Usage: /memory [status|authority|diagnose|audit-migration|query <text>',
     )
     expect(await handleMemoryCommand('PRUNE-ish', deps)).toContain(
-      'Usage: /memory [status|authority|diagnose|query <text>',
+      'Usage: /memory [status|authority|diagnose|audit-migration|query <text>',
     )
     expect(calls.prune).toBe(0)
   })
@@ -344,12 +364,20 @@ describe('/memory command', () => {
   test('authority reports valid values and current selection without mutation', async () => {
     const { deps } = createDeps({ memory: makeMemory() })
     deps.getMemoryV2 = async () => ({
-      status: 'unavailable', requestedAuthority: 'sqlite-v2-opt-in',
-      effectiveAuthority: 'json-v1', degradation: 'fallback', retryable: true,
+      status: 'unavailable',
+      requestedAuthority: 'sqlite-v2-opt-in',
+      effectiveAuthority: 'json-v1',
+      degradation: 'fallback',
+      retryable: true,
     })
     const result = await handleMemoryCommand('authority', deps)
     expect(result).toContain('json-v1, shadow-v2, sqlite-v2-opt-in')
     expect(result).toContain('Requested: sqlite-v2-opt-in; effective: json-v1')
+    expect(result).toContain('Release N')
+    expect(result).toContain(
+      'json-v1 and shadow-v2 remain supported but are deprecated',
+    )
+    expect(result).toContain('sqlite-v2-opt-in is the default and replacement')
     expect(result).toContain('reset/restart')
   })
 
@@ -390,13 +418,27 @@ describe('/memory blocks', () => {
       return { outcome: 'preview', plannedEvents: [] }
     }
     const observation = {
-      observationId: 'observation-1', taskId: 'task-1', kind: 'discovery', summary: 'old', detail: 'old',
-      confidence: 1, selectors: [], evidence: [], tags: [], observedAt: '2025-01-01T00:00:00.000Z',
+      observationId: 'observation-1',
+      taskId: 'task-1',
+      kind: 'discovery',
+      summary: 'old',
+      detail: 'old',
+      confidence: 1,
+      selectors: [],
+      evidence: [],
+      tags: [],
+      observedAt: '2025-01-01T00:00:00.000Z',
     }
     const observationEvent = MemoryEventEnvelopeSchema.parse({
-      schemaVersion: 2, eventSchemaVersion: 1, eventType: 'observation.recorded',
-      eventId: 'observation-event-1', projectId: 'project-1', sessionId: 'session-1', sequence: 1,
-      occurredAt: '2025-01-01T00:00:00.000Z', payload: { payloadSchemaVersion: 1, observation },
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'observation.recorded',
+      eventId: 'observation-event-1',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      sequence: 1,
+      occurredAt: '2025-01-01T00:00:00.000Z',
+      payload: { payloadSchemaVersion: 1, observation },
     })
     const operator = {
       consolidate: invoke('consolidate'),
@@ -404,11 +446,24 @@ describe('/memory blocks', () => {
       revalidate: invoke('revalidate'),
       correct: invoke('correct'),
     }
-    deps.getMemoryV2 = async () => ({
-      status: 'available', requestedAuthority: 'shadow-v2', effectiveAuthority: 'shadow-v2', projectId: 'project-1', operator,
-      repository: { export: async () => ({ outcome: 'page', events: [observationEvent], nextAfterEventId: null }) },
-      release: async () => {},
-    }) as unknown as Awaited<ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>>
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator,
+        repository: {
+          export: async () => ({
+            outcome: 'page',
+            events: [observationEvent],
+            nextAfterEventId: null,
+          }),
+        },
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
 
     const commands = [
       'consolidate',
@@ -419,23 +474,36 @@ describe('/memory blocks', () => {
     ]
     for (const command of commands) {
       const preview = await handleMemoryCommandBlocks(command, deps)
-      const applied = await handleMemoryCommandBlocks(`${command} --apply`, deps)
+      const applied = await handleMemoryCommandBlocks(
+        `${command} --apply`,
+        deps,
+      )
       expect(preview.state).toBe('report')
       expect(applied.state).toBe('report')
       const previewCall = calls.at(-2)?.request as { mode?: string }
       const applyCall = calls.at(-1)?.request as { mode?: string }
       expect(previewCall.mode).toBe('preview')
       expect(applyCall.mode).toBe('apply')
-      if (preview.state === 'report') expect(preview.insertCommands?.[0]?.command).toContain('--apply')
+      if (preview.state === 'report')
+        expect(preview.insertCommands?.[0]?.command).toContain('--apply')
     }
   })
 
   test('failed rejected and busy mutators render error tone with sanitized retryability', async () => {
     const { deps } = createDeps({ memory: makeMemory() })
     const outcomes = [
-      { outcome: 'failed', error: { message: '/secret/store.sqlite locked', retryable: true } },
-      { outcome: 'rejected', error: { message: 'Request was rejected.', retryable: false } },
-      { outcome: 'busy', error: { message: 'Try again shortly.', retryable: true } },
+      {
+        outcome: 'failed',
+        error: { message: '/secret/store.sqlite locked', retryable: true },
+      },
+      {
+        outcome: 'rejected',
+        error: { message: 'Request was rejected.', retryable: false },
+      },
+      {
+        outcome: 'busy',
+        error: { message: 'Try again shortly.', retryable: true },
+      },
     ]
     let index = 0
     const observationEvent = MemoryEventEnvelopeSchema.parse({
@@ -463,18 +531,24 @@ describe('/memory blocks', () => {
         },
       },
     })
-    deps.getMemoryV2 = async () => ({
-      status: 'available', requestedAuthority: 'shadow-v2', effectiveAuthority: 'shadow-v2', projectId: 'project-1',
-      operator: { correct: async () => outcomes[index++]! },
-      repository: {
-        export: async () => ({
-          outcome: 'page',
-          events: [observationEvent],
-          nextAfterEventId: null,
-        }),
-      },
-      release: async () => {},
-    }) as unknown as Awaited<ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>>
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: { correct: async () => outcomes[index++]! },
+        repository: {
+          export: async () => ({
+            outcome: 'page',
+            events: [observationEvent],
+            nextAfterEventId: null,
+          }),
+        },
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
 
     for (const command of ['pin one', 'pin one', 'pin one']) {
       const block = await handleMemoryCommandBlocks(command, deps)
@@ -486,42 +560,392 @@ describe('/memory blocks', () => {
     }
   })
 
+  test('audit-migration blocks every non-valid inspection before provider acquisition', async () => {
+    const cases = [
+      [{ status: 'absent' as const }, 'Outcome: absent', 'secondary'],
+      [
+        { status: 'invalid' as const, reason: 'malformed-json' as const },
+        'malformed JSON',
+        'warning',
+      ],
+      [
+        { status: 'invalid' as const, reason: 'schema-invalid' as const },
+        'schema validation',
+        'warning',
+      ],
+      [
+        { status: 'invalid' as const, reason: 'checksum-mismatch' as const },
+        'checksum validation',
+        'warning',
+      ],
+      [
+        { status: 'unreadable' as const, reason: 'read-failed' as const },
+        'could not be read safely',
+        'error',
+      ],
+    ] as const
+    for (const [inspection, expected, tone] of cases) {
+      const { deps } = createDeps({ memory: makeMemory() })
+      let providers = 0
+      let audits = 0
+      deps.inspectPersistedTaskMemoryV1 = async () => inspection
+      deps.getMemoryV2 = async () => {
+        providers++
+        throw new Error('/private/provider')
+      }
+      deps.auditTaskMemoryV1Migration = async () => {
+        audits++
+        return { outcome: 'no-record' }
+      }
+      const block = await handleMemoryCommandBlocks('audit-migration', deps)
+      if (block.state !== 'report') throw new Error('expected report')
+      expect(block.tone).toBe(tone)
+      expect(block.lines.join('\n')).toContain(expected)
+      expect(block.lines.join('\n')).not.toMatch(/private|provider/i)
+      expect(providers).toBe(0)
+      expect(audits).toBe(0)
+    }
+  })
+
+  test('audit-migration sanitizes an inspector throw without opening V2', async () => {
+    const { deps } = createDeps({ memory: makeMemory() })
+    let providers = 0
+    deps.inspectPersistedTaskMemoryV1 = async () => {
+      throw new Error('/secret/v1.json contents')
+    }
+    deps.getMemoryV2 = async () => {
+      providers++
+      throw new Error('unused')
+    }
+    const block = await handleMemoryCommandBlocks('audit-migration', deps)
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('error')
+    expect(block.lines.join('\n')).not.toMatch(/secret|v1\.json|contents/i)
+    expect(providers).toBe(0)
+  })
+
+  test('audit-migration preserves valid unavailable authority behavior without audit or release', async () => {
+    const memory = makeMemory()
+    const { deps } = createDeps({ memory })
+    let audits = 0
+    let releases = 0
+    deps.getMemoryV2 = async () => ({
+      status: 'unavailable',
+      requestedAuthority: 'sqlite-v2-opt-in',
+      effectiveAuthority: 'sqlite-v2-opt-in',
+      degradation:
+        'Memory V2 storage is unavailable; V1 remains disabled under opt-in authority.',
+      retryable: true,
+    })
+    deps.auditTaskMemoryV1Migration = async () => {
+      audits++
+      return { outcome: 'no-record' }
+    }
+    const block = await handleMemoryCommandBlocks('audit-migration', deps)
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.lines.join('\n')).toContain(
+      'Requested authority: sqlite-v2-opt-in; active authority: sqlite-v2-opt-in',
+    )
+    expect(audits).toBe(0)
+    expect(releases).toBe(0)
+  })
+
+  test('audit-migration renders an exact lossless SDK outcome with success tone', async () => {
+    const memory = makeMemory()
+    const { deps, calls } = createDeps({ memory })
+    const repository = {
+      append: async () => {
+        throw new Error('must not append')
+      },
+    }
+    let request: unknown
+    let releases = 0
+    deps.auditTaskMemoryV1Migration = async (value) => {
+      request = value
+      return {
+        outcome: 'exact',
+        revision: 3,
+        checksum: 'full-source-checksum',
+        identity: 'v1:3:id',
+        markerEventId: 'marker',
+        repositoryLastEventId: 'tail',
+        importedTaskId: 'task',
+        importedObservationIds: ['observation-1', 'observation-2'],
+        omittedFields: 0,
+        warnings: [],
+      } as unknown as Awaited<
+        ReturnType<MemoryCommandDeps['auditTaskMemoryV1Migration']>
+      >
+    }
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'sqlite-v2-opt-in',
+        effectiveAuthority: 'sqlite-v2-opt-in',
+        projectId: 'project-1',
+        operator: {},
+        repository,
+        release: async () => {
+          releases++
+        },
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+
+    const block = await handleMemoryCommandBlocks('audit-migration', deps)
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('success')
+    expect(block.lines.join('\n')).toContain('Outcome: exact')
+    expect(block.lines.join('\n')).toContain('Source revision: 3')
+    expect(block.lines.join('\n')).toContain(
+      'Source checksum: full-source-checksum',
+    )
+    expect(block.lines.join('\n')).toContain(
+      'Marker verification and full deterministic source-derived task/observation body equality: exact',
+    )
+    expect(block.lines.join('\n')).toContain('Imported observations: 2')
+    expect(block.lines.join('\n')).toContain('Omitted fields: 0')
+    expect(block.lines.join('\n')).toContain('Truncated fields: 0')
+    expect(block.lines.join('\n')).toContain('Warnings: 0 (none)')
+    expect(block.lines.join('\n')).toContain('Lossless migration evidence: yes')
+    expect(block.lines.join('\n')).toContain('No writes were performed')
+    expect(request).toEqual({ memory, projectId: 'project-1', repository })
+    expect(calls.prune).toBe(0)
+    expect(releases).toBe(1)
+  })
+
+  test('audit-migration warns when an exact outcome documents loss', async () => {
+    const { deps } = createDeps({ memory: makeMemory() })
+    deps.auditTaskMemoryV1Migration = async () =>
+      ({
+        outcome: 'exact',
+        revision: 3,
+        checksum: 'checksum',
+        identity: 'v1:3:id',
+        markerEventId: 'marker',
+        repositoryLastEventId: 'tail',
+        importedTaskId: 'task',
+        importedObservationIds: [],
+        omittedFields: 2,
+        truncatedFields: 1,
+        warnings: ['text-truncated', 'goal-excluded'],
+      }) as unknown as Awaited<
+        ReturnType<MemoryCommandDeps['auditTaskMemoryV1Migration']>
+      >
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: {},
+        repository: {},
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+
+    const block = await handleMemoryCommandBlocks('audit-migration', deps)
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('warning')
+    expect(block.lines.join('\n')).toContain('Omitted fields: 2')
+    expect(block.lines.join('\n')).toContain('Truncated fields: 1')
+    expect(block.lines.join('\n')).toContain(
+      'Warnings: 2 (text-truncated, goal-excluded)',
+    )
+    expect(block.lines.join('\n')).toContain('Lossless migration evidence: no')
+  })
+
+  test('audit-migration renders every non-exact outcome distinctly and sanitizes failures', async () => {
+    const { deps } = createDeps({ memory: makeMemory() })
+    const outcomes = [
+      { outcome: 'no-record' },
+      { outcome: 'not-migrated', revision: 3, checksum: 'checksum' },
+      {
+        outcome: 'incomplete',
+        reason: 'reservation-only',
+        revision: 3,
+        checksum: 'checksum',
+      },
+      {
+        outcome: 'mismatch',
+        reason: 'imported-body-mismatch',
+        revision: 3,
+        checksum: 'checksum',
+      },
+      { outcome: 'rejected', reason: 'repository-rejected' },
+      { outcome: 'failed', reason: 'repository-failed' },
+    ] as const
+    let index = 0
+    let releases = 0
+    deps.auditTaskMemoryV1Migration = async () =>
+      outcomes[index++] as unknown as Awaited<
+        ReturnType<MemoryCommandDeps['auditTaskMemoryV1Migration']>
+      >
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: {},
+        repository: {},
+        release: async () => {
+          releases++
+        },
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+
+    const rendered = []
+    for (let i = 0; i < outcomes.length; i++) {
+      const block = await handleMemoryCommandBlocks('audit-migration', deps)
+      if (block.state !== 'report') throw new Error('expected report')
+      rendered.push(block.lines.join('\n'))
+    }
+    expect(rendered[0]).toContain('Outcome: no-record')
+    expect(rendered[0]).toContain('No currently loaded V1')
+    expect(rendered[1]).toContain('Outcome: not-migrated')
+    expect(rendered[2]).toContain('Outcome: incomplete')
+    expect(rendered[3]).toContain('Outcome: mismatch')
+    expect(rendered[4]).toContain('Outcome: rejected')
+    expect(rendered[5]).toContain('Outcome: failed')
+    expect(rendered.join('\n')).not.toMatch(/\.sqlite|SELECT|\/secret/i)
+    expect(releases).toBe(outcomes.length)
+  })
+
+  test('audit-migration releases the provider lease once when the injected audit throws', async () => {
+    const { deps } = createDeps({ memory: makeMemory() })
+    let releases = 0
+    deps.auditTaskMemoryV1Migration = async () => {
+      throw new Error('/secret/store.sqlite SELECT token')
+    }
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: {},
+        repository: {},
+        release: async () => {
+          releases++
+        },
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+
+    const block = await handleMemoryCommandBlocks('audit-migration', deps)
+
+    expect(releases).toBe(1)
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('error')
+    expect(block.lines.join('\n')).not.toMatch(/secret|sqlite|SELECT|token/i)
+  })
+
   test('query and diagnose render bounded generic reports', async () => {
     const { deps } = createDeps({ memory: makeMemory() })
-    deps.getMemoryV2 = async () => ({
-      status: 'available', projectId: 'project-1', operator: {},
-      repository: {
-        query: async () => ({ outcome: 'result', result: { matchedTasks: [], verifiedKnowledge: [], reusableDiscovery: [], rereadRequired: [], historicalContext: [], degradation: { state: 'none' } } }),
-        health: async () => ({ status: 'healthy', authority: { kind: 'authoritative' }, backend: { backendId: 'bun-sqlite-memory-v2', capabilities: ['query'] }, issues: [] }),
-        kernelHealth: async () => ({ status: 'healthy', schemaVersion: 2, projectionCursor: 0 }),
-        getCapabilities: async () => ({ status: 'ok', capabilities: [{ name: 'query', available: true }] }),
-        export: async () => ({ outcome: 'page', events: [], nextAfterEventId: null }),
-      },
-      release: async () => {},
-    }) as unknown as Awaited<ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>>
-    const query = await handleMemoryCommandBlocks('query deterministic lookup', deps)
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        projectId: 'project-1',
+        operator: {},
+        repository: {
+          query: async () => ({
+            outcome: 'result',
+            result: {
+              matchedTasks: [],
+              verifiedKnowledge: [],
+              reusableDiscovery: [],
+              rereadRequired: [],
+              historicalContext: [],
+              degradation: { state: 'none' },
+            },
+          }),
+          health: async () => ({
+            status: 'healthy',
+            authority: { kind: 'authoritative' },
+            backend: {
+              backendId: 'bun-sqlite-memory-v2',
+              capabilities: ['query'],
+            },
+            issues: [],
+          }),
+          kernelHealth: async () => ({
+            status: 'healthy',
+            schemaVersion: 2,
+            projectionCursor: 0,
+          }),
+          getCapabilities: async () => ({
+            status: 'ok',
+            capabilities: [{ name: 'query', available: true }],
+          }),
+          export: async () => ({
+            outcome: 'page',
+            events: [],
+            nextAfterEventId: null,
+          }),
+        },
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+    const query = await handleMemoryCommandBlocks(
+      'query deterministic lookup',
+      deps,
+    )
     const diagnose = await handleMemoryCommandBlocks('diagnose', deps)
     expect(query.state).toBe('report')
     expect(diagnose.state).toBe('report')
     if (query.state === 'report') expect(query.lines[0]).toContain('Tasks: 0')
-    if (diagnose.state === 'report') expect(diagnose.lines.join('\n')).toContain('Kernel: healthy')
+    if (diagnose.state === 'report') {
+      expect(diagnose.lines.join('\n')).toContain('Kernel: healthy')
+      expect(diagnose.lines.join('\n')).toContain('Release N')
+      expect(diagnose.lines.join('\n')).toContain(
+        'json-v1 and shadow-v2 remain supported but are deprecated',
+      )
+    }
   })
 
   test('inspect and diagnose use project-scoped canonical export inventories', async () => {
     const { deps } = createDeps({ memory: makeMemory() })
     let exports = 0
     let lowLevelLists = 0
-    deps.getMemoryV2 = async () => ({
-      status: 'available', requestedAuthority: 'shadow-v2', effectiveAuthority: 'shadow-v2', projectId: 'project-1', operator: {},
-      repository: {
-        export: async () => { exports++; return { outcome: 'page', events: [], nextAfterEventId: null } },
-        listEvents: async () => { lowLevelLists++; return { status: 'ok', events: [] } },
-        health: async () => ({ status: 'healthy', authority: { kind: 'authoritative' }, backend: { backendId: 'bun-sqlite-memory-v2', capabilities: [] }, issues: [] }),
-        kernelHealth: async () => ({ status: 'healthy', schemaVersion: 2, projectionCursor: 0 }),
-        getCapabilities: async () => ({ status: 'ok', capabilities: [] }),
-      },
-      release: async () => {},
-    }) as unknown as Awaited<ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>>
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: {},
+        repository: {
+          export: async () => {
+            exports++
+            return { outcome: 'page', events: [], nextAfterEventId: null }
+          },
+          listEvents: async () => {
+            lowLevelLists++
+            return { status: 'ok', events: [] }
+          },
+          health: async () => ({
+            status: 'healthy',
+            authority: { kind: 'authoritative' },
+            backend: { backendId: 'bun-sqlite-memory-v2', capabilities: [] },
+            issues: [],
+          }),
+          kernelHealth: async () => ({
+            status: 'healthy',
+            schemaVersion: 2,
+            projectionCursor: 0,
+          }),
+          getCapabilities: async () => ({ status: 'ok', capabilities: [] }),
+        },
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
     await handleMemoryCommandBlocks('inspect', deps)
     await handleMemoryCommandBlocks('diagnose', deps)
     expect(exports).toBe(2)
@@ -535,12 +959,28 @@ describe('/memory blocks', () => {
     symlinkSync(outside, join(root, '.openbuff', 'memory'))
     const { deps } = createDeps({ memory: makeMemory() })
     deps.getRootDir = () => root
-    deps.getMemoryV2 = async () => ({
-      status: 'available', requestedAuthority: 'shadow-v2', effectiveAuthority: 'shadow-v2', projectId: 'project-1',
-      operator: { exportManifest: async () => ({ outcome: 'exported', manifest: { checksum: 'sha256:1234567890abcdef', canonicalEventCount: 0, events: [], warnings: [] } }) },
-      repository: {},
-      release: async () => {},
-    }) as unknown as Awaited<ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>>
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: {
+          exportManifest: async () => ({
+            outcome: 'exported',
+            manifest: {
+              checksum: 'sha256:1234567890abcdef',
+              canonicalEventCount: 0,
+              events: [],
+              warnings: [],
+            },
+          }),
+        },
+        repository: {},
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
     const block = await handleMemoryCommandBlocks('export', deps)
     if (block.state !== 'report') throw new Error('expected report')
     expect(block.tone).toBe('error')
@@ -560,13 +1000,36 @@ describe('/memory blocks', () => {
     const { deps } = createDeps({ memory: makeMemory() })
     deps.getRootDir = () => root
     let imports = 0
-    deps.getMemoryV2 = async () => ({
-      status: 'available', requestedAuthority: 'shadow-v2', effectiveAuthority: 'shadow-v2', projectId: 'project-1',
-      operator: { importManifest: async () => { imports++; return { outcome: 'imported' } } },
-      repository: { export: async () => ({ outcome: 'page', events: [{ eventId: 'existing' }], nextAfterEventId: null }) },
-      release: async () => {},
-    }) as unknown as Awaited<ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>>
-    for (const path of ['/absolute.json', '../escape.json', 'imports/link.json', 'imports/oversized.json', 'imports/malformed.json']) {
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: {
+          importManifest: async () => {
+            imports++
+            return { outcome: 'imported' }
+          },
+        },
+        repository: {
+          export: async () => ({
+            outcome: 'page',
+            events: [{ eventId: 'existing' }],
+            nextAfterEventId: null,
+          }),
+        },
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+    for (const path of [
+      '/absolute.json',
+      '../escape.json',
+      'imports/link.json',
+      'imports/oversized.json',
+      'imports/malformed.json',
+    ]) {
       const block = await handleMemoryCommandBlocks(`import ${path}`, deps)
       if (block.state !== 'report') throw new Error('expected report')
       expect(block.tone).toBe('error')
@@ -577,21 +1040,54 @@ describe('/memory blocks', () => {
   test('available command leases release exactly once on success and throw', async () => {
     const { deps } = createDeps({ memory: makeMemory() })
     let releases = 0
-    deps.getMemoryV2 = async () => ({
-      status: 'available', requestedAuthority: 'shadow-v2', effectiveAuthority: 'shadow-v2', projectId: 'project-1',
-      operator: {},
-      repository: {
-        query: async () => ({ outcome: 'result', result: { matchedTasks: [], verifiedKnowledge: [], reusableDiscovery: [], rereadRequired: [], historicalContext: [], degradation: { state: 'none' } } }),
-      },
-      release: async () => { releases++ },
-    }) as unknown as Awaited<ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>>
-    expect((await handleMemoryCommandBlocks('query safe', deps)).state).toBe('report')
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: {},
+        repository: {
+          query: async () => ({
+            outcome: 'result',
+            result: {
+              matchedTasks: [],
+              verifiedKnowledge: [],
+              reusableDiscovery: [],
+              rereadRequired: [],
+              historicalContext: [],
+              degradation: { state: 'none' },
+            },
+          }),
+        },
+        release: async () => {
+          releases++
+        },
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+    expect((await handleMemoryCommandBlocks('query safe', deps)).state).toBe(
+      'report',
+    )
     expect(releases).toBe(1)
-    deps.getMemoryV2 = async () => ({
-      status: 'available', requestedAuthority: 'shadow-v2', effectiveAuthority: 'shadow-v2', projectId: 'project-1', operator: {},
-      repository: { query: async () => { throw new Error('/secret/store.sqlite SELECT token') } },
-      release: async () => { releases++ },
-    }) as unknown as Awaited<ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>>
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: {},
+        repository: {
+          query: async () => {
+            throw new Error('/secret/store.sqlite SELECT token')
+          },
+        },
+        release: async () => {
+          releases++
+        },
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
     const failed = await handleMemoryCommandBlocks('query safe', deps)
     expect(releases).toBe(2)
     if (failed.state !== 'report') throw new Error('expected report')
@@ -601,21 +1097,37 @@ describe('/memory blocks', () => {
   test('pagination rejects repeated and empty cursors without leaking details', async () => {
     const { deps } = createDeps({ memory: makeMemory() })
     let calls = 0
-    deps.getMemoryV2 = async () => ({
-      status: 'available', requestedAuthority: 'shadow-v2', effectiveAuthority: 'shadow-v2', projectId: 'project-1', operator: {},
-      repository: { export: async () => { calls++; return { outcome: 'page', events: [], nextAfterEventId: 'same' } } },
-      release: async () => {},
-    }) as unknown as Awaited<ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>>
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: {},
+        repository: {
+          export: async () => {
+            calls++
+            return { outcome: 'page', events: [], nextAfterEventId: 'same' }
+          },
+        },
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
     const block = await handleMemoryCommandBlocks('inspect target', deps)
     if (block.state !== 'report') throw new Error('expected report')
     expect(block.tone).toBe('error')
     expect(calls).toBe(1)
-    expect(block.lines.join('\n')).toContain('operation could not be completed safely')
+    expect(block.lines.join('\n')).toContain(
+      'operation could not be completed safely',
+    )
   })
 
   test('sanitized boundary hides arbitrary provider failures', async () => {
     const { deps } = createDeps({ memory: makeMemory() })
-    deps.getMemoryV2 = async () => { throw new Error('/home/private/store.sqlite SELECT api_key=secret') }
+    deps.getMemoryV2 = async () => {
+      throw new Error('/home/private/store.sqlite SELECT api_key=secret')
+    }
     const block = await handleMemoryCommandBlocks('diagnose', deps)
     if (block.state !== 'report') throw new Error('expected report')
     const output = block.lines.join('\n')
@@ -985,9 +1497,32 @@ describe('/memory blocks', () => {
 
     expect(block.type).toBe('memory')
     expect(block.state).toBe('report')
-    if (block.state === 'report') expect(block.lines.join('\n')).toContain('Usage: /memory [status|authority|diagnose|query <text>')
+    if (block.state === 'report')
+      expect(block.lines.join('\n')).toContain(
+        'Usage: /memory [status|authority|diagnose|audit-migration|query <text>',
+      )
     expect(calls.prune).toBe(0)
     expect(calls.moves).toBe(0)
+  })
+
+  test('V2 status lines include Release N authority deprecation guidance', async () => {
+    const memory = makeMemory()
+    const { deps } = createDeps({ memory, reconciled: memory })
+    deps.getMemoryV2 = async () => ({
+      status: 'unavailable',
+      requestedAuthority: 'shadow-v2',
+      effectiveAuthority: 'json-v1',
+      degradation: 'V1 JSON memory is authoritative; SQLite was not opened.',
+      retryable: false,
+    })
+
+    const output = await handleMemoryCommand('status', deps)
+
+    expect(output).toContain('Release N')
+    expect(output).toContain(
+      'json-v1 and shadow-v2 remain supported but are deprecated',
+    )
+    expect(output).toContain('sqlite-v2-opt-in is the default and replacement')
   })
 
   test('status forwards journal moves so evidence rebinds', async () => {

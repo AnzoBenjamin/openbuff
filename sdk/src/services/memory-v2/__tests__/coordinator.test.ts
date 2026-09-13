@@ -50,7 +50,9 @@ class RepositoryStub implements MemoryRepositoryV2 {
   queryDegradation: MemoryRetrievalResult['degradation'] = { state: 'none' }
   appendGate: ((requestIndex: number) => Promise<void>) | undefined
 
-  async append(request: Parameters<MemoryRepositoryV2['append']>[0]): Promise<MemoryAppendOutcome> {
+  async append(
+    request: Parameters<MemoryRepositoryV2['append']>[0],
+  ): Promise<MemoryAppendOutcome> {
     const parsed = MemoryAppendRequestSchema.parse(request)
     this.inFlight++
     this.maxInFlight = Math.max(this.maxInFlight, this.inFlight)
@@ -89,13 +91,17 @@ class RepositoryStub implements MemoryRepositoryV2 {
     request: MemoryRetrievalRequest,
   ): Promise<ReturnType<typeof MemoryQueryOutcomeSchema.parse>> {
     this.queryRequests.push(request)
-    if (this.queryFailure === 'throw') throw new Error('sensitive backend detail')
+    if (this.queryFailure === 'throw')
+      throw new Error('sensitive backend detail')
     if (this.queryFailure === 'invalid') return { malformed: 'result' } as never
     if (this.queryFailure === 'rejected' || this.queryFailure === 'failed') {
       return MemoryQueryOutcomeSchema.parse({
         outcome: this.queryFailure,
         error: {
-          code: this.queryFailure === 'rejected' ? 'invalid-request' : 'unavailable',
+          code:
+            this.queryFailure === 'rejected'
+              ? 'invalid-request'
+              : 'unavailable',
           message: 'sensitive backend detail',
           retryable: this.queryFailure === 'failed',
         },
@@ -135,17 +141,19 @@ class RepositoryStub implements MemoryRepositoryV2 {
     if (scripted !== undefined) return scripted as MemoryExportOutcome
     type ExportPage = Extract<MemoryExportOutcome, { outcome: 'page' }>
     const events = this.exportTailEventId
-      ? ([{
-          schemaVersion: 2,
-          eventSchemaVersion: 1,
-          eventType: 'session.started',
-          eventId: this.exportTailEventId,
-          projectId,
-          sessionId: 'session:export',
-          occurredAt: generatedAt,
-          sequence: 1,
-          payload: { payloadSchemaVersion: 1, startedAt: generatedAt },
-        }] as unknown as ExportPage['events'])
+      ? ([
+          {
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+            eventType: 'session.started',
+            eventId: this.exportTailEventId,
+            projectId,
+            sessionId: 'session:export',
+            occurredAt: generatedAt,
+            sequence: 1,
+            payload: { payloadSchemaVersion: 1, startedAt: generatedAt },
+          },
+        ] as unknown as ExportPage['events'])
       : []
     return { outcome: 'page' as const, events, nextAfterEventId: null }
   }
@@ -190,7 +198,9 @@ const taskMemory = (requirements: string[] = ['sensitive requirement']) => {
     ...draft,
     revision,
     updatedAt,
-    checksum: stableHash(JSON.stringify({ revision, updatedAt, memory: draft })),
+    checksum: stableHash(
+      JSON.stringify({ revision, updatedAt, memory: draft }),
+    ),
   }
 }
 
@@ -201,24 +211,25 @@ const migrationOutcome = (params: {
   importedObservationCount: number
   sourceItemCounts?: unknown
   truncatedFields?: unknown
-}): V1MigrationOutcome => ({
-  outcome: 'imported',
-  revision: 7,
-  checksum: 'checksum:parity',
-  identity: 'identity:parity',
-  importedObservationIds: Array.from(
-    { length: params.importedObservationCount },
-    (_, index) => `observation:parity-${index}`,
-  ),
-  omittedFields: [],
-  warnings: [],
-  ...(params.sourceItemCounts !== undefined
-    ? { sourceItemCounts: params.sourceItemCounts }
-    : {}),
-  ...(params.truncatedFields !== undefined
-    ? { truncatedFields: params.truncatedFields }
-    : {}),
-} as unknown as V1MigrationOutcome)
+}): V1MigrationOutcome =>
+  ({
+    outcome: 'imported',
+    revision: 7,
+    checksum: 'checksum:parity',
+    identity: 'identity:parity',
+    importedObservationIds: Array.from(
+      { length: params.importedObservationCount },
+      (_, index) => `observation:parity-${index}`,
+    ),
+    omittedFields: [],
+    warnings: [],
+    ...(params.sourceItemCounts !== undefined
+      ? { sourceItemCounts: params.sourceItemCounts }
+      : {}),
+    ...(params.truncatedFields !== undefined
+      ? { truncatedFields: params.truncatedFields }
+      : {}),
+  }) as unknown as V1MigrationOutcome
 
 const emptyRetrievalResult = (): MemoryRetrievalResult => {
   const outcome = MemoryQueryOutcomeSchema.parse({
@@ -243,7 +254,10 @@ const emptyRetrievalResult = (): MemoryRetrievalResult => {
 
 describe('Memory V2 event factory', () => {
   test('derives stable, source-isolated IDs from trusted identity fields', () => {
-    const sessionId = deriveMemorySessionId({ projectId, userInputId: 'input:1' })
+    const sessionId = deriveMemorySessionId({
+      projectId,
+      userInputId: 'input:1',
+    })
     const input = {
       projectId,
       sessionId,
@@ -263,11 +277,22 @@ describe('MemoryV2Coordinator lifecycle', () => {
   test('explicit authority wins over legacy mode and json-v1 performs no V2 operations', async () => {
     const repository = new RepositoryStub()
     const state = getInitialAgentState()
-    const coordinator = new MemoryV2Coordinator({ ...config(repository, 'inject'), authority: 'json-v1' })
-    await coordinator.prepareTurn({ agentState: state, trustedUserInputId: 'input:json-v1', query: 'none' })
+    const coordinator = new MemoryV2Coordinator({
+      ...config(repository, 'inject'),
+      authority: 'json-v1',
+    })
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:json-v1',
+      query: 'none',
+    })
     expect(repository.requests).toHaveLength(0)
     expect(repository.queryRequests).toHaveLength(0)
-    expect(state.memoryAuthority).toMatchObject({ requested: 'json-v1', active: 'json-v1', fallbackOccurred: false })
+    expect(state.memoryAuthority).toMatchObject({
+      requested: 'json-v1',
+      active: 'json-v1',
+      fallbackOccurred: false,
+    })
   })
 
   test('invalid runtime authority safely selects json-v1 and performs no V2 work', async () => {
@@ -321,7 +346,11 @@ describe('MemoryV2Coordinator lifecycle', () => {
   test('isolates fresh tasks and reuses an interrupted persisted turn', async () => {
     const repository = new RepositoryStub()
     const state = getInitialAgentState()
-    const coordinator = new MemoryV2Coordinator(config(repository), undefined, () => generatedAt)
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
     await coordinator.prepareTurn({
       agentState: state,
       trustedUserInputId: 'input:1',
@@ -329,7 +358,11 @@ describe('MemoryV2Coordinator lifecycle', () => {
     })
     const first = structuredClone(state.memoryV2!)
 
-    const fresh = new MemoryV2Coordinator(config(repository), undefined, () => generatedAt)
+    const fresh = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
     await fresh.prepareTurn({
       agentState: state,
       trustedUserInputId: 'input:2',
@@ -341,7 +374,11 @@ describe('MemoryV2Coordinator lifecycle', () => {
     state.memoryV2 = first
     const beforeResume = allEvents(repository).length
     const queriesBeforeResume = repository.queryRequests.length
-    const resumed = new MemoryV2Coordinator(config(repository), undefined, () => '2027-01-01T00:00:00.000Z')
+    const resumed = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => '2027-01-01T00:00:00.000Z',
+    )
     await resumed.prepareTurn({
       agentState: state,
       trustedUserInputId: 'different-runtime-input',
@@ -367,7 +404,11 @@ describe('MemoryV2Coordinator lifecycle', () => {
       revision: 9,
       snapshotId: 'snapshot:9',
     }
-    const inject = new MemoryV2Coordinator(config(repository, 'inject'), undefined, () => generatedAt)
+    const inject = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
     await inject.prepareTurn({
       agentState: state,
       trustedUserInputId: 'input:inject',
@@ -387,7 +428,11 @@ describe('MemoryV2Coordinator lifecycle', () => {
     })
     expect(state.memoryAuthority?.active).toBe('sqlite-v2-opt-in')
 
-    const shadow = new MemoryV2Coordinator(config(repository, 'shadow'), undefined, () => generatedAt)
+    const shadow = new MemoryV2Coordinator(
+      config(repository, 'shadow'),
+      undefined,
+      () => generatedAt,
+    )
     await shadow.prepareTurn({
       agentState: state,
       trustedUserInputId: 'input:shadow',
@@ -396,7 +441,11 @@ describe('MemoryV2Coordinator lifecycle', () => {
     expect(state.memoryV2Context).toBeUndefined()
     expect(state.memoryAuthority?.active).toBe('json-v1')
 
-    const successful = new MemoryV2Coordinator(config(repository, 'inject'), undefined, () => generatedAt)
+    const successful = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
     await successful.prepareTurn({
       agentState: state,
       trustedUserInputId: 'input:successful',
@@ -404,7 +453,11 @@ describe('MemoryV2Coordinator lifecycle', () => {
     })
     expect(state.memoryV2Context).toBeDefined()
     repository.queryFailure = 'failed'
-    const failed = new MemoryV2Coordinator(config(repository, 'inject'), undefined, () => generatedAt)
+    const failed = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
     await failed.prepareTurn({
       agentState: state,
       trustedUserInputId: 'input:failed',
@@ -424,35 +477,48 @@ describe('MemoryV2Coordinator lifecycle', () => {
     ['failed', 'query-failed'],
     ['throw', 'query-threw'],
     ['invalid', 'query-invalid-result'],
-  ] as const)('bounds %s query failures and keeps opt-in fail-closed', async (failure, reason) => {
-    const repository = new RepositoryStub()
-    repository.queryFailure = failure
-    const state = getInitialAgentState()
-    const coordinator = new MemoryV2Coordinator(config(repository, 'inject'), undefined, () => generatedAt)
+  ] as const)(
+    'bounds %s query failures and keeps opt-in fail-closed',
+    async (failure, reason) => {
+      const repository = new RepositoryStub()
+      repository.queryFailure = failure
+      const state = getInitialAgentState()
+      const coordinator = new MemoryV2Coordinator(
+        config(repository, 'inject'),
+        undefined,
+        () => generatedAt,
+      )
 
-    await expect(
-      coordinator.prepareTurn({
-        agentState: state,
-        trustedUserInputId: `input:${failure}`,
-        query: 'sensitive query text',
-      }),
-    ).resolves.toBeUndefined()
+      await expect(
+        coordinator.prepareTurn({
+          agentState: state,
+          trustedUserInputId: `input:${failure}`,
+          query: 'sensitive query text',
+        }),
+      ).resolves.toBeUndefined()
 
-    expect(state.memoryV2Context).toBeUndefined()
-    expect(state.memoryAuthority).toMatchObject({
-      requested: 'sqlite-v2-opt-in',
-      active: 'sqlite-v2-opt-in',
-      fallbackOccurred: false,
-      reason,
-    })
-    expect(JSON.stringify(state.memoryAuthority)).not.toContain('sensitive backend detail')
-  })
+      expect(state.memoryV2Context).toBeUndefined()
+      expect(state.memoryAuthority).toMatchObject({
+        requested: 'sqlite-v2-opt-in',
+        active: 'sqlite-v2-opt-in',
+        fallbackOccurred: false,
+        reason,
+      })
+      expect(JSON.stringify(state.memoryAuthority)).not.toContain(
+        'sensitive backend detail',
+      )
+    },
+  )
 
   test('rejects a mismatched query project and keeps opt-in fail-closed', async () => {
     const repository = new RepositoryStub()
     repository.queryProjectId = ProjectIdSchema.parse('project:other')
     const state = getInitialAgentState()
-    const coordinator = new MemoryV2Coordinator(config(repository, 'inject'), undefined, () => generatedAt)
+    const coordinator = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
 
     await coordinator.prepareTurn({
       agentState: state,
@@ -473,14 +539,20 @@ describe('MemoryV2Coordinator lifecycle', () => {
     const repository = new RepositoryStub()
     repository.queryDegradation = {
       state: 'degraded',
-      reasons: [{
-        code: 'resource-budget',
-        detail: 'The bounded scan stopped at its payload budget.',
-        retryable: true,
-      }],
+      reasons: [
+        {
+          code: 'resource-budget',
+          detail: 'The bounded scan stopped at its payload budget.',
+          retryable: true,
+        },
+      ],
     }
     const state = getInitialAgentState()
-    const coordinator = new MemoryV2Coordinator(config(repository, 'inject'), undefined, () => generatedAt)
+    const coordinator = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
 
     await coordinator.prepareTurn({
       agentState: state,
@@ -503,7 +575,11 @@ describe('MemoryV2Coordinator lifecycle', () => {
       const repository = new RepositoryStub()
       repository.queryFailure = failure
       const state = getInitialAgentState()
-      const coordinator = new MemoryV2Coordinator(config(repository, 'shadow'), undefined, () => generatedAt)
+      const coordinator = new MemoryV2Coordinator(
+        config(repository, 'shadow'),
+        undefined,
+        () => generatedAt,
+      )
       await expect(
         coordinator.prepareTurn({
           agentState: state,
@@ -520,9 +596,21 @@ describe('MemoryV2Coordinator lifecycle', () => {
   )
 
   test.each([
-    { classification: 'match', sourceItemCounts: { requirements: 1, evidence: 1 }, imported: 2 },
-    { classification: 'v1-ahead', sourceItemCounts: { requirements: 2, evidence: 1 }, imported: 2 },
-    { classification: 'v2-ahead', sourceItemCounts: { requirements: 1 }, imported: 2 },
+    {
+      classification: 'match',
+      sourceItemCounts: { requirements: 1, evidence: 1 },
+      imported: 2,
+    },
+    {
+      classification: 'v1-ahead',
+      sourceItemCounts: { requirements: 2, evidence: 1 },
+      imported: 2,
+    },
+    {
+      classification: 'v2-ahead',
+      sourceItemCounts: { requirements: 1 },
+      imported: 2,
+    },
     { classification: 'unavailable', sourceItemCounts: undefined, imported: 2 },
   ] as const)(
     'computes $classification parity from migration source item counts',
@@ -549,26 +637,42 @@ describe('MemoryV2Coordinator lifecycle', () => {
   )
 
   test('extracts summed source counts and one direct safe truncated-field count', () => {
-    expect(extractV1MigrationExtras(migrationOutcome({
-      importedObservationCount: 0,
-      sourceItemCounts: { requirements: 2, evidence: [1, 2] },
-      truncatedFields: 4,
-    }))).toMatchObject({ sourceItemCount: 5, truncatedFields: 4 })
+    expect(
+      extractV1MigrationExtras(
+        migrationOutcome({
+          importedObservationCount: 0,
+          sourceItemCounts: { requirements: 2, evidence: [1, 2] },
+          truncatedFields: 4,
+        }),
+      ),
+    ).toMatchObject({ sourceItemCount: 5, truncatedFields: 4 })
 
-    expect(extractV1MigrationExtras(migrationOutcome({
-      importedObservationCount: 0,
-      truncatedFields: [4],
-    })).truncatedFields).toBeUndefined()
-    expect(extractV1MigrationExtras(migrationOutcome({
-      importedObservationCount: 0,
-      truncatedFields: Number.MAX_SAFE_INTEGER + 1,
-    })).truncatedFields).toBeUndefined()
+    expect(
+      extractV1MigrationExtras(
+        migrationOutcome({
+          importedObservationCount: 0,
+          truncatedFields: [4],
+        }),
+      ).truncatedFields,
+    ).toBeUndefined()
+    expect(
+      extractV1MigrationExtras(
+        migrationOutcome({
+          importedObservationCount: 0,
+          truncatedFields: Number.MAX_SAFE_INTEGER + 1,
+        }),
+      ).truncatedFields,
+    ).toBeUndefined()
   })
 
   test('rebases retryable append conflicts and retries the same deterministic batch at most twice', async () => {
     const repository = new RepositoryStub()
     const state = getInitialAgentState()
-    const coordinator = new MemoryV2Coordinator(config(repository), undefined, () => generatedAt)
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
     await coordinator.prepareTurn({
       agentState: state,
       trustedUserInputId: 'input:conflict-retry',
@@ -604,17 +708,27 @@ describe('MemoryV2Coordinator lifecycle', () => {
       kind: 'event',
       eventId: repository.exportTailEventId,
     })
-    expect(attempts.every((attempt) => attempt.expectedTail !== undefined)).toBe(true)
-    expect(attempts.every((attempt) => attempt.expectedLastEventId === undefined)).toBe(true)
+    expect(
+      attempts.every((attempt) => attempt.expectedTail !== undefined),
+    ).toBe(true)
+    expect(
+      attempts.every((attempt) => attempt.expectedLastEventId === undefined),
+    ).toBe(true)
     expect(attempts[1]!.events).toEqual(attempts[0]!.events)
     expect(attempts[2]!.events).toEqual(attempts[0]!.events)
-    expect(state.memoryV2!.lastEventId).toBe(attempts[2]!.events.at(-1)!.eventId)
+    expect(state.memoryV2!.lastEventId).toBe(
+      attempts[2]!.events.at(-1)!.eventId,
+    )
   })
 
   test('serializes concurrent captures in invocation order with exact cursor chaining through terminal append', async () => {
     const repository = new RepositoryStub()
     const state = getInitialAgentState()
-    const coordinator = new MemoryV2Coordinator(config(repository), undefined, () => generatedAt)
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
     await coordinator.prepareTurn({
       agentState: state,
       trustedUserInputId: 'input:gated',
@@ -631,12 +745,20 @@ describe('MemoryV2Coordinator lifecycle', () => {
     }
 
     const first = coordinator.recordToolObservation({
-      toolName: 'get_build_targets', callId: 'call:first', userInputId: 'input:gated',
-      input: { files: ['src/first.ts'] }, output: [{ type: 'json', value: { targets: ['first'] } }], native: true,
+      toolName: 'get_build_targets',
+      callId: 'call:first',
+      userInputId: 'input:gated',
+      input: { files: ['src/first.ts'] },
+      output: [{ type: 'json', value: { targets: ['first'] } }],
+      native: true,
     })
     const second = coordinator.recordToolObservation({
-      toolName: 'get_affected_tests', callId: 'call:second', userInputId: 'input:gated',
-      input: { files: ['src/second.ts'] }, output: [{ type: 'json', value: { tests: ['second.test.ts'] } }], native: true,
+      toolName: 'get_affected_tests',
+      callId: 'call:second',
+      userInputId: 'input:gated',
+      input: { files: ['src/second.ts'] },
+      output: [{ type: 'json', value: { tests: ['second.test.ts'] } }],
+      native: true,
     })
     const terminal = coordinator.finishTurn({
       agentState: state,
@@ -678,7 +800,11 @@ describe('MemoryV2Coordinator lifecycle', () => {
   test('serializes concurrent captures, advances cursors, and finishes once', async () => {
     const repository = new RepositoryStub()
     const state = getInitialAgentState()
-    const coordinator = new MemoryV2Coordinator(config(repository), undefined, () => generatedAt)
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
     await coordinator.prepareTurn({
       agentState: state,
       trustedUserInputId: 'input:1',
@@ -715,15 +841,29 @@ describe('MemoryV2Coordinator lifecycle', () => {
     expect(repository.maxInFlight).toBe(1)
     expect(allEvents(repository).length).toBe(count)
     expect(state.memoryV2!.turn.status).toBe('completed')
-    expect(state.memoryV2!.lastEventId).toBe(repository.requests.at(-1)!.events.at(-1)!.eventId)
-    expect(repository.requests.every((request) => request.expectedTail !== undefined)).toBe(true)
-    expect(repository.requests.every((request) => request.expectedLastEventId === undefined)).toBe(true)
+    expect(state.memoryV2!.lastEventId).toBe(
+      repository.requests.at(-1)!.events.at(-1)!.eventId,
+    )
+    expect(
+      repository.requests.every(
+        (request) => request.expectedTail !== undefined,
+      ),
+    ).toBe(true)
+    expect(
+      repository.requests.every(
+        (request) => request.expectedLastEventId === undefined,
+      ),
+    ).toBe(true)
   })
 
   test('parks a failed terminal append and later commits the unchanged decision', async () => {
     const repository = new RepositoryStub()
     const state = getInitialAgentState()
-    const coordinator = new MemoryV2Coordinator(config(repository), undefined, () => generatedAt)
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
     await coordinator.prepareTurn({
       agentState: state,
       trustedUserInputId: 'input:terminal-retry',
@@ -785,28 +925,39 @@ describe('MemoryV2Coordinator lifecycle', () => {
       signal: AbortSignal.abort(),
       expected: 'cancelled' as const,
     },
-  ])('records $name terminal lifecycle status', async ({ output, signal, expected }) => {
-    const repository = new RepositoryStub()
-    const state = getInitialAgentState()
-    const coordinator = new MemoryV2Coordinator(config(repository), undefined, () => generatedAt)
-    await coordinator.prepareTurn({
-      agentState: state,
-      trustedUserInputId: `input:${expected}`,
-      query: expected,
-    })
-    await coordinator.finishTurn({ agentState: state, output, signal })
+  ])(
+    'records $name terminal lifecycle status',
+    async ({ output, signal, expected }) => {
+      const repository = new RepositoryStub()
+      const state = getInitialAgentState()
+      const coordinator = new MemoryV2Coordinator(
+        config(repository),
+        undefined,
+        () => generatedAt,
+      )
+      await coordinator.prepareTurn({
+        agentState: state,
+        trustedUserInputId: `input:${expected}`,
+        query: expected,
+      })
+      await coordinator.finishTurn({ agentState: state, output, signal })
 
-    expect(state.memoryV2!.turn.status).toBe(expected)
-    expect(allEvents(repository).at(-1)).toMatchObject({
-      eventType: 'session.ended',
-      payload: { status: expected },
-    })
-  })
+      expect(state.memoryV2!.turn.status).toBe(expected)
+      expect(allEvents(repository).at(-1)).toMatchObject({
+        eventType: 'session.ended',
+        payload: { status: expected },
+      })
+    },
+  )
 
   test('captures only recognized successful native structured metadata with bounded paths', async () => {
     const repository = new RepositoryStub()
     const state = getInitialAgentState()
-    const coordinator = new MemoryV2Coordinator(config(repository), undefined, () => generatedAt)
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
     await coordinator.prepareTurn({
       agentState: state,
       trustedUserInputId: 'input:1',
@@ -829,9 +980,9 @@ describe('MemoryV2Coordinator lifecycle', () => {
         { kind: 'file', path: 'src/good.ts' },
       ])
       expect(observationEvent.payload.observation.evidence).toEqual([])
-      expect(observationEvent.payload.observation.provenance?.metadata.outputDigest).toMatch(
-        /^sha256:[a-f0-9]{64}$/,
-      )
+      expect(
+        observationEvent.payload.observation.provenance?.metadata.outputDigest,
+      ).toMatch(/^sha256:[a-f0-9]{64}$/)
     }
 
     for (const attempt of [
@@ -868,32 +1019,64 @@ describe('MemoryV2Coordinator lifecycle', () => {
   test('filters private memory, generated, dependency, binary, secret, log, and build paths', async () => {
     const repository = new RepositoryStub()
     const state = getInitialAgentState()
-    const coordinator = new MemoryV2Coordinator(config(repository), undefined, () => generatedAt)
-    await coordinator.prepareTurn({ agentState: state, trustedUserInputId: 'input:policy', query: 'capture' })
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:policy',
+      query: 'capture',
+    })
     const before = allEvents(repository).length
     await coordinator.recordToolObservation({
-      toolName: 'code_search', callId: 'call:policy', userInputId: 'input:policy',
-      input: { files: ['.openbuff/memory/export.json', 'node_modules/pkg/index.js', 'generated/client.ts', 'assets/logo.png', '.env', 'logs/agent.log', 'dist/index.js'] },
-      output: [{ type: 'json', value: { matches: [] } }], native: true,
+      toolName: 'code_search',
+      callId: 'call:policy',
+      userInputId: 'input:policy',
+      input: {
+        files: [
+          '.openbuff/memory/export.json',
+          'node_modules/pkg/index.js',
+          'generated/client.ts',
+          'assets/logo.png',
+          '.env',
+          'logs/agent.log',
+          'dist/index.js',
+        ],
+      },
+      output: [{ type: 'json', value: { matches: [] } }],
+      native: true,
     })
     expect(allEvents(repository)).toHaveLength(before)
     await coordinator.recordToolObservation({
-      toolName: 'code_search', callId: 'call:mixed-policy', userInputId: 'input:policy',
+      toolName: 'code_search',
+      callId: 'call:mixed-policy',
+      userInputId: 'input:policy',
       input: { files: ['src/good.ts', '.openbuff/backups/memory.json'] },
-      output: [{ type: 'json', value: { matches: [] } }], native: true,
+      output: [{ type: 'json', value: { matches: [] } }],
+      native: true,
     })
     const event = allEvents(repository).at(-1)!
     expect(event.eventType).toBe('observation.recorded')
     if (event.eventType === 'observation.recorded') {
-      expect(event.payload.observation.selectors).toEqual([{ kind: 'file', path: 'src/good.ts' }])
-      expect(event.payload.observation.detail).toContain('1 project-relative path')
+      expect(event.payload.observation.selectors).toEqual([
+        { kind: 'file', path: 'src/good.ts' },
+      ])
+      expect(event.payload.observation.detail).toContain(
+        '1 project-relative path',
+      )
     }
   })
 
   test('captures only confirmed mutation actions', async () => {
     const repository = new RepositoryStub()
     const state = getInitialAgentState()
-    const coordinator = new MemoryV2Coordinator(config(repository), undefined, () => generatedAt)
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
     await coordinator.prepareTurn({
       agentState: state,
       trustedUserInputId: 'input:1',
@@ -921,7 +1104,8 @@ describe('MemoryV2Coordinator lifecycle', () => {
                 path: 'src/new.ts',
                 outcome: 'applied',
                 beforeHash: null,
-                afterHash: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+                afterHash:
+                  'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
               },
             ],
             authorityTier: 'portable_path',
@@ -942,7 +1126,8 @@ describe('MemoryV2Coordinator lifecycle', () => {
                   path: 'src/new.ts',
                   status: 'committed',
                   beforeHash: null,
-                  afterHash: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+                  afterHash:
+                    'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
                 },
               ],
               finalHashes: {
@@ -964,7 +1149,8 @@ describe('MemoryV2Coordinator lifecycle', () => {
           action: 'create',
           path: 'src/new.ts',
           beforeHash: null,
-          afterHash: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+          afterHash:
+            'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
         },
       ])
     }
@@ -984,23 +1170,44 @@ describe('MemoryV2Coordinator lifecycle', () => {
             version: 1,
             operationId: 'operation:private',
             outcome: 'applied',
-            actions: [{
-              actionId: 'action:private', index: 0, action: 'create',
-              path: '.openbuff/memory/export.json', outcome: 'applied', beforeHash: null,
-              afterHash: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-            }],
+            actions: [
+              {
+                actionId: 'action:private',
+                index: 0,
+                action: 'create',
+                path: '.openbuff/memory/export.json',
+                outcome: 'applied',
+                beforeHash: null,
+                afterHash:
+                  'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+              },
+            ],
             authorityTier: 'portable_path',
             receiptId: 'receipt:private',
             authorityReceipt: {
-              kind: 'commit_receipt', version: 1, receiptId: 'receipt:private',
-              operationId: 'operation:private', callId: 'call:private-write',
-              authorityTier: 'portable_path', status: 'committed',
-              actions: [{
-                actionId: 'action:private', index: 0, action: 'create',
-                path: '.openbuff/memory/export.json', status: 'committed', beforeHash: null,
-                afterHash: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-              }],
-              finalHashes: { '.openbuff/memory/export.json': 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' },
+              kind: 'commit_receipt',
+              version: 1,
+              receiptId: 'receipt:private',
+              operationId: 'operation:private',
+              callId: 'call:private-write',
+              authorityTier: 'portable_path',
+              status: 'committed',
+              actions: [
+                {
+                  actionId: 'action:private',
+                  index: 0,
+                  action: 'create',
+                  path: '.openbuff/memory/export.json',
+                  status: 'committed',
+                  beforeHash: null,
+                  afterHash:
+                    'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+                },
+              ],
+              finalHashes: {
+                '.openbuff/memory/export.json':
+                  'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+              },
             },
             errors: [],
             freshCapabilities: [],
@@ -1018,24 +1225,38 @@ describe('MemoryV2Coordinator lifecycle', () => {
     const logger = { warn: (fields: unknown) => warnings.push(fields) }
 
     const shadowState = getInitialAgentState()
-    const shadow = new MemoryV2Coordinator(config(repository, 'shadow'), logger, () => generatedAt)
-    await expect(shadow.prepareTurn({
-      agentState: shadowState,
-      trustedUserInputId: 'input:shadow-failure',
-      query: 'continue despite failure',
-    })).resolves.toBeUndefined()
+    const shadow = new MemoryV2Coordinator(
+      config(repository, 'shadow'),
+      logger,
+      () => generatedAt,
+    )
+    await expect(
+      shadow.prepareTurn({
+        agentState: shadowState,
+        trustedUserInputId: 'input:shadow-failure',
+        query: 'continue despite failure',
+      }),
+    ).resolves.toBeUndefined()
     expect(shadowState.memoryAuthority).toMatchObject({
-      requested: 'shadow-v2', active: 'json-v1', fallbackOccurred: false,
+      requested: 'shadow-v2',
+      active: 'json-v1',
+      fallbackOccurred: false,
       reason: 'lifecycle-append-failed',
     })
 
     const optInState = getInitialAgentState()
-    const optIn = new MemoryV2Coordinator(config(repository, 'inject'), logger, () => generatedAt)
-    await expect(optIn.prepareTurn({
-      agentState: optInState,
-      trustedUserInputId: 'input:opt-in-failure',
-      query: 'fall back',
-    })).resolves.toBeUndefined()
+    const optIn = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      logger,
+      () => generatedAt,
+    )
+    await expect(
+      optIn.prepareTurn({
+        agentState: optInState,
+        trustedUserInputId: 'input:opt-in-failure',
+        query: 'fall back',
+      }),
+    ).resolves.toBeUndefined()
     expect(optInState.memoryV2!.lastEventId).toBeUndefined()
     expect(optInState.memoryV2Context).toBeUndefined()
     expect(optInState.memoryAuthority).toMatchObject({
@@ -1056,7 +1277,11 @@ describe('MemoryV2Coordinator lifecycle', () => {
     })
     const state = getInitialAgentState()
     state.taskMemory = taskMemory()
-    const coordinator = new MemoryV2Coordinator(config(repository, 'inject'), undefined, () => generatedAt)
+    const coordinator = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
 
     await coordinator.prepareTurn({
       agentState: state,
@@ -1068,22 +1293,37 @@ describe('MemoryV2Coordinator lifecycle', () => {
     expect(state.memoryAuthority?.parity).toBeUndefined()
     expect(state.memoryAuthority).toMatchObject({
       active: 'sqlite-v2-opt-in',
-      reason: 'query-invalid-result',
+      reason: 'migration-failed',
     })
   })
 
   test('replays persisted terminal data before a new lifecycle', async () => {
     const repository = new RepositoryStub()
     const state = getInitialAgentState()
-    const first = new MemoryV2Coordinator(config(repository), undefined, () => generatedAt)
-    await first.prepareTurn({ agentState: state, trustedUserInputId: 'input:first', query: 'first' })
+    const first = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await first.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:first',
+      query: 'first',
+    })
     repository.failNextAppend = true
-    await first.finishTurn({ agentState: state, output: { type: 'structuredOutput', value: {} } })
+    await first.finishTurn({
+      agentState: state,
+      output: { type: 'structuredOutput', value: {} },
+    })
     const failedBatch = structuredClone(repository.requests.at(-1)!.events)
     const checkpoint = structuredClone(state)
     const before = repository.requests.length
 
-    const second = new MemoryV2Coordinator(config(repository), undefined, () => '2027-01-01T00:00:00.000Z')
+    const second = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => '2027-01-01T00:00:00.000Z',
+    )
     await second.prepareTurn({
       agentState: checkpoint,
       trustedUserInputId: 'input:second',
@@ -1091,14 +1331,20 @@ describe('MemoryV2Coordinator lifecycle', () => {
     })
 
     expect(repository.requests[before]!.events).toEqual(failedBatch)
-    expect(repository.requests[before + 1]!.events[0]!.eventType).toBe('session.started')
+    expect(repository.requests[before + 1]!.events[0]!.eventType).toBe(
+      'session.started',
+    )
     expect(checkpoint.memoryV2!.pendingTerminal).toBeUndefined()
   })
 
   test('emits coverage.recorded events from evaluate_audit_coverage results', async () => {
     const repository = new RepositoryStub()
     const state = getInitialAgentState()
-    const coordinator = new MemoryV2Coordinator(config(repository), undefined, () => generatedAt)
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
     await coordinator.prepareTurn({
       agentState: state,
       trustedUserInputId: 'input:coverage',
@@ -1110,13 +1356,28 @@ describe('MemoryV2Coordinator lifecycle', () => {
       callId: 'call:coverage',
       userInputId: 'input:coverage',
       input: {},
-      output: [{ type: 'json', value: { status: 'complete', features: [{ feature: 'auth' }] } }],
+      output: [
+        {
+          type: 'json',
+          value: { status: 'complete', features: [{ feature: 'auth' }] },
+        },
+      ],
       native: true,
-      workspaceState: { schemaVersion: 1 as const, revision: 5, snapshotId: 'snap:5', updatedAt: Date.now(), changes: [] },
+      workspaceState: {
+        schemaVersion: 1 as const,
+        revision: 5,
+        snapshotId: 'snap:5',
+        updatedAt: Date.now(),
+        changes: [],
+      },
     })
     const newEvents = allEvents(repository).slice(before)
-    const observationEvents = newEvents.filter((e) => e.eventType === 'observation.recorded')
-    const coverageEvents = newEvents.filter((e) => e.eventType === 'coverage.recorded')
+    const observationEvents = newEvents.filter(
+      (e) => e.eventType === 'observation.recorded',
+    )
+    const coverageEvents = newEvents.filter(
+      (e) => e.eventType === 'coverage.recorded',
+    )
     expect(observationEvents).toHaveLength(1)
     expect(coverageEvents).toHaveLength(1)
     const coveragePayload = coverageEvents[0]!.payload
@@ -1133,7 +1394,10 @@ describe('MemoryV2Coordinator lifecycle', () => {
 
   test('fails closed when conflict tail export cannot produce a valid page', async () => {
     const failures: Array<unknown> = [
-      { outcome: 'failed', error: { code: 'unavailable', message: 'no', retryable: true } },
+      {
+        outcome: 'failed',
+        error: { code: 'unavailable', message: 'no', retryable: true },
+      },
       { malformed: true },
       new Error('export threw'),
       { outcome: 'page', events: [], nextAfterEventId: 'event:next' },
@@ -1141,14 +1405,26 @@ describe('MemoryV2Coordinator lifecycle', () => {
     for (const scripted of failures) {
       const repository = new RepositoryStub()
       const state = getInitialAgentState()
-      const coordinator = new MemoryV2Coordinator(config(repository), undefined, () => generatedAt)
-      await coordinator.prepareTurn({ agentState: state, trustedUserInputId: 'input:tail-failure', query: 'tail' })
+      const coordinator = new MemoryV2Coordinator(
+        config(repository),
+        undefined,
+        () => generatedAt,
+      )
+      await coordinator.prepareTurn({
+        agentState: state,
+        trustedUserInputId: 'input:tail-failure',
+        query: 'tail',
+      })
       repository.appendConflictsRemaining = 1
       repository.exportScript = [scripted]
       const before = repository.requests.length
       await coordinator.recordToolObservation({
-        toolName: 'get_build_targets', callId: 'call:tail-failure', userInputId: 'input:tail-failure',
-        input: { files: ['src/a.ts'] }, output: [{ type: 'json', value: { targets: ['sdk'] } }], native: true,
+        toolName: 'get_build_targets',
+        callId: 'call:tail-failure',
+        userInputId: 'input:tail-failure',
+        input: { files: ['src/a.ts'] },
+        output: [{ type: 'json', value: { targets: ['sdk'] } }],
+        native: true,
       })
       expect(repository.requests.slice(before)).toHaveLength(1)
       expect(repository.requests.at(-1)!.expectedTail).toBeDefined()
