@@ -12,29 +12,29 @@ import {
 import {
   auditTaskMemoryV1Migration,
   importTaskMemoryV1,
-} from '../services/memory-v2/v1-migration'
+} from '../../../../../sdk/src/services/memory-v2/v1-migration'
 import {
   loadPersistedTaskMemory,
   saveMergedTaskMemory,
-} from '../services/task-memory-store'
+} from '../../../../../sdk/src/services/task-memory-store'
 
 import type { TaskMemoryV1 } from '@codebuff/common/types/task-memory'
 
-// Package placement: this test lives in the sdk package (not beside the cli
-// backend test) because the real Bun SQLite backend needs nothing beyond the
-// plain `bun test` runner — `bun:sqlite` is built into the Bun runtime and the
-// existing backend test (cli/src/services/memory-v2/__tests__/bun-sqlite-memory-repository.test.ts)
-// runs with no special preload or flags, exactly like the sdk suite
-// (`bun --cwd sdk test`). The backend is imported through the same
-// workspace-relative source path the cli backend test itself uses for its own
-// imports, so the sdk runner opens the real store unchanged. The migration
-// (`importTaskMemoryV1`/`auditTaskMemoryV1Migration`) and V1 store
-// (`saveMergedTaskMemory`/`loadPersistedTaskMemory`) functions are the exact
-// modules re-exported from the `@openbuff/sdk` package root (sdk/src/index.ts);
-// they are imported from source here like every other sdk test, because the
+// Package placement: this test lives in the cli package, beside the existing
+// real-backend test (bun-sqlite-memory-repository.test.ts in this directory),
+// so the Bun SQLite backend is imported through a normal package-local
+// relative path — a reviewer advisory flagged the former sdk-side location's
+// cross-package relative import of this cli internal as fragile, since the sdk
+// suite would break if the cli backend file moved. The backend needs nothing
+// beyond the plain `bun test` runner: `bun:sqlite` is built into the Bun
+// runtime and the sibling backend test runs with no special preload or flags.
+// The migration (`importTaskMemoryV1`/`auditTaskMemoryV1Migration`) and V1
+// store (`saveMergedTaskMemory`/`loadPersistedTaskMemory`) functions are the
+// exact modules re-exported from the `@openbuff/sdk` package root
+// (sdk/src/index.ts); they are imported from SDK source here because the
 // `@openbuff/sdk` specifier resolves to the built dist/, which plain
 // `bun test` does not build first.
-import { openBunSQLiteMemoryRepository } from '../../../cli/src/services/memory-v2/bun-sqlite-memory-repository'
+import { openBunSQLiteMemoryRepository } from '../bun-sqlite-memory-repository'
 
 const projectId = ProjectIdSchema.parse('project:sqlite-roundtrip')
 const sessionId = MemorySessionIdSchema.parse('memory-cli')
