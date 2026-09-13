@@ -12961,7 +12961,11 @@ describe('base2 deleted-before-first-snapshot gate files', () => {
           gatePassedFingerprint: '',
           lastReviewerGateSkipReason: '',
           reviewReceipts: [],
-          owedReviewerRevalidations: [],
+          // The stale owed-set entry the prune must retire: both the legacy
+          // scalar and the list point at the pruned reviewer family, so a
+          // missing clear would leave a dead revalidation reference behind.
+          requiredReviewerRevalidation: 'performance-specialist',
+          owedReviewerRevalidations: ['performance-specialist'],
           testWriterGateDone: true,
           docWriterGateDone: true,
           securityReviewGateDone: true,
@@ -12992,7 +12996,9 @@ describe('base2 deleted-before-first-snapshot gate files', () => {
       expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
       // Turn start, BEFORE the owed-set rehydration: the all-missing finding
       // and its verbatim blocker are pruned, so nothing re-arms a
-      // performance-specialist revalidation from stale serialized state.
+      // performance-specialist revalidation from stale serialized state. The
+      // prune also retires the stale owed-set entry that pointed at the
+      // pruned family: both the legacy scalar and the list are cleared.
       const turnStartWork = (agentState as any).base2ActiveWork
       expect(turnStartWork.openReviewerFindings).toEqual([])
       expect(turnStartWork.openReviewerBlockers).toEqual([])
@@ -13163,6 +13169,118 @@ describe('base2 deleted-before-first-snapshot gate files', () => {
         'find-directory',
       ])
       expect(activeWork.openReviewerBlockers).toEqual(keptTexts)
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // Companion to the prune: a family is un-owed only when it was actually
+  // pruned AND no REMAINING open finding still backs it. Seed one prunable
+  // specialist finding (deleted file) plus a prunable and a surviving
+  // code-reviewer finding so the prune fires WITHOUT emptying the ledger: the
+  // specialist family is shed from the owed list, the still-backed
+  // code-reviewer family stays owed (fail closed), and the legacy scalar —
+  // seeded on the pruned family — is rewritten to the filtered owed[0] exactly
+  // as the rehydration block derives it.
+  test('a partial prune sheds only the pruned-and-unbacked family from the owed set and re-mirrors the scalar', () => {
+    const tmpDir = makeProjectTempDir('base2-prune-owed-partial-')
+    try {
+      const presentFile = join(tmpDir, 'exists.ts')
+      writeFileSync(presentFile, 'export const here = 1\n')
+      const presentGateFile = normalizeGateFilePath(presentFile)
+      const missingGateFile = normalizeGateFilePath(join(tmpDir, 'gone.ts'))
+      const prunedSpecialistText =
+        'BLOCKING: performance-specialist assigned-file-unreadable for the deleted probe.'
+      const prunedCodeText =
+        'BLOCKING: code-reviewer finding on the deleted file.'
+      const keptCodeText =
+        'BLOCKING: code-reviewer finding on the surviving file.'
+      const finding = (
+        id: string,
+        text: string,
+        files: string[],
+        reviewer: 'code-reviewer' | 'performance-specialist',
+      ) => ({
+        id,
+        gateId: `${reviewer}:prior-snapshot`,
+        text,
+        status: 'open' as const,
+        files,
+        snapshotFingerprint: 'prior-snapshot',
+        reviewer,
+        createdAt: '2025-01-01T00:00:00.000Z',
+      })
+      const base2 = createBase2('default')
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          changedFiles: [presentGateFile],
+          touchedFiles: [presentGateFile],
+          pendingGateFiles: [presentGateFile],
+          currentPhase: 'repair_loop',
+          latestWorkSummary: '',
+          openReviewerBlockers: [
+            prunedSpecialistText,
+            prunedCodeText,
+            keptCodeText,
+          ],
+          openReviewerFindings: [
+            // All files missing -> pruned; the ONLY specialist finding.
+            finding(
+              'find-specialist-missing',
+              prunedSpecialistText,
+              [missingGateFile],
+              'performance-specialist',
+            ),
+            // All files missing -> pruned, but the code-reviewer family stays
+            // backed by the surviving finding below.
+            finding(
+              'find-code-missing',
+              prunedCodeText,
+              [missingGateFile],
+              'code-reviewer',
+            ),
+            // Still exists -> kept; keeps the code-reviewer family owed.
+            finding(
+              'find-code-present',
+              keptCodeText,
+              [presentGateFile],
+              'code-reviewer',
+            ),
+          ],
+          // The legacy scalar seeded on the PRUNED family's head: after the
+          // filter it must be re-mirrored to the surviving owed[0].
+          requiredReviewerRevalidation: 'performance-specialist',
+          owedReviewerRevalidations: [
+            'performance-specialist',
+            'code-reviewer',
+          ],
+          lastValidationSummary: '',
+          nextRequiredAction: '',
+          lastPinnedStateMessage: '',
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Finish the previous response.',
+        params: {},
+      } as any)
+
+      // The prune runs during turn-start hydration, before the first yield.
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      const activeWork = (agentState as any).base2ActiveWork
+      // The specialist family was pruned and is backed by no remaining
+      // finding, so it is shed from the owed list; the code-reviewer family
+      // was also pruned but stays owed because find-code-present still backs
+      // it. The scalar is rewritten from the filtered list's first entry.
+      expect(activeWork.owedReviewerRevalidations).toEqual(['code-reviewer'])
+      expect(activeWork.requiredReviewerRevalidation).toBe('code-reviewer')
+      expect(
+        (activeWork.openReviewerFindings as Array<{ id: string }>).map(
+          (entry) => entry.id,
+        ),
+      ).toEqual(['find-code-present'])
+      expect(activeWork.openReviewerBlockers).toEqual([keptCodeText])
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }

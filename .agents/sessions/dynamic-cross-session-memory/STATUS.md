@@ -173,3 +173,11 @@ Validation: SQLite focused suite 49/49 (2 new cap tests + 1 updated), V1→V2 ro
 
 Evaluated the reviewer advisory that `scanQueryRows`/`readLastEventIdForProject` use unindexed `json_extract` projectId filters. Benchmarked at the current 10k-event cap (50 iterations each): 250-row filtered query mean 0.815ms unindexed vs 0.671ms with an expression index (within noise); tail query 0.009ms vs 0.008ms. EXPLAIN QUERY PLAN confirms the expression index is used when present, but the absolute cost is already sub-millisecond at the cap. Decision: no schema/index change now; revisit only if the event cap grows materially. Recorded as a data-backed no-change decision.
 
+
+<!-- update_plan_status:appended -->
+## R4/R6 verification + phantom-file gate fix + 'missing' marker constant — 2026-09-13T22:50:29.563Z
+
+Re-verified the memory-v2 plan's remaining focused suites in the current tree: R4 provider/client authority (provider + env) 26/26; R6 coverage/prompt safety (agent-runtime task-memory + memory-v2-context + loop-agent-steps) 84/84; memory-retention eval 6/6. R1-T1 (SQLite 44/44), R1-T2 (typed-unsupported secure-open), R2 (coordinator 53/53), R3-T1 (migration/operator 96/96) all confirmed green. Only R7 finalization (stable exact-snapshot reviews) remains.
+
+Also shipped the phantom-file gate fix (commits afd2292d8 + acbc8ce09): a pending gate file deleted before its first snapshot now resolves to the `missing` content marker (attested-by-absence), and open findings whose files are all missing are pruned at turn start — closing the scripts/perf-probe-tmp.ts review loop. Follow-up hardening: extracted the `'missing'` sentinel into a single in-handleSteps constant `GATE_FILE_MISSING_CONTENT_MARKER` shared by readGateFileContentMarker, collectDeletedFilesFromSnapshotDetails, the turn-start prune, and isCreditableContentMarker. Pure refactor; agents typecheck clean and gate/parity/serialization suites 255/255.
+
