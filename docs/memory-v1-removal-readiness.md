@@ -8,7 +8,7 @@ This is the canonical readiness plan for a later Memory V1 removal decision. It 
 - No removal date or version is set. Removal, if any, requires a later release decision after every gate below passes.
 - Migration is not claimed complete. Current evidence is insufficient to authorize removal.
 - `/memory audit-migration` outcome `not-migrated` means removal is **not ready** for that project. It reports migration state and is not a product defect.
-- Outcome `exact` currently means marker identity, imported task existence, imported observation IDs, and migration provenance were verified. It does not mean every source-derived task or observation body field was reconstructed and compared.
+- Outcome `exact` means every deterministic source-derived task/observation body field and header, plus marker metadata, was reconstructed from the checksum-verified source and exact marker session and compared after schema normalization.
 - Even `exact` is lossless only when `omittedFields === 0`, `(truncatedFields ?? 0) === 0`, and `warnings.length === 0`. Warnings are never waived.
 
 Normative terms such as **MUST**, **MUST NOT**, and **SHOULD** define acceptance criteria for a later removal decision.
@@ -27,8 +27,8 @@ Memory V1 is removal-ready only when all in-scope projects and supported deploym
 
 These blockers are grounded in the current source and make the present answer **not ready**:
 
-1. **Body equality is not proved.** `auditMigrationMarkerBody` in `sdk/src/services/memory-v2/v1-migration.ts` verifies marker identity, imported task existence, imported observation IDs, task association, migration provenance, and the `legacy-v1` tag. It does not reconstruct the import from the V1 source and compare every source-derived task/observation body field. A future audit **MUST** perform that stronger deterministic comparison, with tests that tamper with each imported body field and prove the audit fails closed, before `exact` can authorize removal.
-2. **`no-record` is ambiguous.** `loadPersistedTaskMemory` in `sdk/src/services/task-memory-store.ts` returns `undefined` for absent, invalid, unreadable, and checksum-failed records. Therefore `no-record` alone cannot prove that no V1 data exists. Readiness requires a future non-mutating storage inspection result that distinguishes at least `absent`, `valid`, `invalid`, and `unreadable`; only independently verified `absent` can satisfy absence evidence.
+1. **Full source-derived body equality is implemented.** `auditMigrationMarkerBody` reconstructs deterministic task/observation drafts from the V1 source and marker session, compares full normalized headers and payloads, and fails closed on missing, duplicate, reordered, substituted, or tampered deterministic evidence. This Gate 0 blocker is complete.
+2. **Four-state read-only inspection is implemented.** `inspectPersistedTaskMemoryV1` distinguishes `absent`, checksum-verified `valid`, bounded-reason `invalid`, and `unreadable`; only `ENOENT` is absence. The legacy loader continues collapsing non-valid states for compatibility. Verified inspector `absent` is independent absence evidence. This Gate 0 blocker is complete.
 3. **The importer deliberately loses or excludes some data.** `importTaskMemoryV1` warns or omits data including a non-empty goal (`goal-excluded`) and legacy evidence (`legacy-evidence-unverified`), and can omit stale/unsafe/empty/capped data or truncate text. Any warning, omission, or truncation is lossy and cannot authorize removal. Common legitimate warning cases do not create an exception; warnings **MUST NOT** be waived.
 4. **Interactive audit is bounded.** `scanV1MigrationAuditEvents` scans at most 10 export pages. `/memory audit-migration` therefore cannot be the sole release-evidence path for repositories beyond that bound. Release evidence requires a full or resumable, schema-validated audit that validates pagination and reaches the canonical end of every in-scope repository.
 5. **Post-V1 authority failure semantics are undecided.** Before removal, behavior for legacy or invalid authority values and for V2-open/reset failure **MUST** be explicitly specified, tested, and communicated. It **MUST** fail closed and must not silently report successful V2 authority when canonical V2 storage did not open. The decision must cover `OPENBUFF_MEMORY_AUTHORITY`, SDK authority inputs, provider result types, CLI reporting, and persisted/session authority state.
@@ -64,8 +64,8 @@ Each gate is blocking and advances only with recorded evidence and owner approva
 
 ### Gate 0: blocker closure
 
-- [ ] Full source-derived task/observation body comparison is implemented and tampered-body tests fail closed.
-- [ ] Non-mutating V1 inspection distinguishes `absent`, `valid`, `invalid`, and `unreadable`.
+- [x] Full source-derived task/observation body comparison is implemented and tampered-body tests fail closed.
+- [x] Non-mutating V1 inspection distinguishes `absent`, `valid`, `invalid`, and `unreadable`.
 - [ ] A full/resumable validated audit supports stores beyond the interactive 10-page bound.
 - [ ] Post-V1 authority and V2-open/reset failure semantics are approved and fail closed.
 - [ ] Lossless evaluation uses the exact zero-omission/zero-truncation/zero-warning predicate.
@@ -99,9 +99,11 @@ Each gate is blocking and advances only with recorded evidence and owner approva
 
 A later decision **MUST** explicitly inventory and assess, rather than implicitly delete, at least:
 
-- SDK task-memory functions: `loadPersistedTaskMemory`, `reconcileTaskMemoryEvidence`, `saveMergedTaskMemory`, `pruneStaleTaskMemoryEvidence`, and `codebuffFsToNodePromises`;
+- SDK task-memory functions: `inspectPersistedTaskMemoryV1`, `loadPersistedTaskMemory`, `reconcileTaskMemoryEvidence`, `saveMergedTaskMemory`, `pruneStaleTaskMemoryEvidence`, and `codebuffFsToNodePromises`;
+
 - SDK migration functions: `importTaskMemoryV1`, `getV1MigrationIdentity`, and the transitional read-only `auditTaskMemoryV1Migration`;
-- SDK types: `TaskMemoryStoreFs`, `WorkspaceMoveRecord`, `TaskMemoryPruneOutcome`, `V1MigrationOutcome`, `V1MigrationWarningCode`, `V1MigrationSourceItemCounts`, `V1MigrationAuditReader`, and `V1MigrationAuditOutcome`;
+- SDK types: `TaskMemoryStoreFs`, `TaskMemoryV1Inspection`, `WorkspaceMoveRecord`, `TaskMemoryPruneOutcome`, `V1MigrationOutcome`, `V1MigrationWarningCode`, `V1MigrationSourceItemCounts`, `V1MigrationAuditReader`, and `V1MigrationAuditOutcome`;
+
 - common schemas/constants/types: `TASK_MEMORY_LIST_CAPS`, `taskMemoryEvidenceV1Schema`, `taskMemoryDraftV1Schema`, `taskMemoryV1Schema`, `TaskMemoryEvidenceV1`, `TaskMemoryDraftV1`, and `TaskMemoryV1`;
 - common session/checkpoint contracts that carry V1 import, compatibility-shadow, parity, warning, or authority state, including `MemoryV1ImportWarningCode`, `MemoryV1ImportState`, and `MemoryAuthorityStateV2`;
 - persisted `.openbuff/memory/task-memory.json` semantics and any runtime hydration, reconciliation, save, prune, shadow, fallback, or migration callers.
@@ -210,11 +212,11 @@ Stop rollout and restore the prior compatible artifact/configuration when any of
 ## Operator migration guidance
 
 1. Keep a known-compatible artifact and the current authority configuration available.
-2. Inspect V1 non-mutatingly. If the result is `invalid` or `unreadable`, stop and repair access/record handling; do not interpret it as absence. Until the future inspector exists, treat `no-record` as inconclusive.
+2. Inspect V1 non-mutatingly with `inspectPersistedTaskMemoryV1`. If the result is `invalid` or `unreadable`, stop and repair access/record handling; do not interpret it as absence. Only a verified `absent` result is independent absence evidence.
 3. Create and verify a V1 backup. Do not migrate in place or delete the source.
 4. Import to V2 using the supported path, then run the full/resumable audit. `/memory audit-migration` remains useful interactively but its 10-page bound cannot be sole evidence for larger stores.
 5. Stop on `not-migrated`, `incomplete`, `mismatch`, `rejected`, or `failed`. `not-migrated` means readiness work remains; it is not itself a product defect.
-6. For `exact`, require `omittedFields === 0`, `(truncatedFields ?? 0) === 0`, and `warnings.length === 0`, plus the future full source-derived body comparison. Do not waive `goal-excluded`, `legacy-evidence-unverified`, or any other warning.
+6. For `exact`, require `omittedFields === 0`, `(truncatedFields ?? 0) === 0`, and `warnings.length === 0`; full deterministic source-derived body equality is already part of `exact`. Do not waive `goal-excluded`, `legacy-evidence-unverified`, or any other warning.
 7. Validate and retain a canonical V2 export, then restore and test it on a disposable copy.
 8. If V1 revision/checksum changes, re-import and repeat the fresh lossless audit and export validation.
 9. Preserve both stores until the declared rollback window closes. On a trigger, restore the prior artifact/configuration; do not delete either store.
@@ -225,7 +227,7 @@ A later removal decision is **GO** only when every applicable item is checked:
 
 - [ ] This is a later release decision; Release N was compatibility-only, and the proposed scope/date is explicit in that later record.
 - [ ] Migration is not assumed complete; every in-scope project has a fresh per-project evidence bundle.
-- [ ] All five current blockers are closed with reviewed implementation and tests.
+- [ ] All remaining current blockers are closed with reviewed implementation and tests.
 - [ ] Every valid V1 record has full-body `exact` evidence and the exact lossless predicate passes with no warnings waived.
 - [ ] Every claimed absent V1 record is independently inspected as `absent`; no decision relies on `no-record` alone.
 - [ ] No project has `not-migrated`, stale, incomplete, mismatched, rejected, failed, lossy, invalid, unreadable, or partial evidence.

@@ -40,9 +40,27 @@ const defaultDraft = {
   nextActions: ['next'],
   historicalSummary: 'history',
   evidence: [
-    { id: 'fresh', kind: 'read' as const, summary: 'fresh', path: 'src/live.ts', stale: false },
-    { id: 'stale', kind: 'read' as const, summary: 'stale', path: 'src/stale.ts', stale: true },
-    { id: 'private', kind: 'read' as const, summary: 'private', path: '.env', stale: false },
+    {
+      id: 'fresh',
+      kind: 'read' as const,
+      summary: 'fresh',
+      path: 'src/live.ts',
+      stale: false,
+    },
+    {
+      id: 'stale',
+      kind: 'read' as const,
+      summary: 'stale',
+      path: 'src/stale.ts',
+      stale: true,
+    },
+    {
+      id: 'private',
+      kind: 'read' as const,
+      summary: 'private',
+      path: '.env',
+      stale: false,
+    },
   ],
 }
 
@@ -53,10 +71,15 @@ function memory(overrides: Partial<TaskMemoryV1> = {}): TaskMemoryV1 {
     checksum: checksumOverride,
     ...draftOverrides
   } = overrides
-  const draft = taskMemoryDraftV1Schema.parse({ ...defaultDraft, ...draftOverrides })
+  const draft = taskMemoryDraftV1Schema.parse({
+    ...defaultDraft,
+    ...draftOverrides,
+  })
   const checksum =
     checksumOverride ??
-    stableHash(JSON.stringify({ revision, updatedAt: sourceUpdatedAt, memory: draft }))
+    stableHash(
+      JSON.stringify({ revision, updatedAt: sourceUpdatedAt, memory: draft }),
+    )
   return { ...draft, revision, updatedAt: sourceUpdatedAt, checksum }
 }
 
@@ -67,6 +90,7 @@ class Repository implements MemoryRepositoryV2 {
   exportCalls = 0
   failAppendCall: number | undefined
   failAppendAsConflict = false
+  beforeFailedAppend?: (repository: Repository) => void
   appendRequests: Array<ReturnType<typeof MemoryAppendRequestSchema.parse>> = []
 
   async append(input: Parameters<MemoryRepositoryV2['append']>[0]) {
@@ -74,35 +98,53 @@ class Repository implements MemoryRepositoryV2 {
     this.appendCalls++
     this.appendRequests.push(request)
     if (this.appendCalls === this.failAppendCall) {
+      this.beforeFailedAppend?.(this)
       return this.failAppendAsConflict
         ? {
             outcome: 'rejected' as const,
-            error: { code: 'conflict' as const, message: 'cursor conflict', retryable: true },
+            error: {
+              code: 'conflict' as const,
+              message: 'cursor conflict',
+              retryable: true,
+            },
           }
         : {
             outcome: 'failed' as const,
-            error: { code: 'unavailable' as const, message: 'offline', retryable: true },
+            error: {
+              code: 'unavailable' as const,
+              message: 'offline',
+              retryable: true,
+            },
           }
     }
 
     const canonicalTail = [...this.events.values()].at(-1)?.eventId
-    const expectedTail = request.expectedTail ?? (
-      request.expectedLastEventId === undefined
+    const expectedTail =
+      request.expectedTail ??
+      (request.expectedLastEventId === undefined
         ? { kind: 'any' as const }
-        : { kind: 'event' as const, eventId: request.expectedLastEventId }
-    )
-    const tailMatches = expectedTail.kind === 'any'
-      || (expectedTail.kind === 'empty' && canonicalTail === undefined)
-      || (expectedTail.kind === 'event' && expectedTail.eventId === canonicalTail)
+        : { kind: 'event' as const, eventId: request.expectedLastEventId })
+    const tailMatches =
+      expectedTail.kind === 'any' ||
+      (expectedTail.kind === 'empty' && canonicalTail === undefined) ||
+      (expectedTail.kind === 'event' && expectedTail.eventId === canonicalTail)
     if (!tailMatches) {
       return {
         outcome: 'rejected' as const,
-        error: { code: 'conflict' as const, message: 'cursor conflict', retryable: true },
+        error: {
+          code: 'conflict' as const,
+          message: 'cursor conflict',
+          retryable: true,
+        },
       }
     }
 
     const staged = new Map(this.events)
-    const entries: Array<{ eventId: MemoryEventEnvelope['eventId']; sequence: number; duplicate: boolean }> = []
+    const entries: Array<{
+      eventId: MemoryEventEnvelope['eventId']
+      sequence: number
+      duplicate: boolean
+    }> = []
     let sequence = this.sequence
     for (const event of request.events) {
       const existing = staged.get(event.eventId)
@@ -111,10 +153,18 @@ class Repository implements MemoryRepositoryV2 {
         if (JSON.stringify(existingDraft) !== JSON.stringify(event)) {
           return {
             outcome: 'rejected' as const,
-            error: { code: 'conflict' as const, message: 'event content conflict', retryable: false },
+            error: {
+              code: 'conflict' as const,
+              message: 'event content conflict',
+              retryable: false,
+            },
           }
         }
-        entries.push({ eventId: event.eventId, sequence: existing.sequence, duplicate: true })
+        entries.push({
+          eventId: event.eventId,
+          sequence: existing.sequence,
+          duplicate: true,
+        })
         continue
       }
       const envelope = { ...event, sequence: ++sequence } as MemoryEventEnvelope
@@ -168,7 +218,8 @@ const audit = (repository: V1MigrationAuditReader, value?: TaskMemoryV1) =>
 const cloneEvent = (
   event: MemoryEventEnvelope,
   overrides: Partial<MemoryEventEnvelope>,
-): MemoryEventEnvelope => MemoryEventEnvelopeSchema.parse({ ...event, ...overrides })
+): MemoryEventEnvelope =>
+  MemoryEventEnvelopeSchema.parse({ ...event, ...overrides })
 
 const migrationReservations = (repository: Repository) =>
   [...repository.events.values()].filter(
@@ -215,7 +266,9 @@ describe('V1 memory migration', () => {
       ]),
     )
     expect(JSON.stringify(events)).not.toContain(source.goal)
-    expect(events.some((event) => event.eventType === 'evidence.verified')).toBe(false)
+    expect(
+      events.some((event) => event.eventType === 'evidence.verified'),
+    ).toBe(false)
     expect(JSON.stringify(events)).not.toContain('src/stale.ts')
     expect(JSON.stringify(events)).not.toContain('.env')
 
@@ -246,7 +299,10 @@ describe('V1 memory migration', () => {
 
     const marker = migrationMarkers(repository)[0]
     expect(marker?.eventType).toBe('migration.v1.imported')
-    if (marker?.eventType === 'migration.v1.imported' && outcome.outcome === 'imported') {
+    if (
+      marker?.eventType === 'migration.v1.imported' &&
+      outcome.outcome === 'imported'
+    ) {
       expect(marker.payload.sourceItemCounts).toEqual(outcome.sourceItemCounts)
       expect(marker.payload.truncatedFields).toBe(0)
       expect(marker.payload.omittedFields).toBe(outcome.omittedFields)
@@ -276,18 +332,228 @@ describe('V1 memory migration', () => {
     const repeated = await run(repository, first)
     expect(repeated.outcome).toBe('no-op')
     if (repeated.outcome === 'no-op' && imported.outcome === 'imported') {
-      expect(repeated.importedObservationIds).toEqual(imported.importedObservationIds)
+      expect(repeated.importedObservationIds).toEqual(
+        imported.importedObservationIds,
+      )
       expect(repeated.sourceItemCounts).toEqual(imported.sourceItemCounts)
       expect(repeated.truncatedFields).toBe(imported.truncatedFields)
-      expect(repeated.lastEventId).toBe([...repository.events.values()].at(-1)!.eventId)
+      expect(repeated.lastEventId).toBe(
+        [...repository.events.values()].at(-1)!.eventId,
+      )
     }
     expect(repository.events.size).toBe(eventCount)
+  })
+
+  test('binds an ordinary exact-repeat no-op to the marker whose complete body was audited', async () => {
+    const repository = new Repository()
+    const source = memory()
+    const imported = await run(repository, source)
+    expect(imported.outcome).toBe('imported')
+    const canonicalMarker = migrationMarkers(repository)[0]!
+    if (
+      canonicalMarker.eventType !== 'migration.v1.imported' ||
+      imported.outcome !== 'imported'
+    )
+      return
+
+    const forgedMarker = MemoryEventEnvelopeSchema.parse({
+      ...canonicalMarker,
+      eventId: 'event:later-forged-exact-source-marker',
+      payload: {
+        ...canonicalMarker.payload,
+        importedTaskId: 'task:forged',
+        importedObservationIds: [],
+        omittedFields: 99,
+        sourceItemCounts: { requirements: 99 },
+        truncatedFields: 99,
+        warnings: [],
+      },
+      sequence: repository.sequence + 1,
+    })
+    repository.events.set(forgedMarker.eventId, forgedMarker)
+    repository.sequence = forgedMarker.sequence
+    const eventCount = repository.events.size
+
+    const repeated = await run(repository, source)
+
+    expect(repeated.outcome).toBe('no-op')
+    if (repeated.outcome === 'no-op') {
+      expect(repeated.importedTaskId).toBe(imported.importedTaskId)
+      expect(repeated.importedObservationIds).toEqual(
+        imported.importedObservationIds,
+      )
+      expect(repeated.omittedFields).toBe(imported.omittedFields)
+      expect(repeated.sourceItemCounts).toEqual(imported.sourceItemCounts)
+      expect(repeated.truncatedFields).toBe(imported.truncatedFields)
+      expect(repeated.importedTaskId).not.toBe('task:forged')
+    }
+    expect(repository.events.size).toBe(eventCount)
+  })
+
+  test('repairs missing body evidence despite a matching persisted marker', async () => {
+    const repository = new Repository()
+    const source = memory()
+    expect((await run(repository, source)).outcome).toBe('imported')
+    const missing = [...repository.events.values()].find(
+      (event) => event.eventType === 'task.created',
+    )!
+    repository.events.delete(missing.eventId)
+
+    expect(await run(repository, source)).toMatchObject({ outcome: 'imported' })
+    expect(await audit(repository, source)).toMatchObject({ outcome: 'exact' })
+    const eventCount = repository.events.size
+    expect(await run(repository, source)).toMatchObject({ outcome: 'no-op' })
+    expect(repository.events.size).toBe(eventCount)
+    expect(migrationMarkers(repository)).toHaveLength(2)
+  })
+
+  test('repairs a tampered marker even when its deterministic body remains complete', async () => {
+    const repository = new Repository()
+    const source = memory()
+    expect((await run(repository, source)).outcome).toBe('imported')
+    const marker = migrationMarkers(repository)[0]!
+    if (marker.eventType !== 'migration.v1.imported') return
+    repository.events.set(
+      marker.eventId,
+      MemoryEventEnvelopeSchema.parse({
+        ...marker,
+        payload: { ...marker.payload, omittedFields: 99 },
+      }),
+    )
+
+    const repaired = await run(repository, source)
+
+    expect(repaired).toMatchObject({ outcome: 'imported' })
+    expect(await audit(repository, source)).toMatchObject({ outcome: 'exact' })
+    expect(migrationMarkers(repository)).toHaveLength(2)
+  })
+
+  test('repairs incompatible deterministic body evidence with new event IDs', async () => {
+    const repository = new Repository()
+    const source = memory()
+    expect((await run(repository, source)).outcome).toBe('imported')
+    const original = [...repository.events.values()].find(
+      (event) => event.eventType === 'observation.recorded',
+    )!
+    if (original.eventType !== 'observation.recorded') return
+    repository.events.set(
+      original.eventId,
+      MemoryEventEnvelopeSchema.parse({
+        ...original,
+        payload: {
+          ...original.payload,
+          observation: {
+            ...original.payload.observation,
+            summary: 'older incompatible representation',
+          },
+        },
+      }),
+    )
+
+    expect(await run(repository, source)).toMatchObject({ outcome: 'imported' })
+    expect(await audit(repository, source)).toMatchObject({ outcome: 'exact' })
+    expect(migrationMarkers(repository)).toHaveLength(2)
+  })
+
+  test('fails closed when a resumed deterministic event ID has corrupt content', async () => {
+    const repository = new Repository()
+    const source = memory()
+    repository.failAppendCall = 3
+    expect(await run(repository, source)).toMatchObject({ outcome: 'failed' })
+    const task = [...repository.events.values()].find(
+      (event) => event.eventType === 'task.created',
+    )!
+    repository.events.set(
+      task.eventId,
+      MemoryEventEnvelopeSchema.parse({
+        ...task,
+        payload: { ...task.payload, title: 'non-migration data' },
+      }),
+    )
+    repository.failAppendCall = undefined
+    const eventCount = repository.events.size
+
+    expect(await run(repository, source)).toMatchObject({
+      outcome: 'failed',
+      reason: 'repository-failed',
+    })
+    expect(repository.events.size).toBe(eventCount)
+    expect(migrationMarkers(repository)).toHaveLength(0)
+  })
+
+  test('does not accept an incomplete exact marker discovered during conflict recovery', async () => {
+    const repository = new Repository()
+    const source = memory()
+    const concurrent = new Repository()
+    expect((await run(concurrent, source)).outcome).toBe('imported')
+    const concurrentMarker = migrationMarkers(concurrent)[0]!
+    repository.failAppendCall = 1
+    repository.failAppendAsConflict = true
+    repository.beforeFailedAppend = (target) => {
+      target.events.set(concurrentMarker.eventId, concurrentMarker)
+      target.sequence = concurrentMarker.sequence
+    }
+
+    expect(await run(repository, source)).toMatchObject({
+      outcome: 'failed',
+      reason: 'repository-failed',
+    })
+    expect(
+      [...repository.events.values()].filter(
+        (event) =>
+          event.eventType === 'task.created' ||
+          event.eventType === 'observation.recorded',
+      ),
+    ).toHaveLength(0)
+  })
+
+  test('binds conflict recovery no-op fields to the validated complete marker', async () => {
+    const repository = new Repository()
+    const source = memory()
+    const concurrent = new Repository()
+    const imported = await run(concurrent, source)
+    expect(imported.outcome).toBe('imported')
+    const canonicalMarker = migrationMarkers(concurrent)[0]!
+    if (canonicalMarker.eventType !== 'migration.v1.imported') return
+    const forgedMarker = MemoryEventEnvelopeSchema.parse({
+      ...canonicalMarker,
+      eventId: 'event:concurrent-forged-marker',
+      payload: {
+        ...canonicalMarker.payload,
+        importedTaskId: 'task:forged',
+        importedObservationIds: [],
+      },
+      sequence: concurrent.sequence + 1,
+    })
+
+    repository.failAppendCall = 1
+    repository.failAppendAsConflict = true
+    repository.beforeFailedAppend = (target) => {
+      for (const event of concurrent.events.values()) {
+        target.events.set(event.eventId, event)
+      }
+      target.events.set(forgedMarker.eventId, forgedMarker)
+      target.sequence = forgedMarker.sequence
+    }
+
+    const recovered = await run(repository, source)
+    expect(recovered.outcome).toBe('no-op')
+    if (recovered.outcome === 'no-op' && imported.outcome === 'imported') {
+      expect(recovered.importedTaskId).toBe(imported.importedTaskId)
+      expect(recovered.importedObservationIds).toEqual(
+        imported.importedObservationIds,
+      )
+      expect(recovered.importedTaskId).not.toBe('task:forged')
+    }
   })
 
   test('records all bounded text truncation in the marker and outcome', async () => {
     const repository = new Repository()
     const source = memory({
-      requirements: ['x'.repeat(1_100), ...Array.from({ length: 17 }, () => 'y'.repeat(1_000))],
+      requirements: [
+        'x'.repeat(1_100),
+        ...Array.from({ length: 17 }, () => 'y'.repeat(1_000)),
+      ],
       historicalSummary: 'h'.repeat(1_100),
       evidence: [
         {
@@ -319,7 +585,9 @@ describe('V1 memory migration', () => {
     }
     for (const event of repository.events.values()) {
       if (event.eventType === 'observation.recorded') {
-        expect(event.payload.observation.detail.length).toBeLessThanOrEqual(16_384)
+        expect(event.payload.observation.detail.length).toBeLessThanOrEqual(
+          16_384,
+        )
       }
     }
   })
@@ -338,7 +606,9 @@ describe('V1 memory migration', () => {
       expect(forgotten).toHaveLength(first.importedObservationIds.length)
       expect(
         forgotten.flatMap((event) =>
-          event.eventType === 'claim.forgotten' ? event.payload.observationIds : [],
+          event.eventType === 'claim.forgotten'
+            ? event.payload.observationIds
+            : [],
         ),
       ).toEqual(first.importedObservationIds)
       for (const event of forgotten) {
@@ -367,6 +637,108 @@ describe('V1 memory migration', () => {
     }
   })
 
+  test('does not retire claims from a lower-revision marker with forged observation references', async () => {
+    const repository = new Repository()
+    expect((await run(repository, memory())).outcome).toBe('imported')
+    const marker = migrationMarkers(repository)[0]!
+    if (marker.eventType !== 'migration.v1.imported') return
+    repository.events.set(
+      marker.eventId,
+      MemoryEventEnvelopeSchema.parse({
+        ...marker,
+        payload: {
+          ...marker.payload,
+          importedObservationIds: ['observation:user-owned'],
+        },
+      }),
+    )
+
+    expect((await run(repository, memory({ revision: 4 }))).outcome).toBe(
+      'imported',
+    )
+    expect(
+      [...repository.events.values()].filter(
+        (event) => event.eventType === 'claim.forgotten',
+      ),
+    ).toEqual([])
+  })
+
+  test('does not retire claims from a lower-revision marker without deterministic migration identity', async () => {
+    const repository = new Repository()
+    expect((await run(repository, memory())).outcome).toBe('imported')
+    const marker = migrationMarkers(repository)[0]!
+    if (marker.eventType !== 'migration.v1.imported') return
+    repository.events.set(
+      marker.eventId,
+      MemoryEventEnvelopeSchema.parse({
+        ...marker,
+        payload: {
+          ...marker.payload,
+          legacyRecordKey: 'v1:forged-lower-revision-marker',
+        },
+      }),
+    )
+
+    expect((await run(repository, memory({ revision: 4 }))).outcome).toBe(
+      'imported',
+    )
+    expect(
+      [...repository.events.values()].filter(
+        (event) => event.eventType === 'claim.forgotten',
+      ),
+    ).toEqual([])
+  })
+
+  test('does not retire claims when a lower-revision marker has no migration reservation', async () => {
+    const repository = new Repository()
+    expect((await run(repository, memory())).outcome).toBe('imported')
+    const reservation = migrationReservations(repository)[0]!
+    repository.events.delete(reservation.eventId)
+
+    expect((await run(repository, memory({ revision: 4 }))).outcome).toBe(
+      'imported',
+    )
+    expect(
+      [...repository.events.values()].filter(
+        (event) => event.eventType === 'claim.forgotten',
+      ),
+    ).toEqual([])
+  })
+
+  test('does not retire claims when a referenced observation is not migration-owned', async () => {
+    const repository = new Repository()
+    expect((await run(repository, memory())).outcome).toBe('imported')
+    const observation = [...repository.events.values()].find(
+      (event) => event.eventType === 'observation.recorded',
+    )!
+    if (observation.eventType !== 'observation.recorded') return
+    repository.events.set(
+      observation.eventId,
+      MemoryEventEnvelopeSchema.parse({
+        ...observation,
+        payload: {
+          ...observation.payload,
+          observation: {
+            ...observation.payload.observation,
+            provenance: {
+              ...observation.payload.observation.provenance,
+              recordedBy: 'user-authored',
+            },
+          },
+        },
+      }),
+    )
+
+    expect((await run(repository, memory({ revision: 4 }))).outcome).toBe(
+      'imported',
+    )
+    expect(
+      [...repository.events.values()].filter(
+        (event) => event.eventType === 'claim.forgotten',
+      ),
+    ).toEqual([])
+  })
+
   test('reports imported when retry commits a marker after the body already committed', async () => {
     const repository = new Repository()
     const source = memory()
@@ -383,9 +755,13 @@ describe('V1 memory migration', () => {
     const recovered = await run(repository, source)
     expect(recovered).toMatchObject({ outcome: 'imported' })
     if (recovered.outcome === 'imported') {
-      expect(recovered.lastEventId).toBe([...repository.events.values()].at(-1)!.eventId)
+      expect(recovered.lastEventId).toBe(
+        [...repository.events.values()].at(-1)!.eventId,
+      )
     }
-    expect([...repository.events.keys()].slice(0, bodyIds.length)).toEqual(bodyIds)
+    expect([...repository.events.keys()].slice(0, bodyIds.length)).toEqual(
+      bodyIds,
+    )
     expect(new Set(repository.events.keys()).size).toBe(repository.events.size)
     expect(migrationMarkers(repository)).toHaveLength(1)
   })
@@ -438,9 +814,13 @@ describe('V1 memory migration', () => {
     expect(recovered).toEqual(imported)
     expect([...recovering.events.keys()]).toEqual([...clean.events.keys()])
     expect(
-      [...recovering.events.values()].map(({ sequence: _sequence, ...event }) => event),
+      [...recovering.events.values()].map(
+        ({ sequence: _sequence, ...event }) => event,
+      ),
     ).toEqual(
-      [...clean.events.values()].map(({ sequence: _sequence, ...event }) => event),
+      [...clean.events.values()].map(
+        ({ sequence: _sequence, ...event }) => event,
+      ),
     )
   })
 
@@ -450,7 +830,11 @@ describe('V1 memory migration', () => {
     const first = memory()
     expect(await run(repository, first)).toMatchObject({ outcome: 'failed' })
     expect(migrationReservations(repository)).toHaveLength(1)
-    expect([...repository.events.values()].filter((event) => event.eventType !== 'migration.v1.reserved')).toHaveLength(0)
+    expect(
+      [...repository.events.values()].filter(
+        (event) => event.eventType !== 'migration.v1.reserved',
+      ),
+    ).toHaveLength(0)
 
     repository.failAppendCall = undefined
     const changed = memory({
@@ -462,7 +846,11 @@ describe('V1 memory migration', () => {
       outcome: 'rejected',
       reason: 'checksum-mismatch',
     })
-    expect([...repository.events.values()].filter((event) => event.eventType !== 'migration.v1.reserved')).toHaveLength(0)
+    expect(
+      [...repository.events.values()].filter(
+        (event) => event.eventType !== 'migration.v1.reserved',
+      ),
+    ).toHaveLength(0)
     expect(await run(repository, first)).toMatchObject({ outcome: 'imported' })
   })
 
@@ -490,7 +878,8 @@ describe('V1 memory migration', () => {
     expect(outcome.outcome).toBe('imported')
     expect(repository.appendRequests).toHaveLength(4)
 
-    const [reservationPage, firstPage, secondPage, markerPage] = repository.appendRequests
+    const [reservationPage, firstPage, secondPage, markerPage] =
+      repository.appendRequests
     expect(reservationPage.events).toHaveLength(1)
     expect(reservationPage.events[0]!.eventType).toBe('migration.v1.reserved')
     expect(reservationPage.expectedTail).toEqual({ kind: 'empty' })
@@ -516,7 +905,9 @@ describe('V1 memory migration audit', () => {
   test('no record and checksum mismatch make no repository calls', async () => {
     const repository = new Repository()
     expect(await audit(repository)).toEqual({ outcome: 'no-record' })
-    expect(await audit(repository, memory({ checksum: 'invalid' }))).toMatchObject({
+    expect(
+      await audit(repository, memory({ checksum: 'invalid' })),
+    ).toMatchObject({
       outcome: 'rejected',
       reason: 'checksum-mismatch',
     })
@@ -561,9 +952,13 @@ describe('V1 memory migration audit', () => {
       truncatedFields: 1,
     })
     if (outcome.outcome === 'exact' && imported.outcome === 'imported') {
-      expect(outcome.markerEventId).toBe([...migrationMarkers(repository)][0]!.eventId)
+      expect(outcome.markerEventId).toBe(
+        [...migrationMarkers(repository)][0]!.eventId,
+      )
       expect(outcome.importedTaskId).toBe(imported.importedTaskId)
-      expect(outcome.importedObservationIds).toEqual(imported.importedObservationIds)
+      expect(outcome.importedObservationIds).toEqual(
+        imported.importedObservationIds,
+      )
       expect(outcome.omittedFields).toBe(imported.omittedFields)
       expect(outcome.sourceItemCounts).toEqual(imported.sourceItemCounts)
     }
@@ -621,7 +1016,8 @@ describe('V1 memory migration audit', () => {
     const removed = [...repository.events.values()].find(
       (event) =>
         event.eventType === 'observation.recorded' &&
-        event.payload.observation.observationId === imported.importedObservationIds[0],
+        event.payload.observation.observationId ===
+          imported.importedObservationIds[0],
     )!
     repository.events.delete(removed.eventId)
 
@@ -640,7 +1036,8 @@ describe('V1 memory migration audit', () => {
     const original = [...repository.events.values()].find(
       (event) =>
         event.eventType === 'observation.recorded' &&
-        event.payload.observation.observationId === imported.importedObservationIds[0],
+        event.payload.observation.observationId ===
+          imported.importedObservationIds[0],
     )!
     if (original.eventType !== 'observation.recorded') return
     const mutated = MemoryEventEnvelopeSchema.parse({
@@ -662,6 +1059,192 @@ describe('V1 memory migration audit', () => {
     repository.events.set(original.eventId, mutated)
 
     expect(await audit(repository, source)).toMatchObject({
+      outcome: 'mismatch',
+      reason: 'imported-body-mismatch',
+    })
+  })
+
+  test('detects full deterministic task, observation, header, and marker tampering', async () => {
+    const source = memory()
+    const assertTamper = async (
+      select: (repository: Repository) => MemoryEventEnvelope,
+      mutate: (event: MemoryEventEnvelope) => unknown,
+    ) => {
+      const repository = new Repository()
+      expect((await run(repository, source)).outcome).toBe('imported')
+      const original = select(repository)
+      const replacement = MemoryEventEnvelopeSchema.parse(mutate(original))
+      repository.events.set(original.eventId, replacement)
+      expect(await audit(repository, source)).toMatchObject({
+        outcome: 'mismatch',
+        reason: 'imported-body-mismatch',
+      })
+    }
+    const task = (repository: Repository) =>
+      [...repository.events.values()].find(
+        (event) => event.eventType === 'task.created',
+      )!
+    const observation = (repository: Repository) =>
+      [...repository.events.values()].find(
+        (event) => event.eventType === 'observation.recorded',
+      )!
+    const marker = (repository: Repository) => migrationMarkers(repository)[0]!
+
+    for (const payload of [
+      { title: 'tampered' },
+      { objective: 'tampered' },
+      { initialStatus: 'created' as const, taskId: 'task:tampered' },
+      { payloadSchemaVersion: 1 as const, title: 'tampered' },
+    ]) {
+      await assertTamper(task, (event) => ({
+        ...event,
+        payload: { ...event.payload, ...payload },
+      }))
+    }
+    for (const header of [
+      { sessionId: 'session:tampered' },
+      { occurredAt: '2027-01-01T00:00:00.000Z' },
+      { projectId: 'project:tampered' },
+    ]) {
+      await assertTamper(task, (event) => ({ ...event, ...header }))
+    }
+
+    const observationMutations: Array<
+      (value: Record<string, unknown>) => Record<string, unknown>
+    > = [
+      (value) => ({ ...value, observationId: 'observation:tampered' }),
+      (value) => ({ ...value, taskId: 'task:tampered' }),
+      (value) => ({ ...value, kind: 'fact' }),
+      (value) => ({ ...value, summary: 'tampered' }),
+      (value) => ({ ...value, detail: 'tampered' }),
+      (value) => ({ ...value, confidence: 0.5 }),
+      (value) => ({
+        ...value,
+        evidence: [
+          {
+            artifact: {
+              artifactId: 'artifact:tampered',
+              location: 'src/tampered.ts',
+              classification: {
+                kind: 'source',
+                generated: false,
+                sensitivity: 'internal',
+                labels: [],
+              },
+            },
+            selector: { kind: 'file', path: 'src/tampered.ts' },
+            provenance: {
+              origin: 'migration',
+              recordedBy: 'tampered',
+              sourceEventIds: [],
+              sourceSessionId: sessionId,
+              metadata: {},
+            },
+            capturedAt: '2026-09-10T19:41:53.753Z',
+          },
+        ],
+      }),
+      (value) => ({
+        ...value,
+        selectors: [{ kind: 'file', path: 'tampered.ts' }],
+      }),
+      (value) => ({
+        ...value,
+        provenance: { ...(value.provenance as object), origin: 'derived' },
+      }),
+      (value) => ({
+        ...value,
+        provenance: { ...(value.provenance as object), recordedBy: 'tampered' },
+      }),
+      (value) => ({
+        ...value,
+        provenance: {
+          ...(value.provenance as object),
+          sourceEventIds: ['event:tampered'],
+        },
+      }),
+      (value) => ({
+        ...value,
+        provenance: {
+          ...(value.provenance as object),
+          sourceSessionId: 'session:tampered',
+        },
+      }),
+      (value) => ({
+        ...value,
+        provenance: {
+          ...(value.provenance as object),
+          metadata: {
+            category: 'tampered',
+            revision: 3,
+            checksum: source.checksum,
+          },
+        },
+      }),
+      (value) => ({ ...value, tags: ['tampered'] }),
+      (value) => ({ ...value, observedAt: '2027-01-01T00:00:00.000Z' }),
+    ]
+    for (const mutate of observationMutations) {
+      await assertTamper(observation, (event) => {
+        if (event.eventType !== 'observation.recorded') return event
+        return {
+          ...event,
+          payload: {
+            ...event.payload,
+            observation: mutate(
+              event.payload.observation as unknown as Record<string, unknown>,
+            ),
+          },
+        }
+      })
+    }
+
+    for (const payload of [
+      { importedTaskId: 'task:tampered' },
+      { importedObservationIds: [] },
+      { importedObservationIds: ['observation:tampered'] },
+      { omittedFields: 99 },
+      { warnings: [] },
+      { sourceItemCounts: { requirements: 99 } },
+      { truncatedFields: 99 },
+      { legacyRecordKey: 'tampered' },
+    ]) {
+      await assertTamper(marker, (event) => ({
+        ...event,
+        payload: { ...event.payload, ...payload },
+      }))
+    }
+  })
+
+  test('allows unrelated events but fails duplicate deterministic IDs', async () => {
+    const source = memory()
+    const repository = new Repository()
+    expect((await run(repository, source)).outcome).toBe('imported')
+    const template = [...repository.events.values()].find(
+      (event) => event.eventType === 'task.created',
+    )!
+    repository.events.set(
+      'event:unrelated',
+      MemoryEventEnvelopeSchema.parse({
+        ...template,
+        eventId: 'event:unrelated',
+        payload: { ...template.payload, taskId: 'task:unrelated' },
+        sequence: repository.sequence + 1,
+      }),
+    )
+    expect(await audit(repository, source)).toMatchObject({ outcome: 'exact' })
+
+    const events = [...repository.events.values()]
+    const reader: V1MigrationAuditReader = {
+      async export() {
+        return {
+          outcome: 'page',
+          events: [...events, template],
+          nextAfterEventId: null,
+        }
+      },
+    }
+    expect(await audit(reader, source)).toMatchObject({
       outcome: 'mismatch',
       reason: 'imported-body-mismatch',
     })
@@ -707,7 +1290,11 @@ describe('V1 memory migration audit', () => {
           async export() {
             return {
               outcome: 'rejected',
-              error: { code: 'invalid-request', message: 'no', retryable: false },
+              error: {
+                code: 'invalid-request',
+                message: 'no',
+                retryable: false,
+              },
             }
           },
         },
@@ -735,7 +1322,11 @@ describe('V1 memory migration audit', () => {
       {
         reader: {
           async export() {
-            return { outcome: 'page', events: 'invalid', nextAfterEventId: null }
+            return {
+              outcome: 'page',
+              events: 'invalid',
+              nextAfterEventId: null,
+            }
           },
         } as unknown as V1MigrationAuditReader,
         expected: { outcome: 'failed', reason: 'invalid-export' },
@@ -743,7 +1334,11 @@ describe('V1 memory migration audit', () => {
       {
         reader: {
           async export() {
-            return { outcome: 'page', events: [otherProjectEvent], nextAfterEventId: null }
+            return {
+              outcome: 'page',
+              events: [otherProjectEvent],
+              nextAfterEventId: null,
+            }
           },
         },
         expected: { outcome: 'failed', reason: 'wrong-project' },
@@ -816,7 +1411,11 @@ describe('V1 memory migration audit', () => {
           sequence: page + 1,
         })
         page++
-        return { outcome: 'page', events: [event], nextAfterEventId: event.eventId }
+        return {
+          outcome: 'page',
+          events: [event],
+          nextAfterEventId: event.eventId,
+        }
       },
     }
 
@@ -835,16 +1434,20 @@ describe('V1 memory migration audit', () => {
     const template = canonical.find(
       (event) => event.eventType === 'task.created',
     )!
-    const padding = Array.from({ length: 1_000 - canonical.length }, (_, index) =>
-      cloneEvent(template, {
-        eventId: MemoryEventIdSchema.parse(`event:audit-padding-${index}`),
-        sequence: canonical.length + index + 1,
-        sessionId: MemorySessionIdSchema.parse(`session:audit-padding-${index}`),
-        payload: {
-          ...template.payload,
-          taskId: TaskIdSchema.parse(`task:audit-padding-${index}`),
-        },
-      }),
+    const padding = Array.from(
+      { length: 1_000 - canonical.length },
+      (_, index) =>
+        cloneEvent(template, {
+          eventId: MemoryEventIdSchema.parse(`event:audit-padding-${index}`),
+          sequence: canonical.length + index + 1,
+          sessionId: MemorySessionIdSchema.parse(
+            `session:audit-padding-${index}`,
+          ),
+          payload: {
+            ...template.payload,
+            taskId: TaskIdSchema.parse(`task:audit-padding-${index}`),
+          },
+        }),
     )
     const events = [...canonical, ...padding]
     let calls = 0
