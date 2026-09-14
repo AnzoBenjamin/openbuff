@@ -254,7 +254,24 @@ function loadProductionGateFileContentMarker(): (path: string) => string {
       'Unable to find hoisted GATE_FILE_MISSING_CONTENT_MARKER before readGateFileContentMarker',
     )
   }
-  const hoistEnd = base2JavaScript.indexOf(';', hoistStart)
+  // End-of-declaration robust to a `;` inside the string-literal initializer:
+  // find the `=`, the initializer's opening quote (either quote style), its
+  // matching closing quote, then the terminating `;`. A bare indexOf(';')
+  // could mis-slice if the literal ever contained a `;`.
+  const equalsIndex = base2JavaScript.indexOf('=', hoistStart)
+  const openQuoteOffset =
+    equalsIndex < 0 ? -1 : base2JavaScript.slice(equalsIndex).search(/['"]/)
+  const openQuoteIndex =
+    openQuoteOffset < 0 ? -1 : equalsIndex + openQuoteOffset
+  const closeQuoteIndex =
+    openQuoteIndex < 0
+      ? -1
+      : base2JavaScript.indexOf(
+          base2JavaScript.charAt(openQuoteIndex),
+          openQuoteIndex + 1,
+        )
+  const hoistEnd =
+    closeQuoteIndex < 0 ? -1 : base2JavaScript.indexOf(';', closeQuoteIndex)
   if (hoistEnd < 0) {
     throw new Error('Unable to find the end of the GATE_FILE_MISSING_CONTENT_MARKER declaration')
   }
@@ -1265,7 +1282,15 @@ describe('base2 reviewer spawn conditions e2e', () => {
         const symlinkAbsolute = join(tempDir, 'fixture.ts')
         try {
           symlinkSync(target, symlinkAbsolute, 'file')
-        } catch {
+        } catch (symlinkError) {
+          // POSIX symlink creation can still fail (e.g. EPERM under a
+          // sandboxed filesystem); log the skip so it is visible, then return.
+          const code = String(
+            (symlinkError as { code?: unknown }).code ?? 'unknown',
+          )
+          console.warn(
+            `parity guard: skipping external-symlink sub-case (symlinkSync failed, code=${code})`,
+          )
           return
         }
         const symlinkPath = relative(process.cwd(), symlinkAbsolute).replace(
@@ -1295,7 +1320,15 @@ describe('base2 reviewer spawn conditions e2e', () => {
         const internalSymlinkAbsolute = join(linkDir, 'link.ts')
         try {
           symlinkSync(internalTarget, internalSymlinkAbsolute, 'file')
-        } catch {
+        } catch (symlinkError) {
+          // POSIX symlink creation can still fail (e.g. EPERM under a
+          // sandboxed filesystem); log the skip so it is visible, then return.
+          const code = String(
+            (symlinkError as { code?: unknown }).code ?? 'unknown',
+          )
+          console.warn(
+            `parity guard: skipping internal-symlink sub-case (symlinkSync failed, code=${code})`,
+          )
           return
         }
         const internalSymlinkPath = relative(
@@ -1328,7 +1361,15 @@ describe('base2 reviewer spawn conditions e2e', () => {
         try {
           symlinkSync(realDir, aliasDir, 'dir')
           midSymlinkAbsolute = join(aliasDir, 'sub', 'file.ts')
-        } catch {
+        } catch (symlinkError) {
+          // POSIX symlink creation can still fail (e.g. EPERM under a
+          // sandboxed filesystem); log the skip so it is visible, then return.
+          const code = String(
+            (symlinkError as { code?: unknown }).code ?? 'unknown',
+          )
+          console.warn(
+            `parity guard: skipping mid-path-symlink sub-case (symlinkSync failed, code=${code})`,
+          )
           return
         }
         const midSymlinkPath = relative(
