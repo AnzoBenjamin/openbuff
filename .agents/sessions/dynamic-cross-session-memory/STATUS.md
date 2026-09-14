@@ -1,8 +1,8 @@
 # STATUS — Dynamic Cross-Session Memory V2 Repair
 
-Status: implementation complete; MEM2-R1-T2 resolved (typed-unsupported secure-open fallback) and validated green.
+Status: implementation complete; MEM2-R1-T2 resolved (typed-unsupported secure-open fallback); R7-T2 green; R7-T3 BLOCKED by harness limitation (see R7 gate entry at end).
 Current phase: R7 — integration / finalization.
-Current task: MEM2-R7 — obtain stable exact-snapshot reviews; full race-free WAL/SHM open deferred pending native-addon authorization (option C).
+Current task: none active. R7-T3 is blocked pending the proposed `committed-surface` harness fix; R7-T4 durable-artifact finalization is dispositioned below.
 
 ## Implemented and locally validated before this plan refresh
 
@@ -193,3 +193,23 @@ Fixed the pre-push hook failure that blocked the gate-improvement push: the test
 
 Re-ran MEM2-R7-T2 (package-wide validation + artifact smoke) on the current tree to produce a fresh green baseline before R7-T3. Results: monorepo typecheck 11/11; common 1245 pass; agent-runtime 1618 pass; sdk 1398 pass / 1 skip; cli 3093 pass / 15 skip / 2 fail; evals memory-retention 6/6. SDK build (ESM/CJS/types) and `smoke-test:dist` (CJS require + tree-sitter) passed; CLI binary build + `--version` probe passed. The 2 CLI failures are the known flaky `StatusBar` React-act tests (`renders the status label...` and `hides the scroll control...`), which pass 3/3 in isolation, were untouched by this work, and are unrelated to memory-v2 — a pre-existing flake, not an R7 blocker. R7-T2 acceptance met.
 
+
+<!-- update_plan_status:appended -->
+## R7-T3 BLOCKED (harness limitation) + R7-T4 disposition — 2026-09-14T09:12:00.000Z
+
+**R7-T3 "obtain stable exact-snapshot reviews" — status: BLOCKED (not done).**
+
+The memory-v2 feature is fully committed at HEAD `543bae880` with a clean worktree, so there is no pending gate-file set to fingerprint. Reviewer-family specialists (`compatibility-reviewer`, `migration-reviewer`, `reliability-reviewer`) require `params.snapshot_id` matching `^v3:[a-f0-9]{64}$`, and that token is minted by `hashGateSnapshotDetails(details)` = `'v3:' + sha256(files-v4 details of PENDING files)` (`agents/base2/gate-fingerprint.ts`, `isAttestableSnapshotFingerprint`). With no pending files that fingerprint is a constant, and `agents/base2/gate-state.ts` documents that a `'no-diff'` fingerprint "is a CONSTANT by construction" and that a non-attestable fingerprint "never mints a receipt, for any kind." So R7-T3's own rule — "every specialist spawn must carry the SAME gate-assigned `params.snapshot_id`" — is **unsatisfiable on a committed clean tree by construction**. It is not a flaky failure and not user error.
+
+**Repro:** (1) `get_change_review_bundle` → `files=["cli/knowledge.md"]` and a bare-hex `snapshotId` that is evidence-only (changes every call, explicitly non-reusable per the params contract). (2) A reviewer-family spawn with `params.snapshot_id` = that bare hex / the truncated display form `v3:131ae03adb957` is rejected as "invalid params" (no legacy-format bypass exists). Only `security-reviewer` uses the looser `changed_files` + `snapshot_fingerprint` contract, which is why it alone ran.
+
+**Equivalent-evidence package (NOT a frozen-bundle signoff):**
+- R7-T2 green package-wide baseline at `543bae880` (above).
+- `security-reviewer`: NON_BLOCKING with 2 low advisories (both accepted) — valid under its looser contract; run against the current bundle.
+- Prior migration / compatibility / reliability receipts from **earlier dirty-tree gates over these exact files** — they attest to their edit snapshots, not to HEAD-as-shipped. Explicitly labeled as such.
+- **No NEW frozen bundle is representable post-commit.**
+
+**Proposed fix (the real unblocker):** add a `committed-surface` snapshot mode that mints `v3:<64hex>` deterministically from the committed tree at HEAD (enumerate reviewable files at HEAD with content markers; hash via the existing `buildGateSnapshotDetails(files, '')` + `hashGateSnapshotDetails`), gated to be usable only when the worktree is clean and the fileset is non-empty. This makes R7-T3 mechanically satisfiable for post-commit review without weakening the dirty-tree contract — an additive evidence *kind* (like the existing `'reviewed-diff'` vs `'no-diff'`), not a new trust model. **Do not mark R7-T3 done until this lands and a real bundle is frozen.**
+
+**R7-T4 "finalize durable artifacts" — status: PROCEED, explicitly evidence-substituted.**
+PLAN/STATUS/LESSONS now reflect the actual worktree, the R1-T2 supported/disabled platform decision, the R7-T2 receipts, and the deferred default-cutover/native-helper work; the PLAN current-task pointer is cleared. This is **explicitly NOT a frozen-bundle signoff** — it is an equivalent-evidence disposition pending the `committed-surface` fix. Do not claim "all four specialists attested the same snapshot": one did (security); three did not and could not.
