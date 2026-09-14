@@ -276,6 +276,29 @@ function loadProductionGateFileContentMarker(): (path: string) => string {
     throw new Error('Unable to find the end of the GATE_FILE_MISSING_CONTENT_MARKER declaration')
   }
   const hoistedConstSource = base2JavaScript.slice(hoistStart, hoistEnd + 1)
+  // Fail-fast structural assertion on the slice BEFORE evaluating: it must be
+  // exactly the hoisted const declaration — starting with the const name,
+  // terminated by `;`, and containing exactly one `=` (its initializer). The
+  // check is quote-style agnostic because the transpiled initializer may use
+  // either quote. If base2.ts is ever reordered so the const lands after
+  // readGateFileContentMarker (caught by the hoistStart/inlineFnStart
+  // ordering guard above) or the const is moved inside the function body
+  // (caught here when the slice loses declaration shape), these guards throw
+  // a clear error instead of the `new Function` eval failing with a confusing
+  // ReferenceError that the parity assertion would only surface as
+  // `unreadable:unknown` — or worse, a silently wrong sentinel.
+  const sliceEqualsCount = hoistedConstSource.split('=').length - 1
+  if (
+    !hoistedConstSource.startsWith(
+      'const GATE_FILE_MISSING_CONTENT_MARKER',
+    ) ||
+    !hoistedConstSource.endsWith(';') ||
+    sliceEqualsCount !== 1
+  ) {
+    throw new Error(
+      `loadProductionGateFileContentMarker: hoisted GATE_FILE_MISSING_CONTENT_MARKER slice is malformed (layout changed?): ${JSON.stringify(hoistedConstSource.slice(0, 120))}`,
+    )
+  }
   const fn = new Function(
     `"use strict";\n${hoistedConstSource}\n${helperSource}\nreturn readGateFileContentMarker`,
   ) as () => (path: string) => string
