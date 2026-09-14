@@ -165,7 +165,7 @@ const spawnAgentEntryFields = {
             .string()
             .optional()
             .describe(
-              'Assigned gate snapshot fingerprint (reviewer specialists)',
+              'Optional gate-assigned snapshot token (reviewer specialists). Runtime-owned spawns pass the gate-assigned v3:… token; manual spawns omit this key entirely.',
             ),
           changed_files: z
             .array(z.string())
@@ -291,7 +291,7 @@ Spawn agents in parallel (up to batch max). Pass \`agents\` as a real array of o
 
 - **\`agent_type\` must be a name from the live "You can spawn the following agents" catalog** (hyphenated ids; underscores accepted). It is an agent name (e.g. basher, file-picker, general-agent), **not a tool name** (read_files, str_replace, …). Call tools directly; do not wrap them in spawn_agents.
 - Prefer spawn_agents over single-agent tool aliases so multiple agents can run in parallel. Same nested \`prompt\` + \`params\` schema either way.
-- Include required agent params (e.g. basher \`command\`, git-committer \`owned_paths\`, librarian \`repoUrl\`, dependency-manager \`manager\`+\`operation\`, security-reviewer \`changed_files\`+\`snapshot_fingerprint\`, reviewer specialists \`snapshot_id\`, repair-editor versioned \`handoff\`). Agent-specific fields go in \`params\`, not only the prompt.
+- Include required agent params (e.g. basher \`command\`, git-committer \`owned_paths\`, librarian \`repoUrl\`, dependency-manager \`manager\`+\`operation\`, security-reviewer \`changed_files\`+\`snapshot_fingerprint\`, repair-editor versioned \`handoff\`). Reviewer-family \`snapshot_id\` is NOT a manual param: manual spawns omit it entirely (the gate-assigned \`v3:\` token is minted only for runtime-owned spawns); put scoped files in \`params.files\` and the question in the prompt. Agent-specific fields go in \`params\`, not only the prompt.
 - \`background: true\` returns a jobId immediately; poll with check_background_agent.
 
 Example:

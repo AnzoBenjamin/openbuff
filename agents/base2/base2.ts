@@ -65,7 +65,7 @@ const BROAD_AUDIT_POINTER_TAILS: Record<BroadAuditFinalizeClause, string> = {
     ' In plan mode, do not implement — translate the findings into the durable plan packet instead.',
 }
 const specialistRoutingPointer =
-  'Choosing a specialist agent → read_files `agents/guides/specialist-routing.md`. If that guide is unavailable, route only on a crossed risk boundary (architecture, requirements, performance, reliability, migration, compatibility, accessibility, dependencies), pass the gate-assigned `params.snapshot_id`, and never substitute a specialist for the runtime-owned final gate.'
+  'Choosing a specialist agent → read_files `agents/guides/specialist-routing.md`. If that guide is unavailable, route only on a crossed risk boundary (architecture, requirements, performance, reliability, migration, compatibility, accessibility, dependencies), never include `snapshot_id` in a manually authored reviewer-family spawn (the gate-assigned token is only available to runtime-owned spawns; put scoped files in params and the question in the prompt; security-reviewer still requires `changed_files` + `snapshot_fingerprint` on manual spawns), and never substitute a specialist for the runtime-owned final gate.'
 const gitDisciplinePointer =
   'Before any git commit/branch/push → read_files `agents/guides/git-discipline.md`. If that guide is unavailable, apply the standard git rules: delegate to `git-committer` with `params.owned_paths`, commit only after GATE: PASSED, never push or alter git config unless explicitly asked, and never commit secrets.'
 // The named guide is advisory routing only (when to ask for a pre-edit

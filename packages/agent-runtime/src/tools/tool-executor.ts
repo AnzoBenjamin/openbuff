@@ -1597,6 +1597,13 @@ const GIT_COMMITTER_WITHHELD_USER_MESSAGE =
 // paths, so the two stay in sync.
 const malformedToolCallUserMessage = (toolName: string): string =>
   `The model sent a malformed \`${toolName}\` tool call and is correcting it automatically. No action is needed.`
+// Concise, calm summary for spawn pre-validation failures (the partial
+// spawn_agents failure path and the spawn_agent_inline pre-publication check).
+// Like the followups ordering rejections, this is normal agent self-correction
+// resolved from the detailed contract in `message`, so the CLI suppresses the
+// visible banner (see `autoRecovering` in `common/src/types/print-mode.ts`).
+const SPAWN_INVALID_PARAMS_USER_MESSAGE =
+  'One or more requested sub-agents could not be spawned due to invalid parameters. The agent received the detailed contract and is retrying with corrected parameters. No action is needed.'
 
 function isTerminalFollowupCompanion(name: string): boolean {
   return (
@@ -2800,7 +2807,12 @@ export async function executeToolCall<T extends ToolName>(
           )
         } else {
           const errorMsg = `Some agents could not be spawned: ${errors.join('; ')}. Proceeding with valid agents only.`
-          onResponseChunk({ type: 'error', message: errorMsg })
+          onResponseChunk({
+            type: 'error',
+            message: errorMsg,
+            userMessage: SPAWN_INVALID_PARAMS_USER_MESSAGE,
+            autoRecovering: true,
+          })
           effectiveInput = { ...effectiveInput, agents: validAgents }
         }
       }
@@ -2828,7 +2840,12 @@ export async function executeToolCall<T extends ToolName>(
         )
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        onResponseChunk({ type: 'error', message })
+        onResponseChunk({
+          type: 'error',
+          message,
+          userMessage: SPAWN_INVALID_PARAMS_USER_MESSAGE,
+          autoRecovering: true,
+        })
         logger.debug(
           { toolName, error: message },
           'spawn_agent_inline input failed pre-publication validation',

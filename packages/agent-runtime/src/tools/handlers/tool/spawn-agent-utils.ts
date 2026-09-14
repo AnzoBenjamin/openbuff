@@ -1809,24 +1809,24 @@ export function validateAgentInput(
         params && typeof params === 'object' && !Array.isArray(params)
           ? (params as Record<string, unknown>)
           : undefined
-      const rawSnapshotId =
-        typeof paramsRecord?.snapshot_id === 'string'
-          ? paramsRecord.snapshot_id.trim()
-          : ''
-      const isBareBundleHex = /^[a-f0-9]{64}$/i.test(rawSnapshotId)
-      const bareHexNote = isBareBundleHex
-        ? ` Received bare 64-hex bundle snapshotId "${rawSnapshotId.slice(0, 12)}…" (evidence-only, from get_change_review_bundle) — not gate attestation. Recompute the gate-owned v3 token via hashGateSnapshotDetails(pendingGateFiles) and pass that as params.snapshot_id.`
-        : ''
+      // Branch the recovery hint on whether the caller actually supplied a
+      // snapshot_id key, so exactly one directive is emitted per situation.
+      const snapshotIdSupplied = Object.hasOwn(
+        paramsRecord ?? {},
+        'snapshot_id',
+      )
       const recoveryHint =
         normalizedAgentType === 'basher' && issuePaths.has('command')
           ? '\n\nRecovery: spawn Basher with { "agent_type": "basher", "params": { "command": "<shell command>" } }. A command mentioned only in prompt prose is never executed.'
           : reviewerFamilyRequiredSnapshotIds.has(normalizedAgentType) &&
               issuePaths.has('snapshot_id')
-            ? `\n\nRecovery: set params.snapshot_id to the gate-assigned opaque v3:… token from the parent gate (hashGateSnapshotDetails(pendingGateFiles) / specialistCreditFingerprint), for example { "agent_type": "${normalizedAgentType}", "params": { "snapshot_id": "v3:<64-hex>" } }. Bare hex from get_change_review_bundle.snapshotId is evidence-only and will fail attestation; never invent or reuse a stale fingerprint.${bareHexNote}`
+            ? snapshotIdSupplied
+              ? `\n\nRecovery: the supplied params.snapshot_id is invalid — the gate-assigned opaque v3:… token is minted only for runtime-owned programmatic spawns, and no caller-side call can obtain or derive one. Bare hex from get_change_review_bundle.snapshotId is evidence-only and will fail attestation; never invent or reuse a stale fingerprint, and never use a truncated 16-char display prefix from gate blocks or telemetry. A manual spawn cannot supply a valid token: omit params.snapshot_id entirely — put the scoped file list in params.files and the review question in the prompt — and end the turn to wait for the runtime-owned gate. Only security-reviewer accepts params.snapshot_fingerprint; reviewer-family agents never do.`
+              : `\n\nRecovery: manual spawns omit \`params.snapshot_id\` entirely — put the scoped file list in \`params.files\` and the review question in the prompt. Post-edit reviewer-family spawns are runtime-owned: end the turn and wait for the gate instead of spawning manually. Only security-reviewer accepts \`params.snapshot_fingerprint\`; reviewer-family agents never do.`
             : normalizedAgentType === 'security-reviewer' &&
                 (issuePaths.has('snapshot_fingerprint') ||
                   Object.hasOwn(paramsRecord ?? {}, 'snapshot_id'))
-              ? '\n\nRecovery: replace params.snapshot_id with params.snapshot_fingerprint, or add params.snapshot_fingerprint when it is missing. Retain params.changed_files and preserve both canonical field names exactly.'
+              ? '\n\nRecovery: security-reviewer is the documented exception to the omit-for-manual contract — its schema still requires params.changed_files and params.snapshot_fingerprint on manual spawns too. Replace params.snapshot_id with params.snapshot_fingerprint, or add params.snapshot_fingerprint with the stable fingerprint value to echo exactly; the schema imposes no v3: pattern on that key, so no gate-owned token is needed. Retain params.changed_files and preserve both canonical field names exactly.'
               : normalizedAgentType === 'dependency-manager' &&
                   (issuePaths.has('manager') || issuePaths.has('operation'))
                 ? '\n\nRecovery: place both canonical keys in params, for example { "agent_type": "dependency-manager", "params": { "manager": "npm", "operation": "add" } }. manager must come from repository manifest/environment evidence. operation must be one of add, remove, sync, restore, or update. Do not infer dependency mutation authorization from a validation failure.'

@@ -979,7 +979,7 @@ export interface SpawnAgentsParams {
       push?: boolean
       /** Remote used for fetch/push (git-committer) */
       remote?: string
-      /** Assigned gate snapshot fingerprint (reviewer specialists) */
+      /** Optional gate-assigned snapshot token (reviewer specialists). Runtime-owned spawns pass the gate-assigned v3:… token; manual spawns omit this key entirely. */
       snapshot_id?: string
       /** Changed file paths to review (security-reviewer) */
       changed_files?: string[]

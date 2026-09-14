@@ -1284,31 +1284,21 @@ Input fields:
 - `params` (object, optional) — parameters object for the child agent.
   Direct agent schemas also accept a stringified JSON object for `params`
   and parse it before validation; malformed JSON, arrays, and objects that
-  do not match the child agent's schema still fail validation.
-- `handoff` (object, optional) — structured handoff payload forwarded to
-  the child spawn entry.
-- `background` (boolean, optional) — launches the child as a background job.
-
 `spawn_agents.agents` also performs bounded repair for one- or
 double-stringified arrays and stringified object entries. Malformed or
 truncated JSON remains rejected; the runtime never fabricates an empty agent
 entry or silently drops required parameters. Stringified `params` and
 `handoff` objects are decoded at their envelope boundary only; legitimate
 nested string values such as shell commands remain strings. Basher requires
-`params.command`, and snapshot-scoped reviewers require the exact current
-gate-owned `v3:…` `params.snapshot_id` / `snapshot_fingerprint` from the parent
-gate (not bare `get_change_review_bundle.snapshotId` hex, which is evidence-only).
+`params.command`. Reviewer-family specialists accept `params.snapshot_id` only
+on runtime-owned programmatic spawns, where the parent gate mints the exact
+current opaque `v3:…` token (never bare `get_change_review_bundle.snapshotId`
+hex, which is evidence-only); manual/advisory prompt-authored spawns must omit
+`params.snapshot_id` entirely — put the scoped file list in `params.files` and
+the review question in the prompt. Only `security-reviewer` accepts
+`params.snapshot_fingerprint` (with `params.changed_files`), and manual spawns
+omit that key too.
 
-Example:
-
-```json
-{
-  "prompt": "Run pwd",
-  "params": { "command": "pwd" }
-}
-```
-
-Equivalent tolerated form when a provider serializes nested params as a
 string:
 
 ```json

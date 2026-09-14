@@ -56,6 +56,19 @@ describe('spawn_agents handoff schema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('rejects a versioned handoff that does not satisfy the canonical AgentHandoff schema', () => {
+    const result = spawnAgentsParams.inputSchema.safeParse({
+      agents: [
+        {
+          agent_type: 'editor',
+          handoff: { schemaVersion: 1, objective: 'x' },
+        },
+      ],
+    })
+
+    expect(result.success).toBe(false)
+  })
+
   it('repairs double-stringified lists and stringified agent entries', () => {
     const entry = {
       agent_type: 'file-picker',

@@ -53,26 +53,28 @@ Ownership and timing — Final Gate always runs last; specialist gates are scope
 
 ## Params Contract
 
-Pass the exact params contract or the spawn fails. Do not substitute the bare hex `snapshotId` from `get_change_review_bundle` — reviewer-family requires the opaque `v3:<64-hex>` token from the parent gate.
+`params.snapshot_id` is optional in the reviewer-family schema, but only one mode is valid per spawn. Runtime-owned programmatic spawns pass the gate-assigned opaque `v3:<64-hex>` token; manual spawns omit `params.snapshot_id` entirely. Never substitute the bare hex `snapshotId` from `get_change_review_bundle` — when the key is supplied it must be the opaque `v3:<64-hex>` token from the parent gate.
 
 | Specialist family                                                                                                                                                                                                          | Required `params`                                        | On mismatch                                                             |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Reviewer-family (`product-reviewer`, `performance-specialist`, `reliability-reviewer`, `migration-reviewer`, `compatibility-reviewer`, `accessibility-reviewer`, `ux-visual-reviewer`, `dependency-reviewer`, `evaluator`) | `params.snapshot_id` = `v3:<64-hex>` (opaque gate token) | Spawn fails: missing or wrong key, or bare hex instead of `v3:<64-hex>` |
-| `security-reviewer` (exception)                                                                                                                                                                                            | `params.changed_files` + `params.snapshot_fingerprint`   | Spawn fails; does not accept `params.snapshot_id`                       |
+| Reviewer-family (`product-reviewer`, `performance-specialist`, `reliability-reviewer`, `migration-reviewer`, `compatibility-reviewer`, `accessibility-reviewer`, `ux-visual-reviewer`, `dependency-reviewer`, `evaluator`) | `params.snapshot_id` = `v3:<64-hex>` (opaque gate token) for runtime-owned spawns; omitted entirely for manual spawns | Spawn fails: when supplied, a wrong value or bare hex instead of `v3:<64-hex>` fails; manual spawns that supply any value fail |
+| `security-reviewer` (exception)                                                                                                                                                                                            | `params.changed_files` + `params.snapshot_fingerprint` (required on manual spawns too)   | Spawn fails; does not accept `params.snapshot_id`; omitting the schema-required `snapshot_fingerprint` also fails                       |
+
+Manual/advisory reviewer-family spawns must OMIT `params.snapshot_id` entirely. The gate-assigned `v3:<64-hex>` token is only minted for runtime-owned programmatic spawns; a prompt-authored spawn call cannot obtain one, and display fingerprints in gate blocks or telemetry are truncated 16-char prefixes that never satisfy `^v3:[a-f0-9]{64}$`. No caller-facing guidance may tell a manual reviewer-family spawner to require, hunt for, or supply a gate-owned token: manual caller guidance always states the omit-for-manual contract (put the scoped file list in `params.files` and the review question in the prompt). `security-reviewer` is the documented exception: its schema still requires `params.changed_files` + `params.snapshot_fingerprint` on manual spawns, so a manual caller passes both keys and supplies as `snapshot_fingerprint` the stable fingerprint value it wants echoed exactly — the schema imposes no `^v3:` pattern on that key, so the caller never needs a gate-owned token; omitting the key fails the spawn.
 
 ## Example spawns
 
 ```text
-# reviewer-family (advisory pre-edit) — requires gate token
+# reviewer-family (advisory pre-edit) — no token is passed on manual spawns
 spawn product-reviewer
-  params.snapshot_id: "v3:<64-hex>"  # opaque token from parent gate, not bare hex snapshotId
+  params.files: ["src/example.ts"]  # snapshot_id omitted entirely on manual spawns; the gate-assigned v3 token is only minted for runtime-owned spawns
 ```
 
 ```text
-# security-reviewer (exception) — requires files + fingerprint
+# security-reviewer (exception) — the schema-required fingerprint is passed on manual spawns too
 spawn security-reviewer
   params.changed_files: ["src/auth/login.ts", "src/auth/session.ts"]
-  params.snapshot_fingerprint: "<fingerprint from gate>"  # never snapshot_id
+  params.snapshot_fingerprint: "<stable fingerprint value to echo>"  # schema-required on every spawn; no v3 pattern is imposed, so a manual caller supplies its own stable value
 ```
 
 ```text
@@ -85,7 +87,7 @@ spawn_agents [
 
 ## Compaction recovery
 
-After `context-pruner` / compaction the prior bundle hex is stale. Recompute the gate fingerprint from the fresh `get_change_review_bundle` and re-derive `v3:<64-hex>` before any manual specialist spawn. Do not reuse a stale bundle hex or a pre-compaction `snapshot_id` — the gate will reject it and the finding will not attest to the current pending set.
+After `context-pruner` / compaction do not re-derive or re-mint any `v3:<64-hex>` token for a manual specialist spawn — the gate-assigned token is only available to runtime-owned programmatic spawns, and hand-rolled recomputation never attests. Do not manually re-spawn reviewer-family specialists: wait for the runtime-owned Final Gate result. A manual reviewer-family spawn, when explicitly requested, must omit `params.snapshot_id` entirely; never pass a stale bundle hex, a stale pre-compaction `snapshot_id`, or a truncated display prefix. `security-reviewer` keeps its schema-required `params.snapshot_fingerprint` on manual spawns; supply a stable value to echo rather than re-deriving a gate-owned token.
 
 ## Sequential vs parallel
 
