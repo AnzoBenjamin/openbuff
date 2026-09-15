@@ -150,6 +150,12 @@ const inputSchema = z
       .describe(
         'Validation or review evidence associated with a stable task ID. Completing a PLAN task requires a passed validation checkpoint with receiptIds.',
       ),
+    requestCommittedSurfaceReview: z
+      .boolean()
+      .optional()
+      .describe(
+        "Requests a committed-surface specialist review of the claimed task's runtime-observed files: base2 derives a bounded fileset from the task files, verifies the worktree is fully committed and clean, routes the reviewer-family specialists over the committed bytes, and mints a durable plan-task gate receipt (evidence `committed-surface`). Requires a claimed current task; the review runs on base2's next gate pass and the request is consumed on that first attempt whether it mints or is rejected.",
+      ),
   })
   .refine(
     (input) =>
@@ -157,10 +163,11 @@ const inputSchema = z
       input.append !== undefined ||
       input.sessionStatus !== undefined ||
       input.currentTask !== undefined ||
-      input.checkpoint !== undefined,
+      input.checkpoint !== undefined ||
+      input.requestCommittedSurfaceReview === true,
     {
       message:
-        'Provide at least one `updates` entry, an `append` entry, a `sessionStatus`, a `currentTask`, or a `checkpoint`.',
+        'Provide at least one `updates` entry, an `append` entry, a `sessionStatus`, a `currentTask`, a `checkpoint`, or `requestCommittedSurfaceReview: true`.',
     },
   )
 const description = `
@@ -181,6 +188,7 @@ Session-level controls (also optional):
 - \`sessionStatus\`: When provided, \`.agents/sessions/<slug>/STATE.json\` is created or updated with the new lifecycle status (draft / ready / active / executing / validating / reviewing / blocked / paused / completed / archived). Useful for marking a plan finished without editing individual checklist lines.
 - \`currentTask\`: When provided, the \`<!-- current-task: <task> -->\` annotation in PLAN.md is rewritten. Empty string clears the pointer. The executor reads this annotation to know what to work on next.
 - \`checkpoint\`: Optional validation/review evidence bound to a stable task ID. Provide \`taskId\`, \`phase\` (\`validation\` or \`review\`), \`passed\`, an optional \`summary\`, and \`receiptIds\`. Completing a PLAN task requires a passed validation checkpoint with receiptIds.
+- \`requestCommittedSurfaceReview\`: Set to \`true\` to request a committed-surface specialist review of the claimed current task's runtime-observed files once the worktree is fully committed and clean. Requires a claimed current task. The gate derives a bounded fileset from the task's files, routes reviewer-family specialists over the committed bytes, and mints a durable plan-task gate receipt the next time the gate runs; the request is consumed on that first attempt.
 
 This tool preserves user prose: it never rewrites unmatched lines, never reorders content, and only appends when explicitly requested.
 

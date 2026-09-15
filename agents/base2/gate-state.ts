@@ -87,10 +87,19 @@ export type Base2ReviewReceipt = {
  *   - `'no-diff'`: the cycle had no pending files at all (work that is pure
  *     verification, or whose only output is a non-reviewable artifact). `files`
  *     is empty, so this fingerprint is a CONSTANT by construction.
+ *   - `'committed-surface'`: an OPT-IN reviewer-family review of a fully
+ *     committed CLEAN worktree, requested through a successful
+ *     `update_plan_status` call carrying `requestCommittedSurfaceReview: true`
+ *     while a task is claimed. `files` is a bounded, gate-derived set of the
+ *     task's runtime-observed files (each reviewable, each with a verifiable
+ *     64-hex sha256 content marker), and every routed reviewer-family
+ *     specialist attested the set. Like `'reviewed-diff'` the fingerprint
+ *     covers real file bytes, so the receipt survives turn-start content
+ *     verification while the covered bytes stay identical.
  *
  * `files` is the gate-covered set this receipt attests — for
  * `'unreviewed-scope'` that is the validated pending set, not a reviewed subset.
- * The invariant that makes verification uniform across all three kinds is
+ * The invariant that makes verification uniform across all four kinds is
  * `snapshotFingerprint === hashGateSnapshotDetails(buildGateSnapshotDetails(files, ''))`:
  * content only, with an EMPTY summary component. For `'reviewed-diff'` that is
  * exactly the reviewable-set fingerprint base2 computed for the review.
@@ -116,11 +125,15 @@ export type Base2ReviewReceipt = {
  *   2. Change supersession (`supersedePlanTaskGateReceiptsForChangedFiles` in
  *      base2.ts, called from `recordChangedFiles` and from the credited-file
  *      eviction ledger): drop every receipt whose `files` intersect the changed
- *      paths, plus EVERY receipt whose `evidence` is not `'reviewed-diff'` —
- *      those have no verifiable content identity (a `'no-diff'` fingerprint is a
- *      constant and can never fail verification), so only supersession can
- *      retire them. Legacy receipts serialized before `evidence` existed are
- *      retired the same way (fail closed).
+ *      paths, plus EVERY receipt whose `evidence` is neither `'reviewed-diff'`
+ *      nor `'committed-surface'` — those have no verifiable content identity (a
+ *      `'no-diff'` fingerprint is a constant and can never fail verification,
+ *      and an `'unreviewed-scope'` fingerprint covers a non-reviewable pending
+ *      set), so only supersession can retire them. The two verifiable kinds
+ *      hash real file bytes: a change to paths they do not cover leaves them
+ *      true, and only an intersecting change retires them. Legacy receipts
+ *      serialized before `evidence` existed are retired the same way (fail
+ *      closed).
  *
  * BOUND ON THE GUARANTEE: the runtime handler reads the LIVE
  * `agentState.base2ActiveWork` during a step, so the ledger it sees is whatever
@@ -134,9 +147,11 @@ export type Base2ReviewReceipt = {
  *     and `snapshotFingerprint`;
  *   - base2.ts `supersedePlanTaskGateReceiptsForChangedFiles` reads `evidence`
  *     and `files`;
- *   - base2.ts's gate-pass mint site reads `taskId` (one live receipt per task)
- *     and `receiptId` (an identical ID is the idempotent repeat pass and is left
- *     untouched rather than churning `recordedAt`);
+   * - base2.ts's gate-pass mint site reads `taskId` (one live receipt per task)
+   *     and `receiptId` (an identical ID is the idempotent repeat pass and is left
+   *     untouched rather than churning `recordedAt`); the opt-in committed-
+   *     surface mint reuses the same one-live-receipt-per-task REPLACE semantics
+   *     with `receiptId` derived by `committedSurfaceReceiptId`;
  *   - base2.ts's gate-pass `add_message` reads `taskId`, `receiptId`,
  *     `evidence`, and `files.length` for the printed evidence sentence;
  *   - base2.ts `buildPinnedActiveWorkMessage` reads `receiptId`, `taskId`, and
@@ -153,17 +168,22 @@ export type Base2PlanTaskGateReceipt = {
   /**
    * Gate-issued receipt id, derived from the fingerprint base2 computed itself:
    * `plan-gate:<taskId>:<fp16>` for `'reviewed-diff'`,
-   * `plan-gate:<taskId>:unreviewed-scope:<fp16>`, or
-   * `plan-gate:<taskId>:no-diff:<fp16>`, where `<fp16>` is the first 16 chars of
-   * `snapshotFingerprint`. The kind is part of the id for the two non-reviewed
-   * kinds so a receipt that claims no content review can never be mistaken for
-   * one that does.
+   * `plan-gate:<taskId>:unreviewed-scope:<fp16>`,
+   * `plan-gate:<taskId>:no-diff:<fp16>`, or
+   * `plan-gate:<taskId>:committed-surface:<fp16>`, where `<fp16>` is the first
+   * 16 chars of `snapshotFingerprint`. The kind is part of the id for the
+   * non-reviewed kinds so a receipt that claims no content review can never be
+   * mistaken for one that does.
    */
   receiptId: string
   /** Stable PLAN.md task ID this gate cycle covered. */
   taskId: string
   /** What the gate cycle actually covered; see the docblock above. */
-  evidence: 'reviewed-diff' | 'unreviewed-scope' | 'no-diff'
+  evidence:
+    | 'reviewed-diff'
+    | 'unreviewed-scope'
+    | 'no-diff'
+    | 'committed-surface'
   /** Always `hashGateSnapshotDetails(buildGateSnapshotDetails(files, ''))`. */
   snapshotFingerprint: string
   /** The gate-covered set this receipt attests (empty for `'no-diff'`). */
@@ -528,6 +548,38 @@ export type Base2ActiveWorkState = Base2GateState & {
    * Backward-compatible: older serialized state lacks it (treated as no claim).
    */
   activePlanTaskId?: string
+  /**
+   * Opt-in committed-surface review request (see `Base2PlanTaskGateReceipt`'s
+   * `'committed-surface'` evidence kind). Extracted from a SUCCESSFUL
+   * `update_plan_status` tool call whose raw input carried
+   * `requestCommittedSurfaceReview: true` and claimed a task. `pending` is the
+   * live request the main loop consumes on its FIRST attempt whatever the
+   * outcome (minted, or rejected with a durable reason), so a stale request can
+   * never auto-mint on a later clean turn the model did not intend;
+   * `consumed` / `rejected` are terminal audit records. Execution-tracking
+   * state, NOT gate credit — like `activePlanTaskId`, it lives here and not on
+   * `Base2GateState`. Backward-compatible: older serialized state lacks it
+   * (treated as no request).
+   */
+  committedSurfaceReviewRequest?:
+    | { taskId: string; requestedAt: string; status: 'pending' }
+    | { taskId: string; status: 'consumed' }
+    | { taskId: string; status: 'rejected'; reason: string }
+  /**
+   * Replay watermark for `committedSurfaceReviewRequest`: the message-history
+   * length recorded when the gate branch consumed the pending request.
+   * Extraction ignores a requesting `update_plan_status` call whose history
+   * index is below this watermark, so re-walking the full history at turn
+   * start / post-STEP can never resurrect an already-resolved request as
+   * pending. A watermark GREATER THAN the CURRENT history length is impossible
+   * (it was recorded as a past length; context compaction shrank the history)
+   * and is ignored rather than trusted, so post-compaction requests are never
+   * wrongly blocked; a watermark EQUAL to the current length is the normal
+   * post-resolution state (nothing new appended yet) and yields an empty walk.
+   * Backward-compatible: older serialized state lacks it
+   * (treated as no watermark).
+   */
+  committedSurfaceReviewResolvedFromMessageIndex?: number
   /**
    * Gate-issued per-task validation receipts (see `Base2PlanTaskGateReceipt`),
    * written only on base2's FRESH validation/reviewer gate-pass path while a
