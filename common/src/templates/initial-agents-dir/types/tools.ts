@@ -1108,6 +1108,8 @@ export interface UpdatePlanStatusParams {
     summary?: string
     receiptIds?: string[]
   }
+  /** Requests a committed-surface specialist review of the claimed task's runtime-observed files: base2 derives a bounded fileset from the task files, verifies the worktree is fully committed and clean, routes the reviewer-family specialists over the committed bytes, and mints a durable plan-task gate receipt (evidence `committed-surface`). Requires a claimed current task; the review runs on base2's next gate pass and the request is consumed on that first attempt whether it mints or is rejected. */
+  requestCommittedSurfaceReview?: boolean
 }
 
 /**
