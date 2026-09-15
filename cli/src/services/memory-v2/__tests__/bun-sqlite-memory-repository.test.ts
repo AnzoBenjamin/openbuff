@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -25,6 +34,8 @@ import {
 
 import {
   BunSQLiteMemoryRepository,
+  SQLITE_OPEN_POSTURE,
+  openBunSQLiteMemoryRepository,
   type MemoryV2EventInput,
 } from '../bun-sqlite-memory-repository'
 
@@ -49,10 +60,7 @@ function event(
   }
 }
 
-function draft(
-  eventId: string,
-  projectId = 'project-1',
-): MemoryEventDraft {
+function draft(eventId: string, projectId = 'project-1'): MemoryEventDraft {
   return MemoryEventDraftSchema.parse({
     schemaVersion: 2,
     eventSchemaVersion: 1,
@@ -90,22 +98,38 @@ function canonicalDraft(
   })
 }
 
-function evidenceFixture(path = 'src/example.ts', digest = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') {
+function evidenceFixture(
+  path = 'src/example.ts',
+  digest = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+) {
   return {
     artifact: {
       artifactId: `artifact-${path}`,
       location: path,
-      classification: { kind: 'source' as const, generated: false, sensitivity: 'internal' as const, labels: [] },
+      classification: {
+        kind: 'source' as const,
+        generated: false,
+        sensitivity: 'internal' as const,
+        labels: [],
+      },
     },
     selector: { kind: 'file' as const, path },
-    provenance: { origin: 'repository' as const, recordedBy: 'test', sourceEventIds: [], metadata: {} },
+    provenance: {
+      origin: 'repository' as const,
+      recordedBy: 'test',
+      sourceEventIds: [],
+      metadata: {},
+    },
     capturedAt: '2025-01-02T03:04:05.000Z',
     contentDigest: digest,
     excerpt: 'deterministic evidence',
   }
 }
 
-function observationFixture(observationId: string, evidence = [evidenceFixture()]) {
+function observationFixture(
+  observationId: string,
+  evidence = [evidenceFixture()],
+) {
   return {
     observationId,
     taskId: 'task-1',
@@ -115,7 +139,12 @@ function observationFixture(observationId: string, evidence = [evidenceFixture()
     confidence: 0.9,
     evidence,
     selectors: evidence.map(({ selector }) => selector),
-    provenance: { origin: 'repository' as const, recordedBy: 'test', sourceEventIds: [], metadata: {} },
+    provenance: {
+      origin: 'repository' as const,
+      recordedBy: 'test',
+      sourceEventIds: [],
+      metadata: {},
+    },
     tags: ['deterministic'],
     observedAt: '2025-01-02T03:04:05.000Z',
   }
@@ -145,30 +174,40 @@ const V1_SCHEMA = `
   PRAGMA user_version = 1;
 `
 
-function insertStoredDraft(database: Database, value: MemoryEventDraft, payloadOverride?: unknown): void {
-  database.query(
-    `INSERT INTO memory_events (
+function insertStoredDraft(
+  database: Database,
+  value: MemoryEventDraft,
+  payloadOverride?: unknown,
+): void {
+  database
+    .query(
+      `INSERT INTO memory_events (
        event_id, idempotency_key, event_type, occurred_at, payload_json,
        metadata_json, task_id, session_id, artifact_id
      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL)`,
-  ).run(
-    value.eventId,
-    `event:${value.eventId}`,
-    value.eventType,
-    value.occurredAt,
-    JSON.stringify(payloadOverride ?? value.payload),
-    JSON.stringify({
-      schemaVersion: value.schemaVersion,
-      eventSchemaVersion: value.eventSchemaVersion,
-      projectId: value.projectId,
-      sessionId: value.sessionId,
-    }),
-    'taskId' in value.payload ? value.payload.taskId : null,
-    value.sessionId,
-  )
+    )
+    .run(
+      value.eventId,
+      `event:${value.eventId}`,
+      value.eventType,
+      value.occurredAt,
+      JSON.stringify(payloadOverride ?? value.payload),
+      JSON.stringify({
+        schemaVersion: value.schemaVersion,
+        eventSchemaVersion: value.eventSchemaVersion,
+        projectId: value.projectId,
+        sessionId: value.sessionId,
+      }),
+      'taskId' in value.payload ? value.payload.taskId : null,
+      value.sessionId,
+    )
 }
 
-function createV1Fixture(root: string, value: MemoryEventDraft, payloadOverride?: unknown): string {
+function createV1Fixture(
+  root: string,
+  value: MemoryEventDraft,
+  payloadOverride?: unknown,
+): string {
   const memory = join(root, '.openbuff', 'memory')
   mkdirSync(memory, { recursive: true })
   const path = join(memory, 'memory-v2.sqlite')
@@ -182,14 +221,25 @@ function createV1Fixture(root: string, value: MemoryEventDraft, payloadOverride?
   return path
 }
 
-function rewriteStoredProject(path: string, eventId: string, projectId: unknown): void {
+function rewriteStoredProject(
+  path: string,
+  eventId: string,
+  projectId: unknown,
+): void {
   const database = new Database(path)
   try {
     database.exec('DROP TRIGGER memory_events_no_update')
-    const metadata = projectId === undefined
-      ? { schemaVersion: 2, eventSchemaVersion: 1, sessionId: 'session-1' }
-      : { schemaVersion: 2, eventSchemaVersion: 1, projectId, sessionId: 'session-1' }
-    database.query('UPDATE memory_events SET metadata_json = ?1 WHERE event_id = ?2')
+    const metadata =
+      projectId === undefined
+        ? { schemaVersion: 2, eventSchemaVersion: 1, sessionId: 'session-1' }
+        : {
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+            projectId,
+            sessionId: 'session-1',
+          }
+    database
+      .query('UPDATE memory_events SET metadata_json = ?1 WHERE event_id = ?2')
       .run(JSON.stringify(metadata), eventId)
     database.exec(`CREATE TRIGGER memory_events_no_update BEFORE UPDATE ON memory_events
       BEGIN SELECT RAISE(ABORT, 'canonical memory events are append only'); END;`)
@@ -202,8 +252,14 @@ async function openResult(root: string) {
   return BunSQLiteMemoryRepository.open({ repositoryRoot: root })
 }
 
-async function open(root: string, busyTimeoutMs?: number): Promise<BunSQLiteMemoryRepository> {
-  const result = await BunSQLiteMemoryRepository.open({ repositoryRoot: root, busyTimeoutMs })
+async function open(
+  root: string,
+  busyTimeoutMs?: number,
+): Promise<BunSQLiteMemoryRepository> {
+  const result = await BunSQLiteMemoryRepository.open({
+    repositoryRoot: root,
+    busyTimeoutMs,
+  })
   if (result.status === 'error') throw new Error(result.error.message)
   repositories.push(result.repository)
   return result.repository
@@ -216,12 +272,22 @@ function projectBindingState(repository: BunSQLiteMemoryRepository): {
 } {
   const database = new Database(repository.databasePath)
   try {
-    const events = database.query('SELECT COUNT(*) AS count FROM memory_events').get() as { count: number }
-    const tasks = database.query('SELECT COUNT(*) AS count FROM memory_tasks').get() as { count: number }
+    const events = database
+      .query('SELECT COUNT(*) AS count FROM memory_events')
+      .get() as { count: number }
+    const tasks = database
+      .query('SELECT COUNT(*) AS count FROM memory_tasks')
+      .get() as { count: number }
     const binding = database
-      .query("SELECT value FROM memory_projection_metadata WHERE key = 'project_id'")
+      .query(
+        "SELECT value FROM memory_projection_metadata WHERE key = 'project_id'",
+      )
       .get() as { value: string } | null
-    return { events: events.count, tasks: tasks.count, projectId: binding?.value ?? null }
+    return {
+      events: events.count,
+      tasks: tasks.count,
+      projectId: binding?.value ?? null,
+    }
   } finally {
     database.close()
   }
@@ -240,22 +306,30 @@ describe('BunSQLiteMemoryRepository', () => {
 
     const database = new Database(databasePath)
     try {
-      const version = database.query('PRAGMA user_version').get() as { user_version: number }
+      const version = database.query('PRAGMA user_version').get() as {
+        user_version: number
+      }
       expect(version.user_version).toBe(2)
-      const names = (database
-        .query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-        .all() as Array<{ name: string }>).map(({ name }) => name)
-      expect(names).toEqual(expect.arrayContaining([
-        'memory_events',
-        'memory_tasks',
-        'memory_sessions',
-        'memory_artifacts',
-        'memory_claims',
-        'memory_evidence',
-        'memory_discoveries',
-        'memory_projection_metadata',
-        'memory_store_capabilities',
-      ]))
+      const names = (
+        database
+          .query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
+          )
+          .all() as Array<{ name: string }>
+      ).map(({ name }) => name)
+      expect(names).toEqual(
+        expect.arrayContaining([
+          'memory_events',
+          'memory_tasks',
+          'memory_sessions',
+          'memory_artifacts',
+          'memory_claims',
+          'memory_evidence',
+          'memory_discoveries',
+          'memory_projection_metadata',
+          'memory_store_capabilities',
+        ]),
+      )
     } finally {
       database.close()
     }
@@ -281,7 +355,10 @@ describe('BunSQLiteMemoryRepository', () => {
     const listed = await repository.listEvents()
     expect(listed.status).toBe('ok')
     if (listed.status === 'ok') {
-      expect(listed.events.map(({ eventId }) => eventId)).toEqual(['one', 'two'])
+      expect(listed.events.map(({ eventId }) => eventId)).toEqual([
+        'one',
+        'two',
+      ])
     }
   })
 
@@ -296,7 +373,9 @@ describe('BunSQLiteMemoryRepository', () => {
     const empty = await repository.listEvents()
     expect(empty).toEqual({ status: 'ok', events: [] })
 
-    expect((await repository.appendEvents([event('original')])).status).toBe('ok')
+    expect((await repository.appendEvents([event('original')])).status).toBe(
+      'ok',
+    )
     const conflict = await repository.appendEvents([
       event('different-id', { idempotencyKey: 'key-original' }),
     ])
@@ -307,7 +386,8 @@ describe('BunSQLiteMemoryRepository', () => {
       event('original', { idempotencyKey: 'different-key' }),
     ])
     expect(sameIdConflict.status).toBe('error')
-    if (sameIdConflict.status === 'error') expect(sameIdConflict.error.kind).toBe('invalid')
+    if (sameIdConflict.status === 'error')
+      expect(sameIdConflict.error.kind).toBe('invalid')
     expect(conflict.status).toBe('error')
     if (conflict.status === 'error') expect(conflict.error.kind).toBe('invalid')
   })
@@ -315,29 +395,51 @@ describe('BunSQLiteMemoryRepository', () => {
   test('rejects same-request event and idempotency collisions before binding or mutation', async () => {
     for (const batch of [
       [event('same'), event('same')],
-      [event('same-id'), event('same-id', { payload: { taskId: 'task-1', value: 'different' } })],
-      [event('first-key'), event('second-key', { idempotencyKey: 'key-first-key' })],
+      [
+        event('same-id'),
+        event('same-id', { payload: { taskId: 'task-1', value: 'different' } }),
+      ],
+      [
+        event('first-key'),
+        event('second-key', { idempotencyKey: 'key-first-key' }),
+      ],
     ]) {
       const repository = await open(temporaryRepository())
-      const rejected = await repository.appendEvents(batch.map((entry) => ({
-        ...entry,
-        metadata: { projectId: 'project-1', schemaVersion: 2, eventSchemaVersion: 1 },
-      })))
-      expect(rejected).toMatchObject({ status: 'error', error: { kind: 'invalid', retryable: false } })
-      expect(projectBindingState(repository)).toEqual({ events: 0, tasks: 0, projectId: null })
+      const rejected = await repository.appendEvents(
+        batch.map((entry) => ({
+          ...entry,
+          metadata: {
+            projectId: 'project-1',
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+          },
+        })),
+      )
+      expect(rejected).toMatchObject({
+        status: 'error',
+        error: { kind: 'invalid', retryable: false },
+      })
+      expect(projectBindingState(repository)).toEqual({
+        events: 0,
+        tasks: 0,
+        projectId: null,
+      })
     }
   })
 
   test('persists canonical events across close and reopen', async () => {
     const root = temporaryRepository()
     const repository = await open(root)
-    expect((await repository.appendEvents([event('persisted')])).status).toBe('ok')
+    expect((await repository.appendEvents([event('persisted')])).status).toBe(
+      'ok',
+    )
     await repository.close()
 
     const reopened = await open(root)
     const listed = await reopened.listEvents()
     expect(listed.status).toBe('ok')
-    if (listed.status === 'ok') expect(listed.events[0]?.eventId).toBe('persisted')
+    if (listed.status === 'ok')
+      expect(listed.events[0]?.eventId).toBe('persisted')
   })
 
   test('uses owner-only directory and SQLite file permissions', async () => {
@@ -346,7 +448,10 @@ describe('BunSQLiteMemoryRepository', () => {
     expect(statSync(join(root, '.openbuff')).mode & 0o777).toBe(0o700)
     expect(statSync(join(root, '.openbuff', 'memory')).mode & 0o777).toBe(0o700)
     expect(statSync(repository.databasePath).mode & 0o777).toBe(0o600)
-    for (const sibling of [`${repository.databasePath}-wal`, `${repository.databasePath}-shm`]) {
+    for (const sibling of [
+      `${repository.databasePath}-wal`,
+      `${repository.databasePath}-shm`,
+    ]) {
       try {
         expect(statSync(sibling).mode & 0o777).toBe(0o600)
       } catch {
@@ -379,7 +484,9 @@ describe('BunSQLiteMemoryRepository', () => {
     expect(result.status).toBe('ok')
     if (result.status !== 'ok') return
     const fts = result.capabilities.find(({ name }) => name === 'fts5')
-    const fallback = result.capabilities.find(({ name }) => name === 'lexical_fallback')
+    const fallback = result.capabilities.find(
+      ({ name }) => name === 'lexical_fallback',
+    )
     expect(fts).toBeDefined()
     expect(fts?.available || fts?.fallback === 'lexical-scan-v1').toBe(true)
     expect(fallback).toEqual({
@@ -409,15 +516,105 @@ describe('BunSQLiteMemoryRepository', () => {
     const database = new Database(repository.databasePath)
     try {
       database.exec('DELETE FROM memory_tasks; DELETE FROM memory_claims;')
-      database.query("UPDATE memory_projection_metadata SET value = '0' WHERE key = 'cursor'").run()
+      database
+        .query(
+          "UPDATE memory_projection_metadata SET value = '0' WHERE key = 'cursor'",
+        )
+        .run()
     } finally {
       database.close()
     }
 
     const rebuilt = await repository.rebuildProjections()
-    expect(rebuilt).toEqual({ status: 'ok', cursor: 3, projectedEvents: 3 })
+    expect(rebuilt).toEqual({
+      status: 'ok',
+      cursor: 3,
+      projectedEvents: 3,
+      truncated: false,
+    })
     const after = await repository.getProjectionSnapshot()
     expect(after).toEqual(before)
+  })
+
+  test('rebuilds a store under the replay cap with cursor at the tail and no truncation', async () => {
+    const repository = await open(temporaryRepository())
+    await repository.appendEvents([
+      event('under-cap-one'),
+      event('under-cap-two'),
+    ])
+    const listed = await repository.listEvents()
+    expect(listed.status).toBe('ok')
+    const tail = listed.status === 'ok' ? listed.events.at(-1)!.sequence : -1
+    expect(tail).toBe(2)
+    const rebuilt = await repository.rebuildProjections()
+    expect(rebuilt.status).toBe('ok')
+    if (rebuilt.status !== 'ok') return
+    expect(rebuilt.truncated).toBe(false)
+    expect(rebuilt.projectedEvents).toBe(2)
+    expect(rebuilt.cursor).toBe(tail)
+    expect(rebuilt.cursor).toBe(2)
+  })
+
+  test('truncates a rebuild beyond the replay event budget and signals degradation without claiming the tail', async () => {
+    const repository = await open(temporaryRepository())
+    const database = new Database(repository.databasePath)
+    try {
+      const insert = database.query(
+        `INSERT INTO memory_events (
+           event_id, idempotency_key, event_type, occurred_at, payload_json,
+           metadata_json, task_id, session_id, artifact_id
+         ) VALUES (?1, ?2, 'task.updated', '2025-01-02T03:04:05.000Z', ?3, '{}', 'task-1', 'session-1', NULL)`,
+      )
+      database.exec('BEGIN IMMEDIATE')
+      for (let index = 0; index < 10_250; index++) {
+        insert.run(
+          `replay-cap-${index}`,
+          `key-replay-cap-${index}`,
+          JSON.stringify({ taskId: 'task-1', value: index }),
+        )
+      }
+      database.exec('COMMIT')
+    } finally {
+      database.close()
+    }
+
+    const rebuilt = await repository.rebuildProjections()
+    expect(rebuilt.status).toBe('ok')
+    if (rebuilt.status !== 'ok') return
+    // Deterministic degradation signal: the replay budget bounded the rebuild.
+    expect(rebuilt.truncated).toBe(true)
+    expect(rebuilt.projectedEvents).toBe(10_000)
+    // The cursor must NOT falsely claim the real tail (10_250).
+    expect(rebuilt.cursor).toBe(10_000)
+    expect(rebuilt.cursor).not.toBe(10_250)
+
+    const snapshot = await repository.getProjectionSnapshot()
+    expect(snapshot.status).toBe('ok')
+    if (snapshot.status !== 'ok') return
+    expect(snapshot.cursor).toBe(10_000)
+
+    const verification = new Database(repository.databasePath)
+    try {
+      const tail = (
+        verification
+          .query(
+            'SELECT COALESCE(MAX(sequence), 0) AS sequence FROM memory_events',
+          )
+          .get() as { sequence: number }
+      ).sequence
+      const cursor = (
+        verification
+          .query(
+            "SELECT value FROM memory_projection_metadata WHERE key = 'cursor'",
+          )
+          .get() as { value: string }
+      ).value
+      expect(tail).toBe(10_250)
+      expect(cursor).toBe('10000')
+      expect(cursor).not.toBe(String(tail))
+    } finally {
+      verification.close()
+    }
   })
 
   test('reduces canonical lifecycle chains and rebuilds the exact normalized state', async () => {
@@ -428,29 +625,66 @@ describe('BunSQLiteMemoryRepository', () => {
     const events = [
       draft('canonical-task'),
       canonicalDraft('task.transitioned', 'task-transitioned', {
-        payloadSchemaVersion: 1, taskId: 'task-canonical-task', fromStatus: 'created', toStatus: 'completed', reason: 'done',
+        payloadSchemaVersion: 1,
+        taskId: 'task-canonical-task',
+        fromStatus: 'created',
+        toStatus: 'completed',
+        reason: 'done',
       }),
-      canonicalDraft('session.started', 'session-started', {
-        payloadSchemaVersion: 1, startedAt: '2025-01-02T03:04:05.000Z',
-      }, 'canonical-session'),
-      canonicalDraft('session.ended', 'session-ended', {
-        payloadSchemaVersion: 1, status: 'completed', endedAt: '2025-01-02T04:04:05.000Z',
-      }, 'canonical-session'),
-      canonicalDraft('observation.recorded', 'observation-one', { payloadSchemaVersion: 1, observation: sourceOne }),
-      canonicalDraft('observation.recorded', 'observation-two', { payloadSchemaVersion: 1, observation: sourceTwo }),
+      canonicalDraft(
+        'session.started',
+        'session-started',
+        {
+          payloadSchemaVersion: 1,
+          startedAt: '2025-01-02T03:04:05.000Z',
+        },
+        'canonical-session',
+      ),
+      canonicalDraft(
+        'session.ended',
+        'session-ended',
+        {
+          payloadSchemaVersion: 1,
+          status: 'completed',
+          endedAt: '2025-01-02T04:04:05.000Z',
+        },
+        'canonical-session',
+      ),
+      canonicalDraft('observation.recorded', 'observation-one', {
+        payloadSchemaVersion: 1,
+        observation: sourceOne,
+      }),
+      canonicalDraft('observation.recorded', 'observation-two', {
+        payloadSchemaVersion: 1,
+        observation: sourceTwo,
+      }),
       canonicalDraft('evidence.attached', 'evidence-attached', {
-        payloadSchemaVersion: 1, observationId: 'source-one', evidence: sourceOne.evidence,
+        payloadSchemaVersion: 1,
+        observationId: 'source-one',
+        evidence: sourceOne.evidence,
       }),
       canonicalDraft('claim.pinned', 'claim-pinned', {
-        payloadSchemaVersion: 1, observationId: 'source-one', reason: 'keep', pinnedBy: 'test', pinnedAt: '2025-01-02T03:04:05.000Z',
+        payloadSchemaVersion: 1,
+        observationId: 'source-one',
+        reason: 'keep',
+        pinnedBy: 'test',
+        pinnedAt: '2025-01-02T03:04:05.000Z',
       }),
       canonicalDraft('evidence.verified', 'evidence-verified', {
-        payloadSchemaVersion: 1, observationId: 'source-one', selector: sourceOne.evidence[0]!.selector,
-        verifier: 'test', verifiedAt: '2025-01-02T03:05:05.000Z', observedDigest: sourceOne.evidence[0]!.contentDigest,
+        payloadSchemaVersion: 1,
+        observationId: 'source-one',
+        selector: sourceOne.evidence[0]!.selector,
+        verifier: 'test',
+        verifiedAt: '2025-01-02T03:05:05.000Z',
+        observedDigest: sourceOne.evidence[0]!.contentDigest,
       }),
       canonicalDraft('evidence.invalidated', 'evidence-invalidated', {
-        payloadSchemaVersion: 1, observationId: 'source-one', selector: sourceOne.evidence[0]!.selector,
-        reason: 'changed', detail: 'changed', invalidatedAt: '2025-01-02T03:06:05.000Z',
+        payloadSchemaVersion: 1,
+        observationId: 'source-one',
+        selector: sourceOne.evidence[0]!.selector,
+        reason: 'changed',
+        detail: 'changed',
+        invalidatedAt: '2025-01-02T03:06:05.000Z',
       }),
       canonicalDraft('evidence.rebound', 'evidence-rebound', {
         payloadSchemaVersion: 1,
@@ -460,58 +694,95 @@ describe('BunSQLiteMemoryRepository', () => {
         reason: 'moved',
       }),
       canonicalDraft('claim.corrected', 'claim-corrected', {
-        payloadSchemaVersion: 1, observationId: 'source-two', correction: observationFixture('corrected', []), reason: 'corrected',
+        payloadSchemaVersion: 1,
+        observationId: 'source-two',
+        correction: observationFixture('corrected', []),
+        reason: 'corrected',
       }),
       canonicalDraft('claim.superseded', 'claim-superseded', {
-        payloadSchemaVersion: 1, observationId: 'corrected', supersededByObservationId: 'canonical', reason: 'newer',
+        payloadSchemaVersion: 1,
+        observationId: 'corrected',
+        supersededByObservationId: 'canonical',
+        reason: 'newer',
       }),
       canonicalDraft('claim.forgotten', 'claim-forgotten', {
-        payloadSchemaVersion: 1, observationIds: ['corrected'], reason: 'duplicate', requestedBy: 'test', evidenceDisposition: 'retain-artifacts',
+        payloadSchemaVersion: 1,
+        observationIds: ['corrected'],
+        reason: 'duplicate',
+        requestedBy: 'test',
+        evidenceDisposition: 'retain-artifacts',
       }),
       canonicalDraft('claim.consolidated', 'claim-consolidated', {
-        payloadSchemaVersion: 1, sourceObservationIds: ['source-one', 'source-two'], canonicalObservation: canonical, reason: 'merge',
+        payloadSchemaVersion: 1,
+        sourceObservationIds: ['source-one', 'source-two'],
+        canonicalObservation: canonical,
+        reason: 'merge',
       }),
     ]
-    const appended = await repository.append(MemoryAppendRequestSchema.parse({
-      schemaVersion: 2, projectId: 'project-1', events,
-    }))
+    const appended = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        events,
+      }),
+    )
     expect(appended.outcome).toBe('appended')
     const before = await repository.getProjectionSnapshot()
     expect(before.status).toBe('ok')
     if (before.status !== 'ok') return
     expect(before.tasks[0]?.state).toMatchObject({
-      title: 'Task canonical-task', objective: 'Exercise the public Memory V2 port.', status: 'completed',
+      title: 'Task canonical-task',
+      objective: 'Exercise the public Memory V2 port.',
+      status: 'completed',
     })
     expect(before.sessions[0]).toMatchObject({
-      entityId: 'canonical-session', state: {
-        sessionId: 'canonical-session', status: 'completed',
-        startedAt: '2025-01-02T03:04:05.000Z', endedAt: '2025-01-02T04:04:05.000Z',
+      entityId: 'canonical-session',
+      state: {
+        sessionId: 'canonical-session',
+        status: 'completed',
+        startedAt: '2025-01-02T03:04:05.000Z',
+        endedAt: '2025-01-02T04:04:05.000Z',
       },
     })
-    const attachedEvidence = before.evidence.find(({ state }) => (
-      state as { evidence?: { selector?: { path?: string } } }
-    ).evidence?.selector?.path === 'src/example.ts')
+    const attachedEvidence = before.evidence.find(
+      ({ state }) =>
+        (state as { evidence?: { selector?: { path?: string } } }).evidence
+          ?.selector?.path === 'src/example.ts',
+    )
     expect(attachedEvidence?.state).toMatchObject({
-      lifecycle: 'attached', evidence: sourceOne.evidence[0], freshness: {},
+      lifecycle: 'attached',
+      evidence: sourceOne.evidence[0],
+      freshness: {},
     })
-    const reboundEvidence = before.evidence.find(({ state }) => (
-      state as { evidence?: { selector?: { path?: string } } }
-    ).evidence?.selector?.path !== 'src/example.ts')
+    const reboundEvidence = before.evidence.find(
+      ({ state }) =>
+        (state as { evidence?: { selector?: { path?: string } } }).evidence
+          ?.selector?.path !== 'src/example.ts',
+    )
     expect(reboundEvidence?.state).toMatchObject({
-      lifecycle: 'rebound', freshness: {},
+      lifecycle: 'rebound',
+      freshness: {},
     })
-    expect(before.discoveries.find(({ entityId }) => entityId === 'source-one')?.state)
-      .toMatchObject({ lifecycle: 'superseded' })
-    expect(before.claims.find(({ entityId }) => entityId === 'source-one')?.state)
-      .toMatchObject({ lifecycle: 'superseded' })
-    expect(before.claims.find(({ entityId }) => entityId === 'canonical')?.state)
-      .toMatchObject({ lifecycle: 'consolidated', observationId: 'canonical' })
+    expect(
+      before.discoveries.find(({ entityId }) => entityId === 'source-one')
+        ?.state,
+    ).toMatchObject({ lifecycle: 'superseded' })
+    expect(
+      before.claims.find(({ entityId }) => entityId === 'source-one')?.state,
+    ).toMatchObject({ lifecycle: 'superseded' })
+    expect(
+      before.claims.find(({ entityId }) => entityId === 'canonical')?.state,
+    ).toMatchObject({ lifecycle: 'consolidated', observationId: 'canonical' })
 
     const database = new Database(repository.databasePath)
     try {
       database.exec(`DELETE FROM memory_tasks; DELETE FROM memory_sessions; DELETE FROM memory_artifacts;
         DELETE FROM memory_claims; DELETE FROM memory_evidence; DELETE FROM memory_discoveries;`)
-      database.query("UPDATE memory_projection_metadata SET value = '0' WHERE key = 'cursor'").run()
+      database
+        .query(
+          "UPDATE memory_projection_metadata SET value = '0' WHERE key = 'cursor'",
+        )
+        .run()
     } finally {
       database.close()
     }
@@ -541,19 +812,30 @@ describe('BunSQLiteMemoryRepository', () => {
     const closed = await repository.kernelHealth()
     expect(closed.status).toBe('unavailable')
     expect(closed.failure).toEqual({
-      kind: 'closed', message: 'The memory store is closed.', retryable: false,
+      kind: 'closed',
+      message: 'The memory store is closed.',
+      retryable: false,
     })
     const closedAppend = await repository.appendEvents([event('after-close')])
-    expect(closedAppend).toMatchObject({ status: 'error', error: { kind: 'closed', retryable: false } })
-    if (closedAppend.status === 'error') expect(closedAppend.error.message).not.toContain(repository.databasePath)
+    expect(closedAppend).toMatchObject({
+      status: 'error',
+      error: { kind: 'closed', retryable: false },
+    })
+    if (closedAppend.status === 'error')
+      expect(closedAppend.error.message).not.toContain(repository.databasePath)
   })
 
   test('classifies a generic local filesystem failure as bounded nonretryable I/O', async () => {
     const root = temporaryRepository()
     const fileRoot = join(root, 'not-a-directory')
     writeFileSync(fileRoot, 'occupied')
-    const opened = await BunSQLiteMemoryRepository.open({ repositoryRoot: fileRoot })
-    expect(opened).toMatchObject({ status: 'error', error: { kind: 'io', retryable: false } })
+    const opened = await BunSQLiteMemoryRepository.open({
+      repositoryRoot: fileRoot,
+    })
+    expect(opened).toMatchObject({
+      status: 'error',
+      error: { kind: 'io', retryable: false },
+    })
     if (opened.status === 'error') {
       expect(opened.error.message.length).toBeLessThan(256)
       expect(opened.error.message).not.toContain(root)
@@ -567,28 +849,53 @@ describe('BunSQLiteMemoryRepository', () => {
     const readSemanticState = () => {
       const database = new Database(path, { readonly: true })
       try {
-        const canonicalEvents = database.query(
-          `SELECT sequence, event_id AS eventId, idempotency_key AS idempotencyKey
+        const canonicalEvents = database
+          .query(
+            `SELECT sequence, event_id AS eventId, idempotency_key AS idempotencyKey
              FROM memory_events ORDER BY sequence`,
-        ).all() as Array<{ sequence: number; eventId: string; idempotencyKey: string }>
-        const canonicalEventCount = (database.query(
-          'SELECT COUNT(*) AS count FROM memory_events',
-        ).get() as { count: number }).count
-        const binding = database.query(
-          "SELECT value FROM memory_projection_metadata WHERE key = 'project_id'",
-        ).get() as { value: string } | null
-        const capabilities = database.query(
-          'SELECT name, available, fallback, value FROM memory_store_capabilities ORDER BY name',
-        ).all() as Array<{ name: string; available: number; fallback: string | null; value: string }>
-        const projectionCursor = (database.query(
-          "SELECT value FROM memory_projection_metadata WHERE key = 'cursor'",
-        ).get() as { value: string }).value
-        const userVersion = (database.query(
-          'PRAGMA user_version',
-        ).get() as { user_version: number }).user_version
-        const quickCheck = (database.query(
-          'PRAGMA quick_check(1)',
-        ).get() as { quick_check: string }).quick_check
+          )
+          .all() as Array<{
+          sequence: number
+          eventId: string
+          idempotencyKey: string
+        }>
+        const canonicalEventCount = (
+          database
+            .query('SELECT COUNT(*) AS count FROM memory_events')
+            .get() as { count: number }
+        ).count
+        const binding = database
+          .query(
+            "SELECT value FROM memory_projection_metadata WHERE key = 'project_id'",
+          )
+          .get() as { value: string } | null
+        const capabilities = database
+          .query(
+            'SELECT name, available, fallback, value FROM memory_store_capabilities ORDER BY name',
+          )
+          .all() as Array<{
+          name: string
+          available: number
+          fallback: string | null
+          value: string
+        }>
+        const projectionCursor = (
+          database
+            .query(
+              "SELECT value FROM memory_projection_metadata WHERE key = 'cursor'",
+            )
+            .get() as { value: string }
+        ).value
+        const userVersion = (
+          database.query('PRAGMA user_version').get() as {
+            user_version: number
+          }
+        ).user_version
+        const quickCheck = (
+          database.query('PRAGMA quick_check(1)').get() as {
+            quick_check: string
+          }
+        ).quick_check
         return {
           canonicalEvents,
           canonicalEventCount,
@@ -608,7 +915,9 @@ describe('BunSQLiteMemoryRepository', () => {
     expect(snapshot.status).toBe('ok')
     if (snapshot.status === 'ok') {
       expect(snapshot.cursor).toBe(1)
-      expect(snapshot.tasks.map(({ entityId }) => entityId)).toEqual(['task-v1-task'])
+      expect(snapshot.tasks.map(({ entityId }) => entityId)).toEqual([
+        'task-v1-task',
+      ])
     }
     await repository.close()
     const afterMigration = readFileSync(path)
@@ -628,7 +937,9 @@ describe('BunSQLiteMemoryRepository', () => {
     await reopened.close()
     const reopenedState = readSemanticState()
     expect(reopenedSnapshot).toEqual(snapshot)
-    expect(reopenedState.canonicalEventCount).toBe(migratedState.canonicalEventCount)
+    expect(reopenedState.canonicalEventCount).toBe(
+      migratedState.canonicalEventCount,
+    )
     expect(reopenedState.canonicalEvents).toEqual(migratedState.canonicalEvents)
     expect(reopenedState.projectBinding).toBe(migratedState.projectBinding)
     expect(reopenedState.capabilities).toEqual(migratedState.capabilities)
@@ -654,29 +965,76 @@ describe('BunSQLiteMemoryRepository', () => {
           database.close()
         }
       } else {
-        rewriteStoredProject(path, first.eventId, mode === 'missing' ? undefined : 'not a valid project')
+        rewriteStoredProject(
+          path,
+          first.eventId,
+          mode === 'missing' ? undefined : 'not a valid project',
+        )
       }
       const before = readFileSync(path)
       const opened = await openResult(root)
-      expect(opened).toMatchObject({ status: 'error', error: { kind: 'incompatible', retryable: false } })
+      expect(opened).toMatchObject({
+        status: 'error',
+        error: { kind: 'incompatible', retryable: false },
+      })
       expect(readFileSync(path)).toEqual(before)
     }
   })
 
   test('rolls back schema-v1 DDL, binding, cursor, and projections when replay fails', async () => {
     const root = temporaryRepository()
-    const path = createV1Fixture(root, draft('bad-v1'), { payloadSchemaVersion: 1, taskId: 'task-bad-v1' })
+    const path = createV1Fixture(root, draft('bad-v1'), {
+      payloadSchemaVersion: 1,
+      taskId: 'task-bad-v1',
+    })
     const before = readFileSync(path)
     const opened = await openResult(root)
-    expect(opened).toMatchObject({ status: 'error', error: { kind: 'incompatible', retryable: false } })
+    expect(opened).toMatchObject({
+      status: 'error',
+      error: { kind: 'incompatible', retryable: false },
+    })
     expect(readFileSync(path)).toEqual(before)
     const database = new Database(path, { readonly: true })
     try {
-      expect((database.query('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(1)
-      expect((database.query("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'memory_tasks'").get() as { count: number }).count).toBe(0)
-      expect(database.query("SELECT value FROM memory_projection_metadata WHERE key = 'project_id'").get()).toBeNull()
-      expect((database.query("SELECT value FROM memory_projection_metadata WHERE key = 'cursor'").get() as { value: string }).value).toBe('0')
-      expect((database.query('SELECT COUNT(*) AS count FROM memory_events').get() as { count: number }).count).toBe(1)
+      expect(
+        (
+          database.query('PRAGMA user_version').get() as {
+            user_version: number
+          }
+        ).user_version,
+      ).toBe(1)
+      expect(
+        (
+          database
+            .query(
+              "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'memory_tasks'",
+            )
+            .get() as { count: number }
+        ).count,
+      ).toBe(0)
+      expect(
+        database
+          .query(
+            "SELECT value FROM memory_projection_metadata WHERE key = 'project_id'",
+          )
+          .get(),
+      ).toBeNull()
+      expect(
+        (
+          database
+            .query(
+              "SELECT value FROM memory_projection_metadata WHERE key = 'cursor'",
+            )
+            .get() as { value: string }
+        ).value,
+      ).toBe('0')
+      expect(
+        (
+          database
+            .query('SELECT COUNT(*) AS count FROM memory_events')
+            .get() as { count: number }
+        ).count,
+      ).toBe(1)
     } finally {
       database.close()
     }
@@ -739,13 +1097,15 @@ describe('BunSQLiteMemoryRepository', () => {
       databasePath: join(root, '..', 'escaped.sqlite'),
     })
     expect(escaped.status).toBe('error')
-    if (escaped.status === 'error') expect(escaped.error.kind).toBe('incompatible')
+    if (escaped.status === 'error')
+      expect(escaped.error.kind).toBe('incompatible')
 
     const repository = await open(root)
     expect(await repository.search()).toEqual({
       status: 'unsupported',
       capability: 'semantic-search',
-      message: 'Memory V2 semantic-search is not implemented by the Bun SQLite kernel.',
+      message:
+        'Memory V2 semantic-search is not implemented by the Bun SQLite kernel.',
     })
   })
 
@@ -760,11 +1120,13 @@ describe('BunSQLiteMemoryRepository', () => {
     const parsedAppend = MemoryAppendOutcomeSchema.parse(appended)
     expect(parsedAppend.outcome).toBe('appended')
     if (parsedAppend.outcome !== 'appended') return
-    expect(parsedAppend.entries.map(({ eventId, sequence, duplicate }) => ({
-      eventId: String(eventId),
-      sequence,
-      duplicate,
-    }))).toEqual([
+    expect(
+      parsedAppend.entries.map(({ eventId, sequence, duplicate }) => ({
+        eventId: String(eventId),
+        sequence,
+        duplicate,
+      })),
+    ).toEqual([
       { eventId: 'public-one', sequence: 1, duplicate: false },
       { eventId: 'public-two', sequence: 2, duplicate: false },
     ])
@@ -778,11 +1140,15 @@ describe('BunSQLiteMemoryRepository', () => {
     )
     expect(duplicate.outcome).toBe('appended')
     if (duplicate.outcome !== 'appended') return
-    expect(duplicate.entries.map(({ eventId, sequence, duplicate: isDuplicate }) => ({
-      eventId: String(eventId),
-      sequence,
-      duplicate: isDuplicate,
-    }))).toEqual([{ eventId: 'public-one', sequence: 1, duplicate: true }])
+    expect(
+      duplicate.entries.map(
+        ({ eventId, sequence, duplicate: isDuplicate }) => ({
+          eventId: String(eventId),
+          sequence,
+          duplicate: isDuplicate,
+        }),
+      ),
+    ).toEqual([{ eventId: 'public-one', sequence: 1, duplicate: true }])
     expect(String(duplicate.lastEventId)).toBe('public-two')
 
     const exported = await repository.export(
@@ -876,106 +1242,183 @@ describe('BunSQLiteMemoryRepository', () => {
 
   test('enforces empty, event, any, legacy, and equivalent dual tail preconditions atomically', async () => {
     const repository = await open(temporaryRepository())
-    const append = (value: Record<string, unknown>) => repository.append(
-      MemoryAppendRequestSchema.parse({ schemaVersion: 2, projectId: 'project-1', ...value }),
-    )
-    expect((await append({ expectedTail: { kind: 'empty' }, events: [draft('tail-one')] })).outcome).toBe('appended')
+    const append = (value: Record<string, unknown>) =>
+      repository.append(
+        MemoryAppendRequestSchema.parse({
+          schemaVersion: 2,
+          projectId: 'project-1',
+          ...value,
+        }),
+      )
+    expect(
+      (
+        await append({
+          expectedTail: { kind: 'empty' },
+          events: [draft('tail-one')],
+        })
+      ).outcome,
+    ).toBe('appended')
 
     for (const request of [
       { expectedTail: { kind: 'empty' }, events: [draft('tail-empty-stale')] },
-      { expectedTail: { kind: 'event', eventId: 'missing' }, events: [draft('tail-event-stale')] },
+      {
+        expectedTail: { kind: 'event', eventId: 'missing' },
+        events: [draft('tail-event-stale')],
+      },
       { expectedLastEventId: 'missing', events: [draft('tail-legacy-stale')] },
     ]) {
       const outcome = await append(request)
-      expect(outcome).toMatchObject({ outcome: 'rejected', error: { code: 'conflict', retryable: true } })
+      expect(outcome).toMatchObject({
+        outcome: 'rejected',
+        error: { code: 'conflict', retryable: true },
+      })
     }
 
-    expect((await append({ expectedTail: { kind: 'any' }, events: [draft('tail-any')] })).outcome).toBe('appended')
-    expect((await append({ events: [draft('tail-omitted')] })).outcome).toBe('appended')
+    expect(
+      (
+        await append({
+          expectedTail: { kind: 'any' },
+          events: [draft('tail-any')],
+        })
+      ).outcome,
+    ).toBe('appended')
+    expect((await append({ events: [draft('tail-omitted')] })).outcome).toBe(
+      'appended',
+    )
     const tail = 'tail-omitted'
-    expect((await append({
-      expectedTail: { kind: 'event', eventId: tail },
-      expectedLastEventId: tail,
-      events: [draft('tail-dual')],
-    })).outcome).toBe('appended')
-    expect(MemoryAppendRequestSchema.safeParse({
-      schemaVersion: 2,
-      projectId: 'project-1',
-      expectedTail: { kind: 'empty' },
-      expectedLastEventId: 'tail-dual',
-      events: [draft('tail-invalid-dual')],
-    }).success).toBe(false)
+    expect(
+      (
+        await append({
+          expectedTail: { kind: 'event', eventId: tail },
+          expectedLastEventId: tail,
+          events: [draft('tail-dual')],
+        })
+      ).outcome,
+    ).toBe('appended')
+    expect(
+      MemoryAppendRequestSchema.safeParse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        expectedTail: { kind: 'empty' },
+        expectedLastEventId: 'tail-dual',
+        events: [draft('tail-invalid-dual')],
+      }).success,
+    ).toBe(false)
   })
 
   test('keeps deterministic event ID content conflicts hard under a matching tail', async () => {
     const repository = await open(temporaryRepository())
-    const first = await repository.append(MemoryAppendRequestSchema.parse({
-      schemaVersion: 2,
-      projectId: 'project-1',
-      expectedTail: { kind: 'empty' },
-      events: [draft('same-id')],
-    }))
+    const first = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        expectedTail: { kind: 'empty' },
+        events: [draft('same-id')],
+      }),
+    )
     expect(first.outcome).toBe('appended')
     const conflicting = draft('same-id')
-    if (conflicting.eventType !== 'task.created') throw new Error('invalid fixture')
+    if (conflicting.eventType !== 'task.created')
+      throw new Error('invalid fixture')
     conflicting.payload.title = 'Different deterministic content'
-    const outcome = await repository.append(MemoryAppendRequestSchema.parse({
-      schemaVersion: 2,
-      projectId: 'project-1',
-      expectedTail: { kind: 'event', eventId: 'same-id' },
-      events: [conflicting],
-    }))
-    expect(outcome).toMatchObject({ outcome: 'rejected', error: { retryable: false } })
+    const outcome = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        expectedTail: { kind: 'event', eventId: 'same-id' },
+        events: [conflicting],
+      }),
+    )
+    expect(outcome).toMatchObject({
+      outcome: 'rejected',
+      error: { retryable: false },
+    })
   })
 
   test('binds the database to the first public project before any foreign mutation', async () => {
     const repository = await open(temporaryRepository())
-    const first = await repository.append(MemoryAppendRequestSchema.parse({
-      schemaVersion: 2,
-      projectId: 'project-1',
-      events: [draft('bound')],
-    }))
+    const first = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        events: [draft('bound')],
+      }),
+    )
     expect(first.outcome).toBe('appended')
 
-    const foreignAppend = await repository.append(MemoryAppendRequestSchema.parse({
-      schemaVersion: 2,
-      projectId: 'project-2',
-      events: [draft('foreign', 'project-2')],
-    }))
+    const foreignAppend = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-2',
+        events: [draft('foreign', 'project-2')],
+      }),
+    )
     expect(foreignAppend.outcome).toBe('rejected')
-    const unscopedAppend = await repository.appendEvents([event('unscoped-after-binding')])
+    const unscopedAppend = await repository.appendEvents([
+      event('unscoped-after-binding'),
+    ])
     expect(unscopedAppend.status).toBe('error')
-    if (unscopedAppend.status === 'error') expect(unscopedAppend.error.kind).toBe('invalid')
-    const foreignQuery = await repository.query(MemoryRetrievalRequestSchema.parse({
-      schemaVersion: 2, queryId: 'foreign-query', projectId: 'project-2', sessionId: 'session-1',
-      query: 'Task', selectors: [], artifactKinds: [], includeHistorical: false, maxResultsPerCategory: 10,
-    }))
+    if (unscopedAppend.status === 'error')
+      expect(unscopedAppend.error.kind).toBe('invalid')
+    const foreignQuery = await repository.query(
+      MemoryRetrievalRequestSchema.parse({
+        schemaVersion: 2,
+        queryId: 'foreign-query',
+        projectId: 'project-2',
+        sessionId: 'session-1',
+        query: 'Task',
+        selectors: [],
+        artifactKinds: [],
+        includeHistorical: false,
+        maxResultsPerCategory: 10,
+      }),
+    )
     expect(foreignQuery.outcome).toBe('rejected')
-    const foreignExport = await repository.export(MemoryExportRequestSchema.parse({
-      schemaVersion: 2, projectId: 'project-2', limit: 10,
-    }))
+    const foreignExport = await repository.export(
+      MemoryExportRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-2',
+        limit: 10,
+      }),
+    )
     expect(foreignExport.outcome).toBe('rejected')
-    const foreignRebuild = await repository.rebuild(MemoryRebuildRequestSchema.parse({
-      schemaVersion: 2, projectId: 'project-2', rebuildId: 'foreign-rebuild', projectionNames: ['tasks'],
-    }))
+    const foreignRebuild = await repository.rebuild(
+      MemoryRebuildRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-2',
+        rebuildId: 'foreign-rebuild',
+        projectionNames: ['tasks'],
+      }),
+    )
     expect(foreignRebuild.outcome).toBe('rejected')
-    const foreignVerify = await repository.verify(MemoryVerifyRequestSchema.parse({
-      schemaVersion: 2,
-      projectId: 'project-2',
-      sessionId: 'session-1',
-      action: {
-        kind: 'verify',
-        observationId: 'observation-1',
-        selector: { kind: 'file', path: 'src/example.ts' },
-        observedDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      },
-    }))
+    const foreignVerify = await repository.verify(
+      MemoryVerifyRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-2',
+        sessionId: 'session-1',
+        action: {
+          kind: 'verify',
+          observationId: 'observation-1',
+          selector: { kind: 'file', path: 'src/example.ts' },
+          observedDigest:
+            'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        },
+      }),
+    )
     expect(foreignVerify.outcome).toBe('rejected')
 
     const inventory = await repository.listEvents({ limit: 10 })
-    expect(inventory.status === 'ok' ? inventory.events.map(({ eventId }) => eventId) : []).toEqual(['bound'])
+    expect(
+      inventory.status === 'ok'
+        ? inventory.events.map(({ eventId }) => eventId)
+        : [],
+    ).toEqual(['bound'])
     const projection = await repository.getProjectionSnapshot()
-    expect(projection.status === 'ok' ? projection.tasks.map(({ entityId }) => entityId) : []).toEqual(['task-bound'])
+    expect(
+      projection.status === 'ok'
+        ? projection.tasks.map(({ entityId }) => entityId)
+        : [],
+    ).toEqual(['task-bound'])
   })
 
   test('retrieves idempotent verification retries after more than one thousand events', async () => {
@@ -984,20 +1427,34 @@ describe('BunSQLiteMemoryRepository', () => {
       schemaVersion: 2,
       projectId: 'project-1',
       sessionId: 'session-1',
-      action: { kind: 'verify', observationId: 'observation-1', selector: { kind: 'file', path: 'src/example.ts' }, observedDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+      action: {
+        kind: 'verify',
+        observationId: 'observation-1',
+        selector: { kind: 'file', path: 'src/example.ts' },
+        observedDigest:
+          'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      },
     })
-    const first = MemoryVerifyOutcomeSchema.parse(await repository.verify(request))
+    const first = MemoryVerifyOutcomeSchema.parse(
+      await repository.verify(request),
+    )
     expect(first.outcome).toBe('recorded')
-    const fillers = Array.from({ length: 1_001 }, (_, index) => draft(`after-verify-${index}`))
+    const fillers = Array.from({ length: 1_001 }, (_, index) =>
+      draft(`after-verify-${index}`),
+    )
     for (let offset = 0; offset < fillers.length; offset += 100) {
-      const appended = await repository.append(MemoryAppendRequestSchema.parse({
-        schemaVersion: 2,
-        projectId: 'project-1',
-        events: fillers.slice(offset, offset + 100),
-      }))
+      const appended = await repository.append(
+        MemoryAppendRequestSchema.parse({
+          schemaVersion: 2,
+          projectId: 'project-1',
+          events: fillers.slice(offset, offset + 100),
+        }),
+      )
       expect(appended.outcome).toBe('appended')
     }
-    const retry = MemoryVerifyOutcomeSchema.parse(await repository.verify(request))
+    const retry = MemoryVerifyOutcomeSchema.parse(
+      await repository.verify(request),
+    )
     expect(retry.outcome).toBe('recorded')
     if (first.outcome === 'recorded' && retry.outcome === 'recorded') {
       expect(retry.event.eventId).toBe(first.event.eventId)
@@ -1011,7 +1468,10 @@ describe('BunSQLiteMemoryRepository', () => {
     const database = new Database(target, { create: true })
     database.close()
     symlinkSync(target, join(root, 'linked.sqlite'))
-    const opened = await BunSQLiteMemoryRepository.open({ repositoryRoot: root, databasePath: 'linked.sqlite' })
+    const opened = await BunSQLiteMemoryRepository.open({
+      repositoryRoot: root,
+      databasePath: 'linked.sqlite',
+    })
     expect(opened.status).toBe('error')
     if (opened.status === 'error') {
       expect(opened.error.kind).toBe('incompatible')
@@ -1031,7 +1491,10 @@ describe('BunSQLiteMemoryRepository', () => {
       }
       symlinkSync(join(root, 'missing-target'), `${path}${suffix}`)
       const opened = await openResult(root)
-      expect(opened).toMatchObject({ status: 'error', error: { kind: 'incompatible', retryable: false } })
+      expect(opened).toMatchObject({
+        status: 'error',
+        error: { kind: 'incompatible', retryable: false },
+      })
     }
   })
 
@@ -1062,7 +1525,8 @@ describe('BunSQLiteMemoryRepository', () => {
           kind: 'verify',
           observationId: 'observation-1',
           selector: { kind: 'file', path: 'src/example.ts' },
-          observedDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          observedDigest:
+            'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         },
       }),
     )
@@ -1076,11 +1540,16 @@ describe('BunSQLiteMemoryRepository', () => {
       schemaVersion: 2,
       projectId: 'project-1',
       sessionId: 'session-1',
-      action: { kind: 'verify', observationId: 'observation-1', selector: { kind: 'file', path: 'src/example.ts' } },
+      action: {
+        kind: 'verify',
+        observationId: 'observation-1',
+        selector: { kind: 'file', path: 'src/example.ts' },
+      },
     })
     const rejected = await repository.verify(request)
     expect(rejected.outcome).toBe('rejected')
-    if (rejected.outcome === 'rejected') expect(rejected.error.code).toBe('invalid-request')
+    if (rejected.outcome === 'rejected')
+      expect(rejected.error.code).toBe('invalid-request')
     const listed = await repository.listEvents()
     expect(listed.status === 'ok' ? listed.events : []).toEqual([])
   })
@@ -1093,10 +1562,20 @@ describe('BunSQLiteMemoryRepository', () => {
       sessionId: 'session-1',
       workspaceRevision: 1,
       workspaceSnapshotId: 'snapshot-1',
-      action: { kind: 'verify', observationId: 'observation-1', selector: { kind: 'file', path: 'src/example.ts' }, observedDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+      action: {
+        kind: 'verify',
+        observationId: 'observation-1',
+        selector: { kind: 'file', path: 'src/example.ts' },
+        observedDigest:
+          'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      },
     })
-    const first = MemoryVerifyOutcomeSchema.parse(await repository.verify(request))
-    const second = MemoryVerifyOutcomeSchema.parse(await repository.verify(request))
+    const first = MemoryVerifyOutcomeSchema.parse(
+      await repository.verify(request),
+    )
+    const second = MemoryVerifyOutcomeSchema.parse(
+      await repository.verify(request),
+    )
     expect(first.outcome).toBe('recorded')
     expect(second.outcome).toBe('recorded')
     if (first.outcome === 'recorded' && second.outcome === 'recorded') {
@@ -1104,7 +1583,9 @@ describe('BunSQLiteMemoryRepository', () => {
       expect(second.event.sequence).toBe(first.event.sequence)
       expect(first.event.eventType).toBe('evidence.verified')
       if (first.event.eventType === 'evidence.verified') {
-        expect(first.event.payload.observedDigest).toBe('sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+        expect(first.event.payload.observedDigest).toBe(
+          'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        )
         expect(first.event.payload.workspaceRevision).toBe(1)
         expect(first.event.payload.workspaceSnapshotId).toBe('snapshot-1')
       }
@@ -1117,9 +1598,14 @@ describe('BunSQLiteMemoryRepository', () => {
     const repository = await open(temporaryRepository())
     const evidence = evidenceFixture()
     const observation = observationFixture('freshness', [evidence])
-    const recorded = canonicalDraft('observation.recorded', 'freshness-observation', {
-      payloadSchemaVersion: 1, observation,
-    })
+    const recorded = canonicalDraft(
+      'observation.recorded',
+      'freshness-observation',
+      {
+        payloadSchemaVersion: 1,
+        observation,
+      },
+    )
     const verified = canonicalDraft('evidence.verified', 'freshness-verified', {
       payloadSchemaVersion: 1,
       observationId: 'freshness',
@@ -1128,58 +1614,125 @@ describe('BunSQLiteMemoryRepository', () => {
       verifiedAt: '2025-01-02T03:05:05.000Z',
       observedDigest: evidence.contentDigest,
     })
-    expect((await repository.append(MemoryAppendRequestSchema.parse({
-      schemaVersion: 2, projectId: 'project-1', events: [recorded, verified],
-    }))).outcome).toBe('appended')
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [recorded, verified],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
 
-    const query = async (queryId: string, context: Record<string, unknown> = {}) => repository.query(
-      MemoryRetrievalRequestSchema.parse({
-        schemaVersion: 2, queryId, projectId: 'project-1', sessionId: 'session-1',
-        query: 'Discovery freshness', selectors: [], artifactKinds: [], includeHistorical: false,
-        maxResultsPerCategory: 10, ...context,
-      }),
-    )
+    const query = async (
+      queryId: string,
+      context: Record<string, unknown> = {},
+    ) =>
+      repository.query(
+        MemoryRetrievalRequestSchema.parse({
+          schemaVersion: 2,
+          queryId,
+          projectId: 'project-1',
+          sessionId: 'session-1',
+          query: 'Discovery freshness',
+          selectors: [],
+          artifactKinds: [],
+          includeHistorical: false,
+          maxResultsPerCategory: 10,
+          ...context,
+        }),
+      )
     const noContext = await query('fresh-none')
-    expect(noContext.outcome === 'result' ? noContext.result.verifiedKnowledge.length : 0).toBe(1)
+    expect(
+      noContext.outcome === 'result'
+        ? noContext.result.verifiedKnowledge.length
+        : 0,
+    ).toBe(1)
     for (const [eventId, observedDigest] of [
-      ['freshness-mismatch', 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'],
+      [
+        'freshness-mismatch',
+        'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      ],
       ['freshness-missing', undefined],
     ] as const) {
-      expect((await repository.append(MemoryAppendRequestSchema.parse({
-        schemaVersion: 2,
-        projectId: 'project-1',
-        events: [canonicalDraft('evidence.verified', eventId, {
-          payloadSchemaVersion: 1,
-          observationId: 'freshness', selector: evidence.selector, verifier: 'test',
-          verifiedAt: '2025-01-02T03:05:30.000Z',
-          ...(observedDigest ? { observedDigest } : {}),
-        })],
-      }))).outcome).toBe('appended')
+      expect(
+        (
+          await repository.append(
+            MemoryAppendRequestSchema.parse({
+              schemaVersion: 2,
+              projectId: 'project-1',
+              events: [
+                canonicalDraft('evidence.verified', eventId, {
+                  payloadSchemaVersion: 1,
+                  observationId: 'freshness',
+                  selector: evidence.selector,
+                  verifier: 'test',
+                  verifiedAt: '2025-01-02T03:05:30.000Z',
+                  ...(observedDigest ? { observedDigest } : {}),
+                }),
+              ],
+            }),
+          )
+        ).outcome,
+      ).toBe('appended')
       const result = await query(`${eventId}-query`)
-      expect(result.outcome === 'result' ? result.result.verifiedKnowledge : []).toEqual([])
-      expect(result.outcome === 'result' ? result.result.rereadRequired.length : 0).toBe(1)
+      expect(
+        result.outcome === 'result' ? result.result.verifiedKnowledge : [],
+      ).toEqual([])
+      expect(
+        result.outcome === 'result' ? result.result.rereadRequired.length : 0,
+      ).toBe(1)
     }
-    expect((await repository.append(MemoryAppendRequestSchema.parse({
-      schemaVersion: 2,
-      projectId: 'project-1',
-      events: [canonicalDraft('evidence.verified', 'freshness-context', {
-        payloadSchemaVersion: 1,
-        observationId: 'freshness', selector: evidence.selector, verifier: 'test',
-        verifiedAt: '2025-01-02T03:06:05.000Z', observedDigest: evidence.contentDigest,
-        workspaceRevision: 7, workspaceSnapshotId: 'snapshot-7',
-      })],
-    }))).outcome).toBe('appended')
-    const exact = await query('fresh-exact', { workspaceRevision: 7, workspaceSnapshotId: 'snapshot-7' })
-    expect(exact.outcome === 'result' ? exact.result.verifiedKnowledge.length : 0).toBe(1)
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('evidence.verified', 'freshness-context', {
+                payloadSchemaVersion: 1,
+                observationId: 'freshness',
+                selector: evidence.selector,
+                verifier: 'test',
+                verifiedAt: '2025-01-02T03:06:05.000Z',
+                observedDigest: evidence.contentDigest,
+                workspaceRevision: 7,
+                workspaceSnapshotId: 'snapshot-7',
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const exact = await query('fresh-exact', {
+      workspaceRevision: 7,
+      workspaceSnapshotId: 'snapshot-7',
+    })
+    expect(
+      exact.outcome === 'result' ? exact.result.verifiedKnowledge.length : 0,
+    ).toBe(1)
     for (const [queryId, context] of [
-      ['fresh-revision-mismatch', { workspaceRevision: 8, workspaceSnapshotId: 'snapshot-7' }],
-      ['fresh-snapshot-mismatch', { workspaceRevision: 7, workspaceSnapshotId: 'snapshot-8' }],
+      [
+        'fresh-revision-mismatch',
+        { workspaceRevision: 8, workspaceSnapshotId: 'snapshot-7' },
+      ],
+      [
+        'fresh-snapshot-mismatch',
+        { workspaceRevision: 7, workspaceSnapshotId: 'snapshot-8' },
+      ],
       ['fresh-pair-revision-only', { workspaceRevision: 7 }],
       ['fresh-pair-snapshot-only', { workspaceSnapshotId: 'snapshot-7' }],
     ] as const) {
       const result = await query(queryId, context)
-      expect(result.outcome === 'result' ? result.result.verifiedKnowledge : []).toEqual([])
-      expect(result.outcome === 'result' ? result.result.rereadRequired.length : 0).toBe(1)
+      expect(
+        result.outcome === 'result' ? result.result.verifiedKnowledge : [],
+      ).toEqual([])
+      expect(
+        result.outcome === 'result' ? result.result.rereadRequired.length : 0,
+      ).toBe(1)
     }
   })
 
@@ -1204,61 +1757,100 @@ describe('BunSQLiteMemoryRepository', () => {
       expect(queried.result.verifiedKnowledge).toEqual([])
       expect(queried.result.rereadRequired).toEqual([])
     }
-    const health = await repository.health(MemoryHealthRequestSchema.parse({ schemaVersion: 2, projectId: 'project-1' }))
-    expect(health.backend.capabilities).toEqual(expect.arrayContaining(['query', 'verify']))
+    const health = await repository.health(
+      MemoryHealthRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+      }),
+    )
+    expect(health.backend.capabilities).toEqual(
+      expect.arrayContaining(['query', 'verify']),
+    )
   })
 
   test('returns a partial query when the aggregate payload budget is reached', async () => {
     const repository = await open(temporaryRepository())
     const large = 'x'.repeat(1024 * 1024)
     for (let index = 0; index < 9; index++) {
-      const appended = await repository.appendEvents([event(`large-${index}`, {
-        payload: { taskId: 'task-1', value: large },
-        metadata: { projectId: 'project-1', schemaVersion: 2, eventSchemaVersion: 1 },
-      })])
+      const appended = await repository.appendEvents([
+        event(`large-${index}`, {
+          payload: { taskId: 'task-1', value: large },
+          metadata: {
+            projectId: 'project-1',
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+          },
+        }),
+      ])
       expect(appended.status).toBe('ok')
     }
-    const queried = await repository.query(MemoryRetrievalRequestSchema.parse({
-      schemaVersion: 2, queryId: 'budget-query', projectId: 'project-1', sessionId: 'session-1',
-      query: 'large', selectors: [], artifactKinds: [], includeHistorical: false, maxResultsPerCategory: 10,
-    }))
+    const queried = await repository.query(
+      MemoryRetrievalRequestSchema.parse({
+        schemaVersion: 2,
+        queryId: 'budget-query',
+        projectId: 'project-1',
+        sessionId: 'session-1',
+        query: 'large',
+        selectors: [],
+        artifactKinds: [],
+        includeHistorical: false,
+        maxResultsPerCategory: 10,
+      }),
+    )
     expect(queried.outcome).toBe('result')
     if (queried.outcome === 'result') {
       expect(queried.result.matchedTasks).toEqual([])
       expect(queried.result.degradation.state).toBe('degraded')
       if (queried.result.degradation.state === 'degraded') {
-        expect(queried.result.degradation.reasons.map(({ code }) => code)).toContain('resource-budget')
+        expect(
+          queried.result.degradation.reasons.map(({ code }) => code),
+        ).toContain('resource-budget')
       }
     }
   })
 
   test('rejects malformed rows that claim a recognized canonical event type', async () => {
     const repository = await open(temporaryRepository())
-    const appended = await repository.appendEvents([event('malformed-canonical', {
-      eventType: 'task.created',
-      payload: { taskId: 'task-1' },
-      metadata: {
-        projectId: 'project-1',
-        schemaVersion: 2,
-        eventSchemaVersion: 1,
-        sessionId: 'session-1',
-      },
-    })])
+    const appended = await repository.appendEvents([
+      event('malformed-canonical', {
+        eventType: 'task.created',
+        payload: { taskId: 'task-1' },
+        metadata: {
+          projectId: 'project-1',
+          schemaVersion: 2,
+          eventSchemaVersion: 1,
+          sessionId: 'session-1',
+        },
+      }),
+    ])
     expect(appended.status).toBe('ok')
 
-    const queried = await repository.query(MemoryRetrievalRequestSchema.parse({
-      schemaVersion: 2, queryId: 'malformed-query', projectId: 'project-1', sessionId: 'session-1',
-      query: 'task', selectors: [], artifactKinds: [], includeHistorical: false, maxResultsPerCategory: 10,
-    }))
+    const queried = await repository.query(
+      MemoryRetrievalRequestSchema.parse({
+        schemaVersion: 2,
+        queryId: 'malformed-query',
+        projectId: 'project-1',
+        sessionId: 'session-1',
+        query: 'task',
+        selectors: [],
+        artifactKinds: [],
+        includeHistorical: false,
+        maxResultsPerCategory: 10,
+      }),
+    )
     expect(queried.outcome).toBe('failed')
   })
 
   test('omits absent optional metadata fields in low-level storage', async () => {
     const repository = await open(temporaryRepository())
-    expect((await repository.appendEvents([event('metadata')])).status).toBe('ok')
+    expect((await repository.appendEvents([event('metadata')])).status).toBe(
+      'ok',
+    )
     const database = new Database(repository.databasePath)
     try {
-      const row = database.query('SELECT metadata_json FROM memory_events').get() as {
+      const row = database
+        .query('SELECT metadata_json FROM memory_events')
+        .get() as {
         metadata_json: string
       }
       expect(row.metadata_json).toBe('{}')
@@ -1269,64 +1861,144 @@ describe('BunSQLiteMemoryRepository', () => {
 
   test('allows an exact lost-response retry despite a stale tail but rejects a mixed retry', async () => {
     const repository = await open(temporaryRepository())
-    const append = (events: MemoryEventDraft[], expectedTail: Record<string, unknown>) => repository.append(
-      MemoryAppendRequestSchema.parse({ schemaVersion: 2, projectId: 'project-1', events, expectedTail }),
-    )
-    expect((await append([draft('retry-one')], { kind: 'empty' })).outcome).toBe('appended')
-    expect((await repository.append(MemoryAppendRequestSchema.parse({
-      schemaVersion: 2, projectId: 'project-1', events: [draft('later')],
-    }))).outcome).toBe('appended')
+    const append = (
+      events: MemoryEventDraft[],
+      expectedTail: Record<string, unknown>,
+    ) =>
+      repository.append(
+        MemoryAppendRequestSchema.parse({
+          schemaVersion: 2,
+          projectId: 'project-1',
+          events,
+          expectedTail,
+        }),
+      )
+    expect(
+      (await append([draft('retry-one')], { kind: 'empty' })).outcome,
+    ).toBe('appended')
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [draft('later')],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
     const retry = await append([draft('retry-one')], { kind: 'empty' })
-    expect(retry).toMatchObject({ outcome: 'appended', entries: [{ duplicate: true }] })
-    const mixed = await append([draft('retry-one'), draft('new-in-mixed')], { kind: 'empty' })
-    expect(mixed).toMatchObject({ outcome: 'rejected', error: { code: 'conflict' } })
+    expect(retry).toMatchObject({
+      outcome: 'appended',
+      entries: [{ duplicate: true }],
+    })
+    const mixed = await append([draft('retry-one'), draft('new-in-mixed')], {
+      kind: 'empty',
+    })
+    expect(mixed).toMatchObject({
+      outcome: 'rejected',
+      error: { code: 'conflict' },
+    })
     const listed = await repository.listEvents()
-    expect(listed.status === 'ok' ? listed.events.map(({ eventId }) => eventId) : []).toEqual(['retry-one', 'later'])
+    expect(
+      listed.status === 'ok' ? listed.events.map(({ eventId }) => eventId) : [],
+    ).toEqual(['retry-one', 'later'])
   })
 
   test('binds a valid project-scoped low-level V2 append immediately', async () => {
     const repository = await open(temporaryRepository())
-    const appended = await repository.appendEvents([event('canonical-low-level', {
-      metadata: { projectId: 'project-1', schemaVersion: 2, eventSchemaVersion: 1 },
-    })])
+    const appended = await repository.appendEvents([
+      event('canonical-low-level', {
+        metadata: {
+          projectId: 'project-1',
+          schemaVersion: 2,
+          eventSchemaVersion: 1,
+        },
+      }),
+    ])
     expect(appended.status).toBe('ok')
-    expect(projectBindingState(repository)).toEqual({ events: 1, tasks: 0, projectId: 'project-1' })
+    expect(projectBindingState(repository)).toEqual({
+      events: 1,
+      tasks: 0,
+      projectId: 'project-1',
+    })
   })
 
   test('keeps legacy writes unbound until canonical binding and then rejects unscoped writes', async () => {
     const repository = await open(temporaryRepository())
-    expect((await repository.appendEvents([event('legacy-before-binding')])).status).toBe('ok')
+    expect(
+      (await repository.appendEvents([event('legacy-before-binding')])).status,
+    ).toBe('ok')
     expect(projectBindingState(repository).projectId).toBeNull()
 
-    expect((await repository.appendEvents([event('canonical-after-legacy', {
-      metadata: { projectId: 'project-1', schemaVersion: 2, eventSchemaVersion: 1 },
-    })])).status).toBe('ok')
+    expect(
+      (
+        await repository.appendEvents([
+          event('canonical-after-legacy', {
+            metadata: {
+              projectId: 'project-1',
+              schemaVersion: 2,
+              eventSchemaVersion: 1,
+            },
+          }),
+        ])
+      ).status,
+    ).toBe('ok')
     expect(projectBindingState(repository).projectId).toBe('project-1')
 
-    const unscoped = await repository.appendEvents([event('legacy-after-binding')])
-    expect(unscoped).toMatchObject({ status: 'error', error: { kind: 'invalid' } })
-    expect(projectBindingState(repository)).toEqual({ events: 2, tasks: 1, projectId: 'project-1' })
+    const unscoped = await repository.appendEvents([
+      event('legacy-after-binding'),
+    ])
+    expect(unscoped).toMatchObject({
+      status: 'error',
+      error: { kind: 'invalid' },
+    })
+    expect(projectBindingState(repository)).toEqual({
+      events: 2,
+      tasks: 1,
+      projectId: 'project-1',
+    })
   })
 
   test('rejects malformed and mixed low-level project identities atomically', async () => {
     const batches: MemoryV2EventInput[][] = [
-      [event('missing-project', {
-        metadata: { schemaVersion: 2, eventSchemaVersion: 1 },
-      })],
-      [event('invalid-project', {
-        metadata: { projectId: 'not a valid project', schemaVersion: 2, eventSchemaVersion: 1 },
-      })],
+      [
+        event('missing-project', {
+          metadata: { schemaVersion: 2, eventSchemaVersion: 1 },
+        }),
+      ],
+      [
+        event('invalid-project', {
+          metadata: {
+            projectId: 'not a valid project',
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+          },
+        }),
+      ],
       [
         event('mixed-project-one', {
-          metadata: { projectId: 'project-1', schemaVersion: 2, eventSchemaVersion: 1 },
+          metadata: {
+            projectId: 'project-1',
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+          },
         }),
         event('mixed-project-two', {
-          metadata: { projectId: 'project-2', schemaVersion: 2, eventSchemaVersion: 1 },
+          metadata: {
+            projectId: 'project-2',
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+          },
         }),
       ],
       [
         event('valid-before-missing', {
-          metadata: { projectId: 'project-1', schemaVersion: 2, eventSchemaVersion: 1 },
+          metadata: {
+            projectId: 'project-1',
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+          },
         }),
         event('missing-after-valid', {
           metadata: { schemaVersion: 2, eventSchemaVersion: 1 },
@@ -1334,7 +2006,11 @@ describe('BunSQLiteMemoryRepository', () => {
       ],
       [
         event('canonical-before-unscoped', {
-          metadata: { projectId: 'project-1', schemaVersion: 2, eventSchemaVersion: 1 },
+          metadata: {
+            projectId: 'project-1',
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+          },
         }),
         event('unscoped-legacy-in-canonical-batch'),
       ],
@@ -1343,28 +2019,68 @@ describe('BunSQLiteMemoryRepository', () => {
     for (const batch of batches) {
       const repository = await open(temporaryRepository())
       const rejected = await repository.appendEvents(batch)
-      expect(rejected).toMatchObject({ status: 'error', error: { kind: 'invalid' } })
-      expect(projectBindingState(repository)).toEqual({ events: 0, tasks: 0, projectId: null })
+      expect(rejected).toMatchObject({
+        status: 'error',
+        error: { kind: 'invalid' },
+      })
+      expect(projectBindingState(repository)).toEqual({
+        events: 0,
+        tasks: 0,
+        projectId: null,
+      })
     }
   })
 
   test('uses UTF-8 byte admission and does not parse an excluded oversized newest row', async () => {
     const repository = await open(temporaryRepository())
-    expect((await repository.appendEvents([event('valid-small', {
-      metadata: { projectId: 'project-1', schemaVersion: 2, eventSchemaVersion: 1 },
-    })])).status).toBe('ok')
-    expect((await repository.appendEvents([event('oversized-malformed', {
-      eventType: 'task.created',
-      payload: { taskId: 'task-1', value: '😀'.repeat(2_100_000) },
-      metadata: { projectId: 'project-1', schemaVersion: 2, eventSchemaVersion: 1, sessionId: 'session-1' },
-    })])).status).toBe('ok')
-    const queried = await repository.query(MemoryRetrievalRequestSchema.parse({
-      schemaVersion: 2, queryId: 'oversized-query', projectId: 'project-1', sessionId: 'session-1',
-      query: 'valid', selectors: [], artifactKinds: [], includeHistorical: false, maxResultsPerCategory: 10,
-    }))
+    expect(
+      (
+        await repository.appendEvents([
+          event('valid-small', {
+            metadata: {
+              projectId: 'project-1',
+              schemaVersion: 2,
+              eventSchemaVersion: 1,
+            },
+          }),
+        ])
+      ).status,
+    ).toBe('ok')
+    expect(
+      (
+        await repository.appendEvents([
+          event('oversized-malformed', {
+            eventType: 'task.created',
+            payload: { taskId: 'task-1', value: '😀'.repeat(2_100_000) },
+            metadata: {
+              projectId: 'project-1',
+              schemaVersion: 2,
+              eventSchemaVersion: 1,
+              sessionId: 'session-1',
+            },
+          }),
+        ])
+      ).status,
+    ).toBe('ok')
+    const queried = await repository.query(
+      MemoryRetrievalRequestSchema.parse({
+        schemaVersion: 2,
+        queryId: 'oversized-query',
+        projectId: 'project-1',
+        sessionId: 'session-1',
+        query: 'valid',
+        selectors: [],
+        artifactKinds: [],
+        includeHistorical: false,
+        maxResultsPerCategory: 10,
+      }),
+    )
     expect(queried.outcome).toBe('result')
     if (queried.outcome === 'result') {
-      expect(queried.result.degradation).toMatchObject({ state: 'degraded', reasons: [{ code: 'resource-budget' }] })
+      expect(queried.result.degradation).toMatchObject({
+        state: 'degraded',
+        reasons: [{ code: 'resource-budget' }],
+      })
     }
   })
 
@@ -1381,33 +2097,66 @@ describe('BunSQLiteMemoryRepository', () => {
       )
       database.exec('BEGIN IMMEDIATE')
       const metadata = JSON.stringify({
-        schemaVersion: 2, eventSchemaVersion: 1, projectId: 'project-1', sessionId: 'session-1',
+        schemaVersion: 2,
+        eventSchemaVersion: 1,
+        projectId: 'project-1',
+        sessionId: 'session-1',
       })
       insert.run(
-        'cap-oldest', 'key-cap-oldest', 'task.created',
+        'cap-oldest',
+        'key-cap-oldest',
+        'task.created',
         JSON.stringify({
-          payloadSchemaVersion: 1, taskId: 'task-oldest', title: 'Excluded oldest',
-          objective: 'This semantic candidate must be outside the newest-first admission set.', initialStatus: 'created',
+          payloadSchemaVersion: 1,
+          taskId: 'task-oldest',
+          title: 'Excluded oldest',
+          objective:
+            'This semantic candidate must be outside the newest-first admission set.',
+          initialStatus: 'created',
         }),
-        metadata, 'task-oldest',
+        metadata,
+        'task-oldest',
       )
       for (let index = 0; index < 10_000; index++) {
-        insert.run(`cap-${index}`, `key-cap-${index}`, 'unsupported.low-level', '{}', metadata, null)
+        insert.run(
+          `cap-${index}`,
+          `key-cap-${index}`,
+          'unsupported.low-level',
+          '{}',
+          metadata,
+          null,
+        )
       }
-      database.query("INSERT INTO memory_projection_metadata(key, value) VALUES ('project_id', 'project-1')").run()
+      database
+        .query(
+          "INSERT INTO memory_projection_metadata(key, value) VALUES ('project_id', 'project-1')",
+        )
+        .run()
       database.exec('COMMIT')
     } finally {
       database.close()
     }
-    const queried = await repository.query(MemoryRetrievalRequestSchema.parse({
-      schemaVersion: 2, queryId: 'cap-query', projectId: 'project-1', sessionId: 'session-1',
-      query: 'unsupported', selectors: [], artifactKinds: [], includeHistorical: false, maxResultsPerCategory: 10,
-    }))
+    const queried = await repository.query(
+      MemoryRetrievalRequestSchema.parse({
+        schemaVersion: 2,
+        queryId: 'cap-query',
+        projectId: 'project-1',
+        sessionId: 'session-1',
+        query: 'unsupported',
+        selectors: [],
+        artifactKinds: [],
+        includeHistorical: false,
+        maxResultsPerCategory: 10,
+      }),
+    )
     expect(queried.outcome).toBe('result')
     if (queried.outcome === 'result') {
       expect(queried.result.matchedTasks).toEqual([])
       expect(queried.result.verifiedKnowledge).toEqual([])
-      expect(queried.result.degradation).toMatchObject({ state: 'degraded', reasons: [{ code: 'result-cap-reached' }] })
+      expect(queried.result.degradation).toMatchObject({
+        state: 'degraded',
+        reasons: [{ code: 'result-cap-reached' }],
+      })
     }
   })
 
@@ -1426,7 +2175,10 @@ describe('BunSQLiteMemoryRepository', () => {
       database.close()
       const before = readFileSync(path)
       const opened = await openResult(root)
-      expect(opened).toMatchObject({ status: 'error', error: { kind: 'incompatible', retryable: false } })
+      expect(opened).toMatchObject({
+        status: 'error',
+        error: { kind: 'incompatible', retryable: false },
+      })
       expect(readFileSync(path)).toEqual(before)
     }
   })
@@ -1439,8 +2191,13 @@ describe('BunSQLiteMemoryRepository', () => {
     const database = new Database(path, { create: true })
     database.close()
     mkdirSync(`${path}-wal`)
-    const opened = await BunSQLiteMemoryRepository.open({ repositoryRoot: root })
-    expect(opened).toMatchObject({ status: 'error', error: { kind: 'incompatible' } })
+    const opened = await BunSQLiteMemoryRepository.open({
+      repositoryRoot: root,
+    })
+    expect(opened).toMatchObject({
+      status: 'error',
+      error: { kind: 'incompatible' },
+    })
   })
 
   test('canonical rows cannot be updated or deleted', async () => {
@@ -1448,10 +2205,12 @@ describe('BunSQLiteMemoryRepository', () => {
     await repository.appendEvents([event('immutable')])
     const database = new Database(repository.databasePath)
     try {
-      expect(() => database.exec("UPDATE memory_events SET event_type = 'changed'"))
-        .toThrow('canonical memory events are append only')
-      expect(() => database.exec('DELETE FROM memory_events'))
-        .toThrow('canonical memory events are append only')
+      expect(() =>
+        database.exec("UPDATE memory_events SET event_type = 'changed'"),
+      ).toThrow('canonical memory events are append only')
+      expect(() => database.exec('DELETE FROM memory_events')).toThrow(
+        'canonical memory events are append only',
+      )
     } finally {
       database.close()
     }
@@ -1470,36 +2229,132 @@ describe('BunSQLiteMemoryRepository', () => {
         workspaceRevision: 3,
         workspaceSnapshotId: 'snapshot-3',
       })
-    expect((await repository.append(MemoryAppendRequestSchema.parse({
-      schemaVersion: 2,
-      projectId: 'project-1',
-      events: [
-        coverage('coverage-tests-old', 'tests', 'partial'),
-        coverage('coverage-tests-new', 'tests', 'covered'),
-        coverage('coverage-risk', 'risk', 'partial'),
-      ],
-    }))).outcome).toBe('appended')
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              coverage('coverage-tests-old', 'tests', 'partial'),
+              coverage('coverage-tests-new', 'tests', 'covered'),
+              coverage('coverage-risk', 'risk', 'partial'),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
 
-    const matching = await repository.query(MemoryRetrievalRequestSchema.parse({
-      schemaVersion: 2, queryId: 'coverage-match', projectId: 'project-1', sessionId: 'session-1',
-      query: 'coverage', selectors: [], artifactKinds: [], includeHistorical: false,
-      maxResultsPerCategory: 10, workspaceRevision: 3, workspaceSnapshotId: 'snapshot-3',
-    }))
+    const matching = await repository.query(
+      MemoryRetrievalRequestSchema.parse({
+        schemaVersion: 2,
+        queryId: 'coverage-match',
+        projectId: 'project-1',
+        sessionId: 'session-1',
+        query: 'coverage',
+        selectors: [],
+        artifactKinds: [],
+        includeHistorical: false,
+        maxResultsPerCategory: 10,
+        workspaceRevision: 3,
+        workspaceSnapshotId: 'snapshot-3',
+      }),
+    )
     expect(matching.outcome).toBe('result')
     if (matching.outcome !== 'result') return
     const taskId = TaskIdSchema.parse('task-1')
     expect(matching.result.currentCoverage).toEqual([
-      { dimension: 'risk', state: 'partial', taskId, notes: 'risk-partial-notes', workspaceRevision: 3, workspaceSnapshotId: 'snapshot-3' },
-      { dimension: 'tests', state: 'covered', taskId, notes: 'tests-covered-notes', workspaceRevision: 3, workspaceSnapshotId: 'snapshot-3' },
+      {
+        dimension: 'risk',
+        state: 'partial',
+        taskId,
+        notes: 'risk-partial-notes',
+        workspaceRevision: 3,
+        workspaceSnapshotId: 'snapshot-3',
+      },
+      {
+        dimension: 'tests',
+        state: 'covered',
+        taskId,
+        notes: 'tests-covered-notes',
+        workspaceRevision: 3,
+        workspaceSnapshotId: 'snapshot-3',
+      },
     ])
 
-    const mismatched = await repository.query(MemoryRetrievalRequestSchema.parse({
-      schemaVersion: 2, queryId: 'coverage-mismatch', projectId: 'project-1', sessionId: 'session-1',
-      query: 'coverage', selectors: [], artifactKinds: [], includeHistorical: false,
-      maxResultsPerCategory: 10, workspaceRevision: 4, workspaceSnapshotId: 'snapshot-3',
-    }))
+    const mismatched = await repository.query(
+      MemoryRetrievalRequestSchema.parse({
+        schemaVersion: 2,
+        queryId: 'coverage-mismatch',
+        projectId: 'project-1',
+        sessionId: 'session-1',
+        query: 'coverage',
+        selectors: [],
+        artifactKinds: [],
+        includeHistorical: false,
+        maxResultsPerCategory: 10,
+        workspaceRevision: 4,
+        workspaceSnapshotId: 'snapshot-3',
+      }),
+    )
     expect(mismatched.outcome).toBe('result')
     if (mismatched.outcome !== 'result') return
     expect(mismatched.result.currentCoverage).toEqual([])
+  })
+})
+
+describe('BunSQLiteMemoryRepository strict secure-open gate', () => {
+  test('fails closed with a typed non-retryable unsupported-open error and performs no SQLite mutation', async () => {
+    const root = temporaryRepository()
+    const result = await openBunSQLiteMemoryRepository({
+      repositoryRoot: root,
+      requireSecureOpen: true,
+    })
+    expect(result.status).toBe('error')
+    if (result.status !== 'error') return
+    expect(result.error.kind).toBe('unsupported-open')
+    expect(result.error.retryable).toBe(false)
+    expect(result.error.message).toContain(
+      'bun:sqlite opens the database and its -wal/-shm sidecars by pathname',
+    )
+    expect(result.error.message).toContain('fail-closed')
+    expect(result.error.message).not.toContain(root)
+    expect(existsSync(join(root, '.openbuff'))).toBe(false)
+  })
+
+  test('leaves a pre-existing store byte-identical when the strict open is refused', async () => {
+    const root = temporaryRepository()
+    const repository = await open(root)
+    expect(
+      (await repository.appendEvents([event('pre-existing')])).status,
+    ).toBe('ok')
+    await repository.close()
+    const databasePath = join(root, '.openbuff', 'memory', 'memory-v2.sqlite')
+    const before = readFileSync(databasePath)
+
+    const result = await openBunSQLiteMemoryRepository({
+      repositoryRoot: root,
+      requireSecureOpen: true,
+    })
+    expect(result).toMatchObject({
+      status: 'error',
+      error: { kind: 'unsupported-open', retryable: false },
+    })
+    expect(readFileSync(databasePath)).toEqual(before)
+  })
+
+  test('opens by default and reports the honest best-effort open posture on the result and in kernel health', async () => {
+    const root = temporaryRepository()
+    const result = await openBunSQLiteMemoryRepository({ repositoryRoot: root })
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    repositories.push(result.repository)
+    expect(result.openPosture).toBe(SQLITE_OPEN_POSTURE)
+    expect(SQLITE_OPEN_POSTURE).toBe('pathname-best-effort-unverified-open')
+    const health = await result.repository.kernelHealth()
+    expect(health.openPosture).toBe(SQLITE_OPEN_POSTURE)
+    expect(
+      existsSync(join(root, '.openbuff', 'memory', 'memory-v2.sqlite')),
+    ).toBe(true)
   })
 })

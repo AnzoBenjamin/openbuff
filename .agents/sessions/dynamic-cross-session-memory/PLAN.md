@@ -1,9 +1,9 @@
 # PLAN — Dynamic Cross-Session Memory V2 Repair
 
 Session: `dynamic-cross-session-memory`
-Status: ready for implementation
+Status: implementation complete; R7-T2 green; R7-T3 blocked by harness limitation (see STATUS.md).
 
-<!-- current-task: MEM2-R3-T1 Repair SDK migration/operator atomicity and trust boundaries -->
+<!-- current-task: -->
 
 ## Execution rules
 
@@ -95,6 +95,7 @@ Status: ready for implementation
   - Depends on: MEM2-R7-T2
   - Build one fresh bundle and freeze mutations while security, compatibility, migration, reliability, and final code review run.
   - Acceptance: every reviewer returns a structured non-blocking verdict with the matching fingerprint; quota/protocol failures are retried only against a fresh stable bundle and are never counted as approval.
+  - Status: BLOCKED by harness design — a fully-committed clean tree mints no gate-assigned `v3:<64-hex>` token, so reviewer-family specialists cannot be spawned against HEAD. See STATUS.md for the repro and the proposed `committed-surface` fingerprint mode.
   - Validate: record fingerprint and receipt IDs in `STATUS.md`.
 
 - [ ] MEM2-R7-T4 Finalize durable artifacts

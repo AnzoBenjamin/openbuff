@@ -65,7 +65,7 @@ const BROAD_AUDIT_POINTER_TAILS: Record<BroadAuditFinalizeClause, string> = {
     ' In plan mode, do not implement — translate the findings into the durable plan packet instead.',
 }
 const specialistRoutingPointer =
-  'Choosing a specialist agent → read_files `agents/guides/specialist-routing.md`. If that guide is unavailable, route only on a crossed risk boundary (architecture, requirements, performance, reliability, migration, compatibility, accessibility, dependencies), pass the gate-assigned `params.snapshot_id`, and never substitute a specialist for the runtime-owned final gate.'
+  'Choosing a specialist agent → read_files `agents/guides/specialist-routing.md`. If that guide is unavailable, route only on a crossed risk boundary (architecture, requirements, performance, reliability, migration, compatibility, accessibility, dependencies), never include `snapshot_id` in a manually authored reviewer-family spawn (the gate-assigned token is only available to runtime-owned spawns; put scoped files in params and the question in the prompt; security-reviewer still requires `changed_files` + `snapshot_fingerprint` on manual spawns), and never substitute a specialist for the runtime-owned final gate.'
 const gitDisciplinePointer =
   'Before any git commit/branch/push → read_files `agents/guides/git-discipline.md`. If that guide is unavailable, apply the standard git rules: delegate to `git-committer` with `params.owned_paths`, commit only after GATE: PASSED, never push or alter git config unless explicitly asked, and never commit secrets.'
 // The named guide is advisory routing only (when to ask for a pre-edit
@@ -1012,6 +1012,26 @@ ${guideSections}
         'policy',
       ]
       const SECURITY_SENSITIVE_NAME_SUBSTRINGS = ['secret', 'token', 'apikey']
+      // The sentinel content marker for a gate file that was deleted (true
+      // nonexistence — see the ENOENT probe in readGateFileContentMarker).
+      // Single source of truth for every deletion-semantics site so the
+      // producer and its consumers cannot drift: readGateFileContentMarker
+      // (both ENOENT returns), collectDeletedFilesFromSnapshotDetails, the
+      // turn-start open-finding prune, and isCreditableContentMarker.
+      // Declared INSIDE the handleSteps body rather than at module scope for
+      // the same serialization reason as the globs above: handleSteps is
+      // serialized via .toString() and reconstructed with new Function(...),
+      // so a module-scope binding would be undefined in the reconstructed
+      // body, while this in-body const is serialized along with the function.
+      // It must stay ABOVE the deleted-file finding prune in source order:
+      // `const` bindings are not hoisted (temporal dead zone), and the prune
+      // executes during the generator's initial top-to-bottom pass, so a
+      // lower declaration would throw a ReferenceError at turn start. The
+      // VALUE must remain exactly 'missing': it is persisted in serialized
+      // gate state (the per-file marker ledgers) and compared against markers
+      // recomputed from the live filesystem, so a changed value would silently
+      // evict all persisted deletion credit.
+      const GATE_FILE_MISSING_CONTENT_MARKER = 'missing'
       const runReviewerGate = runValidationGate
       const reviewerAgentType = 'code-reviewer'
       const MAX_REVIEWER_NO_VERDICT_RETRIES = 1
@@ -1202,6 +1222,97 @@ ${guideSections}
       // serialized state lacks this field, which is what makes the
       // condonedFindingTexts fallback below conditional on it being empty.
       activeWorkState.condonedFindingKeys ??= []
+      // Deleted-file finding prune. A pending gate file DELETED before any
+      // snapshot captured its bytes resolves to the `missing` content marker
+      // (readGateFileContentMarker's GATE_FILE_MISSING_CONTENT_MARKER) and is
+      // attested-by-absence, so an open
+      // finding whose ENTIRE file set is now missing can never be cleared by a
+      // fresh matching review: the reviewer cannot read a deleted file and
+      // keeps returning `BLOCKING: ...assigned-file-unreadable...`, which
+      // re-creates the finding and re-spawns its specialist forever (the
+      // scripts/perf-probe-tmp.ts loop). Remove such findings — and their
+      // verbatim blocker strings, matched by the same text-containment rule
+      // mergeReviewerFindings uses to keep blockers and findings in sync —
+      // BEFORE the owed-set rehydration below so a pruned finding's reviewer
+      // family is not rehydrated into another re-review. A finding naming ANY
+      // still-existing file is kept untouched: genuinely
+      // unreadable-but-present files (permissions, EISDIR, symlink escape)
+      // produce `unreadable:*` markers, never `missing`, so fail-closed
+      // re-review for them is preserved.
+      {
+        const openFindings = activeWorkState.openReviewerFindings ?? []
+        const missingFileFindings = openFindings.filter((finding) => {
+          const findingFiles = Array.isArray(finding.files)
+            ? finding.files.filter(
+                (file): file is string =>
+                  typeof file === 'string' && file.length > 0,
+              )
+            : []
+          return (
+            findingFiles.length > 0 &&
+            findingFiles.every(
+              (file) =>
+                readGateFileContentMarker(file) ===
+                GATE_FILE_MISSING_CONTENT_MARKER,
+            )
+          )
+        })
+        if (missingFileFindings.length > 0) {
+          const prunedFindingSet = new Set(missingFileFindings)
+          activeWorkState.openReviewerFindings = openFindings.filter(
+            (finding) => !prunedFindingSet.has(finding),
+          )
+          const prunedFindingTexts = missingFileFindings
+            .map((finding) => finding.text)
+            .filter(
+              (text): text is string =>
+                typeof text === 'string' && text.length > 0,
+            )
+          activeWorkState.openReviewerBlockers = (
+            activeWorkState.openReviewerBlockers ?? []
+          ).filter(
+            (blocker) =>
+              !prunedFindingTexts.some((text) => blocker.includes(text)),
+          )
+          // Retire the owed-set reference the prune would otherwise strand. A
+          // family whose every open finding was just dropped can never be
+          // re-attested — the reviewer cannot read a deleted file — so leaving
+          // it in owedReviewerRevalidations would keep re-arming its aux block
+          // forever after the ledger emptied. Remove ONLY a family that was
+          // actually pruned AND is backed by no remaining open finding: a
+          // pruned family with a surviving finding stays owed (fail closed),
+          // and a family that was never pruned is untouched. The legacy scalar
+          // is owed[0]'s mirror (exactly how the rehydration block derives
+          // it), so a stale one is rewritten from the filtered list rather
+          // than left pointing at the pruned family.
+          const prunedFamilies = new Set(
+            missingFileFindings.map((finding) =>
+              reviewerFamilyFromFinding(finding),
+            ),
+          )
+          const remainingOwed = new Set(
+            activeWorkState.openReviewerFindings.map((finding) =>
+              reviewerFamilyFromFinding(finding),
+            ),
+          )
+          activeWorkState.owedReviewerRevalidations = (
+            activeWorkState.owedReviewerRevalidations ?? []
+          ).filter(
+            (family) =>
+              !prunedFamilies.has(family) || remainingOwed.has(family),
+          )
+          const staleOwedScalar = activeWorkState.requiredReviewerRevalidation
+          if (
+            staleOwedScalar !== undefined &&
+            prunedFamilies.has(staleOwedScalar) &&
+            !remainingOwed.has(staleOwedScalar)
+          ) {
+            activeWorkState.requiredReviewerRevalidation =
+              activeWorkState.owedReviewerRevalidations[0] ?? undefined
+          }
+          markActiveWorkStateChanged()
+        }
+      }
       if (activeWorkState.openReviewerFindings.length > 0) {
         // Rehydrate the owed set from EVERY open finding, not just findings[0]:
         // serialized state can carry open findings from several reviewers and
@@ -9523,7 +9634,10 @@ function hashGateSnapshotDetails(details: string): string {
       // non-attestable markers (unreadable:<code>, missing-crypto, etc.) remain
       // excluded so they can never grant durable gate credit.
       function isCreditableContentMarker(value: string): boolean {
-        return isAttestableContentMarker(value) || value === 'missing'
+        return (
+          isAttestableContentMarker(value) ||
+          value === GATE_FILE_MISSING_CONTENT_MARKER
+        )
       }
 
       function hasFreshGateFingerprintForPendingFiles(
@@ -10574,13 +10688,14 @@ function hashGateSnapshotDetails(details: string): string {
       }
 
       // Deleted-file extraction from files-v4 snapshot details. A pending file
-      // whose content marker is exactly `missing` was deleted in the changeset
-      // and cannot be read by the reviewer, so it is attested-by-absence and
-      // excluded from the reviewedFiles requirement. Only exact `missing`
-      // markers count: `unreadable:<code>` is a present-but-unreadable file
-      // that must still be attested (fail closed). Self-contained inline
-      // helper (handleSteps is serialized via .toString() + new Function(...),
-      // so it must not reference module-scope imports).
+      // whose content marker is exactly `missing` — the shared
+      // GATE_FILE_MISSING_CONTENT_MARKER sentinel — was deleted in the
+      // changeset and cannot be read by the reviewer, so it is
+      // attested-by-absence and excluded from the reviewedFiles requirement.
+      // Only exact `missing` markers count: `unreadable:<code>` is a
+      // present-but-unreadable file that must still be attested (fail closed).
+      // Self-contained inline helper (handleSteps is serialized via .toString()
+      // + new Function(...), so it must not reference module-scope imports).
       function collectDeletedFilesFromSnapshotDetails(
         details: string,
       ): string[] {
@@ -10591,7 +10706,7 @@ function hashGateSnapshotDetails(details: string): string {
           if (line === '--') break
           const tabIndex = line.indexOf('\t')
           if (tabIndex <= 0) continue
-          if (line.slice(tabIndex + 1) === 'missing') {
+          if (line.slice(tabIndex + 1) === GATE_FILE_MISSING_CONTENT_MARKER) {
             deletedFiles.push(line.slice(0, tabIndex))
           }
         }
@@ -10602,9 +10717,13 @@ function hashGateSnapshotDetails(details: string): string {
        * Resolve a normalized gate file path against process.cwd() and return
        * a deterministic content marker for fingerprinting. Regular files are
        * hashed in fixed-size chunks; symlink markers additionally bind the link
-       * path to bytes read from its resolved target. Never throws: scope, read,
-       * or stat failures become `unreadable:<code>` markers so stale credit
-       * fails closed.
+       * path to bytes read from its resolved target. A path that does not exist
+       * on disk returns the exact marker `missing`
+       * (GATE_FILE_MISSING_CONTENT_MARKER; attested-by-absence — the same
+       * marker a snapshotted-then-deleted file gets from the ENOENT catch
+       * below, now also produced for a file deleted before its first snapshot).
+       * Never throws: every other scope, read, or stat failure becomes an
+       * `unreadable:<code>` marker so stale credit fails closed.
        */
       function readGateFileContentMarker(normalizedPath: string): string {
         if (!normalizedPath) return 'unreadable:empty-path'
@@ -10653,6 +10772,34 @@ function hashGateSnapshotDetails(details: string): string {
           return 'unreadable:outside-project'
         }
         try {
+          // True nonexistence is attested-by-absence, NOT an unreadable file:
+          // a pending gate file deleted before any snapshot captured its bytes
+          // must resolve to the existing `missing` marker so
+          // collectDeletedFilesFromSnapshotDetails recognizes the deletion and
+          // per-file credit treats it as stable (a never-snapshotted deletion
+          // otherwise re-triggers specialist review forever). Probe existence
+          // BEFORE the component walk; the walk's lstatSync (or the open below)
+          // still throws ENOENT for the TOCTOU case — deleted between this
+          // probe and the read — and the catch below maps ENOENT to `missing`
+          // too. A path that EXISTS (regular file, directory, or symlink) falls
+          // through unchanged, so present-but-not-a-file stays
+          // `unreadable:not-a-file` and an escaping symlink stays
+          // `unreadable:outside-project-symlink`: only true absence yields
+          // `missing`.
+          // Use lstatSync (not existsSync) for the probe: existsSync follows a
+          // dangling symlink to its nonexistent target and would wrongly report
+          // `missing`, whereas lstatSync sees the link entry itself as present
+          // (ENOENT only when the path truly does not exist).
+          try {
+            fs.lstatSync(absolutePath)
+          } catch (probeError) {
+            if ((probeError as NodeJS.ErrnoException).code === 'ENOENT') {
+              return GATE_FILE_MISSING_CONTENT_MARKER
+            }
+            // A present path that cannot be stated (permissions, etc.) stays
+            // fail-closed as unreadable rather than being mistaken for absent.
+            return 'unreadable:lstat-failed'
+          }
           const pathSegments = projectRelativePath
             .split(path.sep)
             .filter(Boolean)
@@ -10731,7 +10878,7 @@ function hashGateSnapshotDetails(details: string): string {
             err && typeof err === 'object' && 'code' in err
               ? String((err as { code?: unknown }).code ?? 'unknown')
               : 'unknown'
-          if (code === 'ENOENT') return 'missing'
+          if (code === 'ENOENT') return GATE_FILE_MISSING_CONTENT_MARKER
           return `unreadable:${code}`
         }
       }

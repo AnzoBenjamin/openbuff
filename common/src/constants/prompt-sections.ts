@@ -165,14 +165,16 @@ Gather the exact source and snapshot evidence before spawning. Advisory speciali
 
 | Agent family | Required \`params\` | Rejected | Notes |
 |---|---|---|---|
-| Reviewer-family (\`product-reviewer\`, \`performance-specialist\`, \`reliability-reviewer\`, \`migration-reviewer\`, \`compatibility-reviewer\`, \`accessibility-reviewer\`, \`ux-visual-reviewer\`, \`dependency-reviewer\`, \`evaluator\`) | \`params.snapshot_id\` = gate-assigned opaque \`v3:<64-hex>\` token from the parent gate | bare hex or missing token | Spawning with the wrong or missing snapshot key fails the spawn |
-| \`security-reviewer\` (exception) | \`params.changed_files\` + \`params.snapshot_fingerprint\` | \`params.snapshot_id\` | Rejects \`snapshot_id\`; requires file list + fingerprint only |
+| Reviewer-family (\`product-reviewer\`, \`performance-specialist\`, \`reliability-reviewer\`, \`migration-reviewer\`, \`compatibility-reviewer\`, \`accessibility-reviewer\`, \`ux-visual-reviewer\`, \`dependency-reviewer\`, \`evaluator\`) | \`params.snapshot_id\` = gate-assigned opaque \`v3:<64-hex>\` token from the parent gate for runtime-owned spawns; omitted entirely for manual spawns | When supplied, bare hex or a wrong value fails the spawn; manual spawns must omit the key |
+| \`security-reviewer\` (exception) | \`params.changed_files\` + \`params.snapshot_fingerprint\` on every spawn, manual included | \`params.snapshot_id\` | Rejects \`snapshot_id\`; the unchanged schema hard-requires the file list + fingerprint and imposes no \`v3:\` pattern on \`snapshot_fingerprint\` |
 
 Bare hex \`snapshotId\` from \`get_change_review_bundle\` is evidence-only — do not use it as \`params.snapshot_id\`.
 
+Manual spawns must not attempt to pass attestation tokens. \`params.snapshot_id\` is minted only for runtime-owned programmatic spawns; a prompt-authored spawn_agents/spawn_agent_inline call cannot obtain a valid token, and fingerprints shown in gate blocks or telemetry are truncated 16-char display prefixes that fail the \`v3:<64-hex>\` pattern. For manual/advisory reviewer-family spawns omit \`params.snapshot_id\`: put the scoped file list in \`params.files\` and the review question in the prompt. security-reviewer is the documented exception: its schema still requires \`params.changed_files\` + \`params.snapshot_fingerprint\` on manual spawns too, so a manual caller passes both keys and supplies as \`snapshot_fingerprint\` the stable fingerprint value it wants echoed exactly (the schema imposes no \`v3:\` pattern on that key); omitting the key fails the spawn.
+
 ## Compaction recovery
 
-If compaction drops GATE state, re-derive from the runtime's pinned GATE line / \`pendingGateFiles\` and do not manually re-spawn reviewer-family specialists — wait for the runtime-owned Final Gate result.
+If compaction drops GATE state, re-derive from the runtime's pinned GATE line / \`pendingGateFiles\` and do not manually re-spawn reviewer-family specialists — wait for the runtime-owned Final Gate result. Never re-derive or re-mint a \`v3:<64-hex>\` token for a manual specialist spawn: the gate-assigned token is runtime-owned, and a manual spawn, when explicitly requested, must omit \`params.snapshot_id\` entirely.
 
 ## Sequential vs parallel
 

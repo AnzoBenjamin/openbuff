@@ -752,14 +752,46 @@ describe('editor implementation brief validation', () => {
 
     const compatibilityTemplate = {
       id: 'compatibility-reviewer',
-      inputSchema: { params: z.object({ snapshot_id: z.string().min(1) }) },
+      inputSchema: {
+        params: z.object({
+          snapshot_id: z.string().regex(/^v3:[a-f0-9]{64}$/),
+        }),
+      },
     } as unknown as AgentTemplate
+    // No snapshot_id key supplied: a single omit-and-wait directive.
     expect(() =>
       validateAgentInput(
         compatibilityTemplate,
         'compatibility-reviewer',
         'Review compatibility.',
         {},
+      ),
+    ).toThrow('manual spawns omit `params.snapshot_id` entirely')
+    try {
+      validateAgentInput(
+        compatibilityTemplate,
+        'compatibility-reviewer',
+        'Review compatibility.',
+        {},
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      expect(message).toContain('params.files')
+      expect(message).toContain('wait for the gate')
+      expect(message).not.toContain('set params.snapshot_id')
+      expect(message).not.toContain('gate-assigned opaque v3:')
+      expect(message).not.toMatch(
+        /exact current snapshot fingerprint from get_change_review_bundle/i,
+      )
+    }
+
+    // Supplied-but-invalid snapshot_id: a single no-self-minting directive.
+    expect(() =>
+      validateAgentInput(
+        compatibilityTemplate,
+        'compatibility-reviewer',
+        'Review compatibility.',
+        { snapshot_id: 'v3:' + 'a'.repeat(63) },
       ),
     ).toThrow(
       // Gate-assigned opaque v3 token — bare bundle hex is evidence-only.
@@ -770,17 +802,53 @@ describe('editor implementation brief validation', () => {
         compatibilityTemplate,
         'compatibility-reviewer',
         'Review compatibility.',
-        {},
+        { snapshot_id: 'v3:' + 'a'.repeat(63) },
       )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      expect(message).toContain('"snapshot_id": "v3:<64-hex>"')
-      expect(message).toContain('specialistCreditFingerprint')
+      expect(message).toContain('the supplied params.snapshot_id is invalid')
       expect(message).toContain('evidence-only')
+      // No-self-minting: the hint never names a caller-side recompute path.
+      expect(message).not.toMatch(/hashGateSnapshotDetails/i)
+      expect(message).not.toMatch(/recompute|re-mint/i)
+      // A manual caller that supplied an invalid token gets the
+      // omit-for-manual contract, not a recipe for sourcing a replacement.
+      expect(message).toContain('omit params.snapshot_id entirely')
+      expect(message).toContain('wait for the runtime-owned gate')
       expect(message).not.toMatch(
         /exact current snapshot fingerprint from get_change_review_bundle/i,
       )
     }
+  })
+
+  it('accepts a manual security-reviewer spawn with both schema-required keys (omit-for-manual exception)', () => {
+    // security-reviewer is the documented exception to the omit-for-manual
+    // contract: its schema hard-requires changed_files + snapshot_fingerprint
+    // on manual spawns too, and imposes no v3 pattern on the fingerprint, so
+    // the manual pre-edit security-review path stays usable with a
+    // caller-supplied stable value.
+    const securityReviewerTemplate = {
+      id: 'security-reviewer',
+      inputSchema: {
+        params: z
+          .object({
+            changed_files: z.array(z.string()),
+            snapshot_fingerprint: z.string(),
+          })
+          .strict(),
+      },
+    } as unknown as AgentTemplate
+    expect(() =>
+      validateAgentInput(
+        securityReviewerTemplate,
+        'security-reviewer',
+        'Review the auth change.',
+        {
+          changed_files: ['src/auth/login.ts'],
+          snapshot_fingerprint: 'pre-edit-review-fingerprint',
+        },
+      ),
+    ).not.toThrow()
   })
 
   it('accepts a concrete prose brief with actionable target files', () => {

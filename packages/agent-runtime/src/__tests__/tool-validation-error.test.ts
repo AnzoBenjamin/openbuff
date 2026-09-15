@@ -2166,6 +2166,8 @@ describe('tool validation error handling', () => {
     expect(typeof errorEvents[0].userMessage).toBe('string')
     expect((errorEvents[0].userMessage ?? '').length).toBeGreaterThan(0)
     expect(errorEvents[0].userMessage).not.toContain('Raw validation issues')
+    expect(errorEvents[0].userMessage).not.toContain('Exact params contract')
+    expect(errorEvents[0].autoRecovering).toBe(true)
 
     // Verify hadToolCallError is true so the agent loop continues
     expect(result.hadToolCallError).toBe(true)
@@ -2269,10 +2271,14 @@ describe('tool validation error handling', () => {
       ...testAgentTemplate,
       id: 'reliability-reviewer',
       inputSchema: {
-        params: z.object({ snapshot_id: z.string() }),
+        params: z.object({
+          snapshot_id: z.string().regex(/^v3:[a-f0-9]{64}$/),
+        }),
       },
     }
 
+    // No snapshot_id key supplied: a single directive to omit the key and
+    // wait for the runtime-owned gate — never 'set params.snapshot_id'.
     let message = ''
     try {
       validateAgentInput(
@@ -2286,16 +2292,67 @@ describe('tool validation error handling', () => {
     }
 
     expect(message).toContain('Missing required: snapshot_id')
-    expect(message).toContain('params.snapshot_id')
-    expect(message).toContain('"agent_type": "reliability-reviewer"')
-    expect(message).toContain('"snapshot_id": "v3:<64-hex>"')
-    expect(message).toContain('gate-assigned opaque v3:')
-    expect(message).toContain('specialistCreditFingerprint')
-    expect(message).toContain('evidence-only')
-    expect(message).toContain('will fail attestation')
+    expect(message).toContain('manual spawns omit `params.snapshot_id` entirely')
+    expect(message).toContain('params.files')
+    expect(message).toContain('wait for the gate')
+    expect(message).not.toContain('set params.snapshot_id')
+    expect(message).not.toContain('gate-assigned opaque v3:')
     // Must not tell the caller to source the attestation token from the bare
     // bundle snapshotId (evidence-only).
     expect(message).not.toMatch(/fingerprint from get_change_review_bundle/i)
+
+    // Supplied-but-invalid: one directive — the token is minted only for
+    // runtime-owned spawns, so a manual caller omits the key and waits for
+    // the gate (no self-minting, no invented replacement).
+    let suppliedMessage = ''
+    try {
+      validateAgentInput(
+        reliabilityReviewer,
+        'reliability-reviewer',
+        undefined,
+        { snapshot_id: 'v3:' + 'a'.repeat(63) },
+      )
+    } catch (error) {
+      suppliedMessage = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(suppliedMessage).toContain(
+      'the supplied params.snapshot_id is invalid',
+    )
+    expect(suppliedMessage).toContain('gate-assigned opaque v3:')
+    expect(suppliedMessage).toContain('evidence-only')
+    expect(suppliedMessage).toContain('will fail attestation')
+    expect(suppliedMessage).toContain(
+      'never use a truncated 16-char display prefix',
+    )
+    // No-self-minting: the hint never names a caller-side recompute path.
+    expect(suppliedMessage).not.toMatch(/hashGateSnapshotDetails/i)
+    expect(suppliedMessage).not.toMatch(/recompute|re-mint/i)
+    // A manual caller that supplied an invalid token is directed to the
+    // omit-for-manual contract and the runtime-owned gate.
+    expect(suppliedMessage).toContain('omit params.snapshot_id entirely')
+    expect(suppliedMessage).toContain('wait for the runtime-owned gate')
+    // Must not tell the caller to source the attestation token from the bare
+    // bundle snapshotId (evidence-only).
+    expect(suppliedMessage).not.toMatch(
+      /fingerprint from get_change_review_bundle/i,
+    )
+  })
+
+  it('spawn_agents tool description stops listing reviewer snapshot_id as a required manual param', async () => {
+    const { spawnAgentsParams } = await import(
+      '@codebuff/common/tools/params/tool/spawn-agents'
+    )
+    const description = spawnAgentsParams.description
+    // The live tool description must not tell callers to supply snapshot_id
+    // for reviewer specialists: manual spawns omit the key entirely (the
+    // gate-assigned v3 token is minted only for runtime-owned spawns).
+    expect(description).not.toContain('reviewer specialists `snapshot_id`')
+    expect(description).toContain('manual spawns omit it entirely')
+    expect(description).toContain('`params.files`')
+    // A manual caller-facing surface must never instruct callers to hunt for a
+    // gate-assigned v3 token they cannot obtain (omit-for-manual contract).
+    expect(description).not.toMatch(/reviewer specialists? require/i)
   })
 
   it('validateAgentInput accepts attestable v3 snapshot_id and rejects bare hex', async () => {
@@ -2422,10 +2479,64 @@ describe('tool validation error handling', () => {
       'Exact params contract (from the child agent schema)',
     )
     expect(message).toContain(
-      'replace params.snapshot_id with params.snapshot_fingerprint',
+      'Replace params.snapshot_id with params.snapshot_fingerprint',
     )
     expect(message).toContain('Retain params.changed_files')
     expect(message).toContain('Preserve params field names exactly.')
+    // The hint must state the documented exception (schema-required
+    // fingerprint on manual spawns too) rather than the reviewer-family
+    // omit-both directive that deterministically fails this schema.
+    expect(message).toContain(
+      'documented exception to the omit-for-manual contract',
+    )
+    expect(message).toContain('imposes no v3: pattern on that key')
+    expect(message).not.toContain('omit `params.snapshot_id` entirely')
+  })
+
+  it('accepts a manual security-reviewer spawn supplying both schema-required keys', async () => {
+    const { validateAgentInput } =
+      await import('../tools/handlers/tool/spawn-agent-utils')
+    const securityReviewer = {
+      ...testAgentTemplate,
+      id: 'security-reviewer',
+      inputSchema: {
+        params: z
+          .object({
+            changed_files: z.array(z.string()),
+            snapshot_fingerprint: z.string(),
+          })
+          .strict(),
+      },
+    }
+
+    // The manual pre-edit path advertised in agents/guides/security-review.md:
+    // the caller passes both schema-required keys and its own stable
+    // fingerprint value (no v3 pattern is imposed on snapshot_fingerprint, so
+    // no unobtainable gate-owned token is needed).
+    expect(() =>
+      validateAgentInput(securityReviewer, 'security-reviewer', undefined, {
+        changed_files: ['src/auth/login.ts'],
+        snapshot_fingerprint: 'pre-edit-review-fingerprint',
+      }),
+    ).not.toThrow()
+
+    // Omitting the schema-required fingerprint still fails, and the recovery
+    // hint must direct the caller to add the key (the exception), never to
+    // the reviewer-family omit-both contract.
+    let missingMessage = ''
+    try {
+      validateAgentInput(securityReviewer, 'security-reviewer', undefined, {
+        changed_files: ['src/auth/login.ts'],
+      })
+    } catch (error) {
+      missingMessage = error instanceof Error ? error.message : String(error)
+    }
+    expect(missingMessage).toContain('Missing required: snapshot_fingerprint')
+    expect(missingMessage).toContain(
+      'documented exception to the omit-for-manual contract',
+    )
+    expect(missingMessage).toContain('add params.snapshot_fingerprint')
+    expect(missingMessage).not.toContain('omit `params.snapshot_id` entirely')
   })
 
   it('publishes a structured failure result when Basher is missing command', async () => {
@@ -2518,6 +2629,91 @@ describe('tool validation error handling', () => {
     expect(JSON.stringify(toolResultEvent)).not.toContain(
       'Missing required: command',
     )
+  })
+
+  it('emits a calm userMessage on partial spawn failures', async () => {
+    // One valid + one invalid agent entry exercises the PARTIAL spawn_agents
+    // failure path in executeToolCall. The detailed `message` for the agent is
+    // unchanged; the CLI-facing `userMessage` is the calm one-liner and the
+    // event is marked autoRecovering so the CLI suppresses the raw wall.
+    const parent: AgentTemplate = {
+      ...testAgentTemplate,
+      toolNames: ['spawn_agents', 'end_turn'],
+      spawnableAgents: ['basher'],
+    }
+    const basher: AgentTemplate = {
+      ...testAgentTemplate,
+      id: 'basher',
+      inputSchema: { params: z.object({ command: z.string().min(1) }) },
+      toolNames: ['run_terminal_command'],
+      spawnableAgents: [],
+    }
+    const partialSpawn: StreamChunk = {
+      type: 'tool-call',
+      toolName: 'spawn_agents',
+      toolCallId: 'basher-partial-invalid-tool-call-id',
+      input: {
+        agents: [
+          {
+            agent_type: 'basher',
+            prompt: 'Run the tests',
+            params: { command: 'bun test' },
+          },
+          { agent_type: 'basher', params: {} },
+        ],
+      },
+    }
+    async function* mockStream() {
+      yield partialSpawn
+      return promptSuccess('mock-message-id')
+    }
+    const responseChunks: (string | PrintModeEvent)[] = []
+    const sessionState = getInitialSessionState(mockFileContext)
+
+    await processStream({
+      ...agentRuntimeImpl,
+      agentContext: {},
+      agentState: sessionState.mainAgentState,
+      agentStepId: 'test-step-id',
+      agentTemplate: parent,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fileContext: mockFileContext,
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { 'test-agent': parent, basher },
+      messages: [],
+      prompt: 'test prompt',
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      stream: mockStream(),
+      system: 'test system',
+      tools: {},
+      userId: 'test-user',
+      userInputId: 'test-input-id',
+      onCostCalculated: async () => {},
+      onResponseChunk: (chunk) => responseChunks.push(chunk),
+    })
+
+    const errorEvents = responseChunks.filter(
+      (chunk): chunk is Extract<PrintModeEvent, { type: 'error' }> =>
+        typeof chunk !== 'string' && chunk.type === 'error',
+    )
+    const spawnError = errorEvents.find((event) =>
+      event.message.startsWith('Some agents could not be spawned'),
+    )
+    expect(spawnError).toBeDefined()
+    // The detailed agent-facing message is unchanged (FIX A keeps `message`).
+    expect(spawnError!.message).toContain('Missing required: command')
+    // The calm CLI summary rides along and the event is auto-recovering.
+    expect(spawnError!.userMessage).toContain(
+      'could not be spawned due to invalid parameters',
+    )
+    expect(spawnError!.userMessage).not.toContain('Raw validation issues')
+    expect(spawnError!.userMessage).not.toContain('Exact params contract')
+    expect(spawnError!.autoRecovering).toBe(true)
   })
 
   it('repairs a single-agent mis-braced spawn payload and publishes it to the handler', async () => {

@@ -86,3 +86,12 @@ Raw SQLite database bytes are not a valid reopen-idempotence contract under WAL 
 - Export retry idempotency requires EEXIST handling that compares existing content rather than failing deterministically on identical checksums.
 - finishTurn must be bounded against the run abort signal; an unbounded await on a hung SQLite store can delay run termination indefinitely.
 - Post-abort tool observations need a generation gate; isCurrent(undefined) returning true unconditionally allows commits after invalidate.
+
+
+<!-- update_plan_status:appended -->
+## Specialist-token / clean-tree limitation — 2026-09-14T09:12:00.000Z
+
+- Reviewer-family specialists (`compatibility-reviewer`, `migration-reviewer`, `reliability-reviewer`, `performance-specialist`, `accessibility-reviewer`, `ux-visual-reviewer`, `dependency-reviewer`, `product-reviewer`, `evaluator`) require `params.snapshot_id` matching `^v3:[a-f0-9]{64}$`. That token is `hashGateSnapshotDetails(files-v4 details of PENDING files)` = `'v3:' + sha256(details)`. With a CLEAN worktree there are no pending files, so the fingerprint is a constant and `gate-state.ts` documents it "never mints a receipt, for any kind" (`'no-diff'` = constant by construction).
+- Consequence: R7-T3-style "one frozen bundle, every specialist carries the SAME gate-assigned token" is UNREPRESENTABLE on a fully-committed clean tree. It is a harness-design limitation, not a flaky failure. Only `security-reviewer` (looser `changed_files` + `snapshot_fingerprint` contract) can run post-commit.
+- Anti-pattern to avoid: manufacturing a throwaway dirty edit purely to mint a token is evidence theater — the receipts attest the synthetic delta, not the shipped artifact, and go stale on revert. Never launder a same-shaped token into false credit.
+- Correct disposition: mark such a task BLOCKED (not done) with a repro; proceed with dependent finalization only under an explicitly-labeled evidence-substituted basis; file the fix (a `committed-surface` snapshot mode minting `v3:<64hex>` deterministically from the committed tree at HEAD, gated to clean worktree + non-empty fileset) as the real unblocker.

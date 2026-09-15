@@ -4,6 +4,7 @@ import { describe, expect, test } from 'bun:test'
 
 import { createBase2 } from '../base2/base2'
 import { isTestCoverageReviewerFinding } from '../base2/gate-reviewer'
+import { specialistRoutingSection } from '../base2/quality-prompt-section'
 import { createReviewer } from '../reviewer/code-reviewer'
 import { createSpecialist } from '../specialists/create-specialist'
 import { editReceipt } from './helpers/base2-step-fixtures'
@@ -797,7 +798,7 @@ describe('editor / repair-editor / test-writer cohesion', () => {
     expect(specialist.toolNames).toContain('set_output')
   })
 
-  test('non-advisory createSpecialist requires attestable v3 snapshot_id pattern', () => {
+  test('non-advisory createSpecialist keeps attestable v3 snapshot_id pattern when supplied but omits the key from required', () => {
     const specialist = createSpecialist({
       id: 'compatibility-reviewer',
       displayName: 'Compatibility Reviewer',
@@ -814,6 +815,113 @@ describe('editor / repair-editor / test-writer cohesion', () => {
     expect(paramsSchema.properties?.snapshot_id?.pattern).toBe(
       '^v3:[a-f0-9]{64}$',
     )
-    expect(paramsSchema.required).toContain('snapshot_id')
+    // snapshot_id is optional: manual spawns supply only params.files and
+    // still validate; the v3 pattern is enforced when the key IS supplied.
+    expect(paramsSchema.required).not.toContain('snapshot_id')
+  })
+
+  test('non-advisory createSpecialist instructionsPrompt treats an absent snapshot_id as the omit-for-manual contract, not a stale-snapshot failure', () => {
+    const specialist = createSpecialist({
+      id: 'migration-reviewer',
+      displayName: 'Migration Reviewer',
+      purpose: 'Review schema and data migrations.',
+      focus: ['Migration safety'],
+    })
+    const instructions = specialist.instructionsPrompt
+    // The omitted-key path is the legalized manual contract: an absent
+    // snapshot_id must no longer be listed among the stale-snapshot BLOCKING
+    // triggers (that would make every manual-omit spawn self-defeating).
+    expect(instructions).not.toContain('missing/empty snapshot_id')
+    expect(instructions).toContain(
+      'not live-bundle drift during review and not an absent snapshot_id on a manual spawn',
+    )
+    // Manual-omit directive: echo an empty snapshotFingerprint rather than
+    // minting a token the caller cannot have.
+    expect(instructions).toContain(
+      'emit snapshotFingerprint as the empty string',
+    )
+    expect(instructions).toContain('never invent a v3 token')
+    // Protocol-failure rubric: an absent snapshot_id on a manual spawn is not
+    // a protocol failure.
+    expect(instructions).toContain(
+      'An absent snapshot_id on a manual spawn is the documented omit-for-manual contract, not a protocol failure',
+    )
+    // The spawner-facing prompt keeps the omit-for-manual directive.
+    expect(specialist.spawnerPrompt).toContain(
+      'manual spawns omit params.snapshot_id entirely',
+    )
+  })
+})
+
+describe('caller-facing omit-for-manual guidance surfaces (RF-1-55de1919)', () => {
+  // Every surface a manual spawner might consult must state the omit-for-manual
+  // contract: no caller-facing guidance may tell an agent to require, hunt for,
+  // or supply a gate-owned snapshot token it cannot obtain.
+  const base2Source = readFileSync(
+    new URL('../base2/base2.ts', import.meta.url),
+    'utf8',
+  )
+  const routingGuide = readFileSync(
+    new URL('../guides/specialist-routing.md', import.meta.url),
+    'utf8',
+  )
+
+  test('specialist-routing guide states the omit-for-manual contract (no manual token requirement)', () => {
+    // Runtime-owned vs manual split is stated explicitly in the Params Contract.
+    expect(routingGuide).toContain(
+      'manual spawns omit `params.snapshot_id` entirely',
+    )
+    expect(routingGuide).toContain(
+      'Manual/advisory reviewer-family spawns must OMIT `params.snapshot_id` entirely.',
+    )
+    // security-reviewer keeps its schema-required fingerprint on manual
+    // spawns; the guide must document that exception so the manual pre-edit
+    // security-review path stays usable under the omit-for-manual contract.
+    expect(routingGuide).toContain(
+      '`security-reviewer` is the documented exception',
+    )
+    expect(routingGuide).toContain(
+      'its schema still requires `params.changed_files` + `params.snapshot_fingerprint` on manual spawns',
+    )
+    // The stale pre-migration claim (snapshot-scoped reviewers require the
+    // gate-owned token) must not survive in any form.
+    expect(routingGuide).not.toMatch(
+      /reviewers? require[^\n]{0,120}snapshot_id/i,
+    )
+  })
+
+  test('specialistRoutingSection prompt section states the omit-for-manual contract', () => {
+    expect(specialistRoutingSection).toContain(
+      'omitted entirely for manual spawns',
+    )
+    expect(specialistRoutingSection).toContain(
+      'For manual/advisory reviewer-family spawns omit `params.snapshot_id`',
+    )
+    // The section must state the security-reviewer exception so a manual
+    // caller knows the schema-required fingerprint is still passed on
+    // manual spawns (with a caller-supplied stable value).
+    expect(specialistRoutingSection).toContain(
+      'security-reviewer is the documented exception',
+    )
+    expect(specialistRoutingSection).toContain(
+      'its schema still requires `params.changed_files` + `params.snapshot_fingerprint` on manual spawns too',
+    )
+    expect(specialistRoutingSection).not.toMatch(
+      /reviewer-family specialists require params\.snapshot_id/i,
+    )
+  })
+
+  test('base2 specialistRoutingPointer degraded clause states the omit-for-manual contract', () => {
+    expect(base2Source).toContain(
+      'never include `snapshot_id` in a manually authored reviewer-family spawn',
+    )
+    expect(base2Source).toContain(
+      'the gate-assigned token is only available to runtime-owned spawns',
+    )
+    // The degraded clause keeps the security-reviewer schema requirement
+    // visible so a manual pre-edit security spawn still supplies both keys.
+    expect(base2Source).toContain(
+      'security-reviewer still requires `changed_files` + `snapshot_fingerprint` on manual spawns',
+    )
   })
 })

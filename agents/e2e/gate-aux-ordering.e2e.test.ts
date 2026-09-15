@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 
 import { afterEach, describe, expect, test } from 'bun:test'
 
@@ -256,6 +256,18 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
   // them even when an assertion fails mid-test (not only on the happy path).
   afterEach(() => {
     rmSync(SPECIALIST_SCRATCH_ROOT, { recursive: true, force: true })
+    // The owed-specialist tests below create AUX_TRIPLE_FILE on disk so their
+    // seeded openReviewerFindings entry survives the turn-start missing-file
+    // prune. Remove only what the fixture created: the file, plus the
+    // cli/src/auth and cli/src dirs ONLY when empty (rmdirSync refuses
+    // non-empty dirs, so a pre-existing real repo tree is never deleted).
+    rmSync(AUX_TRIPLE_FILE, { force: true })
+    try {
+      rmdirSync('cli/src/auth')
+      rmdirSync('cli/src')
+    } catch {
+      // Absent or non-empty (a real repo path): leave it in place.
+    }
   })
 
   test('fires test-writer -> doc-writer -> security-reviewer before validation hooks + code-reviewer, then does not re-spawn', () => {
@@ -638,6 +650,13 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
   })
 
   test('a coverage-complete routed specialist review with a matching gate fingerprint does not block the gate', () => {
+    // The seeded openReviewerFindings entry below names AUX_TRIPLE_FILE; the
+    // turn-start prune drops open findings whose files are all missing on
+    // disk. Create the fixture file BEFORE handleSteps runs so the finding
+    // survives the prune and the owed specialist rehydrates (mirrors the
+    // SPECIALIST_FILE pattern; the describe afterEach removes it).
+    mkdirSync('cli/src/auth', { recursive: true })
+    writeFileSync(AUX_TRIPLE_FILE, 'export const token = 1\n')
     const base2 = createBase2('default')
     // Seed a reliability-reviewer owed marker (the aux-triple fixture
     // cli/src/auth/token-store.ts routes no specialist on its own, so the
@@ -1523,6 +1542,13 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
   })
 
   test('revalidates an owed specialist reviewer as aux-owned across turns before the final code-reviewer', () => {
+    // The seeded openReviewerFindings entry below names AUX_TRIPLE_FILE; the
+    // turn-start prune drops open findings whose files are all missing on
+    // disk. Create the fixture file BEFORE handleSteps runs so the finding
+    // survives the prune and the owed specialist marker rehydrates (mirrors
+    // the SPECIALIST_FILE pattern; the describe afterEach removes it).
+    mkdirSync('cli/src/auth', { recursive: true })
+    writeFileSync(AUX_TRIPLE_FILE, 'export const token = 1\n')
     const base2 = createBase2('default')
     // Seed the turn so the marker is already owed to a specialist, simulating
     // a prior-turn blocking reliability-reviewer finding. The other aux gates
