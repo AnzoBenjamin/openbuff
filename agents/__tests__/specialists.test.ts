@@ -96,7 +96,9 @@ describe('specialist agents', () => {
 
     const reviewerInput = dependencyReviewer.inputSchema as any
     const reviewerOutput = dependencyReviewer.outputSchema as any
-    expect(reviewerInput.params.required).toContain('snapshot_id')
+    // snapshot_id is optional under the omit-for-manual contract: manual
+    // spawns omit the key entirely; the v3 pattern applies when supplied.
+    expect(reviewerInput.params.required).not.toContain('snapshot_id')
     expect(reviewerOutput.required).toContain('verdict')
     expect(reviewerOutput.required).toContain('coverage')
     expect(reviewerOutput.properties.family.enum).toEqual(['reviewer'])
@@ -124,10 +126,10 @@ describe('specialist agents', () => {
       'never JSON.stringify',
     )
     expect(compatibilityReviewer.spawnerPrompt).toContain(
-      'Requires params.snapshot_id',
+      'When supplied, params.snapshot_id must be the assigned gate snapshot fingerprint',
     )
     expect(compatibilityReviewer.spawnerPrompt).toContain(
-      'assigned gate snapshot fingerprint for this spawn',
+      'manual spawns omit params.snapshot_id entirely',
     )
     expect(
       (compatibilityReviewer.inputSchema as any).params.properties.snapshot_id
