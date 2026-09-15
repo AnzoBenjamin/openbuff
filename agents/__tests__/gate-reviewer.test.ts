@@ -2478,6 +2478,40 @@ describe('gate-reviewer helpers', () => {
     ])
   })
 
+  // A manual spawn echoes the documented omit-for-manual contract as an EMPTY
+  // `snapshotFingerprint` string rather than `undefined`. That echo is not an
+  // attestation: resolveReviewerAttestation skips zero-length fingerprints, so
+  // the receipt must fail closed exactly like the undefined-fingerprint case,
+  // and the unattestable echo must never be credited as drift evidence.
+  test('fails closed when a coverage-complete manual review echoes an empty snapshotFingerprint', () => {
+    const toolResult = {
+      type: 'json',
+      value: [
+        {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: '',
+          reviewedFiles: ['src/a.ts'],
+        },
+      ],
+    }
+    const expected = 'v3:' + 'a'.repeat(64)
+    expect(
+      collectReviewerAttestationIssues(toolResult, expected, ['src/a.ts']),
+    ).toEqual([
+      'BLOCKING: reviewer did not report an attestable snapshot fingerprint',
+    ])
+    // An unattestable echo is never recorded as drift.
+    expect(collectReviewerFingerprintDrift(toolResult, expected)).toBe('')
+    // base2's inline attestation copy is the gate's runtime authority.
+    const inlineHelpers = loadInlineGateReviewerHelpers()
+    expect(
+      inlineHelpers.collectReviewerAttestationIssues(toolResult, expected, [
+        'src/a.ts',
+      ]),
+    ).toEqual(collectReviewerAttestationIssues(toolResult, expected, ['src/a.ts']))
+  })
+
   test('blocks a coverage gap with an attestable-but-wrong fingerprint on both issues', () => {
     expect(
       collectReviewerAttestationIssues(

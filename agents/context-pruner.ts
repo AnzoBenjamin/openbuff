@@ -1954,9 +1954,16 @@ const definition: AgentDefinition = {
       const verdict = isStaleSnapshotReviewerOutput(value)
         ? 'STALE_SNAPSHOT'
         : String(record.verdict).trim().toUpperCase()
+      const rawFingerprint = record.snapshotFingerprint
       const fingerprint =
-        typeof record.snapshotFingerprint === 'string'
-          ? record.snapshotFingerprint
+        typeof rawFingerprint === 'string'
+          ? rawFingerprint.trim().length === 0
+            ? // Manual spawns echo the documented omit-for-manual contract as an
+              // empty string; that echo carries no attestation, so label it
+              // instead of rendering a bare `snapshot=` a reader could mistake
+              // for a gate-attested fingerprint.
+              '(manual/unattested)'
+            : rawFingerprint
           : '(legacy/unattested)'
       const coverage =
         typeof record.coverage === 'string' ? record.coverage : 'n/a'
