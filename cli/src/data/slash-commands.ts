@@ -59,7 +59,8 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
   {
     id: 'memory',
     label: 'memory',
-    description: 'Inspect, query, audit migrations, export, or maintain project memory',
+    description:
+      'Inspect, query, audit migrations, export, or maintain project memory',
     aliases: ['mem'],
   },
   {

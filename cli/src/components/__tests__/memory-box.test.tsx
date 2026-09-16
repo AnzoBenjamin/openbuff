@@ -58,7 +58,12 @@ describe('MemoryBox', () => {
       title: 'Memory V2 query',
       tone: 'warning',
       lines: ['Verified: 2', 'Reread required: 1'],
-      insertCommands: [{ label: 'Apply correction', command: '/memory correct obs replacement --apply' }],
+      insertCommands: [
+        {
+          label: 'Apply correction',
+          command: '/memory correct obs replacement --apply',
+        },
+      ],
     }
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
     expect(markup).toContain('Memory V2 query')
