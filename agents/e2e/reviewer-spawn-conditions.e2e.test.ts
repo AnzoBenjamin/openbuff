@@ -273,7 +273,9 @@ function loadProductionGateFileContentMarker(): (path: string) => string {
   const hoistEnd =
     closeQuoteIndex < 0 ? -1 : base2JavaScript.indexOf(';', closeQuoteIndex)
   if (hoistEnd < 0) {
-    throw new Error('Unable to find the end of the GATE_FILE_MISSING_CONTENT_MARKER declaration')
+    throw new Error(
+      'Unable to find the end of the GATE_FILE_MISSING_CONTENT_MARKER declaration',
+    )
   }
   const hoistedConstSource = base2JavaScript.slice(hoistStart, hoistEnd + 1)
   // Fail-fast structural assertion on the slice BEFORE evaluating: it must be
@@ -289,9 +291,7 @@ function loadProductionGateFileContentMarker(): (path: string) => string {
   // `unreadable:unknown` — or worse, a silently wrong sentinel.
   const sliceEqualsCount = hoistedConstSource.split('=').length - 1
   if (
-    !hoistedConstSource.startsWith(
-      'const GATE_FILE_MISSING_CONTENT_MARKER',
-    ) ||
+    !hoistedConstSource.startsWith('const GATE_FILE_MISSING_CONTENT_MARKER') ||
     !hoistedConstSource.endsWith(';') ||
     sliceEqualsCount !== 1
   ) {
