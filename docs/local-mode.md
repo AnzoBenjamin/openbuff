@@ -194,18 +194,36 @@ Provider `models` can be either a list:
       "baseURL": "https://opencode.ai/zen/go/v1",
       "apiKeyEnv": "OPENCODE_GO_API_KEY",
       "models": [
+        "glm-5.3-flash",
+        "glm-5.3",
+        "glm-5.2",
         "glm-5.1",
-        "glm-5",
+        "kimi-k3",
+        "kimi-k2.7-code",
         "kimi-k2.6",
-        "kimi-k2.5",
+        "longcat-2.0",
         "mimo-v2.5-pro",
         "mimo-v2.5",
-        "qwen3.6-plus",
-        "qwen3.5-plus",
+        "deepseek-v4.1-flash",
+        "deepseek-v4-pro",
+        "deepseek-v4-flash",
+        "hy4-preview",
+        "hy3"
+      ]
+    },
+    "opencode-go-anthropic": {
+      "type": "anthropic-compatible",
+      "baseURL": "https://opencode.ai/zen/go/v1",
+      "apiKeyEnv": "OPENCODE_GO_API_KEY",
+      "models": [
+        "minimax-m3",
         "minimax-m2.7",
         "minimax-m2.5",
-        "deepseek-v4-pro",
-        "deepseek-v4-flash"
+        "qwen3.8-max",
+        "qwen3.8-flash",
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "qwen3.6-plus"
       ]
     }
   },
