@@ -93,33 +93,35 @@ Complete MEM2-R0-T1 and MEM2-R0-T2, then run the common focused suite, SDK Memor
 5. Before final review, create one fresh bundle and freeze mutations until all structured receipts return.
 
 <!-- update_plan_status:appended -->
+
 ## MEM2-R3-T1 validated — 2026-09-11T22:28:59.753Z
 
 Completed `MEM2-R3-T1` migration/operator repair. Added explicit empty/event/any tail preconditions with legacy compatibility, revision-first V1 reservation and resumable CAS chaining, required task-scoped correction/revalidation, verification-lifecycle stripping, strengthened redaction, and manifest import guards/budgets. Validation: common Memory V2 34/34, SDK Memory V2 67/67, affected CLI/SQLite 78/78; common/SDK/CLI typechecks passed. Receipts: `kobhvIeXXMU`, `ko_Aib2doow`, `kpV0IF39BzA`.
 
 Next: `MEM2-R1-T1` SQLite kernel repairs—project binding, pre-materialization query budget, canonical reducers/backfill, freshness, exact replay CAS, compatibility preflight, and filesystem/sidecar safety.
 
-
 <!-- update_plan_status:appended -->
+
 ## SQLite kernel validated; native open limitation retained — 2026-09-11T23:56:58.032Z
 
 SQLite kernel focused validation passed: CLI typecheck plus 43/43 tests (`kuWaxB7ntcI`). Implemented project inference/isolation, pre-materialization UTF-8 query budgets and event caps, same-request collision rejection, lost-response replay semantics, canonical reducers/rebuild equivalence, schema-v1 backfill/rollback/reopen checks, digest/workspace freshness matrix, dangling/nonregular DB-sidecar rejection, expanded schema preflight, and bounded failure classification.
 
 Open security limitation: Bun exposes a pathname-only SQLite constructor. Current owner/regular-file/lstat/realpath/dev+inode checks are best-effort and do not prove descriptor-relative ancestor-swap resistance. No dependency/native helper is authorized; final security review remains blocking on this platform capability question.
 
-
 <!-- update_plan_status:appended -->
+
 ## Coordinator and run reliability validated — 2026-09-12T00:41:17.964Z
 
 SDK coordinator/run reliability validation passed: common typecheck + Memory V2 contracts 34/34 (`kwj7Hs4Iq7o`); SDK typecheck + coordinator, cancellation, contract, migration, and operator suites 88/88 (`kw4VXa5Vq8U`). Implemented explicit empty/event CAS rebase with fail-closed tail derivation, durable terminal replay across coordinators, abort-safe staged preparation, query-ID correlation, and run timeout/external-abort regressions.
 
-
 <!-- update_plan_status:appended -->
+
 ## Final validation checkpoint — 2026-09-12T10:03:38.197Z
 
 All declared workflow items complete.
 
 **Integration matrix** (1548+ pass / 0 fail):
+
 - common: 1237 pass across 71 files
 - SDK Memory V2: 88 pass across 5 files (coordinator, v1-migration, operator-service, contract, run-cancellation)
 - CLI Memory V2: 186 pass across 8 files (SQLite repo, contained-file-io, provider, memory-command, codebuff-client, env, slash-commands, memory-box)
@@ -127,10 +129,12 @@ All declared workflow items complete.
 - discovery-coordinator: 12 pass across 1 file (3 new snapshot-bound identity tests)
 
 **Package-wide validation**:
+
 - Full monorepo typecheck: 11/11 packages pass
 - SDK build: ESM/CJS/Types artifacts produced
 
 **Reviewer results**:
+
 - code-reviewer: LOOKS_GOOD (all dimensions pass, all 47 files attested)
 - migration-reviewer: LOOKS_GOOD (7/7 requirements satisfied)
 - compatibility-reviewer: LOOKS_GOOD (6/6 requirements satisfied)
@@ -140,11 +144,13 @@ All declared workflow items complete.
 **Discovery coverage vertical slice** shipped: taskId + workspaceSnapshotId in schema, coordinator, spawn wiring, and 3 new tests.
 
 <!-- update_plan_status:appended -->
+
 ## Plan tracking re-verified against live worktree — 2026-09-12
 
 Re-verified the durable plan's stale tracking against the live worktree. Focused suites are green: MEM2-R3-T1 migration/operator/coordinator 96/96; MEM2-R1-T1 SQLite kernel 44/44. The only remaining gate is MEM2-R1-T2 (race-resistant SQLite open). Verified fact: race-free WAL/SHM open is provably impossible in pure JS with bun:sqlite (SQLite opens the -wal/-shm sidecars by derived pathname internally; bun:sqlite accepts a path string only — no fd, no dirfd-relative open). R1-T2 therefore resolves via its typed-unsupported fail-closed fallback (report a typed unavailable outcome, perform no SQLite mutation where race-resistance cannot be proven); full race closure is deferred pending explicit native-addon/dependency authorization (SPEC decision #9, option C).
 
 <!-- update_plan_status:appended -->
+
 ## R1-T2 typed-unsupported secure-open + R7 integration matrix — 2026-09-13T19:33:12.321Z
 
 MEM2-R1-T2 resolved via its typed-unsupported fail-closed fallback. Verified fact: race-free SQLite open is provably impossible in pure JS with bun:sqlite (path-only constructor; -wal/-shm sidecars open by derived pathname internally, no fd/dirfd support). Implemented a hybrid: a strict `requireSecureOpen` opt-in gate in `BunSQLiteMemoryRepository.open()` that fails closed with a typed non-retryable `unsupported-open` error and performs zero SQLite mutation, plus a default-on honest `openPosture: 'pathname-best-effort-unverified-open'` visibility field on the open result and `kernelHealth`. Default open path and all pre-existing pathname hardening are unchanged. No dependency added (SPEC #9 respected); full WAL/SHM race closure deferred pending native-addon authorization (option C).
@@ -152,14 +158,15 @@ MEM2-R1-T2 resolved via its typed-unsupported fail-closed fallback. Verified fac
 Security review: LOOKS_GOOD, 0 findings (strict gate prevents all mutation; no path/SQL/secret leak; no false security claim; default path unregressed).
 
 R7 integration matrix re-run against this state (all green):
+
 - SDK Memory V2: 117/117 (coordinator, v1-migration, operator-service, contract, run-cancellation)
 - CLI Memory V2: 201/201 across 9 files (SQLite repo 47 incl. 3 new strict-secure-open tests, contained-file-io, provider, roundtrip, memory-command, codebuff-client, env, slash-commands, memory-box)
 - common Memory V2 contracts: 42/42
 - agent-runtime: 39/39 (task-memory, memory-v2-context)
 - Monorepo typecheck: 11/11 packages pass
 
-
 <!-- update_plan_status:appended -->
+
 ## Projection replay cap + R2 verification — 2026-09-13T19:53:39.176Z
 
 Addressed the gate advisory that rebuildProjections/replayProjections had no event cap. Added `MAX_REPLAY_EVENTS = 10_000` (consistent with `MAX_QUERY_EVENTS`); `replayProjections(database, maxEvents)` now stops the paged replay loop at the cap, and on truncation sets the projection cursor to the last replayed sequence and returns `truncated: true` rather than throwing or falsely claiming the canonical tail. `rebuildProjections()` surfaces `truncated: boolean` on its ok-result. v1→v2 `migrate()` passes `Number.MAX_SAFE_INTEGER` so migration replay stays complete; rollback-on-failure unchanged. Backward-compatible and additive.
@@ -169,32 +176,33 @@ R2 (SDK run/coordinator reliability) verified green: coordinator + run-cancellat
 Validation: SQLite focused suite 49/49 (2 new cap tests + 1 updated), V1→V2 round-trip 1/1, cli typecheck clean, Prettier clean.
 
 <!-- update_plan_status:appended -->
+
 ## projectId index advisory evaluated — no change warranted — 2026-09-13T20:17:06.358Z
 
 Evaluated the reviewer advisory that `scanQueryRows`/`readLastEventIdForProject` use unindexed `json_extract` projectId filters. Benchmarked at the current 10k-event cap (50 iterations each): 250-row filtered query mean 0.815ms unindexed vs 0.671ms with an expression index (within noise); tail query 0.009ms vs 0.008ms. EXPLAIN QUERY PLAN confirms the expression index is used when present, but the absolute cost is already sub-millisecond at the cap. Decision: no schema/index change now; revisit only if the event cap grows materially. Recorded as a data-backed no-change decision.
 
-
 <!-- update_plan_status:appended -->
+
 ## R4/R6 verification + phantom-file gate fix + 'missing' marker constant — 2026-09-13T22:50:29.563Z
 
 Re-verified the memory-v2 plan's remaining focused suites in the current tree: R4 provider/client authority (provider + env) 26/26; R6 coverage/prompt safety (agent-runtime task-memory + memory-v2-context + loop-agent-steps) 84/84; memory-retention eval 6/6. R1-T1 (SQLite 44/44), R1-T2 (typed-unsupported secure-open), R2 (coordinator 53/53), R3-T1 (migration/operator 96/96) all confirmed green. Only R7 finalization (stable exact-snapshot reviews) remains.
 
 Also shipped the phantom-file gate fix (commits afd2292d8 + acbc8ce09): a pending gate file deleted before its first snapshot now resolves to the `missing` content marker (attested-by-absence), and open findings whose files are all missing are pruned at turn start — closing the scripts/perf-probe-tmp.ts review loop. Follow-up hardening: extracted the `'missing'` sentinel into a single in-handleSteps constant `GATE_FILE_MISSING_CONTENT_MARKER` shared by readGateFileContentMarker, collectDeletedFilesFromSnapshotDetails, the turn-start prune, and isCreditableContentMarker. Pure refactor; agents typecheck clean and gate/parity/serialization suites 255/255.
 
-
 <!-- update_plan_status:appended -->
+
 ## Parity-mirror fix for missing-marker (pre-push green) — 2026-09-13T23:36:05.557Z
 
 Fixed the pre-push hook failure that blocked the gate-improvement push: the test-local `gateFileMarker` mirror in `agents/e2e/reviewer-spawn-conditions.e2e.test.ts` had drifted from production `readGateFileContentMarker` (which now returns `'missing'` for a nonexistent path). Root-caused with a debugger: the parity oracle extracts only the `readGateFileContentMarker` function body, so the `GATE_FILE_MISSING_CONTENT_MARKER` const (declared earlier in `handleSteps`) was unbound in the synthetic `new Function` scope, making the ENOENT probe throw a ReferenceError surfaced as `unreadable:unknown`. Fixed two ways: (1) added the early `lstatSync` existence probe to the test mirror so it returns `missing` for nonexistent paths like production, and (2) updated `loadProductionGateFileContentMarker` to hoist the `GATE_FILE_MISSING_CONTENT_MARKER` declaration into the synthetic eval scope (following the `specialist-router-parity.test.ts` hoisted-constant precedent), preserving the const's single-source-of-truth and the drift-safety property. Validated: parity suite 19/19, full agents suite 1184 pass / 0 fail, agents typecheck clean.
 
-
 <!-- update_plan_status:appended -->
+
 ## R7-T2 package-wide validation green — 2026-09-14T06:32:15.052Z
 
 Re-ran MEM2-R7-T2 (package-wide validation + artifact smoke) on the current tree to produce a fresh green baseline before R7-T3. Results: monorepo typecheck 11/11; common 1245 pass; agent-runtime 1618 pass; sdk 1398 pass / 1 skip; cli 3093 pass / 15 skip / 2 fail; evals memory-retention 6/6. SDK build (ESM/CJS/types) and `smoke-test:dist` (CJS require + tree-sitter) passed; CLI binary build + `--version` probe passed. The 2 CLI failures are the known flaky `StatusBar` React-act tests (`renders the status label...` and `hides the scroll control...`), which pass 3/3 in isolation, were untouched by this work, and are unrelated to memory-v2 — a pre-existing flake, not an R7 blocker. R7-T2 acceptance met.
 
-
 <!-- update_plan_status:appended -->
+
 ## R7-T3 BLOCKED (harness limitation) + R7-T4 disposition — 2026-09-14T09:12:00.000Z
 
 **R7-T3 "obtain stable exact-snapshot reviews" — status: BLOCKED (not done).**
@@ -204,12 +212,13 @@ The memory-v2 feature is fully committed at HEAD `543bae880` with a clean worktr
 **Repro:** (1) `get_change_review_bundle` → `files=["cli/knowledge.md"]` and a bare-hex `snapshotId` that is evidence-only (changes every call, explicitly non-reusable per the params contract). (2) A reviewer-family spawn with `params.snapshot_id` = that bare hex / the truncated display form `v3:131ae03adb957` is rejected as "invalid params" (no legacy-format bypass exists). Only `security-reviewer` uses the looser `changed_files` + `snapshot_fingerprint` contract, which is why it alone ran.
 
 **Equivalent-evidence package (NOT a frozen-bundle signoff):**
+
 - R7-T2 green package-wide baseline at `543bae880` (above).
 - `security-reviewer`: NON_BLOCKING with 2 low advisories (both accepted) — valid under its looser contract; run against the current bundle.
 - Prior migration / compatibility / reliability receipts from **earlier dirty-tree gates over these exact files** — they attest to their edit snapshots, not to HEAD-as-shipped. Explicitly labeled as such.
 - **No NEW frozen bundle is representable post-commit.**
 
-**Proposed fix (the real unblocker):** add a `committed-surface` snapshot mode that mints `v3:<64hex>` deterministically from the committed tree at HEAD (enumerate reviewable files at HEAD with content markers; hash via the existing `buildGateSnapshotDetails(files, '')` + `hashGateSnapshotDetails`), gated to be usable only when the worktree is clean and the fileset is non-empty. This makes R7-T3 mechanically satisfiable for post-commit review without weakening the dirty-tree contract — an additive evidence *kind* (like the existing `'reviewed-diff'` vs `'no-diff'`), not a new trust model. **Do not mark R7-T3 done until this lands and a real bundle is frozen.**
+**Proposed fix (the real unblocker):** add a `committed-surface` snapshot mode that mints `v3:<64hex>` deterministically from the committed tree at HEAD (enumerate reviewable files at HEAD with content markers; hash via the existing `buildGateSnapshotDetails(files, '')` + `hashGateSnapshotDetails`), gated to be usable only when the worktree is clean and the fileset is non-empty. This makes R7-T3 mechanically satisfiable for post-commit review without weakening the dirty-tree contract — an additive evidence _kind_ (like the existing `'reviewed-diff'` vs `'no-diff'`), not a new trust model. **Do not mark R7-T3 done until this lands and a real bundle is frozen.**
 
 **R7-T4 "finalize durable artifacts" — status: PROCEED, explicitly evidence-substituted.**
 PLAN/STATUS/LESSONS now reflect the actual worktree, the R1-T2 supported/disabled platform decision, the R7-T2 receipts, and the deferred default-cutover/native-helper work; the PLAN current-task pointer is cleared. This is **explicitly NOT a frozen-bundle signoff** — it is an equivalent-evidence disposition pending the `committed-surface` fix. Do not claim "all four specialists attested the same snapshot": one did (security); three did not and could not.
