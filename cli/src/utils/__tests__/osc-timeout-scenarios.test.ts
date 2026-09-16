@@ -24,7 +24,9 @@ describe('OSC Timeout Protection Scenarios', () => {
       const elapsed = Date.now() - startTime
 
       expect(result).toBe('fallback')
-      expect(elapsed).toBeGreaterThanOrEqual(100)
+      // Timers may fire a few ms early under CI load; the intent is that the
+      // fallback waited for the timeout instead of returning instantly.
+      expect(elapsed).toBeGreaterThanOrEqual(90)
       expect(elapsed).toBeLessThan(200) // Should not hang
     })
 

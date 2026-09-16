@@ -30,6 +30,7 @@
 ## Test Conventions
 
 - OpenTUI reconciler tests (e.g. `status-bar.test.tsx`) must wrap `testRender` and `renderOnce` calls in an explicit `act()` using the dev/prod-safe shim defined at module scope in the test file. `@opentui/react/test-utils` resolves production React whose built-in `act` is a throwing stub, so the renderer's internal act-wrapping silently no-ops under load. Set `globalThis.IS_REACT_ACT_ENVIRONMENT = true` at module scope before the first render.
+- Timing-sensitive tests must tolerate early timer fire: assert fallback behavior with a lower-bound margin (e.g. `>= 90` for a 100ms timeout) rather than an exact bound — CI runners fire timers a few ms early under load, which broke the prod release gate at 99 vs 100.
 
 ## Import Guidelines
 
