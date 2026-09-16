@@ -359,7 +359,9 @@ const buildCompactionLabel = (
   if (notice.pending) {
     if (narrow) return '⇲ …'
     const percent = notice.progressPercent
-    return typeof percent === 'number' && Number.isFinite(percent) && percent > 0
+    return typeof percent === 'number' &&
+      Number.isFinite(percent) &&
+      percent > 0
       ? `⇲ compacting ${Math.min(100, Math.round(percent))}%`
       : '⇲ compacting…'
   }

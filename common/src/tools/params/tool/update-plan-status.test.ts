@@ -99,4 +99,29 @@ describe('updatePlanStatusParams', () => {
 
     expect(result.success).toBe(false)
   })
+
+  it('accepts a standalone requestCommittedSurfaceReview opt-in', () => {
+    // The flag is documented as a standalone operation, so the top-level
+    // refine must accept { path, requestCommittedSurfaceReview: true } alone.
+    const result = updatePlanStatusParams.inputSchema.safeParse({
+      path: '.agents/sessions/example/PLAN.md',
+      requestCommittedSurfaceReview: true,
+    })
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+
+    expect(result.data.requestCommittedSurfaceReview).toBe(true)
+  })
+
+  it('rejects a requestCommittedSurfaceReview value of false with no operation', () => {
+    // Only `true` is the opt-in; `false` (or omitted) must keep the original
+    // at-least-one-operation rule so a bare no-op call still fails.
+    const result = updatePlanStatusParams.inputSchema.safeParse({
+      path: '.agents/sessions/example/PLAN.md',
+      requestCommittedSurfaceReview: false,
+    })
+
+    expect(result.success).toBe(false)
+  })
 })

@@ -83,7 +83,8 @@ const observation = {
   taskId: 'task:1',
   kind: 'discovery',
   summary: 'Memory V2 is schema validated',
-  detail: 'The event envelope validates its payload through a discriminated union.',
+  detail:
+    'The event envelope validates its payload through a discriminated union.',
   confidence: 0.95,
   evidence: [evidence],
   tags: ['contracts'],
@@ -158,8 +159,18 @@ describe('Memory V2 bounded shared contracts', () => {
       sourceChecksum: 'checksum:source',
     }
     expect(V1MigrationReservedPayloadSchema.parse(payload)).toEqual(payload)
-    expect(V1MigrationReservedPayloadSchema.safeParse({ ...payload, unexpected: true }).success).toBe(false)
-    expect(V1MigrationReservedPayloadSchema.safeParse({ ...payload, migrationId: 'x'.repeat(257) }).success).toBe(false)
+    expect(
+      V1MigrationReservedPayloadSchema.safeParse({
+        ...payload,
+        unexpected: true,
+      }).success,
+    ).toBe(false)
+    expect(
+      V1MigrationReservedPayloadSchema.safeParse({
+        ...payload,
+        migrationId: 'x'.repeat(257),
+      }).success,
+    ).toBe(false)
   })
 
   test('bounds V1 migration source item counts and accepts truncation metadata', () => {
@@ -321,7 +332,11 @@ describe('Memory V2 event contracts', () => {
       {
         ...baseEvent,
         eventType: 'session.ended',
-        payload: { payloadSchemaVersion: 1, status: 'completed', endedAt: timestamp },
+        payload: {
+          payloadSchemaVersion: 1,
+          status: 'completed',
+          endedAt: timestamp,
+        },
       },
       {
         ...baseEvent,
@@ -376,7 +391,10 @@ describe('Memory V2 event contracts', () => {
     expect(
       MemoryEventEnvelopeSchema.safeParse({
         ...lifecycleEvents[3],
-        payload: { ...lifecycleEvents[3]!.payload, rawResults: ['not allowed'] },
+        payload: {
+          ...lifecycleEvents[3]!.payload,
+          rawResults: ['not allowed'],
+        },
       }).success,
     ).toBe(false)
     expect(
@@ -416,7 +434,9 @@ describe('Memory V2 event contracts', () => {
     })
 
     expect(request.events).toEqual([draft])
-    expect(MemoryEventDraftSchema.safeParse({ ...draft, sequence: 99 }).success).toBe(false)
+    expect(
+      MemoryEventDraftSchema.safeParse({ ...draft, sequence: 99 }).success,
+    ).toBe(false)
     expect(MemoryEventEnvelopeSchema.safeParse(draft).success).toBe(false)
     expect(outcome.outcome).toBe('appended')
     if (outcome.outcome === 'appended') {
@@ -439,35 +459,59 @@ describe('Memory V2 event contracts', () => {
       occurredAt: timestamp,
       payload: { payloadSchemaVersion: 1, startedAt: timestamp },
     })
-    const base = { schemaVersion: 2, projectId: 'project:demo', events: [draft] }
+    const base = {
+      schemaVersion: 2,
+      projectId: 'project:demo',
+      events: [draft],
+    }
     for (const expectedTail of [
       { kind: 'any' },
       { kind: 'empty' },
       { kind: 'event', eventId: 'event:prior' },
     ]) {
-      expect(MemoryAppendRequestSchema.safeParse({ ...base, expectedTail }).success).toBe(true)
+      expect(
+        MemoryAppendRequestSchema.safeParse({ ...base, expectedTail }).success,
+      ).toBe(true)
     }
-    expect(MemoryExpectedTailSchema.safeParse({ kind: 'empty', eventId: 'event:nope' }).success).toBe(false)
-    expect(MemoryExpectedTailSchema.safeParse({ kind: 'event' }).success).toBe(false)
-    expect(MemoryExpectedTailSchema.safeParse({ kind: 'unknown' }).success).toBe(false)
-    expect(MemoryAppendRequestSchema.safeParse({
-      ...base,
-      expectedTail: { kind: 'event', eventId: 'event:prior' },
-      expectedLastEventId: 'event:prior',
-    }).success).toBe(true)
+    expect(
+      MemoryExpectedTailSchema.safeParse({
+        kind: 'empty',
+        eventId: 'event:nope',
+      }).success,
+    ).toBe(false)
+    expect(MemoryExpectedTailSchema.safeParse({ kind: 'event' }).success).toBe(
+      false,
+    )
+    expect(
+      MemoryExpectedTailSchema.safeParse({ kind: 'unknown' }).success,
+    ).toBe(false)
+    expect(
+      MemoryAppendRequestSchema.safeParse({
+        ...base,
+        expectedTail: { kind: 'event', eventId: 'event:prior' },
+        expectedLastEventId: 'event:prior',
+      }).success,
+    ).toBe(true)
     for (const expectedTail of [
       { kind: 'any' },
       { kind: 'empty' },
       { kind: 'event', eventId: 'event:different' },
     ]) {
-      expect(MemoryAppendRequestSchema.safeParse({
-        ...base,
-        expectedTail,
-        expectedLastEventId: 'event:prior',
-      }).success).toBe(false)
+      expect(
+        MemoryAppendRequestSchema.safeParse({
+          ...base,
+          expectedTail,
+          expectedLastEventId: 'event:prior',
+        }).success,
+      ).toBe(false)
     }
     expect(MemoryAppendRequestSchema.safeParse(base).success).toBe(true)
-    expect(MemoryAppendRequestSchema.safeParse({ ...base, expectedLastEventId: 'event:prior' }).success).toBe(true)
+    expect(
+      MemoryAppendRequestSchema.safeParse({
+        ...base,
+        expectedLastEventId: 'event:prior',
+      }).success,
+    ).toBe(true)
   })
 
   test('accepts only the three public authority modes', () => {
@@ -482,8 +526,11 @@ describe('Memory V2 event contracts', () => {
   test('rejects malformed opaque IDs', () => {
     expect(ProjectIdSchema.safeParse('project with spaces').success).toBe(false)
     expect(
-      MemoryEventEnvelopeSchema.safeParse({ ...baseEvent, projectId: '', eventType: 'task.created' })
-        .success,
+      MemoryEventEnvelopeSchema.safeParse({
+        ...baseEvent,
+        projectId: '',
+        eventType: 'task.created',
+      }).success,
     ).toBe(false)
   })
 
@@ -515,72 +562,193 @@ describe('Memory V2 event contracts', () => {
   })
 
   test('validates strict bounded operator requests and manifests', () => {
-    expect(MemoryConsolidationRequestSchema.parse({
-      schemaVersion: 2, projectId: 'project:demo', sessionId: 'session:1',
-      policyVersion: 'policy:1', mode: 'preview', occurredAt: timestamp,
-    }).maxGroups).toBe(5)
-    expect(MemoryCorrectionRequestSchema.safeParse({
-      schemaVersion: 2, projectId: 'project:demo', sessionId: 'session:1', taskId: 'task:1',
-      mode: 'apply', occurredAt: timestamp,
-      action: { kind: 'pin', observationId: 'observation:1', reason: 'Important', pinnedBy: 'test' },
-    }).success).toBe(true)
-    expect(MemoryCorrectionRequestSchema.safeParse({
-      schemaVersion: 2, projectId: 'project:demo', sessionId: 'session:1',
-      mode: 'apply', occurredAt: timestamp,
-      action: { kind: 'pin', observationId: 'observation:1', reason: 'Important', pinnedBy: 'test' },
-    }).success).toBe(false)
-    expect(MemoryRevalidationRequestSchema.safeParse({
-      schemaVersion: 2, projectId: 'project:demo', sessionId: 'session:1', taskId: 'task:1', mode: 'preview', actions: [],
-    }).success).toBe(false)
-    expect(MemoryRevalidationRequestSchema.safeParse({
-      schemaVersion: 2, projectId: 'project:demo', sessionId: 'session:1', mode: 'preview', actions: [{ kind: 'invalidate', observationId: 'observation:1', selector: { kind: 'file', path: 'src/a.ts' }, reason: 'changed', detail: 'changed' }],
-    }).success).toBe(false)
-    expect(MemoryProjectionRepairRequestSchema.safeParse({
-      schemaVersion: 2, projectId: 'project:demo', sessionId: 'session:1', mode: 'apply',
-      rebuildId: 'rebuild:1', projectionNames: [],
-    }).success).toBe(false)
-    expect(MemoryExportManifestV2Schema.safeParse({
-      schemaVersion: 2, manifestVersion: 2, format: 'markdown',
-    }).success).toBe(false)
+    expect(
+      MemoryConsolidationRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project:demo',
+        sessionId: 'session:1',
+        policyVersion: 'policy:1',
+        mode: 'preview',
+        occurredAt: timestamp,
+      }).maxGroups,
+    ).toBe(5)
+    expect(
+      MemoryCorrectionRequestSchema.safeParse({
+        schemaVersion: 2,
+        projectId: 'project:demo',
+        sessionId: 'session:1',
+        taskId: 'task:1',
+        mode: 'apply',
+        occurredAt: timestamp,
+        action: {
+          kind: 'pin',
+          observationId: 'observation:1',
+          reason: 'Important',
+          pinnedBy: 'test',
+        },
+      }).success,
+    ).toBe(true)
+    expect(
+      MemoryCorrectionRequestSchema.safeParse({
+        schemaVersion: 2,
+        projectId: 'project:demo',
+        sessionId: 'session:1',
+        mode: 'apply',
+        occurredAt: timestamp,
+        action: {
+          kind: 'pin',
+          observationId: 'observation:1',
+          reason: 'Important',
+          pinnedBy: 'test',
+        },
+      }).success,
+    ).toBe(false)
+    expect(
+      MemoryRevalidationRequestSchema.safeParse({
+        schemaVersion: 2,
+        projectId: 'project:demo',
+        sessionId: 'session:1',
+        taskId: 'task:1',
+        mode: 'preview',
+        actions: [],
+      }).success,
+    ).toBe(false)
+    expect(
+      MemoryRevalidationRequestSchema.safeParse({
+        schemaVersion: 2,
+        projectId: 'project:demo',
+        sessionId: 'session:1',
+        mode: 'preview',
+        actions: [
+          {
+            kind: 'invalidate',
+            observationId: 'observation:1',
+            selector: { kind: 'file', path: 'src/a.ts' },
+            reason: 'changed',
+            detail: 'changed',
+          },
+        ],
+      }).success,
+    ).toBe(false)
+    expect(
+      MemoryProjectionRepairRequestSchema.safeParse({
+        schemaVersion: 2,
+        projectId: 'project:demo',
+        sessionId: 'session:1',
+        mode: 'apply',
+        rebuildId: 'rebuild:1',
+        projectionNames: [],
+      }).success,
+    ).toBe(false)
+    expect(
+      MemoryExportManifestV2Schema.safeParse({
+        schemaVersion: 2,
+        manifestVersion: 2,
+        format: 'markdown',
+      }).success,
+    ).toBe(false)
   })
 
   test.each([
-    ['unknown event type', MemoryEventEnvelopeSchema, {
-      ...baseEvent,
-      eventType: 'task.unknown',
-      payload: { payloadSchemaVersion: 1 },
-    }],
-    ['future envelope version', MemoryEventEnvelopeSchema, {
-      ...baseEvent,
-      schemaVersion: 3,
-      eventType: 'task.created',
-      payload: { payloadSchemaVersion: 1, taskId: 'task:1', title: 'Title', objective: 'Objective', initialStatus: 'created' },
-    }],
-    ['future event version', MemoryEventEnvelopeSchema, {
-      ...baseEvent,
-      eventSchemaVersion: 2,
-      eventType: 'task.created',
-      payload: { payloadSchemaVersion: 1, taskId: 'task:1', title: 'Title', objective: 'Objective', initialStatus: 'created' },
-    }],
-    ['future payload version', MemoryEventEnvelopeSchema, {
-      ...baseEvent,
-      eventType: 'task.created',
-      payload: { payloadSchemaVersion: 2, taskId: 'task:1', title: 'Title', objective: 'Objective', initialStatus: 'created' },
-    }],
-    ['event envelope key', MemoryEventEnvelopeSchema, {
-      ...baseEvent,
-      eventType: 'task.created',
-      unexpected: true,
-      payload: { payloadSchemaVersion: 1, taskId: 'task:1', title: 'Title', objective: 'Objective', initialStatus: 'created' },
-    }],
-    ['event payload key', MemoryEventEnvelopeSchema, {
-      ...baseEvent,
-      eventType: 'task.created',
-      payload: { payloadSchemaVersion: 1, taskId: 'task:1', title: 'Title', objective: 'Objective', initialStatus: 'created', unexpected: true },
-    }],
-    ['selector key', MemorySelectorSchema, { ...evidence.selector, unexpected: true }],
+    [
+      'unknown event type',
+      MemoryEventEnvelopeSchema,
+      {
+        ...baseEvent,
+        eventType: 'task.unknown',
+        payload: { payloadSchemaVersion: 1 },
+      },
+    ],
+    [
+      'future envelope version',
+      MemoryEventEnvelopeSchema,
+      {
+        ...baseEvent,
+        schemaVersion: 3,
+        eventType: 'task.created',
+        payload: {
+          payloadSchemaVersion: 1,
+          taskId: 'task:1',
+          title: 'Title',
+          objective: 'Objective',
+          initialStatus: 'created',
+        },
+      },
+    ],
+    [
+      'future event version',
+      MemoryEventEnvelopeSchema,
+      {
+        ...baseEvent,
+        eventSchemaVersion: 2,
+        eventType: 'task.created',
+        payload: {
+          payloadSchemaVersion: 1,
+          taskId: 'task:1',
+          title: 'Title',
+          objective: 'Objective',
+          initialStatus: 'created',
+        },
+      },
+    ],
+    [
+      'future payload version',
+      MemoryEventEnvelopeSchema,
+      {
+        ...baseEvent,
+        eventType: 'task.created',
+        payload: {
+          payloadSchemaVersion: 2,
+          taskId: 'task:1',
+          title: 'Title',
+          objective: 'Objective',
+          initialStatus: 'created',
+        },
+      },
+    ],
+    [
+      'event envelope key',
+      MemoryEventEnvelopeSchema,
+      {
+        ...baseEvent,
+        eventType: 'task.created',
+        unexpected: true,
+        payload: {
+          payloadSchemaVersion: 1,
+          taskId: 'task:1',
+          title: 'Title',
+          objective: 'Objective',
+          initialStatus: 'created',
+        },
+      },
+    ],
+    [
+      'event payload key',
+      MemoryEventEnvelopeSchema,
+      {
+        ...baseEvent,
+        eventType: 'task.created',
+        payload: {
+          payloadSchemaVersion: 1,
+          taskId: 'task:1',
+          title: 'Title',
+          objective: 'Objective',
+          initialStatus: 'created',
+          unexpected: true,
+        },
+      },
+    ],
+    [
+      'selector key',
+      MemorySelectorSchema,
+      { ...evidence.selector, unexpected: true },
+    ],
     ['evidence key', MemoryEvidenceSchema, { ...evidence, unexpected: true }],
-    ['provenance key', MemoryProvenanceSchema, { ...provenance, unexpected: true }],
+    [
+      'provenance key',
+      MemoryProvenanceSchema,
+      { ...provenance, unexpected: true },
+    ],
   ])('rejects %s', (_name, schema, candidate) => {
     expect(schema.safeParse(candidate).success).toBe(false)
   })
@@ -596,7 +764,11 @@ describe('Memory V2 event contracts', () => {
       occurredAt: timestamp,
       payload: { payloadSchemaVersion: 1, startedAt: timestamp },
     }
-    const appendRequest = { schemaVersion: 2, projectId: 'project:demo', events: [draft] }
+    const appendRequest = {
+      schemaVersion: 2,
+      projectId: 'project:demo',
+      events: [draft],
+    }
     const retrievalRequest = {
       schemaVersion: 2,
       queryId: 'query:boundary',
@@ -672,20 +844,26 @@ describe('Memory V2 event contracts', () => {
       [MemoryExportManifestV2Schema, manifest],
     ] as const
     for (const [schema, candidate] of strictBoundaries) {
-      expect(schema.safeParse({ ...candidate, unexpected: true }).success).toBe(false)
+      expect(schema.safeParse({ ...candidate, unexpected: true }).success).toBe(
+        false,
+      )
     }
 
-    expect(MemoryAppendRequestSchema.safeParse({
-      ...appendRequest,
-      events: [{ ...draft, projectId: 'project:other' }],
-    }).success).toBe(false)
-    expect(MemoryManifestImportRequestSchema.safeParse({
-      schemaVersion: 2,
-      projectId: 'project:other',
-      manifest,
-      rebuildId: 'rebuild:boundary',
-      projectionNames: ['verified-knowledge'],
-    }).success).toBe(false)
+    expect(
+      MemoryAppendRequestSchema.safeParse({
+        ...appendRequest,
+        events: [{ ...draft, projectId: 'project:other' }],
+      }).success,
+    ).toBe(false)
+    expect(
+      MemoryManifestImportRequestSchema.safeParse({
+        schemaVersion: 2,
+        projectId: 'project:other',
+        manifest,
+        rebuildId: 'rebuild:boundary',
+        projectionNames: ['verified-knowledge'],
+      }).success,
+    ).toBe(false)
   })
 })
 
@@ -747,7 +925,12 @@ describe('Memory V2 retrieval result', () => {
         rereadRequired: [
           {
             observationId: 'observation:1',
-            selector: { kind: 'symbol', path: 'common/src/types/memory-v2.ts', symbol: 'MemoryEventEnvelopeSchema', occurrence: 1 },
+            selector: {
+              kind: 'symbol',
+              path: 'common/src/types/memory-v2.ts',
+              symbol: 'MemoryEventEnvelopeSchema',
+              occurrence: 1,
+            },
             reason: 'changed',
             detail: 'The same observation cannot remain verified.',
             score: 0.9,
@@ -765,7 +948,12 @@ describe('Memory V2 retrieval result', () => {
             verifiedEvidence: [
               {
                 ...evidence,
-                selector: { kind: 'line-range', path: 'common/src/types/memory-v2.ts', startLine: 1, endLine: 5 },
+                selector: {
+                  kind: 'line-range',
+                  path: 'common/src/types/memory-v2.ts',
+                  startLine: 1,
+                  endLine: 5,
+                },
               },
             ],
           },
@@ -803,9 +991,14 @@ describe('Memory V2 retrieval result', () => {
       result,
     }
     expect(MemoryTurnContextV2Schema.parse(context)).toEqual(context)
-    expect(structuredClone(MemoryTurnContextV2Schema.parse(context))).toEqual(context)
+    expect(structuredClone(MemoryTurnContextV2Schema.parse(context))).toEqual(
+      context,
+    )
     expect(
-      MemoryTurnContextV2Schema.safeParse({ ...context, queryId: 'query:other' }).success,
+      MemoryTurnContextV2Schema.safeParse({
+        ...context,
+        queryId: 'query:other',
+      }).success,
     ).toBe(false)
   })
 })

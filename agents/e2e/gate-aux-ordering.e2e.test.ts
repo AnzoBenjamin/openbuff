@@ -1300,9 +1300,8 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       input: {},
     })
     expect(
-      gen.next(
-        feedJson({ status: ` M ${AUX_TRIPLE_FILE}\n M ${driftedFile}` }),
-      ).value,
+      gen.next(feedJson({ status: ` M ${AUX_TRIPLE_FILE}\n M ${driftedFile}` }))
+        .value,
     ).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
@@ -1333,9 +1332,8 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
 
     // The pass stores markers for exactly the attested file set.
     expect(
-      gen.next(
-        reviewerResult(firstFingerprint, [AUX_TRIPLE_FILE, driftedFile]),
-      ).value,
+      gen.next(reviewerResult(firstFingerprint, [AUX_TRIPLE_FILE, driftedFile]))
+        .value,
     ).toMatchObject({
       toolName: 'spawn_agent_inline',
       input: { agent_type: 'context-pruner' },
@@ -1474,9 +1472,10 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       input: { agent_type: 'context-pruner' },
     })
     const markersAfterFirstPass = (agentState as any).base2ActiveWork
-      .specialistReviewFileMarkers?.[
-        'reliability-reviewer'
-      ] as Record<string, string>
+      .specialistReviewFileMarkers?.['reliability-reviewer'] as Record<
+      string,
+      string
+    >
     expect(Object.keys(markersAfterFirstPass).sort()).toEqual(
       [SPECIALIST_FILE, unchangedFile].sort(),
     )
@@ -1532,9 +1531,10 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
       input: { agent_type: 'context-pruner' },
     })
     const markersAfterSecondPass = (agentState as any).base2ActiveWork
-      .specialistReviewFileMarkers?.[
-        'reliability-reviewer'
-      ] as Record<string, string>
+      .specialistReviewFileMarkers?.['reliability-reviewer'] as Record<
+      string,
+      string
+    >
     expect(markersAfterSecondPass[unchangedFile]).toBe(unchangedMarker)
     expect(markersAfterSecondPass[SPECIALIST_FILE]).not.toBe(
       driftedMarkerBefore,

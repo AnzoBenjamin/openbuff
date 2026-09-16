@@ -991,8 +991,9 @@ describe('selectStatusBarChips', () => {
 
     // One step down the ladder: the trigger suffix goes before the counts.
     const withoutSuffix = '150k/200k ███████│░░ 75%'
-    expect(contextAt(widthForBudget(budgetFor(widest) - 1, full.showStop))
-      ?.label).toBe(withoutSuffix)
+    expect(
+      contextAt(widthForBudget(budgetFor(widest) - 1, full.showStop))?.label,
+    ).toBe(withoutSuffix)
 
     // Then the counts, and only then the bar.
     const barOnly = '███████│░░ 75%'

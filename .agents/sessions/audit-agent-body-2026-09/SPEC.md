@@ -19,7 +19,7 @@ This audit answers three questions:
 ## Non-goals (explicitly out of scope for this audit)
 
 - Token-consumption / context-cost reduction as an objective. Context handling is only in scope
-  where a *failure* (dropped evidence, lost capability, silent truncation) breaks task completion.
+  where a _failure_ (dropped evidence, lost capability, silent truncation) breaks task completion.
 - Backend, multi-tenant, hosted-inference, billing, or credit concerns — none exist in this product.
 - Model/prompt quality tuning and eval-score chasing.
 - Cosmetic TUI polish unrelated to agent capability or operator verification.

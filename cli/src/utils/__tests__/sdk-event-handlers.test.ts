@@ -2823,9 +2823,7 @@ describe('sdk-event-handlers', () => {
     ...overrides,
   })
 
-  const compactionCards = (
-    messages: ChatMessage[],
-  ): CompactionContentBlock[] =>
+  const compactionCards = (messages: ChatMessage[]): CompactionContentBlock[] =>
     (messages[0].blocks ?? []).filter(
       (block): block is CompactionContentBlock => block.type === 'compaction',
     )

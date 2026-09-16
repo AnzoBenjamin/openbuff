@@ -2509,7 +2509,9 @@ describe('gate-reviewer helpers', () => {
       inlineHelpers.collectReviewerAttestationIssues(toolResult, expected, [
         'src/a.ts',
       ]),
-    ).toEqual(collectReviewerAttestationIssues(toolResult, expected, ['src/a.ts']))
+    ).toEqual(
+      collectReviewerAttestationIssues(toolResult, expected, ['src/a.ts']),
+    )
   })
 
   test('blocks a coverage gap with an attestable-but-wrong fingerprint on both issues', () => {

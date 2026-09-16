@@ -3,12 +3,13 @@
  * Deterministic code generator for the reviewer-gate helper functions.
  *
  * The helpers in `agents/base2/gate-paths.ts`, `agents/base2/gate-reviewer.ts`,
- * `agents/base2/gate-repair.ts`, `agents/base2/gate-concurrency.ts`, and
- * `agents/base2/gate-fingerprint.ts` are duplicated inline inside the
+ * `agents/base2/gate-repair.ts`, `agents/base2/gate-concurrency.ts`,
+ * `agents/base2/gate-fingerprint.ts`, and
+ * `agents/base2/gate-committed-surface.ts` are duplicated inline inside the
  * `createBase2` `handleSteps` generator (because that generator is serialized
  * via `handleSteps.toString()` and reconstructed with `new Function(...)`,
  * which loses the module closure). This script is the single source of truth
- * for that inline region: it reads the five canonical modules, parses them with
+ * for that inline region: it reads the six canonical modules, parses them with
  * the TypeScript compiler API, and emits a consolidated block of nested
  * function/type declarations (no `export`, no `import`) suitable for splicing
  * verbatim into the middle of the `handleSteps` generator body.
@@ -40,6 +41,7 @@ const SOURCE_MODULES = [
   'gate-repair.ts',
   'gate-concurrency.ts',
   'gate-fingerprint.ts',
+  'gate-committed-surface.ts',
 ]
 
 type DeclarationWithModifiers =

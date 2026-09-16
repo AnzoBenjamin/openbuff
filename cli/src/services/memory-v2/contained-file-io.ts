@@ -44,7 +44,8 @@ export type ContainedFileRead = {
   digest: `sha256:${string}`
 }
 
-const DIRECTORY_FLAGS = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
+const DIRECTORY_FLAGS =
+  constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
 const PROC_DIRECTORY_FLAGS = constants.O_RDONLY | constants.O_DIRECTORY
 const FILE_READ_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW
 
@@ -57,13 +58,16 @@ function requireSupported(): void {
     process.platform !== 'linux' ||
     typeof constants.O_DIRECTORY !== 'number' ||
     typeof constants.O_NOFOLLOW !== 'number'
-  ) fail('unsupported')
+  )
+    fail('unsupported')
 }
 
 function components(path: string): string[] {
-  if (!path || isAbsolute(path) || path.includes('\0') || path.includes('\\')) fail('invalid-path')
+  if (!path || isAbsolute(path) || path.includes('\0') || path.includes('\\'))
+    fail('invalid-path')
   const values = path.split('/')
-  if (values.some((value) => !value || value === '.' || value === '..')) fail('invalid-path')
+  if (values.some((value) => !value || value === '.' || value === '..'))
+    fail('invalid-path')
   return values
 }
 
@@ -90,7 +94,11 @@ function verifyRegular(descriptor: number): Stats {
   return stat
 }
 
-function openRoot(root: string, hooks: ContainedFileIoTestHooks, descriptors: number[]): number {
+function openRoot(
+  root: string,
+  hooks: ContainedFileIoTestHooks,
+  descriptors: number[],
+): number {
   requireSupported()
   let descriptor: number
   try {
@@ -103,7 +111,10 @@ function openRoot(root: string, hooks: ContainedFileIoTestHooks, descriptors: nu
   try {
     verifyDirectory(descriptor)
     try {
-      const procDescriptor = openSync(procPath(descriptor), PROC_DIRECTORY_FLAGS)
+      const procDescriptor = openSync(
+        procPath(descriptor),
+        PROC_DIRECTORY_FLAGS,
+      )
       closeSync(procDescriptor)
     } catch {
       fail('unsupported')
@@ -127,7 +138,11 @@ function openChildDirectory(parent: number, component: string): number {
 
 function closeAll(descriptors: number[]): void {
   for (let index = descriptors.length - 1; index >= 0; index--) {
-    try { closeSync(descriptors[index]!) } catch { /* Preserve the primary bounded error. */ }
+    try {
+      closeSync(descriptors[index]!)
+    } catch {
+      /* Preserve the primary bounded error. */
+    }
   }
 }
 
@@ -159,7 +174,12 @@ export function readContainedProjectFile(
   const descriptors: number[] = []
   try {
     const rootDescriptor = openRoot(root, hooks, descriptors)
-    const parent = traverse(rootDescriptor, names.slice(0, -1), descriptors, hooks)
+    const parent = traverse(
+      rootDescriptor,
+      names.slice(0, -1),
+      descriptors,
+      hooks,
+    )
     let file: number
     try {
       file = openSync(procPath(parent, names.at(-1)!), FILE_READ_FLAGS)
@@ -183,7 +203,8 @@ export function readContainedProjectFile(
       after.size !== before.size ||
       after.dev !== before.dev ||
       after.ino !== before.ino
-    ) fail('changed')
+    )
+      fail('changed')
     return {
       bytes,
       text: bytes.toString('utf8'),
@@ -250,7 +271,10 @@ export function createContainedProjectDirectory(
       try {
         descriptor = openSync(
           procPath(directoryDescriptor, validated),
-          constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+          constants.O_WRONLY |
+            constants.O_CREAT |
+            constants.O_EXCL |
+            constants.O_NOFOLLOW,
           0o600,
         )
       } catch (error) {
@@ -269,7 +293,11 @@ export function createContainedProjectDirectory(
       } finally {
         closeSync(descriptor)
         if (!complete) {
-          try { unlinkSync(procPath(directoryDescriptor, validated)) } catch { /* Best effort anchored cleanup. */ }
+          try {
+            unlinkSync(procPath(directoryDescriptor, validated))
+          } catch {
+            /* Best effort anchored cleanup. */
+          }
         }
       }
     },

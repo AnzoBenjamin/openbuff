@@ -39,9 +39,17 @@ export const MemoryBox = memo(
 
     if (block.state === 'report') {
       return (
-        <HarnessBox tone={block.tone} title={block.title} gap={1} paddingBottom={1}>
+        <HarnessBox
+          tone={block.tone}
+          title={block.title}
+          gap={1}
+          paddingBottom={1}
+        >
           {block.lines.map((line, index) => (
-            <text key={`${index}-${line}`} style={{ wrapMode: 'word', fg: theme.foreground }}>
+            <text
+              key={`${index}-${line}`}
+              style={{ wrapMode: 'word', fg: theme.foreground }}
+            >
               {line}
             </text>
           ))}
@@ -58,7 +66,9 @@ export const MemoryBox = memo(
               }}
               onClick={() => onInsertCommand(command)}
             >
-              <text style={{ fg: theme.secondary, wrapMode: 'word' }}>{label}</text>
+              <text style={{ fg: theme.secondary, wrapMode: 'word' }}>
+                {label}
+              </text>
             </Button>
           ))}
         </HarnessBox>
@@ -75,7 +85,12 @@ export const MemoryBox = memo(
             It is written after your first successful run completes.
           </text>
           {block.v2Lines?.map((line, index) => (
-            <text key={`v2-empty-${index}`} style={{ wrapMode: 'word', fg: theme.secondary }}>{line}</text>
+            <text
+              key={`v2-empty-${index}`}
+              style={{ wrapMode: 'word', fg: theme.secondary }}
+            >
+              {line}
+            </text>
           ))}
         </HarnessBox>
       )
@@ -101,7 +116,12 @@ export const MemoryBox = memo(
       return (
         <HarnessBox tone={tone} title={header} gap={1} paddingBottom={1}>
           {block.v2Lines?.map((line, index) => (
-            <text key={`v2-${index}`} style={{ wrapMode: 'word', fg: theme.secondary }}>{line}</text>
+            <text
+              key={`v2-${index}`}
+              style={{ wrapMode: 'word', fg: theme.secondary }}
+            >
+              {line}
+            </text>
           ))}
           <box style={{ flexDirection: 'column', gap: 0 }}>
             <text style={{ wrapMode: 'word', fg: theme.secondary }}>Goal</text>

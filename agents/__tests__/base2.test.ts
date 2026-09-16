@@ -10456,9 +10456,11 @@ describe('base2 reviewer re-review round ledger', () => {
       const gateFile = normalizeGateFilePath(join(tmpDir, 'a.ts'))
       writeFileSync(join(tmpDir, 'a.ts'), 'export const value = 1\n')
       const codeFindings = [
-        codeReviewerFinding('NON_BLOCKING: Tighten the early-return guard.', 0, [
-          gateFile,
-        ]),
+        codeReviewerFinding(
+          'NON_BLOCKING: Tighten the early-return guard.',
+          0,
+          [gateFile],
+        ),
         codeReviewerFinding(
           'BLOCKING: [code-reviewer:tests:missing-case] Add a case for the empty payload.',
           1,
@@ -13284,5 +13286,823 @@ describe('base2 deleted-before-first-snapshot gate files', () => {
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('base2 committed-surface review mode', () => {
+  /** update_plan_status tool call plus its paired tool result (local copy). */
+  function planStatusHistory(
+    input: Record<string, unknown>,
+    result: Record<string, unknown> = { message: 'Updated 1 task line(s).' },
+  ) {
+    return [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'plan-1',
+            toolName: 'update_plan_status',
+            input: {
+              path: '.agents/sessions/demo/PLAN.md',
+              ...input,
+            },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        toolCallId: 'plan-1',
+        toolName: 'update_plan_status',
+        content: [{ type: 'json', value: result }],
+      },
+    ]
+  }
+
+  function seedIdleGateState(
+    overrides: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      touchedFiles: [],
+      changedFiles: [],
+      pendingGateFiles: [],
+      currentPhase: 'idle',
+      latestWorkSummary: '',
+      openReviewerBlockers: [],
+      lastValidationSummary: '',
+      nextRequiredAction: '',
+      lastPinnedStateMessage: '',
+      ...overrides,
+    }
+  }
+
+  function seedPendingGateState(
+    gateFile: string,
+    overrides: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      touchedFiles: [gateFile],
+      changedFiles: [gateFile],
+      pendingGateFiles: [gateFile],
+      currentPhase: 'awaiting_validation',
+      latestWorkSummary: '',
+      openReviewerBlockers: [],
+      openReviewerFindings: [],
+      lastValidationSummary: '',
+      nextRequiredAction: '',
+      lastPinnedStateMessage: '',
+      gatePassedFiles: [],
+      gatePassedFileMarkers: {},
+      gatePassedPendingFiles: [],
+      gatePassedReviewerVerdict: '',
+      gatePassedValidationSummary: '',
+      gatePassedFingerprint: '',
+      reviewedReviewableFingerprint: '',
+      lastReviewerGateSkipReason: '',
+      reviewReceipts: [],
+      testWriterGateDone: true,
+      docWriterGateDone: true,
+      securityReviewGateDone: true,
+      preEditSecurityReviewDone: true,
+      specialistReviewGatesDone: [],
+      auxGatesLastPendingFiles: [gateFile],
+      ...overrides,
+    }
+  }
+
+  /** Live gate-issued plan-task receipt ledger published on durable gate state. */
+  function planTaskReceiptsOf(
+    agentState: Record<string, unknown>,
+  ): Array<Record<string, unknown>> {
+    return (agentState as any).base2ActiveWork.planTaskGateReceipts as Array<
+      Record<string, unknown>
+    >
+  }
+
+  // Opt-in committed-surface mode: extraction, gate-branch lifecycle, and the
+  // supersession carve-out.
+  test('a successful requestCommittedSurfaceReview call stores a pending request', () => {
+    const base2 = createBase2('default', { executePlan: true })
+    const agentState: Record<string, unknown> = {
+      agentId: 'base2-execute-plan',
+      messageHistory: planStatusHistory({
+        currentTask: 'P2-T3 Implement the thing',
+        updates: [{ taskId: 'P2-T3', status: 'in_progress' }],
+        requestCommittedSurfaceReview: true,
+      }),
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Continue the plan.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    const request = (agentState as any).base2ActiveWork
+      .committedSurfaceReviewRequest as Record<string, unknown>
+    expect(request).toMatchObject({ taskId: 'P2-T3', status: 'pending' })
+    expect(typeof request.requestedAt).toBe('string')
+  })
+
+  test('a requestCommittedSurfaceReview call without a claimed task stores nothing', () => {
+    // The tool schema documents the claimed-task requirement; runtime
+    // extraction ignores the invalid shape rather than storing it.
+    const base2 = createBase2('default', { executePlan: true })
+    const agentState: Record<string, unknown> = {
+      agentId: 'base2-execute-plan',
+      messageHistory: planStatusHistory({
+        requestCommittedSurfaceReview: true,
+      }),
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Continue the plan.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      (agentState as any).base2ActiveWork.committedSurfaceReviewRequest,
+    ).toBeUndefined()
+  })
+
+  test('an unapplied requestCommittedSurfaceReview call stores nothing', () => {
+    const base2 = createBase2('default', { executePlan: true })
+    const agentState: Record<string, unknown> = {
+      agentId: 'base2-execute-plan',
+      messageHistory: planStatusHistory(
+        {
+          currentTask: 'P2-T3 Implement the thing',
+          requestCommittedSurfaceReview: true,
+        },
+        {
+          errorMessage:
+            'update_plan_status: PLAN transition is atomic; no task matched: P2-T3.',
+        },
+      ),
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Continue the plan.',
+      params: {},
+      config: base2.programmaticConfig,
+    } as any)
+    expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+    expect(
+      (agentState as any).base2ActiveWork.committedSurfaceReviewRequest,
+    ).toBeUndefined()
+  })
+
+  test('a recorded change to a committed-surface receipt retires it, an unrelated change does not', () => {
+    const tmpDir = makeProjectTempDir('base2-committed-surface-supersede-')
+    try {
+      const coveredFile = join(tmpDir, 'a.ts')
+      const unrelatedFile = join(tmpDir, 'b.ts')
+      writeFileSync(coveredFile, 'export const a = 1\n')
+      writeFileSync(unrelatedFile, 'export const b = 1\n')
+      const coveredGateFile = normalizeGateFilePath(coveredFile)
+      const unrelatedGateFile = normalizeGateFilePath(unrelatedFile)
+      const fingerprint = buildFingerprint(
+        [
+          {
+            file: coveredGateFile,
+            contentMarker: buildContentMarker(coveredFile),
+          },
+        ],
+        '',
+      )
+      const committedReceipt = {
+        receiptId: `plan-gate:P2-T3:committed-surface:${fingerprint.slice(0, 16)}`,
+        taskId: 'P2-T3',
+        evidence: 'committed-surface',
+        snapshotFingerprint: fingerprint,
+        files: [coveredGateFile],
+        validationSummary: '',
+        reviewerVerdict: 'LOOKS_GOOD',
+        recordedAt: '2025-01-01T00:00:00.000Z',
+      }
+      /**
+       * Drive a fresh idle-state turn seeded with the receipt up to its first
+       * STEP boundary, deliver the given edit receipt there, and return the
+       * live receipt ledger. One scenario per generator: after a change is
+       * recorded the next iteration routes validation/aux gates for the new
+       * pending file, which a second delivery in the same generator would hit.
+       */
+      function supersedeScenario(
+        deliveredReceipt: Record<string, unknown>,
+      ): Array<Record<string, unknown>> {
+        const scenarioState: Record<string, unknown> = {
+          agentId: 'base2-execute-plan',
+          base2ActiveWork: seedIdleGateState({
+            activePlanTaskId: 'P2-T3',
+            planTaskGateReceipts: [committedReceipt],
+          }),
+        }
+        const scenarioBase2 = createBase2('default', { executePlan: true })
+        const scenarioGen = scenarioBase2.handleSteps!({
+          agentState: scenarioState,
+          prompt: 'Continue the plan.',
+          params: {},
+          config: scenarioBase2.programmaticConfig,
+        } as any)
+        expect(scenarioGen.next().value).toMatchObject({
+          toolName: 'git_status',
+        })
+        // Idle state with no pending request: the turn-start bookkeeping
+        // spawns the inline context-pruner, then the STEP boundary sits behind
+        // any pinned-state message (same choreography as the mint test below).
+        expect(scenarioGen.next(feedJson({ status: '' })).value).toMatchObject({
+          toolName: 'spawn_agent_inline',
+        })
+        const maybePinned = scenarioGen.next().value
+        if (maybePinned !== 'STEP') {
+          expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+          expect(scenarioGen.next().value).toBe('STEP')
+        }
+        // Supersession runs inside recordChangedFiles while the STEP result is
+        // processed, so the ledger is final right after this feed.
+        scenarioGen.next(finishStepWithToolResult(deliveredReceipt))
+        // Supersession filters the ledger in place; the published key survives.
+        expect(
+          'planTaskGateReceipts' in (scenarioState as any).base2ActiveWork,
+        ).toBe(true)
+        return planTaskReceiptsOf(scenarioState)
+      }
+
+      // An UNRELATED recorded change: the committed-surface receipt covers real
+      // bytes that did not change, so it must survive (the old blanket-drop
+      // would have retired it here).
+      expect(supersedeScenario(editReceipt(unrelatedGateFile))).toEqual([
+        committedReceipt,
+      ])
+
+      // A recorded change to a COVERED file: only now is the receipt retired
+      // (it has verifiable content identity, so it dies on file intersection,
+      // not the blanket non-reviewed drop).
+      expect(supersedeScenario(editReceipt(coveredGateFile))).toEqual([])
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a pending committed-surface request on a dirty worktree is rejected and falls through to the normal gate', () => {
+    const tmpDir = makeProjectTempDir('base2-committed-surface-dirty-')
+    try {
+      const dirtyFile = join(tmpDir, 'a.ts')
+      writeFileSync(dirtyFile, 'export const value = 1\n')
+      const gateFile = normalizeGateFilePath(dirtyFile)
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2-execute-plan',
+        base2ActiveWork: seedPendingGateState(gateFile, {
+          activePlanTaskId: 'P2-T3',
+          committedSurfaceReviewRequest: {
+            taskId: 'P2-T3',
+            requestedAt: '2025-01-01T00:00:00.000Z',
+            status: 'pending',
+          },
+        }),
+      }
+
+      const base2 = createBase2('default', { executePlan: true })
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Continue the plan.',
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      const maybePinned = gen.next().value
+      if (maybePinned !== 'STEP') {
+        expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+      expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      // No porcelain probe and no spawn: feeding the dirty status makes the
+      // committed-surface branch reject the request BEFORE the clean-tree
+      // check, then continue to the normal gate logic for the iteration.
+      gen.next(feedJson({ status: ` M ${gateFile}` }))
+      const request = (agentState as any).base2ActiveWork
+        .committedSurfaceReviewRequest as Record<string, unknown>
+      expect(request).toMatchObject({
+        taskId: 'P2-T3',
+        status: 'rejected',
+        reason: 'worktree-dirty',
+      })
+      // Nothing was minted by the committed-surface branch.
+      expect(planTaskReceiptsOf(agentState)).toEqual([])
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a pending committed-surface request on a clean tree routes, attests, and mints the receipt', () => {
+    const tmpDir = makeProjectTempDir('base2-committed-surface-mint-')
+    try {
+      const taskFile = join(tmpDir, 'a.ts')
+      writeFileSync(taskFile, 'export const value = 1\n')
+      const gateFile = normalizeGateFilePath(taskFile)
+      const agentState: Record<string, unknown> = {
+        agentId: 'base2-execute-plan',
+        base2ActiveWork: seedIdleGateState({
+          activePlanTaskId: 'P2-T3',
+          touchedFiles: [gateFile],
+          changedFiles: [gateFile],
+          committedSurfaceReviewRequest: {
+            taskId: 'P2-T3',
+            requestedAt: '2025-01-01T00:00:00.000Z',
+            status: 'pending',
+          },
+        }),
+      }
+
+      const base2 = createBase2('default', { executePlan: true })
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Focus on performance.',
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
+      const maybePinned = gen.next().value
+      if (maybePinned !== 'STEP') {
+        expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+      // No edits this step: the mid-loop git_status runs first, then the
+      // committed-surface branch probes porcelain on the clean result.
+      expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+        toolName: 'run_terminal_command',
+      })
+      expect(
+        gen.next(feedJson({ stdout: '', exitCode: 0 })).value,
+      ).toMatchObject({ toolName: 'spawn_agents' })
+      // The mint runs synchronously while the reviewer result is processed;
+      // the branch then continues to the loop top, so assert on state below
+      // without pinning the post-mint yield shape.
+      gen.next(
+        feedJson([
+          {
+            agentType: 'performance-specialist',
+            value: {
+              schemaVersion: 1,
+              verdict: 'LOOKS_GOOD',
+              snapshotFingerprint: buildFingerprint(
+                [
+                  {
+                    file: gateFile,
+                    contentMarker: buildContentMarker(taskFile),
+                  },
+                ],
+                '',
+              ),
+              reviewedFiles: [gateFile],
+              findings: [],
+              coverage: 'covered',
+              dimensions: {},
+              requirementCoverage: [],
+            },
+          },
+        ]),
+      )
+
+      const activeWork = (agentState as any).base2ActiveWork
+      const receipts = planTaskReceiptsOf(agentState)
+      expect(receipts).toHaveLength(1)
+      expect(receipts[0]).toMatchObject({
+        taskId: 'P2-T3',
+        evidence: 'committed-surface',
+        files: [gateFile],
+        validationSummary: '',
+        reviewerVerdict: 'LOOKS_GOOD',
+      })
+      expect(String(receipts[0].receiptId)).toMatch(
+        /^plan-gate:P2-T3:committed-surface:v3:[a-f0-9]{13}$/,
+      )
+      expect(receipts[0].snapshotFingerprint).toBe(
+        buildFingerprint(
+          [{ file: gateFile, contentMarker: buildContentMarker(taskFile) }],
+          '',
+        ),
+      )
+      expect(
+        (activeWork.committedSurfaceReviewRequest as Record<string, unknown>)
+          .status,
+      ).toBe('consumed')
+      expect(String(activeWork.latestWorkSummary)).toContain(
+        'committed-surface',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // Failure branches: every committed-surface rejection must be durable (the
+  // reason is recorded on the request) and must mint NO receipt — a rejected
+  // request is never done evidence. The dirty-worktree rejection is covered by
+  // the earlier test; these cover the four remaining branch families plus the
+  // verdict gate, replay watermark, and standalone-flag schema contract.
+  describe('committed-surface failure branches', () => {
+    function pendingRequest(): Record<string, unknown> {
+      return {
+        taskId: 'P2-T3',
+        requestedAt: '2025-01-01T00:00:00.000Z',
+        status: 'pending',
+      }
+    }
+
+    function expectRejectedWithoutReceipt(
+      agentState: Record<string, unknown>,
+      reason: string | RegExp,
+    ) {
+      const request = (agentState as any).base2ActiveWork
+        .committedSurfaceReviewRequest as Record<string, unknown>
+      expect(request.status).toBe('rejected')
+      if (typeof reason === 'string') {
+        expect(request.reason).toBe(reason)
+      } else {
+        expect(String(request.reason)).toMatch(reason)
+      }
+      // No receipt was minted by the committed-surface branch.
+      expect(planTaskReceiptsOf(agentState)).toEqual([])
+    }
+
+    test('rejects no-reviewable-committed-files when no derived file survives (empty fileset)', () => {
+      // touchedFiles/changedFiles name only a doc: deriveCommittedSurfaceFileSet
+      // filters it out (non-reviewable marker), so the fileset is empty — a
+      // constant-fingerprint receipt — and the request must reject.
+      const tmpDir = makeProjectTempDir('base2-committed-surface-empty-')
+      try {
+        const docsFile = join(tmpDir, 'notes.md')
+        writeFileSync(docsFile, '# notes\n')
+        const docsGateFile = normalizeGateFilePath(docsFile)
+        const agentState: Record<string, unknown> = {
+          agentId: 'base2-execute-plan',
+          base2ActiveWork: seedIdleGateState({
+            activePlanTaskId: 'P2-T3',
+            touchedFiles: [docsGateFile],
+            changedFiles: [docsGateFile],
+            committedSurfaceReviewRequest: pendingRequest(),
+          }),
+        }
+
+        const base2 = createBase2('default', { executePlan: true })
+        const gen = base2.handleSteps!({
+          agentState,
+          prompt: 'Continue the plan.',
+          params: {},
+          config: base2.programmaticConfig,
+        } as any)
+        expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+        expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+          toolName: 'spawn_agent_inline',
+        })
+        const maybePinned = gen.next().value
+        if (maybePinned !== 'STEP') {
+          expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+          expect(gen.next().value).toBe('STEP')
+        }
+        expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+          toolName: 'git_status',
+        })
+        expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+          toolName: 'run_terminal_command',
+        })
+        // Porcelain is clean, so the empty-derive rejection fires before any
+        // specialist spawn.
+        gen.next(feedJson({ stdout: '', exitCode: 0 }))
+        expectRejectedWithoutReceipt(
+          agentState,
+          'no-reviewable-committed-files',
+        )
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true })
+      }
+    })
+
+    test('rejects fileset-overflow when the derived fileset exceeds the 40-file cap', () => {
+      // 41 reviewable on-disk files with verifiable markers: the derive call
+      // overflows and the request must reject before spawning anything.
+      const tmpDir = makeProjectTempDir('base2-committed-surface-overflow-')
+      try {
+        const files: string[] = []
+        for (let i = 0; i < 41; i++) {
+          const file = join(tmpDir, `gen-${i}.ts`)
+          writeFileSync(file, `export const v${i} = ${i}\n`)
+          files.push(normalizeGateFilePath(file))
+        }
+        const agentState: Record<string, unknown> = {
+          agentId: 'base2-execute-plan',
+          base2ActiveWork: seedIdleGateState({
+            activePlanTaskId: 'P2-T3',
+            touchedFiles: files,
+            changedFiles: files,
+            committedSurfaceReviewRequest: pendingRequest(),
+          }),
+        }
+
+        const base2 = createBase2('default', { executePlan: true })
+        const gen = base2.handleSteps!({
+          agentState,
+          prompt: 'Continue the plan.',
+          params: {},
+          config: base2.programmaticConfig,
+        } as any)
+        expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+        expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+          toolName: 'spawn_agent_inline',
+        })
+        const maybePinned = gen.next().value
+        if (maybePinned !== 'STEP') {
+          expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+          expect(gen.next().value).toBe('STEP')
+        }
+        expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+          toolName: 'git_status',
+        })
+        expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+          toolName: 'run_terminal_command',
+        })
+        gen.next(feedJson({ stdout: '', exitCode: 0 }))
+        expectRejectedWithoutReceipt(agentState, /^fileset-overflow:/)
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true })
+      }
+    })
+
+    test('rejects with no receipt when hashing is unavailable (non-attestable fingerprint family)', () => {
+      // Without a collision-resistant hash the committed fingerprint would be
+      // the stable 'unreadable:no-crypto' sentinel — an error string, never
+      // content evidence. Derive and the snapshot hash share the same crypto
+      // resolution, so the non-attestable-fingerprint guard (defense in depth
+      // behind derive) is preceded here by the empty-derive rejection: file
+      // markers are equally unverifiable, so no file survives and the request
+      // must reject with NO spawn and NO receipt either way (fail closed).
+      const tmpDir = makeProjectTempDir('base2-committed-surface-nocrypto-')
+      const originalGetBuiltinModule = (process as any).getBuiltinModule
+      const originalRequire = (globalThis as any).require
+      try {
+        const taskFile = join(tmpDir, 'a.ts')
+        writeFileSync(taskFile, 'export const value = 1\n')
+        const gateFile = normalizeGateFilePath(taskFile)
+        ;(process as any).getBuiltinModule = undefined
+        ;(globalThis as any).require = undefined
+        const agentState: Record<string, unknown> = {
+          agentId: 'base2-execute-plan',
+          base2ActiveWork: seedIdleGateState({
+            activePlanTaskId: 'P2-T3',
+            touchedFiles: [gateFile],
+            changedFiles: [gateFile],
+            committedSurfaceReviewRequest: pendingRequest(),
+          }),
+        }
+
+        const base2 = createBase2('default', { executePlan: true })
+        const gen = base2.handleSteps!({
+          agentState,
+          prompt: 'Continue the plan.',
+          params: {},
+          config: base2.programmaticConfig,
+        } as any)
+        expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+        expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+          toolName: 'spawn_agent_inline',
+        })
+        const maybePinned = gen.next().value
+        if (maybePinned !== 'STEP') {
+          expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+          expect(gen.next().value).toBe('STEP')
+        }
+        expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+          toolName: 'git_status',
+        })
+        expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+          toolName: 'run_terminal_command',
+        })
+        // No spawn_agents may be reached: unverifiable bytes never spawn.
+        const afterPorcelain = gen.next(feedJson({ stdout: '', exitCode: 0 }))
+        expect((afterPorcelain.value as any)?.toolName).not.toBe('spawn_agents')
+        expectRejectedWithoutReceipt(
+          agentState,
+          'no-reviewable-committed-files',
+        )
+      } finally {
+        ;(process as any).getBuiltinModule = originalGetBuiltinModule
+        ;(globalThis as any).require = originalRequire
+        rmSync(tmpDir, { recursive: true, force: true })
+      }
+    })
+
+    test('rejects attestation-failed when a specialist does not return the structured attestation', () => {
+      // The routed specialist returned prose (no structured receipt), so
+      // collectReviewerAttestationIssues fails closed and the request is
+      // rejected with the durable attestation-failed reason instead of minting.
+      const tmpDir = makeProjectTempDir('base2-committed-surface-attest-')
+      try {
+        const taskFile = join(tmpDir, 'a.ts')
+        writeFileSync(taskFile, 'export const value = 1\n')
+        const gateFile = normalizeGateFilePath(taskFile)
+        const agentState: Record<string, unknown> = {
+          agentId: 'base2-execute-plan',
+          base2ActiveWork: seedIdleGateState({
+            activePlanTaskId: 'P2-T3',
+            touchedFiles: [gateFile],
+            changedFiles: [gateFile],
+            committedSurfaceReviewRequest: pendingRequest(),
+          }),
+        }
+
+        const base2 = createBase2('default', { executePlan: true })
+        const gen = base2.handleSteps!({
+          agentState,
+          prompt: 'Focus on performance.',
+          params: {},
+          config: base2.programmaticConfig,
+        } as any)
+        expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+        expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+          toolName: 'spawn_agent_inline',
+        })
+        const maybePinned = gen.next().value
+        if (maybePinned !== 'STEP') {
+          expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+          expect(gen.next().value).toBe('STEP')
+        }
+        expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+          toolName: 'git_status',
+        })
+        expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+          toolName: 'run_terminal_command',
+        })
+        expect(
+          gen.next(feedJson({ stdout: '', exitCode: 0 })).value,
+        ).toMatchObject({ toolName: 'spawn_agents' })
+        // Non-attesting specialist result (plain prose, no structured entry).
+        gen.next(
+          feedJson([
+            { agentType: 'performance-specialist', value: 'looks fine to me' },
+          ]),
+        )
+        expectRejectedWithoutReceipt(
+          agentState,
+          /^attestation-failed:performance-specialist/,
+        )
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true })
+      }
+    })
+
+    test('rejects a non-LOOKS_GOOD specialist verdict even with a clean attestation', () => {
+      // Finding committed-surface-mint-ignores-verdict: a well-attested but
+      // NON_BLOCKING receipt is not done evidence, so the mint must reject the
+      // request instead of writing a durable committed-surface receipt.
+      const tmpDir = makeProjectTempDir('base2-committed-surface-verdict-')
+      try {
+        const taskFile = join(tmpDir, 'a.ts')
+        writeFileSync(taskFile, 'export const value = 1\n')
+        const gateFile = normalizeGateFilePath(taskFile)
+        const agentState: Record<string, unknown> = {
+          agentId: 'base2-execute-plan',
+          base2ActiveWork: seedIdleGateState({
+            activePlanTaskId: 'P2-T3',
+            touchedFiles: [gateFile],
+            changedFiles: [gateFile],
+            committedSurfaceReviewRequest: pendingRequest(),
+          }),
+        }
+
+        const base2 = createBase2('default', { executePlan: true })
+        const gen = base2.handleSteps!({
+          agentState,
+          prompt: 'Focus on performance.',
+          params: {},
+          config: base2.programmaticConfig,
+        } as any)
+        expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+        expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+          toolName: 'spawn_agent_inline',
+        })
+        const maybePinned = gen.next().value
+        if (maybePinned !== 'STEP') {
+          expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+          expect(gen.next().value).toBe('STEP')
+        }
+        expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+          toolName: 'git_status',
+        })
+        expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+          toolName: 'run_terminal_command',
+        })
+        expect(
+          gen.next(feedJson({ stdout: '', exitCode: 0 })).value,
+        ).toMatchObject({ toolName: 'spawn_agents' })
+        // Fully attesting but NON_BLOCKING: attestation passes, the verdict
+        // gate must reject.
+        gen.next(
+          feedJson([
+            {
+              agentType: 'performance-specialist',
+              value: {
+                schemaVersion: 1,
+                verdict: 'NON_BLOCKING',
+                snapshotFingerprint: buildFingerprint(
+                  [
+                    {
+                      file: gateFile,
+                      contentMarker: buildContentMarker(taskFile),
+                    },
+                  ],
+                  '',
+                ),
+                reviewedFiles: [gateFile],
+                findings: ['Minor committed-surface nit.'],
+                coverage: 'covered',
+                dimensions: {},
+                requirementCoverage: [],
+              },
+            },
+          ]),
+        )
+        expectRejectedWithoutReceipt(
+          agentState,
+          /^specialist-verdict-not-looks-good:performance-specialist/,
+        )
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true })
+      }
+    })
+
+    test('the replay watermark keeps an already-resolved request from re-becoming pending', () => {
+      // Finding committed-surface-watermark-never-read: after the branch
+      // resolved a request, every turn-start re-walk of the SAME history must
+      // not see the old successful request call again and replace the resolved
+      // record with a fresh pending request (which would re-spawn and re-mint
+      // reviewers every later turn).
+      const tmpDir = makeProjectTempDir('base2-committed-surface-replay-')
+      try {
+        const taskFile = join(tmpDir, 'a.ts')
+        writeFileSync(taskFile, 'export const value = 1\n')
+        const gateFile = normalizeGateFilePath(taskFile)
+        const requestHistory = planStatusHistory({
+          currentTask: 'P2-T3 Implement the thing',
+          updates: [{ taskId: 'P2-T3', status: 'in_progress' }],
+          requestCommittedSurfaceReview: true,
+        })
+        const resolvedFromIndex = requestHistory.length
+        const agentState: Record<string, unknown> = {
+          agentId: 'base2-execute-plan',
+          messageHistory: requestHistory,
+          base2ActiveWork: seedIdleGateState({
+            activePlanTaskId: 'P2-T3',
+            // The branch already consumed the request at this watermark.
+            committedSurfaceReviewRequest: {
+              taskId: 'P2-T3',
+              status: 'consumed',
+            },
+            committedSurfaceReviewResolvedFromMessageIndex: resolvedFromIndex,
+          }),
+        }
+
+        const base2 = createBase2('default', { executePlan: true })
+        const gen = base2.handleSteps!({
+          agentState,
+          prompt: 'Continue the plan.',
+          params: {},
+          config: base2.programmaticConfig,
+        } as any)
+        expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+        // Turn-start extraction ran during hydration; the watermark skipped the
+        // request call, so the consumed record stays exactly as it was.
+        const request = (agentState as any).base2ActiveWork
+          .committedSurfaceReviewRequest as Record<string, unknown>
+        expect(request).toEqual({ taskId: 'P2-T3', status: 'consumed' })
+        // And the post-STEP re-walk must not resurrect it either.
+        expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+          toolName: 'spawn_agent_inline',
+        })
+        const maybePinned = gen.next().value
+        if (maybePinned !== 'STEP') {
+          expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+          expect(gen.next().value).toBe('STEP')
+        }
+        gen.next(finishStepWithToolResult({}))
+        expect(
+          (agentState as any).base2ActiveWork
+            .committedSurfaceReviewRequest as Record<string, unknown>,
+        ).toEqual({ taskId: 'P2-T3', status: 'consumed' })
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true })
+      }
+    })
   })
 })

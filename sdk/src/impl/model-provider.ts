@@ -26,6 +26,7 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 import { getValidChatGptOAuthCredentials } from '../credentials'
 import {
   DEFAULT_PROVIDER_COMPATIBILITY,
+  OPENCODE_GO_RESPONSES_MODELS,
   loadProviderConfigSync,
   resolveConfiguredAgentModelConfig,
   resolveConfiguredProviderModel,
@@ -112,6 +113,24 @@ export function resetChatGptOAuthRateLimit(): void {
   chatGptOAuthRateLimit.reset()
 }
 
+export const OPENCODE_GO_SESSION_HEADER = 'x-opencode-session'
+export const OPENBUFF_USER_AGENT = 'openbuff'
+
+export function isOpenCodeGoProvider(params: {
+  providerId: string
+  baseURL?: string
+}): boolean {
+  if (params.providerId === 'opencode-go') return true
+  if (params.providerId.startsWith('opencode-go-')) return true
+  return (params.baseURL ?? '').includes('opencode.ai/zen/go')
+}
+
+export function isOpenCodeGoResponsesModel(providerModel: string): boolean {
+  return (OPENCODE_GO_RESPONSES_MODELS as readonly string[]).includes(
+    providerModel,
+  )
+}
+
 /**
  * Parameters for requesting a model.
  */
@@ -129,6 +148,10 @@ export interface ModelRequestParams {
   costMode?: string
   /** True when the prompt/message history contains image input parts. */
   requiresVision?: boolean
+  /** Stable per-conversation session id forwarded as x-opencode-session to
+   * OpenCode Go for routing and prompt caching. Callers pass fingerprintId
+   * (stable per client) falling back to clientSessionId. */
+  sessionId?: string
   /** When true, an explicit `model` wins over mode/agent/defaultModel routing
    *  in openbuff.json. Used by the provider-failover loop so each configured
    *  failover model is actually attempted instead of being re-resolved to the
@@ -202,6 +225,7 @@ export async function getModelForRequest(
   params: ModelRequestParams,
 ): Promise<ModelResult> {
   const { model, agentId, skipChatGptOAuth, preferModelParam } = params
+  const sessionId = params.sessionId
   const loadedProviderConfig = loadProviderConfigSync()
   const effectiveAgentModelConfig = resolveConfiguredAgentModelConfig({
     agentId,
@@ -248,6 +272,15 @@ export async function getModelForRequest(
   const pricing = resolvedCapabilities?.pricing
 
   if (configuredProviderModel) {
+    if (
+      isOpenCodeGoResponsesModel(configuredProviderModel.providerModel) ||
+      isOpenCodeGoResponsesModel(effectiveModel) ||
+      isOpenCodeGoResponsesModel(configuredProviderModel.requestedModel)
+    ) {
+      throw new Error(
+        `Model '${effectiveModel}' requires the OpenCode Go Responses API (.../zen/go/v1/responses), which openbuff does not support yet. Use a chat/completions model (e.g. opencode-go/kimi-k2.6, opencode-go/glm-5.1, opencode-go/deepseek-v4-pro) or a messages model via opencode-go-anthropic (e.g. qwen3.6-plus, minimax-m2.7), or use the OpenCode TUI. See https://opencode.ai/docs/go/#endpoints`,
+      )
+    }
     if (configuredProviderModel.provider.type === 'chatgpt-oauth') {
       const chatGptOAuthCredentials = await getValidChatGptOAuthCredentials()
       if (!chatGptOAuthCredentials) {
@@ -272,7 +305,10 @@ export async function getModelForRequest(
 
     if (configuredProviderModel.provider.type === 'anthropic-compatible') {
       return {
-        model: createConfiguredAnthropicModel(configuredProviderModel),
+        model: createConfiguredAnthropicModel(
+          configuredProviderModel,
+          sessionId,
+        ),
         isChatGptOAuth: false,
         compatibility: configuredProviderModel.compatibility,
         reasoningEffort,
@@ -283,7 +319,10 @@ export async function getModelForRequest(
     }
 
     return {
-      model: createConfiguredOpenAICompatibleModel(configuredProviderModel),
+      model: createConfiguredOpenAICompatibleModel(
+        configuredProviderModel,
+        sessionId,
+      ),
       isChatGptOAuth: false,
       compatibility: configuredProviderModel.compatibility,
       reasoningEffort,
@@ -592,6 +631,7 @@ function resolveVisionModelIfNeeded(params: {
 
 function createConfiguredOpenAICompatibleModel(
   resolvedModel: ResolvedProviderModel,
+  sessionId?: string,
 ): LanguageModel {
   const { providerId, provider, providerModel, apiKey } = resolvedModel
   if (provider.type !== 'openai-compatible') {
@@ -604,7 +644,12 @@ function createConfiguredOpenAICompatibleModel(
   return new OpenAICompatibleChatLanguageModel(providerModel, {
     provider: providerId,
     url: ({ path: endpoint }: { path: string }) => `${baseURL}${endpoint}`,
-    headers: () => createOpenAICompatibleHeaders(apiKey),
+    headers: () =>
+      createOpenAICompatibleHeaders(apiKey, {
+        providerId,
+        baseURL: provider.baseURL,
+        sessionId,
+      }),
     fetch: createConfiguredProviderFetch(resolvedModel),
     includeUsage: undefined,
     supportsStructuredOutputs: provider.supportsStructuredOutputs,
@@ -612,19 +657,24 @@ function createConfiguredOpenAICompatibleModel(
   })
 }
 
-/**
- * Build the common headers for an OpenAI-compatible BYOK request.
- *
- * Authentication is provider-specific, while Content-Type/Accept and request
- * serialization are owned by the AI SDK's HTTP helper. Do not impersonate a
- * third-party client here: providers may use User-Agent for routing or policy.
- */
 export function createOpenAICompatibleHeaders(
   apiKey?: string,
+  opts?: { providerId?: string; baseURL?: string; sessionId?: string },
 ): Record<string, string> {
+  const isGo = opts?.providerId
+    ? isOpenCodeGoProvider({
+        providerId: opts.providerId,
+        baseURL: opts.baseURL,
+      })
+    : false
   return {
     ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-    'user-agent': `ai-sdk/openai-compatible/${VERSION}/openbuff-custom-provider`,
+    'user-agent': isGo
+      ? OPENBUFF_USER_AGENT
+      : `ai-sdk/openai-compatible/${VERSION}/openbuff-custom-provider`,
+    ...(isGo && opts?.sessionId
+      ? { [OPENCODE_GO_SESSION_HEADER]: opts.sessionId }
+      : {}),
   }
 }
 
@@ -646,6 +696,7 @@ export function normalizeAnthropicBaseURL(baseURL: string): string {
 
 function createConfiguredAnthropicModel(
   resolvedModel: ResolvedProviderModel,
+  sessionId?: string,
 ): LanguageModel {
   const { providerId, provider, providerModel, apiKey } = resolvedModel
   if (provider.type !== 'anthropic-compatible') {
@@ -654,6 +705,10 @@ function createConfiguredAnthropicModel(
     )
   }
 
+  const isGo = isOpenCodeGoProvider({
+    providerId,
+    baseURL: provider.baseURL,
+  })
   const anthropic = createAnthropic({
     baseURL: normalizeAnthropicBaseURL(provider.baseURL),
     // Sent as the `x-api-key` header. Pass an empty string rather than letting
@@ -661,7 +716,10 @@ function createConfiguredAnthropicModel(
     // local gateway.
     apiKey: apiKey ?? '',
     headers: {
-      'user-agent': `ai-sdk/anthropic/${VERSION}/openbuff-custom-provider`,
+      'user-agent': isGo
+        ? OPENBUFF_USER_AGENT
+        : `ai-sdk/anthropic/${VERSION}/openbuff-custom-provider`,
+      ...(isGo && sessionId ? { [OPENCODE_GO_SESSION_HEADER]: sessionId } : {}),
     },
     name: providerId,
   })

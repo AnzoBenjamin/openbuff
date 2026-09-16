@@ -31,7 +31,9 @@ describe('memory artifact policy', () => {
     expect(normalizeMemoryArtifactPath('./src\\index.ts')).toBe('src/index.ts')
     expect(normalizeMemoryArtifactPath('../secret')).toBeUndefined()
     expect(normalizeMemoryArtifactPath('/home/user/secret')).toBeUndefined()
-    expect(normalizeMemoryArtifactPath('C:\\Users\\user\\secret')).toBeUndefined()
+    expect(
+      normalizeMemoryArtifactPath('C:\\Users\\user\\secret'),
+    ).toBeUndefined()
   })
 
   test('requires complete bounded provenance for tracked-like generated spellings', () => {
@@ -50,7 +52,9 @@ describe('memory artifact policy', () => {
         allowed: false,
         reason: 'generated-provenance-required',
       })
-      expect(classifyMemoryArtifactPath(generatedPath, provenance).allowed).toBe(true)
+      expect(
+        classifyMemoryArtifactPath(generatedPath, provenance).allowed,
+      ).toBe(true)
     }
 
     const invalidProvenance = [
@@ -58,13 +62,21 @@ describe('memory artifact policy', () => {
       { ...provenance, generator: 'g'.repeat(129) },
       { ...provenance, config: '../outside.yaml' },
       { ...provenance, sourceInputs: [] },
-      { ...provenance, sourceInputs: Array.from({ length: 101 }, (_, index) => `src/${index}.ts`) },
+      {
+        ...provenance,
+        sourceInputs: Array.from(
+          { length: 101 },
+          (_, index) => `src/${index}.ts`,
+        ),
+      },
       { ...provenance, sourceInputs: ['../outside.ts'] },
       { ...provenance, toolVersion: '' },
       { ...provenance, toolVersion: 'v'.repeat(129) },
     ]
     for (const invalid of invalidProvenance) {
-      expect(classifyMemoryArtifactPath('generated/client.ts', invalid).allowed).toBe(false)
+      expect(
+        classifyMemoryArtifactPath('generated/client.ts', invalid).allowed,
+      ).toBe(false)
     }
     expect(isMemoryArtifactPersistenceAllowed('src/client.ts')).toBe(true)
   })
@@ -93,8 +105,11 @@ describe('memory artifact policy', () => {
     'certs/server.pfx',
     'keys/server.ppk',
     'assets/archive.zip',
-  ])('excludes unsafe durable capture path %s even with valid generated provenance', (path) => {
-    expect(classifyMemoryArtifactPath(path).allowed).toBe(false)
-    expect(classifyMemoryArtifactPath(path, provenance).allowed).toBe(false)
-  })
+  ])(
+    'excludes unsafe durable capture path %s even with valid generated provenance',
+    (path) => {
+      expect(classifyMemoryArtifactPath(path).allowed).toBe(false)
+      expect(classifyMemoryArtifactPath(path, provenance).allowed).toBe(false)
+    },
+  )
 })

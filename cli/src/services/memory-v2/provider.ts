@@ -66,9 +66,13 @@ type Pending<Repository extends BunSQLiteMemoryRepository> = {
 const defaultOpener: RepositoryOpener<BunSQLiteMemoryRepository> = (root) =>
   openBunSQLiteMemoryRepository({ repositoryRoot: root })
 
-function projectIdForRoot(root: string): ReturnType<typeof ProjectIdSchema.parse> {
+function projectIdForRoot(
+  root: string,
+): ReturnType<typeof ProjectIdSchema.parse> {
   const storageKey = getProjectStorageKey(root)
-  return ProjectIdSchema.parse(`project:${storageKey.slice(0, 96)}:${storageKey.slice(-12)}`)
+  return ProjectIdSchema.parse(
+    `project:${storageKey.slice(0, 96)}:${storageKey.slice(-12)}`,
+  )
 }
 
 /** Owns project-scoped resources while handing each caller an independent lease. */
@@ -79,7 +83,9 @@ export class ProjectMemoryV2Provider<
   private current: Resource<Repository> | null = null
   private pending: Pending<Repository> | null = null
 
-  constructor(private readonly opener: RepositoryOpener<Repository> = defaultOpener as RepositoryOpener<Repository>) {}
+  constructor(
+    private readonly opener: RepositoryOpener<Repository> = defaultOpener as RepositoryOpener<Repository>,
+  ) {}
 
   private unavailable(
     requestedAuthority: string,
@@ -95,9 +101,10 @@ export class ProjectMemoryV2Provider<
         effectiveAuthority: authority,
         projectId,
         reason,
-        degradation: reason === 'reset-during-open'
-          ? 'Memory V2 was reset while opening; V1 remains disabled under opt-in authority.'
-          : 'Memory V2 storage is unavailable; V1 remains disabled under opt-in authority.',
+        degradation:
+          reason === 'reset-during-open'
+            ? 'Memory V2 was reset while opening; V1 remains disabled under opt-in authority.'
+            : 'Memory V2 storage is unavailable; V1 remains disabled under opt-in authority.',
         retryable,
       }
     }
@@ -106,26 +113,33 @@ export class ProjectMemoryV2Provider<
       requestedAuthority,
       effectiveAuthority: 'json-v1',
       reason,
-      degradation: reason === 'reset-during-open'
-        ? 'Memory V2 was reset while opening; continuing with V1 memory.'
-        : 'Memory V2 storage is unavailable; continuing with V1 memory.',
+      degradation:
+        reason === 'reset-during-open'
+          ? 'Memory V2 was reset while opening; continuing with V1 memory.'
+          : 'Memory V2 storage is unavailable; continuing with V1 memory.',
       retryable,
     }
   }
 
   private closeResource(resource: Resource<Repository>): Promise<void> {
     if (!resource.closePromise) {
-      resource.closePromise = Promise.resolve().then(() => resource.repository.close())
+      resource.closePromise = Promise.resolve().then(() =>
+        resource.repository.close(),
+      )
     }
     return resource.closePromise
   }
 
   private retire(resource: Resource<Repository>): Promise<void> {
     resource.retired = true
-    return resource.leaseCount === 0 ? this.closeResource(resource) : Promise.resolve()
+    return resource.leaseCount === 0
+      ? this.closeResource(resource)
+      : Promise.resolve()
   }
 
-  private acquire(resource: Resource<Repository>): MemoryV2ProviderBundle<Repository> {
+  private acquire(
+    resource: Resource<Repository>,
+  ): MemoryV2ProviderBundle<Repository> {
     resource.leaseCount++
     let released = false
     return {
@@ -139,12 +153,16 @@ export class ProjectMemoryV2Provider<
         if (released) return
         released = true
         resource.leaseCount--
-        if (resource.retired && resource.leaseCount === 0) await this.closeResource(resource)
+        if (resource.retired && resource.leaseCount === 0)
+          await this.closeResource(resource)
       },
     }
   }
 
-  async open(root: string, authority = getMemoryAuthoritySelection()): Promise<MemoryV2ProviderResult<Repository>> {
+  async open(
+    root: string,
+    authority = getMemoryAuthoritySelection(),
+  ): Promise<MemoryV2ProviderResult<Repository>> {
     if (authority.effective === 'json-v1') {
       await this.close()
       return {
@@ -160,10 +178,17 @@ export class ProjectMemoryV2Provider<
     }
 
     const effectiveAuthority = authority.effective
-    if (this.current?.root === root && this.current.authority === effectiveAuthority && !this.current.retired) {
+    if (
+      this.current?.root === root &&
+      this.current.authority === effectiveAuthority &&
+      !this.current.retired
+    ) {
       return this.acquire(this.current)
     }
-    if (this.pending?.root === root && this.pending.authority === effectiveAuthority) {
+    if (
+      this.pending?.root === root &&
+      this.pending.authority === effectiveAuthority
+    ) {
       const result = await this.pending.promise
       return 'repository' in result ? this.acquire(result) : result
     }
@@ -179,33 +204,53 @@ export class ProjectMemoryV2Provider<
       generation,
       promise: Promise.resolve(null as never),
     }
-    pending.promise = this.opener(root).then(async (opened) => {
-      if (opened.status === 'error') {
+    pending.promise = this.opener(root)
+      .then(async (opened) => {
+        if (opened.status === 'error') {
+          if (this.pending === pending) this.pending = null
+          return this.unavailable(
+            authority.requested,
+            effectiveAuthority,
+            projectId,
+            'storage-unavailable',
+            opened.error.retryable,
+          )
+        }
+        if (generation !== this.generation || this.pending !== pending) {
+          await opened.repository.close()
+          return this.unavailable(
+            authority.requested,
+            effectiveAuthority,
+            projectId,
+            'reset-during-open',
+            true,
+          )
+        }
+        const resource: Resource<Repository> = {
+          root,
+          authority: effectiveAuthority,
+          requestedAuthority: authority.requested,
+          projectId,
+          repository: opened.repository,
+          operator: new MemoryV2OperatorService(opened.repository),
+          leaseCount: 0,
+          retired: false,
+          closePromise: null,
+        }
+        this.current = resource
+        this.pending = null
+        return resource
+      })
+      .catch(() => {
         if (this.pending === pending) this.pending = null
-        return this.unavailable(authority.requested, effectiveAuthority, projectId, 'storage-unavailable', opened.error.retryable)
-      }
-      if (generation !== this.generation || this.pending !== pending) {
-        await opened.repository.close()
-        return this.unavailable(authority.requested, effectiveAuthority, projectId, 'reset-during-open', true)
-      }
-      const resource: Resource<Repository> = {
-        root,
-        authority: effectiveAuthority,
-        requestedAuthority: authority.requested,
-        projectId,
-        repository: opened.repository,
-        operator: new MemoryV2OperatorService(opened.repository),
-        leaseCount: 0,
-        retired: false,
-        closePromise: null,
-      }
-      this.current = resource
-      this.pending = null
-      return resource
-    }).catch(() => {
-      if (this.pending === pending) this.pending = null
-      return this.unavailable(authority.requested, effectiveAuthority, projectId, 'storage-unavailable', false)
-    })
+        return this.unavailable(
+          authority.requested,
+          effectiveAuthority,
+          projectId,
+          'storage-unavailable',
+          false,
+        )
+      })
     this.pending = pending
     const result = await pending.promise
     return 'repository' in result ? this.acquire(result) : result

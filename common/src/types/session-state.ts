@@ -172,7 +172,9 @@ export type MemoryV1ImportState =
       checksum?: string
       reason: Extract<
         MemoryAuthorityReasonCode,
-        'migration-checksum-mismatch' | 'migration-rejected' | 'migration-failed'
+        | 'migration-checksum-mismatch'
+        | 'migration-rejected'
+        | 'migration-failed'
       >
     }
 

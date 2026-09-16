@@ -97,12 +97,28 @@ describe('cli/utils/env', () => {
 
   describe('memory authority', () => {
     test('defaults, accepts valid values, and safely degrades invalid values', () => {
-      expect(getMemoryAuthoritySelection(undefined)).toEqual({ requested: 'sqlite-v2-opt-in', effective: 'sqlite-v2-opt-in' })
-      for (const value of ['json-v1', 'shadow-v2', 'sqlite-v2-opt-in'] as const) {
-        expect(getMemoryAuthoritySelection(value)).toEqual({ requested: value, effective: value })
+      expect(getMemoryAuthoritySelection(undefined)).toEqual({
+        requested: 'sqlite-v2-opt-in',
+        effective: 'sqlite-v2-opt-in',
+      })
+      for (const value of [
+        'json-v1',
+        'shadow-v2',
+        'sqlite-v2-opt-in',
+      ] as const) {
+        expect(getMemoryAuthoritySelection(value)).toEqual({
+          requested: value,
+          effective: value,
+        })
       }
-      expect(getMemoryAuthoritySelection('bad')).toEqual({ requested: 'bad', effective: 'json-v1', reason: 'invalid-authority' })
-      expect(getMemoryAuthoritySelection('x'.repeat(1_000)).requested).toHaveLength(128)
+      expect(getMemoryAuthoritySelection('bad')).toEqual({
+        requested: 'bad',
+        effective: 'json-v1',
+        reason: 'invalid-authority',
+      })
+      expect(
+        getMemoryAuthoritySelection('x'.repeat(1_000)).requested,
+      ).toHaveLength(128)
     })
   })
 

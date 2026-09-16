@@ -9,7 +9,10 @@ export type MemoryArtifactPathKind =
   | 'binary'
   | 'other'
 
-export type MemoryGeneratedDisposition = 'not-generated' | 'tracked-like' | 'ephemeral'
+export type MemoryGeneratedDisposition =
+  | 'not-generated'
+  | 'tracked-like'
+  | 'ephemeral'
 
 export interface MemoryGeneratedArtifactProvenance {
   generator: string
@@ -37,32 +40,110 @@ export interface MemoryArtifactPolicyDecision {
 }
 
 const BINARY_EXTENSIONS = new Set([
-  '7z', 'avi', 'bin', 'bmp', 'class', 'dll', 'dmg', 'doc', 'docx', 'exe', 'gif',
-  'gz', 'ico', 'jar', 'jpeg', 'jpg', 'mov', 'mp3', 'mp4', 'o', 'obj', 'pdf', 'png',
-  'ppt', 'pptx', 'so', 'tar', 'ttf', 'wav', 'webp', 'woff', 'woff2', 'xls', 'xlsx', 'zip',
+  '7z',
+  'avi',
+  'bin',
+  'bmp',
+  'class',
+  'dll',
+  'dmg',
+  'doc',
+  'docx',
+  'exe',
+  'gif',
+  'gz',
+  'ico',
+  'jar',
+  'jpeg',
+  'jpg',
+  'mov',
+  'mp3',
+  'mp4',
+  'o',
+  'obj',
+  'pdf',
+  'png',
+  'ppt',
+  'pptx',
+  'so',
+  'tar',
+  'ttf',
+  'wav',
+  'webp',
+  'woff',
+  'woff2',
+  'xls',
+  'xlsx',
+  'zip',
 ])
 const SOURCE_EXTENSIONS = new Set([
-  'c', 'cc', 'cpp', 'cs', 'css', 'go', 'h', 'hpp', 'html', 'java', 'js', 'jsx', 'kt',
-  'lua', 'php', 'py', 'rb', 'rs', 'scss', 'sh', 'sql', 'svelte', 'swift', 'ts', 'tsx', 'vue',
+  'c',
+  'cc',
+  'cpp',
+  'cs',
+  'css',
+  'go',
+  'h',
+  'hpp',
+  'html',
+  'java',
+  'js',
+  'jsx',
+  'kt',
+  'lua',
+  'php',
+  'py',
+  'rb',
+  'rs',
+  'scss',
+  'sh',
+  'sql',
+  'svelte',
+  'swift',
+  'ts',
+  'tsx',
+  'vue',
 ])
 const CONFIG_NAMES = new Set([
-  'dockerfile', 'makefile', 'biome.json', 'eslint.config.js', 'package.json', 'pyproject.toml',
-  'tsconfig.json', 'vite.config.ts', 'webpack.config.js',
+  'dockerfile',
+  'makefile',
+  'biome.json',
+  'eslint.config.js',
+  'package.json',
+  'pyproject.toml',
+  'tsconfig.json',
+  'vite.config.ts',
+  'webpack.config.js',
 ])
 const CONFIG_EXTENSIONS = new Set(['ini', 'json', 'toml', 'yaml', 'yml'])
 const DATA_EXTENSIONS = new Set(['csv', 'jsonl', 'ndjson', 'parquet', 'xml'])
 const DOC_EXTENSIONS = new Set(['md', 'mdx', 'rst', 'txt'])
 const PRIVATE_KEY_OR_CERTIFICATE_EXTENSIONS = new Set([
-  'cer', 'cert', 'crt', 'der', 'key', 'p12', 'pem', 'pfx', 'ppk',
+  'cer',
+  'cert',
+  'crt',
+  'der',
+  'key',
+  'p12',
+  'pem',
+  'pfx',
+  'ppk',
 ])
 
 const segmentMatches = (segments: string[], expression: RegExp): boolean =>
   segments.some((segment) => expression.test(segment))
 
-export function normalizeMemoryArtifactPath(candidate: string): string | undefined {
-  if (!candidate || candidate.length > 1_024 || candidate.includes('\0')) return undefined
+export function normalizeMemoryArtifactPath(
+  candidate: string,
+): string | undefined {
+  if (!candidate || candidate.length > 1_024 || candidate.includes('\0'))
+    return undefined
   const slashed = candidate.replaceAll('\\', '/')
-  if (slashed.startsWith('/') || slashed.startsWith('//') || /^[A-Za-z]:\//.test(slashed)) {
+  if (
+    slashed.startsWith('/') ||
+    slashed.startsWith('//') ||
+    /^[A-Za-z]:\//.test(slashed)
+  ) {
     return undefined
   }
   const output: string[] = []
@@ -112,7 +193,12 @@ export function classifyMemoryArtifactPath(
 ): MemoryArtifactPolicyDecision {
   const normalizedPath = normalizeMemoryArtifactPath(candidate)
   if (!normalizedPath) {
-    return { allowed: false, kind: 'other', generated: 'not-generated', reason: 'invalid-path' }
+    return {
+      allowed: false,
+      kind: 'other',
+      generated: 'not-generated',
+      reason: 'invalid-path',
+    }
   }
   const lower = normalizedPath.toLowerCase()
   const segments = lower.split('/')
@@ -131,17 +217,32 @@ export function classifyMemoryArtifactPath(
     ...(reason ? { reason } : {}),
   })
 
-  if (segments[0] === '.openbuff') return decision(false, 'data', 'ephemeral', 'private-memory')
-  if (segmentMatches(segments, /^(node_modules|vendor|third_party|third-party)$/)) {
+  if (segments[0] === '.openbuff')
+    return decision(false, 'data', 'ephemeral', 'private-memory')
+  if (
+    segmentMatches(segments, /^(node_modules|vendor|third_party|third-party)$/)
+  ) {
     return decision(false, 'dependency', 'not-generated', 'dependency')
   }
-  if (segmentMatches(segments, /^(\.cache|cache|caches|\.turbo|\.next|\.nuxt|__pycache__)$/)) {
+  if (
+    segmentMatches(
+      segments,
+      /^(\.cache|cache|caches|\.turbo|\.next|\.nuxt|__pycache__)$/,
+    )
+  ) {
     return decision(false, 'generated', 'ephemeral', 'cache')
   }
-  if (segmentMatches(segments, /^(dist|build|out|target|coverage|\.output|\.parcel-cache)$/)) {
+  if (
+    segmentMatches(
+      segments,
+      /^(dist|build|out|target|coverage|\.output|\.parcel-cache)$/,
+    )
+  ) {
     return decision(false, 'generated', 'ephemeral', 'build-output')
   }
-  if (segmentMatches(segments, /^(tmp|temp|\.tmp|\.temp|clones?|worktrees?)$/)) {
+  if (
+    segmentMatches(segments, /^(tmp|temp|\.tmp|\.temp|clones?|worktrees?)$/)
+  ) {
     return decision(false, 'other', 'ephemeral', 'temporary')
   }
   if (extension === 'log' || segmentMatches(segments, /^(logs?)$/)) {
@@ -149,9 +250,12 @@ export function classifyMemoryArtifactPath(
   }
   if (
     name === '.env' ||
-    (segments.includes('.ssh') && (name === 'id_rsa' || name === 'id_ed25519')) ||
+    (segments.includes('.ssh') &&
+      (name === 'id_rsa' || name === 'id_ed25519')) ||
     PRIVATE_KEY_OR_CERTIFICATE_EXTENSIONS.has(extension) ||
-    (/^(\.env\.|.*(?:secret|password|passwd|token|credential|private[-_.]?key).*)$/i.test(name) &&
+    (/^(\.env\.|.*(?:secret|password|passwd|token|credential|private[-_.]?key).*)$/i.test(
+      name,
+    ) &&
       !name.endsWith('.example'))
   ) {
     return decision(false, 'configuration', 'not-generated', 'sensitive')
@@ -167,7 +271,12 @@ export function classifyMemoryArtifactPath(
   if (trackedGenerated) {
     return hasGeneratedProvenance(provenance)
       ? decision(true, 'generated', 'tracked-like')
-      : decision(false, 'generated', 'tracked-like', 'generated-provenance-required')
+      : decision(
+          false,
+          'generated',
+          'tracked-like',
+          'generated-provenance-required',
+        )
   }
   if (
     segmentMatches(segments, /^(test|tests|__tests__|spec|specs)$/) ||
@@ -185,12 +294,14 @@ export function classifyMemoryArtifactPath(
   if (
     CONFIG_NAMES.has(name) ||
     CONFIG_EXTENSIONS.has(extension) ||
-    name.startsWith('.') && !name.includes('.', 1)
+    (name.startsWith('.') && !name.includes('.', 1))
   ) {
     return decision(true, 'configuration', 'not-generated')
   }
-  if (DATA_EXTENSIONS.has(extension)) return decision(true, 'data', 'not-generated')
-  if (SOURCE_EXTENSIONS.has(extension)) return decision(true, 'source', 'not-generated')
+  if (DATA_EXTENSIONS.has(extension))
+    return decision(true, 'data', 'not-generated')
+  if (SOURCE_EXTENSIONS.has(extension))
+    return decision(true, 'source', 'not-generated')
   return decision(true, 'other', 'not-generated')
 }
 

@@ -68,7 +68,9 @@ describe('detectImageMediaTypeFromBytes', () => {
     expect(
       detectImageMediaTypeFromBytes(Buffer.from([0x89, 0x50, 0x4e])),
     ).toBeNull()
-    expect(detectImageMediaTypeFromBytes(Buffer.from('RIFF', 'ascii'))).toBeNull()
+    expect(
+      detectImageMediaTypeFromBytes(Buffer.from('RIFF', 'ascii')),
+    ).toBeNull()
     expect(detectImageMediaTypeFromBytes(Buffer.from([0x49, 0x49]))).toBeNull()
   })
 

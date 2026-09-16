@@ -58,12 +58,13 @@
 - Final security/compatibility/migration/reliability review must follow, not run in parallel with, the final validation when review depends on its results.
 
 <!-- update_plan_status:appended -->
+
 ## SQLite WAL reopen semantics — 2026-09-11T23:56:59.876Z
 
 Raw SQLite database bytes are not a valid reopen-idempotence contract under WAL because checkpoint/header bookkeeping may change physical counters while logical state remains identical. Assert canonical rows/order, project binding, capabilities, projection cursor/state, `user_version`, and `quick_check` instead. Avoid redundant `PRAGMA user_version = currentVersion` writes, but do not infer that physical bytes must remain stable.
 
-
 <!-- update_plan_status:appended -->
+
 ## Session lessons — 2026-09-12T10:04:07.894Z
 
 - Provider crashes are not approval: three specialist reviewers crashed on quota/timeout during this session. The migration-reviewer and compatibility-reviewer results from the working provider run were clean, but the later provider switch caused all four specialists to fail with empty workspaces. A protocol failure is never a positive review signal.
@@ -74,8 +75,8 @@ Raw SQLite database bytes are not a valid reopen-idempotence contract under WAL 
 - finishTurn must be bounded: unbounded await on finishTurn can block run termination when SQLite is locked. Fixed by racing against a FINISH_TURN_TIMEOUT_MS deadline.
 - Post-abort observation gate: captureToolObservation could append after abort because isCurrent(undefined) always returned true. Fixed by threading preparation generation into the observation path.
 
-
 <!-- update_plan_status:appended -->
+
 ## Session lessons (final) — 2026-09-12T10:06:33.552Z
 
 - Specialist reviewers that cannot read workspace files will produce hallucinated findings based on imagined code patterns. Always verify reviewer evidence cites actual file content before acting on findings.
@@ -86,7 +87,6 @@ Raw SQLite database bytes are not a valid reopen-idempotence contract under WAL 
 - Export retry idempotency requires EEXIST handling that compares existing content rather than failing deterministically on identical checksums.
 - finishTurn must be bounded against the run abort signal; an unbounded await on a hung SQLite store can delay run termination indefinitely.
 - Post-abort tool observations need a generation gate; isCurrent(undefined) returning true unconditionally allows commits after invalidate.
-
 
 <!-- update_plan_status:appended -->
 ## Specialist-token / clean-tree limitation — 2026-09-14T09:12:00.000Z
