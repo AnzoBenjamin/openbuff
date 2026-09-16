@@ -95,7 +95,11 @@ export function getMemoryAuthoritySelection(
   ) {
     return { requested, effective: requested }
   }
-  return { requested: requested.slice(0, 128), effective: 'json-v1', reason: 'invalid-authority' }
+  return {
+    requested: requested.slice(0, 128),
+    effective: 'json-v1',
+    reason: 'invalid-authority',
+  }
 }
 
 /**
