@@ -157,7 +157,7 @@ describe('opencode-go-responses-fetch', () => {
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       )
-    }) as typeof fetch
+    }) as unknown as typeof fetch
 
     const response = await createOpenCodeGoResponsesFetch()(
       'https://opencode.ai/zen/go/v1/responses',
@@ -194,7 +194,7 @@ describe('opencode-go-responses-fetch', () => {
       new Response(encoder.encode(events), {
         status: 200,
         headers: { 'content-type': 'text/event-stream' },
-      })) as typeof fetch
+      })) as unknown as typeof fetch
 
     const response = await createOpenCodeGoResponsesFetch()(
       'https://opencode.ai/zen/go/v1/responses',
@@ -217,7 +217,7 @@ describe('opencode-go-responses-fetch', () => {
 
   test('fetch passes error responses through untouched', async () => {
     globalThis.fetch = (async () =>
-      new Response('quota exceeded', { status: 429 })) as typeof fetch
+      new Response('quota exceeded', { status: 429 })) as unknown as typeof fetch
 
     const response = await createOpenCodeGoResponsesFetch()(
       'https://opencode.ai/zen/go/v1/responses',
