@@ -48,12 +48,14 @@ const memoryJsonPrimitiveSchema = z.union([
   z.number().finite(),
   z.string().max(4_096),
 ])
-const memoryJsonDepthLimitSchema: z.ZodType<MemoryJsonValue> = z.custom<MemoryJsonValue>(
-  () => false,
-  { message: 'Memory JSON values may contain at most 32 nested containers' },
-)
+const memoryJsonDepthLimitSchema: z.ZodType<MemoryJsonValue> =
+  z.custom<MemoryJsonValue>(() => false, {
+    message: 'Memory JSON values may contain at most 32 nested containers',
+  })
 
-const memoryJsonValueSchemaAtDepth = (depth: number): z.ZodType<MemoryJsonValue> => {
+const memoryJsonValueSchemaAtDepth = (
+  depth: number,
+): z.ZodType<MemoryJsonValue> => {
   if (depth === MAX_MEMORY_JSON_CONTAINER_DEPTH) {
     const terminalSchema: z.ZodType<MemoryJsonValue> = z.union([
       memoryJsonPrimitiveSchema,
@@ -62,7 +64,8 @@ const memoryJsonValueSchemaAtDepth = (depth: number): z.ZodType<MemoryJsonValue>
     return terminalSchema
   }
 
-  const nestedValueSchema: z.ZodType<MemoryJsonValue> = memoryJsonValueSchemaAtDepth(depth + 1)
+  const nestedValueSchema: z.ZodType<MemoryJsonValue> =
+    memoryJsonValueSchemaAtDepth(depth + 1)
   const valueSchema: z.ZodType<MemoryJsonValue> = z.union([
     memoryJsonPrimitiveSchema,
     z.array(nestedValueSchema).max(64),
@@ -75,7 +78,8 @@ const memoryJsonValueSchemaAtDepth = (depth: number): z.ZodType<MemoryJsonValue>
   return valueSchema
 }
 
-export const MemoryJsonValueSchema: z.ZodType<MemoryJsonValue> = memoryJsonValueSchemaAtDepth(0)
+export const MemoryJsonValueSchema: z.ZodType<MemoryJsonValue> =
+  memoryJsonValueSchemaAtDepth(0)
 
 export const MemoryMetadataSchema = z
   .record(z.string().min(1).max(128), MemoryJsonValueSchema)
@@ -88,7 +92,9 @@ const timestampSchema = z.iso.datetime({ offset: true })
 const pathSchema = z.string().min(1).max(MAX_PATH_LENGTH)
 const shortTextSchema = z.string().min(1).max(1_024)
 const longTextSchema = z.string().min(1).max(MAX_TEXT_LENGTH)
-const digestSchema = z.string().regex(/^[a-z0-9][a-z0-9+.-]{0,31}:[A-Fa-f0-9]{16,256}$/)
+const digestSchema = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9+.-]{0,31}:[A-Fa-f0-9]{16,256}$/)
 
 export const MemorySelectorSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('file'), path: pathSchema }).strict(),
@@ -116,9 +122,12 @@ export const MemorySelectorSchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.literal('json-pointer'),
       path: pathSchema,
-      pointer: z.string().max(2_048).refine((value) => value === '' || value.startsWith('/'), {
-        message: 'JSON pointer must be empty or begin with /',
-      }),
+      pointer: z
+        .string()
+        .max(2_048)
+        .refine((value) => value === '' || value.startsWith('/'), {
+          message: 'JSON pointer must be empty or begin with /',
+        }),
     })
     .strict(),
   z
@@ -150,7 +159,9 @@ export const ArtifactClassificationSchema = z
     labels: z.array(z.string().min(1).max(64)).max(32),
   })
   .strict()
-export type ArtifactClassification = z.infer<typeof ArtifactClassificationSchema>
+export type ArtifactClassification = z.infer<
+  typeof ArtifactClassificationSchema
+>
 
 export const MemoryArtifactSchema = z
   .object({
@@ -200,7 +211,14 @@ export const MemoryObservationSchema = z
   .object({
     observationId: ObservationIdSchema,
     taskId: TaskIdSchema,
-    kind: z.enum(['fact', 'decision', 'constraint', 'discovery', 'warning', 'outcome']),
+    kind: z.enum([
+      'fact',
+      'decision',
+      'constraint',
+      'discovery',
+      'warning',
+      'outcome',
+    ]),
     summary: shortTextSchema,
     detail: longTextSchema,
     confidence: z.number().min(0).max(1),
@@ -240,7 +258,9 @@ export const TaskTransitionedPayloadSchema = z
     message: 'Task transition must change status',
     path: ['toStatus'],
   })
-export type TaskTransitionedPayload = z.infer<typeof TaskTransitionedPayloadSchema>
+export type TaskTransitionedPayload = z.infer<
+  typeof TaskTransitionedPayloadSchema
+>
 
 export const EvidenceAttachedPayloadSchema = z
   .object({
@@ -249,7 +269,9 @@ export const EvidenceAttachedPayloadSchema = z
     evidence: z.array(MemoryEvidenceSchema).min(1).max(32),
   })
   .strict()
-export type EvidenceAttachedPayload = z.infer<typeof EvidenceAttachedPayloadSchema>
+export type EvidenceAttachedPayload = z.infer<
+  typeof EvidenceAttachedPayloadSchema
+>
 
 export const ArtifactClassifiedPayloadSchema = z
   .object({
@@ -261,26 +283,43 @@ export const ArtifactClassifiedPayloadSchema = z
     provenance: MemoryProvenanceSchema,
   })
   .strict()
-export type ArtifactClassifiedPayload = z.infer<typeof ArtifactClassifiedPayloadSchema>
+export type ArtifactClassifiedPayload = z.infer<
+  typeof ArtifactClassifiedPayloadSchema
+>
 
 export const ObservationRecordedPayloadSchema = z
   .object({ ...payloadVersionShape, observation: MemoryObservationSchema })
   .strict()
-export type ObservationRecordedPayload = z.infer<typeof ObservationRecordedPayloadSchema>
+export type ObservationRecordedPayload = z.infer<
+  typeof ObservationRecordedPayloadSchema
+>
 
 export const CoverageRecordedPayloadSchema = z
   .object({
     ...payloadVersionShape,
     taskId: TaskIdSchema,
-    dimension: z.enum(['requirements', 'implementation', 'tests', 'validation', 'risk']),
+    dimension: z.enum([
+      'requirements',
+      'implementation',
+      'tests',
+      'validation',
+      'risk',
+    ]),
     state: z.enum(['not-covered', 'partial', 'covered', 'not-applicable']),
     selectors: z.array(MemorySelectorSchema).max(64),
     notes: z.string().max(4_096),
-    workspaceRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    workspaceRevision: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(),
     workspaceSnapshotId: z.string().min(1).max(256).optional(),
   })
   .strict()
-export type CoverageRecordedPayload = z.infer<typeof CoverageRecordedPayloadSchema>
+export type CoverageRecordedPayload = z.infer<
+  typeof CoverageRecordedPayloadSchema
+>
 
 export const EvidenceVerifiedPayloadSchema = z
   .object({
@@ -290,23 +329,39 @@ export const EvidenceVerifiedPayloadSchema = z
     verifier: z.string().min(1).max(256),
     verifiedAt: timestampSchema,
     observedDigest: digestSchema.optional(),
-    workspaceRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    workspaceRevision: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(),
     workspaceSnapshotId: z.string().min(1).max(256).optional(),
   })
   .strict()
-export type EvidenceVerifiedPayload = z.infer<typeof EvidenceVerifiedPayloadSchema>
+export type EvidenceVerifiedPayload = z.infer<
+  typeof EvidenceVerifiedPayloadSchema
+>
 
 export const EvidenceInvalidatedPayloadSchema = z
   .object({
     ...payloadVersionShape,
     observationId: ObservationIdSchema,
     selector: MemorySelectorSchema,
-    reason: z.enum(['missing', 'changed', 'moved', 'unreadable', 'contradicted', 'expired']),
+    reason: z.enum([
+      'missing',
+      'changed',
+      'moved',
+      'unreadable',
+      'contradicted',
+      'expired',
+    ]),
     detail: z.string().min(1).max(4_096),
     invalidatedAt: timestampSchema,
   })
   .strict()
-export type EvidenceInvalidatedPayload = z.infer<typeof EvidenceInvalidatedPayloadSchema>
+export type EvidenceInvalidatedPayload = z.infer<
+  typeof EvidenceInvalidatedPayloadSchema
+>
 
 export const EvidenceReboundPayloadSchema = z
   .object({
@@ -317,7 +372,9 @@ export const EvidenceReboundPayloadSchema = z
     reason: shortTextSchema,
   })
   .strict()
-export type EvidenceReboundPayload = z.infer<typeof EvidenceReboundPayloadSchema>
+export type EvidenceReboundPayload = z.infer<
+  typeof EvidenceReboundPayloadSchema
+>
 
 export const ClaimConsolidatedPayloadSchema = z
   .object({
@@ -327,7 +384,9 @@ export const ClaimConsolidatedPayloadSchema = z
     reason: longTextSchema,
   })
   .strict()
-export type ClaimConsolidatedPayload = z.infer<typeof ClaimConsolidatedPayloadSchema>
+export type ClaimConsolidatedPayload = z.infer<
+  typeof ClaimConsolidatedPayloadSchema
+>
 
 export const ClaimSupersededPayloadSchema = z
   .object({
@@ -337,7 +396,9 @@ export const ClaimSupersededPayloadSchema = z
     reason: longTextSchema,
   })
   .strict()
-export type ClaimSupersededPayload = z.infer<typeof ClaimSupersededPayloadSchema>
+export type ClaimSupersededPayload = z.infer<
+  typeof ClaimSupersededPayloadSchema
+>
 
 export const ClaimCorrectedPayloadSchema = z
   .object({
@@ -353,7 +414,13 @@ export const ClaimForgottenPayloadSchema = z
   .object({
     ...payloadVersionShape,
     observationIds: z.array(ObservationIdSchema).min(1).max(100),
-    reason: z.enum(['user-request', 'retention-policy', 'invalid', 'sensitive', 'duplicate']),
+    reason: z.enum([
+      'user-request',
+      'retention-policy',
+      'invalid',
+      'sensitive',
+      'duplicate',
+    ]),
     requestedBy: z.string().min(1).max(256),
     evidenceDisposition: z.enum(['retain-artifacts', 'remove-references']),
   })
@@ -379,7 +446,9 @@ export const V1MigrationReservedPayloadSchema = z
     sourceChecksum: z.string().min(1).max(256),
   })
   .strict()
-export type V1MigrationReservedPayload = z.infer<typeof V1MigrationReservedPayloadSchema>
+export type V1MigrationReservedPayload = z.infer<
+  typeof V1MigrationReservedPayloadSchema
+>
 
 export const V1MigrationPayloadSchema = z
   .object({
@@ -388,7 +457,12 @@ export const V1MigrationPayloadSchema = z
     legacyRecordKey: z.string().min(1).max(512),
     importedTaskId: TaskIdSchema,
     importedObservationIds: z.array(ObservationIdSchema).max(100),
-    sourceRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    sourceRevision: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(),
     sourceChecksum: z.string().min(1).max(256).optional(),
     sourceItemCounts: z
       .record(
@@ -399,8 +473,18 @@ export const V1MigrationPayloadSchema = z
         message: 'sourceItemCounts may contain at most 16 keys',
       })
       .optional(),
-    truncatedFields: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
-    omittedFields: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    truncatedFields: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(),
+    omittedFields: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(),
     warnings: z.array(z.string().min(1).max(1_024)).max(100),
   })
   .strict()
@@ -424,7 +508,11 @@ export const ProjectionRebuildCompletedPayloadSchema = z
     ...payloadVersionShape,
     rebuildId: QueryIdSchema,
     projectionNames: z.array(z.string().min(1).max(128)).min(1).max(32),
-    processedEvents: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    processedEvents: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER),
     completedAt: timestampSchema,
   })
   .strict()
@@ -442,7 +530,9 @@ export const ProjectionRebuildFailedPayloadSchema = z
     failedAt: timestampSchema,
   })
   .strict()
-export type ProjectionRebuildFailedPayload = z.infer<typeof ProjectionRebuildFailedPayloadSchema>
+export type ProjectionRebuildFailedPayload = z.infer<
+  typeof ProjectionRebuildFailedPayloadSchema
+>
 
 export const SessionStartedPayloadSchema = z
   .object({
@@ -512,7 +602,9 @@ export const QueryDegradationSummarySchema = z.discriminatedUnion('state', [
     })
     .strict(),
 ])
-export type QueryDegradationSummary = z.infer<typeof QueryDegradationSummarySchema>
+export type QueryDegradationSummary = z.infer<
+  typeof QueryDegradationSummarySchema
+>
 
 export const QueryCompletedPayloadSchema = z
   .object({
@@ -585,8 +677,14 @@ export const MemoryEventDraftSchema = z.discriminatedUnion('eventType', [
   eventDraft('claim.pinned', ClaimPinnedPayloadSchema),
   eventDraft('migration.v1.reserved', V1MigrationReservedPayloadSchema),
   eventDraft('migration.v1.imported', V1MigrationPayloadSchema),
-  eventDraft('projection.rebuild.requested', ProjectionRebuildRequestedPayloadSchema),
-  eventDraft('projection.rebuild.completed', ProjectionRebuildCompletedPayloadSchema),
+  eventDraft(
+    'projection.rebuild.requested',
+    ProjectionRebuildRequestedPayloadSchema,
+  ),
+  eventDraft(
+    'projection.rebuild.completed',
+    ProjectionRebuildCompletedPayloadSchema,
+  ),
   eventDraft('projection.rebuild.failed', ProjectionRebuildFailedPayloadSchema),
 ])
 export type MemoryEventDraft = z.infer<typeof MemoryEventDraftSchema>
@@ -613,9 +711,18 @@ export const MemoryEventEnvelopeSchema = z.discriminatedUnion('eventType', [
   eventEnvelope('claim.pinned', ClaimPinnedPayloadSchema),
   eventEnvelope('migration.v1.reserved', V1MigrationReservedPayloadSchema),
   eventEnvelope('migration.v1.imported', V1MigrationPayloadSchema),
-  eventEnvelope('projection.rebuild.requested', ProjectionRebuildRequestedPayloadSchema),
-  eventEnvelope('projection.rebuild.completed', ProjectionRebuildCompletedPayloadSchema),
-  eventEnvelope('projection.rebuild.failed', ProjectionRebuildFailedPayloadSchema),
+  eventEnvelope(
+    'projection.rebuild.requested',
+    ProjectionRebuildRequestedPayloadSchema,
+  ),
+  eventEnvelope(
+    'projection.rebuild.completed',
+    ProjectionRebuildCompletedPayloadSchema,
+  ),
+  eventEnvelope(
+    'projection.rebuild.failed',
+    ProjectionRebuildFailedPayloadSchema,
+  ),
 ])
 export type MemoryEventEnvelope = z.infer<typeof MemoryEventEnvelopeSchema>
 export type MemoryEventType = MemoryEventEnvelope['eventType']
@@ -652,7 +759,12 @@ export const MemoryRetrievalRequestSchema = z
     sessionId: MemorySessionIdSchema,
     query: z.string().min(1).max(8_192),
     taskId: TaskIdSchema.optional(),
-    workspaceRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    workspaceRevision: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(),
     workspaceSnapshotId: z.string().min(1).max(256).optional(),
     selectors: z.array(MemorySelectorSchema).max(32),
     artifactKinds: z.array(ArtifactClassificationSchema.shape.kind).max(16),
@@ -660,7 +772,9 @@ export const MemoryRetrievalRequestSchema = z
     maxResultsPerCategory: z.number().int().positive().max(MAX_ITEMS),
   })
   .strict()
-export type MemoryRetrievalRequest = z.infer<typeof MemoryRetrievalRequestSchema>
+export type MemoryRetrievalRequest = z.infer<
+  typeof MemoryRetrievalRequestSchema
+>
 
 export const MatchedTaskSchema = z
   .object({
@@ -686,7 +800,8 @@ export const VerifiedKnowledgeSchema = z
       if ('path' in evidence.selector && evidence.contentDigest === undefined) {
         context.addIssue({
           code: 'custom',
-          message: 'Verified path-backed evidence must include a content digest',
+          message:
+            'Verified path-backed evidence must include a content digest',
           path: ['verifiedEvidence', index, 'contentDigest'],
         })
       }
@@ -707,7 +822,13 @@ export const RereadRequiredSchema = z
   .object({
     observationId: ObservationIdSchema,
     selector: MemorySelectorSchema,
-    reason: z.enum(['never-verified', 'changed', 'missing', 'expired', 'authority-unavailable']),
+    reason: z.enum([
+      'never-verified',
+      'changed',
+      'missing',
+      'expired',
+      'authority-unavailable',
+    ]),
     detail: z.string().min(1).max(1_024),
     ...rankedShape,
   })
@@ -770,11 +891,22 @@ export type RankingReasonGroup = z.infer<typeof RankingReasonGroupSchema>
 
 export const CurrentCoverageItemSchema = z
   .object({
-    dimension: z.enum(['requirements', 'implementation', 'tests', 'validation', 'risk']),
+    dimension: z.enum([
+      'requirements',
+      'implementation',
+      'tests',
+      'validation',
+      'risk',
+    ]),
     state: z.enum(['not-covered', 'partial', 'covered', 'not-applicable']),
     taskId: TaskIdSchema,
     notes: z.string().max(1_024).optional(),
-    workspaceRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    workspaceRevision: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(),
     workspaceSnapshotId: z.string().min(1).max(256).optional(),
   })
   .strict()
@@ -830,7 +962,11 @@ export type MemoryTurnContextV2 = z.infer<typeof MemoryTurnContextV2Schema>
 
 export const MemoryAuthoritySchema = z.discriminatedUnion('kind', [
   z
-    .object({ kind: z.literal('authoritative'), writable: z.literal(true), source: shortTextSchema })
+    .object({
+      kind: z.literal('authoritative'),
+      writable: z.literal(true),
+      source: shortTextSchema,
+    })
     .strict(),
   z
     .object({
@@ -856,7 +992,9 @@ export const MemoryBackendSchema = z
     kind: z.enum(['in-memory', 'local-persistent', 'remote', 'custom']),
     persistence: z.enum(['ephemeral', 'durable', 'unknown']),
     capabilities: z
-      .array(z.enum(['append', 'query', 'verify', 'rebuild', 'health', 'export']))
+      .array(
+        z.enum(['append', 'query', 'verify', 'rebuild', 'health', 'export']),
+      )
       .max(6),
   })
   .strict()
@@ -907,14 +1045,18 @@ export const MemoryAppendRequestSchema = z
   })
   .strict()
   .superRefine((request, context) => {
-    if (request.expectedTail !== undefined && request.expectedLastEventId !== undefined) {
+    if (
+      request.expectedTail !== undefined &&
+      request.expectedLastEventId !== undefined
+    ) {
       if (
         request.expectedTail.kind !== 'event' ||
         request.expectedTail.eventId !== request.expectedLastEventId
       ) {
         context.addIssue({
           code: 'custom',
-          message: 'expectedTail and expectedLastEventId must describe the same event tail',
+          message:
+            'expectedTail and expectedLastEventId must describe the same event tail',
           path: ['expectedTail'],
         })
       }
@@ -948,15 +1090,34 @@ export const MemoryAppendOutcomeSchema = z.discriminatedUnion('outcome', [
       lastEventId: MemoryEventIdSchema,
     })
     .strict(),
-  z.object({ outcome: z.literal('rejected'), error: MemoryOperationErrorSchema }).strict(),
-  z.object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema }).strict(),
+  z
+    .object({
+      outcome: z.literal('rejected'),
+      error: MemoryOperationErrorSchema,
+    })
+    .strict(),
+  z
+    .object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema })
+    .strict(),
 ])
 export type MemoryAppendOutcome = z.infer<typeof MemoryAppendOutcomeSchema>
 
 export const MemoryQueryOutcomeSchema = z.discriminatedUnion('outcome', [
-  z.object({ outcome: z.literal('result'), result: MemoryRetrievalResultSchema }).strict(),
-  z.object({ outcome: z.literal('rejected'), error: MemoryOperationErrorSchema }).strict(),
-  z.object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema }).strict(),
+  z
+    .object({
+      outcome: z.literal('result'),
+      result: MemoryRetrievalResultSchema,
+    })
+    .strict(),
+  z
+    .object({
+      outcome: z.literal('rejected'),
+      error: MemoryOperationErrorSchema,
+    })
+    .strict(),
+  z
+    .object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema })
+    .strict(),
 ])
 export type MemoryQueryOutcome = z.infer<typeof MemoryQueryOutcomeSchema>
 
@@ -965,7 +1126,12 @@ export const MemoryVerifyRequestSchema = z
     schemaVersion: z.literal(2),
     projectId: ProjectIdSchema,
     sessionId: MemorySessionIdSchema,
-    workspaceRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    workspaceRevision: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(),
     workspaceSnapshotId: z.string().min(1).max(256).optional(),
     action: z.discriminatedUnion('kind', [
       z
@@ -1000,9 +1166,21 @@ export const MemoryVerifyRequestSchema = z
 export type MemoryVerifyRequest = z.infer<typeof MemoryVerifyRequestSchema>
 
 export const MemoryVerifyOutcomeSchema = z.discriminatedUnion('outcome', [
-  z.object({ outcome: z.literal('recorded'), event: MemoryEventEnvelopeSchema }).strict(),
-  z.object({ outcome: z.literal('rejected'), error: MemoryOperationErrorSchema }).strict(),
-  z.object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema }).strict(),
+  z
+    .object({
+      outcome: z.literal('recorded'),
+      event: MemoryEventEnvelopeSchema,
+    })
+    .strict(),
+  z
+    .object({
+      outcome: z.literal('rejected'),
+      error: MemoryOperationErrorSchema,
+    })
+    .strict(),
+  z
+    .object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema })
+    .strict(),
 ])
 export type MemoryVerifyOutcome = z.infer<typeof MemoryVerifyOutcomeSchema>
 
@@ -1022,16 +1200,30 @@ export const MemoryRebuildOutcomeSchema = z.discriminatedUnion('outcome', [
     .object({
       outcome: z.literal('rebuilt'),
       rebuildId: QueryIdSchema,
-      processedEvents: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      processedEvents: z
+        .number()
+        .int()
+        .nonnegative()
+        .max(Number.MAX_SAFE_INTEGER),
     })
     .strict(),
-  z.object({ outcome: z.literal('rejected'), error: MemoryOperationErrorSchema }).strict(),
-  z.object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema }).strict(),
+  z
+    .object({
+      outcome: z.literal('rejected'),
+      error: MemoryOperationErrorSchema,
+    })
+    .strict(),
+  z
+    .object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema })
+    .strict(),
 ])
 export type MemoryRebuildOutcome = z.infer<typeof MemoryRebuildOutcomeSchema>
 
 export const MemoryHealthRequestSchema = z
-  .object({ schemaVersion: z.literal(2), projectId: ProjectIdSchema.optional() })
+  .object({
+    schemaVersion: z.literal(2),
+    projectId: ProjectIdSchema.optional(),
+  })
   .strict()
 export type MemoryHealthRequest = z.infer<typeof MemoryHealthRequestSchema>
 
@@ -1053,8 +1245,15 @@ export const MemoryExportOutcomeSchema = z.discriminatedUnion('outcome', [
       nextAfterEventId: MemoryEventIdSchema.nullable(),
     })
     .strict(),
-  z.object({ outcome: z.literal('rejected'), error: MemoryOperationErrorSchema }).strict(),
-  z.object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema }).strict(),
+  z
+    .object({
+      outcome: z.literal('rejected'),
+      error: MemoryOperationErrorSchema,
+    })
+    .strict(),
+  z
+    .object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema })
+    .strict(),
 ])
 export type MemoryExportOutcome = z.infer<typeof MemoryExportOutcomeSchema>
 
@@ -1074,7 +1273,9 @@ export const MemoryConsolidationCandidateSchema = z
     canonicalObservationId: ObservationIdSchema,
   })
   .strict()
-export type MemoryConsolidationCandidate = z.infer<typeof MemoryConsolidationCandidateSchema>
+export type MemoryConsolidationCandidate = z.infer<
+  typeof MemoryConsolidationCandidateSchema
+>
 
 export const MemoryConsolidationRequestSchema = z
   .object({
@@ -1086,26 +1287,45 @@ export const MemoryConsolidationRequestSchema = z
     maxGroups: z.number().int().positive().max(5).default(5),
   })
   .strict()
-export type MemoryConsolidationRequest = z.infer<typeof MemoryConsolidationRequestSchema>
+export type MemoryConsolidationRequest = z.infer<
+  typeof MemoryConsolidationRequestSchema
+>
 
 const consolidationResultShape = {
   candidates: z.array(MemoryConsolidationCandidateSchema).max(5),
   plannedEvents: z.array(MemoryEventDraftSchema).max(100),
 } as const
-export const MemoryConsolidationOutcomeSchema = z.discriminatedUnion('outcome', [
-  z.object({ outcome: z.literal('preview'), ...consolidationResultShape }).strict(),
-  z
-    .object({
-      outcome: z.literal('applied'),
-      ...consolidationResultShape,
-      entries: z.array(MemoryAppendEntrySchema).max(100),
-    })
-    .strict(),
-  z.object({ outcome: z.literal('no-op'), reason: shortTextSchema }).strict(),
-  z.object({ outcome: z.literal('rejected'), error: MemoryOperationErrorSchema }).strict(),
-  z.object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema }).strict(),
-])
-export type MemoryConsolidationOutcome = z.infer<typeof MemoryConsolidationOutcomeSchema>
+export const MemoryConsolidationOutcomeSchema = z.discriminatedUnion(
+  'outcome',
+  [
+    z
+      .object({ outcome: z.literal('preview'), ...consolidationResultShape })
+      .strict(),
+    z
+      .object({
+        outcome: z.literal('applied'),
+        ...consolidationResultShape,
+        entries: z.array(MemoryAppendEntrySchema).max(100),
+      })
+      .strict(),
+    z.object({ outcome: z.literal('no-op'), reason: shortTextSchema }).strict(),
+    z
+      .object({
+        outcome: z.literal('rejected'),
+        error: MemoryOperationErrorSchema,
+      })
+      .strict(),
+    z
+      .object({
+        outcome: z.literal('failed'),
+        error: MemoryOperationErrorSchema,
+      })
+      .strict(),
+  ],
+)
+export type MemoryConsolidationOutcome = z.infer<
+  typeof MemoryConsolidationOutcomeSchema
+>
 
 export const MemoryCorrectionActionSchema = z.discriminatedUnion('kind', [
   z
@@ -1122,7 +1342,8 @@ export const MemoryCorrectionActionSchema = z.discriminatedUnion('kind', [
       observationIds: z.array(ObservationIdSchema).min(1).max(100),
       reason: ClaimForgottenPayloadSchema.shape.reason,
       requestedBy: z.string().min(1).max(256),
-      evidenceDisposition: ClaimForgottenPayloadSchema.shape.evidenceDisposition,
+      evidenceDisposition:
+        ClaimForgottenPayloadSchema.shape.evidenceDisposition,
     })
     .strict(),
   z
@@ -1134,7 +1355,9 @@ export const MemoryCorrectionActionSchema = z.discriminatedUnion('kind', [
     })
     .strict(),
 ])
-export type MemoryCorrectionAction = z.infer<typeof MemoryCorrectionActionSchema>
+export type MemoryCorrectionAction = z.infer<
+  typeof MemoryCorrectionActionSchema
+>
 
 export const MemoryCorrectionRequestSchema = z
   .object({
@@ -1145,16 +1368,38 @@ export const MemoryCorrectionRequestSchema = z
     action: MemoryCorrectionActionSchema,
   })
   .strict()
-export type MemoryCorrectionRequest = z.infer<typeof MemoryCorrectionRequestSchema>
+export type MemoryCorrectionRequest = z.infer<
+  typeof MemoryCorrectionRequestSchema
+>
 
 export const MemoryCorrectionOutcomeSchema = z.discriminatedUnion('outcome', [
-  z.object({ outcome: z.literal('preview'), plannedEvents: z.array(MemoryEventDraftSchema).min(1).max(1) }).strict(),
-  z.object({ outcome: z.literal('applied'), plannedEvents: z.array(MemoryEventDraftSchema).min(1).max(1), entry: MemoryAppendEntrySchema }).strict(),
+  z
+    .object({
+      outcome: z.literal('preview'),
+      plannedEvents: z.array(MemoryEventDraftSchema).min(1).max(1),
+    })
+    .strict(),
+  z
+    .object({
+      outcome: z.literal('applied'),
+      plannedEvents: z.array(MemoryEventDraftSchema).min(1).max(1),
+      entry: MemoryAppendEntrySchema,
+    })
+    .strict(),
   z.object({ outcome: z.literal('no-op'), reason: shortTextSchema }).strict(),
-  z.object({ outcome: z.literal('rejected'), error: MemoryOperationErrorSchema }).strict(),
-  z.object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema }).strict(),
+  z
+    .object({
+      outcome: z.literal('rejected'),
+      error: MemoryOperationErrorSchema,
+    })
+    .strict(),
+  z
+    .object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema })
+    .strict(),
 ])
-export type MemoryCorrectionOutcome = z.infer<typeof MemoryCorrectionOutcomeSchema>
+export type MemoryCorrectionOutcome = z.infer<
+  typeof MemoryCorrectionOutcomeSchema
+>
 
 export const MemoryRevalidationRequestSchema = z
   .object({
@@ -1164,20 +1409,46 @@ export const MemoryRevalidationRequestSchema = z
     actions: z.array(MemoryVerifyRequestSchema.shape.action).min(1).max(100),
   })
   .strict()
-export type MemoryRevalidationRequest = z.infer<typeof MemoryRevalidationRequestSchema>
+export type MemoryRevalidationRequest = z.infer<
+  typeof MemoryRevalidationRequestSchema
+>
 
 export const MemoryRevalidationResultSchema = z
-  .object({ action: MemoryVerifyRequestSchema.shape.action, result: MemoryVerifyOutcomeSchema })
+  .object({
+    action: MemoryVerifyRequestSchema.shape.action,
+    result: MemoryVerifyOutcomeSchema,
+  })
   .strict()
-export type MemoryRevalidationResult = z.infer<typeof MemoryRevalidationResultSchema>
+export type MemoryRevalidationResult = z.infer<
+  typeof MemoryRevalidationResultSchema
+>
 
 export const MemoryRevalidationOutcomeSchema = z.discriminatedUnion('outcome', [
-  z.object({ outcome: z.literal('preview'), actions: z.array(MemoryVerifyRequestSchema.shape.action).min(1).max(100) }).strict(),
-  z.object({ outcome: z.literal('applied'), results: z.array(MemoryRevalidationResultSchema).min(1).max(100) }).strict(),
-  z.object({ outcome: z.literal('rejected'), error: MemoryOperationErrorSchema }).strict(),
-  z.object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema }).strict(),
+  z
+    .object({
+      outcome: z.literal('preview'),
+      actions: z.array(MemoryVerifyRequestSchema.shape.action).min(1).max(100),
+    })
+    .strict(),
+  z
+    .object({
+      outcome: z.literal('applied'),
+      results: z.array(MemoryRevalidationResultSchema).min(1).max(100),
+    })
+    .strict(),
+  z
+    .object({
+      outcome: z.literal('rejected'),
+      error: MemoryOperationErrorSchema,
+    })
+    .strict(),
+  z
+    .object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema })
+    .strict(),
 ])
-export type MemoryRevalidationOutcome = z.infer<typeof MemoryRevalidationOutcomeSchema>
+export type MemoryRevalidationOutcome = z.infer<
+  typeof MemoryRevalidationOutcomeSchema
+>
 
 export const MemoryProjectionRepairRequestSchema = z
   .object({
@@ -1188,26 +1459,63 @@ export const MemoryProjectionRepairRequestSchema = z
     fromEventId: MemoryEventIdSchema.optional(),
   })
   .strict()
-export type MemoryProjectionRepairRequest = z.infer<typeof MemoryProjectionRepairRequestSchema>
+export type MemoryProjectionRepairRequest = z.infer<
+  typeof MemoryProjectionRepairRequestSchema
+>
 
 const canonicalIntegrityShape = {
   eventCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   checksum: digestSchema,
 } as const
-export const MemoryProjectionRepairOutcomeSchema = z.discriminatedUnion('outcome', [
-  z.object({ outcome: z.literal('preview'), before: z.object(canonicalIntegrityShape).strict() }).strict(),
-  z.object({ outcome: z.literal('repaired'), before: z.object(canonicalIntegrityShape).strict(), after: z.object(canonicalIntegrityShape).strict(), rebuild: MemoryRebuildOutcomeSchema }).strict(),
-  z.object({ outcome: z.literal('integrity-mismatch'), before: z.object(canonicalIntegrityShape).strict(), after: z.object(canonicalIntegrityShape).strict() }).strict(),
-  z.object({ outcome: z.literal('rejected'), error: MemoryOperationErrorSchema }).strict(),
-  z.object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema }).strict(),
-])
-export type MemoryProjectionRepairOutcome = z.infer<typeof MemoryProjectionRepairOutcomeSchema>
+export const MemoryProjectionRepairOutcomeSchema = z.discriminatedUnion(
+  'outcome',
+  [
+    z
+      .object({
+        outcome: z.literal('preview'),
+        before: z.object(canonicalIntegrityShape).strict(),
+      })
+      .strict(),
+    z
+      .object({
+        outcome: z.literal('repaired'),
+        before: z.object(canonicalIntegrityShape).strict(),
+        after: z.object(canonicalIntegrityShape).strict(),
+        rebuild: MemoryRebuildOutcomeSchema,
+      })
+      .strict(),
+    z
+      .object({
+        outcome: z.literal('integrity-mismatch'),
+        before: z.object(canonicalIntegrityShape).strict(),
+        after: z.object(canonicalIntegrityShape).strict(),
+      })
+      .strict(),
+    z
+      .object({
+        outcome: z.literal('rejected'),
+        error: MemoryOperationErrorSchema,
+      })
+      .strict(),
+    z
+      .object({
+        outcome: z.literal('failed'),
+        error: MemoryOperationErrorSchema,
+      })
+      .strict(),
+  ],
+)
+export type MemoryProjectionRepairOutcome = z.infer<
+  typeof MemoryProjectionRepairOutcomeSchema
+>
 
 export const MemoryExportEventV2Schema = z
   .object({
     event: MemoryEventEnvelopeSchema,
     lifecycle: z.enum(['active', 'stale']),
-    staleReasons: z.array(z.enum(['forgotten', 'superseded', 'corrected'])).max(3),
+    staleReasons: z
+      .array(z.enum(['forgotten', 'superseded', 'corrected']))
+      .max(3),
   })
   .strict()
 export type MemoryExportEventV2 = z.infer<typeof MemoryExportEventV2Schema>
@@ -1219,20 +1527,36 @@ export const MemoryExportManifestV2Schema = z
     format: z.literal('memory-v2-json'),
     projectId: ProjectIdSchema,
     generatedAt: timestampSchema,
-    canonicalEventCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    canonicalEventCount: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER),
     canonicalSequenceRange: z
-      .object({ first: z.number().int().nonnegative(), last: z.number().int().nonnegative() })
+      .object({
+        first: z.number().int().nonnegative(),
+        last: z.number().int().nonnegative(),
+      })
       .strict()
       .nullable(),
     events: z.array(MemoryExportEventV2Schema).max(10_000),
     health: MemoryHealthSchema,
     checksum: digestSchema,
-    labels: z.object({ generated: z.literal(true), authoritative: z.literal(false) }).strict(),
-    stalePolicy: z.object({ includeStale: z.boolean(), excludedEventCount: z.number().int().nonnegative().max(10_000) }).strict(),
+    labels: z
+      .object({ generated: z.literal(true), authoritative: z.literal(false) })
+      .strict(),
+    stalePolicy: z
+      .object({
+        includeStale: z.boolean(),
+        excludedEventCount: z.number().int().nonnegative().max(10_000),
+      })
+      .strict(),
     warnings: z.array(z.string().min(1).max(1_024)).max(100),
   })
   .strict()
-export type MemoryExportManifestV2 = z.infer<typeof MemoryExportManifestV2Schema>
+export type MemoryExportManifestV2 = z.infer<
+  typeof MemoryExportManifestV2Schema
+>
 
 export const MemoryManifestExportRequestSchema = z
   .object({
@@ -1243,14 +1567,37 @@ export const MemoryManifestExportRequestSchema = z
     rendering: z.enum(['json', 'json-and-markdown']).default('json'),
   })
   .strict()
-export type MemoryManifestExportRequest = z.infer<typeof MemoryManifestExportRequestSchema>
+export type MemoryManifestExportRequest = z.infer<
+  typeof MemoryManifestExportRequestSchema
+>
 
-export const MemoryManifestExportOutcomeSchema = z.discriminatedUnion('outcome', [
-  z.object({ outcome: z.literal('exported'), manifest: MemoryExportManifestV2Schema, markdown: z.string().max(1_000_000).optional() }).strict(),
-  z.object({ outcome: z.literal('rejected'), error: MemoryOperationErrorSchema }).strict(),
-  z.object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema }).strict(),
-])
-export type MemoryManifestExportOutcome = z.infer<typeof MemoryManifestExportOutcomeSchema>
+export const MemoryManifestExportOutcomeSchema = z.discriminatedUnion(
+  'outcome',
+  [
+    z
+      .object({
+        outcome: z.literal('exported'),
+        manifest: MemoryExportManifestV2Schema,
+        markdown: z.string().max(1_000_000).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        outcome: z.literal('rejected'),
+        error: MemoryOperationErrorSchema,
+      })
+      .strict(),
+    z
+      .object({
+        outcome: z.literal('failed'),
+        error: MemoryOperationErrorSchema,
+      })
+      .strict(),
+  ],
+)
+export type MemoryManifestExportOutcome = z.infer<
+  typeof MemoryManifestExportOutcomeSchema
+>
 
 export const MemoryManifestImportRequestSchema = z
   .object({
@@ -1266,12 +1613,35 @@ export const MemoryManifestImportRequestSchema = z
     message: 'Manifest projectId must match the import request projectId',
     path: ['manifest', 'projectId'],
   })
-export type MemoryManifestImportRequest = z.infer<typeof MemoryManifestImportRequestSchema>
+export type MemoryManifestImportRequest = z.infer<
+  typeof MemoryManifestImportRequestSchema
+>
 
-export const MemoryManifestImportOutcomeSchema = z.discriminatedUnion('outcome', [
-  z.object({ outcome: z.literal('imported'), importedEvents: z.number().int().nonnegative().max(10_000), rebuild: MemoryRebuildOutcomeSchema }).strict(),
-  z.object({ outcome: z.literal('no-op'), reason: shortTextSchema }).strict(),
-  z.object({ outcome: z.literal('rejected'), error: MemoryOperationErrorSchema }).strict(),
-  z.object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema }).strict(),
-])
-export type MemoryManifestImportOutcome = z.infer<typeof MemoryManifestImportOutcomeSchema>
+export const MemoryManifestImportOutcomeSchema = z.discriminatedUnion(
+  'outcome',
+  [
+    z
+      .object({
+        outcome: z.literal('imported'),
+        importedEvents: z.number().int().nonnegative().max(10_000),
+        rebuild: MemoryRebuildOutcomeSchema,
+      })
+      .strict(),
+    z.object({ outcome: z.literal('no-op'), reason: shortTextSchema }).strict(),
+    z
+      .object({
+        outcome: z.literal('rejected'),
+        error: MemoryOperationErrorSchema,
+      })
+      .strict(),
+    z
+      .object({
+        outcome: z.literal('failed'),
+        error: MemoryOperationErrorSchema,
+      })
+      .strict(),
+  ],
+)
+export type MemoryManifestImportOutcome = z.infer<
+  typeof MemoryManifestImportOutcomeSchema
+>
