@@ -301,7 +301,9 @@ function createSseTransformStream(): TransformStream<Uint8Array, Uint8Array> {
                   tool_calls: [
                     {
                       index: tcIndex,
-                      id: (item.call_id as string) ?? (item.id as string),
+                      id:
+                        ((item.call_id ?? item.id) as string | undefined) ??
+                        `${responseId ?? 'resp'}-call-${outputIdx}`,
                       function: {
                         name: item.name as string,
                         arguments: '',

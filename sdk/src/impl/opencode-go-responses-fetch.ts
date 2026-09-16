@@ -58,6 +58,75 @@ interface ChatCompletionsMessage {
 }
 
 /**
+ * Repair Chat Completions history so every assistant `tool_call` has a
+ * matching later `tool` message and vice versa. Upstream (Console Go ->
+ * model provider) rejects `function_call` items without
+ * `function_call_output` (`No tool output found for function call ...`,
+ * `... must be followed by tool messages ...`). Dangling entries arise
+ * from interrupted streams, failed tools that yield no message, or history
+ * compaction dropping one side of the pair; dropping them here keeps the
+ * request valid. Histories that already pair up pass through untouched.
+ */
+function repairToolCallHistory(
+  messages: ChatCompletionsMessage[],
+): ChatCompletionsMessage[] {
+  // Right -> left: keep only tool calls that have a matching tool message
+  // later in the array.
+  const repaired: ChatCompletionsMessage[] = []
+  const outputsAfter = new Set<string>()
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]
+    if (msg.role === 'tool') {
+      if (typeof msg.tool_call_id === 'string') {
+        outputsAfter.add(msg.tool_call_id)
+      }
+      repaired.unshift(msg)
+    } else if (
+      msg.role === 'assistant' &&
+      Array.isArray(msg.tool_calls) &&
+      msg.tool_calls.length > 0
+    ) {
+      const kept = msg.tool_calls.filter(
+        (tc) => typeof tc.id === 'string' && outputsAfter.has(tc.id),
+      )
+      if (kept.length === msg.tool_calls.length) {
+        repaired.unshift(msg)
+      } else if (kept.length > 0 || msg.content) {
+        const { tool_calls: _dropped, ...rest } = msg
+        repaired.unshift(
+          kept.length > 0 ? { ...rest, tool_calls: kept } : rest,
+        )
+      }
+    } else {
+      repaired.unshift(msg)
+    }
+  }
+
+  // Left -> right: drop tool outputs with no preceding assistant tool call.
+  const result: ChatCompletionsMessage[] = []
+  const declaredBefore = new Set<string>()
+  for (const msg of repaired) {
+    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls)) {
+      for (const tc of msg.tool_calls) {
+        if (typeof tc.id === 'string') declaredBefore.add(tc.id)
+      }
+      result.push(msg)
+    } else if (msg.role === 'tool') {
+      if (
+        typeof msg.tool_call_id === 'string' &&
+        declaredBefore.has(msg.tool_call_id)
+      ) {
+        result.push(msg)
+      }
+    } else {
+      result.push(msg)
+    }
+  }
+
+  return result
+}
+
+/**
  * Convert a Chat Completions request body into an OpenAI Responses API
  * request body, preserving streaming mode and sampling params.
  */
@@ -79,7 +148,7 @@ export function transformOpenCodeGoResponsesRequestBody(
   const transformed: Record<string, unknown> = {
     model: body.model,
     ...(instructions ? { instructions } : {}),
-    input: convertMessages(nonSystemMessages),
+    input: convertMessages(repairToolCallHistory(nonSystemMessages)),
     // Preserve the caller's streaming mode: doGenerate sends no `stream`
     // flag (JSON response), doStream sends `stream: true` (SSE response).
     stream: body.stream === true,
