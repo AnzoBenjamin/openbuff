@@ -491,10 +491,7 @@ describe('OS temp root containment exception', () => {
       // nor a basename-only alias guard (`config` normalizes to itself)
       // fires. Paths are built by concatenation so the raw alias survives
       // into the input on every platform.
-      const aliased = [
-        `${tempRoot}/.aws /config`,
-        `${tempRoot}/.kube ./config`,
-      ]
+      const aliased = [`${tempRoot}/.aws /config`, `${tempRoot}/.kube ./config`]
       for (const target of aliased) {
         expect(isOwnedTempPath(target)).toBe(false)
         expect(resolveProjectPath('/some/project', target)).toBeNull()
@@ -788,7 +785,10 @@ describeWithOutsideFixtures('external read root allowlist', () => {
       // real `.env` on Windows. Paths built by concatenation (not `path.join`)
       // so the raw alias survives into the input on every platform, matching
       // the owned-temp twin's refusal of the identical shape.
-      const aliased = [`${allowedRoot}/.env `, `${allowedRoot}/credentials.json `]
+      const aliased = [
+        `${allowedRoot}/.env `,
+        `${allowedRoot}/credentials.json `,
+      ]
       for (const target of aliased) {
         expect(isExternalReadPath(target)).toBe(false)
         expect(resolveProjectPathForRead(projectRoot, target)).toBeNull()
@@ -1013,9 +1013,9 @@ describeWithOutsideFixtures('external read root allowlist', () => {
 
       // Same project mid-run: this is the configure-once violation the registry
       // exists to prevent, owner or not.
-      expect(() =>
-        configureExternalReadRoots([siblingRoot], projectA),
-      ).toThrow(Error)
+      expect(() => configureExternalReadRoots([siblingRoot], projectA)).toThrow(
+        Error,
+      )
       expect(getExternalReadRoots()).toEqual([path.resolve(allowedRoot)])
 
       const refused = ensureExternalReadRootsConfigured([siblingRoot], projectA)
