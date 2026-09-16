@@ -1363,9 +1363,7 @@ ${guideSections}
       // Track an opt-in committed-surface review request at turn start (see
       // updateActivePlanTaskFromMessages above for the turn-start + post-STEP
       // pairing rationale).
-      updateCommittedSurfaceReviewFromMessages(
-        mutableAgentState.messageHistory,
-      )
+      updateCommittedSurfaceReviewFromMessages(mutableAgentState.messageHistory)
       // Recognize a user-issued "COMMIT ANYWAY" at turn start (not only in
       // the post-STEP messageHistory branch) so a git-committer spawned in
       // the first step of the 'COMMIT ANYWAY' turn already sees the
@@ -2070,7 +2068,10 @@ ${guideSections}
           // (e) Fail closed on a non-attestable fingerprint: a stable error
           // string is not content evidence and must never mint.
           if (!isAttestableSnapshotFingerprint(committedFingerprint)) {
-            consumeCommittedSurfaceRequest('rejected', 'non-attestable-fingerprint')
+            consumeCommittedSurfaceRequest(
+              'rejected',
+              'non-attestable-fingerprint',
+            )
             activeWorkState.latestWorkSummary =
               'Committed-surface review rejected: non-attestable-fingerprint (crypto unavailable).'
             markActiveWorkStateChanged()
@@ -2091,9 +2092,7 @@ ${guideSections}
           ) as string[]
           const routedCommittedSpecialists = (
             committedOwed.length > 0
-              ? Array.from(
-                  new Set([...committedBaseRouted, ...committedOwed]),
-                )
+              ? Array.from(new Set([...committedBaseRouted, ...committedOwed]))
               : committedBaseRouted
           ).filter(
             (agentType) =>
@@ -2184,10 +2183,7 @@ ${guideSections}
           let committedReviewFailed = false
           for (const agentType of routedCommittedSpecialists) {
             const committedVerdict = getReviewerFinalizationVerdict(
-              extractSpawnedAgentResult(
-                committedSpawnToolResult,
-                agentType,
-              ),
+              extractSpawnedAgentResult(committedSpawnToolResult, agentType),
             )
             if (committedVerdict !== 'LOOKS_GOOD') {
               consumeCommittedSurfaceRequest(
@@ -2222,12 +2218,11 @@ ${guideSections}
           const committedReviewerVerdict = routedCommittedSpecialists
             .map((agentType) => {
               const committedOutputs = collectStructuredReviewerOutputs(
-                extractSpawnedAgentResult(
-                  committedSpawnToolResult,
-                  agentType,
-                ),
+                extractSpawnedAgentResult(committedSpawnToolResult, agentType),
               )
-              return committedOutputs[committedOutputs.length - 1]?.verdict ?? ''
+              return (
+                committedOutputs[committedOutputs.length - 1]?.verdict ?? ''
+              )
             })
             .filter(Boolean)
             .join(', ')
@@ -2783,7 +2778,8 @@ ${guideSections}
             securityDriftedFiles.length > 0
               ? securityDriftedFiles
               : securityChangedFiles
-          const securitySpawnScoped = securitySpawnFiles !== securityChangedFiles
+          const securitySpawnScoped =
+            securitySpawnFiles !== securityChangedFiles
           const securitySpawnDetails = securitySpawnScoped
             ? buildGateSnapshotDetails(securitySpawnFiles, '')
             : securitySnapshotDetails
@@ -3381,7 +3377,8 @@ ${guideSections}
                         specialistCreditFingerprint,
                       userPrompt: prompt ?? '',
                       extraLines: buildReviewerRoundLedgerLines(agentType, {
-                        scopeFiles: specialistScopedFileSets.get(agentType) ?? [],
+                        scopeFiles:
+                          specialistScopedFileSets.get(agentType) ?? [],
                         currentFingerprint:
                           specialistScopedFingerprints.get(agentType) ??
                           specialistCreditFingerprint,
@@ -3623,11 +3620,10 @@ ${guideSections}
                     // attested, PRESERVING previously stored markers for other
                     // files so their per-file credit survives the re-review.
                     {
-                      const markerMap = (
-                        (activeWorkState.specialistReviewFileMarkers ??= {})[
+                      const markerMap =
+                        ((activeWorkState.specialistReviewFileMarkers ??= {})[
                           agentType
-                        ] ??= {}
-                      )
+                        ] ??= {})
                       for (const scopedFile of specialistScopedFileSets.get(
                         agentType,
                       ) ?? []) {
@@ -4157,11 +4153,10 @@ ${guideSections}
                   // attested, PRESERVING previously stored markers for other
                   // files so their per-file credit survives the re-review.
                   {
-                    const markerMap = (
-                      (activeWorkState.specialistReviewFileMarkers ??= {})[
+                    const markerMap =
+                      ((activeWorkState.specialistReviewFileMarkers ??= {})[
                         agentType
-                      ] ??= {}
-                    )
+                      ] ??= {})
                     for (const scopedFile of specialistScopedFileSets.get(
                       agentType,
                     ) ?? []) {
@@ -4535,9 +4530,7 @@ ${guideSections}
           // `typeof activeWorkState...` annotation is itself circular
           // (TS2502), so the named imported type is used instead.
           const newestEvidenceEntry:
-            | NonNullable<
-                Base2ActiveWorkState['validationEvidence']
-              >[number]
+            | NonNullable<Base2ActiveWorkState['validationEvidence']>[number]
             | undefined =
             activeWorkState.validationEvidence?.[
               (activeWorkState.validationEvidence?.length ?? 0) - 1
@@ -4552,9 +4545,7 @@ ${guideSections}
             !!newestEvidenceEntry &&
             gateFileSetsEqual(newestEvidenceEntry.files ?? [], gateScopeFiles)
           const reusedEvidence:
-            | NonNullable<
-                Base2ActiveWorkState['validationEvidence']
-              >[number]
+            | NonNullable<Base2ActiveWorkState['validationEvidence']>[number]
             | null =
             evidenceCoversExactScope &&
             newestEvidenceEntry.assurance === 'full' &&
@@ -4575,15 +4566,13 @@ ${guideSections}
           }
           const verify = reusedEvidence
             ? null
-            : (yield {
+            : yield {
                 toolName: 'run_file_change_hooks',
                 input: { files: gateScopeFiles },
-              } as any)
+              } as any
           let failures = reusedEvidence
             ? []
-            : collectHookFailures(
-                (verify as any) && (verify as any).toolResult,
-              )
+            : collectHookFailures((verify as any) && (verify as any).toolResult)
           if (failures.length === 0) {
             if (!reusedEvidence) {
               validationSummary = summarizeHookResults(
@@ -5161,10 +5150,13 @@ ${guideSections}
                     // block); empty on round 0 with no prior receipts so no
                     // stray heading or blank line appears in the first
                     // review's prompt.
-                    ...buildReviewerRoundLedgerLines(requiredReviewerAgentType, {
-                      scopeFiles: reviewableGateScopeFiles,
-                      currentFingerprint: reviewSnapshotFingerprint,
-                    }),
+                    ...buildReviewerRoundLedgerLines(
+                      requiredReviewerAgentType,
+                      {
+                        scopeFiles: reviewableGateScopeFiles,
+                        currentFingerprint: reviewSnapshotFingerprint,
+                      },
+                    ),
                     'Read large files via read_files windows (bounded block reads) instead of whole-file reads so your accumulated read context stays bounded; still attest to every pending file in reviewedFiles.',
                     '',
                     'Return the required structured review object. Echo snapshotFingerprint exactly, list every pending changed file in reviewedFiles (including tests), evaluate all review dimensions, and map every user requirement to evidence. Changed tests are first-class review targets and may also be cited as coverage evidence. Use coverage: missing only when no covering test exists in the changed files or elsewhere in the repo.',
@@ -5210,10 +5202,13 @@ ${guideSections}
                       'Snapshot details (read for file membership; do not echo):',
                       reviewSnapshotDetails,
                       `Validation gate summary: ${validationSummary}`,
-                      ...buildReviewerRoundLedgerLines(requiredReviewerAgentType, {
-                        scopeFiles: reviewableGateScopeFiles,
-                        currentFingerprint: reviewSnapshotFingerprint,
-                      }),
+                      ...buildReviewerRoundLedgerLines(
+                        requiredReviewerAgentType,
+                        {
+                          scopeFiles: reviewableGateScopeFiles,
+                          currentFingerprint: reviewSnapshotFingerprint,
+                        },
+                      ),
                       '',
                       'Protocol errors from the prior response:',
                       ...attestationIssues,
@@ -8758,10 +8753,10 @@ function deriveCommittedSurfaceFileSet(input: {
     markerFor: (path: string) => string;
     cap?: number;
 }): CommittedSurfaceFileSetResult {
-    const cap = typeof input.cap === 'number' && input.cap >= 1
-        ? Math.floor(input.cap)
-        : 40;
-    const runtimeFiles = Array.isArray(input.runtimeFiles) ? input.runtimeFiles : [];
+    const cap = typeof input.cap === 'number' && input.cap >= 1 ? Math.floor(input.cap) : 40;
+    const runtimeFiles = Array.isArray(input.runtimeFiles)
+        ? input.runtimeFiles
+        : [];
     const seen = new Set<string>();
     const normalizedRuntime: string[] = [];
     for (const rawFile of runtimeFiles) {
@@ -8873,7 +8868,10 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
               activeWorkState.validationEvidence[
                 activeWorkState.validationEvidence.length - 1
               ]
-            if (evidenceEntry.fileMarkers && file in evidenceEntry.fileMarkers) {
+            if (
+              evidenceEntry.fileMarkers &&
+              file in evidenceEntry.fileMarkers
+            ) {
               delete evidenceEntry.fileMarkers[file]
             }
           }
@@ -10511,8 +10509,13 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
         requested: boolean
       }
 
-      function extractCommittedSurfaceIntent(input: unknown): CommittedSurfaceExtraction {
-        const noRequest: CommittedSurfaceExtraction = { claimed: '', requested: false }
+      function extractCommittedSurfaceIntent(
+        input: unknown,
+      ): CommittedSurfaceExtraction {
+        const noRequest: CommittedSurfaceExtraction = {
+          claimed: '',
+          requested: false,
+        }
         if (!input || typeof input !== 'object' || Array.isArray(input)) {
           return noRequest
         }
@@ -10579,7 +10582,10 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
             ? resolvedFromIndex
             : 0
         const pendingToolCalls = new Map<string, CommittedSurfaceExtraction>()
-        let latest: CommittedSurfaceExtraction = { claimed: '', requested: false }
+        let latest: CommittedSurfaceExtraction = {
+          claimed: '',
+          requested: false,
+        }
         for (
           let messageIndex = walkFromIndex;
           messageIndex < messages.length;
@@ -10636,7 +10642,9 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
         markActiveWorkStateChanged()
       }
 
-      function updateCommittedSurfaceReviewFromMessages(messages: unknown): void {
+      function updateCommittedSurfaceReviewFromMessages(
+        messages: unknown,
+      ): void {
         extractCommittedSurfaceReviewRequest(messages)
       }
 
@@ -11937,7 +11945,7 @@ function buildExecutePlanInstructionsPrompt(params: {
     '## Durable plan execution mode',
     '',
     'You are in EXECUTE_PLAN mode. Your job is to execute or resume durable plan artifacts, not merely revise them. Treat durable artifact contents already provided in the conversation as the initial authoritative context; read artifacts directly only when their contents are missing, truncated, stale, or have changed. Continue from the next actionable milestone, and use normal project source editing tools when implementation work is required.',
-    'Run the plan preflight before editing. Tasks should have stable IDs, dependencies, Acceptance criteria, and Validate gates. Claim exactly one actionable task by moving it to in_progress and recording its stable ID as currentTask. A task may move to done only after its validation gate passes; record validation/review evidence as a checkpoint. That checkpoint must cite the gate-issued receipt ID printed in the gate-pass message (shaped `plan-gate:<taskId>:<fingerprintPrefix>`, or `plan-gate:<taskId>:unreviewed-scope:<fingerprintPrefix>` / `plan-gate:<taskId>:no-diff:<fingerprintPrefix>` when the cycle had no reviewable diff) in checkpoint.receiptIds; never invent a receipt ID, because the runtime verifies it against gate state and rejects an ID that matches no gate-issued receipt for that task. A receipt is SUPERSEDED when the task\'s files change again, so after further edits you must let the gate close again and copy the NEW ID from the newest gate-pass message (or the pinned harness state); never reuse an ID from an earlier gate-pass message. If preflight fails, repair the durable plan before implementation. Use STATE.json revisions to avoid overwriting newer execution state.',
+    "Run the plan preflight before editing. Tasks should have stable IDs, dependencies, Acceptance criteria, and Validate gates. Claim exactly one actionable task by moving it to in_progress and recording its stable ID as currentTask. A task may move to done only after its validation gate passes; record validation/review evidence as a checkpoint. That checkpoint must cite the gate-issued receipt ID printed in the gate-pass message (shaped `plan-gate:<taskId>:<fingerprintPrefix>`, or `plan-gate:<taskId>:unreviewed-scope:<fingerprintPrefix>` / `plan-gate:<taskId>:no-diff:<fingerprintPrefix>` when the cycle had no reviewable diff) in checkpoint.receiptIds; never invent a receipt ID, because the runtime verifies it against gate state and rejects an ID that matches no gate-issued receipt for that task. A receipt is SUPERSEDED when the task's files change again, so after further edits you must let the gate close again and copy the NEW ID from the newest gate-pass message (or the pinned harness state); never reuse an ID from an earlier gate-pass message. If preflight fails, repair the durable plan before implementation. Use STATE.json revisions to avoid overwriting newer execution state.",
     '',
     'Keep STATUS.md and LESSONS.md current throughout execution. Prefer update_plan_status for incremental STATUS.md / LESSONS.md updates; use create_plan for SPEC.md / PLAN.md revisions, substantial rewrites, or creating missing artifacts. PLAN mode remains plan-only, but EXECUTE_PLAN is allowed to edit project source to complete the plan. Do not let plan artifacts drift behind actual implementation state.',
   ].join('\n')
