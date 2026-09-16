@@ -795,6 +795,155 @@ describe('model-provider', () => {
       expect((result.model as any).modelId).toBe('llama3.1')
     })
 
+    test('getModelForRequest routes opencode-go responses models to /responses', async () => {
+      const tempDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'codebuff-provider-'),
+      )
+      const configPath = path.join(tempDir, 'openbuff.json')
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          defaultModel: 'opencode-go/muse-spark-1.3-contributor',
+          providers: {
+            'opencode-go': {
+              type: 'openai-compatible',
+              baseURL: 'https://opencode.ai/zen/go/v1',
+              apiKeyEnv: 'OPENCODE_GO_API_KEY',
+              models: ['kimi-k2.6', 'muse-spark-1.3-contributor'],
+            },
+          },
+        }),
+      )
+      process.env[PROVIDER_CONFIG_ENV_VAR] = configPath
+      process.env.OPENCODE_GO_API_KEY = 'test-key'
+
+      const result = await getModelForRequest({
+        apiKey: 'codebuff-key',
+        model: 'opencode-go/muse-spark-1.3-contributor',
+      })
+
+      expect(result.isChatGptOAuth).toBe(false)
+      expect((result.model as any).provider).toBe('opencode-go')
+      expect((result.model as any).modelId).toBe('muse-spark-1.3-contributor')
+      expect(result.effectiveModel).toBe(
+        'opencode-go/muse-spark-1.3-contributor',
+      )
+    })
+
+    test('getModelForRequest routes responses models missing from stale provider model lists', async () => {
+      const tempDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'codebuff-provider-'),
+      )
+      const configPath = path.join(tempDir, 'openbuff.json')
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          defaultModel: 'opencode-go/muse-spark-1.3-contributor',
+          providers: {
+            'opencode-go': {
+              type: 'openai-compatible',
+              baseURL: 'https://opencode.ai/zen/go/v1',
+              apiKeyEnv: 'OPENCODE_GO_API_KEY',
+              models: ['kimi-k2.6'],
+            },
+          },
+        }),
+      )
+      process.env[PROVIDER_CONFIG_ENV_VAR] = configPath
+      process.env.OPENCODE_GO_API_KEY = 'test-key'
+
+      const result = await getModelForRequest({
+        apiKey: 'codebuff-key',
+        model: 'opencode-go/muse-spark-1.3-contributor',
+      })
+
+      expect(result.isChatGptOAuth).toBe(false)
+      expect((result.model as any).provider).toBe('opencode-go')
+      expect((result.model as any).modelId).toBe('muse-spark-1.3-contributor')
+    })
+
+    test('responses models post to /responses and parse Responses JSON', async () => {
+      const tempDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'codebuff-provider-'),
+      )
+      const configPath = path.join(tempDir, 'openbuff.json')
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          defaultModel: 'opencode-go/muse-spark-1.3-contributor',
+          providers: {
+            'opencode-go': {
+              type: 'openai-compatible',
+              baseURL: 'https://opencode.ai/zen/go/v1',
+              apiKeyEnv: 'OPENCODE_GO_API_KEY',
+              models: ['kimi-k2.6', 'muse-spark-1.3-contributor'],
+            },
+          },
+        }),
+      )
+      process.env[PROVIDER_CONFIG_ENV_VAR] = configPath
+      process.env.OPENCODE_GO_API_KEY = 'test-key'
+
+      const originalFetch = globalThis.fetch
+      let capturedUrl: string | undefined
+      let capturedBody: Record<string, unknown> | undefined
+      globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+        capturedUrl = String(input)
+        capturedBody = JSON.parse(init?.body as string) as Record<
+          string,
+          unknown
+        >
+        return new Response(
+          JSON.stringify({
+            id: 'resp-1',
+            model: 'muse-spark-1.3-contributor',
+            status: 'completed',
+            output: [
+              {
+                type: 'message',
+                role: 'assistant',
+                content: [{ type: 'output_text', text: 'hello' }],
+              },
+            ],
+            usage: { input_tokens: 5, output_tokens: 7, total_tokens: 12 },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }) as typeof fetch
+
+      try {
+        const result = await getModelForRequest({
+          apiKey: 'codebuff-key',
+          model: 'opencode-go/muse-spark-1.3-contributor',
+        })
+        const generation = await (result.model as any).doGenerate({
+          prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+        })
+
+        expect(capturedUrl).toBe('https://opencode.ai/zen/go/v1/responses')
+        expect(capturedBody).not.toHaveProperty('messages')
+        expect(capturedBody).toHaveProperty('input')
+        expect(generation.content).toContainEqual({
+          type: 'text',
+          text: 'hello',
+        })
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('opencode-go preset lists responses models as routable', () => {
+      const preset = OPENBUFF_PROVIDER_PRESETS['opencode-go']
+      const provider = preset.config.providers['opencode-go']
+      expect(provider?.type).toBe('openai-compatible')
+      if (provider?.type === 'openai-compatible') {
+        expect(provider.models as string[]).toContain(
+          'muse-spark-1.3-contributor',
+        )
+        expect(provider.models as string[]).toContain('kimi-k2.6')
+      }
+    })
+
     test('accepts an anthropic-compatible provider block', () => {
       const result = providerConfigFileSchema.safeParse({
         providers: {

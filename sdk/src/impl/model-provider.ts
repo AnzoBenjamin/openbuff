@@ -37,6 +37,8 @@ import {
   createChatGptBackendFetch,
   extractChatGptAccountId,
 } from './chatgpt-backend-fetch'
+import { createOpenCodeGoResponsesFetch } from './opencode-go-responses-fetch'
+import { getSystemProcessEnv } from '../env'
 import { resolveModelsToTry } from './failover'
 
 import type {
@@ -277,9 +279,18 @@ export async function getModelForRequest(
       isOpenCodeGoResponsesModel(effectiveModel) ||
       isOpenCodeGoResponsesModel(configuredProviderModel.requestedModel)
     ) {
-      throw new Error(
-        `Model '${effectiveModel}' requires the OpenCode Go Responses API (.../zen/go/v1/responses), which openbuff does not support yet. Use a chat/completions model (e.g. opencode-go/kimi-k2.6, opencode-go/glm-5.1, opencode-go/deepseek-v4-pro) or a messages model via opencode-go-anthropic (e.g. qwen3.6-plus, minimax-m2.7), or use the OpenCode TUI. See https://opencode.ai/docs/go/#endpoints`,
-      )
+      return {
+        model: createConfiguredOpenCodeGoResponsesModel(
+          configuredProviderModel,
+          sessionId,
+        ),
+        isChatGptOAuth: false,
+        compatibility: configuredProviderModel.compatibility,
+        reasoningEffort,
+        effectiveModel,
+        contextWindowTokens,
+        pricing,
+      }
     }
     if (configuredProviderModel.provider.type === 'chatgpt-oauth') {
       const chatGptOAuthCredentials = await getValidChatGptOAuthCredentials()
@@ -325,6 +336,25 @@ export async function getModelForRequest(
       ),
       isChatGptOAuth: false,
       compatibility: configuredProviderModel.compatibility,
+      reasoningEffort,
+      effectiveModel,
+      contextWindowTokens,
+      pricing,
+    }
+  }
+
+  const responsesFallback = resolveOpenCodeGoResponsesFallback({
+    effectiveModel,
+    loadedConfig: loadedProviderConfig,
+  })
+  if (responsesFallback) {
+    return {
+      model: createConfiguredOpenCodeGoResponsesModel(
+        responsesFallback,
+        sessionId,
+      ),
+      isChatGptOAuth: false,
+      compatibility: responsesFallback.compatibility,
       reasoningEffort,
       effectiveModel,
       contextWindowTokens,
@@ -655,6 +685,77 @@ function createConfiguredOpenAICompatibleModel(
     supportsStructuredOutputs: provider.supportsStructuredOutputs,
     stringifyTextContent: resolvedModel.compatibility.stringifyTextContent,
   })
+}
+
+function createConfiguredOpenCodeGoResponsesModel(
+  resolvedModel: ResolvedProviderModel,
+  sessionId?: string,
+): LanguageModel {
+  const { providerId, provider, providerModel, apiKey } = resolvedModel
+  if (provider.type !== 'openai-compatible') {
+    throw new Error(
+      `Provider '${providerId}' is not an OpenAI-compatible provider.`,
+    )
+  }
+  const baseURL = provider.baseURL.replace(/\/$/, '')
+
+  return new OpenAICompatibleChatLanguageModel(providerModel, {
+    provider: providerId,
+    url: () => `${baseURL}/responses`,
+    headers: () =>
+      createOpenAICompatibleHeaders(apiKey, {
+        providerId,
+        baseURL: provider.baseURL,
+        sessionId,
+      }),
+    fetch: createOpenCodeGoResponsesFetch(),
+    includeUsage: undefined,
+    supportsStructuredOutputs: provider.supportsStructuredOutputs,
+    stringifyTextContent: resolvedModel.compatibility.stringifyTextContent,
+  })
+}
+
+function resolveOpenCodeGoResponsesFallback(params: {
+  effectiveModel: string
+  loadedConfig: LoadedProviderConfig
+}): ResolvedProviderModel | undefined {
+  const { effectiveModel, loadedConfig } = params
+  const providerModel = effectiveModel.includes('/')
+    ? effectiveModel.slice(effectiveModel.indexOf('/') + 1)
+    : effectiveModel
+  if (!isOpenCodeGoResponsesModel(providerModel)) {
+    return undefined
+  }
+  const entries = Object.entries(loadedConfig.config.providers)
+  const match =
+    entries.find(
+      ([providerId, provider]) =>
+        providerId === 'opencode-go' && provider.type === 'openai-compatible',
+    ) ??
+    entries.find(
+      ([, provider]) =>
+        provider.type === 'openai-compatible' &&
+        provider.baseURL.includes('opencode.ai/zen/go'),
+    )
+  if (!match) {
+    return undefined
+  }
+  const [providerId, provider] = match
+  if (provider.type !== 'openai-compatible') {
+    return undefined
+  }
+  const env = getSystemProcessEnv()
+  return {
+    providerId,
+    provider,
+    requestedModel: effectiveModel,
+    providerModel,
+    apiKey: provider.apiKeyEnv ? env[provider.apiKeyEnv] : undefined,
+    compatibility: {
+      ...DEFAULT_PROVIDER_COMPATIBILITY,
+      ...(provider.compatibility ?? {}),
+    },
+  }
 }
 
 export function createOpenAICompatibleHeaders(

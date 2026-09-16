@@ -88,7 +88,7 @@ function convertUserContentParts(content: unknown): unknown {
   })
 }
 
-function convertMessages(messages: ChatCompletionsMessage[]): unknown[] {
+export function convertMessages(messages: ChatCompletionsMessage[]): unknown[] {
   const input: unknown[] = []
 
   for (const msg of messages) {
@@ -152,7 +152,7 @@ function convertMessages(messages: ChatCompletionsMessage[]): unknown[] {
   return input
 }
 
-function convertTools(tools: ChatCompletionsTool[]): unknown[] {
+export function convertTools(tools: ChatCompletionsTool[]): unknown[] {
   return tools.map((tool) => {
     if (tool.type === 'function' && tool.function) {
       return {
@@ -522,7 +522,7 @@ function createSseTransformStream(): TransformStream<Uint8Array, Uint8Array> {
   })
 }
 
-function transformResponseStream(
+export function transformResponseStream(
   inputStream: ReadableStream<Uint8Array>,
 ): ReadableStream<Uint8Array> {
   const transform = createSseTransformStream()

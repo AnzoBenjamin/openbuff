@@ -1892,10 +1892,9 @@ export const OPENCODE_GO_ANTHROPIC_MODELS = [
 
 /**
  * Models served via `.../go/v1/responses` (OpenAI Responses API).
- * Openbuff has no Responses-API provider type (only openai-compatible chat
- * + anthropic-compatible messages), so these are intentionally NOT routable.
- * getModelForRequest() throws a clear error for them instead of sending a
- * malformed chat/completions request that Go answers with a bare 500.
+ * Routed through the Chat Completions <-> Responses translator in
+ * `impl/opencode-go-responses-fetch.ts`, so they are routable like the
+ * chat and messages models above.
  * Source: https://opencode.ai/docs/go/#endpoints
  */
 export const OPENCODE_GO_RESPONSES_MODELS = [
@@ -1950,7 +1949,7 @@ export const OPENBUFF_PROVIDER_PRESETS = {
             supportsStopSequences: false,
             stripProviderMetadata: true,
           },
-          models: [...OPENCODE_GO_CHAT_MODELS],
+          models: [...OPENCODE_GO_CHAT_MODELS, ...OPENCODE_GO_RESPONSES_MODELS],
         },
         'opencode-go-anthropic': {
           type: 'anthropic-compatible',
