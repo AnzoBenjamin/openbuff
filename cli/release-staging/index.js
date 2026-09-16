@@ -565,6 +565,14 @@ function isVersionFlag(args) {
   return args.length === 1 && (args[0] === '--version' || args[0] === '-v')
 }
 
+function isCheckUpdateFlag(args) {
+  return args.length === 1 && args[0] === '--check-update'
+}
+
+function isUpdateFlag(args) {
+  return args.length === 1 && (args[0] === '--update' || args[0] === '--upgrade')
+}
+
 function streamToString(stream) {
   return new Promise((resolve, reject) => {
     let data = ''
@@ -1032,6 +1040,134 @@ async function checkForUpdates(options = {}) {
   }
 }
 
+async function handleCheckUpdateCommand(options = {}) {
+  const config = options.config || CONFIG
+  void config
+  const log = options.consoleLog || console.log
+  const logError = options.consoleError || console.error
+  const exit = options.exit || process.exit
+  const resolveProxyUrl = options.getProxyUrl || getProxyUrl
+  const getCurrent = options.getCurrentVersion || getCurrentVersion
+  const getLatest = options.getLatestVersion || getLatestVersion
+  const persist = options.writePendingUpdateVersion || writePendingUpdateVersion
+  const compare = options.compareVersions || compareVersions
+
+  const currentVersion =
+    options.currentVersion !== undefined ? options.currentVersion : getCurrent()
+  const latestVersion =
+    options.latestVersion !== undefined
+      ? options.latestVersion
+      : await getLatest()
+
+  if (!latestVersion) {
+    logError('❌ Failed to determine latest version')
+    printInstallFailureGuidance(resolveProxyUrl, logError)
+    exit(1)
+    return
+  }
+
+  if (
+    currentVersion === null ||
+    currentVersion === undefined ||
+    compare(currentVersion, latestVersion) < 0
+  ) {
+    try {
+      persist(latestVersion)
+    } catch (error) {
+      logError('❌ Failed to stage update:', error.message)
+      printInstallFailureGuidance(resolveProxyUrl, logError)
+      exit(1)
+      return
+    }
+    log(
+      `Update ${latestVersion} available (current ${currentVersion ?? 'unknown'}) \u2014 staged and will apply on next launch.`,
+    )
+    log('Restart to apply, or run codecane --update now from your shell.')
+  } else {
+    log(`Codecane is up to date (${currentVersion}).`)
+  }
+  exit(0)
+}
+
+async function handleUpdateCommand(options = {}) {
+  const config = options.config || CONFIG
+  const log = options.consoleLog || console.log
+  const logError = options.consoleError || console.error
+  const exit = options.exit || process.exit
+  const resolveProxyUrl = options.getProxyUrl || getProxyUrl
+  const compare = options.compareVersions || compareVersions
+  const getCurrent = options.getCurrentVersion || getCurrentVersion
+  const getPending = options.getPendingUpdateVersion || getPendingUpdateVersion
+  const getLatest = options.getLatestVersion || getLatestVersion
+
+  const currentVersion =
+    options.currentVersion !== undefined ? options.currentVersion : getCurrent()
+  const pendingVersion =
+    options.pendingVersion !== undefined ? options.pendingVersion : getPending()
+
+  const hasPendingUpdate =
+    pendingVersion &&
+    (currentVersion === null ||
+      currentVersion === undefined ||
+      compare(currentVersion, pendingVersion) < 0)
+
+  let targetVersion = null
+  if (hasPendingUpdate) {
+    targetVersion = pendingVersion
+  } else {
+    const latestVersion =
+      options.latestVersion !== undefined
+        ? options.latestVersion
+        : await getLatest()
+    if (!latestVersion) {
+      logError('❌ Failed to determine latest version')
+      printInstallFailureGuidance(resolveProxyUrl, logError)
+      exit(1)
+      return
+    }
+    if (
+      currentVersion !== null &&
+      currentVersion !== undefined &&
+      compare(currentVersion, latestVersion) >= 0
+    ) {
+      log(`Codecane is up to date (${currentVersion}).`)
+      exit(0)
+      return
+    }
+    targetVersion = latestVersion
+  }
+
+  if (!targetVersion) {
+    log(`Codecane is up to date (${currentVersion ?? 'unknown'}).`)
+    exit(0)
+    return
+  }
+
+  try {
+    if (options.downloadBinary) {
+      await options.downloadBinary(targetVersion)
+    } else if (options.ensureBinaryExists) {
+      await options.ensureBinaryExists({
+        config,
+        consoleError: logError,
+        exit,
+        getLatestVersion: async () => targetVersion,
+        currentVersion,
+        pendingVersion: targetVersion,
+      })
+    } else {
+      await downloadBinary(targetVersion, { config })
+    }
+    log(`Updated to ${targetVersion}.`)
+    exit(0)
+  } catch (error) {
+    term.clearLine()
+    logError('❌ Failed to download codecane:', error.message)
+    printInstallFailureGuidance(resolveProxyUrl, logError)
+    exit(1)
+  }
+}
+
 function printCrashDiagnostics(code, signal) {
   // Windows NTSTATUS codes (unsigned DWORD)
   const unsignedCode = code != null && code < 0 ? code >>> 0 : code
@@ -1103,6 +1239,16 @@ async function main() {
     return
   }
 
+  if (isCheckUpdateFlag(args)) {
+    await handleCheckUpdateCommand()
+    return
+  }
+
+  if (isUpdateFlag(args)) {
+    await handleUpdateCommand()
+    return
+  }
+
   assertSupportedPlatform()
 
   if (process.platform === 'win32') {
@@ -1126,6 +1272,19 @@ async function main() {
   const exitListener = (code, signal) => {
     resetTerminal()
     printCrashDiagnostics(code, signal)
+    try {
+      const pending = getPendingUpdateVersion()
+      if (pending) {
+        const current = getCurrentVersion()
+        if (current === null || compareVersions(current, pending) < 0) {
+          console.error(
+            `Update ${pending} available \u2014 will apply on next launch (or run codecane --update now).`,
+          )
+        }
+      }
+    } catch {
+      // Best-effort notice only; never break normal exit.
+    }
     process.exit(signal ? 1 : code || 0)
   }
 
@@ -1156,8 +1315,13 @@ module.exports = {
   ensureBinaryExists,
   getIllegalInstructionGuidance,
   getManagedSiblingNames,
+  getPendingUpdateVersion,
   getTreeSitterAssetProblems,
   getUpdateFailureProperties,
+  handleCheckUpdateCommand,
+  handleUpdateCommand,
+  isCheckUpdateFlag,
+  isUpdateFlag,
   parseExpectedChecksum,
   parseLinuxCpuInfo,
   resolveConfigDir,

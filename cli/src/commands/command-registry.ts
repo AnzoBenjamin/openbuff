@@ -9,6 +9,7 @@ import { handleIndexCommandBlocks } from './index-command'
 import { handleHelpCommand } from './help'
 import { handleImageCommand } from './image'
 import { handleInfoCommand } from './info'
+import { buildUpdateStatusMessage } from './update-command'
 import { handleMemoryCommandBlocks } from './memory-command'
 import { handleInitializationFlowLocally } from './init'
 import { buildSafeGitCommand } from './git-command-args'
@@ -691,6 +692,15 @@ const ALL_COMMANDS: CommandDefinition[] = [
           ),
         ])
       }
+      params.saveToHistory(params.inputValue.trim())
+      clearInput(params)
+    },
+  }),
+  defineCommand({
+    name: 'update',
+    aliases: ['upgrade', 'check-update'],
+    handler: (params) => {
+      appendLocalMessage(params, buildUpdateStatusMessage())
       params.saveToHistory(params.inputValue.trim())
       clearInput(params)
     },

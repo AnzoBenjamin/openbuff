@@ -208,6 +208,11 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
   //   description: 'Publish agents to the agent store',
   // },
   {
+    id: 'update',
+    label: 'update',
+    description: 'Check staged CLI update status (restart to apply)',
+  },
+  {
     id: 'theme:toggle',
     label: 'theme:toggle',
     description: 'Toggle between light and dark mode',
