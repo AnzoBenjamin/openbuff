@@ -1,4 +1,7 @@
-import { recordDiscoveryResult } from '../../../orchestration/discovery-coordinator'
+import {
+  getVerifiedMemoryPaths,
+  recordDiscoveryResult,
+} from '../../../orchestration/discovery-coordinator'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type { AgentState } from '@codebuff/common/types/session-state'
@@ -35,6 +38,7 @@ export const handleQueryIndex = (async (params: {
       question += ` scope:${input.pathPrefixes.join(',')}`
     }
     question = question.slice(0, 4000)
+    const verifiedPaths = getVerifiedMemoryPaths(agentState)
     agentState.discoveryCoverage = recordDiscoveryResult({
       existing: agentState.discoveryCoverage,
       agentType: 'query_index',
@@ -42,6 +46,7 @@ export const handleQueryIndex = (async (params: {
       result: output,
       workspaceRevision: agentState.workspaceState?.revision,
       workspaceSnapshotId: agentState.workspaceState?.snapshotId,
+      verifiedPaths,
     })
   } catch {
     // Coverage recording must never break the tool call.

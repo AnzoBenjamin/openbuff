@@ -1,3 +1,12 @@
+export interface CodeChunkSummary {
+  chunkId: string
+  qualifiedName: string
+  kind: string
+  startLine: number
+  endLine: number
+  hash: string
+}
+
 export interface IndexedFile {
   path: string // relative to project root
   mtime: number // ms epoch, for cache invalidation
@@ -8,6 +17,7 @@ export interface IndexedFile {
   imports: string[] // import paths (regex extracted)
   headings: string[] // for .md/.mdx only
   concepts: string[] // normalized doc concepts/headings for graph search
+  chunks?: CodeChunkSummary[]
   /** Bounded implementation text used only when semantic indexing is enabled. */
   contentSample?: string
   /** Asset references extracted from game-engine text files (Unity .meta/.prefab/.unity, Godot .tscn/.tres, Unreal .uproject, Bevy). Undefined for files with no asset refs. */

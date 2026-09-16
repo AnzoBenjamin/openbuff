@@ -49,6 +49,7 @@ const evidence = {
   },
   capturedAt: timestamp,
   contentDigest: 'sha256:0123456789abcdef',
+  excerpt: 'verified excerpt content',
 }
 
 function context(long = ''): MemoryTurnContextV2 {
@@ -319,5 +320,11 @@ describe('compileMemoryV2Context', () => {
     })
     const result = compileMemoryV2Context(ctx, { maxChars: 8192 })
     expect(result).not.toContain('[currentCoverage]')
+  })
+
+  test('includes bounded verified excerpt in verifiedKnowledge section', () => {
+    const output = compileMemoryV2Context(context())
+    const verifiedSection = output.split('[verifiedKnowledge]')[1]?.split('[reusableDiscovery]')[0] ?? ''
+    expect(verifiedSection).toContain('verified excerpt content')
   })
 })

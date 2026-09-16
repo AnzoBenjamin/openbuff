@@ -9,6 +9,7 @@ import {
   MemoryExportOutcomeSchema,
   MemoryQueryOutcomeSchema,
   MemoryRetrievalRequestSchema,
+  MemoryVerifyRequestSchema,
   MemoryTurnContextV2Schema,
   QueryCategoryCountsSchema,
   QueryDegradationSummarySchema,
@@ -57,6 +58,9 @@ const MAX_CONFLICT_RETRIES = 2
 const MAX_TAIL_EXPORT_PAGES = 10
 const MAX_PARITY_COUNT_ENTRIES = 64
 const FINISH_TURN_TIMEOUT_MS = 2_000
+const MAX_VERIFY_PER_CAPTURE = 5
+const MAX_VERIFY_STORED = 10
+const VERIFY_DIGEST_RE = /^[a-z0-9][a-z0-9+.-]{0,31}:[A-Fa-f0-9]{16,256}$/
 
 type QueryTerminal = NonNullable<
   MemoryRuntimeStateV2['pendingTerminal']
@@ -99,6 +103,16 @@ const CAPTURE_KINDS: Readonly<Record<string, string>> = {
   edit_transaction: 'mutation',
   replace_range: 'mutation',
   write_audit_findings: 'mutation',
+}
+
+const DIMENSION_MAP: Readonly<Record<string, 'tests' | 'validation'>> = {
+  run_targeted_validation: 'tests',
+  run_file_change_hooks: 'tests',
+  get_change_review_bundle: 'validation',
+}
+
+function inferCoverageDimension(toolName: string): 'tests' | 'validation' | undefined {
+  return DIMENSION_MAP[toolName]
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -359,6 +373,11 @@ export class MemoryV2Coordinator {
   private preparationReady = false
   private preparationGeneration = 0
   private activePreparation: PreparationOperation | undefined
+  private lastCapturedVerifies: Array<{
+    observationId: string
+    selector: { kind: 'file'; path: string }
+    observedDigest: string
+  }> = []
 
   constructor(
     private readonly config: MemoryV2ClientConfig,
@@ -993,6 +1012,51 @@ export class MemoryV2Coordinator {
     return this.bestEffort(() => this.captureToolObservation(params))
   }
 
+  async verifyCapturedPaths(params: {
+    userInputId: string
+    workspaceState?: WorkspaceStateV1
+  }): Promise<void> {
+    void params.userInputId
+    try {
+      const runtimeState = this.runtimeState
+      const preparation = this.activePreparation
+      const repository = this.config.repository
+      if (!this.preparationReady || !runtimeState || !repository) return
+      if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState) return
+      const entries = this.lastCapturedVerifies.slice(0, MAX_VERIFY_STORED)
+      if (entries.length === 0) return
+      for (const entry of entries) {
+        if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState) return
+        if (!VERIFY_DIGEST_RE.test(entry.observedDigest)) continue
+        try {
+          const request = MemoryVerifyRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: this.config.projectId,
+            sessionId: runtimeState.sessionId,
+            ...(params.workspaceState
+              ? {
+                  workspaceRevision: params.workspaceState.revision,
+                  workspaceSnapshotId: params.workspaceState.snapshotId,
+                }
+              : {}),
+            action: {
+              kind: 'verify',
+              observationId: entry.observationId,
+              selector: entry.selector,
+              observedDigest: entry.observedDigest,
+            },
+          })
+          await repository.verify(request)
+        } catch (error) {
+          this.logger?.warn({ error }, 'Memory V2 verify failed')
+          continue
+        }
+      }
+    } catch (error) {
+      this.logger?.warn({ error }, 'Memory V2 verify failed')
+    }
+  }
+
   private async captureToolObservation(params: {
     toolName: string
     callId: string
@@ -1080,9 +1144,12 @@ export class MemoryV2Coordinator {
       callId: params.callId,
       sourceIndex: 0,
     })
+    const countsJson = canonicalBounded(counts)
+    const outputDigest = digestOutput(params.output)
+    const toolNameBounded = params.toolName.slice(0, 128)
     const metadata: Record<string, MemoryJsonValue> = {
       callId: params.callId.slice(0, 128),
-      outputDigest: digestOutput(params.output),
+      outputDigest,
       captureKind,
       counts,
       ...(actions.length > 0 ? { actions } : {}),
@@ -1093,6 +1160,35 @@ export class MemoryV2Coordinator {
           }
         : {}),
     }
+    const evidence = paths.slice(0, 32).map((path) => {
+      const decision = classifyMemoryArtifactPath(path)
+      const excerpt = `${toolNameBounded} ${captureKind} ${path} counts=${countsJson.slice(0, 512)}`.slice(0, 1024)
+      const contentDigest = `sha256:${createHash('sha256').update(`${path}\n${countsJson}`).digest('hex')}`
+      return {
+        artifact: {
+          artifactId: path,
+          location: path,
+          classification: {
+            kind: decision.kind,
+            generated: decision.generated !== 'not-generated',
+            sensitivity: 'internal' as const,
+            labels: [captureKind],
+          },
+        },
+        selector: { kind: 'file' as const, path },
+        provenance: {
+          origin: 'tool' as const,
+          recordedBy: 'sdk-memory-v2',
+          sourceEventIds: [],
+          sourceSessionId: runtimeState.sessionId,
+          toolName: toolNameBounded,
+          metadata: {},
+        },
+        capturedAt: observedAt,
+        contentDigest,
+        excerpt,
+      }
+    })
     const event = createMemoryEventDraft({
       projectId: this.config.projectId,
       sessionId: runtimeState.sessionId,
@@ -1106,17 +1202,17 @@ export class MemoryV2Coordinator {
           observationId,
           taskId: runtimeState.activeTask.taskId,
           kind: captureKind === 'mutation' ? 'outcome' : 'discovery',
-          summary: `${params.toolName.slice(0, 128)} produced structured ${captureKind} metadata`,
-          detail: `Captured ${paths.length} project-relative path selector(s) and bounded structured result counts.`,
+          summary: `${toolNameBounded} ${captureKind} ${paths.length} path(s): ${paths.slice(0, 5).join(', ')}`.slice(0, 1024),
+          detail: `Captured ${paths.length} path(s), counts ${countsJson.slice(0, 2000)}, digest ${outputDigest.slice(0, 64)}`,
           confidence: 0.5,
-          evidence: [],
+          evidence,
           selectors: paths.map((projectPath) => ({ kind: 'file' as const, path: projectPath })),
           provenance: {
             origin: 'tool',
             recordedBy: 'sdk-memory-v2',
             sourceEventIds: [],
             sourceSessionId: runtimeState.sessionId,
-            toolName: params.toolName.slice(0, 128),
+            toolName: toolNameBounded,
             metadata,
           },
           tags: ['sdk-capture', captureKind],
@@ -1140,6 +1236,93 @@ export class MemoryV2Coordinator {
       })
       if (coverageEvents.length > 0 && this.isCurrent(preparation) && this.runtimeState === runtimeState) {
         await this.append(coverageEvents, runtimeState, preparation)
+      }
+    }
+
+    // Phase P4: additive coverage dimension inference for validation tools.
+    // Existing evaluate_audit_coverage path above is unchanged. Only the newly
+    // mapped tools may emit at most one extra coverage.recorded draft, gated
+    // on non-empty paths so conflict-retry count assertions (which use
+    // get_build_targets/get_affected_tests) stay deterministic.
+    if (params.toolName !== 'evaluate_audit_coverage') {
+      const dimension = inferCoverageDimension(params.toolName)
+      if (dimension !== undefined && paths.length > 0) {
+        const hasSuccessMarker = values.some(
+          (value) => value.passed === true || value.success === true,
+        )
+        const state: 'covered' | 'partial' =
+          dimension === 'tests' ? (hasSuccessMarker ? 'covered' : 'partial') : 'partial'
+        const coverageDraft = createMemoryEventDraft({
+          projectId: this.config.projectId,
+          sessionId: runtimeState.sessionId,
+          userInputId: params.userInputId,
+          callId: params.callId,
+          occurredAt: observedAt,
+          eventType: 'coverage.recorded',
+          payload: {
+            payloadSchemaVersion: 1,
+            taskId: runtimeState.activeTask.taskId,
+            dimension,
+            state,
+            selectors: paths.slice(0, 10).map((path) => ({ kind: 'file' as const, path })),
+            notes: `${params.toolName.slice(0, 128)} ${dimension} ${state}: ${paths.length} path(s): ${paths.slice(0, 5).join(', ')}`.slice(0, 1024),
+            ...(params.workspaceState
+              ? {
+                  workspaceRevision: params.workspaceState.revision,
+                  workspaceSnapshotId: params.workspaceState.snapshotId,
+                }
+              : {}),
+          },
+        })
+        if (this.isCurrent(preparation) && this.runtimeState === runtimeState) {
+          await this.append([coverageDraft], runtimeState, preparation)
+        }
+      }
+    }
+
+    // Phase P2: verification promotion hook (additive, bounded, best-effort).
+    // Mutation captures only; never throws and never blocks append.
+    if (captureKind === 'mutation') {
+      const verifyEntries = actions
+        .slice(0, MAX_VERIFY_PER_CAPTURE)
+        .flatMap((action): Array<{ observationId: string; selector: { kind: 'file'; path: string }; observedDigest: string }> => {
+          if (!isRecord(action)) return []
+          const actionPath = typeof action.path === 'string' ? normalizeProjectPath(action.path) : undefined
+          const afterHash = action.afterHash
+          if (!actionPath || typeof afterHash !== 'string' || !VERIFY_DIGEST_RE.test(afterHash)) return []
+          return [{ observationId, selector: { kind: 'file' as const, path: actionPath }, observedDigest: afterHash }]
+        })
+      if (verifyEntries.length > 0) {
+        this.lastCapturedVerifies = [...verifyEntries, ...this.lastCapturedVerifies].slice(0, MAX_VERIFY_STORED)
+        const repository = this.config.repository
+        if (repository) {
+          for (const entry of verifyEntries) {
+            if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState) return
+            try {
+              const request = MemoryVerifyRequestSchema.parse({
+                schemaVersion: 2,
+                projectId: this.config.projectId,
+                sessionId: runtimeState.sessionId,
+                ...(params.workspaceState
+                  ? {
+                      workspaceRevision: params.workspaceState.revision,
+                      workspaceSnapshotId: params.workspaceState.snapshotId,
+                    }
+                  : {}),
+                action: {
+                  kind: 'verify',
+                  observationId: entry.observationId,
+                  selector: entry.selector,
+                  observedDigest: entry.observedDigest,
+                },
+              })
+              await repository.verify(request)
+            } catch (error) {
+              this.logger?.warn({ error }, 'Memory V2 verify failed')
+              continue
+            }
+          }
+        }
       }
     }
   }

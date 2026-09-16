@@ -120,6 +120,24 @@ export const MemorySelectorSchema = z.discriminatedUnion('kind', [
     .strict(),
   z
     .object({
+      kind: z.literal('chunk'),
+      path: pathSchema,
+      chunkId: z
+        .string()
+        .min(1)
+        .max(128)
+        .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+      qualifiedName: z.string().min(1).max(512),
+      startLine: z.number().int().positive().max(10_000_000),
+      endLine: z.number().int().positive().max(10_000_000),
+    })
+    .strict()
+    .refine((selector) => selector.endLine >= selector.startLine, {
+      message: 'endLine must be greater than or equal to startLine',
+      path: ['endLine'],
+    }),
+  z
+    .object({
       kind: z.literal('json-pointer'),
       path: pathSchema,
       pointer: z
@@ -727,9 +745,11 @@ export const MemoryEventEnvelopeSchema = z.discriminatedUnion('eventType', [
 export type MemoryEventEnvelope = z.infer<typeof MemoryEventEnvelopeSchema>
 export type MemoryEventType = MemoryEventEnvelope['eventType']
 
+// lexical-match is preferred for token overlap, semantic-match retained for backwards compat.
 export const RankingReasonSchema = z
   .object({
     code: z.enum([
+      'lexical-match',
       'semantic-match',
       'task-match',
       'selector-match',

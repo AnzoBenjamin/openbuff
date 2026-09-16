@@ -257,6 +257,8 @@ function selectorFacet(selector: MemorySelector): string {
       return `json:${selector.path.replaceAll('\\', '/').toLowerCase()}:${selector.pointer}`
     case 'uri-fragment':
       return `uri:${selector.uri.toLowerCase()}#${selector.fragment}`
+    case 'chunk':
+      return `chunk:${selector.path.replaceAll('\\', '/').toLowerCase()}#${selector.chunkId}:${selector.startLine}-${selector.endLine}`
   }
 }
 
@@ -584,17 +586,33 @@ export class MemoryV2OperatorService {
           .map(({ observation }) => observation.observedAt)
           .sort()
           .at(-1)!
+        const mergedEvidence = candidate.sources.flatMap(({ observation }) => observation.evidence).slice(0, 8)
+        const mergedSelectors = (() => {
+          const seen = new Set<string>()
+          const merged: NonNullable<ActiveObservation['observation']['selectors']> = []
+          for (const { observation } of candidate.sources) {
+            for (const selector of observation.selectors ?? []) {
+              const key = JSON.stringify(selector)
+              if (seen.has(key)) continue
+              seen.add(key)
+              merged.push(selector)
+              if (merged.length >= 5) break
+            }
+            if (merged.length >= 5) break
+          }
+          return merged.length > 0 ? merged : undefined
+        })()
         const canonicalObservation = {
           observationId: candidate.canonicalObservationId,
           taskId: candidate.taskId,
           kind: candidate.observationKind,
-          summary: `Consolidated ${candidate.sourceObservationIds.length} ${candidate.observationKind} observations`,
-          detail: `Derived from observations ${candidate.sourceObservationIds.join(', ')} under policy ${request.policyVersion}.`,
+          summary: `Consolidated ${candidate.sourceObservationIds.length} ${candidate.observationKind} observations for ${(candidate.facet ?? '').slice(0, 128)}`,
+          detail: `Derived from observations ${candidate.sourceObservationIds.join(', ')} under policy ${request.policyVersion}. Facet ${candidate.facet}. Sources: ${candidate.sources.slice(0, 3).map(({ observation }) => observation.summary.slice(0, 200)).join(' | ')}`,
           confidence: Math.min(
             ...candidate.sources.map(({ observation }) => observation.confidence),
           ),
-          evidence: [],
-          selectors: candidate.sources[0]!.observation.selectors?.slice(0, 1),
+          evidence: mergedEvidence,
+          selectors: mergedSelectors,
           provenance: {
             origin: 'derived' as const,
             recordedBy: 'memory-v2-operator',

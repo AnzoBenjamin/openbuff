@@ -34,6 +34,7 @@ import {
   buildDiscoveryQuestion,
   claimDiscoveryShard,
   completeDiscoveryShard,
+  getVerifiedMemoryPaths,
   recordDiscoveryResult,
 } from '../../../orchestration/discovery-coordinator'
 
@@ -509,6 +510,7 @@ export const handleSpawnAgents = (async (
               result: result.output,
               workspaceRevision: parentAgentState.workspaceState?.revision,
               workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
+              verifiedPaths: getVerifiedMemoryPaths(parentAgentState),
             })
             parentAgentState.discoveryCoverage = completeDiscoveryShard({
               existing: parentAgentState.discoveryCoverage,
@@ -793,6 +795,7 @@ export const handleSpawnAgents = (async (
           result: result.value.output,
           workspaceRevision: parentAgentState.workspaceState?.revision,
           workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
+          verifiedPaths: getVerifiedMemoryPaths(parentAgentState),
         })
       }
       parentAgentState.discoveryCoverage = completeDiscoveryShard({

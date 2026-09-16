@@ -289,7 +289,11 @@ export async function parseFileStructure(
     const symbols: SymbolRange[] = []
     const seen = new Set<string>()
     // Iterative DFS to avoid deep recursion on large files.
-    const stack: Node[] = [tree.rootNode]
+    // Skip the root node itself: some grammars (e.g. Python `module`)
+    // collide with definition kinds and would classify the whole file.
+    const stack: Node[] = tree.rootNode.namedChildren.filter(
+      (child): child is Node => child !== null,
+    )
     while (stack.length > 0) {
       const node = stack.pop()!
       const kind = definitionKind(node)

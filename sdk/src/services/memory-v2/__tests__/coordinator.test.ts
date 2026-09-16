@@ -979,7 +979,11 @@ describe('MemoryV2Coordinator lifecycle', () => {
       expect(observationEvent.payload.observation.selectors).toEqual([
         { kind: 'file', path: 'src/good.ts' },
       ])
-      expect(observationEvent.payload.observation.evidence).toEqual([])
+      expect(observationEvent.payload.observation.evidence).toHaveLength(1)
+      expect(observationEvent.payload.observation.evidence[0]).toMatchObject({
+        selector: { kind: 'file', path: 'src/good.ts' },
+      })
+      expect(observationEvent.payload.observation.evidence[0]?.contentDigest).toMatch(/^sha256:/)
       expect(
         observationEvent.payload.observation.provenance?.metadata.outputDigest,
       ).toMatch(/^sha256:[a-f0-9]{64}$/)
@@ -1063,9 +1067,7 @@ describe('MemoryV2Coordinator lifecycle', () => {
       expect(event.payload.observation.selectors).toEqual([
         { kind: 'file', path: 'src/good.ts' },
       ])
-      expect(event.payload.observation.detail).toContain(
-        '1 project-relative path',
-      )
+      expect(event.payload.observation.detail).toContain('1 path(s)')
     }
   })
 

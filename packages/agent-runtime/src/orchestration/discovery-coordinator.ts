@@ -87,12 +87,62 @@ function extractCandidates(value: unknown): Map<string, Set<string>> {
   return candidates
 }
 
+export function getVerifiedMemoryPaths(
+  agentState: { memoryV2Context?: unknown } | null | undefined,
+): Set<string> {
+  const verified = new Set<string>()
+  try {
+    if (!agentState || typeof agentState !== 'object') return verified
+    const memoryV2Context = (
+      agentState as { memoryV2Context?: unknown }
+    ).memoryV2Context
+    if (!memoryV2Context || typeof memoryV2Context !== 'object')
+      return verified
+    const contextRecord = memoryV2Context as Record<string, unknown>
+    const resultRecord =
+      contextRecord['result'] && typeof contextRecord['result'] === 'object'
+        ? (contextRecord['result'] as Record<string, unknown>)
+        : undefined
+    const rawVerifiedKnowledge = resultRecord?.['verifiedKnowledge']
+    const verifiedKnowledge = Array.isArray(rawVerifiedKnowledge)
+      ? rawVerifiedKnowledge
+      : Array.isArray(contextRecord['verifiedKnowledge'])
+        ? (contextRecord['verifiedKnowledge'] as unknown[])
+        : undefined
+    if (!verifiedKnowledge) return verified
+    for (const entry of verifiedKnowledge) {
+      const verifiedEvidence = (entry as { verifiedEvidence?: unknown })
+        ?.verifiedEvidence
+      if (!Array.isArray(verifiedEvidence)) continue
+      for (const evidence of verifiedEvidence) {
+        const selector = (evidence as { selector?: unknown })?.selector as
+          | { path?: unknown }
+          | undefined
+        if (!selector || typeof selector !== 'object') continue
+        const selectorPath = (selector as { path?: unknown }).path
+        if (typeof selectorPath !== 'string' || selectorPath.length === 0)
+          continue
+        try {
+          const normalized = normalizePath(selectorPath)
+          if (normalized) verified.add(normalized)
+        } catch {
+          continue
+        }
+      }
+    }
+    return verified
+  } catch {
+    return verified
+  }
+}
+
 export function planDiscoveryBatch(params: {
   existing?: DiscoveryCoverageV1
   query: string
   result: unknown
   workspaceRevision?: number
   workspaceSnapshotId?: string
+  verifiedPaths?: Set<string> | string[]
 }): DiscoveryCoverageV1 {
   const queryHash = hash(
     params.query
@@ -116,13 +166,31 @@ export function planDiscoveryBatch(params: {
       ] as const
     }),
   )
+  let verifiedSet: Set<string> | undefined
+  if (params.verifiedPaths) {
+    try {
+      verifiedSet = new Set<string>()
+      for (const raw of params.verifiedPaths) {
+        if (typeof raw !== 'string') continue
+        try {
+          const normalized = normalizePath(raw)
+          if (normalized) verifiedSet.add(normalized)
+        } catch {
+          continue
+        }
+      }
+    } catch {
+      verifiedSet = undefined
+    }
+  }
   for (const [path, reasons] of extracted) {
     const previous = previousByPath.get(path)
     previousByPath.set(path, {
       path,
       symbols: previous?.symbols ?? [],
       reasons: [...new Set([...(previous?.reasons ?? []), ...reasons])],
-      verified: previous?.verified ?? false,
+      verified:
+        verifiedSet?.has(path) === true ? true : (previous?.verified ?? false),
       stale: false,
       workspaceRevision: params.workspaceRevision,
     })
@@ -250,6 +318,7 @@ export function recordDiscoveryResult(params: {
   result: unknown
   workspaceRevision?: number
   workspaceSnapshotId?: string
+  verifiedPaths?: Set<string> | string[]
 }): DiscoveryCoverageV1 {
   return planDiscoveryBatch({
     existing: params.existing,
@@ -257,6 +326,7 @@ export function recordDiscoveryResult(params: {
     result: params.result,
     workspaceRevision: params.workspaceRevision,
     workspaceSnapshotId: params.workspaceSnapshotId,
+    verifiedPaths: params.verifiedPaths,
   })
 }
 

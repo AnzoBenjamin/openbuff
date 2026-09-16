@@ -2488,6 +2488,8 @@ function selectorKey(selector: MemorySelector): string {
     return `${base}#${selector.pointer.toLowerCase()}`
   if (selector.kind === 'line-range')
     return `${base}:${selector.startLine}-${selector.endLine}`
+  if (selector.kind === 'chunk')
+    return `${base}#chunk:${selector.chunkId.toLowerCase()}:${selector.startLine}-${selector.endLine}`
   return base
 }
 
@@ -2776,10 +2778,23 @@ function buildLexicalResult(
           'A selector exactly matches the request.',
         ),
       )
+    const chunkSelectorMatch = selectors.some(
+      (selector) =>
+        selector.kind === 'chunk' &&
+        requestedSelectors.has(selectorKey(selector)),
+    )
+    if (chunkSelectorMatch)
+      reasons.push(
+        reason(
+          'selector-match',
+          0.05,
+          'Chunk selector exactly matches the request.',
+        ),
+      )
     if (tokenMatches > 0)
       reasons.push(
         reason(
-          'semantic-match',
+          'lexical-match',
           Math.min(0.3, tokenMatches * 0.06),
           `${tokenMatches} lexical token match(es).`,
         ),
