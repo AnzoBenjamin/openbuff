@@ -1284,20 +1284,20 @@ Input fields:
 - `params` (object, optional) — parameters object for the child agent.
   Direct agent schemas also accept a stringified JSON object for `params`
   and parse it before validation; malformed JSON, arrays, and objects that
-`spawn_agents.agents` also performs bounded repair for one- or
-double-stringified arrays and stringified object entries. Malformed or
-truncated JSON remains rejected; the runtime never fabricates an empty agent
-entry or silently drops required parameters. Stringified `params` and
-`handoff` objects are decoded at their envelope boundary only; legitimate
-nested string values such as shell commands remain strings. Basher requires
-`params.command`. Reviewer-family specialists accept `params.snapshot_id` only
-on runtime-owned programmatic spawns, where the parent gate mints the exact
-current opaque `v3:…` token (never bare `get_change_review_bundle.snapshotId`
-hex, which is evidence-only); manual/advisory prompt-authored spawns must omit
-`params.snapshot_id` entirely — put the scoped file list in `params.files` and
-the review question in the prompt. Only `security-reviewer` accepts
-`params.snapshot_fingerprint` (with `params.changed_files`), and manual spawns
-omit that key too.
+  `spawn_agents.agents` also performs bounded repair for one- or
+  double-stringified arrays and stringified object entries. Malformed or
+  truncated JSON remains rejected; the runtime never fabricates an empty agent
+  entry or silently drops required parameters. Stringified `params` and
+  `handoff` objects are decoded at their envelope boundary only; legitimate
+  nested string values such as shell commands remain strings. Basher requires
+  `params.command`. Reviewer-family specialists accept `params.snapshot_id` only
+  on runtime-owned programmatic spawns, where the parent gate mints the exact
+  current opaque `v3:…` token (never bare `get_change_review_bundle.snapshotId`
+  hex, which is evidence-only); manual/advisory prompt-authored spawns must omit
+  `params.snapshot_id` entirely — put the scoped file list in `params.files` and
+  the review question in the prompt. Only `security-reviewer` accepts
+  `params.snapshot_fingerprint` (with `params.changed_files`), and manual spawns
+  omit that key too.
 
 string:
 
@@ -1530,7 +1530,7 @@ replay, so both directions are stated explicitly:
   its completed-pass branch for an unknown `status`. A `'declined'` block —
   whose result fields are the zeroed placeholders of a pass that never reported
   one — therefore renders there as a completed pass claiming `→ 0 tokens
-  (−0%)`, and `subagent`/`trimSource` are dropped, so a nested or request-time
+(−0%)`, and `subagent`/`trimSource` are dropped, so a nested or request-time
   trim is presented as a root-level runtime pass. That mis-rendering is
   cosmetic and confined to the transcript card: no persisted field is
   reinterpreted, nothing fails to parse, and the session still loads. Consumers

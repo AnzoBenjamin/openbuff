@@ -147,11 +147,11 @@ export type Base2ReviewReceipt = {
  *     and `snapshotFingerprint`;
  *   - base2.ts `supersedePlanTaskGateReceiptsForChangedFiles` reads `evidence`
  *     and `files`;
-   * - base2.ts's gate-pass mint site reads `taskId` (one live receipt per task)
-   *     and `receiptId` (an identical ID is the idempotent repeat pass and is left
-   *     untouched rather than churning `recordedAt`); the opt-in committed-
-   *     surface mint reuses the same one-live-receipt-per-task REPLACE semantics
-   *     with `receiptId` derived by `committedSurfaceReceiptId`;
+ * - base2.ts's gate-pass mint site reads `taskId` (one live receipt per task)
+ *     and `receiptId` (an identical ID is the idempotent repeat pass and is left
+ *     untouched rather than churning `recordedAt`); the opt-in committed-
+ *     surface mint reuses the same one-live-receipt-per-task REPLACE semantics
+ *     with `receiptId` derived by `committedSurfaceReceiptId`;
  *   - base2.ts's gate-pass `add_message` reads `taskId`, `receiptId`,
  *     `evidence`, and `files.length` for the printed evidence sentence;
  *   - base2.ts `buildPinnedActiveWorkMessage` reads `receiptId`, `taskId`, and

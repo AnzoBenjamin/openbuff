@@ -65,11 +65,10 @@ export function deriveCommittedSurfaceFileSet(input: {
   cap?: number
 }): CommittedSurfaceFileSetResult {
   const cap =
-    typeof input.cap === 'number' && input.cap >= 1
-      ? Math.floor(input.cap)
-      : 40
-  const runtimeFiles =
-    Array.isArray(input.runtimeFiles) ? input.runtimeFiles : []
+    typeof input.cap === 'number' && input.cap >= 1 ? Math.floor(input.cap) : 40
+  const runtimeFiles = Array.isArray(input.runtimeFiles)
+    ? input.runtimeFiles
+    : []
   const seen = new Set<string>()
   const normalizedRuntime: string[] = []
   for (const rawFile of runtimeFiles) {
