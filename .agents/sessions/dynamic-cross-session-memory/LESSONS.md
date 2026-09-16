@@ -89,7 +89,6 @@ Raw SQLite database bytes are not a valid reopen-idempotence contract under WAL 
 - Post-abort tool observations need a generation gate; isCurrent(undefined) returning true unconditionally allows commits after invalidate.
 
 <!-- update_plan_status:appended -->
-
 ## Specialist-token / clean-tree limitation — 2026-09-14T09:12:00.000Z
 
 - Reviewer-family specialists (`compatibility-reviewer`, `migration-reviewer`, `reliability-reviewer`, `performance-specialist`, `accessibility-reviewer`, `ux-visual-reviewer`, `dependency-reviewer`, `product-reviewer`, `evaluator`) require `params.snapshot_id` matching `^v3:[a-f0-9]{64}$`. That token is `hashGateSnapshotDetails(files-v4 details of PENDING files)` = `'v3:' + sha256(details)`. With a CLEAN worktree there are no pending files, so the fingerprint is a constant and `gate-state.ts` documents it "never mints a receipt, for any kind" (`'no-diff'` = constant by construction).
