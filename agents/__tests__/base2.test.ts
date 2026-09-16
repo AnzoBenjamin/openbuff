@@ -10456,9 +10456,11 @@ describe('base2 reviewer re-review round ledger', () => {
       const gateFile = normalizeGateFilePath(join(tmpDir, 'a.ts'))
       writeFileSync(join(tmpDir, 'a.ts'), 'export const value = 1\n')
       const codeFindings = [
-        codeReviewerFinding('NON_BLOCKING: Tighten the early-return guard.', 0, [
-          gateFile,
-        ]),
+        codeReviewerFinding(
+          'NON_BLOCKING: Tighten the early-return guard.',
+          0,
+          [gateFile],
+        ),
         codeReviewerFinding(
           'BLOCKING: [code-reviewer:tests:missing-case] Add a case for the empty payload.',
           1,
@@ -13509,9 +13511,9 @@ describe('base2 committed-surface review mode', () => {
         // Idle state with no pending request: the turn-start bookkeeping
         // spawns the inline context-pruner, then the STEP boundary sits behind
         // any pinned-state message (same choreography as the mint test below).
-        expect(
-          scenarioGen.next(feedJson({ status: '' })).value,
-        ).toMatchObject({ toolName: 'spawn_agent_inline' })
+        expect(scenarioGen.next(feedJson({ status: '' })).value).toMatchObject({
+          toolName: 'spawn_agent_inline',
+        })
         const maybePinned = scenarioGen.next().value
         if (maybePinned !== 'STEP') {
           expect(maybePinned).toMatchObject({ toolName: 'add_message' })
@@ -13889,9 +13891,7 @@ describe('base2 committed-surface review mode', () => {
         })
         // No spawn_agents may be reached: unverifiable bytes never spawn.
         const afterPorcelain = gen.next(feedJson({ stdout: '', exitCode: 0 }))
-        expect((afterPorcelain.value as any)?.toolName).not.toBe(
-          'spawn_agents',
-        )
+        expect((afterPorcelain.value as any)?.toolName).not.toBe('spawn_agents')
         expectRejectedWithoutReceipt(
           agentState,
           'no-reviewable-committed-files',

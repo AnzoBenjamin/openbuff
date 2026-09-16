@@ -16,11 +16,14 @@ function makeDeriveInput(overrides?: {
   cap?: number
 }) {
   const marker: Record<string, string> = {
-    'src/kept.ts': 'sha256:a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2:42',
-    'src/other.ts': 'sha256:b1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2:24',
+    'src/kept.ts':
+      'sha256:a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2:42',
+    'src/other.ts':
+      'sha256:b1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2:24',
     'src/deleted.ts': 'missing',
     'src/locked.ts': 'unreadable:EACCES',
-    'notes.md': 'sha256:c1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2:9',
+    'notes.md':
+      'sha256:c1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2:9',
     'src/symlinked.ts':
       'symlink-sha256:d1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2:7',
   }
@@ -29,8 +32,11 @@ function makeDeriveInput(overrides?: {
     ...(overrides?.narrowingHint !== undefined
       ? { narrowingHint: overrides.narrowingHint }
       : {}),
-    isReviewable: overrides?.isReviewable ?? ((path: string) => !path.endsWith('.md')),
-    markerFor: overrides?.markerFor ?? ((path: string) => marker[path] ?? 'unreadable:enoent'),
+    isReviewable:
+      overrides?.isReviewable ?? ((path: string) => !path.endsWith('.md')),
+    markerFor:
+      overrides?.markerFor ??
+      ((path: string) => marker[path] ?? 'unreadable:enoent'),
     ...(overrides?.cap !== undefined ? { cap: overrides.cap } : {}),
   }
 }
@@ -116,7 +122,8 @@ describe('deriveCommittedSurfaceFileSet', () => {
     const result = deriveCommittedSurfaceFileSet(
       makeDeriveInput({
         runtimeFiles: many,
-        markerFor: () => 'sha256:e1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2:1',
+        markerFor: () =>
+          'sha256:e1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2:1',
         cap: 4,
       }),
     )
@@ -127,8 +134,8 @@ describe('deriveCommittedSurfaceFileSet', () => {
     expect(MAX_COMMITTED_SURFACE_FILES).toBe(40)
     const many: string[] = []
     for (let i = 0; i < 41; i++) many.push(`src/bulk-${i}.ts`)
-    const markerFor =
-      () => 'sha256:f1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2:1'
+    const markerFor = () =>
+      'sha256:f1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2:1'
     expect(
       deriveCommittedSurfaceFileSet({
         runtimeFiles: many,
@@ -151,8 +158,8 @@ describe('deriveCommittedSurfaceFileSet', () => {
     const result = deriveCommittedSurfaceFileSet({
       runtimeFiles: many,
       isReviewable: () => true,
-      markerFor:
-        () => 'sha256:0db2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2:1',
+      markerFor: () =>
+        'sha256:0db2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2:1',
       cap: Number.NaN,
     })
     expect(result).toEqual({ status: 'overflow', total: 41 })
@@ -226,14 +233,16 @@ describe('committed-surface inline base2 copy matches export', () => {
       if (end < 0) {
         throw new Error(`Unbalanced braces extracting function ${name}`)
       }
-      return source
-        .slice(begin, end)
-        .replace(/;/g, '')
-        .replace(/\s+/g, '')
-        // The printer drops the module's trailing commas when it re-breaks a
-        // multi-line parameter list single-line; a trailing comma before a
-        // closer is non-semantic, so strip it on both sides.
-        .replace(/,([)\]])/g, '$1')
+      return (
+        source
+          .slice(begin, end)
+          .replace(/;/g, '')
+          .replace(/\s+/g, '')
+          // The printer drops the module's trailing commas when it re-breaks a
+          // multi-line parameter list single-line; a trailing comma before a
+          // closer is non-semantic, so strip it on both sides.
+          .replace(/,([)\]])/g, '$1')
+      )
     }
     for (const name of [
       'isAttestableCommittedSurfaceMarker',
