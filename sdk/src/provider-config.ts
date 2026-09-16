@@ -1844,20 +1844,69 @@ export type OpenbuffProviderPreset = {
   envHelp?: string
 }
 
-const OPENCODE_GO_MODELS = [
+const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
+
+/**
+ * Models served via `.../go/v1/chat/completions` (OpenAI-compatible).
+ * Source: https://opencode.ai/docs/go/#endpoints
+ */
+export const OPENCODE_GO_CHAT_MODELS = [
+  'glm-5.3-flash',
+  'glm-5.3',
+  'glm-5.2',
   'glm-5.1',
   'glm-5',
+  'kimi-k3',
+  'kimi-k2.7-code',
   'kimi-k2.6',
   'kimi-k2.5',
+  'longcat-2.0',
   'mimo-v2.5-pro',
   'mimo-v2.5',
-  'qwen3.6-plus',
-  'qwen3.5-plus',
-  'minimax-m2.7',
-  'minimax-m2.5',
+  'deepseek-v4.1-flash',
   'deepseek-v4-pro',
   'deepseek-v4-flash',
+  'deepseek-v4-flash-vision-exp',
+  'hy4-preview',
+  'hy3',
 ] as const
+
+/**
+ * Models served via `.../go/v1/messages` (Anthropic Messages API).
+ * Must be routed through an `anthropic-compatible` provider entry pointing
+ * at the same Go baseURL — the AI SDK posts `<baseURL>/messages`, which is
+ * exactly the Go messages endpoint.
+ * Source: https://opencode.ai/docs/go/#endpoints
+ */
+export const OPENCODE_GO_ANTHROPIC_MODELS = [
+  'minimax-m3',
+  'minimax-m2.7',
+  'minimax-m2.5',
+  'qwen3.8-max',
+  'qwen3.8-flash',
+  'qwen3.7-max',
+  'qwen3.7-plus',
+  'qwen3.6-plus',
+  'qwen3.5-plus',
+] as const
+
+/**
+ * Models served via `.../go/v1/responses` (OpenAI Responses API).
+ * Openbuff has no Responses-API provider type (only openai-compatible chat
+ * + anthropic-compatible messages), so these are intentionally NOT routable.
+ * getModelForRequest() throws a clear error for them instead of sending a
+ * malformed chat/completions request that Go answers with a bare 500.
+ * Source: https://opencode.ai/docs/go/#endpoints
+ */
+export const OPENCODE_GO_RESPONSES_MODELS = [
+  'grok-4.6',
+  'gpt-5.6-luna',
+  'muse-spark-1.3-contributor',
+  'muse-spark-1.2-contributor',
+] as const
+
+// Backwards-compat alias: previously a single flat list mixing protocols.
+const OPENCODE_GO_MODELS = [...OPENCODE_GO_CHAT_MODELS] as const
 
 const OPENAI_API_MODELS = [
   'gpt-5.5',
@@ -1890,7 +1939,7 @@ export const OPENBUFF_PROVIDER_PRESETS = {
       providers: {
         'opencode-go': {
           type: 'openai-compatible',
-          baseURL: 'https://opencode.ai/zen/go/v1',
+          baseURL: OPENCODE_GO_BASE_URL,
           apiKeyEnv: 'OPENCODE_GO_API_KEY',
           supportsStructuredOutputs: false,
           compatibility: {
@@ -1901,7 +1950,21 @@ export const OPENBUFF_PROVIDER_PRESETS = {
             supportsStopSequences: false,
             stripProviderMetadata: true,
           },
-          models: [...OPENCODE_GO_MODELS],
+          models: [...OPENCODE_GO_CHAT_MODELS],
+        },
+        'opencode-go-anthropic': {
+          type: 'anthropic-compatible',
+          baseURL: OPENCODE_GO_BASE_URL,
+          apiKeyEnv: 'OPENCODE_GO_API_KEY',
+          compatibility: {
+            stripCacheControl: false,
+            stringifyTextContent: false,
+            supportsTools: true,
+            supportsRequiredToolChoice: true,
+            supportsStopSequences: true,
+            stripProviderMetadata: false,
+          },
+          models: [...OPENCODE_GO_ANTHROPIC_MODELS],
         },
       },
     },

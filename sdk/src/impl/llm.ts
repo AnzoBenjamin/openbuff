@@ -1086,6 +1086,7 @@ export async function* promptAiSdkStream(
             skipChatGptOAuth: params.skipChatGptOAuth,
             costMode: params.costMode,
             requiresVision: valueContainsImageInput(params.messages),
+            sessionId: params.fingerprintId ?? params.clientSessionId,
             // Failover attempts (failoverIndex > 0) must honor the explicit
             // failoverModel over openbuff.json mode/agent/defaultModel routing;
             // otherwise every backup model would silently re-resolve to the same
@@ -1761,6 +1762,7 @@ export async function promptAiSdk(
     agentId: params.agentId,
     skipChatGptOAuth: true, // Non-streaming skips ChatGPT OAuth; local/provider config may still route BYOK.
     requiresVision: valueContainsImageInput(params.messages),
+    sessionId: params.fingerprintId ?? params.clientSessionId,
   }
   const {
     model: aiSDKModel,
@@ -1898,6 +1900,7 @@ export async function promptAiSdkStructured<T>(
     agentId: params.agentId,
     skipChatGptOAuth: true, // Non-streaming skips ChatGPT OAuth; local/provider config may still route BYOK.
     requiresVision: valueContainsImageInput(params.messages),
+    sessionId: params.fingerprintId ?? params.clientSessionId,
   }
   const {
     model: aiSDKModel,
