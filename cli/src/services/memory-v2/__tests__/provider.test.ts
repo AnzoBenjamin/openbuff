@@ -10,7 +10,9 @@ import { getMemoryAuthoritySelection } from '../../../utils/env'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => { resolve = done })
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
   return { promise, resolve }
 }
 
@@ -23,12 +25,18 @@ async function repository(root: string): Promise<BunSQLiteMemoryRepository> {
 function countCloses(repo: BunSQLiteMemoryRepository) {
   let closes = 0
   const close = repo.close.bind(repo)
-  repo.close = async () => { closes++; await close() }
+  repo.close = async () => {
+    closes++
+    await close()
+  }
   return () => closes
 }
 
 const shadow = { requested: 'shadow-v2', effective: 'shadow-v2' } as const
-const optIn = { requested: 'sqlite-v2-opt-in', effective: 'sqlite-v2-opt-in' } as const
+const optIn = {
+  requested: 'sqlite-v2-opt-in',
+  effective: 'sqlite-v2-opt-in',
+} as const
 
 describe('ProjectMemoryV2Provider', () => {
   test('deduplicates opener while returning two independent leases', async () => {
@@ -39,7 +47,10 @@ describe('ProjectMemoryV2Provider', () => {
       calls++
       return { status: 'ok', repository: repo }
     })
-    const [first, second] = await Promise.all([provider.open(root, shadow), provider.open(root, shadow)])
+    const [first, second] = await Promise.all([
+      provider.open(root, shadow),
+      provider.open(root, shadow),
+    ])
     expect(calls).toBe(1)
     expect(first.status).toBe('available')
     expect(second.status).toBe('available')
@@ -58,10 +69,14 @@ describe('ProjectMemoryV2Provider', () => {
     const root = mkdtempSync(join(tmpdir(), 'openbuff-memory-provider-leases-'))
     const repo = await repository(root)
     const closes = countCloses(repo)
-    const provider = new ProjectMemoryV2Provider(async () => ({ status: 'ok', repository: repo }))
+    const provider = new ProjectMemoryV2Provider(async () => ({
+      status: 'ok',
+      repository: repo,
+    }))
     const first = await provider.open(root, shadow)
     const second = await provider.open(root, shadow)
-    if (first.status !== 'available' || second.status !== 'available') throw new Error('expected leases')
+    if (first.status !== 'available' || second.status !== 'available')
+      throw new Error('expected leases')
     await provider.close()
     expect(closes()).toBe(0)
     await first.release()
@@ -74,11 +89,22 @@ describe('ProjectMemoryV2Provider', () => {
   })
 
   test('root and authority switches retire leased repositories until release', async () => {
-    const firstRoot = mkdtempSync(join(tmpdir(), 'openbuff-memory-provider-first-'))
-    const secondRoot = mkdtempSync(join(tmpdir(), 'openbuff-memory-provider-second-'))
-    const repos = [await repository(firstRoot), await repository(secondRoot), await repository(secondRoot)]
+    const firstRoot = mkdtempSync(
+      join(tmpdir(), 'openbuff-memory-provider-first-'),
+    )
+    const secondRoot = mkdtempSync(
+      join(tmpdir(), 'openbuff-memory-provider-second-'),
+    )
+    const repos = [
+      await repository(firstRoot),
+      await repository(secondRoot),
+      await repository(secondRoot),
+    ]
     const closes = repos.map(countCloses)
-    const provider = new ProjectMemoryV2Provider(async () => ({ status: 'ok', repository: repos.shift()! }))
+    const provider = new ProjectMemoryV2Provider(async () => ({
+      status: 'ok',
+      repository: repos.shift()!,
+    }))
     const first = await provider.open(firstRoot, shadow)
     const second = await provider.open(secondRoot, shadow)
     expect(closes[0]!()).toBe(0)
@@ -96,14 +122,20 @@ describe('ProjectMemoryV2Provider', () => {
 
   test('pending open reset never publishes and closes exactly once', async () => {
     const root = mkdtempSync(join(tmpdir(), 'openbuff-memory-provider-race-'))
-    const gate = deferred<{ status: 'ok'; repository: BunSQLiteMemoryRepository }>()
+    const gate = deferred<{
+      status: 'ok'
+      repository: BunSQLiteMemoryRepository
+    }>()
     const repo = await repository(root)
     const closes = countCloses(repo)
     const provider = new ProjectMemoryV2Provider(() => gate.promise)
     const opening = provider.open(root, shadow)
     await provider.close()
     gate.resolve({ status: 'ok', repository: repo })
-    expect(await opening).toMatchObject({ status: 'unavailable', reason: 'reset-during-open' })
+    expect(await opening).toMatchObject({
+      status: 'unavailable',
+      reason: 'reset-during-open',
+    })
     expect(closes()).toBe(1)
   })
 
@@ -114,10 +146,16 @@ describe('ProjectMemoryV2Provider', () => {
     const provider = new ProjectMemoryV2Provider(async () => {
       calls++
       return calls === 1
-        ? { status: 'error' as const, error: { kind: 'busy' as const, message: 'busy', retryable: true } }
+        ? {
+            status: 'error' as const,
+            error: { kind: 'busy' as const, message: 'busy', retryable: true },
+          }
         : { status: 'ok' as const, repository: repo }
     })
-    expect(await provider.open(root, shadow)).toMatchObject({ status: 'unavailable', retryable: true })
+    expect(await provider.open(root, shadow)).toMatchObject({
+      status: 'unavailable',
+      retryable: true,
+    })
     const reopened = await provider.open(root, shadow)
     expect(reopened.status).toBe('available')
     expect(calls).toBe(2)
@@ -127,13 +165,23 @@ describe('ProjectMemoryV2Provider', () => {
 
   test('default authority selection fails closed without V1 fallback', async () => {
     const defaultAuthority = getMemoryAuthoritySelection(undefined)
-    expect(defaultAuthority).toEqual({ requested: 'sqlite-v2-opt-in', effective: 'sqlite-v2-opt-in' })
+    expect(defaultAuthority).toEqual({
+      requested: 'sqlite-v2-opt-in',
+      effective: 'sqlite-v2-opt-in',
+    })
     const provider = new ProjectMemoryV2Provider(async () => ({
       status: 'error',
-      error: { kind: 'io', message: '/secret/database.sqlite', retryable: false },
+      error: {
+        kind: 'io',
+        message: '/secret/database.sqlite',
+        retryable: false,
+      },
     }))
     const result = await provider.open('/project', defaultAuthority)
-    expect(result).toMatchObject({ status: 'unavailable', effectiveAuthority: 'sqlite-v2-opt-in' })
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      effectiveAuthority: 'sqlite-v2-opt-in',
+    })
     if (result.status === 'unavailable') {
       expect(result.degradation).toContain('V1 remains disabled')
     }
@@ -143,16 +191,26 @@ describe('ProjectMemoryV2Provider', () => {
   test('opt-in failure remains opt-in with project id while shadow falls back', async () => {
     const provider = new ProjectMemoryV2Provider(async () => ({
       status: 'error',
-      error: { kind: 'io', message: '/secret/database.sqlite', retryable: false },
+      error: {
+        kind: 'io',
+        message: '/secret/database.sqlite',
+        retryable: false,
+      },
     }))
     const opted = await provider.open('/project', optIn)
-    expect(opted).toMatchObject({ status: 'unavailable', effectiveAuthority: 'sqlite-v2-opt-in' })
+    expect(opted).toMatchObject({
+      status: 'unavailable',
+      effectiveAuthority: 'sqlite-v2-opt-in',
+    })
     if (opted.status === 'unavailable') {
       expect(opted.projectId).toBeDefined()
       expect(opted.degradation).toContain('V1 remains disabled')
       expect(opted.degradation).not.toContain('/secret')
     }
-    expect(await provider.open('/project', shadow)).toMatchObject({ status: 'unavailable', effectiveAuthority: 'json-v1' })
+    expect(await provider.open('/project', shadow)).toMatchObject({
+      status: 'unavailable',
+      effectiveAuthority: 'json-v1',
+    })
   })
 
   test('json-v1 and invalid authority never invoke SQLite', async () => {
@@ -161,8 +219,19 @@ describe('ProjectMemoryV2Provider', () => {
       calls++
       throw new Error('must not open')
     })
-    expect(await provider.open('/project', { requested: 'json-v1', effective: 'json-v1' })).toMatchObject({ status: 'unavailable', effectiveAuthority: 'json-v1' })
-    expect(await provider.open('/project', { requested: 'bad', effective: 'json-v1', reason: 'invalid-authority' })).toMatchObject({ status: 'unavailable', reason: 'invalid-authority' })
+    expect(
+      await provider.open('/project', {
+        requested: 'json-v1',
+        effective: 'json-v1',
+      }),
+    ).toMatchObject({ status: 'unavailable', effectiveAuthority: 'json-v1' })
+    expect(
+      await provider.open('/project', {
+        requested: 'bad',
+        effective: 'json-v1',
+        reason: 'invalid-authority',
+      }),
+    ).toMatchObject({ status: 'unavailable', reason: 'invalid-authority' })
     expect(calls).toBe(0)
   })
 })

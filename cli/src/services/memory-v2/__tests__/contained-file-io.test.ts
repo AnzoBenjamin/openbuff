@@ -35,7 +35,9 @@ describe('contained file I/O', () => {
     mkdirSync(join(root, 'directory'))
     symlinkSync(join(root, 'large'), join(root, 'link'))
     for (const path of ['../large', '/absolute', 'link', 'directory']) {
-      expect(() => readContainedProjectFile(root, path, 10)).toThrow(ContainedFileIoError)
+      expect(() => readContainedProjectFile(root, path, 10)).toThrow(
+        ContainedFileIoError,
+      )
     }
     expect(() => readContainedProjectFile(root, 'large', 4)).toThrow(
       new ContainedFileIoError('too-large'),
@@ -61,12 +63,23 @@ describe('contained file I/O', () => {
 
   test('creates owner-only directories and exclusive files with anchored cleanup', () => {
     const root = mkdtempSync(join(tmpdir(), 'contained-create-'))
-    const directory = createContainedProjectDirectory(root, '.openbuff/memory/exports')
+    const directory = createContainedProjectDirectory(
+      root,
+      '.openbuff/memory/exports',
+    )
     directory.writeExclusive('one.json', '{}')
-    expect(readFileSync(join(root, '.openbuff/memory/exports/one.json'), 'utf8')).toBe('{}')
-    expect(lstatSync(join(root, '.openbuff/memory/exports')).mode & 0o777).toBe(0o700)
-    expect(lstatSync(join(root, '.openbuff/memory/exports/one.json')).mode & 0o777).toBe(0o600)
-    expect(() => directory.writeExclusive('one.json', '{}')).toThrow(new ContainedFileIoError('exists'))
+    expect(
+      readFileSync(join(root, '.openbuff/memory/exports/one.json'), 'utf8'),
+    ).toBe('{}')
+    expect(lstatSync(join(root, '.openbuff/memory/exports')).mode & 0o777).toBe(
+      0o700,
+    )
+    expect(
+      lstatSync(join(root, '.openbuff/memory/exports/one.json')).mode & 0o777,
+    ).toBe(0o600)
+    expect(() => directory.writeExclusive('one.json', '{}')).toThrow(
+      new ContainedFileIoError('exists'),
+    )
     directory.remove('one.json')
     directory.remove('one.json')
     directory.close()
@@ -78,6 +91,8 @@ describe('contained file I/O', () => {
     const outside = mkdtempSync(join(tmpdir(), 'contained-outside-'))
     mkdirSync(join(root, '.openbuff'))
     symlinkSync(outside, join(root, '.openbuff', 'memory'))
-    expect(() => createContainedProjectDirectory(root, '.openbuff/memory/exports')).toThrow(ContainedFileIoError)
+    expect(() =>
+      createContainedProjectDirectory(root, '.openbuff/memory/exports'),
+    ).toThrow(ContainedFileIoError)
   })
 })
