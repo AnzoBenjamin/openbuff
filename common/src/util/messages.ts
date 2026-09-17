@@ -345,6 +345,78 @@ function filterOrphanModelToolMessages(
 }
 
 /**
+ * Fail-closed tool-call pairing invariant.
+ *
+ * OpenAI-compatible providers (and the ChatGPT/OAuth backend) validate that
+ * "An assistant message with 'tool_calls' must be followed by tool messages
+ * responding to each 'tool_call_id'." Openbuff's agent loop rewrites message
+ * history (context trimming/compaction in the agent runtime, subagent history
+ * transfer) and can leave an assistant `tool-call` part without its matching
+ * `tool` result. `convertCbToModelMessages` is the single last stop before
+ * every provider request, so the repair lives here.
+ *
+ * We strip only the unanswered `tool-call` *content parts* -- never the whole
+ * assistant message -- because dropping the message would also discard sibling
+ * text/reasoning parts and could orphan a tool result that IS paired with
+ * another call in the same message. An assistant message that becomes empty
+ * after stripping is dropped entirely, since `content: []` is invalid.
+ * Orphan tool *results* (a tool message with no matching call) are handled
+ * separately by `filterOrphanModelToolMessages`.
+ */
+function stripUnansweredToolCalls(
+  messages: ModelMessageWithAuxiliaryData[],
+  logger?: Logger,
+): ModelMessageWithAuxiliaryData[] {
+  const answeredToolCallIds = new Set<string>()
+  for (const message of messages) {
+    if (message.role !== 'tool') continue
+    for (const part of message.content) {
+      const toolCallId = getToolResultPartId(part)
+      if (toolCallId) {
+        answeredToolCallIds.add(toolCallId)
+      }
+    }
+  }
+
+  const strippedToolCallIds: string[] = []
+  const repairedMessages: ModelMessageWithAuxiliaryData[] = []
+  for (const message of messages) {
+    if (message.role !== 'assistant') {
+      repairedMessages.push(message)
+      continue
+    }
+
+    const keptContent = message.content.filter((part) => {
+      if (part.type !== 'tool-call') return true
+      if (answeredToolCallIds.has(part.toolCallId)) return true
+      strippedToolCallIds.push(part.toolCallId)
+      return false
+    })
+
+    if (keptContent.length === 0) {
+      continue
+    }
+    if (keptContent.length === message.content.length) {
+      repairedMessages.push(message)
+      continue
+    }
+    repairedMessages.push({ ...message, content: keptContent })
+  }
+
+  if (strippedToolCallIds.length > 0) {
+    logger?.warn(
+      {
+        strippedToolCallIds: [...new Set(strippedToolCallIds)],
+        strippedCount: strippedToolCallIds.length,
+      },
+      'Stripped unanswered assistant tool calls before model request.',
+    )
+  }
+
+  return repairedMessages
+}
+
+/**
  * M2 telemetry: per-anchor cache-control attribution. Each entry records
  * which aggregated message index received a cache-control breakpoint, a short
  * content hash for churn detection, and a human-readable reason. This lets
@@ -541,14 +613,23 @@ function aggregateMessages(
 
 /**
  * M2 telemetry: compute cache-anchor metadata for a set of messages without
- * modifying them. Crash-safe — returns [] on any conversion error so
- * telemetry never disrupts the request flow. Used by cache-debug snapshots
- * so developers can observe which message indices receive cache control and
- * whether they stay stable across requests.
+ * modifying them. Runs the same aggregation + tool-call repair as
+ * `convertCbToModelMessages` (minus cache-control application and schema
+ * validation), so the reported indices and content hashes point at the exact
+ * messages the request pipeline anchors on. Crash-safe — returns [] on any
+ * conversion error so telemetry never disrupts the request flow. Used by
+ * cache-debug snapshots so developers can observe which message indices
+ * receive cache control and whether they stay stable across requests.
  */
 export function getCacheAnchorSummary(messages: Message[]): CacheAnchorInfo[] {
   try {
-    const aggregated = aggregateMessages(messages)
+    // Strip unanswered tool calls exactly like the request pipeline does:
+    // dropping a now-empty assistant message shifts every later index, so
+    // reporting pre-strip indices (or hashes) would make churn diffs point at
+    // messages that never receive cache control. The logger is intentionally
+    // omitted — anchor positions do not depend on it, and telemetry stays
+    // side-effect free.
+    const aggregated = stripUnansweredToolCalls(aggregateMessages(messages))
     const anchors = findCacheAnchorIndices(aggregated)
     return anchors.map((a) => ({
       ...a,
@@ -591,7 +672,12 @@ export function convertCbToModelMessages({
   includeCacheControl?: boolean
   logger?: Logger
 }): ModelMessage[] {
-  const aggregated = aggregateMessages(messages, logger)
+  // Repair the assistant tool-call / tool-result pairing before anchors are
+  // computed so cache-control positions reflect the final array.
+  const aggregated = stripUnansweredToolCalls(
+    aggregateMessages(messages, logger),
+    logger,
+  )
 
   if (includeCacheControl) {
     // M2: Place cache-control anchors on stable prefix boundaries instead of

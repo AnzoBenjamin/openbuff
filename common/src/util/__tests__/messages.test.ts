@@ -14,12 +14,55 @@ import {
 } from '../messages'
 
 import type { Message } from '../../types/messages/codebuff-message'
+import type { Logger } from '../../types/contracts/logger'
 import type { ToolResultPart } from 'ai'
+
+function createLoggerStub(): {
+  logger: Logger
+  warnings: Array<{ data: unknown; msg?: string }>
+} {
+  const warnings: Array<{ data: unknown; msg?: string }> = []
+  const logger: Logger = {
+    debug: () => {},
+    info: () => {},
+    warn: (data, msg) => {
+      warnings.push({ data, msg })
+    },
+    error: () => {},
+  }
+  return { logger, warnings }
+}
 
 // Test helper types for provider options with cache control
 type CacheControlValue = { type: string }
 type ProviderWithCacheControl = Record<string, unknown> & {
   cache_control?: CacheControlValue
+}
+
+function hasCacheControl(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const { providerOptions } = value as {
+    providerOptions?: Record<string, { cache_control?: { type?: string } }>
+  }
+  return providerOptions?.openaiCompatible?.cache_control?.type === 'ephemeral'
+}
+
+/**
+ * Indices of the messages that actually receive cache control when the request
+ * pipeline runs. Used to assert that `getCacheAnchorSummary` reports the same
+ * anchor positions as `convertCbToModelMessages`.
+ */
+function pipelineAnchoredIndices(messages: Message[]): number[] {
+  const converted = convertCbToModelMessages({
+    messages,
+    includeCacheControl: true,
+  })
+  return converted.flatMap((message, index) => {
+    if (hasCacheControl(message)) return [index]
+    const { content } = message
+    if (typeof content === 'string' || content.length === 0) return []
+    return hasCacheControl(content[content.length - 1]) ? [index] : []
+  })
 }
 
 describe('withCacheControl', () => {
@@ -543,6 +586,157 @@ describe('convertCbToModelMessages', () => {
           role: 'tool',
         }),
       ])
+    })
+  })
+
+  describe('tool-call pairing invariant', () => {
+    it('should preserve a valid assistant tool call / tool result pair unchanged', () => {
+      const messages: Message[] = [
+        userMessage('Do the thing'),
+        assistantMessage({
+          type: 'tool-call',
+          toolCallId: 'call_valid',
+          toolName: 'test_tool',
+          input: { param: 'value' },
+        }),
+        {
+          role: 'tool',
+          toolName: 'test_tool',
+          toolCallId: 'call_valid',
+          content: jsonToolResult({ result: 'success' }),
+        },
+      ]
+
+      const result = convertCbToModelMessages({
+        messages,
+        includeCacheControl: false,
+      })
+
+      expect(result).toEqual([
+        expect.objectContaining({ role: 'user' }),
+        expect.objectContaining({
+          role: 'assistant',
+          content: [
+            expect.objectContaining({
+              type: 'tool-call',
+              toolCallId: 'call_valid',
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          role: 'tool',
+          content: [
+            expect.objectContaining({
+              type: 'tool-result',
+              toolCallId: 'call_valid',
+            }),
+          ],
+        }),
+      ])
+    })
+
+    it('should strip only the unanswered call when some calls in a message are answered', () => {
+      const messages: Message[] = [
+        assistantMessage({
+          type: 'tool-call',
+          toolCallId: 'call_answered',
+          toolName: 'test_tool',
+          input: { param: 'a' },
+        }),
+        assistantMessage({
+          type: 'tool-call',
+          toolCallId: 'call_unanswered',
+          toolName: 'test_tool',
+          input: { param: 'b' },
+        }),
+        {
+          role: 'tool',
+          toolName: 'test_tool',
+          toolCallId: 'call_answered',
+          content: jsonToolResult({ result: 'success' }),
+        },
+      ]
+
+      const result = convertCbToModelMessages({
+        messages,
+        includeCacheControl: false,
+      })
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          role: 'assistant',
+          content: [
+            expect.objectContaining({
+              type: 'tool-call',
+              toolCallId: 'call_answered',
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          role: 'tool',
+          content: [
+            expect.objectContaining({
+              type: 'tool-result',
+              toolCallId: 'call_answered',
+            }),
+          ],
+        }),
+      ])
+    })
+
+    it('should keep text content when dropping an unanswered tool call part', () => {
+      const messages: Message[] = [
+        assistantMessage({
+          content: [
+            { type: 'text', text: 'Here is my plan' },
+            {
+              type: 'tool-call',
+              toolCallId: 'call_unanswered',
+              toolName: 'test_tool',
+              input: {},
+            },
+          ],
+        }),
+      ]
+
+      const result = convertCbToModelMessages({
+        messages,
+        includeCacheControl: false,
+      })
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Here is my plan' }],
+        }),
+      ])
+    })
+
+    it('should warn when an unanswered tool call is stripped', () => {
+      const { logger, warnings } = createLoggerStub()
+      const messages: Message[] = [
+        assistantMessage({
+          type: 'tool-call',
+          toolCallId: 'call_unanswered',
+          toolName: 'test_tool',
+          input: {},
+        }),
+      ]
+
+      convertCbToModelMessages({
+        messages,
+        includeCacheControl: false,
+        logger,
+      })
+
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0].msg).toBe(
+        'Stripped unanswered assistant tool calls before model request.',
+      )
+      expect(warnings[0].data).toEqual({
+        strippedToolCallIds: ['call_unanswered'],
+        strippedCount: 1,
+      })
     })
   })
 
@@ -1151,6 +1345,80 @@ describe('convertCbToModelMessages', () => {
       it('returns empty for empty messages', () => {
         expect(getCacheAnchorSummary([])).toEqual([])
       })
+
+      // The telemetry helper must mirror the request pipeline exactly: when the
+      // unanswered-tool-call strip drops an assistant message, every later
+      // index shifts, so reporting pre-strip indices would make churn diffs
+      // point at messages that never receive cache control.
+      it('reports the same anchor positions as the request pipeline when the strip drops an assistant message', () => {
+        const messages: Message[] = [
+          systemMessage('System'),
+          userMessage('Context'),
+          assistantMessage({
+            type: 'tool-call',
+            toolCallId: 'call_unanswered',
+            toolName: 'test_tool',
+            input: {},
+          }),
+          userMessage('More context'),
+          userMessage({ content: 'User prompt', tags: ['USER_PROMPT'] }),
+        ]
+        const before = cloneDeep(messages)
+
+        const anchors = getCacheAnchorSummary(messages)
+
+        // The unanswered assistant message is dropped, so the stable-history
+        // boundary and tail shift down one index versus the pre-strip array.
+        expect(anchors.map((a) => a.type)).toEqual([
+          'system',
+          'stable-history',
+          'tail',
+        ])
+        expect(anchors.map((a) => a.index)).toEqual([0, 2, 3])
+        expect(anchors.map((a) => a.index)).toEqual(
+          pipelineAnchoredIndices(messages),
+        )
+        expect(messages).toEqual(before)
+      })
+
+      // When the strip only shortens an assistant message the indices keep
+      // their positions, but the *content* behind an anchor changes — so the
+      // reported hash must describe the stripped content, not the pre-strip
+      // message that still contains the unanswered tool call.
+      it('hashes the post-strip content when the strip only shortens an assistant message', () => {
+        const messages: Message[] = [
+          systemMessage('System'),
+          assistantMessage({
+            content: [
+              { type: 'text', text: 'Here is my plan' },
+              {
+                type: 'tool-call',
+                toolCallId: 'call_unanswered',
+                toolName: 'test_tool',
+                input: {},
+              },
+            ],
+          }),
+          userMessage({ content: 'User prompt', tags: ['USER_PROMPT'] }),
+        ]
+        const before = cloneDeep(messages)
+
+        const anchors = getCacheAnchorSummary(messages)
+
+        expect(anchors.map((a) => a.index)).toEqual([0, 1, 2])
+        expect(anchors.map((a) => a.index)).toEqual(
+          pipelineAnchoredIndices(messages),
+        )
+
+        const postStrip = getCacheAnchorSummary([
+          systemMessage('System'),
+          assistantMessage('Here is my plan'),
+          userMessage({ content: 'User prompt', tags: ['USER_PROMPT'] }),
+        ])
+        expect(anchors[1].index).toBe(postStrip[1].index)
+        expect(anchors[1].contentHash).toBe(postStrip[1].contentHash)
+        expect(messages).toEqual(before)
+      })
     })
 
     it('should handle array content with cache control on non-text parts', () => {
@@ -1247,7 +1515,12 @@ describe('convertCbToModelMessages', () => {
       expect(result).toHaveLength(0)
     })
 
-    it('should handle tool-call content in assistant messages', () => {
+    // Behavior change (fail-closed tool-call pairing invariant): a lone
+    // assistant tool call with no matching tool result is no longer sent to
+    // the provider. The call part is stripped and the now-empty assistant
+    // message is dropped, because OpenAI-compatible providers reject an
+    // assistant 'tool_calls' entry that no tool message answers.
+    it('should strip an unanswered assistant tool call and drop the empty message', () => {
       const messages: Message[] = [
         assistantMessage({
           type: 'tool-call',
@@ -1262,20 +1535,7 @@ describe('convertCbToModelMessages', () => {
         includeCacheControl: false,
       })
 
-      expect(result).toEqual([
-        {
-          role: 'assistant',
-          sentAt: expect.any(Number),
-          content: [
-            {
-              type: 'tool-call',
-              toolCallId: 'call_123',
-              toolName: 'test_tool',
-              input: { param: 'value' },
-            },
-          ],
-        },
-      ])
+      expect(result).toEqual([])
     })
 
     it('should convert persisted UIMessage-shaped entries before AI SDK validation', () => {
