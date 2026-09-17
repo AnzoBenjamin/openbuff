@@ -19,6 +19,8 @@
 - Memory V2 authority is selected by `OPENBUFF_MEMORY_AUTHORITY` via `getMemoryAuthoritySelection` (`cli/src/utils/env.ts`); the default is `sqlite-v2-opt-in` (fail-closed — no V1 fallback), with `json-v1` as an explicit opt-out escape hatch and `shadow-v2` as an explicit shadow mode. Release N keeps `json-v1` and `shadow-v2` supported but deprecates both compatibility modes; `sqlite-v2-opt-in` is the default and replacement. Authority selection, degradation, and fallback behavior are unchanged in this release, no removal date/version is implied, and migration is not claimed complete. Follow the normative [Memory V1 removal readiness plan](../docs/memory-v1-removal-readiness.md) before any later removal decision.
 - _Knowledge refresh 2026-09-16: prettier formatting pass over the cli memory-v2 services (`provider.ts`, `contained-file-io.ts`), cli utils (`codebuff-client.ts`, `env.ts`, `status-bar-chips.ts`), `memory-box.tsx`, `data/slash-commands.ts`, and their suites — line re-wraps only, no behavior change._
 
+- _Knowledge refresh 2026-09-17: record_decision tool, memory-first skip/narrow in glob/list-directory/code-search/find-files-matching-content, indexer chunk-freshness sidecar, coordinator deterministic kinds, two-session cold-start test._
+
 ## Slash Commands and Plan Mode
 
 - Durable planning is entered through `mode:plan`; the standalone `/plan` command is intentionally absent from `COMMAND_REGISTRY` and `SLASH_COMMANDS` so there is one plan-entry path.

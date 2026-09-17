@@ -87,6 +87,8 @@ This package contains code shared across the Openbuff monorepo, especially the l
 
 - _Knowledge refresh 2026-09-17 (background jobs live updates): `common/src/util/list-jobs-view.ts` counts each `agent_chunk` as one pending unit, adds bounded `summarizeAgentEvents`/`extractAgentTailLines` plus `lastSummary` (160-char cap); `common/src/tools/params/tool/check-job.ts` and `check-background-agent.ts` add optional `hint`/`stop_polling`/`do_not_repoll` loop-breaker hints._
 
+- _Knowledge refresh 2026-09-17: record_decision params schema with text/kind/evidenceSelectors/excerpt bounds plus tool registration._
+
 ## Scope Notes
 
 Openbuff is CLI/SDK-focused and local/BYOK. Do not add new dependencies from `common/` to hosted web, billing, credit, subscription, or BigQuery product surfaces. Provider-owned billing, quota, token usage, and OAuth flows may still be documented when they refer to the user's configured provider rather than an Openbuff-hosted product.
