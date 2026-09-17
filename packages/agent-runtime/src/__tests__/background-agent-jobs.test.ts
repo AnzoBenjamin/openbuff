@@ -31,6 +31,7 @@ import {
   attachBackgroundAgentPromise,
   registerBackgroundAgentJob,
   appendBackgroundAgentChunk,
+  emitBackgroundAgentStatus,
   getBackgroundAgentJob,
   getBackgroundAgentJobCore,
   listRunningBackgroundAgentJobs,
@@ -39,8 +40,10 @@ import {
   backgroundAgentJobOwnedBy,
   backgroundAgentJobWasCancelled,
   reconcileInterruptedBackgroundAgentIntents,
+  snapshotBackgroundAgentJob,
   takeDroppedBackgroundAgentChunkCount,
   cancelBackgroundAgentJob,
+  waitForBackgroundAgentJob,
   __clearBackgroundAgentJobsForTest,
 } from '../util/background-agent-jobs'
 
@@ -324,6 +327,51 @@ describe('background-agent-jobs registry', () => {
         timestamp: 1,
       }),
     ).not.toThrow()
+  })
+
+  test('emitBackgroundAgentStatus folds bounded milestone into snapshot and wait predicate can match it', async () => {
+    const job = allocateBackgroundAgentJob({
+      agentType: 'basher',
+      agentName: 'Basher',
+    })
+    attachBackgroundAgentPromise(job, new Promise(() => {}))
+    const cursor = snapshotBackgroundAgentJob(job.jobId, 0)?.nextCursor ?? 0
+    emitBackgroundAgentStatus(job.jobId, 'tool:read')
+    const snapshot = snapshotBackgroundAgentJob(job.jobId, cursor)
+    expect(snapshot).toBeDefined()
+    const statusEvents = (snapshot?.events ?? []).filter(
+      (event) => event.payload.type === 'status',
+    )
+    expect(statusEvents).toHaveLength(1)
+    expect(statusEvents[0]?.payload).toMatchObject({
+      type: 'status',
+      message: 'tool:read',
+    })
+    // A small-enum wait predicate matches without scanning full JSON dumps.
+    const waited = await waitForBackgroundAgentJob(job.jobId, {
+      cursor,
+      predicate: (event) =>
+        event.payload.type === 'status' &&
+        (event.payload.message ?? '').includes('tool:read'),
+      timeoutMs: 1000,
+    })
+    expect(waited?.matched?.payload).toMatchObject({
+      type: 'status',
+      message: 'tool:read',
+    })
+    // Unknown job is a no-op (core returns undefined) and never throws.
+    expect(() =>
+      emitBackgroundAgentStatus('bg-agent-unknown', 'tool:read'),
+    ).not.toThrow()
+    // Messages are bounded to 500 chars.
+    emitBackgroundAgentStatus(job.jobId, 'x'.repeat(600))
+    const bounded = snapshotBackgroundAgentJob(
+      job.jobId,
+      snapshot?.nextCursor ?? cursor,
+    )?.events.find((event) => event.payload.type === 'status')
+    expect(
+      (bounded?.payload as { message?: string } | undefined)?.message?.length,
+    ).toBe(500)
   })
 
   test('readNewBackgroundAgentChunks returns only unconsumed chunks and advances offset', () => {
@@ -1047,6 +1095,37 @@ describe('check_background_agent join semantics', () => {
     expect(JSON.stringify(second.events)).not.toContain('chunk-A')
     expect(second.nextCursor as number).toBeGreaterThan(firstCursor)
     expect(second.truncated).toBe(false)
+  })
+
+  test('idle running poll sets stop_polling + hint; terminal poll sets do_not_repoll', async () => {
+    const job = allocateBackgroundAgentJob({
+      agentType: 'basher',
+      agentName: 'Basher',
+      owner: POLL_OWNER,
+    })
+    attachBackgroundAgentPromise(job, new Promise(() => {}))
+    await startCheckBackgroundAgent({ jobId: job.jobId })
+    const idle = await startCheckBackgroundAgent({ jobId: job.jobId })
+    expect(idle.state).toBe('running')
+    expect(idle.events).toEqual([])
+    expect(idle.stop_polling).toBe(true)
+    expect(idle.hint).toBe(
+      'No new events — do other work, do not re-poll for 30s',
+    )
+    expect(idle.do_not_repoll).toBeUndefined()
+  })
+
+  test('terminal poll sets do_not_repoll without stop_polling', async () => {
+    const job = allocateBackgroundAgentJob({
+      agentType: 'basher',
+      agentName: 'Basher',
+      owner: POLL_OWNER,
+    })
+    await settleBackgroundAgentJob(job, { output: 'done' })
+    const settled = await startCheckBackgroundAgent({ jobId: job.jobId })
+    expect(settled.state).toBe('completed')
+    expect(settled.do_not_repoll).toBe(true)
+    expect(settled.stop_polling).toBeUndefined()
   })
 })
 

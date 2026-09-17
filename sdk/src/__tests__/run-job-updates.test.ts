@@ -185,7 +185,7 @@ describe('run job_update forwarding', () => {
     ).toEqual(['queued'])
   })
 
-  it('ignores agent_chunk/status payloads (M5 forwards state + process output only)', async () => {
+  it('forwards agent_chunk text/tool markers and status as outputDelta', async () => {
     const registry = new JobRegistry()
     const events: Extract<PrintModeEvent, { type: 'job_update' }>[] = []
     attachJobForwarding({
@@ -207,11 +207,70 @@ describe('run job_update forwarding', () => {
       chunkType: 'text',
       data: 'chunk',
     })
+    registry.emit(job.jobId, {
+      type: 'agent_chunk',
+      chunkType: 'tool_call',
+      data: 'read_files',
+    })
+    registry.emit(job.jobId, {
+      type: 'agent_chunk',
+      chunkType: 'tool_result',
+      data: 'ok',
+    })
+    registry.emit(job.jobId, {
+      type: 'agent_chunk',
+      chunkType: 'subagent_finish',
+      data: 'done',
+    })
     registry.emit(job.jobId, { type: 'status', message: 'thinking' })
     await Promise.resolve()
 
-    // Only the queued + running lifecycle updates; no chunk/status forwarded.
-    expect(events.map((e) => e.state)).toEqual(['queued', 'running'])
+    // Lifecycle still forwarded.
+    expect(events.map((e) => e.state).slice(0, 2)).toEqual([
+      'queued',
+      'running',
+    ])
+    const deltas = events
+      .map((e) => e.outputDelta)
+      .filter((d): d is string => d !== undefined)
+    expect(deltas).toContain('chunk')
+    expect(deltas).toContain('[tool_call:read_files]')
+    expect(deltas).toContain('[tool_result]')
+    expect(deltas).toContain('[subagent_finish]')
+    expect(deltas).toContain('thinking')
+  })
+
+  it('truncates long agent text deltas instead of dumping full JSON', async () => {
+    const registry = new JobRegistry()
+    const events: Extract<PrintModeEvent, { type: 'job_update' }>[] = []
+    attachJobForwarding({
+      registry,
+      runOwner: {
+        clientSessionId: OWNER.clientSessionId,
+        rootRunId: OWNER.rootRunId,
+      },
+      handleEvent: (event) => {
+        if (event.type === 'job_update') events.push(event)
+      },
+      guards: { callbacksEnabled: true, aborted: false },
+    })
+
+    const job = registry.create({ kind: 'agent', label: 'agent', owner: OWNER })
+    registry.start(job.jobId)
+    registry.emit(job.jobId, {
+      type: 'agent_chunk',
+      chunkType: 'text',
+      data: 'x'.repeat(5000),
+    })
+    await Promise.resolve()
+
+    const deltas = events
+      .map((e) => e.outputDelta)
+      .filter((d): d is string => d !== undefined)
+    expect(deltas.length).toBeGreaterThan(0)
+    for (const delta of deltas) {
+      expect(delta.length).toBeLessThanOrEqual(2000)
+    }
   })
 
   it('respects the callbacksEnabled/aborted guards', async () => {

@@ -130,6 +130,24 @@ export const checkJobParams = {
         matched: z.boolean().optional(),
         timedOut: z.boolean().optional(),
         killed: z.boolean().optional(),
+        hint: z
+          .string()
+          .optional()
+          .describe(
+            'Server-side loop-breaker hint for the model (e.g. idle-poll guidance). Only present alongside stop_polling.',
+          ),
+        stop_polling: z
+          .boolean()
+          .optional()
+          .describe(
+            'True when the job is still running but returned no new events — do other work instead of re-polling immediately.',
+          ),
+        do_not_repoll: z
+          .boolean()
+          .optional()
+          .describe(
+            'True when the job reached a terminal state — do not poll this jobId again.',
+          ),
         logFile: z.string().optional(),
         errorMessage: z.string().optional(),
         touchedPaths: z

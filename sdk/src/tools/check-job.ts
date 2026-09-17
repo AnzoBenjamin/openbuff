@@ -32,6 +32,54 @@ function jobSettled(job: { status: string }): boolean {
   return job.status !== 'running'
 }
 
+/** Terminal check_job states that will never produce more output. */
+function isTerminalCheckJobState(state: JobState): boolean {
+  return (
+    state === 'completed' ||
+    state === 'error' ||
+    state === 'stopped' ||
+    state === 'lost' ||
+    state === 'cancelled'
+  )
+}
+
+/** Idle-poll loop-breaker hint (mirrors check_background_agent wording). */
+const CHECK_JOB_IDLE_POLL_HINT =
+  'No new events — do other work, do not re-poll for 30s'
+
+/**
+ * Server-side loop-breaker hints for check_job. Terminal states set
+ * do_not_repoll; a still-running job with no new events sets stop_polling +
+ * hint so the model does other work instead of tight re-polling.
+ */
+function checkJobLoopBreakerHints(params: {
+  state: JobState
+  events: JobEvent[]
+}): {
+  hint?: string
+  stop_polling?: true
+  do_not_repoll?: true
+} {
+  if (isTerminalCheckJobState(params.state)) {
+    return { do_not_repoll: true as const }
+  }
+  if (params.state === 'running') {
+    const hasProgress = params.events.some((event) => {
+      const payload = event.payload
+      if (payload.type === 'output') {
+        return payload.data.length > 0
+      }
+      if (payload.type === 'agent_chunk') return true
+      if (payload.type === 'status') return true
+      return false
+    })
+    if (!hasProgress) {
+      return { stop_polling: true as const, hint: CHECK_JOB_IDLE_POLL_HINT }
+    }
+  }
+  return {}
+}
+
 /**
  * Extract a plain-text view of the new `output` events for wait_for matching.
  */
@@ -428,8 +476,13 @@ export async function checkJob(params: {
           // Kill settles the job; credit dirty delta on this first settled
           // observation (same one-shot path as natural finish).
           const killTouched = await resolveSettlementTouchedPaths(job)
+          const killLoopBreaker = checkJobLoopBreakerHints({
+            state: postKillState,
+            events: baseValue.events,
+          })
           const killValue = {
             ...baseValue,
+            ...killLoopBreaker,
             state: postKillState,
             ...(postKillExitCode !== undefined && postKillExitCode !== null
               ? { exitCode: postKillExitCode }
@@ -454,6 +507,10 @@ export async function checkJob(params: {
             type: 'json',
             value: {
               ...baseValue,
+              ...checkJobLoopBreakerHints({
+                state: baseValue.state,
+                events: baseValue.events,
+              }),
               killed: true,
               timedOut: true,
               errorMessage: killResult.errorMessage,
@@ -465,17 +522,23 @@ export async function checkJob(params: {
       const settlementTouched = finished
         ? await resolveSettlementTouchedPaths(job)
         : undefined
+      const loopBreaker = checkJobLoopBreakerHints({
+        state: baseValue.state,
+        events: baseValue.events,
+      })
       const resultValue =
         settlementTouched !== undefined
           ? withTouchedPaths(
               {
                 ...baseValue,
+                ...loopBreaker,
                 ...(timedOut ? { timedOut: true as const } : {}),
               },
               settlementTouched,
             )
           : {
               ...baseValue,
+              ...loopBreaker,
               ...(timedOut ? { timedOut: true as const } : {}),
             }
       return [
