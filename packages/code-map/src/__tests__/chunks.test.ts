@@ -1,8 +1,23 @@
-import { describe, expect, test } from 'bun:test'
+import { beforeEach, describe, expect, test } from 'bun:test'
 
-import { deriveChunkId, extractCodeChunks } from '../chunks'
+import {
+  chunkAlias,
+  clearChunkMemo,
+  deriveChunkId,
+  deriveStableChunkId,
+  extractCodeChunks,
+  extractCodeChunksDetailed,
+  hashContent,
+  registerChunkRenameAlias,
+  resolveChunkAlias,
+} from '../chunks'
 
 describe('extractCodeChunks', () => {
+  beforeEach(() => {
+    clearChunkMemo()
+    chunkAlias.clear()
+  })
+
   test('extracts TS functions, classes, and methods with stable chunkId', async () => {
     const src = [
       'export function greet(name: string) {', // 1
@@ -42,12 +57,29 @@ describe('extractCodeChunks', () => {
     for (const chunk of chunks) {
       expect(chunk.chunkId).toMatch(/^[0-9a-f]{64}$/)
       expect(chunk.hash).toMatch(/^[0-9a-f]{64}$/)
+      expect(chunk.stableChunkId).toMatch(/^[0-9a-f]{64}$/)
       expect(chunk.signature.length).toBeLessThanOrEqual(512)
-      expect(chunk.docComment).toBe('')
+      expect(chunk.signatureText).toContain(chunk.signature.slice(0, 16))
+      expect(chunk.signatureRange.endLine).toBeGreaterThanOrEqual(
+        chunk.signatureRange.startLine,
+      )
+      expect(chunk.language).toBe('typescript')
+      expect(chunk.docComment ?? '').toBe('')
       expect(chunk.chunkId).toBe(
         deriveChunkId(chunk.path, chunk.qualifiedName, chunk.kind, chunk.hash),
       )
+      expect(chunk.stableChunkId).toBe(
+        deriveStableChunkId(chunk.path, chunk.qualifiedName, chunk.kind),
+      )
+      expect(Array.isArray(chunk.calls)).toBe(true)
+      expect(Array.isArray(chunk.calledBy)).toBe(true)
+      expect(Array.isArray(chunk.imports)).toBe(true)
+      expect(Array.isArray(chunk.references)).toBe(true)
     }
+    // Export flag + columns survive on the exported function.
+    expect(byName.greet.exported).toBe(true)
+    expect(byName.greet.startCol).toBeGreaterThanOrEqual(1)
+    expect(byName.greet.endCol).toBeGreaterThanOrEqual(1)
 
     // Deterministic across runs.
     const again = await extractCodeChunks(src, 'x.ts')
@@ -75,6 +107,159 @@ describe('extractCodeChunks', () => {
       kind: 'function',
       startLine: 5,
     })
+    expect(byName.top_level.language).toBe('python')
+  })
+
+  test('captures a full multi-line header span, not just the first line', async () => {
+    const src = [
+      'export function multi(', // 1
+      '  a: string,', // 2
+      '  b: number,', // 3
+      '): string {', // 4
+      '  return a', // 5
+      '}', // 6
+    ].join('\n')
+
+    const chunks = await extractCodeChunks(src, 'multi.ts')
+    expect(chunks).toHaveLength(1)
+    const chunk = chunks[0]!
+    expect(chunk.signatureRange.endLine).toBeGreaterThan(
+      chunk.signatureRange.startLine,
+    )
+    expect(chunk.signatureText).toContain('a: string')
+    expect(chunk.signatureText).toContain('b: number')
+    expect(chunk.signatureText.split('\n').length).toBeGreaterThan(1)
+    expect(chunk.signature.length).toBeLessThanOrEqual(512)
+  })
+
+  test('extracts non-empty doc comments with ranges and legacy compat', async () => {
+    const tsSrc = [
+      '/** Greets a user. */', // 1
+      'export function documented(name: string) {', // 2
+      '  return name', // 3
+      '}', // 4
+    ].join('\n')
+    const tsChunks = await extractCodeChunks(tsSrc, 'doc.ts')
+    expect(tsChunks).toHaveLength(1)
+    const documented = tsChunks[0]!
+    expect(documented.docComment ?? '').toContain('Greets a user.')
+    expect(documented.doc?.text ?? '').toContain('Greets a user.')
+    expect(documented.docCommentRange).toMatchObject({
+      startLine: 1,
+      endLine: 1,
+    })
+    expect(documented.doc?.range).toMatchObject({ startLine: 1, endLine: 1 })
+
+    const pySrc = [
+      '# Compute the total.', // 1
+      'def total(xs):', // 2
+      '    return 1', // 3
+    ].join('\n')
+    const pyChunks = await extractCodeChunks(pySrc, 'doc.py')
+    expect(pyChunks).toHaveLength(1)
+    expect(pyChunks[0]!.docComment ?? '').toContain('Compute the total.')
+  })
+
+  test('exposes additive typeInfo and modifiers without breaking compat', async () => {
+    const src = [
+      'export function greet(name: string) {', // 1
+      '  return `hi ${name}`', // 2
+      '}', // 3
+    ].join('\n')
+    const chunks = await extractCodeChunks(src, 'types.ts')
+    expect(chunks).toHaveLength(1)
+    const greet = chunks[0]!
+    expect(greet.typeInfo?.params?.[0]).toMatchObject({ name: 'name' })
+    expect(greet.typeInfo?.params?.[0]?.type).toContain('string')
+    expect(greet.modifiers?.exported).toBe(true)
+    expect(greet.exported).toBe(true)
+  })
+
+  test('links per-chunk call edges and skips self-calls', async () => {
+    const src = [
+      'export function helper() {', // 1
+      '  return 1', // 2
+      '}', // 3
+      '', // 4
+      'export function user() {', // 5
+      '  return helper()', // 6
+      '}', // 7
+      '', // 8
+      'export function lonely() {', // 9
+      '  return lonely()', // 10
+      '}', // 11
+    ].join('\n')
+
+    const chunks = await extractCodeChunks(src, 'edges.ts')
+    const byName = Object.fromEntries(chunks.map((c) => [c.qualifiedName, c]))
+    const helper = byName.helper!
+    const user = byName.user!
+    const lonely = byName.lonely!
+
+    expect(user.calls.map((c) => c.name)).toContain('helper')
+    const helperCall = user.calls.find((c) => c.name === 'helper')!
+    expect(helperCall.line).toBe(6)
+    expect(helperCall.col).toBeGreaterThanOrEqual(1)
+    expect(user.references.map((r) => r.target)).toContain('helper')
+    expect(helper.calledBy.map((c) => c.caller)).toContain('user')
+    const incoming = helper.calledBy.find((c) => c.caller === 'user')!
+    expect(incoming.line).toBe(6)
+    // Self-calls never produce calledBy or reference edges.
+    expect(lonely.calledBy).toEqual([])
+    expect(
+      lonely.references.filter((r) => r.target === 'lonely'),
+    ).toEqual([])
+    // Per-chunk caps hold.
+    for (const chunk of chunks) {
+      expect(chunk.calls.length).toBeLessThanOrEqual(25)
+      expect(chunk.calledBy.length).toBeLessThanOrEqual(25)
+      expect(chunk.imports.length).toBeLessThanOrEqual(25)
+      expect(chunk.references.length).toBeLessThanOrEqual(25)
+    }
+  })
+
+  test('body edits preserve stableChunkId while changing the version hash', async () => {
+    const v1 = ['export function stable() {', '  return 1', '}'].join('\n')
+    const v2 = ['export function stable() {', '  return 2', '}'].join('\n')
+    const before = await extractCodeChunks(v1, 'stable.ts')
+    const after = await extractCodeChunks(v2, 'stable.ts')
+    expect(before).toHaveLength(1)
+    expect(after).toHaveLength(1)
+    expect(after[0]!.stableChunkId).toBe(before[0]!.stableChunkId)
+    expect(after[0]!.stableChunkId).toBe(
+      deriveStableChunkId('stable.ts', 'stable', 'function'),
+    )
+    expect(after[0]!.hash).not.toBe(before[0]!.hash)
+    expect(after[0]!.chunkId).not.toBe(before[0]!.chunkId)
+  })
+
+  test('reuses previous chunks without a fresh parse when the hash is unchanged', async () => {
+    const src = ['export function cached() {', '  return 1', '}'].join('\n')
+    const first = await extractCodeChunks(src, 'reuse-a.ts')
+    expect(first.length).toBeGreaterThan(0)
+    const result = await extractCodeChunksDetailed(src, 'reuse-a.ts', {
+      previousChunks: first,
+      contentHash: hashContent(src),
+    })
+    expect(result.chunks).toBe(first)
+    expect(result.reusedChunks).toBe(first.length)
+    expect(result.freshChunks).toBe(0)
+    expect(result.diagnostics).toEqual([])
+  })
+
+  test('reports diagnostics instead of failing silently', async () => {
+    const unsupported = await extractCodeChunksDetailed(
+      'hello',
+      'notes.unknownext',
+    )
+    expect(unsupported.chunks).toEqual([])
+    expect(unsupported.diagnostics.length).toBeGreaterThan(0)
+    expect(unsupported.diagnostics[0]!.stage).toBe('language')
+
+    const viaOpts: { diagnostics?: import('../chunks').ChunkDiagnostic[] } = {}
+    await extractCodeChunks('hello', 'notes.unknownext', viaOpts)
+    expect(viaOpts.diagnostics !== undefined).toBe(true)
+    expect((viaOpts.diagnostics ?? []).length).toBeGreaterThan(0)
   })
 
   test('returns [] for empty file', async () => {
@@ -83,5 +268,78 @@ describe('extractCodeChunks', () => {
 
   test('returns [] for unsupported extension', async () => {
     expect(await extractCodeChunks('hello', 'notes.unknownext')).toEqual([])
+  })
+
+  test('resolves rename alias round-trip', async () => {
+    expect(resolveChunkAlias('alias-unknown.ts')).toBe('alias-unknown.ts')
+    registerChunkRenameAlias('alias-old.ts', 'alias-mid.ts')
+    expect(resolveChunkAlias('alias-old.ts')).toBe('alias-mid.ts')
+    expect(resolveChunkAlias('alias-mid.ts')).toBe('alias-mid.ts')
+    registerChunkRenameAlias('alias-mid.ts', 'alias-new.ts')
+    expect(resolveChunkAlias('alias-old.ts')).toBe('alias-new.ts')
+    expect(resolveChunkAlias('alias-mid.ts')).toBe('alias-new.ts')
+    registerChunkRenameAlias('alias-same.ts', 'alias-same.ts')
+    expect(resolveChunkAlias('alias-same.ts')).toBe('alias-same.ts')
+    expect(chunkAlias.has('alias-same.ts')).toBe(false)
+  })
+
+  test('resolves alias cycles without hanging', async () => {
+    registerChunkRenameAlias('cycle-a.ts', 'cycle-b.ts')
+    registerChunkRenameAlias('cycle-b.ts', 'cycle-a.ts')
+    expect(resolveChunkAlias('cycle-a.ts')).toBe('cycle-b.ts')
+    expect(resolveChunkAlias('cycle-b.ts')).toBe('cycle-a.ts')
+    registerChunkRenameAlias('cycle-self.ts', 'cycle-self-next.ts')
+    registerChunkRenameAlias('cycle-self-next.ts', 'cycle-self.ts')
+    expect(['cycle-self.ts', 'cycle-self-next.ts']).toContain(
+      resolveChunkAlias('cycle-self.ts'),
+    )
+  })
+
+  test('reuses chunks across rename with remapped stable ids', async () => {
+    const src = ['export function moved() {', '  return 1', '}'].join('\n')
+    const oldPath = 'alias-prev-old.ts'
+    const newPath = 'alias-prev-new.ts'
+    const first = await extractCodeChunks(src, oldPath)
+    expect(first.length).toBeGreaterThan(0)
+    const viaPreviousPath = await extractCodeChunksDetailed(src, newPath, {
+      previousPath: oldPath,
+    })
+    expect(viaPreviousPath.freshChunks).toBe(0)
+    expect(viaPreviousPath.reusedChunks).toBe(first.length)
+    expect(viaPreviousPath.diagnostics).toEqual([])
+    expect(viaPreviousPath.chunks).toHaveLength(first.length)
+    for (let i = 0; i < first.length; i++) {
+      const prev = first[i]!
+      const next = viaPreviousPath.chunks[i]!
+      expect(next.path).toBe(newPath)
+      expect(next.qualifiedName).toBe(prev.qualifiedName)
+      expect(next.kind).toBe(prev.kind)
+      expect(next.hash).toBe(prev.hash)
+      expect(next.stableChunkId).toBe(
+        deriveStableChunkId(newPath, next.qualifiedName, next.kind),
+      )
+      expect(next.chunkId).toBe(
+        deriveChunkId(newPath, next.qualifiedName, next.kind, next.hash),
+      )
+      expect(next.stableChunkId).not.toBe(prev.stableChunkId)
+    }
+    clearChunkMemo()
+    chunkAlias.clear()
+    const aliasOld = 'alias-map-old.ts'
+    const aliasNew = 'alias-map-new.ts'
+    const seeded = await extractCodeChunks(src, aliasOld)
+    expect(seeded.length).toBeGreaterThan(0)
+    registerChunkRenameAlias(aliasOld, aliasNew)
+    const viaAlias = await extractCodeChunksDetailed(src, aliasNew)
+    expect(viaAlias.freshChunks).toBe(0)
+    expect(viaAlias.reusedChunks).toBe(seeded.length)
+    expect(viaAlias.chunks[0]!.path).toBe(aliasNew)
+    expect(viaAlias.chunks[0]!.stableChunkId).toBe(
+      deriveStableChunkId(
+        aliasNew,
+        seeded[0]!.qualifiedName,
+        seeded[0]!.kind,
+      ),
+    )
   })
 })

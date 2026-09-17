@@ -97,6 +97,16 @@ export function collectFilePostingTokens(file: IndexedFile): Set<string> {
   for (const value of values) {
     for (const token of tokenizePostingValue(value)) tokens.add(token)
   }
+  // B1 chunk-aware postings: chunk qualifiedName split (camel/snake/dot/slash
+  // via tokenizePostingValue) + kind tokens. Bounded by the existing 160-char
+  // token cap and the 100/file chunk cap in metadata-indexer.
+  // documentFrequencies rebuild automatically via buildIndexQueryData.
+  for (const chunk of file.chunks ?? []) {
+    for (const token of tokenizePostingValue(chunk.qualifiedName)) {
+      tokens.add(token)
+    }
+    for (const token of tokenizePostingValue(chunk.kind)) tokens.add(token)
+  }
   return tokens
 }
 

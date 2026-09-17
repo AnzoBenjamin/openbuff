@@ -5,6 +5,8 @@ export interface CodeChunkSummary {
   startLine: number
   endLine: number
   hash: string
+  stableChunkId?: string
+  signature?: string
 }
 
 export interface IndexedFile {
@@ -186,8 +188,9 @@ export interface LexicalWeights {
   concept?: number
   /** Match against import specifiers. Historical default: 1. */
   import?: number
+  /** Match against code chunk qualifiedName/kind. Default: 1 (tunable via openbuff.json; measured to hold corpus MRR >= 0.9). */
+  chunk?: number
 }
-
 /**
  * Graph edge weights applied when `buildGraph` materialises edges into the
  * index. Defaults match the historical hardcoded constants; customising lets a
@@ -237,6 +240,17 @@ export interface RelatedFile {
   via?: string
 }
 
+/** Per-file top chunk hits (capped 5/file in query.ts). No separate chunkHash map is exposed — file-level indexedHash stays the file hash; chunk hashes ride along on each hit. */
+export interface QueryChunkHit {
+  chunkId: string
+  qualifiedName: string
+  kind: string
+  startLine: number
+  endLine: number
+  hash: string
+  score: number
+}
+
 export interface QueryIndexResult {
   path: string
   /** Content hash captured by this immutable index snapshot. */
@@ -251,10 +265,12 @@ export interface QueryIndexResult {
     | 'concept'
     | 'semantic'
     | 'command'
+    | 'chunk'
   >
   symbols?: string[]
   headings?: string[]
   matchedSnippets?: string[]
+  chunks?: QueryChunkHit[]
   relatedFiles?: RelatedFile[]
   explanation?: string
 }

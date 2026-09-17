@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -302,5 +303,75 @@ describe('index cache ownership', () => {
     expect(await loadSemanticVectors(root, 'model-b')).toEqual([
       { embeddingHash: 'b', vector: [2] },
     ])
+  })
+
+  test('verifies content-addressed snapshot via expectedSnapshotId', async () => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-index-snapshot-'),
+    )
+    const file = {
+      path: 'src/a.ts',
+      mtime: 1,
+      size: 1,
+      hash: 'hash-a',
+      ext: '.ts',
+      symbols: ['alpha'],
+      imports: [],
+      headings: [],
+      concepts: [],
+    }
+    const base = {
+      version: '2' as const,
+      projectRoot: root,
+      fileCount: 1,
+      files: { 'src/a.ts': file },
+      graph: { nodes: {}, edges: [] },
+    }
+    expect(await saveIndex({ ...base, builtAt: 1 }, root)).toBe(true)
+
+    // Omitted snapshot id returns the index.
+    const loaded = await loadIndex(root)
+    expect(loaded?.builtAt).toBe(1)
+    expect(loaded?.files['src/a.ts']?.hash).toBe('hash-a')
+
+    // Compute the expected content-addressed id via save/load round-trip
+    // (same inputs as the persisted snapshot, no hardcoded hash).
+    const expectedSnapshotId = createHash('sha256')
+      .update(`2\0${root}\0unknown\0`)
+      .update('src/a.ts')
+      .update('\0')
+      .update('hash-a')
+      .digest('hex')
+
+    const verified = await loadIndex(root, '.codebuff-index', {
+      expectedSnapshotId,
+    })
+    expect(verified?.builtAt).toBe(1)
+    expect(verified?.files['src/a.ts']?.hash).toBe('hash-a')
+
+    // Mismatched snapshot id is a safe miss.
+    expect(
+      await loadIndex(root, '.codebuff-index', {
+        expectedSnapshotId: '0'.repeat(64),
+      }),
+    ).toBeNull()
+
+    // The same id no longer matches after content changes.
+    expect(
+      await saveIndex(
+        {
+          ...base,
+          builtAt: 2,
+          files: { 'src/a.ts': { ...file, hash: 'hash-b' } },
+        },
+        root,
+      ),
+    ).toBe(true)
+    expect(await loadIndex(root)).not.toBeNull()
+    expect(
+      await loadIndex(root, '.codebuff-index', {
+        expectedSnapshotId,
+      }),
+    ).toBeNull()
   })
 })

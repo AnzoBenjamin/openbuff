@@ -128,7 +128,7 @@ function evidenceFixture(
 
 function observationFixture(
   observationId: string,
-  evidence = [evidenceFixture()],
+  evidence: any[] = [evidenceFixture()],
 ) {
   return {
     observationId,
@@ -1725,6 +1725,177 @@ describe('BunSQLiteMemoryRepository', () => {
       ],
       ['fresh-pair-revision-only', { workspaceRevision: 7 }],
       ['fresh-pair-snapshot-only', { workspaceSnapshotId: 'snapshot-7' }],
+    ] as const) {
+      const result = await query(queryId, context)
+      expect(
+        result.outcome === 'result' ? result.result.verifiedKnowledge : [],
+      ).toEqual([])
+      expect(
+        result.outcome === 'result' ? result.result.rereadRequired.length : 0,
+      ).toBe(1)
+    }
+  })
+
+  test('applies chunk selector digest (chunk.hash) and paired workspace freshness exactly', async () => {
+    const repository = await open(temporaryRepository())
+    const chunkDigest =
+      'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+    const chunkSelector = {
+      kind: 'chunk' as const,
+      path: 'src/example.ts',
+      chunkId: 'chunk-1',
+      qualifiedName: 'example.chunk',
+      startLine: 1,
+      endLine: 10,
+    }
+    const chunkEvidence = {
+      ...evidenceFixture('src/example.ts', chunkDigest),
+      selector: chunkSelector,
+      excerpt: 'chunk excerpt deterministic tokens',
+    }
+    const observation = observationFixture('chunk-freshness', [chunkEvidence])
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'chunk-observation', {
+                payloadSchemaVersion: 1,
+                observation,
+              }),
+              canonicalDraft('evidence.verified', 'chunk-verified', {
+                payloadSchemaVersion: 1,
+                observationId: 'chunk-freshness',
+                selector: chunkSelector,
+                verifier: 'test',
+                verifiedAt: '2025-01-02T03:05:05.000Z',
+                observedDigest: chunkDigest,
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+
+    const query = async (
+      queryId: string,
+      context: Record<string, unknown> = {},
+    ) =>
+      repository.query(
+        MemoryRetrievalRequestSchema.parse({
+          schemaVersion: 2,
+          queryId,
+          projectId: 'project-1',
+          sessionId: 'session-1',
+          query: 'Chunk freshness deterministic',
+          selectors: [],
+          artifactKinds: [],
+          includeHistorical: false,
+          maxResultsPerCategory: 10,
+          ...context,
+        }),
+      )
+    // Same-snapshot (no-context) chunk verification counts as verified.
+    const noContext = await query('chunk-fresh-none')
+    expect(
+      noContext.outcome === 'result'
+        ? noContext.result.verifiedKnowledge.length
+        : 0,
+    ).toBe(1)
+    if (noContext.outcome === 'result') {
+      const [entry] = noContext.result.verifiedKnowledge
+      expect(entry?.score).toBeGreaterThanOrEqual(0)
+      expect(entry?.score).toBeLessThanOrEqual(1)
+      // Digest-freshness boost is an explicit bounded verified-evidence
+      // reason; the chunk contentDigest (chunk.hash) must match exactly.
+      expect(
+        entry?.reasons.some(
+          ({ code, contribution }) =>
+            code === 'verified-evidence' && contribution === 0.03,
+        ),
+      ).toBe(true)
+    }
+    // Any digest drift (mismatch or missing observedDigest) invalidates the
+    // chunk: verified=0 and reread=1.
+    for (const [eventId, observedDigest] of [
+      [
+        'chunk-mismatch',
+        'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+      ],
+      ['chunk-missing', undefined],
+    ] as const) {
+      expect(
+        (
+          await repository.append(
+            MemoryAppendRequestSchema.parse({
+              schemaVersion: 2,
+              projectId: 'project-1',
+              events: [
+                canonicalDraft('evidence.verified', eventId, {
+                  payloadSchemaVersion: 1,
+                  observationId: 'chunk-freshness',
+                  selector: chunkSelector,
+                  verifier: 'test',
+                  verifiedAt: '2025-01-02T03:05:30.000Z',
+                  ...(observedDigest ? { observedDigest } : {}),
+                }),
+              ],
+            }),
+          )
+        ).outcome,
+      ).toBe('appended')
+      const result = await query(`${eventId}-query`)
+      expect(
+        result.outcome === 'result' ? result.result.verifiedKnowledge : [],
+      ).toEqual([])
+      expect(
+        result.outcome === 'result' ? result.result.rereadRequired.length : 0,
+      ).toBe(1)
+    }
+    // Paired revision/snapshot context: exact match verifies, any drift
+    // (rev8, snap8, rev-only, snap-only) rereads.
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('evidence.verified', 'chunk-context', {
+                payloadSchemaVersion: 1,
+                observationId: 'chunk-freshness',
+                selector: chunkSelector,
+                verifier: 'test',
+                verifiedAt: '2025-01-02T03:06:05.000Z',
+                observedDigest: chunkDigest,
+                workspaceRevision: 7,
+                workspaceSnapshotId: 'snapshot-7',
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const exact = await query('chunk-fresh-exact', {
+      workspaceRevision: 7,
+      workspaceSnapshotId: 'snapshot-7',
+    })
+    expect(
+      exact.outcome === 'result' ? exact.result.verifiedKnowledge.length : 0,
+    ).toBe(1)
+    for (const [queryId, context] of [
+      [
+        'chunk-revision-mismatch',
+        { workspaceRevision: 8, workspaceSnapshotId: 'snapshot-7' },
+      ],
+      [
+        'chunk-snapshot-mismatch',
+        { workspaceRevision: 7, workspaceSnapshotId: 'snapshot-8' },
+      ],
+      ['chunk-pair-revision-only', { workspaceRevision: 7 }],
+      ['chunk-pair-snapshot-only', { workspaceSnapshotId: 'snapshot-7' }],
     ] as const) {
       const result = await query(queryId, context)
       expect(

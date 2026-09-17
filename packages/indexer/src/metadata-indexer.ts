@@ -184,6 +184,18 @@ export async function updateMetadataIndex(
   mutationDelta?: IndexMutationDelta,
 ): Promise<MetadataIndex> {
   tsAliasCacheByRoot.delete(projectRoot)
+  // B5(c) workspaceRevision journal: reject stale complete:true deltas. If the
+  // incoming revision is older than the incorporated revision, skip the precise
+  // walk and return existing with a builtAt refresh so callers observe liveness
+  // without regressing to stale content.
+  if (
+    mutationDelta?.complete === true &&
+    mutationDelta.revision !== undefined &&
+    existing.workspaceRevision !== undefined &&
+    mutationDelta.revision < existing.workspaceRevision
+  ) {
+    return { ...existing, builtAt: Date.now() }
+  }
   const preciseDelta = mutationDelta?.complete === true
   const walked = preciseDelta
     ? await collectPreciseWalk(existing, projectRoot, mutationDelta, config)
@@ -357,6 +369,7 @@ export async function updateMetadataIndex(
   }
 
   for (const file of changedFiles) {
+    const previous = existing.files[file.relativePath]
     const indexed = await indexWalkedFile({
       absolutePath: file.absolutePath,
       projectRoot,
@@ -367,6 +380,8 @@ export async function updateMetadataIndex(
       asset: file.asset,
       hash: hashByPath.get(file.relativePath),
       tokenScores: tokenScores[file.relativePath] ?? {},
+      previousChunks: previous?.chunks,
+      previousHash: previous?.hash,
     })
     if (indexed) {
       updatedFiles[file.relativePath] = indexed
@@ -407,6 +422,8 @@ async function indexWalkedFile(params: {
   asset?: { kind: '3d'; format: string }
   hash?: string
   tokenScores: Record<string, number>
+  previousChunks?: IndexedFile['chunks']
+  previousHash?: string
 }): Promise<IndexedFile | null> {
   // Skip binary files entirely — they cannot be parsed as UTF-8 text and
   // reading them would corrupt the index with garbage imports/symbols.
@@ -486,12 +503,14 @@ async function indexWalkedFile(params: {
         ? configConcepts
         : []
   const concepts = mergeConcepts(baseConcepts, configConcepts)
-  const contentSample = content
+  const contentSampleRaw = content
     .split('\n')
     .filter((line) => line.trim().length > 0)
     .slice(0, 120)
     .join('\n')
-    .slice(0, 4_000)
+  const contentSampleSliced = contentSampleRaw.slice(0, 4_000)
+  const contentSampleTruncated = contentSampleSliced.length < contentSampleRaw.length
+  const contentSample = contentSampleTruncated ? `${contentSampleSliced}…[truncated]` : contentSampleSliced
 
   // Extract asset references from game engine text files (Unity .meta/.prefab/.unity,
   // Godot .tscn/.tres, Unreal .uproject, Bevy configs). Returns [] for non-asset files.
@@ -502,7 +521,11 @@ async function indexWalkedFile(params: {
   // leave `chunks` undefined to keep the cache compact.
   let chunks: IndexedFile['chunks']
   if (CODE_EXTENSIONS.has(params.ext)) {
-    try {
+    const contentHash = params.hash ?? hashContent(content)
+    if (params.previousChunks && params.previousHash && contentHash === params.previousHash) {
+      chunks = params.previousChunks.slice(0, 100)
+      if (chunks.length === 0) chunks = undefined
+    } else try {
       const rawChunks = await extractCodeChunks(content, params.relativePath)
       if (rawChunks.length > 0) {
         chunks = rawChunks.slice(0, 100).map((chunk) => ({
@@ -512,6 +535,8 @@ async function indexWalkedFile(params: {
           startLine: chunk.startLine,
           endLine: chunk.endLine,
           hash: chunk.hash,
+          stableChunkId: chunk.stableChunkId,
+          signature: chunk.signature,
         }))
         if (chunks.length === 0) chunks = undefined
       }

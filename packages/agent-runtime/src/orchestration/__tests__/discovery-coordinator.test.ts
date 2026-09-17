@@ -4,9 +4,11 @@ import {
   buildDiscoveryQuestion,
   claimDiscoveryShard,
   completeDiscoveryShard,
+  evaluateMemoryCover,
   planDiscoveryBatch,
   reconcileInterruptedDiscoveryShards,
   recordDiscoveryResult,
+  tryClaimDiscoveryShard,
 } from '../discovery-coordinator'
 
 describe('discovery coordinator', () => {
@@ -353,5 +355,108 @@ describe('discovery coordinator', () => {
 
     expect(result.candidates).toHaveLength(1)
     expect(result.candidates[0].path).toBe('tests/auth.test.ts')
+  })
+
+  test('evaluateMemoryCover skips on full cover', () => {
+    const evaluation = evaluateMemoryCover({
+      excerpts: [{ path: 'src/auth/login.ts', excerpt: 'login' }],
+      pathPrefixes: ['src/auth'],
+      query: 'authentication',
+    })
+
+    expect(evaluation.decision).toBe('skip')
+    expect(evaluation.remainingGaps).toEqual([])
+    expect(evaluation.coveringExcerpts.map((entry) => entry.path)).toContain(
+      'src/auth/login.ts',
+    )
+  })
+
+  test('evaluateMemoryCover narrows on partial cover', () => {
+    const evaluation = evaluateMemoryCover({
+      excerpts: [{ path: 'src/auth/login.ts', excerpt: 'login' }],
+      pathPrefixes: ['src/auth', 'src/other'],
+      query: 'authentication',
+    })
+
+    expect(evaluation.decision).toBe('narrow')
+    expect(evaluation.remainingGaps).toEqual(['src/other'])
+    expect(evaluation.coveringExcerpts).toHaveLength(1)
+  })
+
+  test('evaluateMemoryCover goes full on stale revision', () => {
+    const evaluation = evaluateMemoryCover({
+      excerpts: [
+        { path: 'src/auth/login.ts', excerpt: 'login', workspaceRevision: 1 },
+      ],
+      pathPrefixes: ['src/auth'],
+      query: 'authentication',
+      workspaceRevision: 2,
+    })
+
+    expect(evaluation.decision).toBe('full')
+    expect(evaluation.coveringExcerpts).toEqual([])
+  })
+
+  test('evaluateMemoryCover goes full on stale index snapshot', () => {
+    const evaluation = evaluateMemoryCover({
+      excerpts: [{ path: 'src/auth/login.ts', excerpt: 'login' }],
+      pathPrefixes: ['src/auth'],
+      query: 'authentication',
+      indexSnapshotId: 'index-new',
+      existingIndexSnapshotId: 'index-old',
+    })
+
+    expect(evaluation.decision).toBe('full')
+    expect(evaluation.reason).toBe('stale-index-snapshot')
+  })
+
+  test('evaluateMemoryCover goes full without cover', () => {
+    expect(
+      evaluateMemoryCover({ pathPrefixes: ['src/auth'], query: 'auth' })
+        .decision,
+    ).toBe('full')
+    expect(
+      evaluateMemoryCover({
+        excerpts: [{ path: 'src/auth/login.ts' }],
+      }).decision,
+    ).toBe('full')
+  })
+
+  test('tryClaimDiscoveryShard returns duplicate receipt instead of throwing', () => {
+    const first = tryClaimDiscoveryShard({
+      agentType: 'query_index',
+      question: 'find auth files',
+      workspaceRevision: 1,
+      taskId: 'task-1',
+    })
+    expect(first.duplicate).toBe(false)
+    expect(first.shardKey).toHaveLength(24)
+
+    const second = tryClaimDiscoveryShard({
+      existing: first.state,
+      agentType: 'query_index',
+      question: 'find auth files',
+      workspaceRevision: 1,
+      taskId: 'task-1',
+    })
+    expect(second.duplicate).toBe(true)
+    expect(second.shardKey).toBe(first.shardKey)
+    expect(second.state).toBe(first.state)
+  })
+
+  test('claimDiscoveryShard throw semantics unchanged', () => {
+    const claimed = claimDiscoveryShard({
+      agentType: 'file-picker',
+      question: 'throw check',
+      workspaceRevision: 9,
+    })
+    expect(() =>
+      claimDiscoveryShard({
+        existing: claimed.state,
+        agentType: 'file-picker',
+        question: 'check throw',
+        workspaceRevision: 9,
+      }),
+    ).toThrow(/Duplicate discovery shard/)
   })
 })

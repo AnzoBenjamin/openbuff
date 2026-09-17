@@ -2726,11 +2726,15 @@ function buildLexicalResult(
       : never,
   ) => {
     if (freshness.state !== 'verified') return false
-    if (
-      'path' in evidence.selector &&
-      freshness.observedDigest !== evidence.contentDigest
-    )
-      return false
+    // Strict honesty gate for every path-bearing selector (file, line-range,
+    // symbol, json-pointer, chunk): the observed digest must equal the
+    // evidence contentDigest (for chunk selectors this is chunk.hash, not the
+    // file hash). Digest-less path evidence never counts as verified so
+    // verifiedKnowledge cannot carry a path selector without a digest.
+    if ('path' in evidence.selector) {
+      if (evidence.contentDigest === undefined) return false
+      if (freshness.observedDigest !== evidence.contentDigest) return false
+    }
     const requestHasContext =
       request.workspaceRevision !== undefined ||
       request.workspaceSnapshotId !== undefined
@@ -2745,6 +2749,20 @@ function buildLexicalResult(
     }
     return true
   }
+  // Bounded-lexical-v1 weight table (deterministic core, score capped at 1.0
+  // via Math.min(1, ...)): task-match 0.25 + selector-match 0.25 +
+  // chunk selector-match 0.05 + lexical-match (query) <= 0.24 (0.06/token) +
+  // excerpt-token overlap (lexical-match code) <= 0.06 (0.02/token, max 3
+  // tokens, only when an evidence excerpt is present; combined lexical
+  // family <= 0.30, preserving the original lexical cap) +
+  // verified-evidence 0.12 + digest-freshness (verified-evidence code)
+  // <= 0.03 (only when verified evidence has matching contentDigest +
+  // exact revision/snapshot; combined verified family <= 0.15, preserving
+  // the original verified cap) + reusability (pinned) 0.04 + recency 0.01.
+  // New-weight sum 0.06 + 0.03 = 0.09 <= 1; worst-case raw sum equals the
+  // pre-existing max and the final score is capped at 1.0. Tiebreak stays
+  // exact > token > verified > pinned > sequence (see compare below);
+  // reasons stay within 1..16 entries.
   const rank = (
     text: string,
     taskId: string | undefined,
@@ -2752,6 +2770,8 @@ function buildLexicalResult(
     verified: boolean,
     pinned: boolean,
     sourceSequence: number,
+    excerptOverlap = 0,
+    digestFresh = false,
   ) => {
     const candidateTokens = lexicalTokens(text)
     let tokenMatches = 0
@@ -2795,16 +2815,32 @@ function buildLexicalResult(
       reasons.push(
         reason(
           'lexical-match',
-          Math.min(0.3, tokenMatches * 0.06),
+          Math.min(0.24, tokenMatches * 0.06),
           `${tokenMatches} lexical token match(es).`,
+        ),
+      )
+    if (excerptOverlap > 0)
+      reasons.push(
+        reason(
+          'lexical-match',
+          Math.min(0.06, excerptOverlap * 0.02),
+          `${excerptOverlap} excerpt token overlap(s).`,
         ),
       )
     if (verified)
       reasons.push(
         reason(
           'verified-evidence',
-          0.15,
+          0.12,
           'The observation has current verified evidence.',
+        ),
+      )
+    if (verified && digestFresh)
+      reasons.push(
+        reason(
+          'verified-evidence',
+          0.03,
+          'Digest and workspace revision/snapshot exactly match.',
         ),
       )
     if (pinned)
@@ -2861,6 +2897,32 @@ function buildLexicalResult(
         const freshness = state.freshness.get(selectorKey(evidence.selector))
         return freshness !== undefined && contextMatches(evidence, freshness)
       })
+      // Digest-freshness: true only when verified evidence carries a matching
+      // contentDigest (chunk.hash for chunk selectors, not the file hash) plus
+      // exact revision/snapshot equality already enforced by contextMatches.
+      const digestFresh = state.observation.evidence.some((evidence) => {
+        const freshness = state.freshness.get(selectorKey(evidence.selector))
+        return (
+          freshness !== undefined &&
+          contextMatches(evidence, freshness) &&
+          evidence.contentDigest !== undefined &&
+          freshness.observedDigest === evidence.contentDigest
+        )
+      })
+      // Excerpt-token overlap: distinct request queryTokens found in the union
+      // of present evidence.excerpt tokens; zero when no excerpt is present.
+      const excerptTokens = new Set<string>()
+      for (const evidence of state.observation.evidence) {
+        if (typeof evidence.excerpt === 'string' && evidence.excerpt.length > 0) {
+          for (const token of lexicalTokens(evidence.excerpt))
+            excerptTokens.add(token)
+        }
+      }
+      let excerptOverlap = 0
+      if (excerptTokens.size > 0) {
+        for (const token of queryTokens)
+          if (excerptTokens.has(token)) excerptOverlap++
+      }
       return {
         id: state.observation.observationId,
         state,
@@ -2872,6 +2934,8 @@ function buildLexicalResult(
           verified,
           state.pinned,
           state.sourceSequence,
+          excerptOverlap,
+          digestFresh,
         ),
       }
     })

@@ -36,7 +36,7 @@ export interface SemanticHit {
 }
 
 /** Bump when {@link fileEmbeddingText} changes in a vector-incompatible way. */
-export const FILE_EMBEDDING_TEXT_VERSION = '2'
+export const FILE_EMBEDDING_TEXT_VERSION = '3'
 
 /**
  * Stable cache identity for vectors produced by one embedding configuration.
@@ -76,15 +76,21 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 
 /**
  * Compact natural-language-ish representation of a file for embedding: path,
- * symbols, headings, and concepts. Deliberately small so embedding is cheap and
- * stays within model input limits.
+ * symbols, headings, concepts, and chunk qualifiedNames. Deliberately small
+ * so embedding is cheap and stays within model input limits.
+ *
+ * Chunk-aware choice (P-B B4): the file graph is kept (no chunk node blowup);
+ * only the embedding text is chunk-aware, bounded to the first 20 chunk
+ * qualifiedNames so vocabulary stays bounded while method names gain recall.
  */
 export function fileEmbeddingText(file: IndexedFile): string {
+  const chunkNames = (file.chunks ?? []).slice(0, 20).map((c) => c.qualifiedName).join(' ')
   const parts = [
     file.path,
     file.symbols.slice(0, 40).join(' '),
     file.headings.slice(0, 20).join(' '),
     file.concepts.slice(0, 30).join(' '),
+    chunkNames,
     file.contentSample?.slice(0, 4_000),
   ]
   return parts.filter((p) => p && p.trim().length > 0).join('\n')

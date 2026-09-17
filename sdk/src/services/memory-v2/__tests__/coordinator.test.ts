@@ -1394,6 +1394,237 @@ describe('MemoryV2Coordinator lifecycle', () => {
     expect(coveragePayload.notes).toContain('complete')
   })
 
+  test('captures chunk selectors from read line-ranges with file fallback', async () => {
+    const repository = new RepositoryStub()
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:chunk-read',
+      query: 'capture',
+    })
+    const before = allEvents(repository).length
+    await coordinator.recordToolObservation({
+      toolName: 'read_files',
+      callId: 'call:chunk-read',
+      userInputId: 'input:chunk-read',
+      input: { path: 'src/good.ts', startLine: 10, endLine: 20 },
+      output: [
+        {
+          type: 'json',
+          value: {
+            path: 'src/good.ts',
+            startLine: 10,
+            endLine: 20,
+            symbol: 'goodFn',
+            occurrence: 1,
+            content: 'export function goodFn() {}',
+          },
+        },
+      ],
+      native: true,
+    })
+    const event = allEvents(repository).at(-1)!
+    expect(allEvents(repository).length).toBe(before + 1)
+    expect(event.eventType).toBe('observation.recorded')
+    if (event.eventType === 'observation.recorded') {
+      const selectors = event.payload.observation.selectors ?? []
+      expect(selectors).toContainEqual({ kind: 'file', path: 'src/good.ts' })
+      const chunk = selectors.find((s) => s.kind === 'chunk')
+      expect(chunk).toMatchObject({
+        kind: 'chunk',
+        path: 'src/good.ts',
+        startLine: 10,
+        endLine: 20,
+      })
+      const chunkEvidence = event.payload.observation.evidence.filter(
+        (e) => e.selector.kind === 'chunk',
+      )
+      expect(chunkEvidence.length).toBeGreaterThan(0)
+      for (const item of chunkEvidence) {
+        expect(item.excerpt === undefined || item.excerpt.length <= 1024).toBe(true)
+        expect(item.contentDigest).toMatch(/^sha256:/)
+      }
+      expect(event.payload.observation.confidence).toBe(0.5)
+    }
+  })
+
+  test('captures chunk selectors from query_index hits and enqueues chunk verifies best-effort', async () => {
+    const repository = new RepositoryStub()
+    const verifyRequests: unknown[] = []
+    repository.verify = (async (request: unknown) => {
+      verifyRequests.push(request)
+      return {
+        outcome: 'rejected',
+        error: { code: 'invalid-request', message: 'stub', retryable: false },
+      } as never
+    }) as unknown as RepositoryStub['verify']
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:chunk-query',
+      query: 'capture',
+    })
+    const validDigest = `sha256:${'a'.repeat(64)}`
+    const before = allEvents(repository).length
+    await coordinator.recordToolObservation({
+      toolName: 'query_index',
+      callId: 'call:chunk-query',
+      userInputId: 'input:chunk-query',
+      input: {},
+      output: [
+        {
+          type: 'json',
+          value: {
+            chunks: [
+              {
+                path: 'src/good.ts',
+                chunkId: 'chunk-1',
+                qualifiedName: 'mod.fn',
+                startLine: 5,
+                endLine: 15,
+                hash: validDigest,
+                signature: 'fn signature',
+                snippet: 'code snippet',
+              },
+              {
+                path: 'src/good.ts',
+                chunkId: 'chunk-bad',
+                qualifiedName: 'mod.bad',
+                startLine: 20,
+                endLine: 25,
+                hash: 'not-a-digest',
+              },
+              {
+                path: '.openbuff/memory/export.json',
+                chunkId: 'chunk-private',
+                qualifiedName: 'private.fn',
+                startLine: 1,
+                endLine: 2,
+                hash: validDigest,
+              },
+            ],
+          },
+        },
+      ],
+      native: true,
+    })
+    const event = allEvents(repository).at(-1)!
+    expect(allEvents(repository).length).toBe(before + 1)
+    expect(event.eventType).toBe('observation.recorded')
+    if (event.eventType === 'observation.recorded') {
+      const selectors = event.payload.observation.selectors ?? []
+      expect(selectors).toContainEqual({ kind: 'file', path: 'src/good.ts' })
+      expect(
+        selectors.filter((s) => s.kind === 'chunk'),
+      ).toHaveLength(2)
+      expect(selectors).toContainEqual({
+        kind: 'chunk',
+        path: 'src/good.ts',
+        chunkId: 'chunk-1',
+        qualifiedName: 'mod.fn',
+        startLine: 5,
+        endLine: 15,
+      })
+      expect(selectors).toContainEqual({
+        kind: 'chunk',
+        path: 'src/good.ts',
+        chunkId: 'chunk-bad',
+        qualifiedName: 'mod.bad',
+        startLine: 20,
+        endLine: 25,
+      })
+      expect(
+        selectors.filter(
+          (s) => s.kind === 'chunk' && s.path.includes('.openbuff'),
+        ),
+      ).toHaveLength(0)
+      const chunkEvidence = event.payload.observation.evidence.find(
+        (e) => e.selector.kind === 'chunk',
+      )
+      expect(chunkEvidence?.contentDigest).toBe(validDigest)
+      expect(chunkEvidence?.excerpt === undefined || chunkEvidence?.excerpt.length <= 1024).toBe(true)
+    }
+    expect(verifyRequests).toHaveLength(1)
+    expect(verifyRequests[0]).toMatchObject({
+      action: {
+        kind: 'verify',
+        selector: {
+          kind: 'chunk',
+          path: 'src/good.ts',
+          chunkId: 'chunk-1',
+        },
+        observedDigest: validDigest,
+      },
+    })
+    // Stored chunk verifies replay through verifyCapturedPaths without throwing.
+    await expect(
+      coordinator.verifyCapturedPaths({ userInputId: 'input:chunk-query' }),
+    ).resolves.toBeUndefined()
+    expect(verifyRequests).toHaveLength(2)
+  })
+
+  test('swallows chunk verify throws best-effort and ignores invalid digests', async () => {
+    const repository = new RepositoryStub()
+    repository.verify = (async () => {
+      throw new Error('verify offline')
+    }) as unknown as RepositoryStub['verify']
+    const warnings: unknown[] = []
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository, 'shadow'),
+      { warn: (fields: unknown) => warnings.push(fields) },
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:chunk-throw',
+      query: 'capture',
+    })
+    const validDigest = `sha256:${'b'.repeat(64)}`
+    await expect(
+      coordinator.recordToolObservation({
+        toolName: 'query_index',
+        callId: 'call:chunk-throw',
+        userInputId: 'input:chunk-throw',
+        input: {},
+        output: [
+          {
+            type: 'json',
+            value: {
+              chunks: [
+                {
+                  path: 'src/good.ts',
+                  chunkId: 'chunk-9',
+                  qualifiedName: 'mod.throw',
+                  startLine: 1,
+                  endLine: 3,
+                  hash: validDigest,
+                },
+              ],
+            },
+          },
+        ],
+        native: true,
+      }),
+    ).resolves.toBeUndefined()
+    const event = allEvents(repository).at(-1)!
+    expect(event.eventType).toBe('observation.recorded')
+    await expect(
+      coordinator.verifyCapturedPaths({ userInputId: 'input:chunk-throw' }),
+    ).resolves.toBeUndefined()
+    expect(warnings.length).toBeGreaterThan(0)
+  })
+
   test('fails closed when conflict tail export cannot produce a valid page', async () => {
     const failures: Array<unknown> = [
       {

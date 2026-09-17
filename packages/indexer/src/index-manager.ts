@@ -1,7 +1,6 @@
-import { createHash } from 'node:crypto'
-
 import { buildMetadataIndex, updateMetadataIndex } from './metadata-indexer'
 import {
+  computeIndexSnapshotId,
   isIndexReady,
   isIndexStale,
   getIndexDir,
@@ -373,7 +372,40 @@ export class IndexManager {
           )
         }
       }
-      this.index = (await loadIndex(this.projectRoot, cacheDir)) ?? index
+      if (persisted) {
+        // Fail-closed verification: only trust disk when it still holds the
+        // snapshot we just built. Verified by comparing snapshot content
+        // directly rather than by re-deriving a content digest, so the check
+        // cannot be silently disabled if this module's identity hash and
+        // index-store's ever drift apart. A mismatch falls back to the
+        // in-memory index so a concurrent writer can't swap content under us.
+        let verified: MetadataIndex | null = null
+        try {
+          verified = await loadIndex(this.projectRoot, cacheDir)
+        } catch {
+          verified = null
+        }
+        if (verified && !isSameIndexSnapshot(verified, index)) {
+          verified = null
+        }
+        if (!verified) {
+          console.warn(
+            '[indexer] persisted index failed snapshot verification; serving the in-memory index.',
+          )
+        }
+        this.index = verified ?? index
+      } else {
+        // Our save lost the CAS race: preserve concurrent-newest-wins by
+        // serving the newest on-disk index (unverified). The read is guarded
+        // so a failed read can't discard the index we just built.
+        let onDisk: MetadataIndex | null = null
+        try {
+          onDisk = await loadIndex(this.projectRoot, cacheDir)
+        } catch {
+          onDisk = null
+        }
+        this.index = onDisk ?? index
+      }
       this.snapshotCache = undefined
       this.lastBuildError = undefined
       await this._buildVectors(this.index, cacheDir)
@@ -396,15 +428,14 @@ export class IndexManager {
 
   private getSnapshotIdentity(index: MetadataIndex): IndexSnapshotIdentity {
     if (this.snapshotCache?.index === index) return this.snapshotCache.identity
-    const hash = createHash('sha256').update(
-      `${index.version}\0${index.projectRoot}\0${index.builtAt}\0${index.workspaceRevision ?? 'unknown'}\0`,
-    )
-    for (const filePath of Object.keys(index.files).sort()) {
-      hash.update(filePath).update('\0').update(index.files[filePath]!.hash)
-    }
+    // Content-addressed: builtAt is metadata only (kept on the identity
+    // object) and excluded from the snapshotId hash input so identical
+    // content yields identical snapshotIds across rebuilds. Delegates to the
+    // single canonical implementation in index-store so the published
+    // identity can never drift from the verification digest.
     const identity: IndexSnapshotIdentity = {
       schemaVersion: 1,
-      snapshotId: hash.digest('hex'),
+      snapshotId: computeIndexSnapshotId(index),
       indexVersion: index.version,
       builtAt: index.builtAt,
       ...(index.workspaceRevision !== undefined
@@ -591,6 +622,31 @@ function withConfigLexicalWeights(
   // Caller-supplied per-query weights take precedence over config defaults.
   if (options.lexicalWeights) return options
   return { ...options, lexicalWeights: configLexical }
+}
+
+/**
+ * Compares two index snapshots by the content that defines a snapshot: schema
+ * version, project root, workspace revision (matching the store's
+ * `undefined -> 'unknown'` normalization), and every file's content hash.
+ * Backs the fail-closed verification in `_build` without depending on two
+ * independently implemented content-addressed digests agreeing.
+ */
+function isSameIndexSnapshot(
+  a: MetadataIndex,
+  b: MetadataIndex,
+): boolean {
+  if (
+    a.version !== b.version ||
+    a.projectRoot !== b.projectRoot ||
+    (a.workspaceRevision ?? 'unknown') !== (b.workspaceRevision ?? 'unknown')
+  ) {
+    return false
+  }
+  const aPaths = Object.keys(a.files)
+  if (aPaths.length !== Object.keys(b.files).length) return false
+  return aPaths.every(
+    (filePath) => a.files[filePath]?.hash === b.files[filePath]?.hash,
+  )
 }
 
 function mergeMutationDeltas(

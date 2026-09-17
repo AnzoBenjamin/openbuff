@@ -144,11 +144,13 @@ All declared workflow items complete.
 **Discovery coverage vertical slice** shipped: taskId + workspaceSnapshotId in schema, coordinator, spawn wiring, and 3 new tests.
 
 <!-- update_plan_status:appended -->
+
 ## Plan tracking re-verified against live worktree — 2026-09-12
 
 Re-verified the durable plan's stale tracking against the live worktree. Focused suites are green: MEM2-R3-T1 migration/operator/coordinator 96/96; MEM2-R1-T1 SQLite kernel 44/44. The only remaining gate is MEM2-R1-T2 (race-resistant SQLite open). Verified fact: race-free WAL/SHM open is provably impossible in pure JS with bun:sqlite (SQLite opens the -wal/-shm sidecars by derived pathname internally; bun:sqlite accepts a path string only — no fd, no dirfd-relative open). R1-T2 therefore resolves via its typed-unsupported fail-closed fallback (report a typed unavailable outcome, perform no SQLite mutation where race-resistance cannot be proven); full race closure is deferred pending explicit native-addon/dependency authorization (SPEC decision #9, option C).
 
 <!-- update_plan_status:appended -->
+
 ## R1-T2 typed-unsupported secure-open + R7 integration matrix — 2026-09-13T19:33:12.321Z
 
 MEM2-R1-T2 resolved via its typed-unsupported fail-closed fallback. Verified fact: race-free SQLite open is provably impossible in pure JS with bun:sqlite (path-only constructor; -wal/-shm sidecars open by derived pathname internally, no fd/dirfd support). Implemented a hybrid: a strict `requireSecureOpen` opt-in gate in `BunSQLiteMemoryRepository.open()` that fails closed with a typed non-retryable `unsupported-open` error and performs zero SQLite mutation, plus a default-on honest `openPosture: 'pathname-best-effort-unverified-open'` visibility field on the open result and `kernelHealth`. Default open path and all pre-existing pathname hardening are unchanged. No dependency added (SPEC #9 respected); full WAL/SHM race closure deferred pending native-addon authorization (option C).
@@ -156,6 +158,7 @@ MEM2-R1-T2 resolved via its typed-unsupported fail-closed fallback. Verified fac
 Security review: LOOKS_GOOD, 0 findings (strict gate prevents all mutation; no path/SQL/secret leak; no false security claim; default path unregressed).
 
 R7 integration matrix re-run against this state (all green):
+
 - SDK Memory V2: 117/117 (coordinator, v1-migration, operator-service, contract, run-cancellation)
 - CLI Memory V2: 201/201 across 9 files (SQLite repo 47 incl. 3 new strict-secure-open tests, contained-file-io, provider, roundtrip, memory-command, codebuff-client, env, slash-commands, memory-box)
 - common Memory V2 contracts: 42/42
@@ -163,6 +166,7 @@ R7 integration matrix re-run against this state (all green):
 - Monorepo typecheck: 11/11 packages pass
 
 <!-- update_plan_status:appended -->
+
 ## Projection replay cap + R2 verification — 2026-09-13T19:53:39.176Z
 
 Addressed the gate advisory that rebuildProjections/replayProjections had no event cap. Added `MAX_REPLAY_EVENTS = 10_000` (consistent with `MAX_QUERY_EVENTS`); `replayProjections(database, maxEvents)` now stops the paged replay loop at the cap, and on truncation sets the projection cursor to the last replayed sequence and returns `truncated: true` rather than throwing or falsely claiming the canonical tail. `rebuildProjections()` surfaces `truncated: boolean` on its ok-result. v1→v2 `migrate()` passes `Number.MAX_SAFE_INTEGER` so migration replay stays complete; rollback-on-failure unchanged. Backward-compatible and additive.
@@ -172,11 +176,13 @@ R2 (SDK run/coordinator reliability) verified green: coordinator + run-cancellat
 Validation: SQLite focused suite 49/49 (2 new cap tests + 1 updated), V1→V2 round-trip 1/1, cli typecheck clean, Prettier clean.
 
 <!-- update_plan_status:appended -->
+
 ## projectId index advisory evaluated — no change warranted — 2026-09-13T20:17:06.358Z
 
 Evaluated the reviewer advisory that `scanQueryRows`/`readLastEventIdForProject` use unindexed `json_extract` projectId filters. Benchmarked at the current 10k-event cap (50 iterations each): 250-row filtered query mean 0.815ms unindexed vs 0.671ms with an expression index (within noise); tail query 0.009ms vs 0.008ms. EXPLAIN QUERY PLAN confirms the expression index is used when present, but the absolute cost is already sub-millisecond at the cap. Decision: no schema/index change now; revisit only if the event cap grows materially. Recorded as a data-backed no-change decision.
 
 <!-- update_plan_status:appended -->
+
 ## R4/R6 verification + phantom-file gate fix + 'missing' marker constant — 2026-09-13T22:50:29.563Z
 
 Re-verified the memory-v2 plan's remaining focused suites in the current tree: R4 provider/client authority (provider + env) 26/26; R6 coverage/prompt safety (agent-runtime task-memory + memory-v2-context + loop-agent-steps) 84/84; memory-retention eval 6/6. R1-T1 (SQLite 44/44), R1-T2 (typed-unsupported secure-open), R2 (coordinator 53/53), R3-T1 (migration/operator 96/96) all confirmed green. Only R7 finalization (stable exact-snapshot reviews) remains.
@@ -184,16 +190,19 @@ Re-verified the memory-v2 plan's remaining focused suites in the current tree: R
 Also shipped the phantom-file gate fix (commits afd2292d8 + acbc8ce09): a pending gate file deleted before its first snapshot now resolves to the `missing` content marker (attested-by-absence), and open findings whose files are all missing are pruned at turn start — closing the scripts/perf-probe-tmp.ts review loop. Follow-up hardening: extracted the `'missing'` sentinel into a single in-handleSteps constant `GATE_FILE_MISSING_CONTENT_MARKER` shared by readGateFileContentMarker, collectDeletedFilesFromSnapshotDetails, the turn-start prune, and isCreditableContentMarker. Pure refactor; agents typecheck clean and gate/parity/serialization suites 255/255.
 
 <!-- update_plan_status:appended -->
+
 ## Parity-mirror fix for missing-marker (pre-push green) — 2026-09-13T23:36:05.557Z
 
 Fixed the pre-push hook failure that blocked the gate-improvement push: the test-local `gateFileMarker` mirror in `agents/e2e/reviewer-spawn-conditions.e2e.test.ts` had drifted from production `readGateFileContentMarker` (which now returns `'missing'` for a nonexistent path). Root-caused with a debugger: the parity oracle extracts only the `readGateFileContentMarker` function body, so the `GATE_FILE_MISSING_CONTENT_MARKER` const (declared earlier in `handleSteps`) was unbound in the synthetic `new Function` scope, making the ENOENT probe throw a ReferenceError surfaced as `unreadable:unknown`. Fixed two ways: (1) added the early `lstatSync` existence probe to the test mirror so it returns `missing` for nonexistent paths like production, and (2) updated `loadProductionGateFileContentMarker` to hoist the `GATE_FILE_MISSING_CONTENT_MARKER` declaration into the synthetic eval scope (following the `specialist-router-parity.test.ts` hoisted-constant precedent), preserving the const's single-source-of-truth and the drift-safety property. Validated: parity suite 19/19, full agents suite 1184 pass / 0 fail, agents typecheck clean.
 
 <!-- update_plan_status:appended -->
+
 ## R7-T2 package-wide validation green — 2026-09-14T06:32:15.052Z
 
 Re-ran MEM2-R7-T2 (package-wide validation + artifact smoke) on the current tree to produce a fresh green baseline before R7-T3. Results: monorepo typecheck 11/11; common 1245 pass; agent-runtime 1618 pass; sdk 1398 pass / 1 skip; cli 3093 pass / 15 skip / 2 fail; evals memory-retention 6/6. SDK build (ESM/CJS/types) and `smoke-test:dist` (CJS require + tree-sitter) passed; CLI binary build + `--version` probe passed. The 2 CLI failures are the known flaky `StatusBar` React-act tests (`renders the status label...` and `hides the scroll control...`), which pass 3/3 in isolation, were untouched by this work, and are unrelated to memory-v2 — a pre-existing flake, not an R7 blocker. R7-T2 acceptance met.
 
 <!-- update_plan_status:appended -->
+
 ## R7-T3 BLOCKED (harness limitation) + R7-T4 disposition — 2026-09-14T09:12:00.000Z
 
 **R7-T3 "obtain stable exact-snapshot reviews" — status: BLOCKED (not done).**
@@ -203,6 +212,7 @@ The memory-v2 feature is fully committed at HEAD `543bae880` with a clean worktr
 **Repro:** (1) `get_change_review_bundle` → `files=["cli/knowledge.md"]` and a bare-hex `snapshotId` that is evidence-only (changes every call, explicitly non-reusable per the params contract). (2) A reviewer-family spawn with `params.snapshot_id` = that bare hex / the truncated display form `v3:131ae03adb957` is rejected as "invalid params" (no legacy-format bypass exists). Only `security-reviewer` uses the looser `changed_files` + `snapshot_fingerprint` contract, which is why it alone ran.
 
 **Equivalent-evidence package (NOT a frozen-bundle signoff):**
+
 - R7-T2 green package-wide baseline at `543bae880` (above).
 - `security-reviewer`: NON_BLOCKING with 2 low advisories (both accepted) — valid under its looser contract; run against the current bundle.
 - Prior migration / compatibility / reliability receipts from **earlier dirty-tree gates over these exact files** — they attest to their edit snapshots, not to HEAD-as-shipped. Explicitly labeled as such.

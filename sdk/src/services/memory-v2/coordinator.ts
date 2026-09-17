@@ -18,6 +18,7 @@ import {
   type MemoryEventId,
   type MemoryJsonValue,
   type MemoryRetrievalResult,
+  type MemorySelector,
   type MemorySessionId,
   type TaskId,
 } from '@codebuff/common/types/memory-v2'
@@ -61,6 +62,9 @@ const FINISH_TURN_TIMEOUT_MS = 2_000
 const MAX_VERIFY_PER_CAPTURE = 5
 const MAX_VERIFY_STORED = 10
 const VERIFY_DIGEST_RE = /^[a-z0-9][a-z0-9+.-]{0,31}:[A-Fa-f0-9]{16,256}$/
+const MAX_CHUNKS = 10
+const MAX_LINES = 10_000_000
+const CHUNK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/
 
 type QueryTerminal = NonNullable<
   MemoryRuntimeStateV2['pendingTerminal']
@@ -97,6 +101,7 @@ const CAPTURE_KINDS: Readonly<Record<string, string>> = {
   inspect_codebase_structure: 'discovery',
   inspect_feature_completeness: 'review',
   evaluate_audit_coverage: 'review',
+  query_index: 'search',
   write_file: 'mutation',
   str_replace: 'mutation',
   create_plan: 'mutation',
@@ -169,6 +174,17 @@ function collectPaths(input: unknown, values: Record<string, unknown>[]): string
         add(item.path)
         add(item.filePath)
         add(item.destinationPath)
+        // Chunk-aware: chunk/symbol hit records carry their file path.
+        // Only file fallbacks are collected here; chunk selectors are
+        // derived separately by collectChunkHints.
+        if (Array.isArray(item.chunks)) {
+          for (const chunk of item.chunks.slice(0, MAX_CHUNKS)) {
+            if (isRecord(chunk)) {
+              add(chunk.path)
+              add(chunk.filePath)
+            }
+          }
+        }
       }
     }
   }
@@ -180,6 +196,11 @@ function collectPaths(input: unknown, values: Record<string, unknown>[]): string
     addArray(input.filePaths)
     addArray(input.files)
     addArray(input.scope)
+    addArray(input.chunks)
+    addArray(input.symbols)
+    addArray(input.hits)
+    addArray(input.results)
+    addArray(input.matches)
   }
   for (const value of values.slice(0, 16)) {
     add(value.path)
@@ -191,8 +212,146 @@ function collectPaths(input: unknown, values: Record<string, unknown>[]): string
     addArray(value.matches)
     addArray(value.entries)
     addArray(value.actions)
+    addArray(value.chunks)
+    addArray(value.symbols)
+    addArray(value.hits)
   }
   return [...paths]
+}
+
+type CollectedChunk = {
+  selector: Extract<MemorySelector, { kind: 'chunk' }>
+  observedDigest?: string
+  signature?: string
+  linesText?: string
+}
+
+function boundedLineNumber(candidate: unknown): number | undefined {
+  return typeof candidate === 'number' &&
+    Number.isInteger(candidate) &&
+    candidate >= 1 &&
+    candidate <= MAX_LINES
+    ? candidate
+    : undefined
+}
+
+function normalizeChunkHint(candidate: unknown): CollectedChunk | undefined {
+  if (!isRecord(candidate)) return undefined
+  const rawPath =
+    typeof candidate.path === 'string'
+      ? candidate.path
+      : typeof candidate.filePath === 'string'
+        ? candidate.filePath
+        : undefined
+  const path = normalizeProjectPath(rawPath)
+  if (!path) return undefined
+  const startLine = boundedLineNumber(candidate.startLine)
+  const endLine = boundedLineNumber(candidate.endLine)
+  if (startLine === undefined || endLine === undefined || endLine < startLine) return undefined
+  const rawChunkId = candidate.chunkId
+  let chunkId: string | undefined
+  if (typeof rawChunkId === 'string' && rawChunkId.length > 0) {
+    const sliced = rawChunkId.slice(0, 128)
+    if (CHUNK_ID_RE.test(sliced)) chunkId = sliced
+    else return undefined
+  }
+  if (chunkId === undefined) {
+    const rawSymbol = candidate.symbol
+    if (typeof rawSymbol === 'string' && rawSymbol.trim().length > 0) {
+      const sanitized = rawSymbol.replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, 64)
+      const occurrence = boundedLineNumber(candidate.occurrence) ?? startLine
+      const synth = `${sanitized}:${occurrence}`.slice(0, 128)
+      chunkId = CHUNK_ID_RE.test(synth) ? synth : `lines-${startLine}-${endLine}`
+    } else {
+      chunkId = `lines-${startLine}-${endLine}`
+    }
+  }
+  const rawQualified =
+    candidate.qualifiedName ?? candidate.symbol ?? candidate.name ?? candidate.title
+  let qualifiedName: string
+  if (typeof rawQualified === 'string' && rawQualified.trim().length > 0) {
+    qualifiedName = rawQualified.slice(0, 512)
+  } else {
+    qualifiedName = `${path}:${startLine}-${endLine}`.slice(0, 512)
+  }
+  const selector: CollectedChunk['selector'] = {
+    kind: 'chunk',
+    path,
+    chunkId,
+    qualifiedName,
+    startLine,
+    endLine,
+  }
+  let observedDigest: string | undefined
+  for (const key of ['hash', 'contentDigest', 'observedDigest', 'digest']) {
+    const digestCandidate = candidate[key]
+    if (typeof digestCandidate === 'string' && VERIFY_DIGEST_RE.test(digestCandidate)) {
+      observedDigest = digestCandidate
+      break
+    }
+  }
+  const rawSignature = candidate.signature
+  const signature =
+    typeof rawSignature === 'string' && rawSignature.length > 0
+      ? rawSignature.slice(0, 256)
+      : qualifiedName.slice(0, 256)
+  let linesText: string | undefined
+  const linesCandidate = candidate.lines
+  if (Array.isArray(linesCandidate)) {
+    linesText = linesCandidate
+      .slice(0, 20)
+      .map((line) => String(line).slice(0, 256))
+      .join('\n')
+      .slice(0, 768)
+  } else if (typeof candidate.content === 'string') {
+    linesText = candidate.content.slice(0, 768)
+  } else if (typeof candidate.text === 'string') {
+    linesText = candidate.text.slice(0, 768)
+  } else if (typeof candidate.snippet === 'string') {
+    linesText = candidate.snippet.slice(0, 768)
+  }
+  return { selector, ...(observedDigest ? { observedDigest } : {}), signature, ...(linesText ? { linesText } : {}) }
+}
+
+function collectChunkHints(input: unknown, values: Record<string, unknown>[]): CollectedChunk[] {
+  const collected: CollectedChunk[] = []
+  const seen = new Set<string>()
+  const push = (candidate: unknown) => {
+    if (collected.length >= MAX_CHUNKS) return
+    const hint = normalizeChunkHint(candidate)
+    if (!hint) return
+    const key = `${hint.selector.path}\u0000${hint.selector.chunkId}\u0000${hint.selector.startLine}\u0000${hint.selector.endLine}`
+    if (seen.has(key)) return
+    seen.add(key)
+    collected.push(hint)
+  }
+  const pushArray = (candidate: unknown) => {
+    if (!Array.isArray(candidate)) return
+    for (const item of candidate.slice(0, MAX_CHUNKS)) push(item)
+  }
+  const pushNested = (candidate: unknown) => {
+    if (!isRecord(candidate)) return
+    push(candidate)
+    pushArray(candidate.chunks)
+    // Results/matches/entries may nest chunk hits one level deep.
+    for (const key of ['results', 'matches', 'entries', 'files', 'hits', 'symbols'] as const) {
+      const nested = candidate[key]
+      if (!Array.isArray(nested)) continue
+      for (const item of nested.slice(0, MAX_CHUNKS)) {
+        if (!isRecord(item)) continue
+        push(item)
+        pushArray(item.chunks)
+      }
+    }
+  }
+  if (isRecord(input)) {
+    pushNested(input)
+  }
+  for (const value of values.slice(0, 16)) {
+    pushNested(value)
+    if (collected.length >= MAX_CHUNKS) break
+  }
+  return collected
 }
 
 function hasErrorResult(values: Record<string, unknown>[]): boolean {
@@ -375,7 +534,7 @@ export class MemoryV2Coordinator {
   private activePreparation: PreparationOperation | undefined
   private lastCapturedVerifies: Array<{
     observationId: string
-    selector: { kind: 'file'; path: string }
+    selector: MemorySelector
     observedDigest: string
   }> = []
 
@@ -1118,6 +1277,7 @@ export class MemoryV2Coordinator {
     }
 
     const paths = collectPaths(params.input, values)
+    const chunkHints = collectChunkHints(params.input, values)
     const counts = countSummary(values)
     const hasPositiveCount = Object.values(counts).some((count) => count > 0)
     const hasRecognizedStatus = values.some(
@@ -1160,7 +1320,7 @@ export class MemoryV2Coordinator {
           }
         : {}),
     }
-    const evidence = paths.slice(0, 32).map((path) => {
+    const fileEvidence = paths.slice(0, 32).map((path) => {
       const decision = classifyMemoryArtifactPath(path)
       const excerpt = `${toolNameBounded} ${captureKind} ${path} counts=${countsJson.slice(0, 512)}`.slice(0, 1024)
       const contentDigest = `sha256:${createHash('sha256').update(`${path}\n${countsJson}`).digest('hex')}`
@@ -1189,6 +1349,38 @@ export class MemoryV2Coordinator {
         excerpt,
       }
     })
+    const chunkEvidence = chunkHints.slice(0, MAX_CHUNKS).map((hint) => {
+      const decision = classifyMemoryArtifactPath(hint.selector.path)
+      const excerpt = `${toolNameBounded} ${captureKind} ${hint.selector.qualifiedName} ${hint.selector.path}:${hint.selector.startLine}-${hint.selector.endLine}${hint.signature ? ` ${hint.signature}` : ''}${hint.linesText ? ` ${hint.linesText}` : ''}`.slice(0, 1024)
+      const contentDigest =
+        hint.observedDigest ??
+        `sha256:${createHash('sha256').update(`${hint.selector.path}\n${hint.selector.chunkId}\n${hint.selector.startLine}-${hint.selector.endLine}\n${countsJson}`).digest('hex')}`
+      return {
+        artifact: {
+          artifactId: hint.selector.path,
+          location: hint.selector.path,
+          classification: {
+            kind: decision.kind,
+            generated: decision.generated !== 'not-generated',
+            sensitivity: 'internal' as const,
+            labels: [captureKind],
+          },
+        },
+        selector: hint.selector,
+        provenance: {
+          origin: 'tool' as const,
+          recordedBy: 'sdk-memory-v2',
+          sourceEventIds: [],
+          sourceSessionId: runtimeState.sessionId,
+          toolName: toolNameBounded,
+          metadata: {},
+        },
+        capturedAt: observedAt,
+        contentDigest,
+        excerpt,
+      }
+    })
+    const evidence = [...fileEvidence, ...chunkEvidence].slice(0, 32)
     const event = createMemoryEventDraft({
       projectId: this.config.projectId,
       sessionId: runtimeState.sessionId,
@@ -1206,7 +1398,7 @@ export class MemoryV2Coordinator {
           detail: `Captured ${paths.length} path(s), counts ${countsJson.slice(0, 2000)}, digest ${outputDigest.slice(0, 64)}`,
           confidence: 0.5,
           evidence,
-          selectors: paths.map((projectPath) => ({ kind: 'file' as const, path: projectPath })),
+          selectors: [...paths.map((projectPath) => ({ kind: 'file' as const, path: projectPath })), ...chunkHints.slice(0, MAX_CHUNKS).map((hint) => hint.selector)].slice(0, 32),
           provenance: {
             origin: 'tool',
             recordedBy: 'sdk-memory-v2',
@@ -1264,7 +1456,7 @@ export class MemoryV2Coordinator {
             taskId: runtimeState.activeTask.taskId,
             dimension,
             state,
-            selectors: paths.slice(0, 10).map((path) => ({ kind: 'file' as const, path })),
+            selectors: [...paths.slice(0, 10).map((path) => ({ kind: 'file' as const, path })), ...chunkHints.slice(0, MAX_CHUNKS).map((hint) => hint.selector)].slice(0, 10),
             notes: `${params.toolName.slice(0, 128)} ${dimension} ${state}: ${paths.length} path(s): ${paths.slice(0, 5).join(', ')}`.slice(0, 1024),
             ...(params.workspaceState
               ? {
@@ -1280,18 +1472,27 @@ export class MemoryV2Coordinator {
       }
     }
 
-    // Phase P2: verification promotion hook (additive, bounded, best-effort).
-    // Mutation captures only; never throws and never blocks append.
-    if (captureKind === 'mutation') {
-      const verifyEntries = actions
+    // Phase P2 (+P-C): verification promotion hook (additive, bounded, best-effort).
+    // File mutation verifies preserved; chunk verifies enqueue for any capture
+    // kind when chunk hints carry a valid observed digest. Never throws.
+    {
+      const fileVerifyEntries: Array<{ observationId: string; selector: MemorySelector; observedDigest: string }> =
+        captureKind === 'mutation'
+          ? actions.slice(0, MAX_VERIFY_PER_CAPTURE).flatMap((action) => {
+              if (!isRecord(action)) return []
+              const actionPath = typeof action.path === 'string' ? normalizeProjectPath(action.path) : undefined
+              const afterHash = action.afterHash
+              if (!actionPath || typeof afterHash !== 'string' || !VERIFY_DIGEST_RE.test(afterHash)) return []
+              return [{ observationId, selector: { kind: 'file' as const, path: actionPath }, observedDigest: afterHash }]
+            })
+          : []
+      const chunkVerifyEntries: Array<{ observationId: string; selector: MemorySelector; observedDigest: string }> = chunkHints
         .slice(0, MAX_VERIFY_PER_CAPTURE)
-        .flatMap((action): Array<{ observationId: string; selector: { kind: 'file'; path: string }; observedDigest: string }> => {
-          if (!isRecord(action)) return []
-          const actionPath = typeof action.path === 'string' ? normalizeProjectPath(action.path) : undefined
-          const afterHash = action.afterHash
-          if (!actionPath || typeof afterHash !== 'string' || !VERIFY_DIGEST_RE.test(afterHash)) return []
-          return [{ observationId, selector: { kind: 'file' as const, path: actionPath }, observedDigest: afterHash }]
+        .flatMap((hint) => {
+          if (!hint.observedDigest || !VERIFY_DIGEST_RE.test(hint.observedDigest)) return []
+          return [{ observationId, selector: hint.selector as MemorySelector, observedDigest: hint.observedDigest }]
         })
+      const verifyEntries = [...fileVerifyEntries, ...chunkVerifyEntries].slice(0, MAX_VERIFY_PER_CAPTURE)
       if (verifyEntries.length > 0) {
         this.lastCapturedVerifies = [...verifyEntries, ...this.lastCapturedVerifies].slice(0, MAX_VERIFY_STORED)
         const repository = this.config.repository

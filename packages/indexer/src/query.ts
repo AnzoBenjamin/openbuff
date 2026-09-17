@@ -35,8 +35,8 @@ export const DEFAULT_LEXICAL_WEIGHTS: Required<LexicalWeights> = {
   heading: 2.5,
   concept: 1.5,
   import: 1,
+  chunk: 1,
 }
-
 /** Merge partial user weights over the historical defaults (undefined-safe). */
 export function resolveLexicalWeights(
   weights?: LexicalWeights,
@@ -278,6 +278,8 @@ function querySearch(
       if (!pathMatchesPrefixes(path, pathPrefixes)) continue
       const existing = directResults.get(path)
       if (existing) {
+        // Preserve lexical chunk hits across the graph merge: only score,
+        // matchedOn, and relatedFiles are augmented; chunks/snippets stay.
         existing.score += related.score
         existing.matchedOn = addMatchedOn(existing.matchedOn, 'graph')
         existing.relatedFiles = mergeRelatedFiles(
@@ -309,6 +311,7 @@ function querySearch(
       relatedFiles: result.relatedFiles
         ?.filter((related) => pathMatchesPrefixes(related.path, pathPrefixes))
         .slice(0, MAX_RELATED_FILES_PER_RESULT),
+      chunks: result.chunks?.slice(0, 5),
       matchedSnippets: result.matchedSnippets?.slice(0, 5),
       explanation: explain
         ? explainResult(result, { ageMs: indexAgeMs, stale })
@@ -420,15 +423,24 @@ function scoreFile(
 ): QueryIndexResult {
   let score = 0
   const matchedOn = new Set<QueryIndexResult['matchedOn'][number]>()
+  const chunkScores = new Map<
+    string,
+    {
+      chunkId: string
+      qualifiedName: string
+      kind: string
+      startLine: number
+      endLine: number
+      hash: string
+      score: number
+    }
+  >()
 
   const normalizedPath = file.path.toLowerCase().replace(/\\/g, '/')
   const pathSegments = normalizedPath.split('/')
   const fileName = pathSegments[pathSegments.length - 1] ?? ''
 
   for (const token of tokens) {
-    // Inverse document frequency: rare tokens discriminate, ubiquitous tokens
-    // (e.g. "config", "index") barely move the score so they stop flooding
-    // results. Defaults to 1 when no corpus stats were supplied.
     const weight = idf?.get(token) ?? 1
 
     if (fileName.includes(token)) {
@@ -470,7 +482,42 @@ function scoreFile(
         break
       }
     }
+
+    const matchedChunks = (file.chunks ?? []).filter((chunk) => {
+      const qn = chunk.qualifiedName.toLowerCase()
+      const kind = chunk.kind.toLowerCase()
+      return symbolMatchesToken(qn, token) || symbolMatchesToken(kind, token)
+    })
+    if (matchedChunks.length > 0) {
+      score += lexicalWeights.chunk * weight
+      matchedOn.add('chunk')
+      for (const chunk of matchedChunks) {
+        const existing = chunkScores.get(chunk.chunkId)
+        const chunkScore = lexicalWeights.chunk * weight
+        if (existing) {
+          existing.score += chunkScore
+        } else {
+          chunkScores.set(chunk.chunkId, {
+            chunkId: chunk.chunkId,
+            qualifiedName: chunk.qualifiedName,
+            kind: chunk.kind,
+            startLine: chunk.startLine,
+            endLine: chunk.endLine,
+            hash: chunk.hash,
+            score: chunkScore,
+          })
+        }
+      }
+    }
   }
+
+  const topChunks = Array.from(chunkScores.values())
+    .map((entry) => ({ ...entry, score: roundScore(entry.score) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5)
+  const chunkSnippets = topChunks.map(
+    (chunk) => `${chunk.chunkId} ${chunk.qualifiedName} L${chunk.startLine}-${chunk.endLine}`,
+  )
 
   const commandBoost = commandIntent ? commandDiscoveryBoost(file, tokens) : 0
   if (commandBoost > 0) {
@@ -484,15 +531,23 @@ function scoreFile(
   if (depth > 4) score *= Math.pow(0.95, depth - 4)
   if (isNoisyPath(pathSegments)) score *= 0.2
 
+  const commandSnippets = commandIntent
+    ? commandMatchedSnippets(file, tokens)
+    : undefined
+  const matchedSnippets = commandIntent
+    ? [...chunkSnippets, ...(commandSnippets ?? [])].slice(0, 5)
+    : chunkSnippets.length > 0
+      ? chunkSnippets.slice(0, 5)
+      : undefined
+
   return {
     path: file.path,
     score,
     matchedOn: Array.from(matchedOn),
     symbols: file.symbols.slice(0, 10),
     headings: file.headings.slice(0, 5),
-    matchedSnippets: commandIntent
-      ? commandMatchedSnippets(file, tokens)
-      : undefined,
+    ...(topChunks.length > 0 ? { chunks: topChunks } : {}),
+    matchedSnippets,
   }
 }
 
@@ -555,6 +610,13 @@ function fileContainsToken(file: IndexedFile, token: string): boolean {
   }
   for (const imp of file.imports) {
     if (imp.toLowerCase().includes(token)) return true
+  }
+  for (const chunk of file.chunks ?? []) {
+    if (
+      symbolMatchesToken(chunk.qualifiedName.toLowerCase(), token) ||
+      symbolMatchesToken(chunk.kind.toLowerCase(), token)
+    )
+      return true
   }
   return false
 }

@@ -34,9 +34,13 @@ import {
   buildDiscoveryQuestion,
   claimDiscoveryShard,
   completeDiscoveryShard,
+  getVerifiedMemoryExcerpts,
   getVerifiedMemoryPaths,
   recordDiscoveryResult,
+  tryClaimDiscoveryShard,
 } from '../../../orchestration/discovery-coordinator'
+
+import type { VerifiedExcerpt } from '../../../orchestration/discovery-coordinator'
 
 import type { BackgroundAgentJob } from '../../../util/background-agent-jobs'
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
@@ -241,27 +245,114 @@ export const handleSpawnAgents = (async (
   const backgroundAgents = validatedAgents.filter(
     (validated) => validated.input.background,
   )
+  let verifiedExcerptsForSpawn: VerifiedExcerpt[] = []
+  try {
+    verifiedExcerptsForSpawn = getVerifiedMemoryExcerpts(parentAgentState, {
+      limit: 5,
+      maxCharsPerExcerpt: 500,
+    }).slice(0, 5)
+  } catch {
+    verifiedExcerptsForSpawn = []
+  }
+  const forwardVerifiedExcerpts = (
+    subAgentState: AgentState,
+    excerpts: VerifiedExcerpt[],
+  ) => {
+    try {
+      if (!excerpts || excerpts.length === 0) return
+      if (!subAgentState || typeof subAgentState !== 'object') return
+      const bounded = excerpts.slice(0, 5).map((entry) => ({
+        path: entry.path,
+        ...(entry.excerpt ? { excerpt: entry.excerpt.slice(0, 500) } : {}),
+      }))
+      const record = subAgentState as unknown as Record<string, unknown>
+      if (Array.isArray(record['verifiedMemoryExcerpts'])) {
+        record['verifiedMemoryExcerpts'] = [
+          ...((record['verifiedMemoryExcerpts'] as unknown[]) ?? []),
+          ...bounded,
+        ].slice(0, 5)
+        return
+      }
+      if ('verifiedMemoryExcerpts' in record && record['verifiedMemoryExcerpts'] === undefined) {
+        record['verifiedMemoryExcerpts'] = bounded
+        return
+      }
+      // Fallback: bounded prompt-prefix injection via a system-tagged context
+      // message so the child can consume verified memory without schema changes.
+      const lines = bounded.map((entry) =>
+        entry.excerpt ? `- ${entry.path}: ${entry.excerpt}` : `- ${entry.path}`,
+      )
+      const text = `<system>Verified memory excerpts (bounded, ${bounded.length} paths):\n${lines.join('\n').slice(0, 2500)}</system>`
+      const history = (subAgentState as AgentState).messageHistory
+      if (Array.isArray(history)) {
+        history.unshift({
+          role: 'user',
+          content: [{ type: 'text', text }],
+          tags: ['SUBAGENT_CONTEXT'],
+          keepDuringTruncation: true,
+        } as unknown as AgentState['messageHistory'][number])
+      }
+    } catch {
+      // Best-effort forwarding only.
+    }
+  }
+  const isDiscoveryAgentType = (agentType: string): boolean => {
+    return (
+      agentType === 'file-picker' ||
+      agentType === 'file-lister' ||
+      agentType === 'query_index' ||
+      agentType === 'query-index' ||
+      agentType === 'code_search' ||
+      agentType === 'code-search'
+    )
+  }
+  const isLegacyThrowClaimType = (agentType: string): boolean => {
+    return agentType === 'file-picker' || agentType === 'file-lister'
+  }
   let nextDiscoveryCoverage = parentAgentState.discoveryCoverage
   for (const validated of validatedAgents) {
-    if (
-      validated.agentType === 'file-picker' ||
-      validated.agentType === 'file-lister'
-    ) {
-      const claimed = claimDiscoveryShard({
-        existing: nextDiscoveryCoverage,
+    if (isDiscoveryAgentType(validated.agentType)) {
+      const question = buildDiscoveryQuestion({
         agentType: validated.agentType,
-        question: buildDiscoveryQuestion({
-          agentType: validated.agentType,
-          prompt: validated.input.prompt,
-          objective: validated.handoff?.objective,
-          spawnParams: validated.runtimeSpawnParams,
-        }),
-        workspaceRevision: parentAgentState.workspaceState?.revision,
-        taskId: validated.handoff?.taskId ?? parentAgentState.runId ?? parentAgentState.agentId,
-        workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
+        prompt: validated.input.prompt,
+        objective: validated.handoff?.objective,
+        spawnParams: validated.runtimeSpawnParams,
       })
-      nextDiscoveryCoverage = claimed.state
-      validated.discoveryShardKey = claimed.shardKey
+      const taskId =
+        validated.handoff?.taskId ??
+        parentAgentState.runId ??
+        parentAgentState.agentId
+      if (isLegacyThrowClaimType(validated.agentType)) {
+        const claimed = claimDiscoveryShard({
+          existing: nextDiscoveryCoverage,
+          agentType: validated.agentType,
+          question,
+          workspaceRevision: parentAgentState.workspaceState?.revision,
+          taskId,
+          workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
+        })
+        nextDiscoveryCoverage = claimed.state
+        validated.discoveryShardKey = claimed.shardKey
+      } else {
+        const claimed = tryClaimDiscoveryShard({
+          existing: nextDiscoveryCoverage,
+          agentType: validated.agentType,
+          question,
+          workspaceRevision: parentAgentState.workspaceState?.revision,
+          taskId,
+          workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
+        })
+        nextDiscoveryCoverage = claimed.state
+        // A duplicate claim serves the existing receipt: leave the shard key
+        // unset so later completeDiscoveryShard is a no-op for this spawn.
+        if (!claimed.duplicate) {
+          validated.discoveryShardKey = claimed.shardKey
+        }
+      }
+      forwardVerifiedExcerpts(
+        validated.subAgentState,
+        verifiedExcerptsForSpawn,
+      )
     }
   }
   // Commit the whole batch of claims at once. If any claim is rejected, the

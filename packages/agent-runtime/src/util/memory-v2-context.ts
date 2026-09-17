@@ -53,6 +53,24 @@ const reasons = (items: RankingReason[]): string =>
 
 const selector = (input: unknown): string => escapeText(canonicalJson(input))
 
+const chunkRangeLine = (input: unknown): string | undefined => {
+  if (typeof input !== 'object' || input === null) return undefined
+  const sel = input as {
+    kind?: unknown
+    path?: unknown
+    startLine?: unknown
+    endLine?: unknown
+    chunkId?: unknown
+  }
+  if (sel.kind !== 'chunk') return undefined
+  const path = typeof sel.path === 'string' ? sel.path : ''
+  const start = typeof sel.startLine === 'number' ? String(sel.startLine) : ''
+  const end = typeof sel.endLine === 'number' ? String(sel.endLine) : ''
+  const id = typeof sel.chunkId === 'string' ? sel.chunkId : ''
+  if (!path && !start && !end && !id) return undefined
+  return value('chunk', `${path}:${start}-${end} (${id})`)
+}
+
 function child(lines: Array<string | undefined>, childMaxChars: number): string {
   return clipped(lines.filter((line): line is string => Boolean(line)).join('\n'), childMaxChars)
 }
@@ -188,11 +206,24 @@ export function compileMemoryV2Context(
       clipped(
         [
           '[currentCoverage]',
-          ...result.currentCoverage.map((item) =>
-            item.notes
-              ? `- ${escapeText(item.dimension)}: ${escapeText(item.state)} — ${escapeText(item.notes)}`
-              : `- ${escapeText(item.dimension)}: ${escapeText(item.state)}`,
-          ),
+          ...result.currentCoverage.map((item) => {
+            const record = item as {
+              workspaceRevision?: unknown
+              workspaceSnapshotId?: unknown
+            }
+            const rev =
+              typeof record.workspaceRevision === 'number'
+                ? ` rev ${escapeText(String(record.workspaceRevision))}`
+                : ''
+            const snap =
+              typeof record.workspaceSnapshotId === 'string'
+                ? ` snap ${escapeText(record.workspaceSnapshotId)}`
+                : ''
+            const suffix = `${rev}${snap}`
+            return item.notes
+              ? `- ${escapeText(item.dimension)}: ${escapeText(item.state)}${suffix} — ${escapeText(item.notes)}`
+              : `- ${escapeText(item.dimension)}: ${escapeText(item.state)}${suffix}`
+          }),
         ].join('\n'),
         prefixBlockBudget,
       ),
@@ -213,18 +244,27 @@ export function compileMemoryV2Context(
         child(
           [
             value('observationId', item.observation.observationId),
+            value('verifiedAt', item.verifiedAt),
+            `selectors: ${sortedByCanonicalJson(item.verifiedEvidence.map((evidence) => evidence.selector)).map(selector).join(', ')}`,
+            ...item.verifiedEvidence.flatMap((evidence) => {
+              const record = evidence as {
+                contentDigest?: string
+                excerpt?: string
+                selector?: unknown
+              }
+              const excerpt =
+                typeof record.excerpt === 'string' ? record.excerpt.slice(0, 500) : undefined
+              return [
+                value('digest', record.contentDigest),
+                chunkRangeLine(record.selector),
+                value('excerpt', excerpt),
+                value('verifiedAt', item.verifiedAt),
+              ]
+            }),
             value('kind', item.observation.kind),
             value('summary', item.observation.summary),
             value('detail', item.observation.detail),
             value('confidence', item.observation.confidence),
-            value('verifiedAt', item.verifiedAt),
-            `selectors: ${sortedByCanonicalJson(item.verifiedEvidence.map((evidence) => evidence.selector)).map(selector).join(', ')}`,
-            ...item.verifiedEvidence.flatMap((evidence) => {
-              const record = evidence as { contentDigest?: string; excerpt?: string }
-              const excerpt =
-                typeof record.excerpt === 'string' ? record.excerpt.slice(0, 500) : undefined
-              return [value('digest', record.contentDigest), value('excerpt', excerpt)]
-            }),
             value('score', item.score),
             `reasons: ${reasons(item.reasons)}`,
           ],

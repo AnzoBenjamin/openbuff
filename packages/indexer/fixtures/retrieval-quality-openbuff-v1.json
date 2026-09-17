@@ -182,6 +182,27 @@
           "relevance": 3
         }
       ]
+    },
+    {
+      "id": "chunk-hit-embedding-text",
+      "query": "fileEmbeddingText fileEmbeddingHash chunk qualifiedNames",
+      "relevant": [
+        { "path": "packages/indexer/src/semantic.ts", "relevance": 3 }
+      ]
+    },
+    {
+      "id": "chunk-hit-snapshot-identity",
+      "query": "IndexManager getSnapshotIdentity content addressed snapshot",
+      "relevant": [
+        { "path": "packages/indexer/src/index-manager.ts", "relevance": 3 }
+      ]
+    },
+    {
+      "id": "chunk-hit-snapshot-verify",
+      "query": "loadIndex expectedSnapshotId content addressed verify computeIndexSnapshotId",
+      "relevant": [
+        { "path": "packages/indexer/src/index-store.ts", "relevance": 3 }
+      ]
     }
   ]
 }

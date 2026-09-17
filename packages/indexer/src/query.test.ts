@@ -319,6 +319,7 @@ describe('queryIndex', () => {
       heading: 2.5,
       concept: 1.5,
       import: 1,
+      chunk: 1,
     })
   })
 
@@ -505,6 +506,81 @@ describe('queryIndex', () => {
     expect(paymentsResult?.explanation).toContain('loginUser')
     expect(paymentsResult?.explanation).toContain('statically resolved')
     expect(paymentsResult?.explanation).toContain('verify dynamic dispatch')
+  })
+
+  test('method-name query returns exact chunk with chunk matchedOn', () => {
+    const chunkIndex: MetadataIndex = {
+      ...index,
+      files: {
+        ...index.files,
+        'src/auth.ts': {
+          ...index.files['src/auth.ts']!,
+          symbols: [],
+          chunks: [
+            {
+              chunkId: 'chunk-login',
+              qualifiedName: 'AuthProvider/loginUser',
+              kind: 'function',
+              startLine: 10,
+              endLine: 20,
+              hash: 'h1',
+            },
+          ],
+        },
+        'src/db.ts': {
+          ...index.files['src/db.ts']!,
+          symbols: [],
+        },
+        '.bun-install/noisy.ts': {
+          ...index.files['.bun-install/noisy.ts']!,
+          symbols: [],
+        },
+      },
+    }
+    const results = queryIndex(chunkIndex, 'loginUser', { limit: 5 })
+    expect(results[0]?.path).toBe('src/auth.ts')
+    expect(results[0]?.matchedOn).toContain('chunk')
+    expect(results[0]?.chunks?.[0]?.qualifiedName).toBe(
+      'AuthProvider/loginUser',
+    )
+    expect(results[0]?.chunks?.length).toBeLessThanOrEqual(5)
+    expect(results[0]?.matchedSnippets?.[0]).toContain('AuthProvider/loginUser')
+  })
+
+  test('zeroing the chunk weight removes chunk-only matches', () => {
+    const chunkOnly: MetadataIndex = {
+      ...index,
+      files: {
+        ...index.files,
+        'src/auth.ts': {
+          ...index.files['src/auth.ts']!,
+          symbols: [],
+          imports: [],
+          concepts: [],
+          chunks: [
+            {
+              chunkId: 'chunk-login',
+              qualifiedName: 'AuthProvider/loginUser',
+              kind: 'function',
+              startLine: 10,
+              endLine: 20,
+              hash: 'h1',
+            },
+          ],
+        },
+      },
+    }
+    const withChunk = queryIndex(chunkOnly, 'loginUser', { limit: 5 })
+    expect(
+      withChunk.some((r) => r.matchedOn.includes('chunk')),
+    ).toBe(true)
+    const withoutChunk = queryIndex(chunkOnly, 'loginUser', {
+      lexicalWeights: { chunk: 0 },
+      limit: 5,
+    })
+    expect(
+      withoutChunk.some((r) => r.matchedOn.includes('chunk')),
+    ).toBe(false)
   })
 })
 

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
@@ -59,6 +59,7 @@ export function getIndexDir(
 export async function loadIndex(
   projectRoot: string,
   cacheDir = '.codebuff-index',
+  options?: { expectedSnapshotId?: string },
 ): Promise<MetadataIndex | null> {
   const indexPath = path.join(getIndexDir(projectRoot, cacheDir), INDEX_FILE)
   try {
@@ -70,6 +71,17 @@ export async function loadIndex(
       return null
     }
     if (!isMetadataIndex(parsed, projectRoot)) return null
+    if (options?.expectedSnapshotId !== undefined) {
+      const expected = options.expectedSnapshotId
+      if (typeof expected !== 'string' || expected.length === 0 || expected.length > 256) return null
+      let snapshotId: string
+      try {
+        snapshotId = computeIndexSnapshotId(parsed)
+      } catch {
+        return null
+      }
+      if (snapshotId !== expected) return null
+    }
     if (!parsed.queryData) {
       parsed.queryData = buildIndexQueryData(parsed.files, parsed.graph)
     }
@@ -295,6 +307,16 @@ function isValidVector(value: unknown): value is number[] {
         typeof component === 'number' && Number.isFinite(component),
     )
   )
+}
+
+export function computeIndexSnapshotId(index: MetadataIndex): string {
+  const hash = createHash('sha256').update(
+    `${index.version}\0${index.projectRoot}\0${index.workspaceRevision ?? 'unknown'}\0`,
+  )
+  for (const filePath of Object.keys(index.files).sort()) {
+    hash.update(filePath).update('\0').update(index.files[filePath]!.hash)
+  }
+  return hash.digest('hex')
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

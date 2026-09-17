@@ -327,4 +327,74 @@ describe('compileMemoryV2Context', () => {
     const verifiedSection = output.split('[verifiedKnowledge]')[1]?.split('[reusableDiscovery]')[0] ?? ''
     expect(verifiedSection).toContain('verified excerpt content')
   })
+
+  test('renders chunk range digest excerpt and verifiedAt in verifiedKnowledge', () => {
+    const base = context()
+    const ctx = MemoryTurnContextV2Schema.parse({
+      ...base,
+      result: {
+        ...base.result,
+        verifiedKnowledge: [
+          {
+            observation: observation('observation:chunk', 'chunk verified'),
+            verifiedEvidence: [
+              {
+                ...evidence,
+                selector: {
+                  kind: 'chunk',
+                  path: 'src/memory.ts',
+                  chunkId: 'chunk-abc-123',
+                  qualifiedName: 'myFunc',
+                  startLine: 10,
+                  endLine: 20,
+                },
+                contentDigest: 'sha256:abcdef0123456789abcd',
+                excerpt: 'chunk excerpt body for range test',
+              },
+            ],
+            verifiedAt: timestamp,
+            score: 0.95,
+            reasons: [rankingReason],
+          },
+        ],
+      },
+    })
+    const output = compileMemoryV2Context(ctx)
+    const verifiedSection = output.split('[verifiedKnowledge]')[1]?.split('[reusableDiscovery]')[0] ?? ''
+    expect(verifiedSection).toContain('chunk-abc-123')
+    expect(verifiedSection).toContain('10')
+    expect(verifiedSection).toContain('20')
+    expect(verifiedSection).toContain('sha256:abcdef0123456789abcd')
+    expect(verifiedSection).toContain('chunk excerpt body for range test')
+    expect(verifiedSection).toContain(timestamp)
+    expect(verifiedSection).toContain('chunk:')
+    expect(verifiedSection).toContain('digest:')
+    expect(verifiedSection).toContain('excerpt:')
+    expect(verifiedSection).toContain('verifiedAt:')
+  })
+
+  test('renders revision and snapshot in currentCoverage when present', () => {
+    const base = context()
+    const ctx = MemoryTurnContextV2Schema.parse({
+      ...base,
+      result: {
+        ...base.result,
+        currentCoverage: [
+          {
+            dimension: 'requirements',
+            state: 'covered',
+            taskId: 'task:1',
+            notes: 'All requirements addressed',
+            workspaceRevision: 7,
+            workspaceSnapshotId: 'snap-abc-123',
+          },
+        ],
+      },
+    })
+    const output = compileMemoryV2Context(ctx, { maxChars: 8192 })
+    expect(output).toContain('[currentCoverage]')
+    expect(output).toContain('- requirements: covered')
+    expect(output).toContain('rev 7')
+    expect(output).toContain('snap snap-abc-123')
+  })
 })
