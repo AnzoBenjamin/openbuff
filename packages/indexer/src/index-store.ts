@@ -3,10 +3,13 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import type { FileVector } from './semantic'
-import type { MetadataIndex } from './types'
+import type { ChunkSidecar, MetadataIndex } from './types'
 import { buildIndexQueryData } from './query-data'
+import { buildChunkSidecar } from './chunk-freshness'
 
 const INDEX_FILE = 'metadata.json'
+export const CHUNKS_FILE = 'chunks.json'
+export const CHUNK_SIDECAR_VERSION = 1 as const
 const INDEX_VERSION = '2'
 const SEMANTIC_VECTOR_FILE = 'semantic-vectors.json'
 const SEMANTIC_VECTOR_VERSION = '3'
@@ -124,6 +127,17 @@ export async function saveIndex(
       return false
     }
     await atomicWriteJson(indexPath, index)
+    // Sidecar shares the same lock txn + CAS/newest-wins gate above so it
+    // can never describe a snapshot that lost the race. Best-effort: a
+    // sidecar write failure must not fail the metadata persist.
+    try {
+      await atomicWriteJson(
+        path.join(dir, CHUNKS_FILE),
+        buildChunkSidecarDocument(index),
+      )
+    } catch {
+      // Best-effort only; metadata.json remains authoritative.
+    }
     return true
   })
 }
@@ -206,7 +220,10 @@ async function assertCacheOwnership(dir: string): Promise<void> {
   try {
     const entries = await fs.promises.readdir(dir)
     const legacyOwned = entries.every(
-      (entry) => entry === INDEX_FILE || entry === SEMANTIC_VECTOR_FILE,
+      (entry) =>
+        entry === INDEX_FILE ||
+        entry === SEMANTIC_VECTOR_FILE ||
+        entry === CHUNKS_FILE,
     )
     if (entries.length > 0 && !entries.includes(OWNER_FILE) && !legacyOwned) {
       throw new Error(`Refusing to use non-owned index cache directory: ${dir}`)
@@ -317,6 +334,163 @@ export function computeIndexSnapshotId(index: MetadataIndex): string {
     hash.update(filePath).update('\0').update(index.files[filePath]!.hash)
   }
   return hash.digest('hex')
+}
+
+const MAX_CHUNK_SIDECAR_ENTRIES = 200_000
+const MAX_CHUNK_SIDECAR_BYTES = 8_000_000
+
+/**
+ * Pure derived sidecar document builder. Deterministic (sorted keys via
+ * buildChunkSidecar), bounded, never throws — falls back to an empty chunk
+ * map and an 'unknown' snapshot id on invalid input so saveIndex stays
+ * fail-open for the sidecar while metadata.json remains authoritative.
+ */
+export function buildChunkSidecarDocument(index: MetadataIndex): ChunkSidecar {
+  let snapshotId = 'unknown'
+  try {
+    snapshotId = computeIndexSnapshotId(index)
+  } catch {
+    snapshotId = 'unknown'
+  }
+  let chunks: ChunkSidecar['chunks'] = {}
+  try {
+    chunks = buildChunkSidecar(index)
+  } catch {
+    chunks = {}
+  }
+  return {
+    version: CHUNK_SIDECAR_VERSION,
+    snapshotId,
+    ...(index?.workspaceRevision !== undefined
+      ? { workspaceRevision: index.workspaceRevision }
+      : {}),
+    builtAt:
+      typeof index?.builtAt === 'number' && Number.isFinite(index.builtAt)
+        ? index.builtAt
+        : Date.now(),
+    projectRoot:
+      typeof index?.projectRoot === 'string' ? index.projectRoot : '',
+    chunks,
+  }
+}
+
+function normalizeChunkSidecar(
+  value: unknown,
+  projectRoot: string,
+): ChunkSidecar | null {
+  if (!isRecord(value)) return null
+  if (value.version !== CHUNK_SIDECAR_VERSION) return null
+  if (value.projectRoot !== projectRoot) return null
+  if (
+    typeof value.snapshotId !== 'string' ||
+    value.snapshotId.length === 0 ||
+    value.snapshotId.length > 256
+  ) {
+    return null
+  }
+  if (
+    typeof value.builtAt !== 'number' ||
+    !Number.isFinite(value.builtAt)
+  ) {
+    return null
+  }
+  if (!isRecord(value.chunks)) return null
+  const entries = Object.entries(value.chunks)
+  if (entries.length > MAX_CHUNK_SIDECAR_ENTRIES) return null
+  const chunks: ChunkSidecar['chunks'] = {}
+  for (const [stableId, raw] of entries) {
+    if (stableId.length === 0 || stableId.length > 128) continue
+    if (!isRecord(raw)) continue
+    if (
+      typeof raw.file !== 'string' ||
+      raw.file.length === 0 ||
+      raw.file.length > 1024 ||
+      typeof raw.startLine !== 'number' ||
+      !Number.isInteger(raw.startLine) ||
+      raw.startLine < 1 ||
+      raw.startLine > 10_000_000 ||
+      typeof raw.endLine !== 'number' ||
+      !Number.isInteger(raw.endLine) ||
+      raw.endLine < raw.startLine ||
+      raw.endLine > 10_000_000 ||
+      typeof raw.qualifiedName !== 'string' ||
+      raw.qualifiedName.length === 0 ||
+      raw.qualifiedName.length > 512 ||
+      typeof raw.kind !== 'string' ||
+      raw.kind.length === 0 ||
+      raw.kind.length > 128 ||
+      typeof raw.contentHash !== 'string' ||
+      raw.contentHash.length === 0 ||
+      raw.contentHash.length > 256
+    ) {
+      continue
+    }
+    chunks[stableId] = {
+      file: raw.file,
+      startLine: raw.startLine,
+      endLine: raw.endLine,
+      qualifiedName: raw.qualifiedName,
+      kind: raw.kind,
+      contentHash: raw.contentHash,
+    }
+  }
+  const sorted: ChunkSidecar['chunks'] = {}
+  for (const key of Object.keys(chunks).sort()) sorted[key] = chunks[key]!
+  const revision = value.workspaceRevision
+  return {
+    version: CHUNK_SIDECAR_VERSION,
+    snapshotId: value.snapshotId,
+    ...(typeof revision === 'string' || typeof revision === 'number'
+      ? { workspaceRevision: revision }
+      : {}),
+    builtAt: value.builtAt,
+    projectRoot: value.projectRoot,
+    chunks: sorted,
+  }
+}
+
+/**
+ * Best-effort sidecar load. Missing/invalid/foreign files return null and
+ * never fail the metadata load; callers fall back to chunkId/inline chunks.
+ * Bounded: refuses oversized payloads without parsing the full metadata.json.
+ */
+export async function loadChunkSidecar(
+  projectRoot: string,
+  cacheDir = DEFAULT_CACHE_DIR,
+): Promise<ChunkSidecar | null> {
+  const sidecarPath = path.join(getIndexDir(projectRoot, cacheDir), CHUNKS_FILE)
+  try {
+    const content = await fs.promises.readFile(sidecarPath, 'utf8')
+    if (content.length > MAX_CHUNK_SIDECAR_BYTES) return null
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(content)
+    } catch {
+      return null
+    }
+    return normalizeChunkSidecar(parsed, projectRoot)
+  } catch {
+    return null
+  }
+}
+
+/** Persist a validated sidecar atomically under the cache lock. */
+export async function saveChunkSidecar(
+  projectRoot: string,
+  sidecar: ChunkSidecar,
+  cacheDir = DEFAULT_CACHE_DIR,
+): Promise<void> {
+  const normalized = normalizeChunkSidecar(sidecar, projectRoot)
+  if (!normalized) return
+  const dir = getIndexDir(projectRoot, cacheDir)
+  await assertCacheOwnership(dir)
+  await ensureGitInfoExcludes(projectRoot, cacheDir)
+  await fs.promises.mkdir(dir, { recursive: true })
+  await writeOwnerFile(dir)
+  const sidecarPath = path.join(dir, CHUNKS_FILE)
+  await withCacheLock(dir, async () => {
+    await atomicWriteJson(sidecarPath, normalized)
+  })
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

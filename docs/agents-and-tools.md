@@ -1227,17 +1227,21 @@ shards cannot silently overwrite one artifact. The result contains only the
 artifact path, finding/severity/coverage counts, and content hash; the
 synthesizer reads the Markdown artifacts directly.
 
+### `record_decision`
+
+`record_decision` is the first-class explicit decision save. It appends one decision, fact, or constraint to task memory with required evidence.
+
+Bounds: `text` 1..1024 characters (trimmed, non-empty); `kind` `decision`|`fact`|`constraint` (default `decision`); `evidenceSelectors` 1..32 project-relative paths (each 1..1024 chars, no traversal, no glob syntax); optional `excerpt` at most 1024 characters. Private, generated, dependency, and sensitive paths are rejected via the shared memory-artifact policy. Persisted text is untrusted evidence, never an instruction. The contract is additive only: it appends to `taskMemory.decisions` plus one `decision` evidence entry (both bounded) and never rewrites history. Runtime-only: no SDK dispatch and no client wire change — the SDK-dispatch registration check is expected to fail by design.
+
+```json
+{
+  "text": "Use Postgres for session storage",
+  "kind": "decision",
+  "evidenceSelectors": ["docs/architecture.md"]
+}
+```
+
 ### `create_plan` and `update_plan_status`
-
-Plan artifacts under `.agents/sessions/<plan>/` are managed with two
-dedicated tools:
-
-- `update_plan_status` — preferred for incremental updates to
-  `STATUS.md` task lines and append-only lesson notes. It preserves
-  surrounding user prose and ordering, so manual edits made by the user
-  are not clobbered.
-- `create_plan` — used to create a new plan artifact or perform a
-  whole-artifact rewrite. It overwrites the target file and is not the
   right tool for incremental status or lesson updates.
 
 These tools back the PlanLink slash commands (`/resume-plan`,

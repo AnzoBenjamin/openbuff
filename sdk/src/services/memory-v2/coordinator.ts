@@ -104,7 +104,10 @@ const CAPTURE_KINDS: Readonly<Record<string, string>> = {
   query_index: 'search',
   write_file: 'mutation',
   str_replace: 'mutation',
-  create_plan: 'mutation',
+  create_plan: 'plan',
+  architect: 'reasoning',
+  thinker: 'reasoning',
+  think_deeply: 'reasoning',
   edit_transaction: 'mutation',
   replace_range: 'mutation',
   write_audit_findings: 'mutation',
@@ -118,6 +121,108 @@ const DIMENSION_MAP: Readonly<Record<string, 'tests' | 'validation'>> = {
 
 function inferCoverageDimension(toolName: string): 'tests' | 'validation' | undefined {
   return DIMENSION_MAP[toolName]
+}
+
+export type ObservationKindHint = 'decision' | 'fact' | 'discovery' | 'outcome' | 'constraint'
+
+const DECISION_TOOL_NAMES: ReadonlySet<string> = new Set(['create_plan'])
+const REASONING_TOOL_NAMES: ReadonlySet<string> = new Set(['architect', 'thinker', 'think_deeply'])
+const DECISION_STRUCTURAL_KEYS: ReadonlyArray<string> = [
+  'decision',
+  'conclusion',
+  'recommendation',
+  'plan',
+  'chosen',
+  'selected',
+  'approach',
+]
+const DECISION_RE =
+  /\b(decision|decide[sd]?|conclusion|recommendation|chosen|selected|approach|plan)\b/i
+
+const CONSTRAINT_STRUCTURAL_KEYS: ReadonlyArray<string> = [
+  'constraint',
+  'constraints',
+  'adr',
+  'requirement',
+  'requirements',
+  'rule',
+]
+const CONSTRAINT_RE =
+  /\b(constraint|adr|must not|must|required|requirement|prohibit|forbidden)\b/i
+
+function hasNonEmptyField(value: unknown): boolean {
+  if (typeof value === 'string') return value.trim().length > 0
+  if (Array.isArray(value)) return value.length > 0
+  if (value !== null && typeof value === 'object')
+    return Object.keys(value).length > 0
+  return false
+}
+
+function valuesContainDecisionSignal(values: Record<string, unknown>[]): boolean {
+  for (const value of values.slice(0, 16)) {
+    for (const key of DECISION_STRUCTURAL_KEYS) {
+      const candidate = value[key]
+      if (candidate === undefined || !hasNonEmptyField(candidate)) continue
+      if (typeof candidate === 'string') {
+        if (DECISION_RE.test(candidate.slice(0, 2048))) return true
+      } else {
+        return true
+      }
+    }
+    for (const key of ['summary', 'detail', 'content', 'text', 'reasoning'] as const) {
+      const candidate = value[key]
+      if (
+        typeof candidate === 'string' &&
+        DECISION_RE.test(candidate.slice(0, 2048))
+      )
+        return true
+    }
+  }
+  return false
+}
+
+function valuesContainConstraintSignal(values: Record<string, unknown>[]): boolean {
+  for (const value of values.slice(0, 16)) {
+    for (const key of CONSTRAINT_STRUCTURAL_KEYS) {
+      const candidate = value[key]
+      if (candidate === undefined || !hasNonEmptyField(candidate)) continue
+      if (typeof candidate === 'string') {
+        if (CONSTRAINT_RE.test(candidate.slice(0, 2048))) return true
+      } else {
+        return true
+      }
+    }
+    for (const key of ['summary', 'detail', 'content', 'text', 'reasoning'] as const) {
+      const candidate = value[key]
+      if (
+        typeof candidate === 'string' &&
+        CONSTRAINT_RE.test(candidate.slice(0, 2048))
+      )
+        return true
+    }
+  }
+  return false
+}
+
+/**
+ * Deterministic observation-kind classifier (no LLM, pure regex/structural).
+ * Conservative: defaults to discovery when uncertain. Mutation stays outcome.
+ * create_plan outputs record decisions; reasoning tools (architect, thinker,
+ * think_deeply) record a constraint when a constraint signal is present, a
+ * decision when a decision signal is present, and a fact otherwise; review
+ * and validation tools stay discovery.
+ */
+export function classifyObservationKind(
+  toolName: string,
+  values: Record<string, unknown>[],
+): ObservationKindHint {
+  if (CAPTURE_KINDS[toolName] === 'mutation') return 'outcome'
+  if (DECISION_TOOL_NAMES.has(toolName)) return 'decision'
+  if (REASONING_TOOL_NAMES.has(toolName)) {
+    if (valuesContainConstraintSignal(values)) return 'constraint'
+    return valuesContainDecisionSignal(values) ? 'decision' : 'fact'
+  }
+  return 'discovery'
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -221,9 +326,17 @@ function collectPaths(input: unknown, values: Record<string, unknown>[]): string
 
 type CollectedChunk = {
   selector: Extract<MemorySelector, { kind: 'chunk' }>
+  /** Stable chunk identity from query_index hits when present; preserved additively in provenance metadata (never in the strict selector). */
+  stableChunkId?: string
   observedDigest?: string
   signature?: string
   linesText?: string
+}
+
+function normalizeStableChunkId(candidate: unknown): string | undefined {
+  if (typeof candidate !== 'string') return undefined
+  const sliced = candidate.slice(0, 128)
+  return CHUNK_ID_RE.test(sliced) ? sliced : undefined
 }
 
 function boundedLineNumber(candidate: unknown): number | undefined {
@@ -310,7 +423,12 @@ function normalizeChunkHint(candidate: unknown): CollectedChunk | undefined {
   } else if (typeof candidate.snippet === 'string') {
     linesText = candidate.snippet.slice(0, 768)
   }
-  return { selector, ...(observedDigest ? { observedDigest } : {}), signature, ...(linesText ? { linesText } : {}) }
+  // Additive-only stableChunkId passthrough: read from query_index chunk hits
+  // when present and carry it alongside the strict selector. The selector
+  // itself stays schema-strict; the stable id is preserved in provenance
+  // metadata at capture time (see chunkEvidence below).
+  const stableChunkId = normalizeStableChunkId(candidate.stableChunkId)
+  return { selector, ...(stableChunkId ? { stableChunkId } : {}), ...(observedDigest ? { observedDigest } : {}), signature, ...(linesText ? { linesText } : {}) }
 }
 
 function collectChunkHints(input: unknown, values: Record<string, unknown>[]): CollectedChunk[] {
@@ -320,7 +438,7 @@ function collectChunkHints(input: unknown, values: Record<string, unknown>[]): C
     if (collected.length >= MAX_CHUNKS) return
     const hint = normalizeChunkHint(candidate)
     if (!hint) return
-    const key = `${hint.selector.path}\u0000${hint.selector.chunkId}\u0000${hint.selector.startLine}\u0000${hint.selector.endLine}`
+    const key = `${hint.selector.path}\u0000${hint.selector.chunkId}\u0000${hint.selector.startLine}\u0000${hint.selector.endLine}\u0000${hint.stableChunkId ?? ''}`
     if (seen.has(key)) return
     seen.add(key)
     collected.push(hint)
@@ -1288,8 +1406,14 @@ export class MemoryV2Coordinator {
         typeof value.workspaceSnapshotId === 'string' ||
         typeof value.snapshotId === 'string',
     )
+    const observationKindHint = classifyObservationKind(params.toolName, values)
+    const isDecisionLike =
+      observationKindHint === 'decision' ||
+      observationKindHint === 'fact' ||
+      observationKindHint === 'constraint'
     if (
       captureKind !== 'mutation' &&
+      !isDecisionLike &&
       paths.length === 0 &&
       !hasPositiveCount &&
       !hasRecognizedStatus
@@ -1373,7 +1497,12 @@ export class MemoryV2Coordinator {
           sourceEventIds: [],
           sourceSessionId: runtimeState.sessionId,
           toolName: toolNameBounded,
-          metadata: {},
+          // Additive-only: stableChunkId rides in allowed provenance metadata
+          // so the strict MemorySelector chunk schema never gains a field.
+          // Old captures without it still verify (metadata is optional).
+          metadata: {
+            ...(hint.stableChunkId ? { stableChunkId: hint.stableChunkId } : {}),
+          },
         },
         capturedAt: observedAt,
         contentDigest,
@@ -1393,7 +1522,7 @@ export class MemoryV2Coordinator {
         observation: {
           observationId,
           taskId: runtimeState.activeTask.taskId,
-          kind: captureKind === 'mutation' ? 'outcome' : 'discovery',
+          kind: observationKindHint,
           summary: `${toolNameBounded} ${captureKind} ${paths.length} path(s): ${paths.slice(0, 5).join(', ')}`.slice(0, 1024),
           detail: `Captured ${paths.length} path(s), counts ${countsJson.slice(0, 2000)}, digest ${outputDigest.slice(0, 64)}`,
           confidence: 0.5,

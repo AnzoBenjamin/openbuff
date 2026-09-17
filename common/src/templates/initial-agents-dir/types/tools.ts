@@ -30,6 +30,7 @@ export type ToolName =
   | 'list_jobs'
   | 'lookup_agent_info'
   | 'query_index'
+  | 'record_decision'
   | 'read_docs'
   | 'read_files'
   | 'read_image'
@@ -89,6 +90,7 @@ export interface ToolParamsMap {
   list_jobs: ListJobsParams
   lookup_agent_info: LookupAgentInfoParams
   query_index: QueryIndexParams
+  record_decision: RecordDecisionParams
   read_docs: ReadDocsParams
   read_files: ReadFilesParams
   read_image: ReadImageParams
@@ -592,6 +594,20 @@ export interface QueryIndexParams {
   from?: string
   /** Optional target file path for path mode. Also used as the seed file for references mode when from is omitted or not indexed. */
   to?: string
+}
+
+/**
+ * Explicitly record a decision, fact, or constraint with evidence.
+ */
+export interface RecordDecisionParams {
+  /** Decision text to record. Trimmed, 1..1024 characters. */
+  text: string
+  /** Kind of record to save. Defaults to decision. */
+  kind?: 'decision' | 'fact' | 'constraint'
+  /** Required evidence: 1..32 project-relative paths without traversal or glob syntax. */
+  evidenceSelectors: string[]
+  /** Optional supporting excerpt, at most 1024 characters. */
+  excerpt?: string
 }
 
 /**

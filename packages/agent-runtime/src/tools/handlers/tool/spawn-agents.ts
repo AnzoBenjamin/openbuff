@@ -33,7 +33,6 @@ import {
 } from '../../../util/workspace-path-leases'
 import {
   buildDiscoveryQuestion,
-  claimDiscoveryShard,
   completeDiscoveryShard,
   getVerifiedMemoryExcerpts,
   getVerifiedMemoryPaths,
@@ -348,16 +347,8 @@ export const handleSpawnAgents = (async (
     }
   }
   const isDiscoveryAgentType = (agentType: string): boolean => {
-    return (
-      agentType === 'file-picker' ||
-      agentType === 'file-lister' ||
-      agentType === 'query_index' ||
-      agentType === 'query-index' ||
-      agentType === 'code_search' ||
-      agentType === 'code-search'
-    )
-  }
-  const isLegacyThrowClaimType = (agentType: string): boolean => {
+    // query_index/code_search are TOOLS, not spawnable agent templates.
+    // Only file-picker/file-lister remain discovery agent types for shard claim.
     return agentType === 'file-picker' || agentType === 'file-lister'
   }
   let nextDiscoveryCoverage = parentAgentState.discoveryCoverage
@@ -373,32 +364,21 @@ export const handleSpawnAgents = (async (
         validated.handoff?.taskId ??
         parentAgentState.runId ??
         parentAgentState.agentId
-      if (isLegacyThrowClaimType(validated.agentType)) {
-        const claimed = claimDiscoveryShard({
-          existing: nextDiscoveryCoverage,
-          agentType: validated.agentType,
-          question,
-          workspaceRevision: parentAgentState.workspaceState?.revision,
-          taskId,
-          workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
-        })
-        nextDiscoveryCoverage = claimed.state
+      const claimed = tryClaimDiscoveryShard({
+        existing: nextDiscoveryCoverage,
+        agentType: validated.agentType,
+        question,
+        workspaceRevision: parentAgentState.workspaceState?.revision,
+        taskId,
+        workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
+      })
+      nextDiscoveryCoverage = claimed.state
+      // A duplicate claim serves the existing receipt: leave the shard key
+      // unset so later completeDiscoveryShard is a no-op for this spawn.
+      // This preserves file-picker/file-lister dedup without throwing the
+      // whole spawn batch on a duplicate claim.
+      if (!claimed.duplicate) {
         validated.discoveryShardKey = claimed.shardKey
-      } else {
-        const claimed = tryClaimDiscoveryShard({
-          existing: nextDiscoveryCoverage,
-          agentType: validated.agentType,
-          question,
-          workspaceRevision: parentAgentState.workspaceState?.revision,
-          taskId,
-          workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
-        })
-        nextDiscoveryCoverage = claimed.state
-        // A duplicate claim serves the existing receipt: leave the shard key
-        // unset so later completeDiscoveryShard is a no-op for this spawn.
-        if (!claimed.duplicate) {
-          validated.discoveryShardKey = claimed.shardKey
-        }
       }
       forwardVerifiedExcerpts(
         validated.subAgentState,

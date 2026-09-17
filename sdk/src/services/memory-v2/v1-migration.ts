@@ -376,6 +376,85 @@ function hasValidImportedTaskEvent(params: {
   )
 }
 
+function v1CategoryObservationKind(
+  category: V1MigrationCategory,
+): 'discovery' | 'warning' {
+  // V1 migration deterministic body preserves audit exactness across upgrade
+  // and rollback: blockers have always been warning; every other category is
+  // discovery. Changing blockers to discovery breaks audit exactness for
+  // pre-existing imports on upgrade and new imports on rollback, so the
+  // canonical body keeps warning. Reclassification, if needed, must stay
+  // additive and never rewrite this deterministic body.
+  if (category === 'blockers') return 'warning'
+  return 'discovery'
+}
+
+/**
+ * Compatibility window for mixed-version V1 imports.
+ *
+ * A previous revision emitted blockers as discovery. During the window the
+ * audit and ownership validators accept both the canonical warning and the
+ * legacy discovery kind for blockers so pre-existing imports certify exact
+ * on upgrade and new canonical imports certify exact on rollback. No other
+ * category has a window: decisions and all remaining categories remain
+ * strict discovery.
+ */
+function isCompatibleV1CategoryKind(
+  category: V1MigrationCategory,
+  kind: string,
+): boolean {
+  if (category === 'blockers')
+    return kind === 'warning' || kind === 'discovery'
+  return kind === v1CategoryObservationKind(category)
+}
+
+/**
+ * Order-insensitive draft equality with the blockers-kind compatibility
+ * window applied: an expected warning blockers observation also matches a
+ * persisted discovery blockers observation (and vice versa) when every other
+ * field is identical. All other categories require exact equality.
+ */
+function equalImportedObservationDraftWithKindWindow(
+  expected: MemoryEventDraft,
+  actual: MemoryEventEnvelope,
+): boolean {
+  if (equalEventDraft(expected, actual)) return true
+  try {
+    const expectedParsed = MemoryEventDraftSchema.parse(expected)
+    const actualDraft = normalizedEventDraft(actual)
+    if (
+      expectedParsed.eventType !== 'observation.recorded' ||
+      actualDraft.eventType !== 'observation.recorded'
+    )
+      return false
+    const expectedCategory =
+      expectedParsed.payload.observation.provenance?.metadata.category
+    const actualCategory = actualDraft.payload.observation.provenance?.metadata
+      .category
+    if (expectedCategory !== 'blockers' || actualCategory !== 'blockers')
+      return false
+    const allowed = new Set(['warning', 'discovery'])
+    if (
+      !allowed.has(expectedParsed.payload.observation.kind) ||
+      !allowed.has(actualDraft.payload.observation.kind)
+    )
+      return false
+    const normalizedExpected = MemoryEventDraftSchema.parse({
+      ...expectedParsed,
+      payload: {
+        ...expectedParsed.payload,
+        observation: {
+          ...expectedParsed.payload.observation,
+          kind: actualDraft.payload.observation.kind,
+        },
+      },
+    })
+    return equalEventDraft(normalizedExpected, actual)
+  } catch {
+    return false
+  }
+}
+
 /**
  * A single imported observation event must match the deterministic body shape
  * for its category, within the source item counts and canonical ordering.
@@ -425,7 +504,7 @@ function hasValidImportedObservationEvent(params: {
     event.payload.payloadSchemaVersion !== 1 ||
     observation.observationId !== observationId ||
     observation.taskId !== expectedTaskId ||
-    observation.kind !== (category === 'blockers' ? 'warning' : 'discovery') ||
+    !isCompatibleV1CategoryKind(category, observation.kind) ||
     observation.summary !== expectedSummary ||
     observation.detail.length > MAX_AGGREGATE_DETAIL ||
     observation.confidence !== 0.25 ||
@@ -773,7 +852,10 @@ function validatedCompleteBuildMarker(
     const matching = lookup.events.filter(
       (event) => event.eventId === draft.eventId,
     )
-    return matching.length === 1 && equalEventDraft(draft, matching[0]!)
+    return (
+      matching.length === 1 &&
+      equalImportedObservationDraftWithKindWindow(draft, matching[0]!)
+    )
   })
   return completeBody ? markerMetadata(markerEvents[0]!) : undefined
 }
@@ -937,7 +1019,7 @@ function buildTaskMemoryV1Migration(params: {
             observation: {
               observationId,
               taskId: importedTaskId,
-              kind: item.category === 'blockers' ? 'warning' : 'discovery',
+              kind: v1CategoryObservationKind(item.category),
               summary: item.summary,
               detail: item.detail,
               confidence: 0.25,
@@ -1199,7 +1281,10 @@ function auditMigrationMarkerBody(params: {
       missingObservationIds.push(expected.eventId)
       continue
     }
-    if (matching.length !== 1 || !equalEventDraft(expected, matching[0]!)) {
+    if (
+      matching.length !== 1 ||
+      !equalImportedObservationDraftWithKindWindow(expected, matching[0]!)
+    ) {
       return markerResult('mismatch', 'imported-body-mismatch')
     }
   }
@@ -1781,7 +1866,8 @@ export async function importTaskMemoryV1(params: {
         const matching = existingEvents.get(draft.eventId) ?? []
         if (
           matching.length > 0 &&
-          (matching.length !== 1 || !equalEventDraft(draft, matching[0]!))
+          (matching.length !== 1 ||
+            !equalImportedObservationDraftWithKindWindow(draft, matching[0]!))
         )
           return {
             outcome: 'failed',

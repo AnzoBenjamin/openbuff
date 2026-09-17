@@ -240,9 +240,37 @@ export interface RelatedFile {
   via?: string
 }
 
+/** Stable chunk identity entry stored in the derived chunks.json sidecar. */
+export interface ChunkSidecarEntry {
+  file: string
+  startLine: number
+  endLine: number
+  qualifiedName: string
+  kind: string
+  contentHash: string
+}
+
+/**
+ * Derived, deterministic chunk sidecar persisted as chunks.json alongside
+ * metadata.json. Rebuildable from MetadataIndex.files; older caches may omit
+ * it and callers must fall back to chunkId/inline chunks. Header carries the
+ * canonical snapshotId plus revision so SNAPSHOT-OLD can be detected without
+ * parsing the full metadata.json.
+ */
+export interface ChunkSidecar {
+  version: 1
+  snapshotId: string
+  workspaceRevision?: string | number
+  builtAt: number
+  projectRoot: string
+  chunks: Record<string, ChunkSidecarEntry>
+}
+
 /** Per-file top chunk hits (capped 5/file in query.ts). No separate chunkHash map is exposed — file-level indexedHash stays the file hash; chunk hashes ride along on each hit. */
 export interface QueryChunkHit {
   chunkId: string
+  /** Stable identity surviving re-chunks/reorders; optional so old caches without it still rank (fallback to chunkId). */
+  stableChunkId?: string
   qualifiedName: string
   kind: string
   startLine: number

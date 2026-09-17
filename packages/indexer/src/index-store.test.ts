@@ -6,10 +6,15 @@ import * as path from 'node:path'
 import { describe, expect, test } from 'bun:test'
 
 import {
+  buildChunkSidecarDocument,
+  CHUNK_SIDECAR_VERSION,
+  computeIndexSnapshotId,
   getIndexDir,
+  loadChunkSidecar,
   loadIndex,
   loadSemanticVectors,
   sanitizeIndexCacheDir,
+  saveChunkSidecar,
   saveIndex,
   saveSemanticVectors,
 } from './index-store'
@@ -373,5 +378,116 @@ describe('index cache ownership', () => {
         expectedSnapshotId,
       }),
     ).toBeNull()
+  })
+
+  test('persists chunks.json sidecar atomically with metadata.json', async () => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-index-sidecar-'),
+    )
+    // Old caches without a sidecar still load/rank: missing file is a safe miss.
+    expect(await loadChunkSidecar(root)).toBeNull()
+    const file = {
+      path: 'src/a.ts',
+      mtime: 1,
+      size: 10,
+      hash: 'hash-a',
+      ext: '.ts',
+      symbols: ['alpha'],
+      imports: [],
+      headings: [],
+      concepts: [],
+      chunks: [
+        {
+          chunkId: 'chunk-a-0',
+          stableChunkId: 'stable-a',
+          qualifiedName: 'A/run',
+          kind: 'function',
+          startLine: 1,
+          endLine: 10,
+          hash: 'chunk-hash-a',
+        },
+      ],
+    }
+    const index = {
+      version: '2' as const,
+      projectRoot: root,
+      builtAt: 1,
+      fileCount: 1,
+      files: { 'src/a.ts': file },
+      graph: { nodes: {}, edges: [] },
+    }
+    expect(await saveIndex(index, root)).toBe(true)
+    // Metadata still loads even though the sidecar is a new file.
+    expect((await loadIndex(root))?.files['src/a.ts']?.hash).toBe('hash-a')
+    const sidecar = await loadChunkSidecar(root)
+    expect(sidecar?.version).toBe(CHUNK_SIDECAR_VERSION)
+    expect(sidecar?.projectRoot).toBe(root)
+    expect(sidecar?.snapshotId).toBe(computeIndexSnapshotId(index))
+    expect(sidecar?.chunks['stable-a']).toEqual({
+      file: 'src/a.ts',
+      startLine: 1,
+      endLine: 10,
+      qualifiedName: 'A/run',
+      kind: 'function',
+      contentHash: 'chunk-hash-a',
+    })
+    // Deterministic derived document: same index rebuilds the same record.
+    expect(buildChunkSidecarDocument(index).chunks).toEqual(sidecar?.chunks ?? {})
+  })
+
+  test('treats missing/invalid sidecars as safe misses and round-trips helpers', async () => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-index-sidecar-invalid-'),
+    )
+    const dir = getIndexDir(root)
+    await fs.promises.mkdir(dir, { recursive: true })
+    await fs.promises.writeFile(path.join(dir, 'chunks.json'), '{not json')
+    expect(await loadChunkSidecar(root)).toBeNull()
+    await fs.promises.writeFile(
+      path.join(dir, 'chunks.json'),
+      JSON.stringify({
+        version: 999,
+        projectRoot: root,
+        snapshotId: 'x',
+        builtAt: 1,
+        chunks: {},
+      }),
+    )
+    expect(await loadChunkSidecar(root)).toBeNull()
+    // saveChunkSidecar helper round-trips a validated document.
+    const file = {
+      path: 'src/a.ts',
+      mtime: 1,
+      size: 10,
+      hash: 'hash-a',
+      ext: '.ts',
+      symbols: [],
+      imports: [],
+      headings: [],
+      concepts: [],
+      chunks: [
+        {
+          chunkId: 'chunk-a-0',
+          stableChunkId: 'stable-helper',
+          qualifiedName: 'A/run',
+          kind: 'function',
+          startLine: 2,
+          endLine: 5,
+          hash: 'chunk-hash-helper',
+        },
+      ],
+    }
+    const index = {
+      version: '2' as const,
+      projectRoot: root,
+      builtAt: 7,
+      fileCount: 1,
+      files: { 'src/a.ts': file },
+      graph: { nodes: {}, edges: [] },
+    }
+    await saveChunkSidecar(root, buildChunkSidecarDocument(index))
+    expect((await loadChunkSidecar(root))?.chunks['stable-helper']?.contentHash).toBe(
+      'chunk-hash-helper',
+    )
   })
 })

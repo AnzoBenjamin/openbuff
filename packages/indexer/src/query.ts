@@ -427,6 +427,7 @@ function scoreFile(
     string,
     {
       chunkId: string
+      stableChunkId?: string
       qualifiedName: string
       kind: string
       startLine: number
@@ -499,6 +500,9 @@ function scoreFile(
         } else {
           chunkScores.set(chunk.chunkId, {
             chunkId: chunk.chunkId,
+            ...(chunk.stableChunkId
+              ? { stableChunkId: chunk.stableChunkId }
+              : {}),
             qualifiedName: chunk.qualifiedName,
             kind: chunk.kind,
             startLine: chunk.startLine,

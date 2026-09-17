@@ -1514,4 +1514,47 @@ describe('V1 memory migration audit', () => {
     expect(await audit(reader, source)).toMatchObject({ outcome: 'exact' })
     expect(calls).toBe(2)
   })
+
+  test('migrates V1 blockers as warning and decisions as discovery to preserve audit exactness', async () => {
+    const repository = new Repository()
+    const source = memory()
+    expect((await run(repository, source)).outcome).toBe('imported')
+    const byCategory = new Map<string, string>()
+    for (const event of repository.events.values()) {
+      if (event.eventType !== 'observation.recorded') continue
+      byCategory.set(
+        String(event.payload.observation.provenance?.metadata.category),
+        String(event.payload.observation.kind),
+      )
+    }
+    expect(byCategory.get('decisions')).toBe('discovery')
+    expect(byCategory.get('blockers')).toBe('warning')
+    expect(byCategory.get('requirements')).toBe('discovery')
+    expect(await audit(repository, source)).toMatchObject({ outcome: 'exact' })
+  })
+
+  test('blockers compatibility window certifies legacy discovery imports as exact', async () => {
+    const repository = new Repository()
+    const source = memory()
+    expect((await run(repository, source)).outcome).toBe('imported')
+    for (const event of repository.events.values()) {
+      if (
+        event.eventType !== 'observation.recorded' ||
+        event.payload.observation.provenance?.metadata.category !== 'blockers'
+      )
+        continue
+      repository.events.set(
+        event.eventId,
+        MemoryEventEnvelopeSchema.parse({
+          ...event,
+          payload: {
+            ...event.payload,
+            observation: { ...event.payload.observation, kind: 'discovery' },
+          },
+        }),
+      )
+    }
+    expect(await audit(repository, source)).toMatchObject({ outcome: 'exact' })
+    expect((await run(repository, source)).outcome).toBe('no-op')
+  })
 })

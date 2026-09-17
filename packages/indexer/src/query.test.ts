@@ -547,6 +547,43 @@ describe('queryIndex', () => {
     expect(results[0]?.matchedSnippets?.[0]).toContain('AuthProvider/loginUser')
   })
 
+  test('stableChunkId survives query', () => {
+    const stableIndex: MetadataIndex = {
+      version: '2',
+      projectRoot: '/repo',
+      builtAt: Date.now(),
+      fileCount: 1,
+      files: {
+        'src/stable.ts': {
+          path: 'src/stable.ts',
+          mtime: 1,
+          size: 100,
+          hash: 'stable',
+          ext: '.ts',
+          symbols: [],
+          imports: [],
+          headings: [],
+          concepts: [],
+          chunks: [
+            {
+              chunkId: 'chunk-stable-0',
+              stableChunkId: 'stable-abc123',
+              qualifiedName: 'StableWidget/renderStable',
+              kind: 'function',
+              startLine: 1,
+              endLine: 10,
+              hash: 'h-stable',
+            },
+          ],
+        },
+      },
+      graph: { nodes: {}, edges: [] },
+    }
+    const results = queryIndex(stableIndex, 'renderStable', { limit: 5 })
+    expect(results[0]?.path).toBe('src/stable.ts')
+    expect(results[0]?.chunks?.[0]?.stableChunkId).toBe('stable-abc123')
+  })
+
   test('zeroing the chunk weight removes chunk-only matches', () => {
     const chunkOnly: MetadataIndex = {
       ...index,

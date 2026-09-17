@@ -17,6 +17,7 @@ import { stableHash } from '@codebuff/common/util/stable-hash'
 import { getInitialAgentState } from '@codebuff/common/types/session-state'
 
 import {
+  classifyObservationKind,
   computeMemoryParity,
   extractV1MigrationExtras,
   MemoryV2Coordinator,
@@ -1661,6 +1662,81 @@ describe('MemoryV2Coordinator lifecycle', () => {
       })
       expect(repository.requests.slice(before)).toHaveLength(1)
       expect(repository.requests.at(-1)!.expectedTail).toBeDefined()
+    }
+  })
+
+  test('classifies decision tools deterministically', () => {
+    expect(classifyObservationKind('create_plan', [{ plan: 'x' }])).toBe('decision')
+    expect(classifyObservationKind('architect', [{ conclusion: 'We decided ok' }])).toBe('decision')
+    expect(classifyObservationKind('thinker', [{ summary: 'plain notes' }])).toBe('fact')
+    expect(classifyObservationKind('think_deeply', [{ text: 'the service must not delete data' }])).toBe('constraint')
+    expect(classifyObservationKind('think_deeply', [{ summary: 'plain notes' }])).toBe('fact')
+    expect(classifyObservationKind('architect', [{ constraint: 'must use sqlite' }])).toBe('constraint')
+    expect(classifyObservationKind('get_change_review_bundle', [{ status: 'ok' }])).toBe('discovery')
+    expect(classifyObservationKind('run_targeted_validation', [{ passed: true }])).toBe('discovery')
+    expect(classifyObservationKind('write_file', [{ ok: true }])).toBe('outcome')
+    expect(classifyObservationKind('code_search', [{ ok: true }])).toBe('discovery')
+  })
+
+  test('records decision-classified tool output as kind=decision', async () => {
+    const repository = new RepositoryStub()
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:decision-capture',
+      query: 'capture',
+    })
+    const before = allEvents(repository).length
+    await coordinator.recordToolObservation({
+      toolName: 'create_plan',
+      callId: 'call:plan-decision',
+      userInputId: 'input:decision-capture',
+      input: {},
+      output: [{ type: 'json', value: { plan: 'migrate to sqlite', status: 'ok' } }],
+      native: true,
+    })
+    expect(allEvents(repository).length).toBe(before + 1)
+    const event = allEvents(repository).at(-1)!
+    expect(event.eventType).toBe('observation.recorded')
+    if (event.eventType === 'observation.recorded') {
+      expect(event.payload.observation.kind).toBe('decision')
+      expect(event.payload.observation.confidence).toBe(0.5)
+      expect(event.payload.observation.evidence.length).toBeLessThanOrEqual(32)
+    }
+  })
+
+  test('records constraint-classified think_deeply output as kind=constraint', async () => {
+    const repository = new RepositoryStub()
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:constraint-capture',
+      query: 'capture',
+    })
+    const before = allEvents(repository).length
+    await coordinator.recordToolObservation({
+      toolName: 'think_deeply',
+      callId: 'call:constraint',
+      userInputId: 'input:constraint-capture',
+      input: {},
+      output: [{ type: 'json', value: { text: 'the service must not delete data' } }],
+      native: true,
+    })
+    expect(allEvents(repository).length).toBe(before + 1)
+    const event = allEvents(repository).at(-1)!
+    expect(event.eventType).toBe('observation.recorded')
+    if (event.eventType === 'observation.recorded') {
+      expect(event.payload.observation.kind).toBe('constraint')
     }
   })
 })
