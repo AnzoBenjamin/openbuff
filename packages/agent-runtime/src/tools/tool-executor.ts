@@ -24,6 +24,7 @@ import {
 } from '@codebuff/common/tools/metadata'
 import { isAbortError } from '@codebuff/common/util/error'
 import { jsonToolResult } from '@codebuff/common/util/messages'
+import type { JSONObject } from '@codebuff/common/types/json'
 import {
   isExternalReadPath,
   isOwnedTempPath,
@@ -150,17 +151,68 @@ function makeAbortableBarrier(
 // was retired because the raw handler error can carry internal detail that
 // should not be echoed into agent-visible tool output (the sibling
 // native_tool_result_error path likewise never echoes raw internals). The
-// contract is now the static, safe string below; the underlying error is
-// still logged via logger.warn at the call site in executeToolCall. Do not
+// contract is now the static, safe string below plus an optional sanitized
+// per-agent `recoveryHint` derived only from the safe prefix of a
+// validateAgentInput message (formatValidationIssues + exact params contract
+// + Recovery:); the raw `Original params/prompt value` section and any
+// non-validation internals are never echoed. The underlying error is still
+// logged via logger.warn at the call site in executeToolCall. Do not
 // reintroduce the interpolated format, and do not pin it in tests.
+const SPAWN_HANDLER_FAILURE_MESSAGE =
+  'Agent spawn failed because the handler could not validate the request.'
+
+const SPAWN_RECOVERY_HINT_MAX_CHARS = 2_000
+
+function extractSanitizedSpawnRecoveryHint(error: unknown): string | undefined {
+  const candidate: unknown =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : undefined
+  // Normalize to a primitive string before any sanitizing. String() unboxes a
+  // boxed String while preserving already-sanitized content; primitives hit
+  // sanitizeJsonToolResultValue's early return, while boxed/non-primitive
+  // values would take its object/toJSON branch and serialize as {}.
+  const raw =
+    typeof candidate === 'string'
+      ? candidate
+      : candidate instanceof String
+        ? String(candidate)
+        : undefined
+  if (typeof raw !== 'string' || !raw) return undefined
+  // Only validation-shaped messages are eligible; any other handler
+  // internal (bridge failures, stack traces) stays log-only.
+  const isValidationHint =
+    /Invalid (params|prompt) for agent|Editor agent requires|Invalid (versioned )?handoff|repair-editor requires|Missing required:|Exact params contract|Recovery:/.test(
+      raw,
+    )
+  if (!isValidationHint) return undefined
+  let sanitized = raw
+    .split('\n\nOriginal params value:')[0]
+    .split('\n\nOriginal prompt value:')[0]
+    .split('Original params value:')[0]
+    .split('Original prompt value:')[0]
+  sanitized = sanitized
+    .replace(/[\x00-\x1f\x7f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!sanitized) return undefined
+  if (sanitized.length > SPAWN_RECOVERY_HINT_MAX_CHARS) {
+    sanitized = `${sanitized.slice(0, SPAWN_RECOVERY_HINT_MAX_CHARS).trimEnd()}...[truncated]`
+  }
+  // String() is the identity on the already-sanitized primitive and unboxes
+  // any boxed form, so the hint reaching jsonToolResult is always a primitive
+  // string (preserved verbatim by sanitizeJsonToolResultValue's early return).
+  return String(sanitized)
+}
+
 export function buildSpawnAgentsHandlerFailureOutput(
   input: unknown,
   // Retained for call-site symmetry with the generic failure-output builder
-  // and for logging at the call site; deliberately NOT interpolated into the
-  // agent-visible errorMessage (see the migration note above). Prefixed with
-  // `_` so it is explicitly intentionally-unused and lint-safe under
-  // `noUnusedParameters`.
-  _error: unknown,
+  // and for logging at the call site; only its sanitized validation prefix
+  // (see extractSanitizedSpawnRecoveryHint) reaches agent-visible output.
+  error: unknown,
 ): CodebuffToolOutput<'spawn_agents'> {
   const inputRecord =
     input && typeof input === 'object'
@@ -168,25 +220,41 @@ export function buildSpawnAgentsHandlerFailureOutput(
       : undefined
   const agents =
     inputRecord && Array.isArray(inputRecord.agents) ? inputRecord.agents : []
+  const recoveryHint = extractSanitizedSpawnRecoveryHint(error)
 
-  return jsonToolResult(
-    (agents.length > 0 ? agents : [{}]).map((agent) => {
-      const agentType =
-        agent &&
-        typeof agent === 'object' &&
-        typeof (agent as Record<string, unknown>).agent_type === 'string'
-          ? String((agent as Record<string, unknown>).agent_type)
-          : 'unknown'
+  const reports = (agents.length > 0 ? agents : [{}]).map((agent): JSONObject => {
+    const agentType =
+      agent &&
+      typeof agent === 'object' &&
+      typeof (agent as Record<string, unknown>).agent_type === 'string'
+        ? String((agent as Record<string, unknown>).agent_type)
+        : 'unknown'
+    if (typeof recoveryHint === 'string' && recoveryHint.length > 0) {
+      // Separate explicit branch: the false branch below has no recoveryHint
+      // key at all, so no undefined ever enters the JSON payload. String() is
+      // the identity on the already-sanitized primitive and keeps the property
+      // typed as string (not string|undefined) so jsonToolResult<T extends
+      // JSONValue> accepts the payload.
+      const hintPrimitive: string = String(recoveryHint)
       return {
         agentType,
         agentName: agentType,
         value: {
-          errorMessage:
-            'Agent spawn failed because the handler could not validate the request.',
+          errorMessage: SPAWN_HANDLER_FAILURE_MESSAGE,
+          recoveryHint: hintPrimitive,
         },
       }
-    }),
-  )
+    }
+    return {
+      agentType,
+      agentName: agentType,
+      value: {
+        errorMessage: SPAWN_HANDLER_FAILURE_MESSAGE,
+      },
+    }
+  })
+
+  return jsonToolResult(reports) as CodebuffToolOutput<'spawn_agents'>
 }
 
 type SpawnGateFilterResult = {
@@ -2805,6 +2873,12 @@ export async function executeToolCall<T extends ToolName>(
             { toolName, errors },
             'All agents in spawn_agents failed pre-validation; publishing the call so the handler can return a structured failure result',
           )
+          onResponseChunk({
+            type: 'error',
+            message: `All agents could not be spawned: ${errors.join('; ')}`,
+            userMessage: SPAWN_INVALID_PARAMS_USER_MESSAGE,
+            autoRecovering: true,
+          })
         } else {
           const errorMsg = `Some agents could not be spawned: ${errors.join('; ')}. Proceeding with valid agents only.`
           onResponseChunk({

@@ -565,8 +565,17 @@ const HIGH_FIDELITY_STRING_FIELDS = new Set([
   'digest',
   'stdout',
   'stderr',
+  // Basher long-log verbatim pointers: the parent reads back via
+  // read_logs/read_files using these fields, so they must survive
+  // compaction verbatim (they are short identifiers, never truncated).
+  'fullLogPath',
+  'logFile',
+  'jobId',
 ])
 const PARENT_AGENT_OUTPUT_ARRAY_ITEMS = 48
+// extractedLines is control-plane: the basher 80-line extract must survive
+// (not clipped to the 48-item default). Overall output stays bounded by the
+// 256k PARENT_AGENT_OUTPUT_MAX_CHARS check with a truncation receipt.
 const CONTROL_PLANE_ARRAY_FIELDS = new Set([
   'reviewedFiles',
   'requirementCoverage',
@@ -578,6 +587,7 @@ const CONTROL_PLANE_ARRAY_FIELDS = new Set([
   'errors',
   'unresolved',
   'requestedValidation',
+  'extractedLines',
 ])
 
 function truncateReviewerText(value: unknown, maxChars: number): unknown {
@@ -1833,7 +1843,16 @@ export function validateAgentInput(
                 : normalizedAgentType === 'librarian' &&
                     issuePaths.has('repoUrl')
                   ? '\n\nRecovery: set params.repoUrl to a GitHub URL, for example { "agent_type": "librarian", "params": { "repoUrl": "https://github.com/<owner>/<repo>" } }. params.repoUrl must have the form https://github.com/<owner>/<repo>; a URL only in prompt prose is not used.'
-                  : ''
+                  : normalizedAgentType === 'thinker'
+                    ? '\n\nRecovery: prompt is required for thinker — pass a self-contained decision packet in prompt (decision, confirmed evidence, constraints, options, risks, unknowns). params accepts only depth and outputSchemaHint; do not place files or commands in params.'
+                    : normalizedAgentType === 'general-agent'
+                      ? '\n\nRecovery: prompt is required for general-agent — pass a self-contained prompt plus params.filePaths/params.directoryPaths. Use filePaths/directoryPaths, not files/directories; preserve both canonical field names exactly.'
+                      : normalizedAgentType === 'architect' ||
+                          normalizedAgentType === 'docs-architect'
+                        ? '\n\nRecovery: spawn the architect/advisory specialist with the review question in prompt and the scoped file list in params.files. params.snapshot_id is optional — omit it on manual spawns; put the scoped file list in params.files and the review question in the prompt.'
+                        : normalizedAgentType === 'editor'
+                          ? '\n\nRecovery: spawn editor with a 5-section brief (Requirements, Target files, Constraints/non-goals, Patterns, Risks) or concrete prose naming the exact target path plus the implementation action. Do not rely on parent conversation history.'
+                          : ''
       const paramsContract = formatAgentParamsContract(inputSchema.params)
       throw new Error(
         `Invalid params for agent ${agentType}: ${formatValidationIssues({ issues: result.error.issues })}\n\nExact params contract (from the child agent schema): ${paramsContract}\nPreserve params field names exactly.${recoveryHint}\n\nOriginal params value:\n${formatValueForError(params ?? {})}`,

@@ -79,6 +79,68 @@ describe('tool validation error handling', () => {
     expect(JSON.stringify(output)).not.toContain('Editor brief is incomplete')
   })
 
+  it('includes a sanitized per-agent recoveryHint alongside the static failure string', () => {
+    const validationError = new Error(
+      'Invalid params for agent basher: Missing required: command\n\nExact params contract (from the child agent schema): {"type":"object","required":["command"]}\nPreserve params field names exactly.\n\nRecovery: spawn Basher with { "agent_type": "basher", "params": { "command": "<shell command>" } }.\n\nOriginal params value:\n{"secret":"should-never-appear"}',
+    )
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: [{ agent_type: 'basher', params: {} }] },
+      validationError,
+    )
+
+    // NOTE: do not use toMatchObject with asymmetric matchers here. Bun's
+    // toMatchObject mutates the received object (replaces a matched string
+    // with {}), which would flatten recoveryHint before the serialized
+    // assertions below. Assert via direct property reads instead.
+    expect(output[0]?.type).toBe('json')
+    const report = (output[0] as unknown as { value: Array<{ agentType: string; agentName: string; value: { errorMessage: string; recoveryHint: unknown } }> }).value[0]
+    expect(report.agentType).toBe('basher')
+    expect(report.agentName).toBe('basher')
+    expect(report.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+    expect(typeof report.value.recoveryHint).toBe('string')
+    expect(report.value.recoveryHint as string).toContain(
+      'Missing required: command',
+    )
+    const serialized = JSON.stringify(output)
+    expect(serialized).toContain('Exact params contract')
+    expect(serialized).toContain('Recovery:')
+    // Raw internals never leak: original values and stack-adjacent detail stay log-only.
+    expect(serialized).not.toContain('should-never-appear')
+    expect(serialized).not.toContain('Original params value')
+  })
+
+  it('preserves basher extractedLines as control-plane output', async () => {
+    const { normalizeSpawnedAgentOutput } = await import(
+      '../tools/handlers/tool/spawn-agent-utils'
+    )
+    const extractedLines = Array.from(
+      { length: 80 },
+      (_, index) => `failure line ${index + 1}: Expected x Received y`,
+    )
+    const output = normalizeSpawnedAgentOutput(
+      {
+        type: 'structuredOutput',
+        value: {
+          command: 'bun test',
+          requestedSummary: 'Report failures',
+          message: extractedLines.join('\n'),
+          extractedLines,
+        },
+      },
+      'basher',
+    )
+    const serialized = JSON.stringify(output)
+    // Control-plane extracts survive compaction verbatim within the 256k bound.
+    expect(serialized.length).toBeLessThanOrEqual(256_000)
+    const roundTripped =
+      output?.value?.extractedLines ?? output?.extractedLines ?? []
+    expect(Array.isArray(roundTripped)).toBe(true)
+    expect(roundTripped).toHaveLength(80)
+    expect(roundTripped[0]).toContain('failure line 1')
+  })
+
   const testAgentTemplate: AgentTemplate = {
     id: 'test-agent',
     displayName: 'Test Agent',
@@ -2595,40 +2657,62 @@ describe('tool validation error handling', () => {
     const events = responseChunks.filter(
       (chunk): chunk is PrintModeEvent => typeof chunk !== 'string',
     )
-    expect(events.some((event) => event.type === 'error')).toBe(false)
+    const spawnErrors = events.filter(
+      (chunk): chunk is Extract<PrintModeEvent, { type: 'error' }> =>
+        chunk.type === 'error',
+    )
+    expect(spawnErrors.length).toBe(1)
+    expect(spawnErrors[0].message).toContain('Missing required: command')
+    expect(spawnErrors[0].message).toContain('Exact params contract')
+    expect(spawnErrors[0].userMessage).toContain(
+      'could not be spawned due to invalid parameters',
+    )
+    expect(spawnErrors[0].autoRecovering).toBe(true)
     expect(events.find((event) => event.type === 'tool_call')).toMatchObject({
       type: 'tool_call',
       toolName: 'spawn_agents',
       toolCallId: 'basher-missing-command-tool-call-id',
     })
     const toolResultEvent = events.find((event) => event.type === 'tool_result')
-    expect(toolResultEvent).toMatchObject({
-      type: 'tool_result',
-      toolName: 'spawn_agents',
-      toolCallId: 'basher-missing-command-tool-call-id',
-      output: [
-        {
-          type: 'json',
-          value: expect.arrayContaining([
-            expect.objectContaining({
-              agentType: 'basher',
-              value: {
-                // Spawn-failure errorMessage is the static, leak-safe contract
-                // (no interpolation of the underlying validation error); the
-                // detailed error is logged via logger.warn instead.
-                errorMessage:
-                  'Agent spawn failed because the handler could not validate the request.',
-              },
-            }),
-          ]),
-        },
-      ],
-    })
-    // The underlying validation error must not leak into the agent-visible
-    // failure output (regression guard for the retired interpolated format).
-    expect(JSON.stringify(toolResultEvent)).not.toContain(
+    // NOTE: do not use toMatchObject with asymmetric matchers on the live
+    // event: Bun's toMatchObject mutates the received payload (matched
+    // strings become {}), which would flatten recoveryHint before
+    // stringification. Capture JSON first, then assert via direct reads.
+    const toolResultJson = JSON.stringify(toolResultEvent)
+    expect(toolResultEvent?.type).toBe('tool_result')
+    const failureOutput = (
+      toolResultEvent as unknown as {
+        toolName: string
+        toolCallId: string
+        output: Array<{
+          type: string
+          value: Array<{
+            agentType: string
+            value: { errorMessage: string; recoveryHint: unknown }
+          }>
+        }>
+      }
+    ).output[0]?.value[0]
+    expect(
+      (toolResultEvent as unknown as { toolName: string }).toolName,
+    ).toBe('spawn_agents')
+    expect(
+      (toolResultEvent as unknown as { toolCallId: string }).toolCallId,
+    ).toBe('basher-missing-command-tool-call-id')
+    expect(failureOutput?.agentType).toBe('basher')
+    // Static leak-safe string plus sanitized per-agent hint; raw internals
+    // stay log-only via logger.warn.
+    expect(failureOutput?.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+    expect(typeof failureOutput?.value.recoveryHint).toBe('string')
+    expect(failureOutput?.value.recoveryHint as string).toContain(
       'Missing required: command',
     )
+    // Sanitized validation hint is agent-visible; raw sections never leak.
+    expect(toolResultJson).toContain('Missing required: command')
+    expect(toolResultJson).toContain('Exact params contract')
+    expect(toolResultJson).not.toContain('Original params value')
   })
 
   it('emits a calm userMessage on partial spawn failures', async () => {

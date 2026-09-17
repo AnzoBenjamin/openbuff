@@ -11,7 +11,7 @@ const basher: AgentDefinition = {
   publisher,
   displayName: 'Basher',
   spawnerPrompt:
-    'Runs a single terminal command and returns a deterministic report of its output. Use what_to_summarize to label the information to extract. Every basher spawn MUST include params: { command: "<shell>" }.',
+    'Runs a single terminal command and returns a deterministic report of its output. Use what_to_summarize to label the information to extract. For large suites use save_full_log:true with failure_pattern/max_failure_lines for extracts; retain_full_log:true returns fullLogPath for parent read_logs/read_files. Use BACKGROUND+check_job for servers/tails. Never embed multi-KB heredoc in params.command. Every basher spawn MUST include params: { command: "<shell>" }.',
 
   inputSchema: {
     params: {
