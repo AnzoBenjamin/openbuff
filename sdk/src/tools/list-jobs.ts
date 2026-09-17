@@ -3,7 +3,9 @@ import {
   bucketPendingLines,
   buildListJobsValue,
   countPendingOutputLines,
+  extractAgentTailLines,
   selectListJobsRows,
+  summarizeAgentEvents,
   type ListJobsViewRow,
 } from '@codebuff/common/util/list-jobs-view'
 import {
@@ -65,15 +67,15 @@ export async function listJobs(params: {
   const rows: ListJobsViewRow[] = selected.rows.map(({ entry }) => {
     // Resolve process adapters by jobId (Map key = registry id = jobId).
     //
-    // `pending` line buckets count only registry events with
-    // `payload.type === 'output'` relative to the process adapter's
-    // `lastCheckCursor` (advanced solely by `check_job`). Agent jobs typically
-    // have no process adapter (miss → cursor 0) and emit `agent_chunk` (not
-    // `output`), so line-based `pending` stays `'none'`; agents are
-    // rediscovered via status/kind, not pending lines. `gap` still reflects
-    // ring truncation at the snapshot cursor for any kind.
+    // `pending` buckets count `output` newlines (process) plus one unit per
+    // `agent_chunk` (agent) relative to the consumer cursor. The process
+    // cursor is the adapter's `lastCheckCursor` (advanced solely by
+    // `check_job`); agent jobs have no process adapter (miss → cursor 0),
+    // so their pending reflects every buffered chunk since cursor 0.
+    // `gap` reflects ring truncation at the snapshot cursor for any kind.
     //
     // The lineCarry +1 counting rationale lives on `countPendingOutputLines`.
+    // list_jobs is read-only: cursors are never advanced here.
     const adapter = getBackgroundJobAdapter(entry.jobId)
     const cursor = adapter?.lastCheckCursor ?? 0
     const snap = jobRegistry.snapshot(entry.jobId, cursor)
@@ -103,6 +105,21 @@ export async function listJobs(params: {
     if (entry.exitCode !== undefined) {
       row.exitCode = entry.exitCode
     }
+    if (entry.kind === 'agent') {
+      // Agent progress hint from chunks since the cursor; fall back to the
+      // full buffer when the cursor already consumed everything so running
+      // and terminal rows still carry a summary.
+      const summary =
+        summarizeAgentEvents(snap?.events ?? []) ??
+        (snap && snap.events.length === 0
+          ? summarizeAgentEvents(
+              jobRegistry.snapshot(entry.jobId, 0)?.events ?? [],
+            )
+          : undefined)
+      if (summary !== undefined) {
+        row.lastSummary = summary
+      }
+    }
     if (isTerminalJobState(entry.state)) {
       // Prefer events after the consumer cursor; if empty, peek from 0 for a
       // short terminal tail without dumping megabytes (already-buffered only).
@@ -110,7 +127,10 @@ export async function listJobs(params: {
         snap && snap.events.length > 0
           ? snap.events
           : (jobRegistry.snapshot(entry.jobId, 0)?.events ?? [])
-      const tail = extractTailLines(tailSource)
+      const tail =
+        entry.kind === 'agent'
+          ? extractAgentTailLines(tailSource)
+          : extractTailLines(tailSource)
       if (tail.length > 0) {
         row.tail = tail
       }

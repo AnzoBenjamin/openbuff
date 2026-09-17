@@ -566,6 +566,21 @@ export function appendBackgroundAgentChunk(
 }
 
 /**
+ * Fold a bounded status milestone into the unified core so `wait_for` can
+ * match a small enum instead of scanning full JSON payloads (e.g.
+ * `tool:read`, `tool_result`, `started:thinker`, `finished:thinker`).
+ * Backpressure-free single registry emit; status payloads are not counted in
+ * the chunk byte bound. No-op for unknown jobs (the core returns undefined).
+ */
+export function emitBackgroundAgentStatus(
+  jobId: string,
+  message: string,
+): void {
+  const bounded = message.slice(0, 500)
+  registry.emit(jobId, { type: 'status', message: bounded })
+}
+
+/**
  * Look up a background agent job by id. Returns undefined for unknown ids.
  */
 export function getBackgroundAgentJob(

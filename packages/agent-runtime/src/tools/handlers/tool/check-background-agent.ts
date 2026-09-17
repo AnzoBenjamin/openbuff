@@ -299,6 +299,16 @@ export const handleCheckBackgroundAgent = (async ({
   const cancelled = cancelledNow || state === 'cancelled'
   const resultValue = coreJob?.result ?? view?.result
   const errorValue = coreJob?.error ?? view?.error
+  // Server-side loop breaker: idle running polls tell the model to do other
+  // work instead of tight re-polling; terminal states tell it never to poll
+  // this job again. Optional fields only; existing consumers ignore them.
+  const isTerminalState =
+    state === 'completed' ||
+    state === 'error' ||
+    state === 'cancelled' ||
+    state === 'stopped' ||
+    state === 'lost'
+  const idleRunning = state === 'running' && events.length === 0
 
   return {
     output: {
@@ -320,6 +330,13 @@ export const handleCheckBackgroundAgent = (async ({
         ...(matched !== undefined ? { matched } : {}),
         ...(timedOut ? { timedOut: true } : {}),
         ...(cancelled ? { cancelled: true } : {}),
+        ...(idleRunning
+          ? {
+              stop_polling: true,
+              hint: 'No new events — do other work, do not re-poll for 30s',
+            }
+          : {}),
+        ...(isTerminalState ? { do_not_repoll: true } : {}),
       },
     } as unknown as CodebuffToolOutput<ToolName>,
   }

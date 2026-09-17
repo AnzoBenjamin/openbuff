@@ -120,6 +120,22 @@ export const checkBackgroundAgentParams = {
         matched: z.boolean().optional(),
         timedOut: z.boolean().optional(),
         cancelled: z.boolean().optional(),
+        hint: z
+          .string()
+          .optional()
+          .describe(
+            'Server-side loop-breaker hint (e.g. idle running with no new events).',
+          ),
+        stop_polling: z
+          .boolean()
+          .optional()
+          .describe(
+            'When true, do other work instead of re-polling immediately.',
+          ),
+        do_not_repoll: z
+          .boolean()
+          .optional()
+          .describe('When true, the job is terminal: do not poll again.'),
       }),
       z.object({
         jobId: z.string(),

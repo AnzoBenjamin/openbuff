@@ -203,6 +203,58 @@ describe('listJobs', () => {
     expect(entry?.pending).toBe('<100')
   })
 
+  test('agent jobs bucket pending from agent_chunk with lastSummary', async () => {
+    const jobId = seedRunningJob('researcher', owner, 'agent')
+    jobRegistry.emit(jobId, {
+      type: 'agent_chunk',
+      chunkType: 'text',
+      data: 'working on it',
+    })
+    jobRegistry.emit(jobId, {
+      type: 'agent_chunk',
+      chunkType: 'text',
+      data: 'still going',
+    })
+    jobRegistry.emit(jobId, {
+      type: 'agent_chunk',
+      chunkType: 'tool_call',
+      data: {},
+    })
+    const entry = (
+      value(await listJobs({ owner })).jobs as Array<{
+        jobId: string
+        kind: string
+        pending: string
+        lastSummary?: string
+      }>
+    ).find((job) => job.jobId === jobId)
+    expect(entry?.kind).toBe('agent')
+    expect(entry?.pending).toBe('<10')
+    expect(entry?.lastSummary).toContain('tool_call')
+  })
+
+  test('terminal agent includes bounded agent tail', async () => {
+    const jobId = seedRunningJob('researcher', owner, 'agent')
+    for (let i = 0; i < 12; i++) {
+      jobRegistry.emit(jobId, {
+        type: 'agent_chunk',
+        chunkType: 'text',
+        data: `agent-line-${i}\n`,
+      })
+    }
+    jobRegistry.emit(jobId, { type: 'lifecycle', state: 'completed' })
+    const entry = (
+      value(await listJobs({ owner })).jobs as Array<{
+        jobId: string
+        status: string
+        tail?: string[]
+      }>
+    ).find((job) => job.jobId === jobId)
+    expect(entry?.status).toBe('completed')
+    expect(entry?.tail).toHaveLength(10)
+    expect(entry?.tail?.[9]).toBe('agent-line-11')
+  })
+
   test('completed job may include exitCode and note is always present', async () => {
     const { jobId } = seedCompletedJob('bun build', owner)
     jobRegistry.emit(jobId, { type: 'output', data: 'built ok\n' })

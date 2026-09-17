@@ -1,13 +1,16 @@
 import { describe, expect, test } from 'bun:test'
 
 import {
+  LIST_JOBS_LAST_SUMMARY_MAX_CHARS,
   LIST_JOBS_MAX_ROWS,
   LIST_JOBS_NO_ACTION_LINE,
   bucketPendingLines,
   buildListJobsValue,
   countPendingOutputLines,
+  extractAgentTailLines,
   fingerprintListJobsRows,
   selectListJobsRows,
+  summarizeAgentEvents,
   type ListJobsViewRow,
 } from '../list-jobs-view'
 
@@ -68,6 +71,86 @@ describe('countPendingOutputLines', () => {
         lineCarry: '',
       }),
     ).toBe(0)
+  })
+
+  test('agent_chunk events each count as 1 pending unit', () => {
+    expect(
+      countPendingOutputLines({
+        eventsAfterCursor: [
+          { payload: { type: 'agent_chunk', data: 'hello' } },
+          { payload: { type: 'agent_chunk', data: { text: 'hi' } } },
+          { payload: { type: 'agent_chunk', data: 42 } },
+        ],
+      }),
+    ).toBe(3)
+    expect(
+      countPendingOutputLines({
+        eventsAfterCursor: [
+          { payload: { type: 'output', data: 'a\nb\n' } },
+          { payload: { type: 'agent_chunk', data: 'x' } },
+          { payload: { type: 'lifecycle', data: 'ignored' } },
+          { payload: { type: 'status', message: 'ignored' } },
+        ],
+      }),
+    ).toBe(3)
+    expect(countPendingOutputLines({ eventsAfterCursor: [] })).toBe(0)
+  })
+})
+
+describe('summarizeAgentEvents', () => {
+  test('prefers last text, collapses whitespace, caps length', () => {
+    expect(summarizeAgentEvents([])).toBeUndefined()
+    expect(
+      summarizeAgentEvents([
+        { payload: { type: 'output', data: 'ignored' } },
+      ]),
+    ).toBeUndefined()
+    expect(
+      summarizeAgentEvents([
+        { payload: { type: 'agent_chunk', chunkType: 'text', data: 'first' } },
+        {
+          payload: {
+            type: 'agent_chunk',
+            chunkType: 'text',
+            data: '  second\n line  ',
+          },
+        },
+      ]),
+    ).toBe('second line')
+    expect(
+      summarizeAgentEvents([
+        { payload: { type: 'agent_chunk', chunkType: 'tool_call', data: {} } },
+      ]),
+    ).toBe('tool_call')
+    const long = `x${'y'.repeat(500)}`
+    const summary = summarizeAgentEvents([
+      { payload: { type: 'agent_chunk', chunkType: 'text', data: long } },
+    ])
+    expect(summary!.length).toBeLessThanOrEqual(
+      LIST_JOBS_LAST_SUMMARY_MAX_CHARS,
+    )
+    expect(summary).toBe(long.slice(0, LIST_JOBS_LAST_SUMMARY_MAX_CHARS))
+  })
+})
+
+describe('extractAgentTailLines', () => {
+  test('collects last 10 text lines, skips non-string data', () => {
+    const events: Array<{ payload: { type: string; chunkType: string; data: unknown } }> = Array.from({ length: 12 }, (_, i) => ({
+      payload: {
+        type: 'agent_chunk',
+        chunkType: 'text',
+        data: `agent-line-${i}\n`,
+      },
+    }))
+    events.push({
+      payload: { type: 'agent_chunk', chunkType: 'tool_call', data: {} },
+    })
+    const tail = extractAgentTailLines(events)
+    expect(tail).toHaveLength(10)
+    expect(tail).toEqual(
+      Array.from({ length: 10 }, (_, i) => `agent-line-${i + 2}`),
+    )
+    expect(extractAgentTailLines([])).toEqual([])
   })
 })
 

@@ -726,6 +726,49 @@ describe('checkJob', () => {
     expect(result).toMatchObject({ state: 'completed', exitCode: 0 })
   })
 
+  test('idle running poll returns stop_polling with a loop-breaker hint', async () => {
+    // A still-running job with no new events must tell the model to do other
+    // work instead of tight re-polling.
+    const job = makeJob()
+
+    const result = value(
+      await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+    )
+    expect(result.state).toBe('running')
+    expect(outputText(result)).toBe('')
+    expect(result.stop_polling).toBe(true)
+    expect(typeof result.hint).toBe('string')
+    expect((result.hint as string).length).toBeGreaterThan(0)
+    expect(result.do_not_repoll).toBeUndefined()
+  })
+
+  test('running poll with new output does not set stop_polling', async () => {
+    const job = makeJob()
+    fs.appendFileSync(job.logFile, 'line one\n')
+
+    const result = value(
+      await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+    )
+    expect(result.state).toBe('running')
+    expect(outputText(result)).toBe('line one\n')
+    expect(result.stop_polling).toBeUndefined()
+    expect(result.hint).toBeUndefined()
+    expect(result.do_not_repoll).toBeUndefined()
+  })
+
+  test('terminal poll returns do_not_repoll', async () => {
+    const job = makeJob({ status: 'completed', exitCode: 0 })
+    fs.appendFileSync(job.logFile, 'done\n')
+
+    const result = value(
+      await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+    )
+    expect(result.state).toBe('completed')
+    expect(result.do_not_repoll).toBe(true)
+    expect(result.stop_polling).toBeUndefined()
+    expect(result.hint).toBeUndefined()
+  })
+
   test('first settled poll emits one-shot dirty-delta touchedPaths', async () => {
     const projectRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), 'check-job-dirty-'),

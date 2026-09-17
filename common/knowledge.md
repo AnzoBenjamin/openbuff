@@ -85,6 +85,8 @@ This package contains code shared across the Openbuff monorepo, especially the l
 
 - _Knowledge refresh 2026-09-17 (tool-call pairing repair): `common/src/util/messages.ts` gained fail-closed `stripUnansweredToolCalls` in `convertCbToModelMessages` — unanswered assistant `tool-call` parts are stripped (sibling text kept; now-empty messages dropped) before cache-anchor computation so OpenAI-compatible providers never see an unpaired `tool_call_id`, with a `logger.warn` naming `strippedToolCallIds`/`strippedCount`; `getCacheAnchorSummary` runs the same strip (logger omitted, side-effect free) so anchor indices/hashes match the request pipeline. Pinned in `common/src/util/__tests__/messages.test.ts` (pairing invariant + anchor-parity cases)._
 
+- _Knowledge refresh 2026-09-17 (background jobs live updates): `common/src/util/list-jobs-view.ts` counts each `agent_chunk` as one pending unit, adds bounded `summarizeAgentEvents`/`extractAgentTailLines` plus `lastSummary` (160-char cap); `common/src/tools/params/tool/check-job.ts` and `check-background-agent.ts` add optional `hint`/`stop_polling`/`do_not_repoll` loop-breaker hints._
+
 ## Scope Notes
 
 Openbuff is CLI/SDK-focused and local/BYOK. Do not add new dependencies from `common/` to hosted web, billing, credit, subscription, or BigQuery product surfaces. Provider-owned billing, quota, token usage, and OAuth flows may still be documented when they refer to the user's configured provider rather than an Openbuff-hosted product.

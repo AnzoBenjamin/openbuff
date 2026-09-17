@@ -8,6 +8,7 @@ import {
   attachBackgroundAgentPromise,
   BACKGROUND_AGENT_CANCEL_REASON,
   backgroundAgentJobWasCancelled,
+  emitBackgroundAgentStatus,
   reconcileInterruptedBackgroundAgentIntents,
 } from '../../../util/background-agent-jobs'
 
@@ -81,6 +82,56 @@ type ValidatedSpawnAgent = {
   leaseId?: string
   discoveryShardKey?: string
   handoff?: AgentHandoff
+}
+
+/**
+ * Derive a small status milestone enum for a background chunk. String chunks
+ * carry no milestone. `tool_call` maps to `tool:<toolName>`, `tool_result`
+ * to `tool_result`, `subagent_start` to `started:<agentType>`, and
+ * `subagent_finish` to `finished:<agentType>` with an `:error` suffix when
+ * the finish carries an error. Returns undefined when no milestone applies.
+ */
+function backgroundAgentStatusForChunk(
+  chunk: PrintModeEvent,
+): string | undefined {
+  try {
+    switch (chunk.type) {
+      case 'tool_call': {
+        const record = chunk as unknown as Record<string, unknown>
+        const nested =
+          (record['toolCall'] as Record<string, unknown> | undefined)?.[
+            'toolName'
+          ] ?? (record['tool'] as Record<string, unknown> | undefined)?.['name']
+        const raw = record['toolName'] ?? record['tool_name'] ?? record['name'] ?? nested
+        const name =
+          typeof raw === 'string' && raw.length > 0 ? raw : 'unknown'
+        return `tool:${name.slice(0, 100)}`
+      }
+      case 'tool_result':
+        return 'tool_result'
+      case 'subagent_start': {
+        const record = chunk as unknown as Record<string, unknown>
+        const raw =
+          record['agentType'] ?? record['agent_type'] ?? record['agentName']
+        const agentType =
+          typeof raw === 'string' && raw.length > 0 ? raw : 'unknown'
+        return `started:${agentType.slice(0, 100)}`
+      }
+      case 'subagent_finish': {
+        const record = chunk as unknown as Record<string, unknown>
+        const raw =
+          record['agentType'] ?? record['agent_type'] ?? record['agentName']
+        const agentType =
+          typeof raw === 'string' && raw.length > 0 ? raw : 'unknown'
+        const base = `finished:${agentType.slice(0, 100)}`
+        return record['error'] ? `${base}:error` : base
+      }
+      default:
+        return undefined
+    }
+  } catch {
+    return undefined
+  }
 }
 
 export const handleSpawnAgents = (async (
@@ -554,6 +605,14 @@ export const handleSpawnAgents = (async (
             payload: chunk,
             timestamp: Date.now(),
           })
+          try {
+            const milestone = backgroundAgentStatusForChunk(chunk)
+            if (milestone !== undefined) {
+              emitBackgroundAgentStatus(job.jobId, milestone)
+            }
+          } catch {
+            // Best-effort milestone only; chunk buffering above already succeeded.
+          }
         },
       })
 
