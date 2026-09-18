@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   MemoryAppendRequestSchema,
+  MemoryEventDraftSchema,
   MemoryEventEnvelopeSchema,
   MemoryExportManifestV2Schema,
   MemoryHealthSchema,
@@ -13,7 +14,11 @@ import {
 } from '@codebuff/common/types/memory-v2'
 
 import { MemoryV2OperatorService } from '../operator-service'
-import type { MemoryRepositoryV2 } from '../types'
+import type {
+  MemoryRepositoryV2,
+  PrivilegedCompactionInput,
+  PrivilegedCompactionResult,
+} from '../types'
 
 const projectId = ProjectIdSchema.parse('project:operator')
 const timestamp = '2026-09-10T19:41:53.753Z'
@@ -89,6 +94,45 @@ class RepositoryStub implements MemoryRepositoryV2 {
   rebuildResults: Array<MemoryRebuildOutcome | Error> = []
   exportCalls = 0
   healthCalls = 0
+  storeStatsOverride?: { eventCount: number; bytes: number }
+  selectGCRequests: Array<{ projectId: typeof projectId; olderThanDays: number; maxEvents: number }> = []
+  privilegedCompactRequests: Array<{ eventIds: string[]; archivePath: string; archiveHash: string }> = []
+
+  getStoreStats?: (request: { projectId: typeof projectId }) => Promise<{ eventCount: number; bytes: number }> = async (_request) => {
+    if (this.storeStatsOverride) return this.storeStatsOverride
+    const bytes = new TextEncoder().encode(JSON.stringify(this.events)).length
+    return { eventCount: this.events.length, bytes }
+  }
+
+  selectGCandidates?: (request: { projectId: typeof projectId; olderThanDays: number; maxEvents: number }) => Promise<{ eventIds: PrivilegedCompactionInput['eventIds'] }> = async (request) => {
+    this.selectGCRequests.push(request)
+    return { eventIds: [] as unknown as PrivilegedCompactionInput['eventIds'] }
+  }
+
+  privilegedCompact?: (input: PrivilegedCompactionInput) => Promise<PrivilegedCompactionResult> = async (input) => {
+    this.privilegedCompactRequests.push({
+      eventIds: input.eventIds.map(String),
+      archivePath: input.archivePath,
+      archiveHash: input.archiveHash,
+    })
+    const beforeCount = this.events.length
+    const beforeBytes = new TextEncoder().encode(JSON.stringify(this.events)).length
+    const ids = new Set(input.eventIds.map(String))
+    this.events = this.events.filter((event) => !ids.has(String(event.eventId)))
+    const sequence = this.events.length + 1
+    this.events.push(
+      MemoryEventEnvelopeSchema.parse({ ...(input.archiveClaimDraft as unknown as Record<string, unknown>), sequence }),
+    )
+    const afterCount = this.events.length
+    const afterBytes = new TextEncoder().encode(JSON.stringify(this.events)).length
+    return {
+      archivedEventIds: input.eventIds,
+      beforeCount,
+      afterCount,
+      beforeBytes,
+      afterBytes,
+    }
+  }
 
   constructor(events: MemoryEventEnvelope[] = []) {
     this.events = [...events]
@@ -845,4 +889,117 @@ describe('MemoryV2OperatorService', () => {
       expect(JSON.stringify(outcome)).not.toContain('sensitive')
     },
   )
+
+  test('compact preview is no-write, excludes archived events, and caps at maxEvents', async () => {
+    const archivedDraft = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'claim.archived',
+      eventId: 'event:archived-1',
+      projectId,
+      sessionId,
+      occurredAt: timestamp,
+      payload: {
+        payloadSchemaVersion: 1,
+        archivedEventIds: ['event:observation-1'],
+        archivePath: '.openbuff/memory/archive/test.jsonl',
+        archiveHash: `sha256:${'a'.repeat(64)}`,
+        reason: 'test archival',
+        archivedAt: timestamp,
+      },
+    })
+    const repository = new RepositoryStub([
+      observationEvent(1, 'observation:1', 'One'),
+      observationEvent(2, 'observation:2', 'Two'),
+      MemoryEventEnvelopeSchema.parse({ ...archivedDraft, sequence: 3 }),
+    ])
+    const service = new MemoryV2OperatorService(repository)
+    const preview = await service.compact({
+      schemaVersion: 2,
+      projectId,
+      sessionId,
+      mode: 'preview',
+      olderThanDays: 1,
+      maxEvents: 1000,
+    })
+    expect(preview.outcome).toBe('preview')
+    if (preview.outcome !== 'preview') return
+    expect(preview.candidateEventIds.map(String)).toEqual([
+      'event:observation-1',
+      'event:observation-2',
+    ])
+    expect(preview.candidateCount).toBe(2)
+    expect(preview.archiveByteEstimate).toBeGreaterThan(0)
+    expect(Array.isArray(preview.warnings)).toBe(true)
+    expect(repository.events).toHaveLength(3)
+    expect(repository.appendRequests).toHaveLength(0)
+    expect(repository.privilegedCompactRequests).toHaveLength(0)
+
+    const capped = await service.compact({
+      schemaVersion: 2,
+      projectId,
+      sessionId,
+      mode: 'preview',
+      olderThanDays: 1,
+      maxEvents: 1,
+    })
+    expect(capped.outcome).toBe('preview')
+    if (capped.outcome !== 'preview') return
+    expect(capped.candidateCount).toBe(1)
+    expect(capped.candidateEventIds).toHaveLength(1)
+  })
+
+  test('compact apply echoes in-memory counts and bytes with threshold warnings', async () => {
+    const repository = new RepositoryStub([
+      observationEvent(1, 'observation:1', 'One'),
+      observationEvent(2, 'observation:2', 'Two'),
+    ])
+    repository.storeStatsOverride = { eventCount: 25000, bytes: 60000000 }
+    const applied = await new MemoryV2OperatorService(repository).compact({
+      schemaVersion: 2,
+      projectId,
+      sessionId,
+      mode: 'apply',
+      olderThanDays: 1,
+      maxEvents: 1000,
+    })
+    expect(applied.outcome).toBe('applied')
+    if (applied.outcome !== 'applied') return
+    expect(applied.archivedEventIds.map(String)).toEqual([
+      'event:observation-1',
+      'event:observation-2',
+    ])
+    expect(applied.beforeCount).toBe(2)
+    expect(applied.afterCount).toBe(1)
+    expect(applied.beforeBytes).toBeGreaterThanOrEqual(0)
+    expect(applied.afterBytes).toBeGreaterThanOrEqual(0)
+    expect(applied.warnings.join('\n')).toContain('50MB')
+    expect(applied.warnings.join('\n')).toContain('20000')
+    expect(repository.events.filter((event) => event.eventType === 'claim.archived')).toHaveLength(1)
+  })
+
+  test('compact apply without privilegedCompact rejects as invalid-request', async () => {
+    const repository = new RepositoryStub([observationEvent(1, 'observation:1', 'One')])
+    delete (repository as unknown as Record<string, unknown>).privilegedCompact
+    const outcome = await new MemoryV2OperatorService(repository).compact({
+      schemaVersion: 2,
+      projectId,
+      sessionId,
+      mode: 'apply',
+      olderThanDays: 1,
+      maxEvents: 1000,
+    })
+    expect(outcome).toMatchObject({
+      outcome: 'rejected',
+      error: { code: 'invalid-request' },
+    })
+  })
+
+  test('compact invalid request rejects', async () => {
+    const repository = new RepositoryStub()
+    expect(await new MemoryV2OperatorService(repository).compact({ schemaVersion: 2 })).toMatchObject({
+      outcome: 'rejected',
+      error: { code: 'invalid-request' },
+    })
+  })
 })

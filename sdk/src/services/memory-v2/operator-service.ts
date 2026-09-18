@@ -15,6 +15,8 @@ import {
   MemoryManifestExportRequestSchema,
   MemoryManifestImportOutcomeSchema,
   MemoryManifestImportRequestSchema,
+  MemoryCompactionOutcomeSchema,
+  MemoryCompactionRequestSchema,
   MemoryProjectionRepairOutcomeSchema,
   MemoryProjectionRepairRequestSchema,
   MemoryRebuildOutcomeSchema,
@@ -23,6 +25,7 @@ import {
   MemoryRevalidationRequestSchema,
   MemoryVerifyOutcomeSchema,
   MemoryVerifyRequestSchema,
+  type MemoryCompactionOutcome,
   type MemoryConsolidationOutcome,
   type MemoryCorrectionOutcome,
   type MemoryEventDraft,
@@ -47,6 +50,10 @@ const MAX_GROUP_SOURCES = 19
 const MAX_MANIFEST_EVENTS_ENCODED_BYTES = 32 * 1024 * 1024
 const MAX_EXPORT_WARNINGS = 100
 const SHA256_ZERO = `sha256:${'0'.repeat(64)}`
+const COMPACTION_STORE_BYTES_THRESHOLD = 52_428_800
+const COMPACTION_EVENT_COUNT_THRESHOLD = 20_000
+const COMPACTION_APPLY_MAX_EVENTS = 100
+const MAX_COMPACTION_WARNINGS = 100
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -480,6 +487,48 @@ function renderMarkdown(manifest: MemoryExportManifestV2): string {
     )
   }
   return lines.join('\n').slice(0, 1_000_000)
+}
+
+function compactionObservationIds(event: MemoryEventEnvelope): string[] {
+  switch (event.eventType) {
+    case 'observation.recorded':
+      return [event.payload.observation.observationId]
+    case 'claim.consolidated':
+      return [...event.payload.sourceObservationIds, event.payload.canonicalObservation.observationId]
+    case 'claim.corrected':
+      return [event.payload.observationId, event.payload.correction.observationId]
+    case 'claim.superseded':
+      return [event.payload.observationId]
+    case 'claim.forgotten':
+      return [...event.payload.observationIds]
+    case 'claim.pinned':
+      return [event.payload.observationId]
+    case 'evidence.attached':
+      return [event.payload.observationId]
+    case 'evidence.verified':
+      return [event.payload.observationId]
+    case 'evidence.invalidated':
+      return [event.payload.observationId]
+    case 'evidence.rebound':
+      return [event.payload.observationId]
+    default:
+      return []
+  }
+}
+
+function compactionWarnings(eventCount: number, bytes: number | null): string[] {
+  const warnings: string[] = []
+  if (bytes !== null && bytes >= COMPACTION_STORE_BYTES_THRESHOLD) {
+    warnings.push(
+      `Store size ${bytes} bytes exceeds 50MB compaction threshold (52428800 bytes).`.slice(0, 512),
+    )
+  }
+  if (eventCount >= COMPACTION_EVENT_COUNT_THRESHOLD) {
+    warnings.push(
+      `Event count ${eventCount} exceeds 20000 compaction threshold (20k events).`.slice(0, 512),
+    )
+  }
+  return warnings.slice(0, MAX_COMPACTION_WARNINGS)
 }
 
 export class MemoryV2OperatorService {
@@ -1115,6 +1164,153 @@ export class MemoryV2OperatorService {
       })
     } catch (error) {
       return MemoryManifestImportOutcomeSchema.parse({ outcome: 'failed', error: failedError(error) })
+    }
+  }
+
+  async compact(input: unknown): Promise<MemoryCompactionOutcome> {
+    const parsed = MemoryCompactionRequestSchema.safeParse(input)
+    if (!parsed.success) {
+      return MemoryCompactionOutcomeSchema.parse({
+        outcome: 'rejected',
+        error: operationalError('invalid-request', 'Invalid compaction request'),
+      })
+    }
+    const request = parsed.data
+    try {
+      const events = await this.allEvents(request.projectId)
+      const stale = staleObservationReasons(events)
+      const cutoffMs = Date.now() - request.olderThanDays * 24 * 60 * 60 * 1000
+      const candidates = events
+        .filter((event) => {
+          if (event.eventType === 'claim.archived') return false
+          const ids = compactionObservationIds(event)
+          const isStale = ids.some((id) => stale.has(id))
+          const occurredMs = Date.parse(event.occurredAt)
+          const isOld = !Number.isNaN(occurredMs) && occurredMs < cutoffMs
+          return isStale || isOld
+        })
+        .sort(eventOrder)
+        .slice(0, request.maxEvents)
+      let eventCount = events.length
+      let bytes: number | null = null
+      try {
+        if (typeof this.repository.getStoreStats === 'function') {
+          const stats = await this.repository.getStoreStats({ projectId: request.projectId })
+          if (
+            typeof stats.eventCount === 'number' &&
+            Number.isSafeInteger(stats.eventCount) &&
+            stats.eventCount >= 0 &&
+            typeof stats.bytes === 'number' &&
+            Number.isSafeInteger(stats.bytes) &&
+            stats.bytes >= 0
+          ) {
+            eventCount = stats.eventCount
+            bytes = stats.bytes
+          }
+        }
+      } catch {
+        // Preview stays available on stats failure; apply fails closed below.
+      }
+      const warnings = compactionWarnings(eventCount, bytes)
+      if (request.mode === 'preview') {
+        const encoder = new TextEncoder()
+        let archiveByteEstimate = 0
+        for (const event of candidates) {
+          archiveByteEstimate += encoder.encode(stableJson(event)).length + 1
+        }
+        return MemoryCompactionOutcomeSchema.parse({
+          outcome: 'preview',
+          candidateEventIds: candidates.map((event) => event.eventId),
+          candidateCount: candidates.length,
+          archiveByteEstimate,
+          warnings,
+        })
+      }
+      const applyCandidates = candidates.slice(0, COMPACTION_APPLY_MAX_EVENTS)
+      if (applyCandidates.length === 0) {
+        return MemoryCompactionOutcomeSchema.parse({
+          outcome: 'no-op',
+          reason: 'No compaction candidates are eligible for archival',
+        })
+      }
+      if (typeof this.repository.privilegedCompact !== 'function') {
+        return MemoryCompactionOutcomeSchema.parse({
+          outcome: 'rejected',
+          error: operationalError(
+            'invalid-request',
+            'Privileged compaction is not available for this repository',
+          ),
+        })
+      }
+      try {
+        if (
+          typeof this.repository.selectGCandidates === 'function' ||
+          typeof this.repository.inspectForGC === 'function'
+        ) {
+          const selector =
+            this.repository.selectGCandidates ?? this.repository.inspectForGC!
+          await selector({
+            projectId: request.projectId,
+            olderThanDays: request.olderThanDays,
+            maxEvents: request.maxEvents,
+          })
+        }
+      } catch {
+        // Inspection is advisory; privilegedCompact remains fail-closed.
+      }
+      const archiveLines = applyCandidates.map((event) => stableJson(event)).slice(0, COMPACTION_APPLY_MAX_EVENTS)
+      const archiveHash = digest(archiveLines)
+      const archivePath = `.openbuff/memory/archive/archive-${archiveHash.slice(7, 15)}.jsonl`
+      const archivedEventIds = applyCandidates.map((event) => event.eventId)
+      const archivedAt = new Date().toISOString()
+      const payload = {
+        payloadSchemaVersion: 1 as const,
+        archivedEventIds,
+        archivePath,
+        archiveHash,
+        reason: `Privileged compaction of ${archivedEventIds.length} events olderThanDays ${request.olderThanDays}`,
+        archivedAt,
+      }
+      const draft = MemoryEventDraftSchema.parse({
+        schemaVersion: 2,
+        eventSchemaVersion: 1,
+        eventType: 'claim.archived',
+        eventId: derivedId('event', { type: 'claim.archived', payload }),
+        projectId: request.projectId,
+        sessionId: request.sessionId,
+        occurredAt: archivedAt,
+        payload,
+      })
+      try {
+        const result = await this.repository.privilegedCompact({
+          projectId: request.projectId,
+          eventIds: archivedEventIds,
+          archiveClaimDraft: draft,
+          archiveLines,
+          archivePath,
+          archiveHash,
+        })
+        const appliedWarnings = compactionWarnings(result.afterCount, result.afterBytes)
+        const mergedWarnings = [...warnings, ...appliedWarnings].filter(
+          (warning, index, all) => all.indexOf(warning) === index,
+        ).slice(0, MAX_COMPACTION_WARNINGS)
+        return MemoryCompactionOutcomeSchema.parse({
+          outcome: 'applied',
+          archivedEventIds: result.archivedEventIds,
+          archivePath,
+          archiveHash,
+          beforeCount: result.beforeCount,
+          afterCount: result.afterCount,
+          beforeBytes: result.beforeBytes,
+          afterBytes: result.afterBytes,
+          warnings: mergedWarnings,
+        })
+      } catch (error) {
+        if (error instanceof ExpectedOperationFailure) throw error
+        throw new ExpectedOperationFailure(failedError(error))
+      }
+    } catch (error) {
+      return MemoryCompactionOutcomeSchema.parse({ outcome: 'failed', error: failedError(error) })
     }
   }
 }

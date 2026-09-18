@@ -44,7 +44,13 @@ import {
   type MemoryVerifyOutcome,
   type MemoryVerifyRequest,
 } from '../../../../common/src/types/memory-v2'
-import type { MemoryRepositoryV2 } from '../../../../sdk/src/services/memory-v2/types'
+import type {
+  GcCandidateSelection,
+  MemoryRepositoryV2,
+  MemoryStoreStats,
+  PrivilegedCompactionInput,
+  PrivilegedCompactionResult,
+} from '../../../../sdk/src/services/memory-v2/types'
 
 export type RuntimeNeutralMemoryRepositoryV2 = MemoryRepositoryV2
 export type RuntimeNeutralMemoryEventV2 = MemoryEventEnvelope
@@ -57,6 +63,10 @@ const PAGE_SIZE = 250
 const MAX_QUERY_EVENTS = 10_000
 const MAX_QUERY_PAYLOAD_BYTES = 8 * 1024 * 1024
 const MAX_REPLAY_EVENTS = 10_000
+const GC_SELECT_LIMIT = 10_000
+const COMPACTION_APPLY_MAX = 100
+const DIGEST_PATTERN = /^[a-z0-9][a-z0-9+.-]{0,31}:[A-Fa-f0-9]{16,256}$/
+const NO_DELETE_TRIGGER_SQL = `CREATE TRIGGER memory_events_no_delete BEFORE DELETE ON memory_events BEGIN SELECT RAISE(ABORT, 'canonical memory events are append only'); END;`
 const CANONICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'task.created',
   'task.transitioned',
@@ -69,6 +79,7 @@ const CANONICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'claim.superseded',
   'claim.forgotten',
   'claim.pinned',
+  'claim.archived',
   'evidence.attached',
   'evidence.verified',
   'evidence.invalidated',
@@ -1171,6 +1182,251 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
     return unsupported('semantic-search')
   }
 
+  async getStoreStats(request: { projectId: string }): Promise<MemoryStoreStats> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      this.requireBoundProject(request.projectId)
+      const count = (
+        this.database
+          .query(
+            `SELECT COUNT(*) AS count FROM memory_events
+              WHERE json_extract(metadata_json, '$.projectId') = ?1`,
+          )
+          .get(request.projectId) as { count: number }
+      ).count
+      const pageCount = readPragmaNumber(this.database, 'PRAGMA page_count', 'page_count')
+      const pageSize = readPragmaNumber(this.database, 'PRAGMA page_size', 'page_size')
+      return { eventCount: count, bytes: pageCount * pageSize }
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  async selectGCandidates(request: {
+    projectId: string
+    olderThanDays: number
+    maxEvents: number
+  }): Promise<GcCandidateSelection> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      this.requireBoundProject(request.projectId)
+      if (
+        !Number.isInteger(request.olderThanDays) ||
+        request.olderThanDays < 1 ||
+        request.olderThanDays > 365
+      ) {
+        throw new MemoryV2StorageError({
+          kind: 'invalid',
+          message: 'The GC olderThanDays must be an integer between 1 and 365.',
+          retryable: false,
+        })
+      }
+      if (
+        !Number.isInteger(request.maxEvents) ||
+        request.maxEvents < 1 ||
+        request.maxEvents > GC_SELECT_LIMIT
+      ) {
+        throw new MemoryV2StorageError({
+          kind: 'invalid',
+          message: 'The GC maxEvents must be an integer between 1 and 10000.',
+          retryable: false,
+        })
+      }
+      const cutoff = new Date(
+        Date.now() - request.olderThanDays * 24 * 60 * 60 * 1000,
+      ).toISOString()
+      const rows = this.database
+        .query(
+          `SELECT event_id, event_type, occurred_at FROM memory_events
+            WHERE json_extract(metadata_json, '$.projectId') = ?1
+              AND event_type != 'claim.archived'
+            ORDER BY occurred_at ASC, sequence ASC
+            LIMIT ?2`,
+        )
+        .all(request.projectId, GC_SELECT_LIMIT) as Array<{
+        event_id: string
+        event_type: string
+        occurred_at: string
+      }>
+      const staleTypes = new Set([
+        'claim.forgotten',
+        'claim.superseded',
+        'claim.corrected',
+      ])
+      const candidates = rows
+        .filter((row) => staleTypes.has(row.event_type) || row.occurred_at < cutoff)
+        .sort((left, right) => {
+          const leftStale = staleTypes.has(left.event_type) ? 0 : 1
+          const rightStale = staleTypes.has(right.event_type) ? 0 : 1
+          if (leftStale !== rightStale) return leftStale - rightStale
+          if (left.occurred_at !== right.occurred_at)
+            return left.occurred_at < right.occurred_at ? -1 : 1
+          return left.event_id < right.event_id ? -1 : left.event_id > right.event_id ? 1 : 0
+        })
+        .slice(0, request.maxEvents)
+      return {
+        eventIds: candidates.map((row) => row.event_id) as GcCandidateSelection['eventIds'],
+      }
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  async inspectForGC(request: {
+    projectId: string
+    olderThanDays: number
+    maxEvents: number
+  }): Promise<GcCandidateSelection> {
+    return this.selectGCandidates(request)
+  }
+
+  async privilegedCompact(
+    input: PrivilegedCompactionInput,
+  ): Promise<PrivilegedCompactionResult> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      this.requireBoundProject(input.projectId)
+    } catch (error) {
+      throw error instanceof MemoryV2StorageError
+        ? error
+        : new MemoryV2StorageError(classifyStorageError(error))
+    }
+    const fail = (message: string): never => {
+      throw new MemoryV2StorageError({ kind: 'invalid', message, retryable: false })
+    }
+    if (
+      !Array.isArray(input.eventIds) ||
+      input.eventIds.length < 1 ||
+      input.eventIds.length > COMPACTION_APPLY_MAX
+    ) {
+      fail('The privileged compaction event list must contain 1 to 100 event IDs.')
+    }
+    for (const id of input.eventIds) {
+      if (!MemoryEventIdSchema.safeParse(id).success)
+        fail('The privileged compaction event IDs are invalid.')
+    }
+    if (!Array.isArray(input.archiveLines) || input.archiveLines.length !== input.eventIds.length) {
+      fail('The privileged compaction archive lines must match the event list.')
+    }
+    if (typeof input.archiveHash !== 'string' || !DIGEST_PATTERN.test(input.archiveHash)) {
+      fail('The privileged compaction archive hash is invalid.')
+    }
+    if (
+      typeof input.archivePath !== 'string' ||
+      input.archivePath.length < 1 ||
+      input.archivePath.length > 1024
+    ) {
+      fail('The privileged compaction archive path is invalid.')
+    }
+    const draft = MemoryEventDraftSchema.safeParse(input.archiveClaimDraft)
+    if (!draft.success || draft.data.eventType !== 'claim.archived') {
+      fail('The privileged compaction archive claim is invalid.')
+    }
+    const claim = draft.data as Extract<typeof draft.data, { eventType: 'claim.archived' }>
+    if (claim.projectId !== input.projectId) {
+      fail('The privileged compaction archive claim project does not match.')
+    }
+    if (
+      claim.payload.archivedEventIds.length !== input.eventIds.length ||
+      claim.payload.archivedEventIds.some((id, index) => id !== input.eventIds[index])
+    ) {
+      fail('The privileged compaction archive claim events do not match.')
+    }
+    if (
+      claim.payload.archiveHash !== input.archiveHash ||
+      claim.payload.archivePath !== input.archivePath
+    ) {
+      fail('The privileged compaction archive claim hash or path does not match.')
+    }
+    const expectedHash = `sha256:${createHash('sha256').update(stableJson(input.archiveLines)).digest('hex')}`
+    if (expectedHash !== input.archiveHash) {
+      fail('The privileged compaction archive hash does not match the archive lines.')
+    }
+    const before = await this.getStoreStats({ projectId: input.projectId })
+    const placeholders = input.eventIds.map(() => '?').join(',')
+    const projectParamIndex = input.eventIds.length + 1
+    this.database.exec('BEGIN IMMEDIATE')
+    try {
+      const existing = this.database
+        .query(
+          `SELECT event_id FROM memory_events
+            WHERE event_id IN (${placeholders})
+              AND json_extract(metadata_json, '$.projectId') = ?${projectParamIndex}`,
+        )
+        .all(...input.eventIds, input.projectId) as Array<{ event_id: string }>
+      if (existing.length !== input.eventIds.length) {
+        fail('The privileged compaction events were not found for this project.')
+      }
+      this.database.exec('DROP TRIGGER IF EXISTS memory_events_no_delete')
+      const deleted = this.database
+        .query(
+          `DELETE FROM memory_events
+            WHERE event_id IN (${placeholders})
+              AND json_extract(metadata_json, '$.projectId') = ?${projectParamIndex}`,
+        )
+        .run(...input.eventIds, input.projectId) as unknown as { changes: unknown }
+      if (Number(deleted.changes) !== input.eventIds.length) {
+        fail('The privileged compaction delete did not remove every event.')
+      }
+      this.database.exec(NO_DELETE_TRIGGER_SQL)
+      const prepared = prepareEvent(claim)
+      const duplicate = this.database
+        .query('SELECT event_id FROM memory_events WHERE event_id = ?1')
+        .get(prepared.eventId) as { event_id: string } | null
+      if (duplicate) {
+        fail('The privileged compaction archive claim already exists.')
+      }
+      this.database
+        .query(
+          `INSERT INTO memory_events (
+             event_id, idempotency_key, event_type, occurred_at, payload_json,
+             metadata_json, task_id, session_id, artifact_id
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+        )
+        .run(
+          prepared.eventId,
+          prepared.idempotencyKey,
+          prepared.eventType,
+          prepared.occurredAt,
+          prepared.payloadJson,
+          prepared.metadataJson,
+          prepared.taskId,
+          prepared.sessionId,
+          prepared.artifactId,
+        )
+      for (const table of PROJECTION_TABLES) this.database.exec(`DELETE FROM ${table}`)
+      setProjectionCursor(this.database, 0)
+      replayProjections(this.database, Number.MAX_SAFE_INTEGER)
+      this.database.exec('COMMIT')
+    } catch (error) {
+      try {
+        this.database.exec('ROLLBACK')
+      } catch {
+        // Preserve the primary compaction failure.
+      }
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+    try {
+      this.database.exec('VACUUM')
+    } catch (error) {
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+    const after = await this.getStoreStats({ projectId: input.projectId })
+    return {
+      archivedEventIds: [...input.eventIds] as PrivilegedCompactionResult['archivedEventIds'],
+      beforeCount: before.eventCount,
+      afterCount: after.eventCount,
+      beforeBytes: before.bytes,
+      afterBytes: after.bytes,
+    }
+  }
+
   async compact(): Promise<MemoryV2UnsupportedResult> {
     return unsupported('compaction')
   }
@@ -2116,6 +2372,18 @@ function applyProjection(
         'pinned',
         payload,
       )
+      return
+    case 'claim.archived':
+      for (const archivedEventId of stringArray(payload.archivedEventIds)) {
+        upsertClaim(
+          database,
+          event,
+          sequence,
+          projectionId(archivedEventId),
+          'archived',
+          payload,
+        )
+      }
       return
     case 'evidence.attached':
       for (const evidence of objectArray(payload.evidence)) {

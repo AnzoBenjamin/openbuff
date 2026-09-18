@@ -208,7 +208,7 @@ function memoryBlockToString(
 }
 
 const MEMORY_USAGE =
-  'Usage: /memory [status|authority|diagnose|audit-migration|query <text>|inspect [eventId]|consolidate [--apply] [--task <id>]|repair [--apply]|revalidate <observationId> <path> [--apply]|correct <observationId> <replacement-summary> [--apply]|forget <observationId...> [--apply]|pin <observationId> [--apply]|export [--format json|markdown] [--include-stale]|import <project-relative-json-path> [--apply]|prune]'
+  'Usage: /memory [status|authority|diagnose|audit-migration|query <text>|inspect [eventId]|consolidate [--apply] [--task <id>]|repair [--apply]|revalidate <observationId> <path> [--apply]|correct <observationId> <replacement-summary> [--apply]|forget <observationId...> [--apply]|pin <observationId> [--apply]|export [--format json|markdown] [--include-stale]|import <project-relative-json-path> [--apply]|compact-memory [--apply --confirm]|prune]'
 const RELEASE_N_AUTHORITY_WARNING =
   'Release N: json-v1 and shadow-v2 remain supported but are deprecated; sqlite-v2-opt-in is the default and replacement.'
 const CLI_SESSION_ID = 'memory-cli'
@@ -471,11 +471,18 @@ function parseArgs(rawArgs: string): {
   command: string
   args: string[]
   apply: boolean
+  confirm: boolean
 } {
   const tokens = rawArgs.trim().split(/\s+/).filter(Boolean)
   const command = (tokens.shift() ?? 'status').toLowerCase()
   const apply = tokens.includes('--apply')
-  return { command, args: tokens.filter((token) => token !== '--apply'), apply }
+  const confirm = tokens.includes('--confirm')
+  return {
+    command,
+    args: tokens.filter((token) => token !== '--apply' && token !== '--confirm'),
+    apply,
+    confirm,
+  }
 }
 
 async function runV2Command(
@@ -498,6 +505,7 @@ async function runV2Command(
       'pin',
       'export',
       'import',
+      'compact-memory',
     ].includes(parsed.command)
   )
     return commandError(MEMORY_USAGE)
@@ -556,6 +564,7 @@ async function runV2Command(
         canonicalInventory(v2, 1_000),
       ])
       const events = inventory.events
+      const storeLines = inventory.error ? [] : await storeObservabilityLines(v2, events)
       return report(
         'Memory V2 diagnosis',
         [
@@ -587,6 +596,7 @@ async function runV2Command(
                 .map(({ name }) => name)
                 .join(', ')}.`
             : 'Kernel capabilities unavailable.',
+          ...storeLines,
           health.status === 'healthy'
             ? 'Recovery guidance: none required.'
             : 'Recovery guidance: run /memory repair for a non-destructive projection preview.',
@@ -872,6 +882,8 @@ async function runV2Command(
       )
     }
 
+    if (parsed.command === 'compact-memory')
+      return runCompact(v2, parsed.args, parsed.apply, parsed.confirm, deps.getRootDir())
     if (parsed.command === 'export')
       return runExport(v2, parsed.args, deps.getRootDir())
     if (parsed.command === 'import')
@@ -912,6 +924,211 @@ async function lookupObservationTaskId(
     }
   }
   return wanted.size === 0 && taskIds.size === 1 ? [...taskIds][0] : undefined
+}
+
+const COMPACT_STORE_BYTES_THRESHOLD = 52_428_800
+const COMPACT_EVENT_COUNT_THRESHOLD = 20_000
+
+function parseCompactOptions(args: string[]): { olderThanDays: number; maxEvents: number } | null {
+  let olderThanDays = 30
+  let maxEvents = 1_000
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index]!
+    if (token === '--older-than-days' || token === '--older-than') {
+      const value = Number(args[index + 1])
+      if (!Number.isInteger(value) || value < 1 || value > 365) return null
+      olderThanDays = value
+      index++
+    } else if (token === '--max-events') {
+      const value = Number(args[index + 1])
+      if (!Number.isInteger(value) || value < 1 || value > 10_000) return null
+      maxEvents = value
+      index++
+    } else {
+      return null
+    }
+  }
+  return { olderThanDays, maxEvents }
+}
+
+async function storeObservabilityLines(
+  v2: Extract<Awaited<ReturnType<typeof getV2>>, { status: 'available' }>,
+  events: import('@openbuff/sdk').MemoryEventEnvelope[],
+): Promise<string[]> {
+  let stats: { eventCount: number; bytes: number } | null = null
+  try {
+    if (typeof v2.repository.getStoreStats === 'function') {
+      const observed = await v2.repository.getStoreStats({ projectId: v2.projectId })
+      if (
+        typeof observed.eventCount === 'number' &&
+        Number.isSafeInteger(observed.eventCount) &&
+        observed.eventCount >= 0 &&
+        typeof observed.bytes === 'number' &&
+        Number.isSafeInteger(observed.bytes) &&
+        observed.bytes >= 0
+      ) {
+        stats = observed
+      }
+    }
+  } catch {
+    stats = null
+  }
+  const count = stats?.eventCount ?? events.length
+  const bytesText = stats ? `${stats.bytes} bytes` : 'bytes unavailable'
+  const archived = events.filter((event) => event.eventType === 'claim.archived')
+  const latest = archived.at(-1)
+  const lastCompaction =
+    latest && latest.eventType === 'claim.archived'
+      ? `Last compaction: ${latest.payload.archivedEventIds.length} events; ${latest.payload.archivePath}; ${latest.payload.archiveHash}.`
+      : 'Last compaction: unavailable.'
+  const lines = [`Store: ${count} events; ${bytesText}.`, lastCompaction]
+  if (stats && stats.bytes >= COMPACT_STORE_BYTES_THRESHOLD) {
+    lines.push(`Bloat: store size ${stats.bytes} bytes exceeds 50MB (52428800 bytes).`)
+  }
+  if (count >= COMPACT_EVENT_COUNT_THRESHOLD) {
+    lines.push(`Bloat: event count ${count} exceeds 20k events.`)
+  }
+  return lines
+}
+
+async function runCompact(
+  v2: Extract<Awaited<ReturnType<typeof getV2>>, { status: 'available' }>,
+  args: string[],
+  apply: boolean,
+  confirm: boolean,
+  root: string,
+): Promise<import('../types/chat').MemoryContentBlock> {
+  const options = parseCompactOptions(args)
+  if (!options) return commandError(MEMORY_USAGE)
+  if (apply && !confirm) return commandError(MEMORY_USAGE)
+  const scope = {
+    schemaVersion: 2 as const,
+    projectId: v2.projectId,
+    sessionId: MemorySessionIdSchema.parse(CLI_SESSION_ID),
+  }
+  if (!apply) {
+    const outcome = await v2.operator.compact({
+      ...scope,
+      mode: 'preview',
+      olderThanDays: options.olderThanDays,
+      maxEvents: options.maxEvents,
+    })
+    if (outcome.outcome === 'preview') {
+      return report(
+        'Memory V2 compaction',
+        [
+          'Outcome: preview.',
+          `Candidates: ${outcome.candidateCount}.`,
+          `Archive estimate: ${outcome.archiveByteEstimate} bytes.`,
+          `Warnings: ${outcome.warnings.length ? outcome.warnings.join('; ') : 'none'}.`,
+          'Preview only; no writes were performed.',
+        ],
+        'secondary',
+        [{ label: 'Insert apply command', command: '/memory compact-memory --apply --confirm' }],
+      )
+    }
+    return report(
+      'Memory V2 compaction',
+      operationLines(outcome),
+      isFailureOutcome(outcome) ? 'error' : 'secondary',
+    )
+  }
+  const preview = await v2.operator.compact({
+    ...scope,
+    mode: 'preview',
+    olderThanDays: options.olderThanDays,
+    maxEvents: options.maxEvents,
+  })
+  if (preview.outcome !== 'preview') {
+    return report(
+      'Memory V2 compaction',
+      operationLines(preview),
+      isFailureOutcome(preview) ? 'error' : 'secondary',
+    )
+  }
+  if (preview.candidateCount === 0 || preview.candidateEventIds.length === 0) {
+    return report(
+      'Memory V2 compaction',
+      ['Outcome: no-op.', 'No compaction candidates are eligible for archival.'],
+      'secondary',
+    )
+  }
+  const applyIds = preview.candidateEventIds.slice(0, 100)
+  const inventory = await canonicalInventory(v2, 10_000)
+  if (inventory.error) {
+    return commandError('Memory compaction failed: local output could not be created safely.')
+  }
+  const byId = new Map(inventory.events.map((event) => [event.eventId, event]))
+  const selected = applyIds
+    .map((id) => byId.get(id))
+    .filter((event): event is import('@openbuff/sdk').MemoryEventEnvelope => event !== undefined)
+  if (selected.length !== applyIds.length) {
+    return commandError('Memory compaction failed: local output could not be created safely.')
+  }
+  const archiveLines = selected.map((event) => stableManifestJson(event))
+  const archiveHash = `sha256:${createHash('sha256').update(stableManifestJson(archiveLines)).digest('hex')}`
+  const fileName = `archive-${archiveHash.slice(7, 15)}.jsonl`
+  const content = archiveLines.length > 0 ? `${archiveLines.join('\n')}\n` : ''
+  if (Buffer.byteLength(content) > EXPORT_MAX_BYTES) {
+    return commandError('Memory compaction failed: local output could not be created safely.')
+  }
+  const directory = createContainedProjectDirectory(root, '.openbuff/memory/archive')
+  try {
+    try {
+      directory.writeExclusive(fileName, content)
+    } catch (error) {
+      if (!(error instanceof ContainedFileIoError) || error.code !== 'exists') throw error
+      const existing = readContainedProjectFile(
+        root,
+        `.openbuff/memory/archive/${fileName}`,
+        EXPORT_MAX_BYTES,
+      ).text
+      if (existing !== content) throw error
+    }
+  } catch {
+    directory.close()
+    return commandError('Memory compaction failed: local output could not be created safely.')
+  }
+  directory.close()
+  const outcome = await v2.operator.compact({
+    ...scope,
+    mode: 'apply',
+    olderThanDays: options.olderThanDays,
+    maxEvents: options.maxEvents,
+  })
+  if (outcome.outcome !== 'applied') {
+    return report(
+      'Memory V2 compaction',
+      operationLines(outcome),
+      isFailureOutcome(outcome) ? 'error' : 'secondary',
+    )
+  }
+  if (outcome.archiveHash !== archiveHash || !outcome.archivePath.endsWith(fileName)) {
+    return report(
+      'Memory V2 compaction',
+      [
+        'Outcome: applied.',
+        `Archived: ${outcome.archivedEventIds.length} events.`,
+        `Archive: ${outcome.archivePath} (${outcome.archiveHash}).`,
+        `Counts: ${outcome.beforeCount} -> ${outcome.afterCount}; bytes: ${outcome.beforeBytes} -> ${outcome.afterBytes}.`,
+        `Mismatch: expected archive file .openbuff/memory/archive/${fileName} (${archiveHash}) but canonical claim reports ${outcome.archivePath} (${outcome.archiveHash}); the local archive file may not match the canonical claim.`,
+        `Warnings: ${outcome.warnings.length ? outcome.warnings.join('; ') : 'none'}.`,
+      ],
+      'warning',
+    )
+  }
+  return report(
+    'Memory V2 compaction',
+    [
+      'Outcome: applied.',
+      `Archived: ${outcome.archivedEventIds.length} events.`,
+      `Archive: ${outcome.archivePath} (${outcome.archiveHash}).`,
+      `Counts: ${outcome.beforeCount} -> ${outcome.afterCount}; bytes: ${outcome.beforeBytes} -> ${outcome.afterBytes}.`,
+      `Archive file: .openbuff/memory/archive/${fileName}.`,
+      `Warnings: ${outcome.warnings.length ? outcome.warnings.join('; ') : 'none'}.`,
+    ],
+    'success',
+  )
 }
 
 async function runExport(
@@ -1210,6 +1427,7 @@ async function runStatusBlock(
           const migrationPayload = migration
             ? V1MigrationPayloadSchema.safeParse(migration.payload)
             : undefined
+          const storeLines = inventory.error ? [] : await storeObservabilityLines(v2, inventory.events)
           v2Lines = [
             `Memory authority: requested ${v2.requestedAuthority}; active ${v2.effectiveAuthority}.`,
             RELEASE_N_AUTHORITY_WARNING,
@@ -1220,6 +1438,7 @@ async function runStatusBlock(
               : 'Last V1 import: unavailable.',
             'Last parity: unavailable in this command session.',
             `Schema ${kernel.schemaVersion ?? 'unknown'}; capabilities ${health.backend.capabilities.join(', ')}; events ${inventory.error ? 'unavailable' : inventory.events.length}; projection ${kernel.projectionCursor ?? 'unknown'}.`,
+            ...storeLines,
             `Degradation: ${health.issues.length ? health.issues.map(safeOperationMessage).join('; ') : 'none'}.`,
           ]
         } else {

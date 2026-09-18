@@ -456,6 +456,18 @@ export const ClaimPinnedPayloadSchema = z
   .strict()
 export type ClaimPinnedPayload = z.infer<typeof ClaimPinnedPayloadSchema>
 
+export const ClaimArchivedPayloadSchema = z
+  .object({
+    ...payloadVersionShape,
+    archivedEventIds: z.array(MemoryEventIdSchema).min(1).max(100),
+    archivePath: z.string().min(1).max(1_024),
+    archiveHash: digestSchema,
+    reason: longTextSchema,
+    archivedAt: timestampSchema,
+  })
+  .strict()
+export type ClaimArchivedPayload = z.infer<typeof ClaimArchivedPayloadSchema>
+
 export const V1MigrationReservedPayloadSchema = z
   .object({
     ...payloadVersionShape,
@@ -693,6 +705,7 @@ export const MemoryEventDraftSchema = z.discriminatedUnion('eventType', [
   eventDraft('claim.corrected', ClaimCorrectedPayloadSchema),
   eventDraft('claim.forgotten', ClaimForgottenPayloadSchema),
   eventDraft('claim.pinned', ClaimPinnedPayloadSchema),
+  eventDraft('claim.archived', ClaimArchivedPayloadSchema),
   eventDraft('migration.v1.reserved', V1MigrationReservedPayloadSchema),
   eventDraft('migration.v1.imported', V1MigrationPayloadSchema),
   eventDraft(
@@ -727,6 +740,7 @@ export const MemoryEventEnvelopeSchema = z.discriminatedUnion('eventType', [
   eventEnvelope('claim.corrected', ClaimCorrectedPayloadSchema),
   eventEnvelope('claim.forgotten', ClaimForgottenPayloadSchema),
   eventEnvelope('claim.pinned', ClaimPinnedPayloadSchema),
+  eventEnvelope('claim.archived', ClaimArchivedPayloadSchema),
   eventEnvelope('migration.v1.reserved', V1MigrationReservedPayloadSchema),
   eventEnvelope('migration.v1.imported', V1MigrationPayloadSchema),
   eventEnvelope(
@@ -1664,4 +1678,56 @@ export const MemoryManifestImportOutcomeSchema = z.discriminatedUnion(
 )
 export type MemoryManifestImportOutcome = z.infer<
   typeof MemoryManifestImportOutcomeSchema
+>
+
+export const MemoryCompactionRequestSchema = z
+  .object({
+    schemaVersion: z.literal(2),
+    projectId: ProjectIdSchema,
+    sessionId: MemorySessionIdSchema,
+    mode: operationModeSchema,
+    olderThanDays: z.number().int().min(1).max(365).default(30),
+    maxEvents: z.number().int().min(1).max(10_000).default(1_000),
+  })
+  .strict()
+export type MemoryCompactionRequest = z.infer<
+  typeof MemoryCompactionRequestSchema
+>
+
+export const MemoryCompactionOutcomeSchema = z.discriminatedUnion('outcome', [
+  z
+    .object({
+      outcome: z.literal('preview'),
+      candidateEventIds: z.array(MemoryEventIdSchema).max(10_000),
+      candidateCount: z.number().int().nonnegative().max(10_000),
+      archiveByteEstimate: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      warnings: z.array(z.string().min(1).max(1_024)).max(100),
+    })
+    .strict(),
+  z
+    .object({
+      outcome: z.literal('applied'),
+      archivedEventIds: z.array(MemoryEventIdSchema).min(1).max(100),
+      archivePath: z.string().min(1).max(1_024),
+      archiveHash: digestSchema,
+      beforeCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      afterCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      beforeBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      afterBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      warnings: z.array(z.string().min(1).max(1_024)).max(100),
+    })
+    .strict(),
+  z.object({ outcome: z.literal('no-op'), reason: shortTextSchema }).strict(),
+  z
+    .object({
+      outcome: z.literal('rejected'),
+      error: MemoryOperationErrorSchema,
+    })
+    .strict(),
+  z
+    .object({ outcome: z.literal('failed'), error: MemoryOperationErrorSchema })
+    .strict(),
+])
+export type MemoryCompactionOutcome = z.infer<
+  typeof MemoryCompactionOutcomeSchema
 >

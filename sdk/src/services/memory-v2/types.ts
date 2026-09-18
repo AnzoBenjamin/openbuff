@@ -3,6 +3,8 @@ import {
   type MemoryAppendOutcome,
   type MemoryAppendRequest,
   type MemoryAuthorityMode,
+  type MemoryEventDraft,
+  type MemoryEventId,
   type MemoryExportOutcome,
   type MemoryExportRequest,
   type MemoryHealth,
@@ -66,6 +68,40 @@ export function getEffectiveMemoryAuthority(
  * inputs and outputs are bounded, schema-validated JSON DTOs and intentionally
  * expose no database or runtime driver types.
  */
+export interface MemoryStoreStats {
+  eventCount: number
+  bytes: number
+}
+
+export interface PrivilegedCompactionInput {
+  projectId: ProjectId
+  eventIds: MemoryEventId[]
+  archiveClaimDraft: MemoryEventDraft
+  archiveLines: string[]
+  archivePath: string
+  archiveHash: string
+}
+
+export interface PrivilegedCompactionResult {
+  archivedEventIds: MemoryEventId[]
+  beforeCount: number
+  afterCount: number
+  beforeBytes: number
+  afterBytes: number
+}
+
+export interface GcCandidateSelection {
+  eventIds: MemoryEventId[]
+}
+
+/**
+ * Runtime-neutral persistence boundary for Memory V2.
+ *
+ * Implementations own storage and concurrency. Append inputs are event drafts;
+ * implementations assign sequences and expose committed event envelopes. All
+ * inputs and outputs are bounded, schema-validated JSON DTOs and intentionally
+ * expose no database or runtime driver types.
+ */
 export interface MemoryRepositoryV2 {
   append(request: MemoryAppendRequest): Promise<MemoryAppendOutcome>
   query(request: MemoryRetrievalRequest): Promise<MemoryQueryOutcome>
@@ -73,4 +109,20 @@ export interface MemoryRepositoryV2 {
   rebuild(request: MemoryRebuildRequest): Promise<MemoryRebuildOutcome>
   health(request: MemoryHealthRequest): Promise<MemoryHealth>
   export(request: MemoryExportRequest): Promise<MemoryExportOutcome>
+  /** Optional privileged GC surface. Absent on fakes; fail-closed when missing. */
+  getStoreStats?(request: { projectId: ProjectId }): Promise<MemoryStoreStats>
+  selectGCandidates?(request: {
+    projectId: ProjectId
+    olderThanDays: number
+    maxEvents: number
+  }): Promise<GcCandidateSelection>
+  privilegedCompact?(
+    input: PrivilegedCompactionInput,
+  ): Promise<PrivilegedCompactionResult>
+  /** Alias some drivers expose for GC inspection. */
+  inspectForGC?(request: {
+    projectId: ProjectId
+    olderThanDays: number
+    maxEvents: number
+  }): Promise<GcCandidateSelection>
 }

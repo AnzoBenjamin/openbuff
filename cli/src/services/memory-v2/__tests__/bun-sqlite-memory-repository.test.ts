@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { createHash } from 'node:crypto'
 import {
   chmodSync,
   existsSync,
@@ -27,6 +28,7 @@ import {
   MemoryRetrievalRequestSchema,
   MemoryVerifyOutcomeSchema,
   MemoryVerifyRequestSchema,
+  ProjectIdSchema,
   TaskIdSchema,
   type MemoryAppendRequest,
   type MemoryEventDraft,
@@ -2471,6 +2473,327 @@ describe('BunSQLiteMemoryRepository', () => {
     expect(mismatched.outcome).toBe('result')
     if (mismatched.outcome !== 'result') return
     expect(mismatched.result.currentCoverage).toEqual([])
+  })
+})
+
+describe('BunSQLiteMemoryRepository privileged GC', () => {
+  test('getStoreStats returns non-negative counts and grows with appends', async () => {
+    const repository = await open(temporaryRepository())
+    const empty = await repository.getStoreStats({ projectId: 'project-1' })
+    expect(empty.eventCount).toBe(0)
+    expect(empty.bytes).toBeGreaterThanOrEqual(0)
+    const appended = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        events: [draft('gc-stats-one'), draft('gc-stats-two')],
+      }),
+    )
+    expect(appended.outcome).toBe('appended')
+    const after = await repository.getStoreStats({ projectId: 'project-1' })
+    expect(after.eventCount).toBe(2)
+    expect(after.bytes).toBeGreaterThanOrEqual(0)
+    expect(after.bytes).toBeGreaterThanOrEqual(empty.bytes)
+  })
+
+  test('selectGCandidates returns stale and old events, excludes archived, and respects maxEvents', async () => {
+    const repository = await open(temporaryRepository())
+    const now = new Date().toISOString()
+    const oldObservation = canonicalDraft('observation.recorded', 'event:gc-old-1', {
+      payloadSchemaVersion: 1,
+      observation: observationFixture('gc-old-1', []),
+    })
+    const staleForgotten = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'claim.forgotten',
+      eventId: 'event:gc-forgotten-1',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: now,
+      payload: {
+        payloadSchemaVersion: 1,
+        observationIds: ['gc-old-1'],
+        reason: 'user-request',
+        requestedBy: 'test',
+        evidenceDisposition: 'retain-artifacts',
+      },
+    })
+    const freshTask = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'task.created',
+      eventId: 'event:gc-fresh-1',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: now,
+      payload: {
+        payloadSchemaVersion: 1,
+        taskId: 'task-gc-fresh-1',
+        title: 'Fresh task',
+        objective: 'Not eligible for GC.',
+        initialStatus: 'created',
+      },
+    })
+    const archivedHash = `sha256:${'a'.repeat(64)}`
+    const archivedAt = now
+    const archivedClaim = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'claim.archived',
+      eventId: 'event:gc-archived-1',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: now,
+      payload: {
+        payloadSchemaVersion: 1,
+        archivedEventIds: ['event:gc-old-1'],
+        archivePath: '.openbuff/memory/archive/gc-select.jsonl',
+        archiveHash: archivedHash,
+        reason: 'seed archived event',
+        archivedAt,
+      },
+    })
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [oldObservation, staleForgotten, freshTask, archivedClaim],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const selected = await repository.selectGCandidates({
+      projectId: 'project-1',
+      olderThanDays: 30,
+      maxEvents: 10,
+    })
+    expect(selected.eventIds.map(String)).toContain('event:gc-old-1')
+    expect(selected.eventIds.map(String)).toContain('event:gc-forgotten-1')
+    expect(selected.eventIds.map(String)).not.toContain('event:gc-fresh-1')
+    expect(selected.eventIds.map(String)).not.toContain('event:gc-archived-1')
+    const capped = await repository.selectGCandidates({
+      projectId: 'project-1',
+      olderThanDays: 30,
+      maxEvents: 1,
+    })
+    expect(capped.eventIds).toHaveLength(1)
+  })
+
+  test('selectGCandidates validates olderThanDays and maxEvents bounds', async () => {
+    const repository = await open(temporaryRepository())
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [draft('gc-bounds')],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    for (const request of [
+      { projectId: 'project-1', olderThanDays: 0, maxEvents: 10 },
+      { projectId: 'project-1', olderThanDays: 400, maxEvents: 10 },
+      { projectId: 'project-1', olderThanDays: 30, maxEvents: 0 },
+      { projectId: 'project-1', olderThanDays: 30, maxEvents: 20000 },
+    ]) {
+      const failure = await repository
+        .selectGCandidates(request)
+        .then(() => null)
+        .catch((error: unknown) => error as { failure: { kind: string } })
+      expect(failure?.failure?.kind).toBe('invalid')
+    }
+  })
+
+  test('privilegedCompact archives eligible events and keeps the store readable', async () => {
+    const repository = await open(temporaryRepository())
+    const events = [
+      canonicalDraft('observation.recorded', 'event:gc-compact-1', {
+        payloadSchemaVersion: 1,
+        observation: observationFixture('gc-compact-1', []),
+      }),
+      canonicalDraft('observation.recorded', 'event:gc-compact-2', {
+        payloadSchemaVersion: 1,
+        observation: observationFixture('gc-compact-2', []),
+      }),
+      canonicalDraft('claim.forgotten', 'event:gc-compact-forgotten', {
+        payloadSchemaVersion: 1,
+        observationIds: ['gc-compact-1'],
+        reason: 'duplicate',
+        requestedBy: 'test',
+        evidenceDisposition: 'retain-artifacts',
+      }),
+    ]
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events,
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const eventIds = [
+      'event:gc-compact-1',
+      'event:gc-compact-2',
+      'event:gc-compact-forgotten',
+    ] as const
+    const archiveLines = eventIds.map((eventId) => JSON.stringify({ eventId }))
+    const archiveHash = `sha256:${createHash('sha256').update(JSON.stringify(archiveLines)).digest('hex')}`
+    const archivedAt = new Date().toISOString()
+    const archivePath = '.openbuff/memory/archive/gc-compact.jsonl'
+    const archiveClaimDraft = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'claim.archived',
+      eventId: 'event:gc-compact-archive',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: archivedAt,
+      payload: {
+        payloadSchemaVersion: 1,
+        archivedEventIds: [...eventIds],
+        archivePath,
+        archiveHash,
+        reason: 'Privileged compaction test',
+        archivedAt,
+      },
+    })
+    const result = await repository.privilegedCompact({
+      projectId: ProjectIdSchema.parse('project-1'),
+      eventIds: [...eventIds] as unknown as Parameters<BunSQLiteMemoryRepository['privilegedCompact']>[0]['eventIds'],
+      archiveClaimDraft,
+      archiveLines,
+      archivePath,
+      archiveHash,
+    })
+    expect(result.archivedEventIds.map(String)).toEqual([...eventIds])
+    expect(result.beforeCount).toBe(3)
+    expect(result.afterCount).toBe(1)
+    expect(result.beforeBytes).toBeGreaterThanOrEqual(0)
+    expect(result.afterBytes).toBeGreaterThanOrEqual(0)
+    const listed = await repository.listEvents()
+    expect(listed.status).toBe('ok')
+    if (listed.status !== 'ok') return
+    const remainingIds = listed.events.map(({ eventId }) => eventId)
+    for (const eventId of eventIds) expect(remainingIds).not.toContain(eventId)
+    expect(remainingIds).toContain('event:gc-compact-archive')
+    expect(
+      listed.events.find(({ eventId }) => eventId === 'event:gc-compact-archive')?.eventType,
+    ).toBe('claim.archived')
+    const snapshot = await repository.getProjectionSnapshot()
+    expect(snapshot.status).toBe('ok')
+    if (snapshot.status !== 'ok') return
+    for (const eventId of eventIds) {
+      const row = snapshot.claims.find(({ entityId }) => entityId === eventId)
+      expect(row?.state).toMatchObject({ lifecycle: 'archived' })
+    }
+    const probe = new Database(repository.databasePath)
+    try {
+      expect(() => probe.exec('DELETE FROM memory_events')).toThrow(
+        'canonical memory events are append only',
+      )
+    } finally {
+      probe.close()
+    }
+    const readable = await repository.listEvents()
+    expect(readable.status).toBe('ok')
+    expect(await repository.getStoreStats({ projectId: 'project-1' })).toMatchObject({
+      eventCount: 1,
+    })
+  })
+
+  test('privilegedCompact rejects hash mismatch and unknown ids without mutation', async () => {
+    const repository = await open(temporaryRepository())
+    const events = [
+      canonicalDraft('observation.recorded', 'event:gc-reject-1', {
+        payloadSchemaVersion: 1,
+        observation: observationFixture('gc-reject-1', []),
+      }),
+      canonicalDraft('observation.recorded', 'event:gc-reject-2', {
+        payloadSchemaVersion: 1,
+        observation: observationFixture('gc-reject-2', []),
+      }),
+    ]
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events,
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const countEvents = async () => {
+      const listed = await repository.listEvents()
+      return listed.status === 'ok' ? listed.events.map(({ eventId }) => eventId) : []
+    }
+    const beforeIds = await countEvents()
+    expect(beforeIds).toHaveLength(2)
+    const archiveLines = ['event:gc-reject-1', 'event:gc-reject-2'].map((eventId) =>
+      JSON.stringify({ eventId }),
+    )
+    const goodHash = `sha256:${createHash('sha256').update(JSON.stringify(archiveLines)).digest('hex')}`
+    const archivedAt = new Date().toISOString()
+    const buildClaim = (archiveHash: string, archivedEventIds: string[], eventId: string) =>
+      MemoryEventDraftSchema.parse({
+        schemaVersion: 2,
+        eventSchemaVersion: 1,
+        eventType: 'claim.archived',
+        eventId,
+        projectId: 'project-1',
+        sessionId: 'session-1',
+        occurredAt: archivedAt,
+        payload: {
+          payloadSchemaVersion: 1,
+          archivedEventIds,
+          archivePath: '.openbuff/memory/archive/gc-reject.jsonl',
+          archiveHash,
+          reason: 'Privileged compaction reject test',
+          archivedAt,
+        },
+      })
+    const badHash = `sha256:${'b'.repeat(64)}`
+    const badClaim = buildClaim(badHash, ['event:gc-reject-1', 'event:gc-reject-2'], 'event:gc-reject-bad')
+    const badFailure = await repository
+      .privilegedCompact({
+        projectId: ProjectIdSchema.parse('project-1'),
+        eventIds: ['event:gc-reject-1', 'event:gc-reject-2'] as unknown as Parameters<BunSQLiteMemoryRepository['privilegedCompact']>[0]['eventIds'],
+        archiveClaimDraft: badClaim,
+        archiveLines,
+        archivePath: '.openbuff/memory/archive/gc-reject.jsonl',
+        archiveHash: badHash,
+      })
+      .then(() => null)
+      .catch((error: unknown) => error as { failure: { kind: string } })
+    expect(badFailure?.failure?.kind).toBe('invalid')
+    expect(await countEvents()).toEqual(beforeIds)
+    const unknownIds = ['event:gc-missing-1']
+    const unknownLines = unknownIds.map((eventId) => JSON.stringify({ eventId }))
+    const unknownHash = `sha256:${createHash('sha256').update(JSON.stringify(unknownLines)).digest('hex')}`
+    const unknownClaim = buildClaim(unknownHash, unknownIds, 'event:gc-reject-unknown')
+    const unknownFailure = await repository
+      .privilegedCompact({
+        projectId: ProjectIdSchema.parse('project-1'),
+        eventIds: [...unknownIds] as unknown as Parameters<BunSQLiteMemoryRepository['privilegedCompact']>[0]['eventIds'],
+        archiveClaimDraft: unknownClaim,
+        archiveLines: unknownLines,
+        archivePath: '.openbuff/memory/archive/gc-reject.jsonl',
+        archiveHash: unknownHash,
+      })
+      .then(() => null)
+      .catch((error: unknown) => error as { failure: { kind: string } })
+    expect(unknownFailure?.failure?.kind).toBe('invalid')
+    expect(await countEvents()).toEqual(beforeIds)
+    expect(goodHash).not.toBe(badHash)
   })
 })
 

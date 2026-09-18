@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -1551,5 +1552,424 @@ describe('/memory blocks', () => {
     await handleMemoryCommandBlocks('prune', deps)
 
     expect(calls.pruneMoves).toEqual([moves])
+  })
+})
+
+describe('/memory blocks compact-memory', () => {
+  function stableJson(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+    if (value !== null && typeof value === 'object') {
+      const entries = Object.entries(value as Record<string, unknown>).sort(
+        ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0),
+      )
+      return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`
+    }
+    return JSON.stringify(value) ?? 'null'
+  }
+
+  function makeCompactEnvelope(
+    eventId: string,
+    sequence: number,
+    observationId: string,
+  ) {
+    return MemoryEventEnvelopeSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'observation.recorded',
+      eventId,
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      sequence,
+      occurredAt: '2025-01-01T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        observation: {
+          observationId,
+          taskId: 'task-1',
+          kind: 'discovery',
+          summary: `Canonical observation ${observationId}`,
+          detail: `Canonical observation detail ${observationId}`,
+          confidence: 1,
+          selectors: [],
+          evidence: [],
+          tags: [],
+          observedAt: '2025-01-01T00:00:00.000Z',
+        },
+      },
+    })
+  }
+
+  function collectArchiveFiles(root: string): string[] {
+    const dir = join(root, '.openbuff', 'memory', 'archive')
+    if (!existsSync(dir)) return []
+    return readdirSync(dir)
+      .map((entry) => join(dir, entry))
+      .filter((path) => path.endsWith('.jsonl'))
+  }
+
+  test('preview renders candidates estimate warnings without writing archive', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-compact-preview-'))
+    const { deps } = createDeps({ memory: makeMemory() })
+    deps.getRootDir = () => root
+    const compactCalls: Array<Record<string, unknown>> = []
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: {
+          compact: async (request: Record<string, unknown>) => {
+            compactCalls.push(request)
+            return {
+              outcome: 'preview',
+              candidateEventIds: ['observation-event-1', 'observation-event-2'],
+              candidateCount: 2,
+              archiveByteEstimate: 512,
+              warnings: ['preview-warning'],
+            }
+          },
+        },
+        repository: {
+          export: async () => ({
+            outcome: 'page',
+            events: [],
+            nextAfterEventId: null,
+          }),
+        },
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+
+    const block = await handleMemoryCommandBlocks('compact-memory', deps)
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('secondary')
+    const text = block.lines.join('\n')
+    expect(text).toContain('Candidates')
+    expect(text).toContain('Archive estimate')
+    expect(text).toContain('Warnings')
+    expect(text).toContain('Preview only')
+    expect(block.insertCommands?.[0]?.command).toContain('--apply')
+    expect(block.insertCommands?.[0]?.command).toContain('--confirm')
+    expect(compactCalls).toHaveLength(1)
+    expect(compactCalls[0]?.['mode']).toBe('preview')
+    if ('olderThanDays' in (compactCalls[0] ?? {}))
+      expect(compactCalls[0]?.['olderThanDays']).toBe(30)
+    if ('maxEvents' in (compactCalls[0] ?? {}))
+      expect(compactCalls[0]?.['maxEvents']).toBe(1000)
+    expect(collectArchiveFiles(root)).toHaveLength(0)
+  })
+
+  test('--apply without --confirm returns usage error without calling compact', async () => {
+    const { deps } = createDeps({ memory: makeMemory() })
+    let compacts = 0
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: {
+          compact: async () => {
+            compacts++
+            return {
+              outcome: 'preview',
+              candidateEventIds: [],
+              candidateCount: 0,
+              archiveByteEstimate: 0,
+              warnings: [],
+            }
+          },
+        },
+        repository: {
+          export: async () => ({
+            outcome: 'page',
+            events: [],
+            nextAfterEventId: null,
+          }),
+        },
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+
+    const block = await handleMemoryCommandBlocks(
+      'compact-memory --apply',
+      deps,
+    )
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('error')
+    expect(block.lines.join('\n')).toMatch(/usage|--confirm/i)
+    expect(compacts).toBe(0)
+  })
+
+  test('invalid compact options return usage error without calling compact', async () => {
+    for (const command of [
+      'compact-memory --older-than-days 0',
+      'compact-memory --max-events 20000',
+    ]) {
+      const { deps } = createDeps({ memory: makeMemory() })
+      let compacts = 0
+      deps.getMemoryV2 = async () =>
+        ({
+          status: 'available',
+          requestedAuthority: 'shadow-v2',
+          effectiveAuthority: 'shadow-v2',
+          projectId: 'project-1',
+          operator: {
+            compact: async () => {
+              compacts++
+              return {
+                outcome: 'preview',
+                candidateEventIds: [],
+                candidateCount: 0,
+                archiveByteEstimate: 0,
+                warnings: [],
+              }
+            },
+          },
+          repository: {
+            export: async () => ({
+              outcome: 'page',
+              events: [],
+              nextAfterEventId: null,
+            }),
+          },
+          release: async () => {},
+        }) as unknown as Awaited<
+          ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+        >
+
+      const block = await handleMemoryCommandBlocks(command, deps)
+
+      if (block.state !== 'report') throw new Error(`expected report for ${command}`)
+      expect(block.tone).toBe('error')
+      expect(block.lines.join('\n')).toMatch(/usage/i)
+      expect(compacts).toBe(0)
+    }
+  })
+
+  test('apply success writes canonical archive and reports success', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-compact-apply-'))
+    const { deps } = createDeps({ memory: makeMemory() })
+    deps.getRootDir = () => root
+    const first = makeCompactEnvelope(
+      'observation-event-1',
+      1,
+      'observation-1',
+    )
+    const second = makeCompactEnvelope(
+      'observation-event-2',
+      2,
+      'observation-2',
+    )
+    // Small sorted-keys helper mirroring CLI jsonl serialization.
+    const expectedLines = [first, second].map((event) => stableJson(event))
+    const expectedHash =
+      'sha256:' + createHash('sha256').update(stableJson(expectedLines)).digest('hex')
+    const fileName = 'archive-' + expectedHash.slice(7, 15) + '.jsonl'
+    const compactCalls: Array<Record<string, unknown>> = []
+    let releases = 0
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: {
+          compact: async (request: Record<string, unknown>) => {
+            compactCalls.push(request)
+            if (request?.['mode'] === 'preview') {
+              return {
+                outcome: 'preview',
+                candidateEventIds: [
+                  'observation-event-1',
+                  'observation-event-2',
+                ],
+                candidateCount: 2,
+                archiveByteEstimate: 512,
+                warnings: [],
+              }
+            }
+            return {
+              outcome: 'applied',
+              archivedEventIds: ['observation-event-1', 'observation-event-2'],
+              archivePath: '.openbuff/memory/archive/' + fileName,
+              archiveHash: expectedHash,
+              beforeCount: 2,
+              afterCount: 1,
+              beforeBytes: 1024,
+              afterBytes: 512,
+              warnings: [],
+            }
+          },
+        },
+        repository: {
+          export: async () => ({
+            outcome: 'page',
+            events: [first, second],
+            nextAfterEventId: null,
+          }),
+        },
+        release: async () => {
+          releases++
+        },
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+
+    const block = await handleMemoryCommandBlocks(
+      'compact-memory --apply --confirm',
+      deps,
+    )
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('success')
+    const text = block.lines.join('\n')
+    expect(text).toContain('Archive file')
+    expect(compactCalls.length).toBeGreaterThanOrEqual(2)
+    expect(compactCalls[0]?.['mode']).toBe('preview')
+    expect(compactCalls.at(-1)?.['mode']).toBe('apply')
+    const files = collectArchiveFiles(root)
+    expect(files).toHaveLength(1)
+    const content = readFileSync(files[0]!, 'utf8')
+    const lines = content.split('\n').filter(Boolean)
+    expect(lines).toHaveLength(2)
+    expect(lines).toEqual(expectedLines)
+    for (const line of lines) {
+      const parsed = MemoryEventEnvelopeSchema.parse(JSON.parse(line))
+      expect(parsed.projectId as string).toBe('project-1')
+    }
+    expect(releases).toBe(1)
+  })
+
+  test('apply mismatch warns and names both hashes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-compact-mismatch-'))
+    const { deps } = createDeps({ memory: makeMemory() })
+    deps.getRootDir = () => root
+    const first = makeCompactEnvelope(
+      'observation-event-1',
+      1,
+      'observation-1',
+    )
+    const second = makeCompactEnvelope(
+      'observation-event-2',
+      2,
+      'observation-2',
+    )
+    const fakeHash =
+      'sha256:0000000000000000000000000000000000000000000000000000000000000000'
+    const fakePath = join(root, 'mismatch-archive.jsonl')
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: {
+          compact: async (request: Record<string, unknown>) => {
+            if (request?.['mode'] === 'preview') {
+              return {
+                outcome: 'preview',
+                candidateEventIds: [
+                  'observation-event-1',
+                  'observation-event-2',
+                ],
+                candidateCount: 2,
+                archiveByteEstimate: 512,
+                warnings: [],
+              }
+            }
+            return {
+              outcome: 'applied',
+              archivedEventIds: ['observation-event-1', 'observation-event-2'],
+              archivePath: fakePath,
+              archiveHash: fakeHash,
+              beforeCount: 2,
+              afterCount: 1,
+              beforeBytes: 1024,
+              afterBytes: 512,
+              warnings: [],
+            }
+          },
+        },
+        repository: {
+          export: async () => ({
+            outcome: 'page',
+            events: [first, second],
+            nextAfterEventId: null,
+          }),
+        },
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+
+    const block = await handleMemoryCommandBlocks(
+      'compact-memory --apply --confirm',
+      deps,
+    )
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('warning')
+    const text = block.lines.join('\n')
+    expect(text).toContain('Mismatch')
+    expect(text).toContain(fakeHash)
+    // Both hashes are named: the returned fake hash and the CLI-computed one.
+    const hashes = text.match(/sha256:[0-9a-f]+/gi) ?? []
+    expect(hashes.length).toBeGreaterThanOrEqual(2)
+    expect(hashes).toContain(fakeHash)
+  })
+
+  test('apply no-op when preview reports zero candidates', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-compact-noop-'))
+    const { deps } = createDeps({ memory: makeMemory() })
+    deps.getRootDir = () => root
+    const compactCalls: Array<Record<string, unknown>> = []
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: {
+          compact: async (request: Record<string, unknown>) => {
+            compactCalls.push(request)
+            return {
+              outcome: 'preview',
+              candidateEventIds: [],
+              candidateCount: 0,
+              archiveByteEstimate: 0,
+              warnings: [],
+            }
+          },
+        },
+        repository: {
+          export: async () => ({
+            outcome: 'page',
+            events: [],
+            nextAfterEventId: null,
+          }),
+        },
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+
+    const block = await handleMemoryCommandBlocks(
+      'compact-memory --apply --confirm',
+      deps,
+    )
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('secondary')
+    expect(block.lines.join('\n')).toContain('Outcome: no-op.')
+    expect(block.lines.join('\n')).toContain('No compaction candidates are eligible for archival.')
+    expect(compactCalls).toHaveLength(1)
+    expect(compactCalls[0]?.['mode']).toBe('preview')
+    expect(collectArchiveFiles(root)).toHaveLength(0)
   })
 })
