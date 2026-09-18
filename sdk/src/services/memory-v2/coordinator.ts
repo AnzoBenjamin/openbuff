@@ -111,6 +111,7 @@ const CAPTURE_KINDS: Readonly<Record<string, string>> = {
   edit_transaction: 'mutation',
   replace_range: 'mutation',
   write_audit_findings: 'mutation',
+  record_decision: 'decision',
 }
 
 const DIMENSION_MAP: Readonly<Record<string, 'tests' | 'validation'>> = {
@@ -217,6 +218,10 @@ export function classifyObservationKind(
   values: Record<string, unknown>[],
 ): ObservationKindHint {
   if (CAPTURE_KINDS[toolName] === 'mutation') return 'outcome'
+  if (toolName === 'record_decision') {
+    const k = values[0]?.kind
+    return k === 'fact' || k === 'constraint' ? k : 'decision'
+  }
   if (DECISION_TOOL_NAMES.has(toolName)) return 'decision'
   if (REASONING_TOOL_NAMES.has(toolName)) {
     if (valuesContainConstraintSignal(values)) return 'constraint'
@@ -300,6 +305,7 @@ function collectPaths(input: unknown, values: Record<string, unknown>[]): string
     addArray(input.paths)
     addArray(input.filePaths)
     addArray(input.files)
+    addArray(input.evidenceSelectors)
     addArray(input.scope)
     addArray(input.chunks)
     addArray(input.symbols)
@@ -313,6 +319,7 @@ function collectPaths(input: unknown, values: Record<string, unknown>[]): string
     add(value.destinationPath)
     addArray(value.paths)
     addArray(value.files)
+    addArray(value.evidenceSelectors)
     addArray(value.results)
     addArray(value.matches)
     addArray(value.entries)

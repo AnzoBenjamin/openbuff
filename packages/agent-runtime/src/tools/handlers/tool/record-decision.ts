@@ -114,6 +114,9 @@ export const handleRecordDecision = (async (params: {
         message: 'Recorded ' + kind + ' with ' + String(normalizedPaths.length) + ' evidence path(s).',
         kind,
         evidenceCount: normalizedPaths.length,
+        text: rawText,
+        evidenceSelectors: normalizedPaths,
+        ...(excerpt !== undefined ? { excerpt } : {}),
       }),
     }
   } catch (error) {

@@ -1766,6 +1766,112 @@ describe('MemoryV2Coordinator lifecycle', () => {
     }
   })
 
+  test('records record_decision tool output as kind=decision with evidence selectors', async () => {
+    const repository = new RepositoryStub()
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:record-decision',
+      query: 'capture',
+    })
+    const before = allEvents(repository).length
+    await coordinator.recordToolObservation({
+      toolName: 'record_decision',
+      callId: 'call:record-decision',
+      userInputId: 'input:record-decision',
+      input: {
+        text: 'Use Postgres because durability',
+        kind: 'decision',
+        evidenceSelectors: ['docs/architecture.md'],
+      },
+      output: [
+        {
+          type: 'json',
+          value: {
+            message: 'Recorded decision with 1 evidence path(s).',
+            kind: 'decision',
+            evidenceCount: 1,
+            text: 'Use Postgres because durability',
+            evidenceSelectors: ['docs/architecture.md'],
+          },
+        },
+      ],
+      native: true,
+    })
+    expect(allEvents(repository).length).toBe(before + 1)
+    const event = allEvents(repository).at(-1)!
+    expect(event.eventType).toBe('observation.recorded')
+    if (event.eventType === 'observation.recorded') {
+      expect(event.payload.observation.kind).toBe('decision')
+      const selectors = event.payload.observation.selectors ?? []
+      expect(selectors).toContainEqual({
+        kind: 'file',
+        path: 'docs/architecture.md',
+      })
+      const evidencePaths = event.payload.observation.evidence.map(
+        (e) => e.selector,
+      )
+      expect(evidencePaths).toContainEqual({
+        kind: 'file',
+        path: 'docs/architecture.md',
+      })
+    }
+  })
+
+  test('records record_decision constraint kind echoed in output as kind=constraint', async () => {
+    const repository = new RepositoryStub()
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:record-constraint',
+      query: 'capture',
+    })
+    const before = allEvents(repository).length
+    await coordinator.recordToolObservation({
+      toolName: 'record_decision',
+      callId: 'call:record-constraint',
+      userInputId: 'input:record-constraint',
+      input: {
+        text: 'The service must not delete data',
+        kind: 'constraint',
+        evidenceSelectors: ['docs/architecture.md'],
+      },
+      output: [
+        {
+          type: 'json',
+          value: {
+            message: 'Recorded constraint with 1 evidence path(s).',
+            kind: 'constraint',
+            evidenceCount: 1,
+            text: 'The service must not delete data',
+            evidenceSelectors: ['docs/architecture.md'],
+          },
+        },
+      ],
+      native: true,
+    })
+    expect(allEvents(repository).length).toBe(before + 1)
+    const event = allEvents(repository).at(-1)!
+    expect(event.eventType).toBe('observation.recorded')
+    if (event.eventType === 'observation.recorded') {
+      expect(event.payload.observation.kind).toBe('constraint')
+      expect(event.payload.observation.selectors ?? []).toContainEqual({
+        kind: 'file',
+        path: 'docs/architecture.md',
+      })
+    }
+  })
+
   test('records constraint-classified think_deeply output as kind=constraint', async () => {
     const repository = new RepositoryStub()
     const state = getInitialAgentState()
