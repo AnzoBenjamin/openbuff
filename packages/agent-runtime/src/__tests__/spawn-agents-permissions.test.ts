@@ -192,7 +192,7 @@ describe('Spawn Agents Permissions', () => {
     ).toContain('server/src/__tests__')
   })
 
-  it('does not retain partial discovery claims when a batch has duplicates', async () => {
+  it('serves existing discovery receipt when a batch has duplicates', async () => {
     const parentAgent = createMockAgent('parent', ['file-picker'])
     const childAgent = createMockAgent('file-picker')
     const sessionState = getInitialSessionState(mockFileContext)
@@ -203,23 +203,35 @@ describe('Spawn Agents Permissions', () => {
       },
     }
 
-    await expect(
-      handleSpawnAgents({
-        ...handleSpawnAgentsBaseParams,
-        agentState: sessionState.mainAgentState,
-        agentTemplate: parentAgent,
-        localAgentTemplates: { 'file-picker': childAgent },
-        toolCall: {
-          toolName: 'spawn_agents',
-          toolCallId: 'spawn-duplicate-file-pickers',
-          input: { agents: [duplicate, duplicate] },
-        },
-      }),
-    ).rejects.toThrow('Duplicate discovery shard')
+    const { output } = await handleSpawnAgents({
+      ...handleSpawnAgentsBaseParams,
+      agentState: sessionState.mainAgentState,
+      agentTemplate: parentAgent,
+      localAgentTemplates: { 'file-picker': childAgent },
+      toolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-duplicate-file-pickers',
+        input: { agents: [duplicate, duplicate] },
+      },
+    })
 
+    const reports =
+      output[0]?.type === 'json' ? (output[0].value as unknown[]) : undefined
+    expect(Array.isArray(reports)).toBe(true)
+    expect(reports).toHaveLength(2)
+    for (const report of reports as unknown[]) {
+      expect(JSON.stringify(report)).toContain('Mock agent response')
+    }
+
+    expect(sessionState.mainAgentState.discoveryCoverage?.shards).toHaveLength(
+      1,
+    )
     expect(
-      sessionState.mainAgentState.discoveryCoverage?.shards ?? [],
-    ).toHaveLength(0)
+      sessionState.mainAgentState.discoveryCoverage?.shards[0],
+    ).toMatchObject({
+      agentType: 'file-picker',
+      status: 'completed',
+    })
   })
 
   it('attenuates terminal authority throughout plan-only spawn ancestry', () => {

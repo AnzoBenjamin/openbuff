@@ -59,7 +59,7 @@ function looksLikePath(value: string): boolean {
 function extractCandidates(value: unknown): Map<string, Set<string>> {
   const candidates = new Map<string, Set<string>>()
   const add = (raw: string, reason: string) => {
-    const withoutLine = raw.replace(/:\d+(?::\d+)?$/, '')
+    const withoutLine = raw.replace(/:(\d+)(?::\d+)?.*$/, '')
     const path = normalizePath(withoutLine)
     if (!looksLikePath(path)) return
     const reasons = candidates.get(path) ?? new Set<string>()
@@ -69,7 +69,9 @@ function extractCandidates(value: unknown): Map<string, Set<string>> {
   const visit = (item: unknown, key = 'result', depth = 0): void => {
     if (!item || depth > 10) return
     if (typeof item === 'string') {
-      add(item, key)
+      for (const line of item.split(/\r?\n/)) {
+        add(line, key)
+      }
       return
     }
     if (Array.isArray(item)) {
