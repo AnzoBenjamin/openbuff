@@ -50,7 +50,7 @@ const MAX_GROUP_SOURCES = 19
 const MAX_MANIFEST_EVENTS_ENCODED_BYTES = 32 * 1024 * 1024
 const MAX_EXPORT_WARNINGS = 100
 const SHA256_ZERO = `sha256:${'0'.repeat(64)}`
-const COMPACTION_STORE_BYTES_THRESHOLD = 52_428_800
+const COMPACTION_STORE_BYTES_THRESHOLD = 134_217_728
 const COMPACTION_EVENT_COUNT_THRESHOLD = 20_000
 const COMPACTION_APPLY_MAX_EVENTS = 100
 const MAX_COMPACTION_WARNINGS = 100
@@ -520,7 +520,7 @@ function compactionWarnings(eventCount: number, bytes: number | null): string[] 
   const warnings: string[] = []
   if (bytes !== null && bytes >= COMPACTION_STORE_BYTES_THRESHOLD) {
     warnings.push(
-      `Store size ${bytes} bytes exceeds 50MB compaction threshold (52428800 bytes).`.slice(0, 512),
+      `Store size ${bytes} bytes exceeds 128MB compaction threshold (134217728 bytes).`.slice(0, 512),
     )
   }
   if (eventCount >= COMPACTION_EVENT_COUNT_THRESHOLD) {

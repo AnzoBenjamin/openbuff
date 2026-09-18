@@ -954,7 +954,7 @@ describe('MemoryV2OperatorService', () => {
       observationEvent(1, 'observation:1', 'One'),
       observationEvent(2, 'observation:2', 'Two'),
     ])
-    repository.storeStatsOverride = { eventCount: 25000, bytes: 60000000 }
+    repository.storeStatsOverride = { eventCount: 25000, bytes: 150000000 }
     const applied = await new MemoryV2OperatorService(repository).compact({
       schemaVersion: 2,
       projectId,
@@ -973,7 +973,7 @@ describe('MemoryV2OperatorService', () => {
     expect(applied.afterCount).toBe(1)
     expect(applied.beforeBytes).toBeGreaterThanOrEqual(0)
     expect(applied.afterBytes).toBeGreaterThanOrEqual(0)
-    expect(applied.warnings.join('\n')).toContain('50MB')
+    expect(applied.warnings.join('\n')).toContain('128MB')
     expect(applied.warnings.join('\n')).toContain('20000')
     expect(repository.events.filter((event) => event.eventType === 'claim.archived')).toHaveLength(1)
   })

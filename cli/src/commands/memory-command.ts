@@ -926,7 +926,7 @@ async function lookupObservationTaskId(
   return wanted.size === 0 && taskIds.size === 1 ? [...taskIds][0] : undefined
 }
 
-const COMPACT_STORE_BYTES_THRESHOLD = 52_428_800
+const COMPACT_STORE_BYTES_THRESHOLD = 134_217_728
 const COMPACT_EVENT_COUNT_THRESHOLD = 20_000
 
 function parseCompactOptions(args: string[]): { olderThanDays: number; maxEvents: number } | null {
@@ -983,7 +983,7 @@ async function storeObservabilityLines(
       : 'Last compaction: unavailable.'
   const lines = [`Store: ${count} events; ${bytesText}.`, lastCompaction]
   if (stats && stats.bytes >= COMPACT_STORE_BYTES_THRESHOLD) {
-    lines.push(`Bloat: store size ${stats.bytes} bytes exceeds 50MB (52428800 bytes).`)
+    lines.push(`Bloat: store size ${stats.bytes} bytes exceeds 128MB (134217728 bytes).`)
   }
   if (count >= COMPACT_EVENT_COUNT_THRESHOLD) {
     lines.push(`Bloat: event count ${count} exceeds 20k events.`)
