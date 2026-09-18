@@ -7,6 +7,7 @@ import { GUIDE_FALLBACK_SECTIONS } from '@codebuff/common/util/guides'
 import { createBase2, GUIDE_POINTERS, type GuidePath } from '../base2/base2'
 import {
   buildBroadAuditSection,
+  decisionCapturePolicySection,
   gateAwarenessSection,
   gitDisciplineSection,
   preReviewSelfCheckSection,
@@ -338,7 +339,7 @@ describe('base2 progressive prompt disclosure (M4)', () => {
         if (!planOnly) {
           expect(
             system.includes(
-              `\n\n${gateAwarenessSection}\n\n# Openbuff Meta-information`,
+              `\n\n${gateAwarenessSection}\n\n${decisionCapturePolicySection}\n\n# Openbuff Meta-information`,
             )
               ? 'spaced'
               : `${label}: gate section seam lost its blank-line gaps`,
