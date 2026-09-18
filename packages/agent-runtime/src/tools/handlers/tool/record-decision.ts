@@ -6,6 +6,7 @@ import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type { CodebuffToolCall, CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { AgentState } from '@codebuff/common/types/session-state'
+import { hasDecisionRationale } from '@codebuff/common/util/decision-rationale'
 
 type ToolName = 'record_decision'
 
@@ -37,6 +38,9 @@ export const handleRecordDecision = (async (params: {
     }
     if (rawText.length > 1024) {
       return errorOutput('record_decision: text must be at most 1024 characters.')
+    }
+    if ((kind === 'decision' || kind === 'constraint') && !hasDecisionRationale(rawText)) {
+      return errorOutput('record_decision: a decision/constraint must state a rationale (>=24 chars and include one of: because, so that, instead of, to avoid, rather than, chose, rejected, trade, prefer, must, require).')
     }
     if (rawSelectors.length < 1 || rawSelectors.length > 32) {
       return errorOutput('record_decision: evidenceSelectors must contain 1..32 entries.')

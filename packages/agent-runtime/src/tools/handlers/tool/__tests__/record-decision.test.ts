@@ -56,4 +56,39 @@ describe('handleRecordDecision', () => {
     const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { errorMessage?: string }
     expect(typeof value.errorMessage).toBe('string')
   })
+  test('rejects a decision without a rationale', async () => {
+    const agentState = buildAgentState()
+    const { output } = await handleRecordDecision({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: buildToolCall({ text: 'Updated the config file today', kind: 'decision', evidenceSelectors: ['docs/a.md'] }),
+      agentState,
+    } as Parameters<typeof handleRecordDecision>[0])
+    const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { errorMessage?: string }
+    expect(typeof value.errorMessage).toBe('string')
+    expect(agentState.taskMemory?.decisions ?? []).toHaveLength(0)
+  })
+  test('accepts a decision with a rationale', async () => {
+    const agentState = buildAgentState()
+    const { output } = await handleRecordDecision({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: buildToolCall({ text: 'Chose Postgres because sessions must survive restarts', kind: 'decision', evidenceSelectors: ['docs/architecture.md'] }),
+      agentState,
+    } as Parameters<typeof handleRecordDecision>[0])
+    const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { message?: string; kind?: string; errorMessage?: string }
+    expect(value.errorMessage).toBeUndefined()
+    expect(value.kind).toBe('decision')
+    expect(agentState.taskMemory?.decisions.length).toBe(1)
+  })
+  test('does not gate a fact with short non-rationale text', async () => {
+    const agentState = buildAgentState()
+    const { output } = await handleRecordDecision({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: buildToolCall({ text: 'Config file exists', kind: 'fact', evidenceSelectors: ['docs/a.md'] }),
+      agentState,
+    } as Parameters<typeof handleRecordDecision>[0])
+    const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { kind?: string; errorMessage?: string }
+    expect(value.errorMessage).toBeUndefined()
+    expect(value.kind).toBe('fact')
+    expect(agentState.taskMemory?.decisions.length).toBe(1)
+  })
 })

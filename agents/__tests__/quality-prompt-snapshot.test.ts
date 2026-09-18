@@ -8,6 +8,7 @@ import { createBase2 } from '../base2/base2'
 import { createCodeEditor } from '../editor/editor'
 import {
   buildBroadAuditSection,
+  decisionCapturePolicySection,
   gateAwarenessSection,
   gitDisciplineSection,
   preReviewSelfCheckSection,
@@ -235,6 +236,23 @@ describe('shared craftsmanship prompt sections', () => {
     expect(specialistRoutingSection).toContain('get_change_review_bundle')
     expect(specialistRoutingSection).toContain('changed_files')
     expect(specialistRoutingSection).toContain('snapshot_fingerprint')
+  })
+
+  test('decisionCapturePolicySection is interpolated into both orchestrators', () => {
+    // decisionCapturePolicySection is advisory guidance that may evolve; only
+    // assert topic coverage plus that both orchestrators wire it in. It is
+    // deliberately NOT asserted against the editor prompt: the editor's tool
+    // set does not include record_decision, so the clause would be inert there.
+    expect(decisionCapturePolicySection).toContain('# Decision Capture')
+    expect(decisionCapturePolicySection).toContain('record_decision')
+
+    const base2 = createBase2('default', {
+      progressivePromptDisclosure: false,
+    })
+    const baseDeep = createBaseDeep()
+
+    expect(base2.systemPrompt).toContain(decisionCapturePolicySection)
+    expect(baseDeep.systemPrompt).toContain(decisionCapturePolicySection)
   })
 
   test('all three consumers interpolate shared sections and leave conditional sections gated', () => {

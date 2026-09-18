@@ -4,6 +4,7 @@ import {
 } from '../types/secret-agent-definition'
 import { createBase2 } from './base2'
 import {
+  decisionCapturePolicySection,
   gateAwarenessSection,
   gitDisciplineSection,
   preReviewSelfCheckSection,
@@ -134,6 +135,7 @@ ${qualitySection}
 ${preReviewSelfCheckSection}
 
 ${gateAwarenessSection}
+${decisionCapturePolicySection}
 
 ${PLACEHOLDER.FRONTEND_SECTION}
 
