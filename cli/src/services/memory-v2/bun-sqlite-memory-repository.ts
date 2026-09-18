@@ -87,6 +87,12 @@ const CANONICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'migration.v1.reserved',
   'migration.v1.imported',
   'coverage.recorded',
+  'query.started',
+  'query.completed',
+  'query.failed',
+  'projection.rebuild.requested',
+  'projection.rebuild.completed',
+  'projection.rebuild.failed',
 ])
 
 export type MemoryV2FailureKind =
@@ -1082,6 +1088,23 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
           )
         afterSequence = cursor.sequence
       }
+      // Tolerant reader: `skippedUnknownCount` counts rows whose event_type is
+      // not a recognized canonical type (unknown/future types), which are
+      // skipped so a future additive event type never bricks an older reader.
+      // A KNOWN canonical type that fails strict decode is a hard error
+      // (surfaced as a failed/rejected export outcome), never silently dropped.
+      // export() issues exactly ONE raw query per call and builds the page from
+      // that single raw page:
+      // - `nextAfterEventId` is the authoritative opaque cursor, driven by the
+      //   RAW rows (never recomputed from the filtered events), and a `null`
+      //   cursor is the only terminal signal. It can advance past skipped tail
+      //   rows, so an empty `events[]` MAY be paired with a non-null cursor
+      //   when the whole raw page was dropped; consumers must guard
+      //   loop-termination on the cursor, never on `events.length`.
+      // - `rawTailEventId` is the id of the last RAW row in the page
+      //   (decodable or not) and is the authoritative source for
+      //   store-tail/CAS derivation; it is omitted only when the page observed
+      //   zero raw rows.
       const rows = this.database
         .query(
           `SELECT sequence, event_id, idempotency_key, event_type, occurred_at,
@@ -1097,15 +1120,31 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
           parsed.data.projectId,
           parsed.data.limit,
         ) as EventRow[]
-      const events = rows.map(envelopeFromRow)
+      const events: MemoryEventEnvelope[] = []
+      let skippedUnknownCount = 0
+      for (const row of rows) {
+        if (!CANONICAL_EVENT_TYPES.has(row.event_type)) {
+          skippedUnknownCount += 1
+          continue
+        }
+        events.push(envelopeFromRow(row))
+      }
+      const lastRow = rows[rows.length - 1]
+      const nextAfterEventId: MemoryEventEnvelope['eventId'] | null =
+        rows.length === parsed.data.limit
+          ? (lastRow!.event_id as MemoryEventEnvelope['eventId'])
+          : null
       return {
         outcome: 'page',
         events,
-        nextAfterEventId:
-          rows.length === parsed.data.limit
-            ? (rows[rows.length - 1]
-                ?.event_id as MemoryEventEnvelope['eventId'])
-            : null,
+        nextAfterEventId,
+        ...(rows.length > 0
+          ? {
+              rawTailEventId:
+                lastRow!.event_id as MemoryEventEnvelope['eventId'],
+            }
+          : {}),
+        skippedUnknownCount,
       }
     } catch (error) {
       const failure = classifyStorageError(error)

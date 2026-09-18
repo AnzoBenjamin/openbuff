@@ -2474,6 +2474,455 @@ describe('BunSQLiteMemoryRepository', () => {
     if (mismatched.outcome !== 'result') return
     expect(mismatched.result.currentCoverage).toEqual([])
   })
+
+  test('tolerantly skips and counts an unknown-type row so an older reader can export a newer store', async () => {
+    const repository = await open(temporaryRepository())
+    const appended = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        events: [draft('known-one')],
+      }),
+    )
+    expect(appended.outcome).toBe('appended')
+
+    // Direct raw INSERT of a future/unknown event type carrying valid
+    // schemaVersion-2 metadata for the SAME project. INSERT (not UPDATE or
+    // DELETE) is permitted by the append-only triggers.
+    const database = new Database(repository.databasePath)
+    try {
+      database
+        .query(
+          `INSERT INTO memory_events (
+             event_id, idempotency_key, event_type, occurred_at, payload_json,
+             metadata_json, task_id, session_id, artifact_id
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+        )
+        .run(
+          'future-unknown-1',
+          'key-future-unknown-1',
+          'future.unknown.event',
+          '2025-01-02T03:04:05.000Z',
+          '{}',
+          JSON.stringify({
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+            projectId: 'project-1',
+            sessionId: 'session-1',
+          }),
+          null,
+          'session-1',
+          null,
+        )
+    } finally {
+      database.close()
+    }
+
+    const exported = await repository.export(
+      MemoryExportRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        limit: 100,
+      }),
+    )
+    expect(MemoryExportOutcomeSchema.safeParse(exported).success).toBe(true)
+    expect(exported.outcome).toBe('page')
+    if (exported.outcome !== 'page') return
+    const ids = exported.events.map(({ eventId }) => String(eventId))
+    expect(ids).toContain('known-one')
+    expect(ids).not.toContain('future-unknown-1')
+    expect(exported.skippedUnknownCount).toBe(1)
+  })
+
+  test('fails the export (never silently drops) when a KNOWN canonical-type row cannot be strict-decoded, while still skip-and-counting unknown types', async () => {
+    const repository = await open(temporaryRepository())
+    const appended = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        events: [draft('known-one')],
+      }),
+    )
+    expect(appended.outcome).toBe('appended')
+
+    // Raw INSERT a row claiming a KNOWN canonical event_type
+    // ('migration.v1.imported') but carrying a malformed payload that fails
+    // strict envelope reconstruction, plus a genuinely UNKNOWN type row. A
+    // known-type strict-decode failure must be a hard error (non-'page'
+    // outcome), never a silent skip-and-count that would hide a migration
+    // marker.
+    const database = new Database(repository.databasePath)
+    try {
+      database
+        .query(
+          `INSERT INTO memory_events (
+             event_id, idempotency_key, event_type, occurred_at, payload_json,
+             metadata_json, task_id, session_id, artifact_id
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+        )
+        .run(
+          'future-unknown-marker',
+          'key-future-unknown-marker',
+          'future.unknown.event',
+          '2025-01-02T03:04:05.000Z',
+          '{}',
+          JSON.stringify({
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+            projectId: 'project-1',
+            sessionId: 'session-1',
+          }),
+          null,
+          'session-1',
+          null,
+        )
+      database
+        .query(
+          `INSERT INTO memory_events (
+             event_id, idempotency_key, event_type, occurred_at, payload_json,
+             metadata_json, task_id, session_id, artifact_id
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+        )
+        .run(
+          'malformed-known-marker',
+          'key-malformed-known-marker',
+          'migration.v1.imported',
+          '2025-01-02T03:04:06.000Z',
+          '{"totally":"malformed"}',
+          JSON.stringify({
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+            projectId: 'project-1',
+            sessionId: 'session-1',
+          }),
+          null,
+          'session-1',
+          null,
+        )
+    } finally {
+      database.close()
+    }
+
+    const exported = await repository.export(
+      MemoryExportRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        limit: 100,
+      }),
+    )
+    expect(MemoryExportOutcomeSchema.safeParse(exported).success).toBe(true)
+    // The known-type strict-decode failure surfaces loudly rather than being
+    // silently dropped from events[].
+    expect(exported.outcome).not.toBe('page')
+    expect(['failed', 'rejected']).toContain(exported.outcome)
+  })
+
+  test('exports known current query.* and projection.rebuild.* envelopes without dropping or miscounting them', async () => {
+    const repository = await open(temporaryRepository())
+    const appended = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        events: [
+          draft('current-task'),
+          canonicalDraft('query.started', 'current-query-started', {
+            payloadSchemaVersion: 1,
+            queryId: 'query-1',
+            taskId: 'task-current',
+            userInputId: 'input-1',
+            mode: 'inject',
+            startedAt: '2025-01-02T03:04:05.000Z',
+          }),
+          canonicalDraft('query.completed', 'current-query-completed', {
+            payloadSchemaVersion: 1,
+            queryId: 'query-1',
+            taskId: 'task-current',
+            completedAt: '2025-01-02T03:04:06.000Z',
+            counts: {
+              matchedTasks: 0,
+              verifiedKnowledge: 0,
+              reusableDiscovery: 0,
+              rereadRequired: 0,
+              historicalContext: 0,
+            },
+            degradation: { state: 'none' },
+          }),
+          canonicalDraft('query.failed', 'current-query-failed', {
+            payloadSchemaVersion: 1,
+            queryId: 'query-2',
+            taskId: 'task-current',
+            failedAt: '2025-01-02T03:04:07.000Z',
+            error: 'deterministic failure',
+            retryable: false,
+          }),
+          canonicalDraft(
+            'projection.rebuild.requested',
+            'current-rebuild-requested',
+            {
+              payloadSchemaVersion: 1,
+              rebuildId: 'rebuild-1',
+              projectionNames: ['tasks'],
+              requestedBy: 'test',
+            },
+          ),
+          canonicalDraft(
+            'projection.rebuild.completed',
+            'current-rebuild-completed',
+            {
+              payloadSchemaVersion: 1,
+              rebuildId: 'rebuild-1',
+              projectionNames: ['tasks'],
+              processedEvents: 1,
+              completedAt: '2025-01-02T03:04:08.000Z',
+            },
+          ),
+          canonicalDraft('projection.rebuild.failed', 'current-rebuild-failed', {
+            payloadSchemaVersion: 1,
+            rebuildId: 'rebuild-2',
+            projectionNames: ['tasks'],
+            error: 'deterministic rebuild failure',
+            retryable: true,
+            failedAt: '2025-01-02T03:04:09.000Z',
+          }),
+        ],
+      }),
+    )
+    expect(appended.outcome).toBe('appended')
+
+    const exported = await repository.export(
+      MemoryExportRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        limit: 100,
+      }),
+    )
+    expect(MemoryExportOutcomeSchema.safeParse(exported).success).toBe(true)
+    expect(exported.outcome).toBe('page')
+    if (exported.outcome !== 'page') return
+    const ids = exported.events.map(({ eventId }) => String(eventId))
+    expect(ids).toEqual([
+      'current-task',
+      'current-query-started',
+      'current-query-completed',
+      'current-query-failed',
+      'current-rebuild-requested',
+      'current-rebuild-completed',
+      'current-rebuild-failed',
+    ])
+    // Known current envelope types are never treated as unknown/future types.
+    expect(exported.skippedUnknownCount).toBe(0)
+  })
+
+  test('legally returns an empty export page paired with a non-null advancing cursor and the raw tail id when a full page is skipped', async () => {
+    const repository = await open(temporaryRepository())
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [draft('known-head')],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+
+    // Raw-insert a contiguous block of future/unknown-type rows for the SAME
+    // project between two known events. INSERT is permitted by the append-only
+    // triggers. With a limit of 2 the middle page is a full page of only
+    // dropped rows. export() is now a SINGLE raw page per call, so that page
+    // legally surfaces events: [] with a non-null advancing cursor and a
+    // rawTailEventId carrying the last raw row id; consumers page on the
+    // cursor, never on events.length.
+    const database = new Database(repository.databasePath)
+    try {
+      const insert = database.query(
+        `INSERT INTO memory_events (
+           event_id, idempotency_key, event_type, occurred_at, payload_json,
+           metadata_json, task_id, session_id, artifact_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+      )
+      const metadata = JSON.stringify({
+        schemaVersion: 2,
+        eventSchemaVersion: 1,
+        projectId: 'project-1',
+        sessionId: 'session-1',
+      })
+      for (let index = 0; index < 3; index++) {
+        insert.run(
+          `future-${index}`,
+          `key-future-${index}`,
+          'future.unknown.event',
+          '2025-01-02T03:04:05.000Z',
+          '{}',
+          metadata,
+          null,
+          'session-1',
+          null,
+        )
+      }
+    } finally {
+      database.close()
+    }
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [draft('known-tail')],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+
+    const seen: string[] = []
+    let totalSkipped = 0
+    let sawEmptyAdvancingPage = false
+    let afterEventId: string | undefined
+    for (let page = 0; page < 20; page++) {
+      const outcome = await repository.export(
+        MemoryExportRequestSchema.parse({
+          schemaVersion: 2,
+          projectId: 'project-1',
+          ...(afterEventId ? { afterEventId } : {}),
+          limit: 2,
+        }),
+      )
+      expect(MemoryExportOutcomeSchema.safeParse(outcome).success).toBe(true)
+      expect(outcome.outcome).toBe('page')
+      if (outcome.outcome !== 'page') return
+      const skipped = outcome.skippedUnknownCount ?? 0
+      totalSkipped += skipped
+      // A full page of only dropped rows is now LEGAL: empty events[] paired
+      // with a non-null advancing cursor and a rawTailEventId == last raw id.
+      if (outcome.events.length === 0 && outcome.nextAfterEventId) {
+        sawEmptyAdvancingPage = true
+        expect(String(outcome.rawTailEventId)).toBe(
+          String(outcome.nextAfterEventId),
+        )
+      }
+      for (const event of outcome.events) seen.push(String(event.eventId))
+      if (!outcome.nextAfterEventId) break
+      afterEventId = String(outcome.nextAfterEventId)
+    }
+    expect(seen).toEqual(['known-head', 'known-tail'])
+    expect(totalSkipped).toBe(3)
+    expect(sawEmptyAdvancingPage).toBe(true)
+  })
+
+  test('returns a single raw page with rawTailEventId == the last raw row id on terminal and decoded-tail-skipped pages', async () => {
+    const repository = await open(temporaryRepository())
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [draft('raw-tail-head')],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    // Raw-insert a future/unknown-type row as the store tail: it is the last
+    // raw row but is skipped from events[].
+    const database = new Database(repository.databasePath)
+    try {
+      database
+        .query(
+          `INSERT INTO memory_events (
+             event_id, idempotency_key, event_type, occurred_at, payload_json,
+             metadata_json, task_id, session_id, artifact_id
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+        )
+        .run(
+          'raw-tail-future',
+          'key-raw-tail-future',
+          'future.unknown.event',
+          '2025-01-02T03:04:05.000Z',
+          '{}',
+          JSON.stringify({
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+            projectId: 'project-1',
+            sessionId: 'session-1',
+          }),
+          null,
+          'session-1',
+          null,
+        )
+    } finally {
+      database.close()
+    }
+
+    // Terminal page (limit exceeds row count): cursor is null, rawTailEventId
+    // is the last RAW row (the skipped future row), NOT the last decoded event.
+    const terminal = await repository.export(
+      MemoryExportRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        limit: 100,
+      }),
+    )
+    expect(terminal.outcome).toBe('page')
+    if (terminal.outcome !== 'page') return
+    expect(terminal.events.map(({ eventId }) => String(eventId))).toEqual([
+      'raw-tail-head',
+    ])
+    expect(terminal.nextAfterEventId).toBeNull()
+    expect(String(terminal.rawTailEventId)).toBe('raw-tail-future')
+    expect(terminal.skippedUnknownCount).toBe(1)
+
+    // Decoded-tail-skipped full page (limit === row count): the decoded tail
+    // is the head event, but rawTailEventId is the skipped future row and the
+    // cursor advances to it.
+    const fullPage = await repository.export(
+      MemoryExportRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        limit: 2,
+      }),
+    )
+    expect(fullPage.outcome).toBe('page')
+    if (fullPage.outcome !== 'page') return
+    expect(fullPage.events.map(({ eventId }) => String(eventId))).toEqual([
+      'raw-tail-head',
+    ])
+    expect(String(fullPage.nextAfterEventId)).toBe('raw-tail-future')
+    expect(String(fullPage.rawTailEventId)).toBe('raw-tail-future')
+    expect(fullPage.skippedUnknownCount).toBe(1)
+  })
+
+  test('omits rawTailEventId on an empty store export', async () => {
+    const repository = await open(temporaryRepository())
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [draft('empty-store-anchor')],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    // Page after the only row observes zero raw rows.
+    const exported = await repository.export(
+      MemoryExportRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        afterEventId: 'empty-store-anchor',
+        limit: 100,
+      }),
+    )
+    expect(MemoryExportOutcomeSchema.safeParse(exported).success).toBe(true)
+    expect(exported.outcome).toBe('page')
+    if (exported.outcome !== 'page') return
+    expect(exported.events).toEqual([])
+    expect(exported.nextAfterEventId).toBeNull()
+    expect(exported.rawTailEventId).toBeUndefined()
+    expect('rawTailEventId' in exported).toBe(false)
+  })
 })
 
 describe('BunSQLiteMemoryRepository privileged GC', () => {

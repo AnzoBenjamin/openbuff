@@ -1272,11 +1272,29 @@ export const MemoryExportRequestSchema = z
 export type MemoryExportRequest = z.infer<typeof MemoryExportRequestSchema>
 
 export const MemoryExportOutcomeSchema = z.discriminatedUnion('outcome', [
+  // Tolerant export reader contract (loosened, backward compatible):
+  // - `events` is the strictly-decoded, in-order subset of the single raw
+  //   page; `skippedUnknownCount` counts rows whose event_type is not a
+  //   recognized canonical type (unknown/future types), which are skipped. A
+  //   KNOWN canonical type that fails strict decode is a hard error (surfaced
+  //   as a failed/rejected export outcome), never silently dropped.
+  // - `nextAfterEventId` is the authoritative opaque pagination cursor and a
+  //   `null` cursor is the ONLY terminal signal. An empty `events[]` MAY be
+  //   paired with a non-null (advancing) cursor when a raw page is entirely
+  //   skipped, so consumers MUST guard loop-termination on the cursor, never
+  //   on `events.length`.
+  // - `rawTailEventId` (when present) is the id of the last RAW row in the
+  //   page (decodable or not) and is the authoritative source for
+  //   store-tail/CAS derivation: derive any tail from `rawTailEventId`, never
+  //   from the last decoded event. It is omitted only when the page observed
+  //   zero raw rows.
   z
     .object({
       outcome: z.literal('page'),
       events: z.array(MemoryEventEnvelopeSchema).max(1_000),
       nextAfterEventId: MemoryEventIdSchema.nullable(),
+      rawTailEventId: MemoryEventIdSchema.optional(),
+      skippedUnknownCount: z.number().int().nonnegative().optional(),
     })
     .strict(),
   z

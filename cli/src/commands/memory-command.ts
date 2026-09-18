@@ -1345,23 +1345,25 @@ async function canonicalInventory(
     const parsedEvents: import('@openbuff/sdk').MemoryEventEnvelope[] = []
     for (const candidate of page.events) {
       const parsed = MemoryEventEnvelopeSchema.safeParse(candidate)
-      if (!parsed.success || parsed.data.projectId !== v2.projectId)
+      // Tolerant reader: an unparseable row (e.g. a future additive event
+      // type the repo already drops) is skipped rather than aborting the
+      // page. A wrong-project row remains a hard integrity failure.
+      if (!parsed.success) continue
+      if (parsed.data.projectId !== v2.projectId)
         return {
           events: [],
           error: { message: 'Canonical inventory failed validation.' },
         }
       parsedEvents.push(parsed.data)
     }
-    if (page.nextAfterEventId && parsedEvents.length === 0)
-      return {
-        events: [],
-        error: { message: 'Canonical inventory pagination did not advance.' },
-      }
+    // A page that is entirely dropped rows is legitimately empty while the
+    // cursor advances, so only a non-advancing cursor is a hard failure. The
+    // cursor is authoritative from the repo and is never tied to the last
+    // parsed event id (the last raw row may have been dropped).
     if (page.nextAfterEventId) {
       if (
         page.nextAfterEventId === afterEventId ||
-        cursors.has(page.nextAfterEventId) ||
-        page.nextAfterEventId !== parsedEvents.at(-1)?.eventId
+        cursors.has(page.nextAfterEventId)
       )
         return {
           events: [],

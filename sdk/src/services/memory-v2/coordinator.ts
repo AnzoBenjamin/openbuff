@@ -784,11 +784,10 @@ export class MemoryV2Coordinator {
         if (outcome.events.some((event) => event.projectId !== this.config.projectId)) {
           return { kind: 'failed' }
         }
-        const last = outcome.events.at(-1)
-        if (last) tail = last.eventId
+        if (outcome.rawTailEventId) tail = outcome.rawTailEventId
         const next = outcome.nextAfterEventId
         if (!next) return tail ? { kind: 'found', eventId: tail } : { kind: 'empty' }
-        if (outcome.events.length === 0 || next === afterEventId || seenCursors.has(next)) {
+        if (next === afterEventId || seenCursors.has(next)) {
           return { kind: 'failed' }
         }
         seenCursors.add(next)

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   MemoryAppendRequestSchema,
+  MemoryEventIdSchema,
   MemoryQueryOutcomeSchema,
   ProjectIdSchema,
   type MemoryAppendOutcome,
@@ -156,7 +157,14 @@ class RepositoryStub implements MemoryRepositoryV2 {
           },
         ] as unknown as ExportPage['events'])
       : []
-    return { outcome: 'page' as const, events, nextAfterEventId: null }
+    return {
+      outcome: 'page' as const,
+      events,
+      nextAfterEventId: null,
+      ...(this.exportTailEventId
+        ? { rawTailEventId: this.exportTailEventId }
+        : {}),
+    }
   }
 }
 
@@ -1634,7 +1642,6 @@ describe('MemoryV2Coordinator lifecycle', () => {
       },
       { malformed: true },
       new Error('export threw'),
-      { outcome: 'page', events: [], nextAfterEventId: 'event:next' },
     ]
     for (const scripted of failures) {
       const repository = new RepositoryStub()
@@ -1663,6 +1670,55 @@ describe('MemoryV2Coordinator lifecycle', () => {
       expect(repository.requests.slice(before)).toHaveLength(1)
       expect(repository.requests.at(-1)!.expectedTail).toBeDefined()
     }
+  })
+
+  test('clears a CAS conflict by deriving the raw tail from a skipped future-type row', async () => {
+    const repository = new RepositoryStub()
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:raw-tail-cas',
+      query: 'capture',
+    })
+    const before = repository.requests.length
+    // The store's REAL last row is a skipped future-type row an older reader
+    // cannot decode, so export() returns an empty events[] with a null cursor
+    // but a non-null rawTailEventId carrying that raw tail. deriveRepositoryTail
+    // must surface it so the retry append's CAS clears.
+    const futureTailId = MemoryEventIdSchema.parse('event:future-skipped-tail')
+    repository.appendConflictsRemaining = 1
+    repository.exportScript = [
+      {
+        outcome: 'page',
+        events: [],
+        nextAfterEventId: null,
+        rawTailEventId: futureTailId,
+      },
+    ]
+
+    await coordinator.recordToolObservation({
+      toolName: 'get_build_targets',
+      callId: 'call:raw-tail-cas',
+      userInputId: 'input:raw-tail-cas',
+      input: { files: ['src/raw-tail.ts'] },
+      output: [{ type: 'json', value: { targets: ['sdk'] } }],
+      native: true,
+    })
+
+    const attempts = repository.requests.slice(before)
+    expect(attempts).toHaveLength(2)
+    expect(repository.exportRequests).toHaveLength(1)
+    expect(attempts[1]!.expectedTail).toEqual({
+      kind: 'event',
+      eventId: futureTailId,
+    })
+    expect(attempts[1]!.events).toEqual(attempts[0]!.events)
+    expect(state.memoryV2!.lastEventId).toBe(attempts[1]!.events.at(-1)!.eventId)
   })
 
   test('classifies decision tools deterministically', () => {
