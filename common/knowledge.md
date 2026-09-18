@@ -89,6 +89,8 @@ This package contains code shared across the Openbuff monorepo, especially the l
 
 - _Knowledge refresh 2026-09-17: record_decision params schema with text/kind/evidenceSelectors/excerpt bounds plus tool registration._
 
+- _Knowledge refresh 2026-09-18: `common/src/types/memory-v2.ts` gained `ClaimArchivedPayloadSchema` (archivedEventIds 1..100, archivePath, archiveHash digest, reason, archivedAt) wired into draft/envelope unions, plus `MemoryCompactionRequestSchema`/`MemoryCompactionOutcomeSchema` (preview/applied/no-op/rejected/failed, bounded warnings); GC keeps append-only triggers for normal paths with privileged DELETE only inside `privilegedCompact`._
+
 ## Scope Notes
 
 Openbuff is CLI/SDK-focused and local/BYOK. Do not add new dependencies from `common/` to hosted web, billing, credit, subscription, or BigQuery product surfaces. Provider-owned billing, quota, token usage, and OAuth flows may still be documented when they refer to the user's configured provider rather than an Openbuff-hosted product.
