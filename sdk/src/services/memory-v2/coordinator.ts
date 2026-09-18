@@ -218,6 +218,7 @@ export function classifyObservationKind(
   values: Record<string, unknown>[],
 ): ObservationKindHint {
   if (CAPTURE_KINDS[toolName] === 'mutation') return 'outcome'
+  // Error outputs are filtered upstream by the hasErrorResult guard in captureToolObservation, so this branch only runs for successful record_decision output.
   if (toolName === 'record_decision') {
     const k = values[0]?.kind
     return k === 'fact' || k === 'constraint' ? k : 'decision'

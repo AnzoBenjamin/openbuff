@@ -96,9 +96,10 @@ export const handleRecordDecision = (async (params: {
       lines.push('Excerpt: ' + excerpt)
     }
     const summary = lines.join('\n').slice(0, 2000)
+    const evidenceKind = kind === 'constraint' ? 'requirement' : kind === 'fact' ? 'note' : 'decision'
     memory.evidence.push({
-      id: evidenceId.length > 0 ? evidenceId : 'decision:' + Date.now().toString(),
-      kind: 'decision',
+      id: evidenceId,
+      kind: evidenceKind,
       summary,
       source: normalizedPaths[0],
       path: normalizedPaths[0],
