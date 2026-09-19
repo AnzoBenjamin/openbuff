@@ -42,6 +42,11 @@ import {
 } from '@codebuff/common/types/memory-v2'
 
 import type { MemoryRepositoryV2 } from './types'
+import {
+  COMPACTION_ELIGIBILITY_MODEL_VERSION,
+  selectCompactionCandidates,
+  type GCRelevantEnvelope,
+} from '@codebuff/common/util/compaction-eligibility'
 
 const EXPORT_PAGE_SIZE = 1_000
 const MAX_EXPORT_PAGES = 10
@@ -487,33 +492,6 @@ function renderMarkdown(manifest: MemoryExportManifestV2): string {
     )
   }
   return lines.join('\n').slice(0, 1_000_000)
-}
-
-function compactionObservationIds(event: MemoryEventEnvelope): string[] {
-  switch (event.eventType) {
-    case 'observation.recorded':
-      return [event.payload.observation.observationId]
-    case 'claim.consolidated':
-      return [...event.payload.sourceObservationIds, event.payload.canonicalObservation.observationId]
-    case 'claim.corrected':
-      return [event.payload.observationId, event.payload.correction.observationId]
-    case 'claim.superseded':
-      return [event.payload.observationId]
-    case 'claim.forgotten':
-      return [...event.payload.observationIds]
-    case 'claim.pinned':
-      return [event.payload.observationId]
-    case 'evidence.attached':
-      return [event.payload.observationId]
-    case 'evidence.verified':
-      return [event.payload.observationId]
-    case 'evidence.invalidated':
-      return [event.payload.observationId]
-    case 'evidence.rebound':
-      return [event.payload.observationId]
-    default:
-      return []
-  }
 }
 
 function compactionWarnings(eventCount: number, bytes: number | null): string[] {
@@ -1178,19 +1156,22 @@ export class MemoryV2OperatorService {
     const request = parsed.data
     try {
       const events = await this.allEvents(request.projectId)
-      const stale = staleObservationReasons(events)
-      const cutoffMs = Date.now() - request.olderThanDays * 24 * 60 * 60 * 1000
-      const candidates = events
-        .filter((event) => {
-          if (event.eventType === 'claim.archived') return false
-          const ids = compactionObservationIds(event)
-          const isStale = ids.some((id) => stale.has(id))
-          const occurredMs = Date.parse(event.occurredAt)
-          const isOld = !Number.isNaN(occurredMs) && occurredMs < cutoffMs
-          return isStale || isOld
-        })
-        .sort(eventOrder)
-        .slice(0, request.maxEvents)
+      const envelopes: GCRelevantEnvelope[] = events
+        .filter((event) => event.eventType !== 'claim.archived')
+        .map((event) => ({
+          eventType: event.eventType,
+          eventId: event.eventId,
+          sequence: event.sequence,
+          occurredAt: event.occurredAt,
+          payload: event.payload,
+        }))
+      // Deterministic as-of wall clock: the code-point max occurredAt across
+      // the GC-relevant envelopes (never Date.now), so eligibility is
+      // reproducible from the batch alone.
+      const asOfTurnWall = envelopes.reduce(
+        (max, envelope) => (envelope.occurredAt > max ? envelope.occurredAt : max),
+        '1970-01-01T00:00:00.000Z',
+      )
       let eventCount = events.length
       let bytes: number | null = null
       try {
@@ -1213,20 +1194,41 @@ export class MemoryV2OperatorService {
       }
       const warnings = compactionWarnings(eventCount, bytes)
       if (request.mode === 'preview') {
+        const selection = selectCompactionCandidates({
+          envelopes,
+          maxEvents: request.maxEvents,
+          asOfTurnWall,
+        })
+        const eventsById = new Map<string, MemoryEventEnvelope>(
+          events.map((event) => [event.eventId as string, event]),
+        )
         const encoder = new TextEncoder()
         let archiveByteEstimate = 0
-        for (const event of candidates) {
+        for (const eventId of selection.eventIds) {
+          const event = eventsById.get(eventId)
+          if (!event) continue
           archiveByteEstimate += encoder.encode(stableJson(event)).length + 1
         }
         return MemoryCompactionOutcomeSchema.parse({
           outcome: 'preview',
-          candidateEventIds: candidates.map((event) => event.eventId),
-          candidateCount: candidates.length,
+          candidateEventIds: selection.eventIds,
+          candidateCount: selection.eventIds.length,
           archiveByteEstimate,
           warnings,
         })
       }
-      const applyCandidates = candidates.slice(0, COMPACTION_APPLY_MAX_EVENTS)
+      // Apply selection is recomputed group-granular so a batch never splits
+      // an observation group across the maxEvents boundary.
+      const applyMaxEvents = Math.min(request.maxEvents, COMPACTION_APPLY_MAX_EVENTS)
+      const applySelection = selectCompactionCandidates({
+        envelopes,
+        maxEvents: applyMaxEvents,
+        asOfTurnWall,
+      })
+      const applyEventIdSet = new Set(applySelection.eventIds)
+      const applyCandidates = events
+        .filter((event) => applyEventIdSet.has(event.eventId))
+        .sort(eventOrder)
       if (applyCandidates.length === 0) {
         return MemoryCompactionOutcomeSchema.parse({
           outcome: 'no-op',
@@ -1249,11 +1251,23 @@ export class MemoryV2OperatorService {
         ) {
           const selector =
             this.repository.selectGCandidates ?? this.repository.inspectForGC!
-          await selector({
+          const repositorySelection = await selector({
             projectId: request.projectId,
             olderThanDays: request.olderThanDays,
             maxEvents: request.maxEvents,
           })
+          // Consistency check between the repository's candidate view and the
+          // operator's apply batch: a mismatch is reported but stays non-fatal.
+          const repositoryEventIds = new Set(repositorySelection.eventIds)
+          const operatorEventIds = new Set(applyCandidates.map((event) => event.eventId))
+          const drift =
+            applyCandidates.filter((event) => !repositoryEventIds.has(event.eventId)).length +
+            repositorySelection.eventIds.filter((eventId) => !operatorEventIds.has(eventId)).length
+          if (drift > 0) {
+            warnings.push(
+              `GC candidate drift: repository=${repositorySelection.eventIds.length} operator=${applyCandidates.length}`.slice(0, 512),
+            )
+          }
         }
       } catch {
         // Inspection is advisory; privilegedCompact remains fail-closed.
@@ -1268,7 +1282,7 @@ export class MemoryV2OperatorService {
         archivedEventIds,
         archivePath,
         archiveHash,
-        reason: `Privileged compaction of ${archivedEventIds.length} events olderThanDays ${request.olderThanDays}`,
+        reason: `gc-eligibility ${COMPACTION_ELIGIBILITY_MODEL_VERSION} model=usefulness-v1 branches retracted=${applySelection.branchCounts.retracted} orphan=${applySelection.branchCounts.orphan} lowScore=${applySelection.branchCounts.lowScore}; olderThanDays=${request.olderThanDays}; maxEvents=${applyMaxEvents}; asOf=${asOfTurnWall}`.slice(0, 1000),
         archivedAt,
       }
       const draft = MemoryEventDraftSchema.parse({

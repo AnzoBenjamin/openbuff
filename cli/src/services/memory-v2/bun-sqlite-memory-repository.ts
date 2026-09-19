@@ -49,6 +49,11 @@ import {
   scoreUsefulness,
   type UsefulnessTier,
 } from './usefulness-scorer'
+import {
+  observationIdsReferencedBy,
+  selectCompactionCandidates,
+  type GCRelevantEnvelope,
+} from '../../../../common/src/util/compaction-eligibility'
 import type {
   GcCandidateSelection,
   MemoryRepositoryV2,
@@ -70,6 +75,27 @@ const MAX_QUERY_PAYLOAD_BYTES = 8 * 1024 * 1024
 const MAX_REPLAY_EVENTS = 10_000
 const GC_SELECT_LIMIT = 10_000
 const COMPACTION_APPLY_MAX = 100
+/** Event types the shared P6 compaction-eligibility selection consumes. */
+const GC_RELEVANT_EVENT_TYPES: readonly string[] = [
+  'observation.recorded',
+  'claim.forgotten',
+  'claim.superseded',
+  'claim.corrected',
+  'claim.consolidated',
+  'claim.pinned',
+  'evidence.attached',
+  'evidence.verified',
+  'evidence.invalidated',
+  'evidence.rebound',
+  'observation.reused',
+]
+/** Multi-referencing events that never belong to a single observation group. */
+const GC_SHARED_EVENT_TYPES: readonly string[] = [
+  'claim.forgotten',
+  'claim.consolidated',
+  'claim.corrected',
+  'observation.reused',
+]
 const DIGEST_PATTERN = /^[a-z0-9][a-z0-9+.-]{0,31}:[A-Fa-f0-9]{16,256}$/
 const NO_DELETE_TRIGGER_SQL = `CREATE TRIGGER memory_events_no_delete BEFORE DELETE ON memory_events BEGIN SELECT RAISE(ABORT, 'canonical memory events are append only'); END;`
 const CANONICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
@@ -1368,40 +1394,55 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
           retryable: false,
         })
       }
-      const cutoff = new Date(
-        Date.now() - request.olderThanDays * 24 * 60 * 60 * 1000,
-      ).toISOString()
+      const eventTypePlaceholders = GC_RELEVANT_EVENT_TYPES.map(
+        (_, index) => `?${index + 3}`,
+      ).join(',')
       const rows = this.database
         .query(
-          `SELECT event_id, event_type, occurred_at FROM memory_events
+          `SELECT event_id, event_type, sequence, occurred_at, payload_json FROM memory_events
             WHERE json_extract(metadata_json, '$.projectId') = ?1
-              AND event_type != 'claim.archived'
-            ORDER BY occurred_at ASC, sequence ASC
+              AND event_type IN (${eventTypePlaceholders})
+            ORDER BY sequence ASC
             LIMIT ?2`,
         )
-        .all(request.projectId, GC_SELECT_LIMIT) as Array<{
+        .all(
+          request.projectId,
+          GC_SELECT_LIMIT,
+          ...GC_RELEVANT_EVENT_TYPES,
+        ) as Array<{
         event_id: string
         event_type: string
+        sequence: number
         occurred_at: string
+        payload_json: string
       }>
-      const staleTypes = new Set([
-        'claim.forgotten',
-        'claim.superseded',
-        'claim.corrected',
-      ])
-      const candidates = rows
-        .filter((row) => staleTypes.has(row.event_type) || row.occurred_at < cutoff)
-        .sort((left, right) => {
-          const leftStale = staleTypes.has(left.event_type) ? 0 : 1
-          const rightStale = staleTypes.has(right.event_type) ? 0 : 1
-          if (leftStale !== rightStale) return leftStale - rightStale
-          if (left.occurred_at !== right.occurred_at)
-            return left.occurred_at < right.occurred_at ? -1 : 1
-          return left.event_id < right.event_id ? -1 : left.event_id > right.event_id ? 1 : 0
+      const envelopes: GCRelevantEnvelope[] = []
+      let asOfTurnWall = '1970-01-01T00:00:00.000Z'
+      for (const row of rows) {
+        let payload: unknown
+        try {
+          payload = JSON.parse(row.payload_json) as unknown
+        } catch {
+          // Malformed payload rows are skipped; selection is best-effort.
+          // The privileged compaction pre-check remains fail-closed.
+          continue
+        }
+        envelopes.push({
+          eventType: row.event_type,
+          eventId: row.event_id,
+          sequence: Number(row.sequence),
+          occurredAt: row.occurred_at,
+          payload,
         })
-        .slice(0, request.maxEvents)
+        if (row.occurred_at > asOfTurnWall) asOfTurnWall = row.occurred_at
+      }
+      const selection = selectCompactionCandidates({
+        envelopes,
+        maxEvents: request.maxEvents,
+        asOfTurnWall,
+      })
       return {
-        eventIds: candidates.map((row) => row.event_id) as GcCandidateSelection['eventIds'],
+        eventIds: selection.eventIds as GcCandidateSelection['eventIds'],
       }
     } catch (error) {
       if (error instanceof MemoryV2StorageError) throw error
@@ -1494,6 +1535,100 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
         .all(...input.eventIds, input.projectId) as Array<{ event_id: string }>
       if (existing.length !== input.eventIds.length) {
         fail('The privileged compaction events were not found for this project.')
+      }
+      // P6 fail-closed closure verification BEFORE the delete trigger is
+      // dropped: every observation referenced by a batch event must have its
+      // anchor 'observation.recorded' inside the batch (group closure), and
+      // no shared event outside the batch may reference an archived
+      // observation (resurrection / shared-event corruption gate).
+      const batchRows = this.database
+        .query(
+          `SELECT event_id, event_type, sequence, occurred_at, payload_json FROM memory_events
+            WHERE event_id IN (${placeholders})
+              AND json_extract(metadata_json, '$.projectId') = ?${projectParamIndex}`,
+        )
+        .all(...input.eventIds, input.projectId) as Array<{
+        event_id: string
+        event_type: string
+        sequence: number
+        occurred_at: string
+        payload_json: string
+      }>
+      const batchEnvelopes: GCRelevantEnvelope[] = []
+      for (const row of batchRows) {
+        let payload: unknown
+        try {
+          payload = JSON.parse(row.payload_json) as unknown
+        } catch {
+          fail('The privileged compaction batch contains a malformed event payload.')
+        }
+        batchEnvelopes.push({
+          eventType: row.event_type,
+          eventId: row.event_id,
+          sequence: Number(row.sequence),
+          occurredAt: row.occurred_at,
+          payload,
+        })
+      }
+      const referencedObservationIds = new Set<string>()
+      const batchAnchoredObservationIds = new Set<string>()
+      const batchEventIdSet = new Set(batchEnvelopes.map((envelope) => envelope.eventId))
+      for (const envelope of batchEnvelopes) {
+        for (const id of observationIdsReferencedBy(envelope.eventType, envelope.payload)) {
+          referencedObservationIds.add(id)
+        }
+        if (envelope.eventType === 'observation.recorded') {
+          for (const id of observationIdsReferencedBy(envelope.eventType, envelope.payload)) {
+            batchAnchoredObservationIds.add(id)
+          }
+        }
+      }
+      for (const id of referencedObservationIds) {
+        if (!batchAnchoredObservationIds.has(id)) {
+          fail(
+            `The privileged compaction batch does not close the observation group for ${id}: the observation.recorded anchor is missing.`,
+          )
+        }
+      }
+      const batchEventTypePlaceholders = GC_RELEVANT_EVENT_TYPES.map(
+        (_, index) => `?${input.eventIds.length + 1 + index}`,
+      ).join(',')
+      const sharedOutside = this.database
+        .query(
+          `SELECT event_id, event_type, payload_json FROM memory_events
+            WHERE event_id NOT IN (${placeholders})
+              AND event_type IN (${batchEventTypePlaceholders})
+              AND json_extract(metadata_json, '$.projectId') = ?${
+                input.eventIds.length + GC_RELEVANT_EVENT_TYPES.length + 1
+              }`,
+        )
+        .all(
+          ...input.eventIds,
+          ...GC_RELEVANT_EVENT_TYPES,
+          input.projectId,
+        ) as Array<{
+        event_id: string
+        event_type: string
+        payload_json: string
+      }>
+      for (const row of sharedOutside) {
+        if (!GC_SHARED_EVENT_TYPES.includes(row.event_type)) continue
+        if (batchEventIdSet.has(row.event_id)) continue
+        let payload: unknown
+        try {
+          payload = JSON.parse(row.payload_json) as unknown
+        } catch {
+          // Outside rows keep selection's tolerant posture; only batch rows
+          // are fail-closed here.
+          continue
+        }
+        const references = observationIdsReferencedBy(row.event_type, payload)
+        const conflict = references.find((id) => referencedObservationIds.has(id))
+        if (conflict !== undefined) {
+          fail(
+            `Privileged compaction closure violated: shared event ${row.event_id} outside the batch references archived observation ${conflict}.`,
+          )
+        }
       }
       this.database.exec('DROP TRIGGER IF EXISTS memory_events_no_delete')
       const deleted = this.database

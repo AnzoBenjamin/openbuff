@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1599,6 +1599,30 @@ describe('/memory blocks compact-memory', () => {
     })
   }
 
+  function makeForgottenEnvelope(
+    eventId: string,
+    sequence: number,
+    observationIds: string[],
+  ) {
+    return MemoryEventEnvelopeSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'claim.forgotten',
+      eventId,
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      sequence,
+      occurredAt: '2025-01-01T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        observationIds,
+        reason: 'user-request',
+        requestedBy: 'test',
+        evidenceDisposition: 'retain-artifacts',
+      },
+    })
+  }
+
   function collectArchiveFiles(root: string): string[] {
     const dir = join(root, '.openbuff', 'memory', 'archive')
     if (!existsSync(dir)) return []
@@ -1766,8 +1790,15 @@ describe('/memory blocks compact-memory', () => {
       2,
       'observation-2',
     )
+    // The apply batch is recomputed from the canonical inventory, so the
+    // fixture needs a retracted (forgotten) observation group to be eligible.
+    const forgotten = makeForgottenEnvelope(
+      'forgotten-event-3',
+      3,
+      ['observation-1', 'observation-2'],
+    )
     // Small sorted-keys helper mirroring CLI jsonl serialization.
-    const expectedLines = [first, second].map((event) => stableJson(event))
+    const expectedLines = [first, second, forgotten].map((event) => stableJson(event))
     const expectedHash =
       'sha256:' + createHash('sha256').update(stableJson(expectedLines)).digest('hex')
     const fileName = 'archive-' + expectedHash.slice(7, 15) + '.jsonl'
@@ -1788,18 +1819,23 @@ describe('/memory blocks compact-memory', () => {
                 candidateEventIds: [
                   'observation-event-1',
                   'observation-event-2',
+                  'forgotten-event-3',
                 ],
-                candidateCount: 2,
+                candidateCount: 3,
                 archiveByteEstimate: 512,
                 warnings: [],
               }
             }
             return {
               outcome: 'applied',
-              archivedEventIds: ['observation-event-1', 'observation-event-2'],
+              archivedEventIds: [
+                'observation-event-1',
+                'observation-event-2',
+                'forgotten-event-3',
+              ],
               archivePath: '.openbuff/memory/archive/' + fileName,
               archiveHash: expectedHash,
-              beforeCount: 2,
+              beforeCount: 3,
               afterCount: 1,
               beforeBytes: 1024,
               afterBytes: 512,
@@ -1810,7 +1846,7 @@ describe('/memory blocks compact-memory', () => {
         repository: {
           export: async () => ({
             outcome: 'page',
-            events: [first, second],
+            events: [first, second, forgotten],
             nextAfterEventId: null,
           }),
         },
@@ -1835,9 +1871,11 @@ describe('/memory blocks compact-memory', () => {
     expect(compactCalls.at(-1)?.['mode']).toBe('apply')
     const files = collectArchiveFiles(root)
     expect(files).toHaveLength(1)
+    // INV7: the archive jsonl is owner-only 0600.
+    expect(statSync(files[0]!).mode & 0o777).toBe(0o600)
     const content = readFileSync(files[0]!, 'utf8')
     const lines = content.split('\n').filter(Boolean)
-    expect(lines).toHaveLength(2)
+    expect(lines).toHaveLength(expectedLines.length)
     expect(lines).toEqual(expectedLines)
     for (const line of lines) {
       const parsed = MemoryEventEnvelopeSchema.parse(JSON.parse(line))
@@ -1860,6 +1898,11 @@ describe('/memory blocks compact-memory', () => {
       2,
       'observation-2',
     )
+    const forgotten = makeForgottenEnvelope(
+      'forgotten-event-3',
+      3,
+      ['observation-1', 'observation-2'],
+    )
     const fakeHash =
       'sha256:0000000000000000000000000000000000000000000000000000000000000000'
     const fakePath = join(root, 'mismatch-archive.jsonl')
@@ -1877,18 +1920,23 @@ describe('/memory blocks compact-memory', () => {
                 candidateEventIds: [
                   'observation-event-1',
                   'observation-event-2',
+                  'forgotten-event-3',
                 ],
-                candidateCount: 2,
+                candidateCount: 3,
                 archiveByteEstimate: 512,
                 warnings: [],
               }
             }
             return {
               outcome: 'applied',
-              archivedEventIds: ['observation-event-1', 'observation-event-2'],
+              archivedEventIds: [
+                'observation-event-1',
+                'observation-event-2',
+                'forgotten-event-3',
+              ],
               archivePath: fakePath,
               archiveHash: fakeHash,
-              beforeCount: 2,
+              beforeCount: 3,
               afterCount: 1,
               beforeBytes: 1024,
               afterBytes: 512,
@@ -1899,7 +1947,7 @@ describe('/memory blocks compact-memory', () => {
         repository: {
           export: async () => ({
             outcome: 'page',
-            events: [first, second],
+            events: [first, second, forgotten],
             nextAfterEventId: null,
           }),
         },

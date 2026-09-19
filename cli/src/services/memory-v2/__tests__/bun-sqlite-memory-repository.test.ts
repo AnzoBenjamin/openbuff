@@ -3390,6 +3390,17 @@ describe('BunSQLiteMemoryRepository observation.reused usage projection', () => 
 
   test('privileged compaction keeps memory_usage consistent with the surviving event log', async () => {
     const repository = await open(temporaryRepository())
+    // P6 group closure: a derived event (observation.reused) may only be
+    // archived together with the observation it references, so the fixture
+    // records the observation first and archives both events as one batch.
+    const observationDraft = canonicalDraft(
+      'observation.recorded',
+      'event:used-compact-observation',
+      {
+        payloadSchemaVersion: 1,
+        observation: observationFixture('observation:used-compact', []),
+      },
+    )
     const reusedDraft = canonicalDraft(
       'observation.reused',
       'event:usage-compact-1',
@@ -3409,7 +3420,7 @@ describe('BunSQLiteMemoryRepository observation.reused usage projection', () => 
           MemoryAppendRequestSchema.parse({
             schemaVersion: 2,
             projectId: 'project-1',
-            events: [reusedDraft],
+            events: [observationDraft, reusedDraft],
           }),
         )
       ).outcome,
@@ -3422,7 +3433,10 @@ describe('BunSQLiteMemoryRepository observation.reused usage projection', () => 
       'observation:used-compact',
     ])
 
-    const eventIds = ['event:usage-compact-1'] as const
+    const eventIds = [
+      'event:used-compact-observation',
+      'event:usage-compact-1',
+    ] as const
     const archiveLines = eventIds.map((eventId) => JSON.stringify({ eventId }))
     const archiveHash = `sha256:${createHash('sha256').update(JSON.stringify(archiveLines)).digest('hex')}`
     const archivedAt = new Date().toISOString()
@@ -3864,5 +3878,212 @@ describe('BunSQLiteMemoryRepository usefulness-scored retrieval ordering', () =>
       code === 'reusability' && detail === 'P4 usage correlation score.',
     )).toBe(true)
     expect(scoredEntry?.score).toBeLessThanOrEqual(1)
+  })
+})
+
+describe('P9 invariant enforcement (store)', () => {
+  test('INV11: an old unsuperseded agent-explicit decision is never a GC candidate', async () => {
+    const repository = await open(temporaryRepository())
+    const oldExplicit = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'observation.recorded',
+      eventId: 'event:p9-explicit-old',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: '2024-06-01T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        observation: {
+          ...observationFixture('p9-explicit-old', []),
+          kind: 'decision' as const,
+          provenance: {
+            origin: 'repository' as const,
+            recordedBy: 'test',
+            sourceEventIds: [],
+            metadata: {},
+            toolName: 'record_decision',
+          },
+          observedAt: '2024-06-01T00:00:00.000Z',
+        },
+      },
+    })
+    // Control: the same age and shape without the explicit tier is an old
+    // orphan and IS eligible.
+    const oldDerived = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'observation.recorded',
+      eventId: 'event:p9-derived-old',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: '2024-06-01T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        observation: {
+          ...observationFixture('p9-derived-old', []),
+          observedAt: '2024-06-01T00:00:00.000Z',
+        },
+      },
+    })
+    // Anchor event raising the scanned window's as-of clock.
+    const anchor = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'observation.recorded',
+      eventId: 'event:p9-anchor',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: '2025-06-01T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        observation: observationFixture('p9-anchor', []),
+      },
+    })
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [oldExplicit, oldDerived, anchor],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const selected = await repository.selectGCandidates({
+      projectId: 'project-1',
+      olderThanDays: 30,
+      maxEvents: 100,
+    })
+    const ids = selected.eventIds.map(String)
+    expect(ids).toContain('event:p9-derived-old')
+    expect(ids).not.toContain('event:p9-explicit-old')
+    expect(ids).not.toContain('event:p9-anchor')
+  })
+
+  test('pinned blocks reclamation even for retracted observations', async () => {
+    const repository = await open(temporaryRepository())
+    const observation = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'observation.recorded',
+      eventId: 'event:p9-pin-obs',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: '2024-06-01T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        observation: {
+          ...observationFixture('p9-pin-target', []),
+          observedAt: '2024-06-01T00:00:00.000Z',
+        },
+      },
+    })
+    const pinned = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'claim.pinned',
+      eventId: 'event:p9-pin',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: '2024-06-02T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        observationId: 'p9-pin-target',
+        reason: 'pinned by user',
+        pinnedBy: 'test',
+        pinnedAt: '2024-06-02T00:00:00.000Z',
+      },
+    })
+    const forgotten = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'claim.forgotten',
+      eventId: 'event:p9-pin-forgotten',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: '2024-06-03T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        observationIds: ['p9-pin-target'],
+        reason: 'user-request',
+        requestedBy: 'test',
+        evidenceDisposition: 'retain-artifacts',
+      },
+    })
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [observation, pinned, forgotten],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const selected = await repository.selectGCandidates({
+      projectId: 'project-1',
+      olderThanDays: 30,
+      maxEvents: 100,
+    })
+    // The pinned group is ineligible, and closure keeps the shared forgotten
+    // event out of the batch too: nothing is archivable.
+    expect(selected.eventIds).toHaveLength(0)
+  })
+
+  test('P9: projection replay is deterministic across rebuilds for new event types', async () => {
+    const repository = await open(temporaryRepository())
+    const observation = canonicalDraft('observation.recorded', 'event:p9-replay-obs', {
+      payloadSchemaVersion: 1,
+      observation: observationFixture('p9-replay-target', []),
+    })
+    const reused = canonicalDraft('observation.reused', 'event:p9-replay-reused', {
+      payloadSchemaVersion: 1,
+      turnId: 'input:p9-replay',
+      used: [{ observationId: 'p9-replay-target', mechanism: 'gate-skip' }],
+      ignored: [],
+    })
+    const archived = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'claim.archived',
+      eventId: 'event:p9-replay-archived',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: '2025-06-02T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        archivedEventIds: ['event:p9-replay-obs'],
+        archivePath: '.openbuff/memory/archive/p9-replay.jsonl',
+        archiveHash: `sha256:${'b'.repeat(64)}`,
+        reason: 'P9 replay determinism seed',
+        archivedAt: '2025-06-02T00:00:00.000Z',
+      },
+    })
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [observation, reused, archived],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const fingerprint = async () =>
+      JSON.stringify({
+        snapshot: await repository.getProjectionSnapshot(),
+        usage: await repository.getUsage({ projectId: 'project-1' }),
+      })
+    const first = await fingerprint()
+    await repository.rebuildProjections()
+    const second = await fingerprint()
+    await repository.rebuildProjections()
+    const third = await fingerprint()
+    expect(second).toBe(first)
+    expect(third).toBe(first)
   })
 })

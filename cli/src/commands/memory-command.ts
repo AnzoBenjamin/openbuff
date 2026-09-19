@@ -35,6 +35,10 @@ import type {
   V1MigrationAuditOutcome,
   WorkspaceMoveRecord,
 } from '@openbuff/sdk'
+import {
+  selectCompactionCandidates,
+  type GCRelevantEnvelope,
+} from '../../../common/src/util/compaction-eligibility'
 
 export type MemoryCommandDeps = {
   getRootDir: () => string
@@ -1053,12 +1057,35 @@ async function runCompact(
       'secondary',
     )
   }
-  const applyIds = preview.candidateEventIds.slice(0, 100)
   const inventory = await canonicalInventory(v2, 10_000)
   if (inventory.error) {
     return commandError('Memory compaction failed: local output could not be created safely.')
   }
-  const byId = new Map(inventory.events.map((event) => [event.eventId, event]))
+  // Group-granular apply batch: recompute the selection from the canonical
+  // inventory envelopes (claim.archived excluded) with the bounded apply
+  // maxEvents, so an observation group is never split across the boundary.
+  const inventoryEnvelopes: GCRelevantEnvelope[] = inventory.events
+    .filter((event) => event.eventType !== 'claim.archived')
+    .map((event) => ({
+      eventType: event.eventType,
+      eventId: event.eventId,
+      sequence: event.sequence,
+      occurredAt: event.occurredAt,
+      payload: event.payload,
+    }))
+  const inventoryAsOf = inventoryEnvelopes.reduce(
+    (max, envelope) => (envelope.occurredAt > max ? envelope.occurredAt : max),
+    '1970-01-01T00:00:00.000Z',
+  )
+  const applySelection = selectCompactionCandidates({
+    envelopes: inventoryEnvelopes,
+    maxEvents: Math.min(options.maxEvents, 100),
+    asOfTurnWall: inventoryAsOf,
+  })
+  const applyIds = applySelection.eventIds
+  const byId = new Map<string, import('@openbuff/sdk').MemoryEventEnvelope>(
+    inventory.events.map((event) => [event.eventId as string, event]),
+  )
   const selected = applyIds
     .map((id) => byId.get(id))
     .filter((event): event is import('@openbuff/sdk').MemoryEventEnvelope => event !== undefined)
@@ -1094,7 +1121,7 @@ async function runCompact(
     ...scope,
     mode: 'apply',
     olderThanDays: options.olderThanDays,
-    maxEvents: options.maxEvents,
+    maxEvents: Math.min(options.maxEvents, 100),
   })
   if (outcome.outcome !== 'applied') {
     return report(

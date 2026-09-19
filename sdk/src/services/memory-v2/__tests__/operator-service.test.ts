@@ -79,6 +79,28 @@ const observationEvent = (
     },
   })
 
+const forgottenEvent = (
+  sequence: number,
+  observationIds: string[],
+): MemoryEventEnvelope =>
+  MemoryEventEnvelopeSchema.parse({
+    schemaVersion: 2,
+    eventSchemaVersion: 1,
+    eventType: 'claim.forgotten',
+    eventId: `event:forgotten-${sequence}`,
+    projectId,
+    sessionId,
+    sequence,
+    occurredAt: timestamp,
+    payload: {
+      payloadSchemaVersion: 1,
+      observationIds,
+      reason: 'user-request',
+      requestedBy: 'test',
+      evidenceDisposition: 'retain-artifacts',
+    },
+  })
+
 class RepositoryStub implements MemoryRepositoryV2 {
   events: MemoryEventEnvelope[]
   appendRequests: MemoryAppendRequest[] = []
@@ -911,7 +933,8 @@ describe('MemoryV2OperatorService', () => {
     const repository = new RepositoryStub([
       observationEvent(1, 'observation:1', 'One'),
       observationEvent(2, 'observation:2', 'Two'),
-      MemoryEventEnvelopeSchema.parse({ ...archivedDraft, sequence: 3 }),
+      forgottenEvent(3, ['observation:1', 'observation:2']),
+      MemoryEventEnvelopeSchema.parse({ ...archivedDraft, sequence: 4 }),
     ])
     const service = new MemoryV2OperatorService(repository)
     const preview = await service.compact({
@@ -924,14 +947,19 @@ describe('MemoryV2OperatorService', () => {
     })
     expect(preview.outcome).toBe('preview')
     if (preview.outcome !== 'preview') return
+    // Both retracted observation groups archive whole; the shared
+    // claim.forgotten event follows because every observation it references
+    // was archived. Fresh unretracted observations are no longer eligible and
+    // claim.archived is never a candidate.
     expect(preview.candidateEventIds.map(String)).toEqual([
       'event:observation-1',
       'event:observation-2',
+      'event:forgotten-3',
     ])
-    expect(preview.candidateCount).toBe(2)
+    expect(preview.candidateCount).toBe(3)
     expect(preview.archiveByteEstimate).toBeGreaterThan(0)
     expect(Array.isArray(preview.warnings)).toBe(true)
-    expect(repository.events).toHaveLength(3)
+    expect(repository.events).toHaveLength(4)
     expect(repository.appendRequests).toHaveLength(0)
     expect(repository.privilegedCompactRequests).toHaveLength(0)
 
@@ -945,14 +973,18 @@ describe('MemoryV2OperatorService', () => {
     })
     expect(capped.outcome).toBe('preview')
     if (capped.outcome !== 'preview') return
+    // Group granularity: maxEvents=1 archives the single-event retracted
+    // group for observation:1; adding the second group or the shared forgotten
+    // event would exceed the budget, so the selection stops there.
     expect(capped.candidateCount).toBe(1)
-    expect(capped.candidateEventIds).toHaveLength(1)
+    expect(capped.candidateEventIds.map(String)).toEqual(['event:observation-1'])
   })
 
   test('compact apply echoes in-memory counts and bytes with threshold warnings', async () => {
     const repository = new RepositoryStub([
       observationEvent(1, 'observation:1', 'One'),
       observationEvent(2, 'observation:2', 'Two'),
+      forgottenEvent(3, ['observation:1', 'observation:2']),
     ])
     repository.storeStatsOverride = { eventCount: 25000, bytes: 150000000 }
     const applied = await new MemoryV2OperatorService(repository).compact({
@@ -968,8 +1000,9 @@ describe('MemoryV2OperatorService', () => {
     expect(applied.archivedEventIds.map(String)).toEqual([
       'event:observation-1',
       'event:observation-2',
+      'event:forgotten-3',
     ])
-    expect(applied.beforeCount).toBe(2)
+    expect(applied.beforeCount).toBe(3)
     expect(applied.afterCount).toBe(1)
     expect(applied.beforeBytes).toBeGreaterThanOrEqual(0)
     expect(applied.afterBytes).toBeGreaterThanOrEqual(0)
@@ -979,7 +1012,12 @@ describe('MemoryV2OperatorService', () => {
   })
 
   test('compact apply without privilegedCompact rejects as invalid-request', async () => {
-    const repository = new RepositoryStub([observationEvent(1, 'observation:1', 'One')])
+    // The batch must contain an eligible group (a retracted observation) so
+    // apply reaches the privilegedCompact availability check, not the no-op.
+    const repository = new RepositoryStub([
+      observationEvent(1, 'observation:1', 'One'),
+      forgottenEvent(2, ['observation:1']),
+    ])
     delete (repository as unknown as Record<string, unknown>).privilegedCompact
     const outcome = await new MemoryV2OperatorService(repository).compact({
       schemaVersion: 2,
