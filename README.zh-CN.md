@@ -46,7 +46,123 @@ openbuff
 
 配置提供商：在 TUI 内运行 `/setup <preset>`（如 `/setup openai`）快速套用预设，或在 `openbuff.json` 中声明提供商和模型路由。然后导出提供商 `apiKeyEnv` 指定的 API key 环境变量（如 `export OPENAI_API_KEY="..."`），再告诉 Openbuff 你想做什么。
 
-完整流程——安装 → 提供商配置 → 模型路由 → 验证——见[《快速上手》](./docs/getting-started.md)。
+完整流程——安装 → 提供商配置 → 模型路由 → 验证——见下文[快速上手](#快速上手)（英文原版见 [docs/getting-started.md](./docs/getting-started.md)）。
+
+## 快速上手
+
+> 英文权威版本见 [docs/getting-started.md](./docs/getting-started.md)。
+
+Openbuff 是一款本地优先、自带密钥（BYOK）的智能编程 CLI：没有账号、没有积分、也没有托管推理——你为自己的提供商（OpenAI、Anthropic/Claude、OpenRouter、本地 Ollama，或任何 OpenAI 兼容端点）提供 API key，每次模型请求都在本地根据你的配置完成解析。本指南带你从安装一路走到可用的 CLI 会话。
+
+### 1. 安装
+
+```bash
+npm install -g @openbuff/cli
+```
+
+在你的项目目录中运行：
+
+```bash
+cd your-project
+openbuff
+```
+
+### 2. 配置提供商
+
+Openbuff 自身不运行任何模型——把它指向一个你有密钥的提供商即可。提供商配置按以下优先级从多个来源读取：
+
+1. `OPENBUFF_PROVIDER_CONFIG` —— 指向单个配置文件的环境变量
+2. `~/.config/openbuff/provider-config.json` —— 用户全局配置
+3. `~/.config/openbuff/openbuff.json` —— 用户全局配置（备用名称）
+4. 当前目录及其各级祖先目录（含 `$HOME`）中的 `openbuff.json` —— 项目本地配置
+
+多文件合并语义详见 [configuration.md](./configuration.md)。
+
+有两条快速路径。
+
+#### 在 TUI 内（推荐）
+
+运行你提供商对应的预设命令：
+
+```text
+/setup openai   # 预设：openai, anthropic, codex, openrouter, ollama,
+                # glm, opencode-go, bedrock, freemodel
+```
+
+或使用交互式向导（包括自定义提供商）：
+
+```text
+/provider add
+```
+
+对于 ChatGPT/Codex 订阅，先连接 OAuth：
+
+```text
+/provider connect codex
+```
+
+#### 手动（`openbuff.json`）
+
+按照上面的搜索顺序，创建一个 `openbuff.json`（项目本地或用户全局），包含一个提供商和默认路由：
+
+```jsonc
+{
+  "providers": {
+    "openai": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "models": ["gpt-5.5", "gpt-5.4-mini"]
+    }
+  },
+  "defaultModel": "openai/gpt-5.5",
+  "modes": { "default": "openai/gpt-5.5" }
+}
+```
+
+`apiKeyEnv` 指定存放 API key 的环境变量——在启动 Openbuff 之前先导出：
+
+```bash
+export OPENAI_API_KEY="..."
+```
+
+### 3. 路由你的模型
+
+Openbuff 根据 `openbuff.json` 为每个智能体步骤路由模型：
+
+- `modes.default` 和 `modes.plan` 覆盖内置的根智能体。
+- `agents[agentId]` 覆盖子智能体及其他非 mode 智能体。
+- `defaultModel` 是上述都未匹配时的兜底。
+
+**没有硬编码的兜底模型。** 如果某个智能体没有配置模型，Openbuff 会报错：
+
+```text
+No model configured for agent '<id>'. Run /setup or set defaultModel ...
+```
+
+用 `/models` 打开模型路由选择器，或用 `/models configure` 打开交互式路由向导。完整的解析顺序见 [local-mode.md](./local-mode.md)。
+
+### 4. 验证
+
+在 TUI 内：
+
+```text
+/provider status   # 已加载配置、提供商 URL、缺失环境变量
+/models            # 模型路由选择器
+```
+
+导出 API key 后，可选择性运行冒烟测试：
+
+```bash
+bun run smoke:openbuff
+```
+
+### 5. 故障排查
+
+- **`No model configured for agent '<id>'`** —— 该智能体没有路由到任何模型。运行 `/setup <preset>`，或在 `openbuff.json` 中设置 `defaultModel`（或 `agents['<id>']`）。
+- **缺少 API key 环境变量** —— 提供商的 `apiKeyEnv` 变量未导出。导出它（例如 `export OPENAI_API_KEY="..."`）后重启。`/provider status` 会列出每个提供商缺失的环境变量。
+- **`chatgpt-oauth` 提供商失败** —— ChatGPT/Codex OAuth 提供商需要先执行 `/provider connect codex` 才能提供服务。
+- **配置未生效** —— `/provider status` 会显示实际加载了哪个文件。检查第 2 节的优先级顺序；当多个文件匹配时，[configuration.md](./configuration.md) 中的合并规则决定哪些值生效。
 
 ## 创建自定义智能体
 
@@ -150,7 +266,7 @@ await client.run({
 
 ## 提供商配置
 
-刚接触 Openbuff？[《快速上手》](./docs/getting-started.md)完整讲解了从安装、配置提供商、路由模型到验证的全流程。
+刚接触 Openbuff？[快速上手](#快速上手)完整讲解了从安装、配置提供商、路由模型到验证的全流程。
 
 Openbuff 默认在本地/BYOK 模式下运行：不需要托管认证、积分或平台推理。在 `openbuff.json` 中配置 OpenAI 兼容或 Anthropic 兼容提供商和按智能体路由的模型。详情请见 [Openbuff 本地/BYOK 提供商模式](./docs/local-mode.md)。
 
