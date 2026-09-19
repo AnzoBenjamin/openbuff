@@ -139,6 +139,30 @@ describe('handleGlob memory-first', () => {
     expect(seen).toHaveLength(1)
   })
 
+  test('narrow cover falls through to the full call without rooting cwd at a file gap', async () => {
+    const agentState = buildVerifiedState(['src/auth/login.ts'])
+    const toolCall = buildToolCall({
+      pattern: 'src/auth/login.ts src/missing/file.ts',
+    })
+    const seen: Array<ClientToolCall<'glob'>> = []
+    const output = buildOutput()
+    const { output: returned } = await invoke({
+      agentState,
+      output,
+      toolCall,
+      onClientCall: (call) => {
+        seen.push(call)
+      },
+    })
+    expect(returned).toEqual(output)
+    expect(seen).toHaveLength(1)
+    // The full call must be issued unchanged: no cwd derived from a file gap.
+    expect(seen[0].input).toEqual(toolCall.input)
+    expect(
+      (seen[0].input as { cwd?: string }).cwd,
+    ).toBeUndefined()
+  })
+
   test('a failing memory check falls through to the full call', async () => {
     const agentState = buildAgentState()
     spyOn(

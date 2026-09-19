@@ -2,8 +2,12 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   MemoryAppendRequestSchema,
+  MemoryEventIdSchema,
   MemoryQueryOutcomeSchema,
   ProjectIdSchema,
+  QueryIdSchema,
+  type MemoryReuseReceiptV1,
+  type MemoryTurnContextV2,
   type MemoryAppendOutcome,
   type MemoryEventDraft,
   type MemoryEventId,
@@ -13,6 +17,7 @@ import {
   type QueryId,
 } from '@codebuff/common/types/memory-v2'
 import { taskMemoryDraftV1Schema } from '@codebuff/common/types/task-memory'
+import { deriveClaimId } from '@codebuff/common/util/claim-identity'
 import { stableHash } from '@codebuff/common/util/stable-hash'
 import { getInitialAgentState } from '@codebuff/common/types/session-state'
 
@@ -28,7 +33,14 @@ import {
   deriveQueryId,
   deriveTaskId,
 } from '../event-factory'
-import type { MemoryRepositoryV2, MemoryV2ClientConfig } from '../types'
+import type {
+  MemoryClaimDedupEntry,
+  MemoryClaimDedupReadOutcome,
+  MemoryObservationStatusEntry,
+  MemoryObservationStatusReadOutcome,
+  MemoryRepositoryV2,
+  MemoryV2ClientConfig,
+} from '../types'
 import type { V1MigrationOutcome } from '../v1-migration'
 
 const projectId = ProjectIdSchema.parse('project:test')
@@ -50,6 +62,16 @@ class RepositoryStub implements MemoryRepositoryV2 {
   queryIdOverride: QueryId | undefined
   queryDegradation: MemoryRetrievalResult['degradation'] = { state: 'none' }
   appendGate: ((requestIndex: number) => Promise<void>) | undefined
+  claimDedupEntries: MemoryClaimDedupEntry[] = []
+  claimDedupFailure: 'reject' | undefined
+  /**
+   * When set, getObservationStatus serves exactly these entries filtered by
+   * the requested ids. When undefined it derives active same-task entries
+   * from the lifecycle events already accepted, so the supersedes
+   * validation passes for any target unless a test overrides it.
+   */
+  observationStatusEntries: MemoryObservationStatusEntry[] | undefined
+  observationStatusFailure: 'reject' | undefined
 
   async append(
     request: Parameters<MemoryRepositoryV2['append']>[0],
@@ -126,6 +148,73 @@ class RepositoryStub implements MemoryRepositoryV2 {
     })
   }
 
+  async getClaimDedup(
+    params: Parameters<NonNullable<MemoryRepositoryV2['getClaimDedup']>>[0],
+  ): Promise<MemoryClaimDedupReadOutcome> {
+    if (this.claimDedupFailure === 'reject') {
+      return {
+        status: 'error',
+        error: { kind: 'unavailable', message: 'dedup offline', retryable: true },
+      }
+    }
+    const requested = params.claimIds
+    const entries = requested
+      ? this.claimDedupEntries.filter((entry) => requested.includes(entry.claimId))
+      : this.claimDedupEntries
+    return { status: 'ok', entries }
+  }
+
+  async getObservationStatus(
+    params: Parameters<
+      NonNullable<MemoryRepositoryV2['getObservationStatus']>
+    >[0],
+  ): Promise<MemoryObservationStatusReadOutcome> {
+    if (this.observationStatusFailure === 'reject') {
+      return {
+        status: 'error',
+        error: {
+          kind: 'unavailable',
+          message: 'observation status offline',
+          retryable: true,
+        },
+      }
+    }
+    const requested = [...new Set(params.observationIds)]
+    if (this.observationStatusEntries !== undefined) {
+      return {
+        status: 'ok',
+        entries: this.observationStatusEntries.filter((entry) =>
+          requested.includes(entry.observationId),
+        ),
+      }
+    }
+    // Default: report every requested id as active on the active task taken
+    // from the last lifecycle event already accepted, mirroring the store's
+    // active same-task posture so supersede validation passes unless a test
+    // overrides observationStatusEntries.
+    let activeTaskId: string | undefined
+    for (const request of this.requests) {
+      for (const event of request.events) {
+        if (
+          event.eventType === 'task.created' ||
+          event.eventType === 'task.transitioned'
+        ) {
+          const payload = event.payload as { taskId?: unknown }
+          if (typeof payload.taskId === 'string') activeTaskId = payload.taskId
+        }
+      }
+    }
+    if (activeTaskId === undefined) return { status: 'ok', entries: [] }
+    return {
+      status: 'ok',
+      entries: requested.map((observationId) => ({
+        observationId,
+        taskId: activeTaskId!,
+        status: 'active' as const,
+      })),
+    }
+  }
+
   async verify(): Promise<never> {
     throw new Error('not used')
   }
@@ -156,7 +245,26 @@ class RepositoryStub implements MemoryRepositoryV2 {
           },
         ] as unknown as ExportPage['events'])
       : []
-    return { outcome: 'page' as const, events, nextAfterEventId: null }
+    return {
+      outcome: 'page' as const,
+      events,
+      nextAfterEventId: null,
+      ...(this.exportTailEventId
+        ? { rawTailEventId: this.exportTailEventId }
+        : {}),
+    }
+  }
+}
+
+/** Fake that predates the optional P7 claim-dedup projection (no method). */
+class RepositoryWithoutClaimDedup extends RepositoryStub {
+  constructor() {
+    super()
+    // Simulate a driver without the optional getClaimDedup read: the
+    // coordinator's optional call must short-circuit so capture falls
+    // through to the normal observation.recorded path.
+    const legacy: { getClaimDedup?: unknown } = this
+    legacy.getClaimDedup = undefined
   }
 }
 
@@ -1634,7 +1742,6 @@ describe('MemoryV2Coordinator lifecycle', () => {
       },
       { malformed: true },
       new Error('export threw'),
-      { outcome: 'page', events: [], nextAfterEventId: 'event:next' },
     ]
     for (const scripted of failures) {
       const repository = new RepositoryStub()
@@ -1663,6 +1770,55 @@ describe('MemoryV2Coordinator lifecycle', () => {
       expect(repository.requests.slice(before)).toHaveLength(1)
       expect(repository.requests.at(-1)!.expectedTail).toBeDefined()
     }
+  })
+
+  test('clears a CAS conflict by deriving the raw tail from a skipped future-type row', async () => {
+    const repository = new RepositoryStub()
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:raw-tail-cas',
+      query: 'capture',
+    })
+    const before = repository.requests.length
+    // The store's REAL last row is a skipped future-type row an older reader
+    // cannot decode, so export() returns an empty events[] with a null cursor
+    // but a non-null rawTailEventId carrying that raw tail. deriveRepositoryTail
+    // must surface it so the retry append's CAS clears.
+    const futureTailId = MemoryEventIdSchema.parse('event:future-skipped-tail')
+    repository.appendConflictsRemaining = 1
+    repository.exportScript = [
+      {
+        outcome: 'page',
+        events: [],
+        nextAfterEventId: null,
+        rawTailEventId: futureTailId,
+      },
+    ]
+
+    await coordinator.recordToolObservation({
+      toolName: 'get_build_targets',
+      callId: 'call:raw-tail-cas',
+      userInputId: 'input:raw-tail-cas',
+      input: { files: ['src/raw-tail.ts'] },
+      output: [{ type: 'json', value: { targets: ['sdk'] } }],
+      native: true,
+    })
+
+    const attempts = repository.requests.slice(before)
+    expect(attempts).toHaveLength(2)
+    expect(repository.exportRequests).toHaveLength(1)
+    expect(attempts[1]!.expectedTail).toEqual({
+      kind: 'event',
+      eventId: futureTailId,
+    })
+    expect(attempts[1]!.events).toEqual(attempts[0]!.events)
+    expect(state.memoryV2!.lastEventId).toBe(attempts[1]!.events.at(-1)!.eventId)
   })
 
   test('classifies decision tools deterministically', () => {
@@ -1710,6 +1866,408 @@ describe('MemoryV2Coordinator lifecycle', () => {
     }
   })
 
+  test('records record_decision tool output as kind=decision with evidence selectors', async () => {
+    const repository = new RepositoryStub()
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:record-decision',
+      query: 'capture',
+    })
+    const before = allEvents(repository).length
+    await coordinator.recordToolObservation({
+      toolName: 'record_decision',
+      callId: 'call:record-decision',
+      userInputId: 'input:record-decision',
+      input: {
+        text: 'Use Postgres because durability',
+        kind: 'decision',
+        evidenceSelectors: ['docs/architecture.md'],
+      },
+      output: [
+        {
+          type: 'json',
+          value: {
+            message: 'Recorded decision with 1 evidence path(s).',
+            kind: 'decision',
+            evidenceCount: 1,
+            text: 'Use Postgres because durability',
+            evidenceSelectors: ['docs/architecture.md'],
+          },
+        },
+      ],
+      native: true,
+    })
+    expect(allEvents(repository).length).toBe(before + 1)
+    const event = allEvents(repository).at(-1)!
+    expect(event.eventType).toBe('observation.recorded')
+    if (event.eventType === 'observation.recorded') {
+      expect(event.payload.observation.kind).toBe('decision')
+      const selectors = event.payload.observation.selectors ?? []
+      expect(selectors).toContainEqual({
+        kind: 'file',
+        path: 'docs/architecture.md',
+      })
+      const evidencePaths = event.payload.observation.evidence.map(
+        (e) => e.selector,
+      )
+      expect(evidencePaths).toContainEqual({
+        kind: 'file',
+        path: 'docs/architecture.md',
+      })
+    }
+  })
+
+  test('records record_decision constraint kind echoed in output as kind=constraint', async () => {
+    const repository = new RepositoryStub()
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:record-constraint',
+      query: 'capture',
+    })
+    const before = allEvents(repository).length
+    await coordinator.recordToolObservation({
+      toolName: 'record_decision',
+      callId: 'call:record-constraint',
+      userInputId: 'input:record-constraint',
+      input: {
+        text: 'The service must not delete data',
+        kind: 'constraint',
+        evidenceSelectors: ['docs/architecture.md'],
+      },
+      output: [
+        {
+          type: 'json',
+          value: {
+            message: 'Recorded constraint with 1 evidence path(s).',
+            kind: 'constraint',
+            evidenceCount: 1,
+            text: 'The service must not delete data',
+            evidenceSelectors: ['docs/architecture.md'],
+          },
+        },
+      ],
+      native: true,
+    })
+    expect(allEvents(repository).length).toBe(before + 1)
+    const event = allEvents(repository).at(-1)!
+    expect(event.eventType).toBe('observation.recorded')
+    if (event.eventType === 'observation.recorded') {
+      expect(event.payload.observation.kind).toBe('constraint')
+      expect(event.payload.observation.selectors ?? []).toContainEqual({
+        kind: 'file',
+        path: 'docs/architecture.md',
+      })
+    }
+  })
+
+  test('reinforces an existing claim instead of recording a duplicate decision', async () => {
+    const repository = new RepositoryStub()
+    const expectedClaimId = deriveClaimId({
+      kind: 'decision',
+      text: 'Use Postgres because durability',
+      evidencePaths: ['docs/architecture.md'],
+    })
+    repository.claimDedupEntries = [
+      { claimId: expectedClaimId, observationId: 'observation:existing-1' },
+    ]
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:dedupe-hit',
+      query: 'capture',
+    })
+    const before = allEvents(repository).length
+    await coordinator.recordToolObservation({
+      toolName: 'record_decision',
+      callId: 'call:dedupe-hit',
+      userInputId: 'input:dedupe-hit',
+      input: {
+        text: 'Use Postgres because durability',
+        kind: 'decision',
+        evidenceSelectors: ['docs/architecture.md'],
+      },
+      output: [
+        {
+          type: 'json',
+          value: {
+            message: 'Recorded decision with 1 evidence path(s).',
+            kind: 'decision',
+            evidenceCount: 1,
+            text: 'Use Postgres because durability',
+            evidenceSelectors: ['docs/architecture.md'],
+          },
+        },
+      ],
+      native: true,
+    })
+    const newEvents = allEvents(repository).slice(before)
+    expect(newEvents).toHaveLength(1)
+    const event = newEvents[0]!
+    expect(event.eventType).toBe('claim.reinforced')
+    if (event.eventType === 'claim.reinforced') {
+      expect(event.payload.claimId).toBe(expectedClaimId)
+      expect(String(event.payload.observationId)).toBe('observation:existing-1')
+    }
+    expect(
+      newEvents.some((candidate) => candidate.eventType === 'observation.recorded'),
+    ).toBe(false)
+  })
+
+  test('records observation.recorded with claimId metadata when the dedup projection is missing', async () => {
+    const repository = new RepositoryWithoutClaimDedup()
+    const expectedClaimId = deriveClaimId({
+      kind: 'decision',
+      text: 'Use Postgres because durability',
+      evidencePaths: ['docs/architecture.md'],
+    })
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:dedupe-missing',
+      query: 'capture',
+    })
+    const before = allEvents(repository).length
+    await coordinator.recordToolObservation({
+      toolName: 'record_decision',
+      callId: 'call:dedupe-missing',
+      userInputId: 'input:dedupe-missing',
+      input: {
+        text: 'Use Postgres because durability',
+        kind: 'decision',
+        evidenceSelectors: ['docs/architecture.md'],
+      },
+      output: [
+        {
+          type: 'json',
+          value: {
+            message: 'Recorded decision with 1 evidence path(s).',
+            kind: 'decision',
+            evidenceCount: 1,
+            text: 'Use Postgres because durability',
+            evidenceSelectors: ['docs/architecture.md'],
+          },
+        },
+      ],
+      native: true,
+    })
+    const newEvents = allEvents(repository).slice(before)
+    expect(newEvents).toHaveLength(1)
+    const event = newEvents[0]!
+    expect(event.eventType).toBe('observation.recorded')
+    if (event.eventType === 'observation.recorded') {
+      expect(event.payload.observation.provenance?.metadata?.claimId).toBe(
+        expectedClaimId,
+      )
+    }
+  })
+
+  test('falls back to observation.recorded when the dedup lookup fails', async () => {
+    const repository = new RepositoryStub()
+    repository.claimDedupFailure = 'reject'
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:dedupe-failed',
+      query: 'capture',
+    })
+    const before = allEvents(repository).length
+    await coordinator.recordToolObservation({
+      toolName: 'record_decision',
+      callId: 'call:dedupe-failed',
+      userInputId: 'input:dedupe-failed',
+      input: {
+        text: 'Use Postgres because durability',
+        kind: 'decision',
+        evidenceSelectors: ['docs/architecture.md'],
+      },
+      output: [
+        {
+          type: 'json',
+          value: {
+            message: 'Recorded decision with 1 evidence path(s).',
+            kind: 'decision',
+            evidenceCount: 1,
+            text: 'Use Postgres because durability',
+            evidenceSelectors: ['docs/architecture.md'],
+          },
+        },
+      ],
+      native: true,
+    })
+    const newEvents = allEvents(repository).slice(before)
+    expect(newEvents).toHaveLength(1)
+    expect(newEvents[0]!.eventType).toBe('observation.recorded')
+  })
+
+  test('emits claim.superseded drafts and one observation.reused citation for echoed supersedes', async () => {
+    const repository = new RepositoryStub()
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:supersede',
+      query: 'capture',
+    })
+    const before = allEvents(repository).length
+    await coordinator.recordToolObservation({
+      toolName: 'record_decision',
+      callId: 'call:supersede',
+      userInputId: 'input:supersede',
+      input: {
+        text: 'Use Postgres because durability',
+        kind: 'decision',
+        evidenceSelectors: ['docs/architecture.md'],
+        supersedes: ['observation:old-b', 'observation:old-a', 'observation:old-b'],
+      },
+      output: [
+        {
+          type: 'json',
+          value: {
+            message: 'Recorded decision with 1 evidence path(s).',
+            kind: 'decision',
+            evidenceCount: 1,
+            text: 'Use Postgres because durability',
+            evidenceSelectors: ['docs/architecture.md'],
+            supersedes: ['observation:old-b', 'observation:old-a', 'observation:old-b'],
+          },
+        },
+      ],
+      native: true,
+    })
+    const newEvents = allEvents(repository).slice(before)
+    const recorded = newEvents[0]!
+    expect(recorded.eventType).toBe('observation.recorded')
+    if (recorded.eventType !== 'observation.recorded') return
+    const capturedObservationId = recorded.payload.observation.observationId
+    const superseded = newEvents.filter(
+      (candidate): candidate is Extract<MemoryEventDraft, { eventType: 'claim.superseded' }> =>
+        candidate.eventType === 'claim.superseded',
+    )
+    expect(
+      superseded.map((draft) => String(draft.payload.observationId)),
+    ).toEqual(['observation:old-a', 'observation:old-b'])
+    for (const draft of superseded) {
+      expect(draft.payload.supersededByObservationId).toBe(capturedObservationId)
+    }
+    const reused = newEvents.filter(
+      (candidate): candidate is Extract<MemoryEventDraft, { eventType: 'observation.reused' }> =>
+        candidate.eventType === 'observation.reused',
+    )
+    expect(reused).toHaveLength(1)
+    expect(reused[0]!.payload.used).toEqual([
+      { observationId: capturedObservationId, mechanism: 'cited' },
+    ])
+    expect(reused[0]!.payload.ignored).toEqual([])
+  })
+
+  test.each(['retracted', 'foreign-task', 'error'] as const)(
+    'skips supersede drafts when store validation fails: %s',
+    async (mode) => {
+      const repository = new RepositoryStub()
+      const state = getInitialAgentState()
+      const coordinator = new MemoryV2Coordinator(
+        config(repository),
+        undefined,
+        () => generatedAt,
+      )
+      await coordinator.prepareTurn({
+        agentState: state,
+        trustedUserInputId: 'input:supersede-invalid',
+        query: 'capture',
+      })
+      const activeTaskId = String(state.memoryV2!.activeTask.taskId)
+      if (mode === 'retracted') {
+        // Both targets exist on the ACTIVE task but their stored claim
+        // lifecycle is retracted, so only the status check can exclude them.
+        repository.observationStatusEntries = [
+          { observationId: 'observation:old-a', taskId: activeTaskId, status: 'retracted' },
+          { observationId: 'observation:old-b', taskId: activeTaskId, status: 'retracted' },
+        ]
+      } else if (mode === 'foreign-task') {
+        // Both targets are active but belong to another task, so only the
+        // taskId check can exclude them.
+        repository.observationStatusEntries = [
+          { observationId: 'observation:old-a', taskId: 'task:foreign', status: 'active' },
+          { observationId: 'observation:old-b', taskId: 'task:foreign', status: 'active' },
+        ]
+      } else {
+        repository.observationStatusFailure = 'reject'
+      }
+      const beforeRequests = repository.requests.length
+      await coordinator.recordToolObservation({
+        toolName: 'record_decision',
+        callId: 'call:supersede-invalid',
+        userInputId: 'input:supersede-invalid',
+        input: {
+          text: 'Use Postgres because durability',
+          kind: 'decision',
+          evidenceSelectors: ['docs/architecture.md'],
+          supersedes: ['observation:old-a', 'observation:old-b'],
+        },
+        output: [
+          {
+            type: 'json',
+            value: {
+              message: 'Recorded decision with 1 evidence path(s).',
+              kind: 'decision',
+              evidenceCount: 1,
+              text: 'Use Postgres because durability',
+              evidenceSelectors: ['docs/architecture.md'],
+              supersedes: ['observation:old-a', 'observation:old-b'],
+            },
+          },
+        ],
+        native: true,
+      })
+      const newRequests = repository.requests.slice(beforeRequests)
+      expect(newRequests).toHaveLength(1)
+      const newEvents = newRequests[0]!.events
+      expect(newEvents).toHaveLength(1)
+      expect(newEvents[0]!.eventType).toBe('observation.recorded')
+      expect(
+        newEvents.some(
+          (candidate) => candidate.eventType === 'claim.superseded',
+        ),
+      ).toBe(false)
+      expect(
+        newEvents.some(
+          (candidate) => candidate.eventType === 'observation.reused',
+        ),
+      ).toBe(false)
+    },
+  )
+
   test('records constraint-classified think_deeply output as kind=constraint', async () => {
     const repository = new RepositoryStub()
     const state = getInitialAgentState()
@@ -1738,5 +2296,199 @@ describe('MemoryV2Coordinator lifecycle', () => {
     if (event.eventType === 'observation.recorded') {
       expect(event.payload.observation.kind).toBe('constraint')
     }
+  })
+})
+
+describe('MemoryV2Coordinator usage correlation (P4)', () => {
+  const chunkEvidence = (chunkId: string) => ({
+    artifact: {
+      artifactId: `artifact:${chunkId}`,
+      location: `src/${chunkId}.ts`,
+      classification: {
+        kind: 'source',
+        generated: false,
+        sensitivity: 'internal',
+        labels: [],
+      },
+    },
+    selector: {
+      kind: 'chunk',
+      path: `src/${chunkId}.ts`,
+      chunkId,
+      qualifiedName: 'sym',
+      startLine: 1,
+      endLine: 10,
+    },
+    provenance: {
+      origin: 'tool',
+      recordedBy: 'test',
+      sourceEventIds: [],
+      metadata: {},
+    },
+    capturedAt: generatedAt,
+    contentDigest: `sha256:${'a'.repeat(64)}`,
+  })
+
+  const usageContext = (queryId: QueryId) =>
+    ({
+      schemaVersion: 2,
+      userInputId: 'input:usage',
+      queryId,
+      result: {
+        schemaVersion: 2,
+        queryId,
+        projectId,
+        generatedAt,
+        matchedTasks: [],
+        verifiedKnowledge: ['used:chunk-a', 'other:chunk-b'].map((pair) => {
+          const [name, chunkId] = pair.split(':')
+          return {
+            observation: {
+              observationId: `observation:${name}`,
+              taskId: 'task-1',
+              kind: 'discovery',
+              summary: name,
+              detail: 'deterministic detail',
+              confidence: 0.9,
+              evidence: [chunkEvidence(chunkId!)],
+              selectors: [],
+              tags: ['test'],
+              observedAt: generatedAt,
+            },
+            verifiedEvidence: [chunkEvidence(chunkId!)],
+            verifiedAt: generatedAt,
+            score: 1,
+            reasons: [],
+          }
+        }),
+        reusableDiscovery: [],
+        rereadRequired: [],
+        historicalContext: [],
+        degradation: { state: 'none' },
+        rankingReasons: [],
+      },
+    }) as unknown as MemoryTurnContextV2
+
+  const usageReceipt = (): MemoryReuseReceiptV1 => ({
+    schemaVersion: 1,
+    turnId: 'input:usage',
+    skip: 1,
+    narrow: 0,
+    full: 1,
+    recordsServed: 1,
+    gapsRemaining: 0,
+    recordedDecisions: 1,
+    conceptExpanded: 0,
+    byTool: [
+      {
+        tool: 'read_files',
+        decision: 'skip',
+        served: 1,
+        gaps: 0,
+        coveredStableChunkIds: ['chunk-a'],
+      },
+    ],
+  })
+
+  test('appends one batched observation.reused event and clears the snapshot', async () => {
+    const repository = new RepositoryStub()
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:usage',
+      query: 'usage',
+    })
+    state.memoryV2Context = usageContext(state.memoryV2!.turn.queryId)
+    state.memoryUsageTurn = usageReceipt()
+    const before = allEvents(repository).length
+
+    await coordinator.finishTurn({
+      agentState: state,
+      output: { type: 'structuredOutput', value: {} },
+    })
+
+    const events = allEvents(repository).slice(before)
+    const reused = events.find(
+      (candidate) => candidate.eventType === 'observation.reused',
+    )
+    expect(reused).toBeDefined()
+    expect(events.at(-1)!.eventType).toBe('observation.reused')
+    if (reused && reused.eventType === 'observation.reused') {
+      expect(reused.payload.turnId).toBe('input:usage')
+      expect(
+        reused.payload.used.map((entry) => ({
+          observationId: entry.observationId as string,
+          mechanism: entry.mechanism,
+        })),
+      ).toEqual([{ observationId: 'observation:used', mechanism: 'gate-skip' }])
+      expect(
+        reused.payload.ignored.map((entry) => ({
+          observationId: entry.observationId as string,
+          mechanism: entry.mechanism,
+        })),
+      ).toEqual([
+        { observationId: 'observation:other', mechanism: 'reread-despite' },
+      ])
+    }
+    expect(state.memoryUsageTurn).toBeUndefined()
+  })
+
+  test('stale queryId or missing receipt appends no usage event', async () => {
+    const repository = new RepositoryStub()
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:usage',
+      query: 'usage',
+    })
+    state.memoryV2Context = usageContext(QueryIdSchema.parse('query:stale'))
+    state.memoryUsageTurn = usageReceipt()
+
+    await coordinator.finishTurn({
+      agentState: state,
+      output: { type: 'structuredOutput', value: {} },
+    })
+    expect(
+      allEvents(repository).some(
+        (candidate) => candidate.eventType === 'observation.reused',
+      ),
+    ).toBe(false)
+    expect(state.memoryUsageTurn).toBeUndefined()
+
+    const missingRepository = new RepositoryStub()
+    const missingState = getInitialAgentState()
+    const missingCoordinator = new MemoryV2Coordinator(
+      config(missingRepository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
+    await missingCoordinator.prepareTurn({
+      agentState: missingState,
+      trustedUserInputId: 'input:usage',
+      query: 'usage',
+    })
+    missingState.memoryV2Context = usageContext(
+      missingState.memoryV2!.turn.queryId,
+    )
+
+    await missingCoordinator.finishTurn({
+      agentState: missingState,
+      output: { type: 'structuredOutput', value: {} },
+    })
+    expect(
+      allEvents(missingRepository).some(
+        (candidate) => candidate.eventType === 'observation.reused',
+      ),
+    ).toBe(false)
   })
 })

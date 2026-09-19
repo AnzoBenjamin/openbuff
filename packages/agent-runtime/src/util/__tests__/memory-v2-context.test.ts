@@ -1,12 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 
 import {
+  MemoryReuseReceiptV1Schema,
   MemoryTurnContextV2Schema,
   type MemoryTurnContextV2,
 } from '@codebuff/common/types/memory-v2'
 
 import {
   compileMemoryV2Context,
+  countConceptAdvisoryEntries,
   MEMORY_V2_CONTEXT_MAX_CHARS,
 } from '../memory-v2-context'
 
@@ -396,5 +398,75 @@ describe('compileMemoryV2Context', () => {
     expect(output).toContain('- requirements: covered')
     expect(output).toContain('rev 7')
     expect(output).toContain('snap snap-abc-123')
+  })
+})
+
+describe('countConceptAdvisoryEntries', () => {
+  const advisoryReason = {
+    code: 'concept-advisory' as const,
+    contribution: 0,
+    detail: 'Advisory concept expansion.',
+  }
+
+  test('is 0 for a context without concept-advisory entries', () => {
+    expect(countConceptAdvisoryEntries(context())).toBe(0)
+  })
+
+  test('counts only reusableDiscovery entries carrying the concept-advisory code', () => {
+    const base = context()
+    const reusable = base.result.reusableDiscovery[0]!
+    const ctx = MemoryTurnContextV2Schema.parse({
+      ...base,
+      result: {
+        ...base.result,
+        // An advisory-marked verifiedKnowledge entry must NOT count: the
+        // receipt metric is scoped to the advisory reusableDiscovery tail.
+        verifiedKnowledge: [
+          { ...base.result.verifiedKnowledge[0]!, reasons: [advisoryReason] },
+        ],
+        reusableDiscovery: [
+          { ...reusable, reasons: [advisoryReason] },
+          {
+            ...reusable,
+            observation: observation('observation:advisory-2', 'advisory two'),
+            reasons: [advisoryReason, rankingReason],
+          },
+          reusable,
+        ],
+      },
+    })
+    expect(countConceptAdvisoryEntries(ctx)).toBe(2)
+  })
+
+  test('the produced receipt satisfies its own schema with the counter set', () => {
+    const base = context()
+    const reusable = base.result.reusableDiscovery[0]!
+    const ctx = MemoryTurnContextV2Schema.parse({
+      ...base,
+      result: {
+        ...base.result,
+        reusableDiscovery: [
+          { ...reusable, reasons: [advisoryReason] },
+          { ...reusable, observation: observation('observation:advisory-2', 'advisory two'), reasons: [advisoryReason] },
+          { ...reusable, observation: observation('observation:advisory-3', 'advisory three'), reasons: [advisoryReason] },
+        ],
+      },
+    })
+    const count = countConceptAdvisoryEntries(ctx)
+    expect(count).toBe(3)
+    expect(() =>
+      MemoryReuseReceiptV1Schema.parse({
+        schemaVersion: 1,
+        turnId: 'input:test',
+        skip: 1,
+        narrow: 0,
+        full: 0,
+        recordsServed: 3,
+        gapsRemaining: 0,
+        recordedDecisions: 0,
+        conceptExpanded: count,
+        byTool: [],
+      }),
+    ).not.toThrow()
   })
 })

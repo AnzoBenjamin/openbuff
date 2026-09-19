@@ -540,6 +540,11 @@ export type MemoryContentBlock =
     }
   | {
       type: 'memory'
+      state: 'reuse'
+      lines: string[]
+    }
+  | {
+      type: 'memory'
       state: 'status'
       revision: number
       updatedAt: number

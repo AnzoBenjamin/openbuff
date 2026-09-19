@@ -34,13 +34,9 @@ cd your-project
 openbuff
 ```
 
-Then just tell Openbuff what you want and it handles the rest:
+Configure a provider: inside the TUI run `/setup <preset>` (e.g. `/setup openai`) for a quick preset, or declare providers and model routing in `openbuff.json`. Then export the API key env var named by your provider's `apiKeyEnv` (e.g. `export OPENAI_API_KEY="..."`) and tell Openbuff what you want.
 
-- "Fix the SQL injection vulnerability in user registration"
-- "Add rate limiting to all API endpoints"
-- "Refactor the database connection code for better performance"
-
-Openbuff will find the right files, make changes across your codebase, and run tests to make sure nothing breaks.
+The full walkthrough — install → provider config → model routing → verification — is in [Getting Started](./docs/getting-started.md).
 
 ## Create custom agents
 
@@ -143,6 +139,8 @@ await client.run({
 Learn more about the SDK [here](https://www.npmjs.com/package/@openbuff/sdk).
 
 ## Provider configuration
+
+New to Openbuff? [Getting Started](./docs/getting-started.md) walks through the full setup path: install, configure a provider, route models, verify.
 
 Openbuff runs local/BYOK by default: no hosted auth, credits, or platform
 inference. Configure OpenAI-compatible or Anthropic-compatible providers and

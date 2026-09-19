@@ -702,7 +702,6 @@ async function findMigrationMarker(
 
     for (const event of outcome.events) {
       events.push(event)
-      lastEventId = event.eventId
       if (event.eventType === 'migration.v1.reserved') {
         if (event.payload.sourceRevision === revision) {
           if (
@@ -726,6 +725,7 @@ async function findMigrationMarker(
       }
     }
 
+    lastEventId = outcome.rawTailEventId ?? lastEventId
     if (!outcome.nextAfterEventId) {
       const prior = [...priorCandidates]
         .reverse()
@@ -747,7 +747,6 @@ async function findMigrationMarker(
       return { state: 'none', lastEventId, prior, reserved, events }
     }
     afterEventId = outcome.nextAfterEventId
-    lastEventId = outcome.nextAfterEventId
   }
   throw new Error('Migration marker lookup exceeded page limit')
 }
@@ -1191,8 +1190,8 @@ async function scanV1MigrationAuditEvents(
       if (eventIds.has(event.eventId)) duplicateEventIds.add(event.eventId)
       else eventIds.add(event.eventId)
       events.push(event)
-      repositoryLastEventId = event.eventId
     }
+    repositoryLastEventId = exported.rawTailEventId ?? repositoryLastEventId
 
     const nextAfterEventId = exported.nextAfterEventId ?? undefined
     if (!nextAfterEventId) {
@@ -1204,13 +1203,7 @@ async function scanV1MigrationAuditEvents(
         repositoryLastEventId,
       }
     }
-    const pageLastEventId = exported.events.at(-1)?.eventId
-    if (
-      !pageLastEventId ||
-      nextAfterEventId !== pageLastEventId ||
-      nextAfterEventId === afterEventId ||
-      cursors.has(nextAfterEventId)
-    ) {
+    if (nextAfterEventId === afterEventId || cursors.has(nextAfterEventId)) {
       return { outcome: 'failed', reason: 'pagination-invalid' }
     }
     cursors.add(nextAfterEventId)

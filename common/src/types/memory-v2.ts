@@ -339,6 +339,24 @@ export type CoverageRecordedPayload = z.infer<
   typeof CoverageRecordedPayloadSchema
 >
 
+const observationUsageEntryShape = {
+  observationId: ObservationIdSchema,
+  mechanism: z.enum(['gate-skip', 'cited', 'reread-despite']),
+} as const
+
+export const ObservationReusedPayloadSchema = z
+  .object({
+    ...payloadVersionShape,
+    turnId: z.string().min(1).max(128),
+    taskId: TaskIdSchema.optional(),
+    used: z.object(observationUsageEntryShape).strict().array().max(64),
+    ignored: z.object(observationUsageEntryShape).strict().array().max(64),
+  })
+  .strict()
+export type ObservationReusedPayload = z.infer<
+  typeof ObservationReusedPayloadSchema
+>
+
 export const EvidenceVerifiedPayloadSchema = z
   .object({
     ...payloadVersionShape,
@@ -416,6 +434,20 @@ export const ClaimSupersededPayloadSchema = z
   .strict()
 export type ClaimSupersededPayload = z.infer<
   typeof ClaimSupersededPayloadSchema
+>
+
+export const ClaimReinforcedPayloadSchema = z
+  .object({
+    ...payloadVersionShape,
+    observationId: ObservationIdSchema,
+    claimId: z.string().regex(/^[0-9a-f]{64}$/),
+    reason: longTextSchema,
+    reinforcedAt: timestampSchema,
+    reinforcedBy: z.string().min(1).max(256).optional(),
+  })
+  .strict()
+export type ClaimReinforcedPayload = z.infer<
+  typeof ClaimReinforcedPayloadSchema
 >
 
 export const ClaimCorrectedPayloadSchema = z
@@ -696,6 +728,7 @@ export const MemoryEventDraftSchema = z.discriminatedUnion('eventType', [
   eventDraft('evidence.attached', EvidenceAttachedPayloadSchema),
   eventDraft('artifact.classified', ArtifactClassifiedPayloadSchema),
   eventDraft('observation.recorded', ObservationRecordedPayloadSchema),
+  eventDraft('observation.reused', ObservationReusedPayloadSchema),
   eventDraft('coverage.recorded', CoverageRecordedPayloadSchema),
   eventDraft('evidence.verified', EvidenceVerifiedPayloadSchema),
   eventDraft('evidence.invalidated', EvidenceInvalidatedPayloadSchema),
@@ -706,6 +739,7 @@ export const MemoryEventDraftSchema = z.discriminatedUnion('eventType', [
   eventDraft('claim.forgotten', ClaimForgottenPayloadSchema),
   eventDraft('claim.pinned', ClaimPinnedPayloadSchema),
   eventDraft('claim.archived', ClaimArchivedPayloadSchema),
+  eventDraft('claim.reinforced', ClaimReinforcedPayloadSchema),
   eventDraft('migration.v1.reserved', V1MigrationReservedPayloadSchema),
   eventDraft('migration.v1.imported', V1MigrationPayloadSchema),
   eventDraft(
@@ -731,6 +765,7 @@ export const MemoryEventEnvelopeSchema = z.discriminatedUnion('eventType', [
   eventEnvelope('evidence.attached', EvidenceAttachedPayloadSchema),
   eventEnvelope('artifact.classified', ArtifactClassifiedPayloadSchema),
   eventEnvelope('observation.recorded', ObservationRecordedPayloadSchema),
+  eventEnvelope('observation.reused', ObservationReusedPayloadSchema),
   eventEnvelope('coverage.recorded', CoverageRecordedPayloadSchema),
   eventEnvelope('evidence.verified', EvidenceVerifiedPayloadSchema),
   eventEnvelope('evidence.invalidated', EvidenceInvalidatedPayloadSchema),
@@ -741,6 +776,7 @@ export const MemoryEventEnvelopeSchema = z.discriminatedUnion('eventType', [
   eventEnvelope('claim.forgotten', ClaimForgottenPayloadSchema),
   eventEnvelope('claim.pinned', ClaimPinnedPayloadSchema),
   eventEnvelope('claim.archived', ClaimArchivedPayloadSchema),
+  eventEnvelope('claim.reinforced', ClaimReinforcedPayloadSchema),
   eventEnvelope('migration.v1.reserved', V1MigrationReservedPayloadSchema),
   eventEnvelope('migration.v1.imported', V1MigrationPayloadSchema),
   eventEnvelope(
@@ -773,6 +809,7 @@ export const RankingReasonSchema = z
       'historical-only',
       'stale-evidence',
       'authority-penalty',
+      'concept-advisory',
     ]),
     contribution: z.number().min(-1).max(1),
     detail: z.string().min(1).max(1_024),
@@ -862,6 +899,7 @@ export const RereadRequiredSchema = z
       'missing',
       'expired',
       'authority-unavailable',
+      'contradiction-suspected',
     ]),
     detail: z.string().min(1).max(1_024),
     ...rankedShape,
@@ -967,6 +1005,11 @@ export const MemoryRetrievalResultSchema = z
       result.verifiedKnowledge.map((item) => item.observation.observationId),
     )
     result.rereadRequired.forEach((item, index) => {
+      // SPEC S4 exception: a verified observation can still be flagged
+      // 'contradiction-suspected' when another live claim shares its topic
+      // and neither supersedes the other — both must surface with a
+      // reconcile marker even though each is individually verified.
+      if (item.reason === 'contradiction-suspected') return
       if (verifiedObservationIds.has(item.observationId)) {
         context.addIssue({
           code: 'custom',
@@ -1272,11 +1315,29 @@ export const MemoryExportRequestSchema = z
 export type MemoryExportRequest = z.infer<typeof MemoryExportRequestSchema>
 
 export const MemoryExportOutcomeSchema = z.discriminatedUnion('outcome', [
+  // Tolerant export reader contract (loosened, backward compatible):
+  // - `events` is the strictly-decoded, in-order subset of the single raw
+  //   page; `skippedUnknownCount` counts rows whose event_type is not a
+  //   recognized canonical type (unknown/future types), which are skipped. A
+  //   KNOWN canonical type that fails strict decode is a hard error (surfaced
+  //   as a failed/rejected export outcome), never silently dropped.
+  // - `nextAfterEventId` is the authoritative opaque pagination cursor and a
+  //   `null` cursor is the ONLY terminal signal. An empty `events[]` MAY be
+  //   paired with a non-null (advancing) cursor when a raw page is entirely
+  //   skipped, so consumers MUST guard loop-termination on the cursor, never
+  //   on `events.length`.
+  // - `rawTailEventId` (when present) is the id of the last RAW row in the
+  //   page (decodable or not) and is the authoritative source for
+  //   store-tail/CAS derivation: derive any tail from `rawTailEventId`, never
+  //   from the last decoded event. It is omitted only when the page observed
+  //   zero raw rows.
   z
     .object({
       outcome: z.literal('page'),
       events: z.array(MemoryEventEnvelopeSchema).max(1_000),
       nextAfterEventId: MemoryEventIdSchema.nullable(),
+      rawTailEventId: MemoryEventIdSchema.optional(),
+      skippedUnknownCount: z.number().int().nonnegative().optional(),
     })
     .strict(),
   z
@@ -1290,6 +1351,39 @@ export const MemoryExportOutcomeSchema = z.discriminatedUnion('outcome', [
     .strict(),
 ])
 export type MemoryExportOutcome = z.infer<typeof MemoryExportOutcomeSchema>
+
+/**
+ * Per-turn Memory Reuse Receipt (S2). A NEW standalone type, not an
+ * event-envelope variant: it is carried on the live turn stream only and is
+ * never persisted to the memory-v2 event store, so the store schemaVersion
+ * stays 2 while this receipt is versioned independently at 1.
+ */
+export const MemoryReuseReceiptV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    turnId: z.string().min(1).max(128),
+    skip: z.number().int().nonnegative(),
+    narrow: z.number().int().nonnegative(),
+    full: z.number().int().nonnegative(),
+    recordsServed: z.number().int().nonnegative(),
+    gapsRemaining: z.number().int().nonnegative(),
+    recordedDecisions: z.number().int().nonnegative(),
+    conceptExpanded: z.number().int().nonnegative(),
+    byTool: z
+      .array(
+        z.object({
+          tool: z.string().min(1).max(64),
+          decision: z.enum(['skip', 'narrow', 'full']),
+          served: z.number().int().nonnegative(),
+          gaps: z.number().int().nonnegative(),
+          coveredStableChunkIds: z.array(z.string().min(1).max(128)).max(32).optional(),
+        }),
+      )
+      .max(32)
+      .optional(),
+  })
+  .strict()
+export type MemoryReuseReceiptV1 = z.infer<typeof MemoryReuseReceiptV1Schema>
 
 const operatorScopeShape = {
   schemaVersion: z.literal(2),
@@ -1386,6 +1480,14 @@ export const MemoryCorrectionActionSchema = z.discriminatedUnion('kind', [
       observationId: ObservationIdSchema,
       reason: shortTextSchema,
       pinnedBy: z.string().min(1).max(256),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('supersede'),
+      observationId: ObservationIdSchema,
+      supersededByObservationId: ObservationIdSchema,
+      reason: longTextSchema,
     })
     .strict(),
 ])

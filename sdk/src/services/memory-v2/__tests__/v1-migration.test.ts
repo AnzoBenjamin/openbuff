@@ -8,6 +8,7 @@ import {
   ProjectIdSchema,
   TaskIdSchema,
   type MemoryEventEnvelope,
+  type MemoryExportOutcome,
 } from '@codebuff/common/types/memory-v2'
 import {
   taskMemoryDraftV1Schema,
@@ -192,6 +193,7 @@ class Repository implements MemoryRepositoryV2 {
       outcome: 'page' as const,
       events: page,
       nextAfterEventId: hasMore ? page.at(-1)!.eventId : null,
+      ...(page.length > 0 ? { rawTailEventId: page.at(-1)!.eventId } : {}),
     }
   }
 
@@ -1442,6 +1444,69 @@ describe('V1 memory migration audit', () => {
         outcome: 'failed',
         reason: 'pagination-invalid',
       })
+    }
+  })
+
+  test('does not report pagination-invalid when a page skips a future-type tail row', async () => {
+    const source = memory()
+    const repository = new Repository()
+    expect((await run(repository, source)).outcome).toBe('imported')
+    const canonical = [...repository.events.values()]
+    // A page whose last RAW row is a future/unknown-type row the reader could
+    // not decode: events[] omits it, nextAfterEventId advances to it, and
+    // rawTailEventId carries the raw tail. The audit must page past this
+    // cursor without a false pagination-invalid and derive its last event id
+    // from the raw tail.
+    const rawTailId = MemoryEventIdSchema.parse('event:audit-future-tail')
+    let calls = 0
+    const reader: V1MigrationAuditReader = {
+      async export(request) {
+        calls++
+        if (!request.afterEventId) {
+          return {
+            outcome: 'page',
+            events: canonical,
+            nextAfterEventId: rawTailId,
+            rawTailEventId: rawTailId,
+          }
+        }
+        return { outcome: 'page', events: [], nextAfterEventId: null }
+      },
+    }
+
+    const outcome = await audit(reader, source)
+    expect(outcome).toMatchObject({
+      outcome: 'exact',
+      repositoryLastEventId: rawTailId,
+    })
+    expect(calls).toBe(2)
+  })
+
+  test('marker lookup derives last event id from the raw tail of a skipped future-type row', async () => {
+    const repository = new Repository()
+    const source = memory()
+    expect((await run(repository, source)).outcome).toBe('imported')
+    // Raw-insert a future/unknown-type row as the store tail that the strict
+    // envelope schema cannot decode, mirroring what the real repository would
+    // skip. The Repository fake only stores decodable envelopes, so simulate
+    // the skipped tail by wrapping export to append a rawTailEventId beyond
+    // the decoded page.
+    const rawTailId = MemoryEventIdSchema.parse('event:marker-future-tail')
+    const baseExport = repository.export.bind(repository)
+    repository.export = (async (
+      input: Parameters<MemoryRepositoryV2['export']>[0],
+    ): Promise<MemoryExportOutcome> => {
+      const page = await baseExport(input)
+      if (page.outcome !== 'page' || page.nextAfterEventId) return page
+      return { ...page, rawTailEventId: rawTailId }
+    }) as typeof repository.export
+
+    // An exact-repeat no-op must succeed: the marker lookup adopts the raw
+    // tail so the no-op reports it as the last event id.
+    const repeated = await run(repository, source)
+    expect(repeated.outcome).toBe('no-op')
+    if (repeated.outcome === 'no-op') {
+      expect(repeated.lastEventId).toBe(rawTailId)
     }
   })
 

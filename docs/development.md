@@ -4,6 +4,8 @@ As a Bring Your Own Key (BYOK), local-first fork, developing Openbuff is highly 
 
 ## Getting Started (CLI & SDK Development)
 
+New to Openbuff? See [Getting Started](./getting-started.md) for end-user CLI setup (install and provider configuration). This guide covers contributing and development setup.
+
 To develop the CLI locally, you do not need to run a web server or database. Simply configure your local providers and run the CLI developer task directly:
 
 1. **Install Dependencies:**

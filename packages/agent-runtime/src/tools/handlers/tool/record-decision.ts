@@ -6,12 +6,16 @@ import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type { CodebuffToolCall, CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { AgentState } from '@codebuff/common/types/session-state'
+import { hasDecisionRationale } from '@codebuff/common/util/decision-rationale'
 
 type ToolName = 'record_decision'
 
 function errorOutput(message: string): { output: CodebuffToolOutput<ToolName> } {
   return { output: jsonToolResult({ errorMessage: message }) }
 }
+
+const SUPERSEDES_ERROR =
+  'record_decision: supersedes must contain 1..16 observation id strings of at most 128 characters.'
 
 export const handleRecordDecision = (async (params: {
   previousToolCallFinished: Promise<void>
@@ -27,6 +31,7 @@ export const handleRecordDecision = (async (params: {
       kind?: unknown
       evidenceSelectors?: unknown
       excerpt?: unknown
+      supersedes?: unknown
     }
     const rawText = typeof input.text === 'string' ? input.text.trim() : ''
     const kind = input.kind === 'decision' || input.kind === 'fact' || input.kind === 'constraint' ? input.kind : 'decision'
@@ -38,11 +43,37 @@ export const handleRecordDecision = (async (params: {
     if (rawText.length > 1024) {
       return errorOutput('record_decision: text must be at most 1024 characters.')
     }
+    if ((kind === 'decision' || kind === 'constraint') && !hasDecisionRationale(rawText)) {
+      return errorOutput('record_decision: a decision/constraint must state a rationale (>=24 chars and include one of: because, so that, instead of, to avoid, rather than, chose, rejected, trade, prefer, must, require).')
+    }
     if (rawSelectors.length < 1 || rawSelectors.length > 32) {
       return errorOutput('record_decision: evidenceSelectors must contain 1..32 entries.')
     }
     if (excerpt !== undefined && excerpt.length > 1024) {
       return errorOutput('record_decision: excerpt must be at most 1024 characters.')
+    }
+    let supersedes: string[] | undefined
+    if (input.supersedes !== undefined) {
+      const rawSupersedes = Array.isArray(input.supersedes) ? (input.supersedes as unknown[]) : []
+      if (rawSupersedes.length < 1 || rawSupersedes.length > 16) {
+        return errorOutput(SUPERSEDES_ERROR)
+      }
+      const normalizedSupersedes: string[] = []
+      const seen = new Set<string>()
+      for (const target of rawSupersedes) {
+        if (typeof target !== 'string') {
+          return errorOutput(SUPERSEDES_ERROR)
+        }
+        const trimmed = target.trim()
+        if (trimmed.length === 0 || trimmed.length > 128) {
+          return errorOutput(SUPERSEDES_ERROR)
+        }
+        if (!seen.has(trimmed)) {
+          seen.add(trimmed)
+          normalizedSupersedes.push(trimmed)
+        }
+      }
+      supersedes = normalizedSupersedes
     }
     const normalizedPaths: string[] = []
     for (const selector of rawSelectors) {
@@ -96,9 +127,10 @@ export const handleRecordDecision = (async (params: {
       lines.push('Excerpt: ' + excerpt)
     }
     const summary = lines.join('\n').slice(0, 2000)
+    const evidenceKind = kind === 'constraint' ? 'requirement' : kind === 'fact' ? 'note' : 'decision'
     memory.evidence.push({
-      id: evidenceId.length > 0 ? evidenceId : 'decision:' + Date.now().toString(),
-      kind: 'decision',
+      id: evidenceId,
+      kind: evidenceKind,
       summary,
       source: normalizedPaths[0],
       path: normalizedPaths[0],
@@ -114,6 +146,10 @@ export const handleRecordDecision = (async (params: {
         message: 'Recorded ' + kind + ' with ' + String(normalizedPaths.length) + ' evidence path(s).',
         kind,
         evidenceCount: normalizedPaths.length,
+        text: rawText,
+        evidenceSelectors: normalizedPaths,
+        ...(excerpt !== undefined ? { excerpt } : {}),
+        ...(supersedes !== undefined ? { supersedes } : {}),
       }),
     }
   } catch (error) {

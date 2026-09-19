@@ -3,6 +3,7 @@ import {
   getVerifiedMemoryExcerpts,
   getVerifiedMemoryPaths,
   recordDiscoveryResult,
+  recordMemoryReuse,
 } from '../../../orchestration/discovery-coordinator'
 
 import type { VerifiedExcerpt } from '../../../orchestration/discovery-coordinator'
@@ -115,6 +116,18 @@ export const handleCodeSearch = (async (params: {
         workspaceRevision: agentState.workspaceState?.revision,
         workspaceSnapshotId: agentState.workspaceState?.snapshotId,
         existingIndexSnapshotId: agentState.discoveryCoverage?.indexSnapshotId,
+      })
+      recordMemoryReuse(agentState, {
+        tool: 'code_search',
+        decision: cover.decision,
+        served:
+          cover.decision === 'skip' || cover.decision === 'narrow'
+            ? cover.coveringExcerpts.length
+            : 0,
+        gaps: cover.remainingGaps.length,
+        coveredStableChunkIds: cover.coveringExcerpts
+          .map((entry) => entry.chunkId)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0),
       })
       if (cover.decision === 'skip' && cover.coveringExcerpts.length > 0) {
         const output = buildSkipOutput(cover.coveringExcerpts)

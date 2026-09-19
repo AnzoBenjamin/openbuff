@@ -1,4 +1,11 @@
-import { MemoryV2OperatorService, ProjectIdSchema } from '@openbuff/sdk'
+import { dirname, resolve } from 'node:path'
+
+import {
+  createConfiguredEmbedder,
+  loadProviderConfigSync,
+  MemoryV2OperatorService,
+  ProjectIdSchema,
+} from '@openbuff/sdk'
 
 import { getMemoryAuthoritySelection } from '../../utils/env'
 import { getProjectRoot, getProjectStorageKey } from '../../project-files'
@@ -6,7 +13,9 @@ import {
   BunSQLiteMemoryRepository,
   openBunSQLiteMemoryRepository,
   type BunSQLiteMemoryRepositoryOpenResult,
+  type BunSQLiteMemoryRepositoryOptions,
 } from './bun-sqlite-memory-repository'
+import { expandConceptRecall, type ConceptEmbedFn } from './concept-index'
 
 export type MemoryV2ProviderBundle<
   Repository extends BunSQLiteMemoryRepository = BunSQLiteMemoryRepository,
@@ -63,8 +72,52 @@ type Pending<Repository extends BunSQLiteMemoryRepository> = {
   promise: Promise<Resource<Repository> | MemoryV2ProviderUnavailable>
 }
 
-const defaultOpener: RepositoryOpener<BunSQLiteMemoryRepository> = (root) =>
-  openBunSQLiteMemoryRepository({ repositoryRoot: root })
+const defaultOpener: RepositoryOpener<BunSQLiteMemoryRepository> = (root) => {
+  const options: BunSQLiteMemoryRepositoryOptions = { repositoryRoot: root }
+  // P8 wave 2b composition root: advisory concept recall is composed here so
+  // the repository stays storage-only. This mirrors the exact indexing config
+  // loading used by the query_index handler in codebuff-client.ts. ANY failure
+  // (config load, embedder routing) degrades to recallExpander === undefined
+  // and never blocks the open.
+  try {
+    const indexingConfig = loadProviderConfigSync().config.indexing
+    // Concept recall honors the openbuff.json contract consistently with the
+    // query_index handler: the parent indexing.enabled=false flag suppresses
+    // ALL embedding API calls (including memory semantic recall) even when
+    // indexing.semantic.enabled is true, and semantic recall additionally
+    // requires semantic.enabled + a configured model.
+    const semantic =
+      indexingConfig.enabled === false
+        ? null
+        : (indexingConfig.semantic ?? null)
+    const embed: ConceptEmbedFn | null =
+      semantic?.enabled && semantic.model
+        ? (createConfiguredEmbedder(semantic.model) ?? null)
+        : null
+    if (embed) {
+      // The store lives at <projectRoot>/.openbuff/memory/memory-v2.sqlite
+      // (the repository's default database path); the concept vector cache is
+      // keyed by the project root derived from that database path.
+      const databasePath = resolve(
+        root,
+        '.openbuff',
+        'memory',
+        'memory-v2.sqlite',
+      )
+      const projectRoot = resolve(dirname(databasePath), '..', '..')
+      options.recallExpander = (params) =>
+        expandConceptRecall({
+          projectRoot,
+          embed,
+          request: params.request,
+          corpus: params.corpus,
+        })
+    }
+  } catch {
+    // Advisory only: recall expansion stays off when composition fails.
+  }
+  return openBunSQLiteMemoryRepository(options)
+}
 
 function projectIdForRoot(
   root: string,

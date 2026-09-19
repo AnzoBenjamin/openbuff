@@ -18,6 +18,23 @@ openbuff          # primary binary
 
 Openbuff is always local/BYOK — there is no cloud-mode toggle.
 
+## Quickstart
+
+1. Install and launch the CLI:
+
+   ```bash
+   npm install -g @openbuff/cli
+   cd your-project
+   openbuff
+   ```
+
+2. Configure a provider inside the TUI with `/setup <preset>` (e.g.
+   `/setup openai`), or `/provider add` for the interactive wizard.
+3. Verify with `/provider status` (loaded config, provider URLs, missing env
+   vars) and `/models`.
+
+See [Getting Started](./getting-started.md) for the full walkthrough.
+
 ## Configure providers
 
 Openbuff looks for provider config in this order (see

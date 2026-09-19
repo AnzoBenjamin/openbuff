@@ -608,6 +608,8 @@ export interface RecordDecisionParams {
   evidenceSelectors: string[]
   /** Optional supporting excerpt, at most 1024 characters. */
   excerpt?: string
+  /** Optional observation ids this decision supersedes (1..16 ids, each 1..128 chars). Emits append-only claim.superseded events; never blocks capture. */
+  supersedes?: string[]
 }
 
 /**

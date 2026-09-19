@@ -33,12 +33,14 @@ import {
   type MemoryAppendRequest,
   type MemoryEventDraft,
 } from '../../../../../common/src/types/memory-v2'
+import type { MemoryUsageEntry } from '../../../../../sdk/src/services/memory-v2/types'
 
 import {
   BunSQLiteMemoryRepository,
   SQLITE_OPEN_POSTURE,
   openBunSQLiteMemoryRepository,
   type MemoryV2EventInput,
+  type RuntimeNeutralMemoryRepositoryV2,
 } from '../bun-sqlite-memory-repository'
 
 const repositories: BunSQLiteMemoryRepository[] = []
@@ -200,7 +202,7 @@ function insertStoredDraft(
         projectId: value.projectId,
         sessionId: value.sessionId,
       }),
-      'taskId' in value.payload ? value.payload.taskId : null,
+      'taskId' in value.payload ? (value.payload.taskId ?? null) : null,
       value.sessionId,
     )
 }
@@ -300,7 +302,7 @@ afterEach(async () => {
 })
 
 describe('BunSQLiteMemoryRepository', () => {
-  test('creates the contained default database with schema version 2 and append-only tables', async () => {
+  test('creates the contained default database with the current schema version and append-only tables', async () => {
     const root = temporaryRepository()
     const repository = await open(root)
     const databasePath = join(root, '.openbuff', 'memory', 'memory-v2.sqlite')
@@ -311,7 +313,10 @@ describe('BunSQLiteMemoryRepository', () => {
       const version = database.query('PRAGMA user_version').get() as {
         user_version: number
       }
-      expect(version.user_version).toBe(2)
+      // SCHEMA_VERSION 3 (P7 mixed-version repair): a pre-P7 build sharing
+      // this store fails closed at its own open because its version check
+      // rejects user_version values above its own SCHEMA_VERSION.
+      expect(version.user_version).toBe(3)
       const names = (
         database
           .query(
@@ -806,7 +811,7 @@ describe('BunSQLiteMemoryRepository', () => {
     const repository = await open(temporaryRepository())
     const health = await repository.kernelHealth()
     expect(['healthy', 'degraded']).toContain(health.status)
-    expect(health.schemaVersion).toBe(2)
+    expect(health.schemaVersion).toBe(3)
     expect(health.journalMode).toBeTruthy()
     expect(health.synchronous).toBeTruthy()
 
@@ -931,7 +936,7 @@ describe('BunSQLiteMemoryRepository', () => {
     expect(migratedState.projectBinding).toBe('project-1')
     expect(migratedState.capabilities.length).toBeGreaterThan(0)
     expect(migratedState.projectionCursor).toBe('1')
-    expect(migratedState.userVersion).toBe(2)
+    expect(migratedState.userVersion).toBe(3)
     expect(migratedState.quickCheck).toBe('ok')
 
     const reopened = await open(root)
@@ -946,7 +951,7 @@ describe('BunSQLiteMemoryRepository', () => {
     expect(reopenedState.projectBinding).toBe(migratedState.projectBinding)
     expect(reopenedState.capabilities).toEqual(migratedState.capabilities)
     expect(reopenedState.projectionCursor).toBe(migratedState.projectionCursor)
-    expect(reopenedState.userVersion).toBe(2)
+    expect(reopenedState.userVersion).toBe(3)
     expect(reopenedState.quickCheck).toBe('ok')
     expect(afterMigration).not.toEqual(before)
   })
@@ -2474,6 +2479,455 @@ describe('BunSQLiteMemoryRepository', () => {
     if (mismatched.outcome !== 'result') return
     expect(mismatched.result.currentCoverage).toEqual([])
   })
+
+  test('tolerantly skips and counts an unknown-type row so an older reader can export a newer store', async () => {
+    const repository = await open(temporaryRepository())
+    const appended = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        events: [draft('known-one')],
+      }),
+    )
+    expect(appended.outcome).toBe('appended')
+
+    // Direct raw INSERT of a future/unknown event type carrying valid
+    // schemaVersion-2 metadata for the SAME project. INSERT (not UPDATE or
+    // DELETE) is permitted by the append-only triggers.
+    const database = new Database(repository.databasePath)
+    try {
+      database
+        .query(
+          `INSERT INTO memory_events (
+             event_id, idempotency_key, event_type, occurred_at, payload_json,
+             metadata_json, task_id, session_id, artifact_id
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+        )
+        .run(
+          'future-unknown-1',
+          'key-future-unknown-1',
+          'future.unknown.event',
+          '2025-01-02T03:04:05.000Z',
+          '{}',
+          JSON.stringify({
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+            projectId: 'project-1',
+            sessionId: 'session-1',
+          }),
+          null,
+          'session-1',
+          null,
+        )
+    } finally {
+      database.close()
+    }
+
+    const exported = await repository.export(
+      MemoryExportRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        limit: 100,
+      }),
+    )
+    expect(MemoryExportOutcomeSchema.safeParse(exported).success).toBe(true)
+    expect(exported.outcome).toBe('page')
+    if (exported.outcome !== 'page') return
+    const ids = exported.events.map(({ eventId }) => String(eventId))
+    expect(ids).toContain('known-one')
+    expect(ids).not.toContain('future-unknown-1')
+    expect(exported.skippedUnknownCount).toBe(1)
+  })
+
+  test('fails the export (never silently drops) when a KNOWN canonical-type row cannot be strict-decoded, while still skip-and-counting unknown types', async () => {
+    const repository = await open(temporaryRepository())
+    const appended = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        events: [draft('known-one')],
+      }),
+    )
+    expect(appended.outcome).toBe('appended')
+
+    // Raw INSERT a row claiming a KNOWN canonical event_type
+    // ('migration.v1.imported') but carrying a malformed payload that fails
+    // strict envelope reconstruction, plus a genuinely UNKNOWN type row. A
+    // known-type strict-decode failure must be a hard error (non-'page'
+    // outcome), never a silent skip-and-count that would hide a migration
+    // marker.
+    const database = new Database(repository.databasePath)
+    try {
+      database
+        .query(
+          `INSERT INTO memory_events (
+             event_id, idempotency_key, event_type, occurred_at, payload_json,
+             metadata_json, task_id, session_id, artifact_id
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+        )
+        .run(
+          'future-unknown-marker',
+          'key-future-unknown-marker',
+          'future.unknown.event',
+          '2025-01-02T03:04:05.000Z',
+          '{}',
+          JSON.stringify({
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+            projectId: 'project-1',
+            sessionId: 'session-1',
+          }),
+          null,
+          'session-1',
+          null,
+        )
+      database
+        .query(
+          `INSERT INTO memory_events (
+             event_id, idempotency_key, event_type, occurred_at, payload_json,
+             metadata_json, task_id, session_id, artifact_id
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+        )
+        .run(
+          'malformed-known-marker',
+          'key-malformed-known-marker',
+          'migration.v1.imported',
+          '2025-01-02T03:04:06.000Z',
+          '{"totally":"malformed"}',
+          JSON.stringify({
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+            projectId: 'project-1',
+            sessionId: 'session-1',
+          }),
+          null,
+          'session-1',
+          null,
+        )
+    } finally {
+      database.close()
+    }
+
+    const exported = await repository.export(
+      MemoryExportRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        limit: 100,
+      }),
+    )
+    expect(MemoryExportOutcomeSchema.safeParse(exported).success).toBe(true)
+    // The known-type strict-decode failure surfaces loudly rather than being
+    // silently dropped from events[].
+    expect(exported.outcome).not.toBe('page')
+    expect(['failed', 'rejected']).toContain(exported.outcome)
+  })
+
+  test('exports known current query.* and projection.rebuild.* envelopes without dropping or miscounting them', async () => {
+    const repository = await open(temporaryRepository())
+    const appended = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        events: [
+          draft('current-task'),
+          canonicalDraft('query.started', 'current-query-started', {
+            payloadSchemaVersion: 1,
+            queryId: 'query-1',
+            taskId: 'task-current',
+            userInputId: 'input-1',
+            mode: 'inject',
+            startedAt: '2025-01-02T03:04:05.000Z',
+          }),
+          canonicalDraft('query.completed', 'current-query-completed', {
+            payloadSchemaVersion: 1,
+            queryId: 'query-1',
+            taskId: 'task-current',
+            completedAt: '2025-01-02T03:04:06.000Z',
+            counts: {
+              matchedTasks: 0,
+              verifiedKnowledge: 0,
+              reusableDiscovery: 0,
+              rereadRequired: 0,
+              historicalContext: 0,
+            },
+            degradation: { state: 'none' },
+          }),
+          canonicalDraft('query.failed', 'current-query-failed', {
+            payloadSchemaVersion: 1,
+            queryId: 'query-2',
+            taskId: 'task-current',
+            failedAt: '2025-01-02T03:04:07.000Z',
+            error: 'deterministic failure',
+            retryable: false,
+          }),
+          canonicalDraft(
+            'projection.rebuild.requested',
+            'current-rebuild-requested',
+            {
+              payloadSchemaVersion: 1,
+              rebuildId: 'rebuild-1',
+              projectionNames: ['tasks'],
+              requestedBy: 'test',
+            },
+          ),
+          canonicalDraft(
+            'projection.rebuild.completed',
+            'current-rebuild-completed',
+            {
+              payloadSchemaVersion: 1,
+              rebuildId: 'rebuild-1',
+              projectionNames: ['tasks'],
+              processedEvents: 1,
+              completedAt: '2025-01-02T03:04:08.000Z',
+            },
+          ),
+          canonicalDraft('projection.rebuild.failed', 'current-rebuild-failed', {
+            payloadSchemaVersion: 1,
+            rebuildId: 'rebuild-2',
+            projectionNames: ['tasks'],
+            error: 'deterministic rebuild failure',
+            retryable: true,
+            failedAt: '2025-01-02T03:04:09.000Z',
+          }),
+        ],
+      }),
+    )
+    expect(appended.outcome).toBe('appended')
+
+    const exported = await repository.export(
+      MemoryExportRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        limit: 100,
+      }),
+    )
+    expect(MemoryExportOutcomeSchema.safeParse(exported).success).toBe(true)
+    expect(exported.outcome).toBe('page')
+    if (exported.outcome !== 'page') return
+    const ids = exported.events.map(({ eventId }) => String(eventId))
+    expect(ids).toEqual([
+      'current-task',
+      'current-query-started',
+      'current-query-completed',
+      'current-query-failed',
+      'current-rebuild-requested',
+      'current-rebuild-completed',
+      'current-rebuild-failed',
+    ])
+    // Known current envelope types are never treated as unknown/future types.
+    expect(exported.skippedUnknownCount).toBe(0)
+  })
+
+  test('legally returns an empty export page paired with a non-null advancing cursor and the raw tail id when a full page is skipped', async () => {
+    const repository = await open(temporaryRepository())
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [draft('known-head')],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+
+    // Raw-insert a contiguous block of future/unknown-type rows for the SAME
+    // project between two known events. INSERT is permitted by the append-only
+    // triggers. With a limit of 2 the middle page is a full page of only
+    // dropped rows. export() is now a SINGLE raw page per call, so that page
+    // legally surfaces events: [] with a non-null advancing cursor and a
+    // rawTailEventId carrying the last raw row id; consumers page on the
+    // cursor, never on events.length.
+    const database = new Database(repository.databasePath)
+    try {
+      const insert = database.query(
+        `INSERT INTO memory_events (
+           event_id, idempotency_key, event_type, occurred_at, payload_json,
+           metadata_json, task_id, session_id, artifact_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+      )
+      const metadata = JSON.stringify({
+        schemaVersion: 2,
+        eventSchemaVersion: 1,
+        projectId: 'project-1',
+        sessionId: 'session-1',
+      })
+      for (let index = 0; index < 3; index++) {
+        insert.run(
+          `future-${index}`,
+          `key-future-${index}`,
+          'future.unknown.event',
+          '2025-01-02T03:04:05.000Z',
+          '{}',
+          metadata,
+          null,
+          'session-1',
+          null,
+        )
+      }
+    } finally {
+      database.close()
+    }
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [draft('known-tail')],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+
+    const seen: string[] = []
+    let totalSkipped = 0
+    let sawEmptyAdvancingPage = false
+    let afterEventId: string | undefined
+    for (let page = 0; page < 20; page++) {
+      const outcome = await repository.export(
+        MemoryExportRequestSchema.parse({
+          schemaVersion: 2,
+          projectId: 'project-1',
+          ...(afterEventId ? { afterEventId } : {}),
+          limit: 2,
+        }),
+      )
+      expect(MemoryExportOutcomeSchema.safeParse(outcome).success).toBe(true)
+      expect(outcome.outcome).toBe('page')
+      if (outcome.outcome !== 'page') return
+      const skipped = outcome.skippedUnknownCount ?? 0
+      totalSkipped += skipped
+      // A full page of only dropped rows is now LEGAL: empty events[] paired
+      // with a non-null advancing cursor and a rawTailEventId == last raw id.
+      if (outcome.events.length === 0 && outcome.nextAfterEventId) {
+        sawEmptyAdvancingPage = true
+        expect(String(outcome.rawTailEventId)).toBe(
+          String(outcome.nextAfterEventId),
+        )
+      }
+      for (const event of outcome.events) seen.push(String(event.eventId))
+      if (!outcome.nextAfterEventId) break
+      afterEventId = String(outcome.nextAfterEventId)
+    }
+    expect(seen).toEqual(['known-head', 'known-tail'])
+    expect(totalSkipped).toBe(3)
+    expect(sawEmptyAdvancingPage).toBe(true)
+  })
+
+  test('returns a single raw page with rawTailEventId == the last raw row id on terminal and decoded-tail-skipped pages', async () => {
+    const repository = await open(temporaryRepository())
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [draft('raw-tail-head')],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    // Raw-insert a future/unknown-type row as the store tail: it is the last
+    // raw row but is skipped from events[].
+    const database = new Database(repository.databasePath)
+    try {
+      database
+        .query(
+          `INSERT INTO memory_events (
+             event_id, idempotency_key, event_type, occurred_at, payload_json,
+             metadata_json, task_id, session_id, artifact_id
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+        )
+        .run(
+          'raw-tail-future',
+          'key-raw-tail-future',
+          'future.unknown.event',
+          '2025-01-02T03:04:05.000Z',
+          '{}',
+          JSON.stringify({
+            schemaVersion: 2,
+            eventSchemaVersion: 1,
+            projectId: 'project-1',
+            sessionId: 'session-1',
+          }),
+          null,
+          'session-1',
+          null,
+        )
+    } finally {
+      database.close()
+    }
+
+    // Terminal page (limit exceeds row count): cursor is null, rawTailEventId
+    // is the last RAW row (the skipped future row), NOT the last decoded event.
+    const terminal = await repository.export(
+      MemoryExportRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        limit: 100,
+      }),
+    )
+    expect(terminal.outcome).toBe('page')
+    if (terminal.outcome !== 'page') return
+    expect(terminal.events.map(({ eventId }) => String(eventId))).toEqual([
+      'raw-tail-head',
+    ])
+    expect(terminal.nextAfterEventId).toBeNull()
+    expect(String(terminal.rawTailEventId)).toBe('raw-tail-future')
+    expect(terminal.skippedUnknownCount).toBe(1)
+
+    // Decoded-tail-skipped full page (limit === row count): the decoded tail
+    // is the head event, but rawTailEventId is the skipped future row and the
+    // cursor advances to it.
+    const fullPage = await repository.export(
+      MemoryExportRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        limit: 2,
+      }),
+    )
+    expect(fullPage.outcome).toBe('page')
+    if (fullPage.outcome !== 'page') return
+    expect(fullPage.events.map(({ eventId }) => String(eventId))).toEqual([
+      'raw-tail-head',
+    ])
+    expect(String(fullPage.nextAfterEventId)).toBe('raw-tail-future')
+    expect(String(fullPage.rawTailEventId)).toBe('raw-tail-future')
+    expect(fullPage.skippedUnknownCount).toBe(1)
+  })
+
+  test('omits rawTailEventId on an empty store export', async () => {
+    const repository = await open(temporaryRepository())
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [draft('empty-store-anchor')],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    // Page after the only row observes zero raw rows.
+    const exported = await repository.export(
+      MemoryExportRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        afterEventId: 'empty-store-anchor',
+        limit: 100,
+      }),
+    )
+    expect(MemoryExportOutcomeSchema.safeParse(exported).success).toBe(true)
+    expect(exported.outcome).toBe('page')
+    if (exported.outcome !== 'page') return
+    expect(exported.events).toEqual([])
+    expect(exported.nextAfterEventId).toBeNull()
+    expect(exported.rawTailEventId).toBeUndefined()
+    expect('rawTailEventId' in exported).toBe(false)
+  })
 })
 
 describe('BunSQLiteMemoryRepository privileged GC', () => {
@@ -2850,5 +3304,1594 @@ describe('BunSQLiteMemoryRepository strict secure-open gate', () => {
     expect(
       existsSync(join(root, '.openbuff', 'memory', 'memory-v2.sqlite')),
     ).toBe(true)
+  })
+})
+
+describe('BunSQLiteMemoryRepository observation.reused usage projection', () => {
+  test('projects canonical observation.reused events into bounded usage counters and survives a rebuild', async () => {
+    const repository = await open(temporaryRepository())
+    const reusedDraft = canonicalDraft('observation.reused', 'event:usage-1', {
+      payloadSchemaVersion: 1,
+      turnId: 'input:usage-1',
+      used: [
+        { observationId: 'observation:used-a', mechanism: 'gate-skip' },
+        { observationId: 'observation:used-b', mechanism: 'gate-skip' },
+      ],
+      ignored: [
+        { observationId: 'observation:ignored-c', mechanism: 'reread-despite' },
+      ],
+    })
+    const secondDraft = canonicalDraft('observation.reused', 'event:usage-2', {
+      payloadSchemaVersion: 1,
+      turnId: 'input:usage-2',
+      used: [{ observationId: 'observation:used-a', mechanism: 'gate-skip' }],
+      ignored: [],
+    })
+
+    const appended = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        events: [reusedDraft, secondDraft],
+      }),
+    )
+    expect(appended.outcome).toBe('appended')
+
+    const read = await repository.getUsage({ projectId: 'project-1' })
+    expect(read.status).toBe('ok')
+    if (read.status !== 'ok') return
+    expect(read.usage).toEqual([
+      {
+        observationId: 'observation:ignored-c',
+        usedCount: 0,
+        ignoredCount: 1,
+        staledCount: 0,
+        lastMechanism: 'reread-despite',
+        lastTurnId: 'input:usage-1',
+        lastSequence: 1,
+      },
+      {
+        observationId: 'observation:used-a',
+        usedCount: 2,
+        ignoredCount: 0,
+        staledCount: 0,
+        lastMechanism: 'gate-skip',
+        lastTurnId: 'input:usage-2',
+        lastSequence: 2,
+      },
+      {
+        observationId: 'observation:used-b',
+        usedCount: 1,
+        ignoredCount: 0,
+        staledCount: 0,
+        lastMechanism: 'gate-skip',
+        lastTurnId: 'input:usage-1',
+        lastSequence: 1,
+      },
+    ])
+
+    const filtered = await repository.getUsage({
+      projectId: 'project-1',
+      observationIds: ['observation:used-b'],
+    })
+    expect(filtered.status).toBe('ok')
+    if (filtered.status !== 'ok') return
+    expect(filtered.usage.map(({ observationId }) => observationId)).toEqual([
+      'observation:used-b',
+    ])
+
+    const beforeRebuild = read.usage
+    const rebuilt = await repository.rebuildProjections()
+    expect(rebuilt.status).toBe('ok')
+    if (rebuilt.status !== 'ok') return
+    expect(rebuilt.projectedEvents).toBe(2)
+    const afterRebuild = await repository.getUsage({ projectId: 'project-1' })
+    expect(afterRebuild.status).toBe('ok')
+    if (afterRebuild.status !== 'ok') return
+    expect(afterRebuild.usage).toEqual(beforeRebuild)
+  })
+
+  test('privileged compaction keeps memory_usage consistent with the surviving event log', async () => {
+    const repository = await open(temporaryRepository())
+    // P6 group closure: a derived event (observation.reused) may only be
+    // archived together with the observation it references, so the fixture
+    // records the observation first and archives both events as one batch.
+    const observationDraft = canonicalDraft(
+      'observation.recorded',
+      'event:used-compact-observation',
+      {
+        payloadSchemaVersion: 1,
+        observation: observationFixture('observation:used-compact', []),
+      },
+    )
+    const reusedDraft = canonicalDraft(
+      'observation.reused',
+      'event:usage-compact-1',
+      {
+        payloadSchemaVersion: 1,
+        turnId: 'input:usage-compact-1',
+        used: [
+          { observationId: 'observation:used-compact', mechanism: 'gate-skip' },
+        ],
+        ignored: [],
+      },
+    )
+
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [observationDraft, reusedDraft],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+
+    const before = await repository.getUsage({ projectId: 'project-1' })
+    expect(before.status).toBe('ok')
+    if (before.status !== 'ok') return
+    expect(before.usage.map(({ observationId }) => observationId)).toEqual([
+      'observation:used-compact',
+    ])
+
+    const eventIds = [
+      'event:used-compact-observation',
+      'event:usage-compact-1',
+    ] as const
+    const archiveLines = eventIds.map((eventId) => JSON.stringify({ eventId }))
+    const archiveHash = `sha256:${createHash('sha256').update(JSON.stringify(archiveLines)).digest('hex')}`
+    const archivedAt = new Date().toISOString()
+    const archivePath = '.openbuff/memory/archive/usage-compact.jsonl'
+    const archiveClaimDraft = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'claim.archived',
+      eventId: 'event:usage-compact-archive',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: archivedAt,
+      payload: {
+        payloadSchemaVersion: 1,
+        archivedEventIds: [...eventIds],
+        archivePath,
+        archiveHash,
+        reason: 'Usage projection compaction test',
+        archivedAt,
+      },
+    })
+
+    const result = await repository.privilegedCompact({
+      projectId: ProjectIdSchema.parse('project-1'),
+      eventIds: [...eventIds] as unknown as Parameters<
+        BunSQLiteMemoryRepository['privilegedCompact']
+      >[0]['eventIds'],
+      archiveClaimDraft,
+      archiveLines,
+      archivePath,
+      archiveHash,
+    })
+    expect(result.archivedEventIds.map(String)).toEqual([...eventIds])
+
+    // The archived 'observation.reused' event is gone from the canonical log,
+    // so its usage counter must be gone too — not carried over from before.
+    const after = await repository.getUsage({ projectId: 'project-1' })
+    expect(after.status).toBe('ok')
+    if (after.status !== 'ok') return
+    expect(after.usage).toEqual([])
+  })
+
+  test('exposes getUsage through the runtime-neutral MemoryRepositoryV2 boundary', async () => {
+    const repository = await open(temporaryRepository())
+    const appended = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        events: [
+          canonicalDraft('observation.reused', 'event:usage-boundary', {
+            payloadSchemaVersion: 1,
+            turnId: 'input:usage-boundary',
+            used: [
+              { observationId: 'observation:boundary', mechanism: 'gate-skip' },
+            ],
+            ignored: [],
+          }),
+        ],
+      }),
+    )
+    expect(appended.outcome).toBe('appended')
+
+    // The persistence boundary, not the concrete driver, is the documented
+    // contract for all Memory V2 storage access: the usage projection read
+    // must be reachable (and fake-substitutable) through that type.
+    const boundary: RuntimeNeutralMemoryRepositoryV2 = repository
+    expect(typeof boundary.getUsage).toBe('function')
+    const read = await boundary.getUsage?.({
+      projectId: ProjectIdSchema.parse('project-1'),
+      observationIds: ['observation:boundary'],
+    })
+    expect(read).toEqual({
+      status: 'ok',
+      usage: [
+        {
+          observationId: 'observation:boundary',
+          usedCount: 1,
+          ignoredCount: 0,
+          staledCount: 0,
+          lastMechanism: 'gate-skip',
+          lastTurnId: 'input:usage-boundary',
+          lastSequence: 1,
+        },
+      ],
+    })
+
+    // A runtime-neutral fake can substitute the projection read for tests.
+    const fakeEntry: MemoryUsageEntry = {
+      observationId: 'observation:fake',
+      usedCount: 2,
+      ignoredCount: 1,
+      staledCount: 0,
+      lastMechanism: null,
+      lastTurnId: null,
+      lastSequence: 3,
+    }
+    const fake: RuntimeNeutralMemoryRepositoryV2 = {
+      append: async () => {
+        throw new Error('not used')
+      },
+      query: async () => {
+        throw new Error('not used')
+      },
+      verify: async () => {
+        throw new Error('not used')
+      },
+      rebuild: async () => {
+        throw new Error('not used')
+      },
+      health: async () => {
+        throw new Error('not used')
+      },
+      export: async () => {
+        throw new Error('not used')
+      },
+      getUsage: async () => ({ status: 'ok', usage: [fakeEntry] }),
+    }
+    await expect(
+      fake.getUsage?.({
+        projectId: ProjectIdSchema.parse('project-1'),
+        observationIds: [],
+      }),
+    ).resolves.toEqual({ status: 'ok', usage: [fakeEntry] })
+  })
+})
+
+describe('BunSQLiteMemoryRepository usefulness-scored retrieval ordering', () => {
+  const toolProvenance = (toolName?: string) => ({
+    origin: 'tool' as const,
+    recordedBy: 'test',
+    sourceEventIds: [],
+    metadata: {},
+    ...(toolName ? { toolName } : {}),
+  })
+
+  const scoredObservation = (
+    observationId: string,
+    kind: 'decision' | 'discovery',
+    summary: string,
+    evidence: any[] = [],
+    provenance = toolProvenance(),
+    observedAt = '2025-01-02T03:04:05.000Z',
+  ) => ({
+    ...observationFixture(observationId, evidence),
+    kind,
+    summary,
+    provenance,
+    observedAt,
+  })
+
+  const verifiedDraft = (
+    eventId: string,
+    observationId: string,
+    evidence: ReturnType<typeof evidenceFixture>,
+  ) =>
+    canonicalDraft('evidence.verified', eventId, {
+      payloadSchemaVersion: 1,
+      observationId,
+      selector: evidence.selector,
+      verifier: 'test',
+      verifiedAt: '2025-01-02T03:05:05.000Z',
+      observedDigest: evidence.contentDigest,
+    })
+
+  const retrieval = (
+    queryId: string,
+    query: string,
+    extra: Record<string, unknown> = {},
+  ) =>
+    MemoryRetrievalRequestSchema.parse({
+      schemaVersion: 2,
+      queryId,
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      query,
+      selectors: [],
+      artifactKinds: [],
+      includeHistorical: false,
+      maxResultsPerCategory: 10,
+      ...extra,
+    })
+
+  test('golden: an agent-explicit verified decision outranks a same-observedAt discovery with more token matches', async () => {
+    const repository = await open(temporaryRepository())
+    const decisionEvidence = evidenceFixture('src/decision.ts')
+    const discoveryEvidence = evidenceFixture('src/discovery.ts')
+    const decision = scoredObservation(
+      'golden-decision',
+      'decision',
+      'Ship deterministic lexical ranking',
+      [decisionEvidence],
+      toolProvenance('record_decision'),
+    )
+    const discovery = scoredObservation(
+      'golden-discovery',
+      'discovery',
+      'Discovery deterministic lexical ranking policy',
+      [discoveryEvidence],
+    )
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'golden-decision-event', {
+                payloadSchemaVersion: 1,
+                observation: decision,
+              }),
+              canonicalDraft('observation.recorded', 'golden-discovery-event', {
+                payloadSchemaVersion: 1,
+                observation: discovery,
+              }),
+              verifiedDraft(
+                'golden-decision-verified',
+                'golden-decision',
+                decisionEvidence,
+              ),
+              verifiedDraft(
+                'golden-discovery-verified',
+                'golden-discovery',
+                discoveryEvidence,
+              ),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const queried = await repository.query(
+      retrieval('golden-query', 'deterministic lexical ranking policy'),
+    )
+    expect(queried.outcome).toBe('result')
+    if (queried.outcome !== 'result') return
+    // The discovery has strictly more query-token overlap (4 vs 3 tokens),
+    // yet the agent-explicit decision tier orders first in verifiedKnowledge
+    // (both are digest-fresh verified, so freshnessClass is equal at 3).
+    expect(
+      queried.result.verifiedKnowledge.map(
+        ({ observation }) => observation.observationId as string,
+      ),
+    ).toEqual(['golden-decision', 'golden-discovery'])
+  })
+
+  test('age-floor: an old ignored explicit decision still outranks an equally-ignored derived discovery', async () => {
+    const repository = await open(temporaryRepository())
+    const oldDecision = scoredObservation(
+      'floor-decision',
+      'decision',
+      'Ignored policy decision',
+      [evidenceFixture()],
+      toolProvenance('record_decision'),
+      '2024-06-01T00:00:00.000Z',
+    )
+    const oldDiscovery = scoredObservation(
+      'floor-discovery',
+      'discovery',
+      'Ignored policy discovery',
+      [evidenceFixture()],
+      toolProvenance(),
+      '2024-06-01T00:00:00.000Z',
+    )
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'floor-decision-event', {
+                payloadSchemaVersion: 1,
+                observation: oldDecision,
+              }),
+              canonicalDraft('observation.recorded', 'floor-discovery-event', {
+                payloadSchemaVersion: 1,
+                observation: oldDiscovery,
+              }),
+              canonicalDraft('observation.reused', 'floor-ignored', {
+                payloadSchemaVersion: 1,
+                turnId: 'input:floor-ignored',
+                used: [],
+                ignored: [
+                  {
+                    observationId: 'floor-decision',
+                    mechanism: 'reread-despite',
+                  },
+                  {
+                    observationId: 'floor-discovery',
+                    mechanism: 'reread-despite',
+                  },
+                ],
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const queried = await repository.query(retrieval('floor-query', 'policy'))
+    expect(queried.outcome).toBe('result')
+    if (queried.outcome !== 'result') return
+    // Both are old (age bucket 90) and ignored once: the explicit decision
+    // keeps its agent-explicit floor while the equally-ignored derived
+    // discovery clamps to 0, so the decision orders first despite identical
+    // lexical weight and source sequence.
+    expect(
+      queried.result.rereadRequired.map(
+        ({ observationId }) => observationId as string,
+      ),
+    ).toEqual(['floor-decision', 'floor-discovery'])
+  })
+
+  test('neutrality: same-kind, same-observedAt, no-usage candidates keep the exact→token order', async () => {
+    const repository = await open(temporaryRepository())
+    const rich = scoredObservation(
+      'neutral-rich',
+      'discovery',
+      'Neutrality alpha beta gamma delta',
+      [],
+    )
+    const poor = scoredObservation(
+      'neutral-poor',
+      'discovery',
+      'Neutrality alpha',
+      [],
+    )
+    // The lexically poorer match is recorded FIRST (earlier sourceSequence):
+    // the exact→token ordering must still put the richer match first.
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'neutral-poor-event', {
+                payloadSchemaVersion: 1,
+                observation: poor,
+              }),
+              canonicalDraft('observation.recorded', 'neutral-rich-event', {
+                payloadSchemaVersion: 1,
+                observation: rich,
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const queried = await repository.query(
+      retrieval('neutral-query', 'neutrality alpha beta gamma delta'),
+    )
+    expect(queried.outcome).toBe('result')
+    if (queried.outcome !== 'result') return
+    expect(
+      queried.result.reusableDiscovery.map(
+        ({ observation }) => observation.observationId as string,
+      ),
+    ).toEqual(['neutral-rich', 'neutral-poor'])
+  })
+
+  test('usage-fold parity: appending observation.reused reorders a candidate against its unused sibling', async () => {
+    // Control store: two identical-shape discoveries, no usage events. The
+    // earlier-sourced sibling wins on sourceSequence tiebreak.
+    const controlRepository = await open(temporaryRepository())
+    const buildObservations = () => [
+      scoredObservation('fold-first', 'discovery', 'Fold usage sibling', []),
+      scoredObservation('fold-second', 'discovery', 'Fold usage sibling', []),
+    ]
+    expect(
+      (
+        await controlRepository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: buildObservations().map((observation, index) =>
+              canonicalDraft(
+                'observation.recorded',
+                `fold-control-${index}`,
+                { payloadSchemaVersion: 1, observation },
+              ),
+            ),
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const control = await controlRepository.query(
+      retrieval('fold-control-query', 'fold usage sibling'),
+    )
+    expect(control.outcome).toBe('result')
+    if (control.outcome !== 'result') return
+    // Without usage, ordering falls through to sourceSequence (the later
+    // source wins) — fold-second is the control winner.
+    expect(
+      control.result.reusableDiscovery.map(
+        ({ observation }) => observation.observationId as string,
+      ),
+    ).toEqual(['fold-second', 'fold-first'])
+
+    // Treatment store: same shape, but the second sibling is marked used.
+    const usedRepository = await open(temporaryRepository())
+    expect(
+      (
+        await usedRepository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              ...buildObservations().map((observation, index) =>
+                canonicalDraft(
+                  'observation.recorded',
+                  `fold-used-${index}`,
+                  { payloadSchemaVersion: 1, observation },
+                ),
+              ),
+              canonicalDraft('observation.reused', 'fold-used-event', {
+                payloadSchemaVersion: 1,
+                turnId: 'input:fold-used',
+                used: [{ observationId: 'fold-first', mechanism: 'cited' }],
+                ignored: [],
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const used = await usedRepository.query(
+      retrieval('fold-used-query', 'fold usage sibling'),
+    )
+    expect(used.outcome).toBe('result')
+    if (used.outcome !== 'result') return
+    // The used sibling now carries a higher usefulness score and outranks
+    // the unused one despite its earlier source sequence.
+    expect(
+      used.result.reusableDiscovery.map(
+        ({ observation }) => observation.observationId as string,
+      ),
+    ).toEqual(['fold-first', 'fold-second'])
+    const scoredEntry = used.result.reusableDiscovery[0]
+    expect(scoredEntry?.reasons.some(({ code, detail }) =>
+      code === 'reusability' && detail === 'P4 usage correlation score.',
+    )).toBe(true)
+    expect(scoredEntry?.score).toBeLessThanOrEqual(1)
+  })
+})
+
+describe('P9 invariant enforcement (store)', () => {
+  test('INV11: an old unsuperseded agent-explicit decision is never a GC candidate', async () => {
+    const repository = await open(temporaryRepository())
+    const oldExplicit = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'observation.recorded',
+      eventId: 'event:p9-explicit-old',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: '2024-06-01T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        observation: {
+          ...observationFixture('p9-explicit-old', []),
+          kind: 'decision' as const,
+          provenance: {
+            origin: 'repository' as const,
+            recordedBy: 'test',
+            sourceEventIds: [],
+            metadata: {},
+            toolName: 'record_decision',
+          },
+          observedAt: '2024-06-01T00:00:00.000Z',
+        },
+      },
+    })
+    // Control: the same age and shape without the explicit tier is an old
+    // orphan and IS eligible.
+    const oldDerived = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'observation.recorded',
+      eventId: 'event:p9-derived-old',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: '2024-06-01T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        observation: {
+          ...observationFixture('p9-derived-old', []),
+          observedAt: '2024-06-01T00:00:00.000Z',
+        },
+      },
+    })
+    // Anchor event raising the scanned window's as-of clock.
+    const anchor = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'observation.recorded',
+      eventId: 'event:p9-anchor',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: '2025-06-01T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        observation: observationFixture('p9-anchor', []),
+      },
+    })
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [oldExplicit, oldDerived, anchor],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const selected = await repository.selectGCandidates({
+      projectId: 'project-1',
+      olderThanDays: 30,
+      maxEvents: 100,
+    })
+    const ids = selected.eventIds.map(String)
+    expect(ids).toContain('event:p9-derived-old')
+    expect(ids).not.toContain('event:p9-explicit-old')
+    expect(ids).not.toContain('event:p9-anchor')
+  })
+
+  test('pinned blocks reclamation even for retracted observations', async () => {
+    const repository = await open(temporaryRepository())
+    const observation = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'observation.recorded',
+      eventId: 'event:p9-pin-obs',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: '2024-06-01T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        observation: {
+          ...observationFixture('p9-pin-target', []),
+          observedAt: '2024-06-01T00:00:00.000Z',
+        },
+      },
+    })
+    const pinned = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'claim.pinned',
+      eventId: 'event:p9-pin',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: '2024-06-02T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        observationId: 'p9-pin-target',
+        reason: 'pinned by user',
+        pinnedBy: 'test',
+        pinnedAt: '2024-06-02T00:00:00.000Z',
+      },
+    })
+    const forgotten = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'claim.forgotten',
+      eventId: 'event:p9-pin-forgotten',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: '2024-06-03T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        observationIds: ['p9-pin-target'],
+        reason: 'user-request',
+        requestedBy: 'test',
+        evidenceDisposition: 'retain-artifacts',
+      },
+    })
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [observation, pinned, forgotten],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const selected = await repository.selectGCandidates({
+      projectId: 'project-1',
+      olderThanDays: 30,
+      maxEvents: 100,
+    })
+    // The pinned group is ineligible, and closure keeps the shared forgotten
+    // event out of the batch too: nothing is archivable.
+    expect(selected.eventIds).toHaveLength(0)
+  })
+
+  test('P9: projection replay is deterministic across rebuilds for new event types', async () => {
+    const repository = await open(temporaryRepository())
+    const observation = canonicalDraft('observation.recorded', 'event:p9-replay-obs', {
+      payloadSchemaVersion: 1,
+      observation: observationFixture('p9-replay-target', []),
+    })
+    const reused = canonicalDraft('observation.reused', 'event:p9-replay-reused', {
+      payloadSchemaVersion: 1,
+      turnId: 'input:p9-replay',
+      used: [{ observationId: 'p9-replay-target', mechanism: 'gate-skip' }],
+      ignored: [],
+    })
+    const archived = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'claim.archived',
+      eventId: 'event:p9-replay-archived',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: '2025-06-02T00:00:00.000Z',
+      payload: {
+        payloadSchemaVersion: 1,
+        archivedEventIds: ['event:p9-replay-obs'],
+        archivePath: '.openbuff/memory/archive/p9-replay.jsonl',
+        archiveHash: `sha256:${'b'.repeat(64)}`,
+        reason: 'P9 replay determinism seed',
+        archivedAt: '2025-06-02T00:00:00.000Z',
+      },
+    })
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [observation, reused, archived],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const fingerprint = async () =>
+      JSON.stringify({
+        snapshot: await repository.getProjectionSnapshot(),
+        usage: await repository.getUsage({ projectId: 'project-1' }),
+      })
+    const first = await fingerprint()
+    await repository.rebuildProjections()
+    const second = await fingerprint()
+    await repository.rebuildProjections()
+    const third = await fingerprint()
+    expect(second).toBe(first)
+    expect(third).toBe(first)
+  })
+})
+
+describe('P7 contradictions, reinforcement, and claim dedup', () => {
+  const retrieval = (
+    queryId: string,
+    query: string,
+    extra: Record<string, unknown> = {},
+  ) =>
+    MemoryRetrievalRequestSchema.parse({
+      schemaVersion: 2,
+      queryId,
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      query,
+      selectors: [],
+      artifactKinds: [],
+      includeHistorical: false,
+      maxResultsPerCategory: 10,
+      ...extra,
+    })
+
+  test('claim_dedup: records, deletes on forget, restores on a same-claim re-record, and rebuilds consistently', async () => {
+    const repository = await open(temporaryRepository())
+    const claimId = 'a'.repeat(64)
+    const claimObservation = (observationId: string) => ({
+      ...observationFixture(observationId, [evidenceFixture()]),
+      provenance: {
+        origin: 'repository' as const,
+        recordedBy: 'test',
+        sourceEventIds: [],
+        metadata: { claimId },
+      },
+    })
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'claim-dedup-one', {
+                payloadSchemaVersion: 1,
+                observation: claimObservation('claim-dedup-obs-one'),
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const recorded = await repository.getClaimDedup({ projectId: 'project-1' })
+    expect(recorded.status).toBe('ok')
+    if (recorded.status !== 'ok') return
+    expect(recorded.entries).toEqual([
+      { claimId, observationId: 'claim-dedup-obs-one' },
+    ])
+
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('claim.forgotten', 'claim-dedup-forgotten', {
+                payloadSchemaVersion: 1,
+                observationIds: ['claim-dedup-obs-one'],
+                reason: 'duplicate',
+                requestedBy: 'test',
+                evidenceDisposition: 'retain-artifacts',
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const forgotten = await repository.getClaimDedup({ projectId: 'project-1' })
+    expect(forgotten.status).toBe('ok')
+    if (forgotten.status !== 'ok') return
+    expect(forgotten.entries).toEqual([])
+
+    // A NEW observation reintroducing the SAME claim id restores the row:
+    // first-wins per replay means the deleted slot is empty, so the new
+    // observation becomes the current holder of the claim id.
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'claim-dedup-two', {
+                payloadSchemaVersion: 1,
+                observation: claimObservation('claim-dedup-obs-two'),
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const restored = await repository.getClaimDedup({ projectId: 'project-1' })
+    expect(restored.status).toBe('ok')
+    if (restored.status !== 'ok') return
+    expect(restored.entries).toEqual([
+      { claimId, observationId: 'claim-dedup-obs-two' },
+    ])
+
+    expect((await repository.rebuildProjections()).status).toBe('ok')
+    const rebuilt = await repository.getClaimDedup({ projectId: 'project-1' })
+    expect(rebuilt.status).toBe('ok')
+    if (rebuilt.status !== 'ok') return
+    expect(rebuilt.entries).toEqual(restored.entries)
+  })
+
+  test('claim_dedup cold-start backfill: pre-existing v2 claims are derived on open', async () => {
+    const root = temporaryRepository()
+    const claimId = 'c'.repeat(64)
+    const writer = await open(root)
+    expect(
+      (
+        await writer.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'claim-backfill-one', {
+                payloadSchemaVersion: 1,
+                observation: {
+                  ...observationFixture('claim-backfill-obs-one', [
+                    evidenceFixture(),
+                  ]),
+                  provenance: {
+                    origin: 'repository' as const,
+                    recordedBy: 'test',
+                    sourceEventIds: [],
+                    metadata: { claimId },
+                  },
+                },
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    await writer.close()
+
+    // Simulate a pre-P7 v2 store: the projection table exists but is empty
+    // and no backfill marker was ever recorded (an old writer).
+    const legacy = new Database(
+      join(root, '.openbuff', 'memory', 'memory-v2.sqlite'),
+    )
+    try {
+      legacy.exec('DELETE FROM claim_dedup')
+      legacy
+        .query(
+          "DELETE FROM memory_projection_metadata WHERE key = 'claim_dedup_backfill'",
+        )
+        .run()
+    } finally {
+      legacy.close()
+    }
+
+    // Opening the store backfills the projection from the surviving log, so
+    // pre-existing claims are visible to dedup immediately after upgrade.
+    const reopened = await open(root)
+    const backfilled = await reopened.getClaimDedup({ projectId: 'project-1' })
+    expect(backfilled.status).toBe('ok')
+    if (backfilled.status !== 'ok') return
+    expect(backfilled.entries).toEqual([
+      { claimId, observationId: 'claim-backfill-obs-one' },
+    ])
+
+    // A second open is a bounded no-op: the recorded marker stops the replay
+    // and the projection stays stable.
+    await reopened.close()
+    const steady = await open(root)
+    const steadyEntries = await steady.getClaimDedup({ projectId: 'project-1' })
+    expect(steadyEntries.status).toBe('ok')
+    if (steadyEntries.status !== 'ok') return
+    expect(steadyEntries.entries).toEqual(backfilled.entries)
+
+    // An explicit rebuild agrees with the open backfill.
+    expect((await steady.rebuildProjections()).status).toBe('ok')
+    const rebuilt = await steady.getClaimDedup({ projectId: 'project-1' })
+    expect(rebuilt.status).toBe('ok')
+    if (rebuilt.status !== 'ok') return
+    expect(rebuilt.entries).toEqual(backfilled.entries)
+  })
+
+  test('contradiction integration: shared stable chunk ids flag both live decisions until superseded', async () => {
+    const repository = await open(temporaryRepository())
+    const stableChunkId = 'b'.repeat(64)
+    const contradictionEvidence = (path: string) => ({
+      ...evidenceFixture(path),
+      provenance: {
+        ...evidenceFixture(path).provenance,
+        metadata: { stableChunkId },
+      },
+    })
+    const contradictionObservation = (observationId: string, path: string) => ({
+      ...observationFixture(observationId, [contradictionEvidence(path)]),
+      kind: 'decision' as const,
+      summary: 'Contradiction alpha beta',
+    })
+    const evidenceA = contradictionEvidence('src/contradiction-a.ts')
+    const evidenceB = contradictionEvidence('src/contradiction-b.ts')
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'contradiction-a-event', {
+                payloadSchemaVersion: 1,
+                observation: contradictionObservation(
+                  'contradiction-a',
+                  'src/contradiction-a.ts',
+                ),
+              }),
+              canonicalDraft('observation.recorded', 'contradiction-b-event', {
+                payloadSchemaVersion: 1,
+                observation: contradictionObservation(
+                  'contradiction-b',
+                  'src/contradiction-b.ts',
+                ),
+              }),
+              // Verify both so the staleness pass emits nothing and the
+              // contradiction pass is the only source of reread entries.
+              canonicalDraft('evidence.verified', 'contradiction-a-verified', {
+                payloadSchemaVersion: 1,
+                observationId: 'contradiction-a',
+                selector: evidenceA.selector,
+                verifier: 'test',
+                verifiedAt: '2025-01-02T03:05:05.000Z',
+                observedDigest: evidenceA.contentDigest,
+              }),
+              canonicalDraft('evidence.verified', 'contradiction-b-verified', {
+                payloadSchemaVersion: 1,
+                observationId: 'contradiction-b',
+                selector: evidenceB.selector,
+                verifier: 'test',
+                verifiedAt: '2025-01-02T03:05:05.000Z',
+                observedDigest: evidenceB.contentDigest,
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+
+    const flagged = await repository.query(
+      retrieval('contradiction-query', 'contradiction alpha beta'),
+    )
+    expect(flagged.outcome).toBe('result')
+    if (flagged.outcome !== 'result') return
+    const suspected = flagged.result.rereadRequired.filter(
+      ({ reason }) => reason === 'contradiction-suspected',
+    )
+    expect(
+      suspected.map(({ observationId }) => String(observationId)).sort(),
+    ).toEqual(['contradiction-a', 'contradiction-b'])
+    for (const entry of suspected) {
+      expect(entry.detail).toBe(
+        'contradiction_suspected: reconcile — resolve via record_decision(supersedes:[...])',
+      )
+    }
+
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('claim.superseded', 'contradiction-superseded', {
+                payloadSchemaVersion: 1,
+                observationId: 'contradiction-a',
+                supersededByObservationId: 'contradiction-b',
+                reason: 'newer decision',
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const resolved = await repository.query(
+      retrieval('contradiction-resolved-query', 'contradiction alpha beta'),
+    )
+    expect(resolved.outcome).toBe('result')
+    if (resolved.outcome !== 'result') return
+    expect(
+      resolved.result.rereadRequired.filter(
+        ({ reason }) => reason === 'contradiction-suspected',
+      ),
+    ).toEqual([])
+  })
+
+  test('contradiction grouping keys on the stableChunkId metadata key, not any 64-hex value', async () => {
+    const repository = await open(temporaryRepository())
+    const sharedStableChunkId = 'chunk:shared-stable-id'
+    const hexUnderOtherKey = 'c'.repeat(64)
+    const evidenceWithMetadata = (
+      path: string,
+      metadata: Record<string, string>,
+    ) => ({
+      ...evidenceFixture(path),
+      provenance: {
+        ...evidenceFixture(path).provenance,
+        metadata,
+      },
+    })
+    const observationWithMetadata = (
+      observationId: string,
+      path: string,
+      metadata: Record<string, string>,
+    ) => ({
+      ...observationFixture(observationId, [
+        evidenceWithMetadata(path, metadata),
+      ]),
+      kind: 'decision' as const,
+      summary: `Hex-scan ${observationId} alpha beta`,
+    })
+    const evidenceA = evidenceWithMetadata('src/stable-a.ts', {
+      stableChunkId: sharedStableChunkId,
+    })
+    const evidenceB = evidenceWithMetadata('src/stable-b.ts', {
+      stableChunkId: sharedStableChunkId,
+    })
+    const observationWithEvidence = (observationId: string, evidence: any) => ({
+      ...observationFixture(observationId, [evidence]),
+      kind: 'decision' as const,
+      summary: `Hex-scan ${observationId} alpha beta`,
+    })
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              // Shared 64-hex values under a non-canonical key must never
+              // create a contradiction topic (no overmatch).
+              canonicalDraft('observation.recorded', 'hex-key-a-event', {
+                payloadSchemaVersion: 1,
+                observation: observationWithMetadata('hex-key-a', 'src/hex-a.ts', {
+                  claimId: hexUnderOtherKey,
+                }),
+              }),
+              canonicalDraft('observation.recorded', 'hex-key-b-event', {
+                payloadSchemaVersion: 1,
+                observation: observationWithMetadata('hex-key-b', 'src/hex-b.ts', {
+                  claimId: hexUnderOtherKey,
+                }),
+              }),
+              // Shared non-hex stableChunkIds under the canonical key must
+              // group (no undermatch).
+              canonicalDraft('observation.recorded', 'stable-id-a-event', {
+                payloadSchemaVersion: 1,
+                observation: observationWithEvidence('stable-id-a', evidenceA),
+              }),
+              canonicalDraft('observation.recorded', 'stable-id-b-event', {
+                payloadSchemaVersion: 1,
+                observation: observationWithEvidence('stable-id-b', evidenceB),
+              }),
+              // Verify both stable-id observations so the staleness pass emits
+              // nothing for them and the contradiction pass is the only source
+              // of their reread entries.
+              canonicalDraft('evidence.verified', 'stable-id-a-verified', {
+                payloadSchemaVersion: 1,
+                observationId: 'stable-id-a',
+                selector: evidenceA.selector,
+                verifier: 'test',
+                verifiedAt: '2025-01-02T03:05:05.000Z',
+                observedDigest: evidenceA.contentDigest,
+              }),
+              canonicalDraft('evidence.verified', 'stable-id-b-verified', {
+                payloadSchemaVersion: 1,
+                observationId: 'stable-id-b',
+                selector: evidenceB.selector,
+                verifier: 'test',
+                verifiedAt: '2025-01-02T03:05:05.000Z',
+                observedDigest: evidenceB.contentDigest,
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+
+    const queried = await repository.query(
+      retrieval('hex-scan-query', 'alpha beta'),
+    )
+    expect(queried.outcome).toBe('result')
+    if (queried.outcome !== 'result') return
+    const suspected = queried.result.rereadRequired.filter(
+      ({ reason }) => reason === 'contradiction-suspected',
+    )
+    expect(
+      suspected.map(({ observationId }) => String(observationId)).sort(),
+    ).toEqual(['stable-id-a', 'stable-id-b'])
+  })
+
+  test('chain-fold replay: historical context for A carries the chain head source event', async () => {
+    const repository = await open(temporaryRepository())
+    const chainObservation = (observationId: string) => ({
+      ...observationFixture(observationId, []),
+      summary: 'Chain alpha superseded history',
+    })
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'chain-a-event', {
+                payloadSchemaVersion: 1,
+                observation: chainObservation('chain-a'),
+              }),
+              canonicalDraft('observation.recorded', 'chain-b-event', {
+                payloadSchemaVersion: 1,
+                observation: chainObservation('chain-b'),
+              }),
+              canonicalDraft('observation.recorded', 'chain-c-event', {
+                payloadSchemaVersion: 1,
+                observation: chainObservation('chain-c'),
+              }),
+              canonicalDraft('claim.superseded', 'chain-superseded-ab', {
+                payloadSchemaVersion: 1,
+                observationId: 'chain-a',
+                supersededByObservationId: 'chain-b',
+                reason: 'superseded by b',
+              }),
+              canonicalDraft('claim.superseded', 'chain-superseded-bc', {
+                payloadSchemaVersion: 1,
+                observationId: 'chain-b',
+                supersededByObservationId: 'chain-c',
+                reason: 'superseded by c',
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const queried = await repository.query(
+      retrieval('chain-query', 'chain alpha superseded history', {
+        includeHistorical: true,
+      }),
+    )
+    expect(queried.outcome).toBe('result')
+    if (queried.outcome !== 'result') return
+    const entryA = queried.result.historicalContext.find(
+      ({ eventIds }) => eventIds[0] === 'chain-a-event',
+    )
+    expect(entryA).toBeDefined()
+    // A -> B -> C: the head pointer resolves through both supersession edges
+    // to C, whose source event id must appear in A's eventIds.
+    expect(entryA?.eventIds.map(String)).toContain('chain-c-event')
+  })
+
+  test('reinforced: claim.reinforced raises usefulness and reorders against an unreinforced control', async () => {
+    const buildObservations = () => [
+      {
+        ...observationFixture('reinforced-first', []),
+        summary: 'Reinforce usage sibling',
+      },
+      {
+        ...observationFixture('reinforced-second', []),
+        summary: 'Reinforce usage sibling',
+      },
+    ]
+
+    // Control store: identical shape, no reinforcement — the later source
+    // wins on the sourceSequence tiebreak.
+    const controlRepository = await open(temporaryRepository())
+    expect(
+      (
+        await controlRepository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: buildObservations().map((observation, index) =>
+              canonicalDraft('observation.recorded', `reinforce-control-${index}`, {
+                payloadSchemaVersion: 1,
+                observation,
+              }),
+            ),
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const control = await controlRepository.query(
+      retrieval('reinforce-control-query', 'reinforce usage sibling'),
+    )
+    expect(control.outcome).toBe('result')
+    if (control.outcome !== 'result') return
+    expect(
+      control.result.reusableDiscovery.map(
+        ({ observation }) => observation.observationId as string,
+      ),
+    ).toEqual(['reinforced-second', 'reinforced-first'])
+
+    // Treatment store: same shape, but the first sibling is reinforced.
+    const reinforcedRepository = await open(temporaryRepository())
+    expect(
+      (
+        await reinforcedRepository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              ...buildObservations().map((observation, index) =>
+                canonicalDraft('observation.recorded', `reinforce-used-${index}`, {
+                  payloadSchemaVersion: 1,
+                  observation,
+                }),
+              ),
+              canonicalDraft('claim.reinforced', 'reinforce-event', {
+                payloadSchemaVersion: 1,
+                observationId: 'reinforced-first',
+                claimId: 'c'.repeat(64),
+                reason: 'reinforced by the operator',
+                reinforcedAt: '2025-01-02T03:06:05.000Z',
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const reinforced = await reinforcedRepository.query(
+      retrieval('reinforce-query', 'reinforce usage sibling'),
+    )
+    expect(reinforced.outcome).toBe('result')
+    if (reinforced.outcome !== 'result') return
+    // The reinforced sibling now carries a higher usefulness score and
+    // outranks the unreinforced one despite its earlier source sequence.
+    expect(
+      reinforced.result.reusableDiscovery.map(
+        ({ observation }) => observation.observationId as string,
+      ),
+    ).toEqual(['reinforced-first', 'reinforced-second'])
+    const scoredEntry = reinforced.result.reusableDiscovery[0]
+    const controlEntry = control.result.reusableDiscovery.find(
+      ({ observation }) =>
+        (observation.observationId as string) === 'reinforced-first',
+    )
+    expect(scoredEntry?.score).toBeGreaterThan(controlEntry!.score)
+    expect(
+      scoredEntry?.reasons.some(
+        ({ code, detail }) =>
+          code === 'reusability' && detail === 'P4 usage correlation score.',
+      ),
+    ).toBe(true)
+  })
+
+  test('mixed-version repair: a pre-P7 store (user_version 2) is upgraded to 3 and stale claim_dedup rows are reconciled on open', async () => {
+    const root = temporaryRepository()
+    const claimId = 'd'.repeat(64)
+    const staleClaimId = 'e'.repeat(64)
+    const writer = await open(root)
+    expect(
+      (
+        await writer.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'reconcile-one', {
+                payloadSchemaVersion: 1,
+                observation: {
+                  ...observationFixture('reconcile-obs-one', [
+                    evidenceFixture(),
+                  ]),
+                  provenance: {
+                    origin: 'repository' as const,
+                    recordedBy: 'test',
+                    sourceEventIds: [],
+                    metadata: { claimId },
+                  },
+                },
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    await writer.close()
+
+    // Simulate a pre-P7 build: it left the store at user_version 2 and its
+    // compaction/rebuild truncated projections without maintaining
+    // claim_dedup, leaving a row mapped to an observation whose anchor
+    // events were deleted.
+    const legacy = new Database(
+      join(root, '.openbuff', 'memory', 'memory-v2.sqlite'),
+    )
+    try {
+      legacy.exec('PRAGMA user_version = 2')
+      legacy
+        .query(
+          "DELETE FROM memory_projection_metadata WHERE key = 'claim_dedup_backfill'",
+        )
+        .run()
+      legacy
+        .query(
+          'INSERT INTO claim_dedup (claim_id, observation_id) VALUES (?1, ?2)',
+        )
+        .run(staleClaimId, 'reconcile-obs-gone')
+    } finally {
+      legacy.close()
+    }
+
+    // Opening with the new build upgrades the store to version 3 (a pre-P7
+    // build sharing the file now fails closed at its own open) and
+    // reconciles the stale dedup row: only the live claim survives.
+    const reopened = await open(root)
+    const versionCheck = new Database(
+      join(root, '.openbuff', 'memory', 'memory-v2.sqlite'),
+    )
+    try {
+      expect(
+        (
+          versionCheck.query('PRAGMA user_version').get() as {
+            user_version: number
+          }
+        ).user_version,
+      ).toBe(3)
+    } finally {
+      versionCheck.close()
+    }
+    const reconciled = await reopened.getClaimDedup({ projectId: 'project-1' })
+    expect(reconciled.status).toBe('ok')
+    if (reconciled.status !== 'ok') return
+    expect(reconciled.entries).toEqual([
+      { claimId, observationId: 'reconcile-obs-one' },
+    ])
+  })
+
+  test('observation status: corrupted projection state fails closed to unknown', async () => {
+    const repository = await open(temporaryRepository())
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'status-one', {
+                payloadSchemaVersion: 1,
+                observation: observationFixture('status-obs-active', [
+                  evidenceFixture(),
+                ]),
+              }),
+              canonicalDraft('observation.recorded', 'status-two', {
+                payloadSchemaVersion: 1,
+                observation: observationFixture('status-obs-retracted', [
+                  evidenceFixture(),
+                ]),
+              }),
+              canonicalDraft('observation.recorded', 'status-three', {
+                payloadSchemaVersion: 1,
+                observation: observationFixture('status-obs-corrupt', [
+                  evidenceFixture(),
+                ]),
+              }),
+              canonicalDraft('observation.recorded', 'status-four', {
+                payloadSchemaVersion: 1,
+                observation: observationFixture('status-obs-flat', [
+                  evidenceFixture(),
+                ]),
+              }),
+              canonicalDraft('claim.forgotten', 'status-forgotten', {
+                payloadSchemaVersion: 1,
+                observationIds: ['status-obs-retracted'],
+                reason: 'duplicate',
+                requestedBy: 'test',
+                evidenceDisposition: 'retain-artifacts',
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+
+    // Corrupt two projection rows directly: one unparseable, one valid JSON
+    // that is not an object carrying a lifecycle field.
+    const corruptor = new Database(repository.databasePath)
+    try {
+      corruptor
+        .query('UPDATE memory_claims SET state_json = ?1 WHERE entity_id = ?2')
+        .run('not json at all', 'status-obs-corrupt')
+      corruptor
+        .query('UPDATE memory_claims SET state_json = ?1 WHERE entity_id = ?2')
+        .run('"flat-string"', 'status-obs-flat')
+    } finally {
+      corruptor.close()
+    }
+
+    const status = await repository.getObservationStatus({
+      projectId: ProjectIdSchema.parse('project-1'),
+      observationIds: [
+        'status-obs-active',
+        'status-obs-retracted',
+        'status-obs-corrupt',
+        'status-obs-flat',
+      ],
+    })
+    expect(status.status).toBe('ok')
+    if (status.status !== 'ok') return
+    const byId = new Map(
+      status.entries.map((entry) => [entry.observationId, entry.status]),
+    )
+    // Readable state with a recognized non-retraction lifecycle -> active.
+    expect(byId.get('status-obs-active')).toBe('active')
+    // Retraction lifecycle -> retracted.
+    expect(byId.get('status-obs-retracted')).toBe('retracted')
+    // Corrupted projection state fails closed: never supersession-eligible.
+    expect(byId.get('status-obs-corrupt')).toBe('unknown')
+    expect(byId.get('status-obs-flat')).toBe('unknown')
+  })
+
+  test('claim_dedup continuity: corrections and consolidations reseed the surviving observation', async () => {
+    const repository = await open(temporaryRepository())
+    const claimId = 'f'.repeat(64)
+    const withClaim = (observationId: string) => ({
+      ...observationFixture(observationId, [evidenceFixture()]),
+      provenance: {
+        origin: 'repository' as const,
+        recordedBy: 'test',
+        sourceEventIds: [],
+        metadata: { claimId },
+      },
+    })
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'continuity-one', {
+                payloadSchemaVersion: 1,
+                observation: withClaim('continuity-src'),
+              }),
+              canonicalDraft('claim.corrected', 'continuity-correct', {
+                payloadSchemaVersion: 1,
+                observationId: 'continuity-src',
+                correction: withClaim('continuity-fix'),
+                reason: 'corrected decision text',
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    // The correction deleted the source observation's dedup row but reseeded
+    // it from the correction observation's provenance, so a later duplicate
+    // record dedup-hits the SURVIVING correction instead of bloating.
+    const corrected = await repository.getClaimDedup({ projectId: 'project-1' })
+    expect(corrected.status).toBe('ok')
+    if (corrected.status !== 'ok') return
+    expect(corrected.entries).toEqual([
+      { claimId, observationId: 'continuity-fix' },
+    ])
+
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'continuity-two', {
+                payloadSchemaVersion: 1,
+                observation: withClaim('continuity-sibling'),
+              }),
+              canonicalDraft('claim.consolidated', 'continuity-consolidate', {
+                payloadSchemaVersion: 1,
+                sourceObservationIds: ['continuity-fix', 'continuity-sibling'],
+                canonicalObservation: withClaim('continuity-head'),
+                reason: 'consolidated duplicate decisions',
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    // The consolidation deleted both sources' dedup rows and seeded the
+    // canonical head, preserving dedup continuity for the surviving claim.
+    const consolidated = await repository.getClaimDedup({
+      projectId: 'project-1',
+    })
+    expect(consolidated.status).toBe('ok')
+    if (consolidated.status !== 'ok') return
+    expect(consolidated.entries).toEqual([
+      { claimId, observationId: 'continuity-head' },
+    ])
+
+    // A rebuild reproduces the same continuity (first-wins replay folds the
+    // seeded head exactly once).
+    expect((await repository.rebuildProjections()).status).toBe('ok')
+    const rebuilt = await repository.getClaimDedup({ projectId: 'project-1' })
+    expect(rebuilt.status).toBe('ok')
+    if (rebuilt.status !== 'ok') return
+    expect(rebuilt.entries).toEqual(consolidated.entries)
   })
 })

@@ -44,18 +44,46 @@ import {
   type MemoryVerifyOutcome,
   type MemoryVerifyRequest,
 } from '../../../../common/src/types/memory-v2'
+import {
+  deriveUsefulnessTier,
+  scoreUsefulness,
+  type UsefulnessTier,
+} from './usefulness-scorer'
+import {
+  observationIdsReferencedBy,
+  selectCompactionCandidates,
+  type GCRelevantEnvelope,
+} from '../../../../common/src/util/compaction-eligibility'
 import type {
   GcCandidateSelection,
+  MemoryObservationStatusEntry,
+  MemoryObservationStatusReadRequest,
   MemoryRepositoryV2,
   MemoryStoreStats,
   PrivilegedCompactionInput,
   PrivilegedCompactionResult,
 } from '../../../../sdk/src/services/memory-v2/types'
+import {
+  detectContradictions,
+  extractStableChunkIds,
+  resolveSupersessionHead,
+  type ContradictionCandidate,
+} from '../../../../common/src/util/contradiction-detector'
+import type { ConceptCorpusEntry, ConceptExpansion } from './concept-index'
 
 export type RuntimeNeutralMemoryRepositoryV2 = MemoryRepositoryV2
 export type RuntimeNeutralMemoryEventV2 = MemoryEventEnvelope
 
-const SCHEMA_VERSION = 2
+/**
+ * Store file schema version (PRAGMA user_version). Bumped 2 -> 3 by the P7
+ * mixed-version repair: a build whose own SCHEMA_VERSION is lower than the
+ * store's fails closed at open (its preflight/migrate reject version > their
+ * SCHEMA_VERSION), so a pre-P7 build sharing this store can never open it —
+ * closing the window where its GC selection (unaware of claim.reinforced)
+ * could archive a reinforced observation and where its projection rebuild
+ * could leave claim_dedup stale.
+ */
+const SCHEMA_VERSION = 3
 const DEFAULT_DATABASE_PATH = join('.openbuff', 'memory', 'memory-v2.sqlite')
 const DEFAULT_BUSY_TIMEOUT_MS = 2_500
 const MAX_BUSY_TIMEOUT_MS = 10_000
@@ -65,6 +93,30 @@ const MAX_QUERY_PAYLOAD_BYTES = 8 * 1024 * 1024
 const MAX_REPLAY_EVENTS = 10_000
 const GC_SELECT_LIMIT = 10_000
 const COMPACTION_APPLY_MAX = 100
+/** Metadata key tracking the claim_dedup cold-start backfill cursor. */
+const CLAIM_DEDUP_BACKFILL_KEY = 'claim_dedup_backfill'
+/** Event types the shared P6 compaction-eligibility selection consumes. */
+const GC_RELEVANT_EVENT_TYPES: readonly string[] = [
+  'observation.recorded',
+  'claim.forgotten',
+  'claim.superseded',
+  'claim.corrected',
+  'claim.consolidated',
+  'claim.pinned',
+  'claim.reinforced',
+  'evidence.attached',
+  'evidence.verified',
+  'evidence.invalidated',
+  'evidence.rebound',
+  'observation.reused',
+]
+/** Multi-referencing events that never belong to a single observation group. */
+const GC_SHARED_EVENT_TYPES: readonly string[] = [
+  'claim.forgotten',
+  'claim.consolidated',
+  'claim.corrected',
+  'observation.reused',
+]
 const DIGEST_PATTERN = /^[a-z0-9][a-z0-9+.-]{0,31}:[A-Fa-f0-9]{16,256}$/
 const NO_DELETE_TRIGGER_SQL = `CREATE TRIGGER memory_events_no_delete BEFORE DELETE ON memory_events BEGIN SELECT RAISE(ABORT, 'canonical memory events are append only'); END;`
 const CANONICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
@@ -74,11 +126,13 @@ const CANONICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'session.ended',
   'artifact.classified',
   'observation.recorded',
+  'observation.reused',
   'claim.consolidated',
   'claim.corrected',
   'claim.superseded',
   'claim.forgotten',
   'claim.pinned',
+  'claim.reinforced',
   'claim.archived',
   'evidence.attached',
   'evidence.verified',
@@ -87,6 +141,12 @@ const CANONICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'migration.v1.reserved',
   'migration.v1.imported',
   'coverage.recorded',
+  'query.started',
+  'query.completed',
+  'query.failed',
+  'projection.rebuild.requested',
+  'projection.rebuild.completed',
+  'projection.rebuild.failed',
 ])
 
 export type MemoryV2FailureKind =
@@ -184,6 +244,17 @@ export interface BunSQLiteMemoryRepositoryOptions {
    * hardening below as best-effort defense-in-depth.
    */
   requireSecureOpen?: boolean
+  /**
+   * Advisory semantic recall expansion. The expander receives the retrieval
+   * request plus a bounded corpus of active observations and may return extra
+   * observation ids appended AFTER the lexical ranking as a concept-advisory
+   * tail. The expander must degrade internally (never throw); when absent,
+   * recall expansion is off and results are purely lexical.
+   */
+  recallExpander?: (params: {
+    request: MemoryRetrievalRequest
+    corpus: ConceptCorpusEntry[]
+  }) => Promise<ConceptExpansion | null>
 }
 
 export type BunSQLiteMemoryRepositoryOpenResult =
@@ -285,6 +356,49 @@ interface QueryAdmissionRow {
   metadata_bytes: number
 }
 
+interface UsageRow {
+  observation_id: string
+  used_count: number
+  ignored_count: number
+  staled_count: number
+  last_mechanism: string | null
+  last_turn_id: string | null
+  last_sequence: number
+}
+
+interface ClaimDedupRow {
+  claim_id: string
+  observation_id: string
+}
+
+interface ObservationStatusRow {
+  entity_id: string
+  task_id: string | null
+  state_json: string
+}
+
+/**
+ * memory_claims has no dedicated status column: retraction state lives in the
+ * projection state JSON's `lifecycle` field. upsertClaim writes
+ * 'forgotten'/'superseded'/'corrected' on the claim.forgotten/superseded/
+ * corrected folds, markProjectionLifecycle writes 'superseded' on
+ * consolidation sources, and claim.archived folds write 'archived'. Rows whose
+ * lifecycle is one of these retraction markers map to 'retracted'; a readable
+ * state with a recognized non-retraction lifecycle ('canonical',
+ * consolidation-head 'consolidated', 'pinned') maps to 'active'. A row whose
+ * state_json is unreadable, is not an object, or lacks a recognizable
+ * lifecycle maps to 'unknown' — the fail-closed branch: supersession-safety
+ * callers accept only 'active' targets, so a corrupted projection row can
+ * never be superseded. Observation ids absent from memory_claims are omitted
+ * entirely so unknown targets cannot be superseded either.
+ */
+const RETRACTED_CLAIM_LIFECYCLES: ReadonlySet<string> = new Set([
+  'forgotten',
+  'superseded',
+  'corrected',
+  'archived',
+])
+
 interface QueryScanResult {
   rows: EventRow[]
   eventCapReached: boolean
@@ -335,6 +449,7 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
   private constructor(
     private readonly database: Database,
     databasePath: string,
+    private readonly recallExpander?: BunSQLiteMemoryRepositoryOptions['recallExpander'],
   ) {
     this.databasePath = databasePath
   }
@@ -378,6 +493,7 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
         repository: new BunSQLiteMemoryRepository(
           database,
           preparedPath.databasePath,
+          options.recallExpander,
         ),
         openPosture: SQLITE_OPEN_POSTURE,
       }
@@ -689,6 +805,7 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
             const sequence = Number(inserted.lastInsertRowid)
             applyProjection(this.database, event, sequence)
             setProjectionCursor(this.database, sequence)
+            setClaimDedupBackfillCursor(this.database, sequence)
             results.push({ eventId: event.eventId, sequence, duplicate: false })
           }
         }
@@ -802,6 +919,9 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
       const rebuild = this.database.transaction(() => {
         for (const table of PROJECTION_TABLES)
           this.database.exec(`DELETE FROM ${table}`)
+        this.database.exec('DELETE FROM memory_usage')
+        // claim_dedup is rebuilt from the surviving log during the replay.
+        this.database.exec('DELETE FROM claim_dedup')
         setProjectionCursor(this.database, 0)
         return replayProjections(this.database)
       })
@@ -827,6 +947,223 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
         claims: readProjectionRows(this.database, 'memory_claims'),
         evidence: readProjectionRows(this.database, 'memory_evidence'),
         discoveries: readProjectionRows(this.database, 'memory_discoveries'),
+      }
+    } catch (error) {
+      return { status: 'error', error: classifyStorageError(error) }
+    }
+  }
+
+  /**
+   * Bounded read of the P4 usage projection. Filters by the bound project
+   * (single-project stores) and either the given observation ids (max 64) or
+   * up to 256 rows in code-point order of observation_id.
+   */
+  async getUsage(params: {
+    projectId: string
+    observationIds?: string[]
+  }): Promise<
+    MemoryV2Result<{
+      usage: Array<{
+        observationId: string
+        usedCount: number
+        ignoredCount: number
+        staledCount: number
+        lastMechanism: string | null
+        lastTurnId: string | null
+        lastSequence: number
+      }>
+    }>
+  > {
+    const unavailable = this.requireOpen()
+    if (unavailable) return unavailable
+
+    try {
+      this.requireBoundProject(params.projectId)
+      const filtered = Array.isArray(params.observationIds)
+        ? params.observationIds
+            .filter(
+              (id): id is string =>
+                typeof id === 'string' && id.length > 0 && id.length <= 512,
+            )
+            .slice(0, 64)
+        : undefined
+      if (filtered !== undefined && filtered.length === 0) {
+        return { status: 'ok', usage: [] }
+      }
+      const rows =
+        filtered !== undefined
+          ? (this.database
+              .query(
+                `SELECT observation_id, used_count, ignored_count, staled_count,
+                        last_mechanism, last_turn_id, last_sequence
+                   FROM memory_usage
+                  WHERE observation_id IN (${filtered
+                    .map((_, index) => `?${index + 1}`)
+                    .join(', ')})
+                  ORDER BY observation_id
+                  LIMIT 256`,
+              )
+              .all(...filtered) as UsageRow[])
+          : (this.database
+              .query(
+                `SELECT observation_id, used_count, ignored_count, staled_count,
+                        last_mechanism, last_turn_id, last_sequence
+                   FROM memory_usage
+                  ORDER BY observation_id
+                  LIMIT 256`,
+              )
+              .all() as UsageRow[])
+      return {
+        status: 'ok',
+        usage: rows.map((row) => ({
+          observationId: row.observation_id,
+          usedCount: row.used_count,
+          ignoredCount: row.ignored_count,
+          staledCount: row.staled_count,
+          lastMechanism: row.last_mechanism ?? null,
+          lastTurnId: row.last_turn_id ?? null,
+          lastSequence: row.last_sequence,
+        })),
+      }
+    } catch (error) {
+      return { status: 'error', error: classifyStorageError(error) }
+    }
+  }
+
+  /**
+   * Bounded read of the P7 claim-dedup projection. Filters by the bound
+   * project (single-project stores) and either the given claim ids (max 64)
+   * or up to 256 rows in code-point order of claim_id.
+   */
+  async getClaimDedup(params: {
+    projectId: string
+    claimIds?: string[]
+  }): Promise<
+    MemoryV2Result<{
+      entries: Array<{
+        claimId: string
+        observationId: string
+      }>
+    }>
+  > {
+    const unavailable = this.requireOpen()
+    if (unavailable) return unavailable
+
+    try {
+      this.requireBoundProject(params.projectId)
+      const filtered = Array.isArray(params.claimIds)
+        ? params.claimIds
+            .filter(
+              (id): id is string =>
+                typeof id === 'string' && id.length >= 1 && id.length <= 64,
+            )
+            .slice(0, 64)
+        : undefined
+      if (filtered !== undefined && filtered.length === 0) {
+        return { status: 'ok', entries: [] }
+      }
+      const rows =
+        filtered !== undefined
+          ? (this.database
+              .query(
+                `SELECT claim_id, observation_id
+                   FROM claim_dedup
+                  WHERE claim_id IN (${filtered
+                    .map((_, index) => `?${index + 1}`)
+                    .join(', ')})
+                  ORDER BY claim_id
+                  LIMIT 256`,
+              )
+              .all(...filtered) as ClaimDedupRow[])
+          : (this.database
+              .query(
+                `SELECT claim_id, observation_id
+                   FROM claim_dedup
+                  ORDER BY claim_id
+                  LIMIT 256`,
+              )
+              .all() as ClaimDedupRow[])
+      return {
+        status: 'ok',
+        entries: rows.map((row) => ({
+          claimId: row.claim_id,
+          observationId: row.observation_id,
+        })),
+      }
+    } catch (error) {
+      return { status: 'error', error: classifyStorageError(error) }
+    }
+  }
+
+  /**
+   * Bounded read of the P7 observation lifecycle status projection. Filters
+   * by the bound project (single-project stores) and the given observation
+   * ids (max 64), returning up to 256 rows in code-point order of
+   * observation_id. Targets absent from memory_claims are omitted from the
+   * result so callers fail closed on unknown ids.
+   */
+  async getObservationStatus(
+    params: MemoryObservationStatusReadRequest,
+  ): Promise<MemoryV2Result<{ entries: MemoryObservationStatusEntry[] }>> {
+    const unavailable = this.requireOpen()
+    if (unavailable) return unavailable
+
+    try {
+      this.requireBoundProject(params.projectId)
+      const filtered = Array.isArray(params.observationIds)
+        ? [...new Set(params.observationIds)]
+            .filter(
+              (id): id is string =>
+                typeof id === 'string' && id.length >= 1 && id.length <= 128,
+            )
+            .slice(0, 64)
+        : []
+      if (filtered.length === 0) {
+        return { status: 'ok', entries: [] }
+      }
+      const rows = this.database
+        .query(
+          `SELECT entity_id, task_id, state_json
+             FROM memory_claims
+            WHERE entity_id IN (${filtered
+              .map((_, index) => `?${index + 1}`)
+              .join(', ')})
+            ORDER BY entity_id
+            LIMIT 256`,
+        )
+        .all(...filtered) as ObservationStatusRow[]
+      return {
+        status: 'ok',
+        entries: rows
+          .map((row) => {
+            let state: unknown
+            let readable = true
+            try {
+              state = JSON.parse(row.state_json) as unknown
+            } catch {
+              // Unreadable or malformed projection state fails closed: the
+              // row maps to 'unknown', which supersession-safety callers
+              // (accepting only 'active' targets) treat as ineligible.
+              readable = false
+              state = undefined
+            }
+            const lifecycle = nestedValue(state, 'lifecycle')
+            return {
+              observationId: row.entity_id,
+              taskId: row.task_id ?? '',
+              status: !readable
+                ? ('unknown' as const)
+                : typeof lifecycle === 'string' &&
+                    RETRACTED_CLAIM_LIFECYCLES.has(lifecycle)
+                  ? ('retracted' as const)
+                  : typeof lifecycle === 'string'
+                    ? ('active' as const)
+                    : ('unknown' as const),
+            }
+          })
+          .sort((left, right) =>
+            compareUnicodeCodePoints(left.observationId, right.observationId),
+          ),
       }
     } catch (error) {
       return { status: 'error', error: classifyStorageError(error) }
@@ -861,11 +1198,12 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
         .map(envelopeFromRow)
       return {
         outcome: 'result',
-        result: buildLexicalResult(
+        result: await buildLexicalResult(
           parsed.data,
           events,
           scan.eventCapReached,
           scan.payloadBudgetReached,
+          this.recallExpander,
         ),
       }
     } catch (error) {
@@ -1082,6 +1420,23 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
           )
         afterSequence = cursor.sequence
       }
+      // Tolerant reader: `skippedUnknownCount` counts rows whose event_type is
+      // not a recognized canonical type (unknown/future types), which are
+      // skipped so a future additive event type never bricks an older reader.
+      // A KNOWN canonical type that fails strict decode is a hard error
+      // (surfaced as a failed/rejected export outcome), never silently dropped.
+      // export() issues exactly ONE raw query per call and builds the page from
+      // that single raw page:
+      // - `nextAfterEventId` is the authoritative opaque cursor, driven by the
+      //   RAW rows (never recomputed from the filtered events), and a `null`
+      //   cursor is the only terminal signal. It can advance past skipped tail
+      //   rows, so an empty `events[]` MAY be paired with a non-null cursor
+      //   when the whole raw page was dropped; consumers must guard
+      //   loop-termination on the cursor, never on `events.length`.
+      // - `rawTailEventId` is the id of the last RAW row in the page
+      //   (decodable or not) and is the authoritative source for
+      //   store-tail/CAS derivation; it is omitted only when the page observed
+      //   zero raw rows.
       const rows = this.database
         .query(
           `SELECT sequence, event_id, idempotency_key, event_type, occurred_at,
@@ -1097,15 +1452,31 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
           parsed.data.projectId,
           parsed.data.limit,
         ) as EventRow[]
-      const events = rows.map(envelopeFromRow)
+      const events: MemoryEventEnvelope[] = []
+      let skippedUnknownCount = 0
+      for (const row of rows) {
+        if (!CANONICAL_EVENT_TYPES.has(row.event_type)) {
+          skippedUnknownCount += 1
+          continue
+        }
+        events.push(envelopeFromRow(row))
+      }
+      const lastRow = rows[rows.length - 1]
+      const nextAfterEventId: MemoryEventEnvelope['eventId'] | null =
+        rows.length === parsed.data.limit
+          ? (lastRow!.event_id as MemoryEventEnvelope['eventId'])
+          : null
       return {
         outcome: 'page',
         events,
-        nextAfterEventId:
-          rows.length === parsed.data.limit
-            ? (rows[rows.length - 1]
-                ?.event_id as MemoryEventEnvelope['eventId'])
-            : null,
+        nextAfterEventId,
+        ...(rows.length > 0
+          ? {
+              rawTailEventId:
+                lastRow!.event_id as MemoryEventEnvelope['eventId'],
+            }
+          : {}),
+        skippedUnknownCount,
       }
     } catch (error) {
       const failure = classifyStorageError(error)
@@ -1235,40 +1606,55 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
           retryable: false,
         })
       }
-      const cutoff = new Date(
-        Date.now() - request.olderThanDays * 24 * 60 * 60 * 1000,
-      ).toISOString()
+      const eventTypePlaceholders = GC_RELEVANT_EVENT_TYPES.map(
+        (_, index) => `?${index + 3}`,
+      ).join(',')
       const rows = this.database
         .query(
-          `SELECT event_id, event_type, occurred_at FROM memory_events
+          `SELECT event_id, event_type, sequence, occurred_at, payload_json FROM memory_events
             WHERE json_extract(metadata_json, '$.projectId') = ?1
-              AND event_type != 'claim.archived'
-            ORDER BY occurred_at ASC, sequence ASC
+              AND event_type IN (${eventTypePlaceholders})
+            ORDER BY sequence ASC
             LIMIT ?2`,
         )
-        .all(request.projectId, GC_SELECT_LIMIT) as Array<{
+        .all(
+          request.projectId,
+          GC_SELECT_LIMIT,
+          ...GC_RELEVANT_EVENT_TYPES,
+        ) as Array<{
         event_id: string
         event_type: string
+        sequence: number
         occurred_at: string
+        payload_json: string
       }>
-      const staleTypes = new Set([
-        'claim.forgotten',
-        'claim.superseded',
-        'claim.corrected',
-      ])
-      const candidates = rows
-        .filter((row) => staleTypes.has(row.event_type) || row.occurred_at < cutoff)
-        .sort((left, right) => {
-          const leftStale = staleTypes.has(left.event_type) ? 0 : 1
-          const rightStale = staleTypes.has(right.event_type) ? 0 : 1
-          if (leftStale !== rightStale) return leftStale - rightStale
-          if (left.occurred_at !== right.occurred_at)
-            return left.occurred_at < right.occurred_at ? -1 : 1
-          return left.event_id < right.event_id ? -1 : left.event_id > right.event_id ? 1 : 0
+      const envelopes: GCRelevantEnvelope[] = []
+      let asOfTurnWall = '1970-01-01T00:00:00.000Z'
+      for (const row of rows) {
+        let payload: unknown
+        try {
+          payload = JSON.parse(row.payload_json) as unknown
+        } catch {
+          // Malformed payload rows are skipped; selection is best-effort.
+          // The privileged compaction pre-check remains fail-closed.
+          continue
+        }
+        envelopes.push({
+          eventType: row.event_type,
+          eventId: row.event_id,
+          sequence: Number(row.sequence),
+          occurredAt: row.occurred_at,
+          payload,
         })
-        .slice(0, request.maxEvents)
+        if (row.occurred_at > asOfTurnWall) asOfTurnWall = row.occurred_at
+      }
+      const selection = selectCompactionCandidates({
+        envelopes,
+        maxEvents: request.maxEvents,
+        asOfTurnWall,
+      })
       return {
-        eventIds: candidates.map((row) => row.event_id) as GcCandidateSelection['eventIds'],
+        eventIds: selection.eventIds as GcCandidateSelection['eventIds'],
       }
     } catch (error) {
       if (error instanceof MemoryV2StorageError) throw error
@@ -1362,6 +1748,100 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
       if (existing.length !== input.eventIds.length) {
         fail('The privileged compaction events were not found for this project.')
       }
+      // P6 fail-closed closure verification BEFORE the delete trigger is
+      // dropped: every observation referenced by a batch event must have its
+      // anchor 'observation.recorded' inside the batch (group closure), and
+      // no shared event outside the batch may reference an archived
+      // observation (resurrection / shared-event corruption gate).
+      const batchRows = this.database
+        .query(
+          `SELECT event_id, event_type, sequence, occurred_at, payload_json FROM memory_events
+            WHERE event_id IN (${placeholders})
+              AND json_extract(metadata_json, '$.projectId') = ?${projectParamIndex}`,
+        )
+        .all(...input.eventIds, input.projectId) as Array<{
+        event_id: string
+        event_type: string
+        sequence: number
+        occurred_at: string
+        payload_json: string
+      }>
+      const batchEnvelopes: GCRelevantEnvelope[] = []
+      for (const row of batchRows) {
+        let payload: unknown
+        try {
+          payload = JSON.parse(row.payload_json) as unknown
+        } catch {
+          fail('The privileged compaction batch contains a malformed event payload.')
+        }
+        batchEnvelopes.push({
+          eventType: row.event_type,
+          eventId: row.event_id,
+          sequence: Number(row.sequence),
+          occurredAt: row.occurred_at,
+          payload,
+        })
+      }
+      const referencedObservationIds = new Set<string>()
+      const batchAnchoredObservationIds = new Set<string>()
+      const batchEventIdSet = new Set(batchEnvelopes.map((envelope) => envelope.eventId))
+      for (const envelope of batchEnvelopes) {
+        for (const id of observationIdsReferencedBy(envelope.eventType, envelope.payload)) {
+          referencedObservationIds.add(id)
+        }
+        if (envelope.eventType === 'observation.recorded') {
+          for (const id of observationIdsReferencedBy(envelope.eventType, envelope.payload)) {
+            batchAnchoredObservationIds.add(id)
+          }
+        }
+      }
+      for (const id of referencedObservationIds) {
+        if (!batchAnchoredObservationIds.has(id)) {
+          fail(
+            `The privileged compaction batch does not close the observation group for ${id}: the observation.recorded anchor is missing.`,
+          )
+        }
+      }
+      const batchEventTypePlaceholders = GC_RELEVANT_EVENT_TYPES.map(
+        (_, index) => `?${input.eventIds.length + 1 + index}`,
+      ).join(',')
+      const sharedOutside = this.database
+        .query(
+          `SELECT event_id, event_type, payload_json FROM memory_events
+            WHERE event_id NOT IN (${placeholders})
+              AND event_type IN (${batchEventTypePlaceholders})
+              AND json_extract(metadata_json, '$.projectId') = ?${
+                input.eventIds.length + GC_RELEVANT_EVENT_TYPES.length + 1
+              }`,
+        )
+        .all(
+          ...input.eventIds,
+          ...GC_RELEVANT_EVENT_TYPES,
+          input.projectId,
+        ) as Array<{
+        event_id: string
+        event_type: string
+        payload_json: string
+      }>
+      for (const row of sharedOutside) {
+        if (!GC_SHARED_EVENT_TYPES.includes(row.event_type)) continue
+        if (batchEventIdSet.has(row.event_id)) continue
+        let payload: unknown
+        try {
+          payload = JSON.parse(row.payload_json) as unknown
+        } catch {
+          // Outside rows keep selection's tolerant posture; only batch rows
+          // are fail-closed here.
+          continue
+        }
+        const references = observationIdsReferencedBy(row.event_type, payload)
+        const conflict = references.find((id) => referencedObservationIds.has(id))
+        if (conflict !== undefined) {
+          fail(
+            `Privileged compaction closure violated: shared event ${row.event_id} outside the batch references archived observation ${conflict}.`,
+          )
+        }
+      }
       this.database.exec('DROP TRIGGER IF EXISTS memory_events_no_delete')
       const deleted = this.database
         .query(
@@ -1400,6 +1880,14 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
           prepared.artifactId,
         )
       for (const table of PROJECTION_TABLES) this.database.exec(`DELETE FROM ${table}`)
+      // The usage projection must stay consistent with the surviving event log:
+      // clearing the canonical events (including archived 'observation.reused'
+      // events) invalidates their usage counters, so memory_usage is rebuilt
+      // from scratch exactly like every other projection table (matches
+      // rebuildProjections).
+      this.database.exec('DELETE FROM memory_usage')
+      // claim_dedup is rebuilt from the surviving log during the replay.
+      this.database.exec('DELETE FROM claim_dedup')
       setProjectionCursor(this.database, 0)
       replayProjections(this.database, Number.MAX_SAFE_INTEGER)
       this.database.exec('COMMIT')
@@ -1687,7 +2175,8 @@ function preflightExistingDatabase(prepared: PreparedDatabasePath): void {
         retryable: false,
       })
     }
-    if (version === 1 || version === 2) validateSchemaShape(database, version)
+    if (version >= 1 && version <= SCHEMA_VERSION)
+      validateSchemaShape(database, version)
     else if (version !== 0) throw incompatibleSchemaError()
   } finally {
     database?.close()
@@ -1700,7 +2189,7 @@ function validateSchemaShape(database: Database, version: number): void {
     'memory_projection_metadata',
     'memory_store_capabilities',
   ]
-  if (version === 2) requiredTables.push(...PROJECTION_TABLES)
+  if (version >= 2) requiredTables.push(...PROJECTION_TABLES)
   const tables = database
     .query(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${requiredTables.map(() => '?').join(',')})`,
@@ -1727,7 +2216,7 @@ function validateSchemaShape(database: Database, version: number): void {
     'fallback',
     'value',
   ])
-  if (version === 2) {
+  if (version >= 2) {
     for (const table of PROJECTION_TABLES) {
       assertTableColumns(database, table, [
         'entity_id',
@@ -1856,12 +2345,48 @@ function migrate(database: Database): void {
   try {
     if (version < 1) database.exec(MIGRATION_1)
     if (version < 2) database.exec(MIGRATION_2)
+    // Additive P4 projection table: created idempotently on every open so
+    // existing stores gain it without a structural migration.
+    database.exec(MEMORY_USAGE_DDL)
+    // Additive P7 projection table: created idempotently on every open so
+    // existing stores gain it without a structural migration. This build
+    // also bumps PRAGMA user_version to SCHEMA_VERSION (3) below, so a
+    // pre-P7 build sharing the file fails closed at its own open (version
+    // > its SCHEMA_VERSION) instead of compacting/rebuilding a store whose
+    // claim.reinforced protection it cannot see.
+    database.exec(CLAIM_DEDUP_DDL)
     inferAndBindProject(database)
     // A v1->v2 migration replay must stay correct-and-complete: truncating it
     // would leave the projections partially applied while the migration commits,
     // so it intentionally replays fully (no total-event budget). Failure still
-    // rolls the whole migration back.
-    if (version === 1) replayProjections(database, Number.MAX_SAFE_INTEGER)
+    // rolls the whole migration back. replayProjections advances the claim_dedup
+    // backfill marker to the replay tail itself.
+    if (version === 1) {
+      replayProjections(database, Number.MAX_SAFE_INTEGER)
+    } else {
+      // P7 cold-start backfill: pre-existing v2 stores gain the claim_dedup
+      // projection additively (no user_version bump), so it is derived here
+      // from the surviving canonical log on open instead of staying empty
+      // until the first duplicate arrives or an explicit
+      // rebuildProjections()/privilegedCompact() runs. Incremental: a recorded
+      // marker bounds the replay to events appended since the last backfill,
+      // covering histories written by builds that never maintained it.
+      backfillClaimDedup(database)
+    }
+    // stale-claim-dedup-after-legacy-compaction repair (defense in depth
+    // behind the user_version gate above): any path that deletes canonical
+    // events and rebuilds the projections without maintaining claim_dedup
+    // (e.g. a pre-P7 build that pre-dates the gate) leaves dedup rows whose
+    // anchor observations no longer exist in memory_claims. A stale row
+    // would make a later record_decision dedup-hit the deleted observation
+    // and replace the capture with a claim.reinforced event that folds to
+    // nothing — silently losing the new decision text. Drop every dedup row
+    // whose observation is absent from memory_claims; the incremental
+    // backfill above already folded the surviving log, so this removes only
+    // genuinely stale anchors.
+    database.exec(
+      'DELETE FROM claim_dedup WHERE observation_id NOT IN (SELECT entity_id FROM memory_claims)',
+    )
     if (version !== SCHEMA_VERSION)
       database.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
     database.exec('COMMIT')
@@ -1937,6 +2462,11 @@ function replayProjections(
   let cursor = 0
   let projectedEvents = 0
   let truncated = false
+  // A full replay rebuilds every projection (claim_dedup included) from
+  // scratch, so the claim_dedup backfill marker restarts together with the
+  // projection cursor and is advanced to the replay tail on every exit —
+  // otherwise the next store open would re-fold the whole log.
+  setClaimDedupBackfillCursor(database, 0)
   while (true) {
     if (projectedEvents >= maxEvents) {
       truncated = true
@@ -1973,11 +2503,15 @@ function replayProjections(
     // the last replayed sequence as the cursor (not the tail, which would falsely
     // claim the projections are complete) and surface the truncation signal.
     setProjectionCursor(database, cursor)
+    // claim_dedup was folded exactly through `cursor`, so the incremental
+    // backfill marker must advance to the same point.
+    setClaimDedupBackfillCursor(database, cursor)
     return { cursor, projectedEvents, truncated: true }
   }
   if (cursor !== tail)
     throw new Error('Projection replay did not reach the canonical tail.')
   setProjectionCursor(database, tail)
+  setClaimDedupBackfillCursor(database, tail)
   return { cursor: tail, projectedEvents, truncated: false }
 }
 
@@ -2038,6 +2572,26 @@ const MIGRATION_2 = `
     entity_id TEXT PRIMARY KEY, task_id TEXT, session_id TEXT, state_json TEXT NOT NULL,
     source_sequence INTEGER NOT NULL, updated_at TEXT NOT NULL
   ) WITHOUT ROWID;
+`
+
+const MEMORY_USAGE_DDL = `
+  CREATE TABLE IF NOT EXISTS memory_usage (
+    observation_id TEXT PRIMARY KEY,
+    used_count INTEGER NOT NULL DEFAULT 0,
+    ignored_count INTEGER NOT NULL DEFAULT 0,
+    staled_count INTEGER NOT NULL DEFAULT 0,
+    last_mechanism TEXT,
+    last_turn_id TEXT,
+    last_sequence INTEGER NOT NULL DEFAULT -1
+  ) WITHOUT ROWID;
+`
+
+const CLAIM_DEDUP_DDL = `
+  CREATE TABLE IF NOT EXISTS claim_dedup (
+    claim_id TEXT PRIMARY KEY,
+    observation_id TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS claim_dedup_observation ON claim_dedup(observation_id);
 `
 
 function recordRuntimeCapabilities(
@@ -2281,6 +2835,9 @@ function applyProjection(
         'canonical',
         observation,
       )
+      const provenance = objectValue(observation.provenance)
+      const claimId = nestedValue(objectValue(provenance.metadata), 'claimId')
+      upsertClaimDedup(database, claimId, observationId, sequence)
       return
     }
     case 'claim.consolidated': {
@@ -2301,6 +2858,9 @@ function applyProjection(
           sequence,
           'superseded',
         )
+        database
+          .query('DELETE FROM claim_dedup WHERE observation_id = ?1')
+          .run(sourceId)
       }
       const observation = objectValue(payload.canonicalObservation)
       const observationId = projectionId(observation.observationId)
@@ -2321,6 +2881,17 @@ function applyProjection(
         'consolidated',
         observation,
       )
+      // claim-dedup-not-seeded-for-replacement-observations repair: seed the
+      // dedup projection from the canonical head's provenance exactly like
+      // the observation.recorded fold, so a duplicate record for the same
+      // derived claim reinforces the surviving claim instead of creating a
+      // fresh observation row (first-wins semantics keep replay determinism).
+      const consolidatedProvenance = objectValue(observation.provenance)
+      const consolidatedClaimId = nestedValue(
+        objectValue(consolidatedProvenance.metadata),
+        'claimId',
+      )
+      upsertClaimDedup(database, consolidatedClaimId, observationId, sequence)
       return
     }
     case 'claim.corrected':
@@ -2340,6 +2911,29 @@ function applyProjection(
         'canonical',
         objectValue(payload.correction),
       )
+      database
+        .query('DELETE FROM claim_dedup WHERE observation_id = ?1')
+        .run(projectionId(payload.observationId))
+      {
+        // claim-dedup-not-seeded-for-replacement-observations repair: seed
+        // the dedup projection from the correction observation's provenance
+        // exactly like the observation.recorded fold, so a duplicate record
+        // for the same derived claim reinforces the surviving correction
+        // instead of creating a fresh observation row (first-wins semantics
+        // keep replay determinism).
+        const correction = objectValue(payload.correction)
+        const correctionProvenance = objectValue(correction.provenance)
+        const correctionClaimId = nestedValue(
+          objectValue(correctionProvenance.metadata),
+          'claimId',
+        )
+        upsertClaimDedup(
+          database,
+          correctionClaimId,
+          projectionId(correction.observationId),
+          sequence,
+        )
+      }
       return
     case 'claim.superseded':
       upsertClaim(
@@ -2350,6 +2944,9 @@ function applyProjection(
         'superseded',
         payload,
       )
+      database
+        .query('DELETE FROM claim_dedup WHERE observation_id = ?1')
+        .run(projectionId(payload.observationId))
       return
     case 'claim.forgotten':
       for (const observationId of stringArray(payload.observationIds)) {
@@ -2361,6 +2958,9 @@ function applyProjection(
           'forgotten',
           payload,
         )
+        database
+          .query('DELETE FROM claim_dedup WHERE observation_id = ?1')
+          .run(observationId)
       }
       return
     case 'claim.pinned':
@@ -2408,6 +3008,30 @@ function applyProjection(
         payload,
       )
       return
+    case 'observation.reused': {
+      const usageTurnId = projectionId(payload.turnId)
+      for (const entry of objectArray(payload.used)) {
+        upsertUsage(
+          database,
+          entry.observationId,
+          sequence,
+          entry.mechanism,
+          usageTurnId,
+          'used_count',
+        )
+      }
+      for (const entry of objectArray(payload.ignored)) {
+        upsertUsage(
+          database,
+          entry.observationId,
+          sequence,
+          entry.mechanism,
+          usageTurnId,
+          'ignored_count',
+        )
+      }
+      return
+    }
     case 'evidence.verified':
       upsertEvidence(
         database,
@@ -2592,6 +3216,82 @@ function upsertProjection(
     )
 }
 
+/**
+ * Monotonic usage projection for 'observation.reused' events: increments one
+ * counter per entry, guarded by the event sequence so duplicate replays never
+ * double-count. Never deletes; staled_count stays reserved (P4 never emits
+ * 'staled').
+ */
+function upsertUsage(
+  database: Database,
+  observationId: unknown,
+  sequence: number,
+  mechanism: unknown,
+  turnId: string | null,
+  column: 'used_count' | 'ignored_count',
+): void {
+  const id = projectionId(observationId)
+  if (!id) return
+  const prior = database
+    .query(
+      `SELECT used_count, ignored_count, last_sequence
+         FROM memory_usage WHERE observation_id = ?1`,
+    )
+    .get(id) as
+    | { used_count: number; ignored_count: number; last_sequence: number }
+    | null
+  if (prior && sequence <= prior.last_sequence) return
+  const usedCount = (prior?.used_count ?? 0) + (column === 'used_count' ? 1 : 0)
+  const ignoredCount =
+    (prior?.ignored_count ?? 0) + (column === 'ignored_count' ? 1 : 0)
+  database
+    .query(
+      `INSERT INTO memory_usage (
+         observation_id, used_count, ignored_count, staled_count,
+         last_mechanism, last_turn_id, last_sequence
+       ) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6)
+       ON CONFLICT(observation_id) DO UPDATE SET
+         used_count = excluded.used_count,
+         ignored_count = excluded.ignored_count,
+         staled_count = excluded.staled_count,
+         last_mechanism = excluded.last_mechanism,
+         last_turn_id = excluded.last_turn_id,
+         last_sequence = excluded.last_sequence`,
+    )
+    .run(
+      id,
+      usedCount,
+      ignoredCount,
+      projectionId(mechanism),
+      turnId,
+      sequence,
+    )
+}
+
+/**
+ * First-wins claim-dedup projection (P7): records the claim id an observation's
+ * provenance carries, mapping it to the observation that first introduced it.
+ * Replay-deterministic: a claim id already present is skipped regardless of
+ * sequence, so replays never rebind a claim to a later observation.
+ */
+function upsertClaimDedup(
+  database: Database,
+  claimId: unknown,
+  observationId: string | null,
+  _sequence: number,
+): void {
+  const id =
+    typeof claimId === 'string' && /^[0-9a-f]{64}$/.test(claimId) ? claimId : null
+  if (!id || !observationId) return
+  const existing = database
+    .query('SELECT observation_id FROM claim_dedup WHERE claim_id = ?1')
+    .get(id) as { observation_id: string } | null
+  if (existing) return
+  database
+    .query('INSERT INTO claim_dedup (claim_id, observation_id) VALUES (?1, ?2)')
+    .run(id, observationId)
+}
+
 function projectionId(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 && value.length <= 512
     ? value
@@ -2624,6 +3324,68 @@ function setProjectionCursor(database: Database, sequence: number): void {
       "UPDATE memory_projection_metadata SET value = ?1 WHERE key = 'cursor'",
     )
     .run(String(sequence))
+}
+
+function readClaimDedupBackfillCursor(database: Database): number {
+  const row = database
+    .query(
+      'SELECT value FROM memory_projection_metadata WHERE key = ?1',
+    )
+    .get(CLAIM_DEDUP_BACKFILL_KEY) as { value: string } | null
+  const parsed = row ? Number(row.value) : 0
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
+}
+
+function setClaimDedupBackfillCursor(
+  database: Database,
+  sequence: number,
+): void {
+  database
+    .query(
+      `INSERT INTO memory_projection_metadata(key, value) VALUES (?1, ?2)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    )
+    .run(CLAIM_DEDUP_BACKFILL_KEY, String(sequence))
+}
+
+/**
+ * Cold-start backfill of the P7 claim-dedup projection: pre-existing v2
+ * stores gain claim_dedup additively on open (no user_version bump), so the
+ * projection is derived here from the surviving canonical log instead of
+ * staying empty until the first duplicate arrives or an explicit
+ * rebuildProjections()/privilegedCompact() runs. Incremental: a recorded
+ * metadata marker bounds the replay to events appended since the last
+ * backfill, so mixed-version histories (written by builds that never
+ * maintained the marker) are folded exactly once and steady-state opens do
+ * no work. The fold is the same first-wins + lifecycle-delete replay the
+ * projection applies per event, so a suffix replay yields exactly the
+ * full-replay state. Fail-closed parity with replayProjections: every row
+ * passes validateCanonicalProjectionRow before folding, so a malformed
+ * canonical event fails the open exactly as a rebuild would instead of
+ * silently diverging the dedup state. Runs inside the migrate()
+ * transaction: failure rolls the whole open back.
+ */
+function backfillClaimDedup(database: Database): void {
+  let cursor = readClaimDedupBackfillCursor(database)
+  while (true) {
+    const rows = database
+      .query(
+        `SELECT sequence, event_id, idempotency_key, event_type, occurred_at,
+                payload_json, metadata_json, task_id, session_id, artifact_id
+           FROM memory_events
+          WHERE sequence > ?1
+          ORDER BY sequence
+          LIMIT ?2`,
+      )
+      .all(cursor, PAGE_SIZE) as EventRow[]
+    if (rows.length === 0) break
+    for (const row of rows) {
+      validateCanonicalProjectionRow(row)
+      applyProjection(database, preparedEventFromRow(row), row.sequence)
+      cursor = row.sequence
+    }
+  }
+  setClaimDedupBackfillCursor(database, cursor)
 }
 
 function isIdempotentMatch(row: EventRow, event: PreparedEvent): boolean {
@@ -2826,11 +3588,12 @@ function reason(
   return { code, contribution, detail }
 }
 
-function buildLexicalResult(
+async function buildLexicalResult(
   request: MemoryRetrievalRequest,
   events: MemoryEventEnvelope[],
   eventCapReached: boolean,
   payloadBudgetReached: boolean,
+  recallExpander?: BunSQLiteMemoryRepositoryOptions['recallExpander'],
 ) {
   type ObservationState = {
     observation: MemoryObservation
@@ -2840,6 +3603,9 @@ function buildLexicalResult(
     superseded: boolean
     corrected: boolean
     pinned: boolean
+    used: number
+    ignored: number
+    reinforced: number
     freshness: Map<
       string,
       {
@@ -2868,6 +3634,10 @@ function buildLexicalResult(
   }
   const observations = new Map<string, ObservationState>()
   const tasks = new Map<string, TaskState>()
+  // P7 supersession head map: observation id -> the observation id that
+  // superseded it, folded from claim.superseded events during the replay so
+  // historicalContext can resolve the tail of a supersession chain.
+  const supersededBy = new Map<string, string>()
 
   for (const event of events) {
     if (event.eventType === 'task.created') {
@@ -2897,6 +3667,9 @@ function buildLexicalResult(
         superseded: false,
         corrected: false,
         pinned: false,
+        used: 0,
+        ignored: 0,
+        reinforced: 0,
         freshness: new Map(),
       })
     } else if (event.eventType === 'evidence.attached') {
@@ -2922,6 +3695,9 @@ function buildLexicalResult(
         superseded: false,
         corrected: false,
         pinned: false,
+        used: 0,
+        ignored: 0,
+        reinforced: 0,
         freshness: new Map(),
       })
     } else if (event.eventType === 'claim.corrected') {
@@ -2935,6 +3711,9 @@ function buildLexicalResult(
         superseded: false,
         corrected: false,
         pinned: prior?.pinned ?? false,
+        used: 0,
+        ignored: 0,
+        reinforced: 0,
         freshness: new Map(),
       })
     } else if (event.eventType === 'claim.forgotten') {
@@ -2945,6 +3724,10 @@ function buildLexicalResult(
     } else if (event.eventType === 'claim.superseded') {
       const state = observations.get(event.payload.observationId)
       if (state) state.superseded = true
+      supersededBy.set(
+        event.payload.observationId,
+        event.payload.supersededByObservationId,
+      )
     } else if (event.eventType === 'claim.pinned') {
       const state = observations.get(event.payload.observationId)
       if (state) state.pinned = true
@@ -2980,8 +3763,72 @@ function buildLexicalResult(
         }
         state.freshness.delete(selectorKey(event.payload.previousSelector))
       }
+    } else if (event.eventType === 'observation.reused') {
+      // Fold the P4 usage counters into observation state so retrieval can
+      // score reusability without ever reading the memory_usage projection
+      // table directly (fold events, never tables). Unknown observation ids
+      // are ignored and malformed payloads are tolerated objectArray-style.
+      for (const entry of objectArray(event.payload.used)) {
+        const state = observations.get(
+          typeof entry.observationId === 'string'
+            ? entry.observationId
+            : String(entry.observationId ?? ''),
+        )
+        if (state) state.used += 1
+      }
+      for (const entry of objectArray(event.payload.ignored)) {
+        const state = observations.get(
+          typeof entry.observationId === 'string'
+            ? entry.observationId
+            : String(entry.observationId ?? ''),
+        )
+        if (state) state.ignored += 1
+      }
+    } else if (event.eventType === 'claim.reinforced') {
+      // Fold the P7 reinforcement counter so retrieval usefulness scoring
+      // credits reinforced claims. Unknown observation ids are ignored,
+      // mirroring the observation.reused fold branch above.
+      const state = observations.get(event.payload.observationId)
+      if (state) state.reinforced += 1
     }
   }
+
+  // P8 wave 2a concept corpus: a bounded snapshot of ACTIVE observations
+  // (never forgotten/superseded/corrected) offered to the advisory recall
+  // expander. observationId code-point order and the 256-entry cap keep the
+  // corpus deterministic and bounded; claimId is carried only as a strict
+  // 64-hex value from the canonical provenance metadata key.
+  const conceptCorpus: ConceptCorpusEntry[] = [...observations.values()]
+    .filter(
+      (state) => !state.forgotten && !state.superseded && !state.corrected,
+    )
+    .map((state) => {
+      const entry: ConceptCorpusEntry = {
+        observationId: state.observation.observationId,
+        kind: state.observation.kind,
+        summary: state.observation.summary,
+      }
+      if (
+        typeof state.observation.detail === 'string' &&
+        state.observation.detail.length > 0
+      )
+        entry.detail = state.observation.detail
+      const claimId = state.observation.provenance?.metadata?.claimId
+      if (typeof claimId === 'string' && /^[0-9a-f]{64}$/.test(claimId))
+        entry.claimId = claimId
+      return entry
+    })
+    .sort((left, right) =>
+      compareUnicodeCodePoints(left.observationId, right.observationId),
+    )
+    .slice(0, 256)
+
+  // Deterministic as-of wall clock: the latest occurredAt across the admitted
+  // event page (never Date.now), so usefulness age buckets are reproducible.
+  const asOfTurnWall = events.reduce(
+    (max, e) => (e.occurredAt > max ? e.occurredAt : max),
+    '1970-01-01T00:00:00.000Z',
+  )
 
   const queryTokens = lexicalTokens(
     [request.query, ...request.selectors.map(selectorKey)].join(' '),
@@ -3026,11 +3873,17 @@ function buildLexicalResult(
   // verified-evidence 0.12 + digest-freshness (verified-evidence code)
   // <= 0.03 (only when verified evidence has matching contentDigest +
   // exact revision/snapshot; combined verified family <= 0.15, preserving
-  // the original verified cap) + reusability (pinned) 0.04 + recency 0.01.
-  // New-weight sum 0.06 + 0.03 = 0.09 <= 1; worst-case raw sum equals the
-  // pre-existing max and the final score is capped at 1.0. Tiebreak stays
+  // the original verified cap) + reusability (pinned) 0.04 + reusability
+  // (usage) <= 0.05 (bounded P4 usefulness correlation, display-only; the
+  // score itself stays Math.min(1, ...)) + recency 0.01.
+  // New-weight sum 0.06 + 0.03 + 0.05 = 0.14 <= 1; worst-case raw sum stays
+  // bounded and the final score is capped at 1.0. Tiebreak stays
   // exact > token > verified > pinned > sequence (see compare below);
-  // reasons stay within 1..16 entries.
+  // observation ordering additionally applies retraction, freshness class,
+  // tier, and usefulness via compareObservations — the age/tier reordering
+  // (agent-explicit decisions outranking discovery at equal lexical weight)
+  // is intended S3 behavior, not a regression. Reasons stay within 1..16
+  // entries.
   const rank = (
     text: string,
     taskId: string | undefined,
@@ -3040,6 +3893,7 @@ function buildLexicalResult(
     sourceSequence: number,
     excerptOverlap = 0,
     digestFresh = false,
+    usefulness = 0,
   ) => {
     const candidateTokens = lexicalTokens(text)
     let tokenMatches = 0
@@ -3113,6 +3967,14 @@ function buildLexicalResult(
       )
     if (pinned)
       reasons.push(reason('reusability', 0.04, 'The observation is pinned.'))
+    if (usefulness > 0)
+      reasons.push(
+        reason(
+          'reusability',
+          Math.min(0.05, (usefulness / 1000) * 0.05),
+          'P4 usage correlation score.',
+        ),
+      )
     reasons.push(
       reason('recency', 0.01, `Canonical source sequence ${sourceSequence}.`),
     )
@@ -3136,6 +3998,36 @@ function buildLexicalResult(
     right.ranking.exact - left.ranking.exact ||
     right.ranking.tokenMatches - left.ranking.tokenMatches ||
     right.ranking.verified - left.ranking.verified ||
+    right.ranking.pinned - left.ranking.pinned ||
+    right.ranking.sourceSequence - left.ranking.sourceSequence ||
+    compareUnicodeCodePoints(left.id, right.id)
+  // Observation-specific deterministic ordering: retraction first, then
+  // freshness class, agent-explicit tier, P4 usefulness (integer score), and
+  // only then the lexical core. The old verified key is dropped as redundant
+  // with freshnessClass. Tasks keep `compare` unchanged.
+  const tierRank = (t: UsefulnessTier) =>
+    t === 'explicit' ? 2 : t === 'outcome' ? 1 : 0
+  const compareObservations = <
+    T extends {
+      ranking: ReturnType<typeof rank>
+      id: string
+      tier: UsefulnessTier
+      usefulness: number
+      conceptRank: number
+      freshnessClass: number
+      retracted: boolean
+    },
+  >(
+    left: T,
+    right: T,
+  ) =>
+    Number(left.retracted) - Number(right.retracted) ||
+    right.freshnessClass - left.freshnessClass ||
+    tierRank(right.tier) - tierRank(left.tier) ||
+    right.usefulness - left.usefulness ||
+    right.conceptRank - left.conceptRank ||
+    right.ranking.exact - left.ranking.exact ||
+    right.ranking.tokenMatches - left.ranking.tokenMatches ||
     right.ranking.pinned - left.ranking.pinned ||
     right.ranking.sourceSequence - left.ranking.sourceSequence ||
     compareUnicodeCodePoints(left.id, right.id)
@@ -3191,10 +4083,43 @@ function buildLexicalResult(
         for (const token of queryTokens)
           if (excerptTokens.has(token)) excerptOverlap++
       }
+      // Usefulness-v1 scoring: tier from kind + provenance, integer score
+      // from folded usage counters against the deterministic as-of clock.
+      const tier = deriveUsefulnessTier({
+        kind: state.observation.kind,
+        provenance: state.observation.provenance,
+      })
+      const usefulness = scoreUsefulness({
+        used: state.used,
+        ignored: state.ignored,
+        staled: 0,
+        reinforced: state.reinforced,
+        pinned: state.pinned ? 1 : 0,
+        createdAtWall: state.observation.observedAt,
+        asOfTurnWall,
+        tier,
+      }).score
+      const freshnessClass =
+        verified && digestFresh
+          ? 3
+          : verified
+            ? 2
+            : [...state.freshness.values()].some(
+                  (freshness) => freshness.state === 'invalid',
+                )
+              ? 1
+              : 0
+      const retracted =
+        state.forgotten || state.superseded || state.corrected
       return {
         id: state.observation.observationId,
         state,
         selectors,
+        tier,
+        usefulness,
+        conceptRank: 0,
+        freshnessClass,
+        retracted,
         ranking: rank(
           `${state.observation.taskId} ${state.observation.kind} ${state.observation.summary} ${state.observation.detail} ${selectors.map(selectorKey).join(' ')}`,
           state.observation.taskId,
@@ -3204,6 +4129,7 @@ function buildLexicalResult(
           state.sourceSequence,
           excerptOverlap,
           digestFresh,
+          usefulness,
         ),
       }
     })
@@ -3218,7 +4144,7 @@ function buildLexicalResult(
           item.ranking.exact > 0 ||
           item.state.pinned),
     )
-    .sort(compare)
+    .sort(compareObservations)
 
   const limit = request.maxResultsPerCategory
   const verifiedCandidates = observationCandidates.filter(
@@ -3266,7 +4192,8 @@ function buildLexicalResult(
               | 'never-verified'
               | 'changed'
               | 'missing'
-              | 'expired',
+              | 'expired'
+              | 'contradiction-suspected',
             detail:
               freshness?.state === 'invalid'
                 ? 'The latest evidence state is invalidated; reread before use.'
@@ -3289,6 +4216,65 @@ function buildLexicalResult(
         ({ state }) => state.forgotten || state.superseded || state.corrected,
       )
     : []
+  // P7 contradiction flagging: group live decision/constraint observations by
+  // stable chunk ids carried under the canonical `stableChunkId` key in
+  // evidence provenance metadata — the exact key and value shape the capture
+  // writer persists (extractStableChunkIds), never a value-shape scan over
+  // arbitrary metadata keys. Then append additive reread entries for each
+  // flagged member not already scheduled by the staleness pass. Zero-selector
+  // observations are skipped, entries reuse the existing reread shape, and the
+  // merge happens before the existing reread cap so determinism and bounds are
+  // preserved.
+  const contradictionCandidates: ContradictionCandidate[] =
+    observationCandidates.flatMap(({ state }) => {
+      const stableChunkIds = [
+        ...new Set(
+          state.observation.evidence.flatMap((evidence) =>
+            extractStableChunkIds(evidence.provenance.metadata),
+          ),
+        ),
+      ]
+      return [
+        {
+          observationId: state.observation.observationId,
+          kind: state.observation.kind,
+          stableChunkIds,
+          forgotten: state.forgotten,
+          superseded: state.superseded,
+          corrected: state.corrected,
+        },
+      ]
+    })
+  const flaggedContradictionIds = new Set(
+    detectContradictions({
+      observations: contradictionCandidates,
+    }).flatMap(({ observationIds }) => observationIds),
+  )
+  const existingRereadIds = new Set(
+    rereadCandidates.map(({ observationId }) => observationId),
+  )
+  for (const candidate of observationCandidates) {
+    if (!flaggedContradictionIds.has(candidate.id)) continue
+    if (existingRereadIds.has(candidate.id)) continue
+    const firstSelector = candidate.selectors[0]
+    if (firstSelector === undefined) continue
+    rereadCandidates.push({
+      observationId: candidate.id,
+      selector: firstSelector,
+      reason: 'contradiction-suspected' as const,
+      detail:
+        'contradiction_suspected: reconcile — resolve via record_decision(supersedes:[...])',
+      score: 0,
+      reasons: [
+        ...candidate.ranking.reasons,
+        reason(
+          'stale-evidence',
+          -0.2,
+          'Contradiction suspected against another live observation.',
+        ),
+      ].slice(0, 16),
+    })
+  }
   const matchedTasks = taskCandidates
     .slice(0, limit)
     .map(({ task, ranking }) => ({
@@ -3343,19 +4329,83 @@ function buildLexicalResult(
       score: ranking.score,
       reasons: ranking.reasons,
     }))
+  // P8 wave 2a concept-advisory tail: appended AFTER the lexical
+  // reusableDiscovery array is final, so it never reorders or displaces the
+  // lexical prefix. The expander is strictly advisory: a null or degraded
+  // expansion and any thrown error leave the lexical result untouched, and
+  // appended entries are capped at 8 active, non-duplicate observations.
+  if (recallExpander) {
+    try {
+      const expansion = await recallExpander({ request, corpus: conceptCorpus })
+      if (expansion && !expansion.degraded) {
+        let appended = 0
+        for (const id of expansion.observationIds) {
+          // The result schema caps reusableDiscovery at 100 entries; never
+          // push past that bound, or the final parse would fail the query.
+          if (appended >= 8 || reusableDiscovery.length >= 100) break
+          const state = observations.get(id)
+          if (!state || state.forgotten || state.superseded || state.corrected)
+            continue
+          if (reusableDiscovery.some((e) => e.observation.observationId === id))
+            continue
+          reusableDiscovery.push({
+            observation: state.observation,
+            reuseGuidance: 'Verify selectors before reusing this discovery.',
+            score: 0,
+            reasons: [
+              reason(
+                'concept-advisory',
+                0,
+                'Advisory semantic recall expansion matched this observation.',
+              ),
+            ],
+          })
+          appended += 1
+        }
+      }
+    } catch {
+      // Advisory only: expansion failures never fail the query.
+    }
+  }
   const rereadRequired = rereadCandidates.slice(0, limit)
   const historicalContext = historicalCandidates
     .slice(0, limit)
-    .map(({ state, ranking }) => ({
-      taskId: state.observation.taskId,
-      summary: state.observation.summary,
-      eventIds: [state.sourceEventId],
-      score: ranking.score,
-      reasons: [
-        ...ranking.reasons,
-        reason('historical-only', -0.1, 'This observation is historical only.'),
-      ].slice(0, 16),
-    }))
+    .map(({ state, ranking }) => {
+      // P7 supersession head: for a retracted predecessor, resolve the tail of
+      // its supersession chain and include the head observation's source event
+      // id when it is known, keeping the own event first and the list within
+      // the schema's 1..100 bound.
+      const headId = resolveSupersessionHead(
+        state.observation.observationId,
+        supersededBy,
+      )
+      const headSourceEventId =
+        headId !== state.observation.observationId
+          ? observationCandidates.find(({ id }) => id === headId)?.state
+              .sourceEventId
+          : undefined
+      const eventIds = [
+        ...new Set(
+          headSourceEventId
+            ? [state.sourceEventId, headSourceEventId]
+            : [state.sourceEventId],
+        ),
+      ].slice(0, 100)
+      return {
+        taskId: state.observation.taskId,
+        summary: state.observation.summary,
+        eventIds,
+        score: ranking.score,
+        reasons: [
+          ...ranking.reasons,
+          reason(
+            'historical-only',
+            -0.1,
+            'This observation is historical only.',
+          ),
+        ].slice(0, 16),
+      }
+    })
   const latestCoverageByKey = new Map<
     string,
     {

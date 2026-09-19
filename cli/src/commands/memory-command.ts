@@ -35,6 +35,10 @@ import type {
   V1MigrationAuditOutcome,
   WorkspaceMoveRecord,
 } from '@openbuff/sdk'
+import {
+  selectCompactionCandidates,
+  type GCRelevantEnvelope,
+} from '../../../common/src/util/compaction-eligibility'
 
 export type MemoryCommandDeps = {
   getRootDir: () => string
@@ -1053,12 +1057,35 @@ async function runCompact(
       'secondary',
     )
   }
-  const applyIds = preview.candidateEventIds.slice(0, 100)
   const inventory = await canonicalInventory(v2, 10_000)
   if (inventory.error) {
     return commandError('Memory compaction failed: local output could not be created safely.')
   }
-  const byId = new Map(inventory.events.map((event) => [event.eventId, event]))
+  // Group-granular apply batch: recompute the selection from the canonical
+  // inventory envelopes (claim.archived excluded) with the bounded apply
+  // maxEvents, so an observation group is never split across the boundary.
+  const inventoryEnvelopes: GCRelevantEnvelope[] = inventory.events
+    .filter((event) => event.eventType !== 'claim.archived')
+    .map((event) => ({
+      eventType: event.eventType,
+      eventId: event.eventId,
+      sequence: event.sequence,
+      occurredAt: event.occurredAt,
+      payload: event.payload,
+    }))
+  const inventoryAsOf = inventoryEnvelopes.reduce(
+    (max, envelope) => (envelope.occurredAt > max ? envelope.occurredAt : max),
+    '1970-01-01T00:00:00.000Z',
+  )
+  const applySelection = selectCompactionCandidates({
+    envelopes: inventoryEnvelopes,
+    maxEvents: Math.min(options.maxEvents, 100),
+    asOfTurnWall: inventoryAsOf,
+  })
+  const applyIds = applySelection.eventIds
+  const byId = new Map<string, import('@openbuff/sdk').MemoryEventEnvelope>(
+    inventory.events.map((event) => [event.eventId as string, event]),
+  )
   const selected = applyIds
     .map((id) => byId.get(id))
     .filter((event): event is import('@openbuff/sdk').MemoryEventEnvelope => event !== undefined)
@@ -1094,7 +1121,7 @@ async function runCompact(
     ...scope,
     mode: 'apply',
     olderThanDays: options.olderThanDays,
-    maxEvents: options.maxEvents,
+    maxEvents: Math.min(options.maxEvents, 100),
   })
   if (outcome.outcome !== 'applied') {
     return report(
@@ -1345,23 +1372,25 @@ async function canonicalInventory(
     const parsedEvents: import('@openbuff/sdk').MemoryEventEnvelope[] = []
     for (const candidate of page.events) {
       const parsed = MemoryEventEnvelopeSchema.safeParse(candidate)
-      if (!parsed.success || parsed.data.projectId !== v2.projectId)
+      // Tolerant reader: an unparseable row (e.g. a future additive event
+      // type the repo already drops) is skipped rather than aborting the
+      // page. A wrong-project row remains a hard integrity failure.
+      if (!parsed.success) continue
+      if (parsed.data.projectId !== v2.projectId)
         return {
           events: [],
           error: { message: 'Canonical inventory failed validation.' },
         }
       parsedEvents.push(parsed.data)
     }
-    if (page.nextAfterEventId && parsedEvents.length === 0)
-      return {
-        events: [],
-        error: { message: 'Canonical inventory pagination did not advance.' },
-      }
+    // A page that is entirely dropped rows is legitimately empty while the
+    // cursor advances, so only a non-advancing cursor is a hard failure. The
+    // cursor is authoritative from the repo and is never tied to the last
+    // parsed event id (the last raw row may have been dropped).
     if (page.nextAfterEventId) {
       if (
         page.nextAfterEventId === afterEventId ||
-        cursors.has(page.nextAfterEventId) ||
-        page.nextAfterEventId !== parsedEvents.at(-1)?.eventId
+        cursors.has(page.nextAfterEventId)
       )
         return {
           events: [],

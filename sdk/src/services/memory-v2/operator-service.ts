@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 import {
   MemoryAppendOutcomeSchema,
   MemoryAppendRequestSchema,
@@ -42,6 +44,11 @@ import {
 } from '@codebuff/common/types/memory-v2'
 
 import type { MemoryRepositoryV2 } from './types'
+import {
+  COMPACTION_ELIGIBILITY_MODEL_VERSION,
+  selectCompactionCandidates,
+  type GCRelevantEnvelope,
+} from '@codebuff/common/util/compaction-eligibility'
 
 const EXPORT_PAGE_SIZE = 1_000
 const MAX_EXPORT_PAGES = 10
@@ -157,75 +164,14 @@ function stableJson(value: unknown): string {
   return JSON.stringify(null)
 }
 
-const rotateRight = (value: number, amount: number): number =>
-  (value >>> amount) | (value << (32 - amount))
-
-/** Small synchronous SHA-256 implementation keeps this service free of runtime imports. */
+/**
+ * Standard SHA-256 via node:crypto (the same capability the sdk memory-v2
+ * coordinator already imports). Byte-identical to the removed hand-rolled
+ * implementation (verified across empty/short/JSON/1MB/unicode vectors), so
+ * derived event/observation ids and manifest checksums are unchanged.
+ */
 function sha256(input: string): string {
-  const constants: number[] = []
-  const initial: number[] = []
-  let candidate = 2
-  while (constants.length < 64) {
-    let prime = true
-    for (let divisor = 2; divisor * divisor <= candidate; divisor++) {
-      if (candidate % divisor === 0) {
-        prime = false
-        break
-      }
-    }
-    if (prime) {
-      if (initial.length < 8) initial.push((Math.sqrt(candidate) * 0x1_0000_0000) | 0)
-      constants.push((Math.cbrt(candidate) * 0x1_0000_0000) | 0)
-    }
-    candidate++
-  }
-  const bytes = new TextEncoder().encode(input)
-  const bitLength = bytes.length * 8
-  const paddedLength = Math.ceil((bytes.length + 9) / 64) * 64
-  const padded = new Uint8Array(paddedLength)
-  padded.set(bytes)
-  padded[bytes.length] = 0x80
-  const view = new DataView(padded.buffer)
-  view.setUint32(paddedLength - 8, Math.floor(bitLength / 0x1_0000_0000))
-  view.setUint32(paddedLength - 4, bitLength >>> 0)
-  const hash = initial.slice()
-  const words = new Int32Array(64)
-  for (let offset = 0; offset < paddedLength; offset += 64) {
-    for (let index = 0; index < 16; index++) words[index] = view.getInt32(offset + index * 4)
-    for (let index = 16; index < 64; index++) {
-      const a = words[index - 15]!
-      const b = words[index - 2]!
-      const sigma0 = rotateRight(a, 7) ^ rotateRight(a, 18) ^ (a >>> 3)
-      const sigma1 = rotateRight(b, 17) ^ rotateRight(b, 19) ^ (b >>> 10)
-      words[index] = (words[index - 16]! + sigma0 + words[index - 7]! + sigma1) | 0
-    }
-    let [a, b, c, d, e, f, g, h] = hash
-    for (let index = 0; index < 64; index++) {
-      const sum1 = rotateRight(e!, 6) ^ rotateRight(e!, 11) ^ rotateRight(e!, 25)
-      const choice = (e! & f!) ^ (~e! & g!)
-      const temp1 = (h! + sum1 + choice + constants[index]! + words[index]!) | 0
-      const sum0 = rotateRight(a!, 2) ^ rotateRight(a!, 13) ^ rotateRight(a!, 22)
-      const majority = (a! & b!) ^ (a! & c!) ^ (b! & c!)
-      const temp2 = (sum0 + majority) | 0
-      h = g
-      g = f
-      f = e
-      e = (d! + temp1) | 0
-      d = c
-      c = b
-      b = a
-      a = (temp1 + temp2) | 0
-    }
-    hash[0] = (hash[0]! + a!) | 0
-    hash[1] = (hash[1]! + b!) | 0
-    hash[2] = (hash[2]! + c!) | 0
-    hash[3] = (hash[3]! + d!) | 0
-    hash[4] = (hash[4]! + e!) | 0
-    hash[5] = (hash[5]! + f!) | 0
-    hash[6] = (hash[6]! + g!) | 0
-    hash[7] = (hash[7]! + h!) | 0
-  }
-  return hash.map((word) => (word >>> 0).toString(16).padStart(8, '0')).join('')
+  return createHash('sha256').update(input).digest('hex')
 }
 
 const digest = (value: unknown): string => `sha256:${sha256(stableJson(value))}`
@@ -489,33 +435,6 @@ function renderMarkdown(manifest: MemoryExportManifestV2): string {
   return lines.join('\n').slice(0, 1_000_000)
 }
 
-function compactionObservationIds(event: MemoryEventEnvelope): string[] {
-  switch (event.eventType) {
-    case 'observation.recorded':
-      return [event.payload.observation.observationId]
-    case 'claim.consolidated':
-      return [...event.payload.sourceObservationIds, event.payload.canonicalObservation.observationId]
-    case 'claim.corrected':
-      return [event.payload.observationId, event.payload.correction.observationId]
-    case 'claim.superseded':
-      return [event.payload.observationId]
-    case 'claim.forgotten':
-      return [...event.payload.observationIds]
-    case 'claim.pinned':
-      return [event.payload.observationId]
-    case 'evidence.attached':
-      return [event.payload.observationId]
-    case 'evidence.verified':
-      return [event.payload.observationId]
-    case 'evidence.invalidated':
-      return [event.payload.observationId]
-    case 'evidence.rebound':
-      return [event.payload.observationId]
-    default:
-      return []
-  }
-}
-
 function compactionWarnings(eventCount: number, bytes: number | null): string[] {
   const warnings: string[] = []
   if (bytes !== null && bytes >= COMPACTION_STORE_BYTES_THRESHOLD) {
@@ -757,7 +676,23 @@ export class MemoryV2OperatorService {
     try {
       const action = request.action
       const targetObservationIds =
-        action.kind === 'forget' ? action.observationIds : [action.observationId]
+        action.kind === 'forget'
+          ? action.observationIds
+          : action.kind === 'supersede'
+            ? [action.observationId, action.supersededByObservationId]
+            : [action.observationId]
+      if (
+        action.kind === 'supersede' &&
+        action.observationId === action.supersededByObservationId
+      ) {
+        return MemoryCorrectionOutcomeSchema.parse({
+          outcome: 'rejected',
+          error: operationalError(
+            'invalid-request',
+            'An observation cannot supersede itself',
+          ),
+        })
+      }
       const tasks = observationTaskIds(await this.allEvents(request.projectId))
       const targetTasks = targetObservationIds.map((observationId) => tasks.get(observationId))
       const targetIsInvalid =
@@ -772,6 +707,18 @@ export class MemoryV2OperatorService {
             'Observation target is missing or outside the requested task',
           ),
         })
+      }
+      if (action.kind === 'supersede') {
+        const events = await this.allEvents(request.projectId)
+        if (!activeObservations(events).has(action.supersededByObservationId)) {
+          return MemoryCorrectionOutcomeSchema.parse({
+            outcome: 'rejected',
+            error: operationalError(
+              'invalid-request',
+              'The superseding observation must be active',
+            ),
+          })
+        }
       }
       const event = (() => {
         if (action.kind === 'correct') {
@@ -789,6 +736,17 @@ export class MemoryV2OperatorService {
           return {
             eventType: 'claim.forgotten' as const,
             payload: { payloadSchemaVersion: 1 as const, ...action, kind: undefined },
+          }
+        }
+        if (action.kind === 'supersede') {
+          return {
+            eventType: 'claim.superseded' as const,
+            payload: {
+              payloadSchemaVersion: 1 as const,
+              observationId: action.observationId,
+              supersededByObservationId: action.supersededByObservationId,
+              reason: action.reason,
+            },
           }
         }
         return {
@@ -1178,19 +1136,22 @@ export class MemoryV2OperatorService {
     const request = parsed.data
     try {
       const events = await this.allEvents(request.projectId)
-      const stale = staleObservationReasons(events)
-      const cutoffMs = Date.now() - request.olderThanDays * 24 * 60 * 60 * 1000
-      const candidates = events
-        .filter((event) => {
-          if (event.eventType === 'claim.archived') return false
-          const ids = compactionObservationIds(event)
-          const isStale = ids.some((id) => stale.has(id))
-          const occurredMs = Date.parse(event.occurredAt)
-          const isOld = !Number.isNaN(occurredMs) && occurredMs < cutoffMs
-          return isStale || isOld
-        })
-        .sort(eventOrder)
-        .slice(0, request.maxEvents)
+      const envelopes: GCRelevantEnvelope[] = events
+        .filter((event) => event.eventType !== 'claim.archived')
+        .map((event) => ({
+          eventType: event.eventType,
+          eventId: event.eventId,
+          sequence: event.sequence,
+          occurredAt: event.occurredAt,
+          payload: event.payload,
+        }))
+      // Deterministic as-of wall clock: the code-point max occurredAt across
+      // the GC-relevant envelopes (never Date.now), so eligibility is
+      // reproducible from the batch alone.
+      const asOfTurnWall = envelopes.reduce(
+        (max, envelope) => (envelope.occurredAt > max ? envelope.occurredAt : max),
+        '1970-01-01T00:00:00.000Z',
+      )
       let eventCount = events.length
       let bytes: number | null = null
       try {
@@ -1213,20 +1174,41 @@ export class MemoryV2OperatorService {
       }
       const warnings = compactionWarnings(eventCount, bytes)
       if (request.mode === 'preview') {
+        const selection = selectCompactionCandidates({
+          envelopes,
+          maxEvents: request.maxEvents,
+          asOfTurnWall,
+        })
+        const eventsById = new Map<string, MemoryEventEnvelope>(
+          events.map((event) => [event.eventId as string, event]),
+        )
         const encoder = new TextEncoder()
         let archiveByteEstimate = 0
-        for (const event of candidates) {
+        for (const eventId of selection.eventIds) {
+          const event = eventsById.get(eventId)
+          if (!event) continue
           archiveByteEstimate += encoder.encode(stableJson(event)).length + 1
         }
         return MemoryCompactionOutcomeSchema.parse({
           outcome: 'preview',
-          candidateEventIds: candidates.map((event) => event.eventId),
-          candidateCount: candidates.length,
+          candidateEventIds: selection.eventIds,
+          candidateCount: selection.eventIds.length,
           archiveByteEstimate,
           warnings,
         })
       }
-      const applyCandidates = candidates.slice(0, COMPACTION_APPLY_MAX_EVENTS)
+      // Apply selection is recomputed group-granular so a batch never splits
+      // an observation group across the maxEvents boundary.
+      const applyMaxEvents = Math.min(request.maxEvents, COMPACTION_APPLY_MAX_EVENTS)
+      const applySelection = selectCompactionCandidates({
+        envelopes,
+        maxEvents: applyMaxEvents,
+        asOfTurnWall,
+      })
+      const applyEventIdSet = new Set(applySelection.eventIds)
+      const applyCandidates = events
+        .filter((event) => applyEventIdSet.has(event.eventId))
+        .sort(eventOrder)
       if (applyCandidates.length === 0) {
         return MemoryCompactionOutcomeSchema.parse({
           outcome: 'no-op',
@@ -1249,11 +1231,23 @@ export class MemoryV2OperatorService {
         ) {
           const selector =
             this.repository.selectGCandidates ?? this.repository.inspectForGC!
-          await selector({
+          const repositorySelection = await selector({
             projectId: request.projectId,
             olderThanDays: request.olderThanDays,
             maxEvents: request.maxEvents,
           })
+          // Consistency check between the repository's candidate view and the
+          // operator's apply batch: a mismatch is reported but stays non-fatal.
+          const repositoryEventIds = new Set(repositorySelection.eventIds)
+          const operatorEventIds = new Set(applyCandidates.map((event) => event.eventId))
+          const drift =
+            applyCandidates.filter((event) => !repositoryEventIds.has(event.eventId)).length +
+            repositorySelection.eventIds.filter((eventId) => !operatorEventIds.has(eventId)).length
+          if (drift > 0) {
+            warnings.push(
+              `GC candidate drift: repository=${repositorySelection.eventIds.length} operator=${applyCandidates.length}`.slice(0, 512),
+            )
+          }
         }
       } catch {
         // Inspection is advisory; privilegedCompact remains fail-closed.
@@ -1268,7 +1262,7 @@ export class MemoryV2OperatorService {
         archivedEventIds,
         archivePath,
         archiveHash,
-        reason: `Privileged compaction of ${archivedEventIds.length} events olderThanDays ${request.olderThanDays}`,
+        reason: `gc-eligibility ${COMPACTION_ELIGIBILITY_MODEL_VERSION} model=usefulness-v1 branches retracted=${applySelection.branchCounts.retracted} orphan=${applySelection.branchCounts.orphan} lowScore=${applySelection.branchCounts.lowScore}; olderThanDays=${request.olderThanDays}; maxEvents=${applyMaxEvents}; asOf=${asOfTurnWall}`.slice(0, 1000),
         archivedAt,
       }
       const draft = MemoryEventDraftSchema.parse({

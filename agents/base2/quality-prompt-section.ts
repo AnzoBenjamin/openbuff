@@ -29,6 +29,7 @@
 
 export {
   buildBroadAuditSection,
+  decisionCapturePolicySection,
   gitDisciplineSection,
   preReviewSelfCheckSection,
   qualitySection,

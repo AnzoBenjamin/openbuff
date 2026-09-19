@@ -91,7 +91,10 @@ import {
   flushBufferedToolEvidenceIntoTaskMemory,
   mergeTaskMemoryDraft,
 } from './util/task-memory'
-import { compileMemoryV2Context } from './util/memory-v2-context'
+import {
+  compileMemoryV2Context,
+  countConceptAdvisoryEntries,
+} from './util/memory-v2-context'
 
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 import type { TrackEventFn } from '@codebuff/common/types/contracts/analytics'
@@ -2547,6 +2550,39 @@ export async function loopAgentSteps(
 
         currentPrompt = undefined
         currentParams = undefined
+      }
+
+      // Emit exactly one deterministic per-turn memory reuse receipt for the
+      // ROOT run only (subagents/inline agents have a parentId). Carried on the
+      // live turn stream, never persisted to the memory-v2 event store. Fires
+      // once here on the completed finish path after the loop exits. Mirrors
+      // the existing `context_window` chunk emission.
+      if (!currentAgentState.parentId && currentAgentState.memoryReuse) {
+        const receipt = currentAgentState.memoryReuse
+        // conceptExpanded producer (P8): count the advisory concept-expansion
+        // entries this turn's retrieval served, derived from the turn's
+        // validated retrieval context and freshness-guarded on userInputId so
+        // a stale context from a prior turn never leaks into this receipt.
+        // Best-effort: an absent/invalid context counts 0 (semantics off).
+        const parsedMemoryContext = MemoryTurnContextV2Schema.safeParse(
+          currentAgentState.memoryV2Context,
+        )
+        receipt.conceptExpanded =
+          parsedMemoryContext.success &&
+          parsedMemoryContext.data.userInputId === String(userInputId)
+            ? countConceptAdvisoryEntries(parsedMemoryContext.data)
+            : 0
+        receipt.turnId = String(userInputId).slice(0, 128)
+        if (receipt.byTool) {
+          receipt.byTool.sort((a, b) =>
+            a.tool < b.tool ? -1 : a.tool > b.tool ? 1 : 0,
+          )
+        }
+        onResponseChunk({ type: 'memory_reuse', receipt })
+        // Hand the stamped receipt to the SDK coordinator (finishTurn reads it
+        // for usage correlation) instead of dropping it.
+        currentAgentState.memoryUsageTurn = receipt
+        currentAgentState.memoryReuse = undefined
       }
 
       if (clearUserPromptMessagesAfterResponse) {

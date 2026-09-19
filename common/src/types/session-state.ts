@@ -13,6 +13,7 @@ import { createInitialWorkspaceState } from './workspace-state'
 import type {
   MemoryAuthorityMode,
   MemoryEventId,
+  MemoryReuseReceiptV1,
   MemorySessionId,
   MemoryTurnContextV2,
   ProjectId,
@@ -410,6 +411,10 @@ export type AgentState = {
   memoryAuthority?: MemoryAuthorityStateV2
   /** Validated retrieval context for the current trusted turn only. */
   memoryV2Context?: MemoryTurnContextV2
+  /** Per-turn memory-cover reuse accumulator (S2 reuse receipt). Reset each turn. */
+  memoryReuse?: MemoryReuseReceiptV1
+  /** Snapshot of the completed turn's reuse receipt handed to the SDK coordinator for usage correlation; cleared by coordinator finishTurn. */
+  memoryUsageTurn?: MemoryReuseReceiptV1
   /** Monotonic workspace state shared by reads, mutations, indexing, validation, and review. */
   workspaceState?: WorkspaceStateV1
   /**
@@ -603,6 +608,8 @@ export function getInitialAgentState(): AgentState {
     memoryV2: undefined,
     memoryAuthority: undefined,
     memoryV2Context: undefined,
+    memoryReuse: undefined,
+    memoryUsageTurn: undefined,
     workspaceState: createInitialWorkspaceState(),
     backgroundAgentJobs: [],
   }

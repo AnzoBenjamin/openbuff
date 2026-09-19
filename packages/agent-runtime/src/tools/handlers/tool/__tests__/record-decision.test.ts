@@ -16,7 +16,7 @@ describe('handleRecordDecision', () => {
     const agentState = buildAgentState()
     const { output } = await handleRecordDecision({
       previousToolCallFinished: Promise.resolve(),
-      toolCall: buildToolCall({ text: 'Use Postgres for sessions', kind: 'decision', evidenceSelectors: ['docs/architecture.md'] }),
+      toolCall: buildToolCall({ text: 'Chose Postgres for sessions because they must survive restarts', kind: 'decision', evidenceSelectors: ['docs/architecture.md'] }),
       agentState,
     } as Parameters<typeof handleRecordDecision>[0])
     const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { message: string; kind: string; evidenceCount: number }
@@ -55,5 +55,94 @@ describe('handleRecordDecision', () => {
     } as Parameters<typeof handleRecordDecision>[0])
     const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { errorMessage?: string }
     expect(typeof value.errorMessage).toBe('string')
+  })
+  test('rejects a decision without a rationale', async () => {
+    const agentState = buildAgentState()
+    const { output } = await handleRecordDecision({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: buildToolCall({ text: 'Updated the config file today', kind: 'decision', evidenceSelectors: ['docs/a.md'] }),
+      agentState,
+    } as Parameters<typeof handleRecordDecision>[0])
+    const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { errorMessage?: string }
+    expect(typeof value.errorMessage).toBe('string')
+    expect(agentState.taskMemory?.decisions ?? []).toHaveLength(0)
+  })
+  test('accepts a decision with a rationale', async () => {
+    const agentState = buildAgentState()
+    const { output } = await handleRecordDecision({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: buildToolCall({ text: 'Chose Postgres because sessions must survive restarts', kind: 'decision', evidenceSelectors: ['docs/architecture.md'] }),
+      agentState,
+    } as Parameters<typeof handleRecordDecision>[0])
+    const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { message?: string; kind?: string; errorMessage?: string }
+    expect(value.errorMessage).toBeUndefined()
+    expect(value.kind).toBe('decision')
+    expect(agentState.taskMemory?.decisions.length).toBe(1)
+  })
+  test('does not gate a fact with short non-rationale text', async () => {
+    const agentState = buildAgentState()
+    const { output } = await handleRecordDecision({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: buildToolCall({ text: 'Config file exists', kind: 'fact', evidenceSelectors: ['docs/a.md'] }),
+      agentState,
+    } as Parameters<typeof handleRecordDecision>[0])
+    const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { kind?: string; errorMessage?: string }
+    expect(value.errorMessage).toBeUndefined()
+    expect(value.kind).toBe('fact')
+    expect(agentState.taskMemory?.decisions.length).toBe(1)
+  })
+  test('echoes trimmed deduped supersedes ids in the success output', async () => {
+    const agentState = buildAgentState()
+    const { output } = await handleRecordDecision({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: buildToolCall({
+        text: 'Chose Postgres for sessions because they must survive restarts',
+        kind: 'decision',
+        evidenceSelectors: ['docs/architecture.md'],
+        supersedes: ['  observation:dup-2  ', 'observation:dup-1', 'observation:dup-2'],
+      }),
+      agentState,
+    } as Parameters<typeof handleRecordDecision>[0])
+    const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { supersedes?: unknown; errorMessage?: string }
+    expect(value.errorMessage).toBeUndefined()
+    expect(value.supersedes).toEqual(['observation:dup-2', 'observation:dup-1'])
+    expect(agentState.taskMemory?.decisions.length).toBe(1)
+  })
+  test('omits supersedes from the output when not provided', async () => {
+    const agentState = buildAgentState()
+    const { output } = await handleRecordDecision({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: buildToolCall({ text: 'Chose Postgres for sessions because they must survive restarts', kind: 'decision', evidenceSelectors: ['docs/architecture.md'] }),
+      agentState,
+    } as Parameters<typeof handleRecordDecision>[0])
+    const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { supersedes?: unknown }
+    expect(value.supersedes).toBeUndefined()
+  })
+  test('rejects invalid supersedes payloads without recording', async () => {
+    const invalidPayloads: unknown[] = [
+      [],
+      ['   '],
+      ['x'.repeat(129)],
+      ['observation:a', 7],
+      Array.from({ length: 17 }, (_, index) => 'observation:' + String(index)),
+    ]
+    for (const supersedes of invalidPayloads) {
+      const agentState = buildAgentState()
+      const { output } = await handleRecordDecision({
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: buildToolCall({
+          text: 'Chose Postgres for sessions because they must survive restarts',
+          kind: 'decision',
+          evidenceSelectors: ['docs/architecture.md'],
+          supersedes,
+        }),
+        agentState,
+      } as Parameters<typeof handleRecordDecision>[0])
+      const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { errorMessage?: string }
+      expect(value.errorMessage).toBe(
+        'record_decision: supersedes must contain 1..16 observation id strings of at most 128 characters.',
+      )
+      expect(agentState.taskMemory?.decisions ?? []).toHaveLength(0)
+    }
   })
 })

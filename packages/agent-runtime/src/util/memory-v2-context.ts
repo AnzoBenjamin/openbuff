@@ -377,3 +377,23 @@ export function compileMemoryV2Context(
     maxChars,
   )
 }
+
+/**
+ * P8 receipt producer: counts the advisory concept-expansion entries the
+ * turn's retrieval served — reusableDiscovery entries whose reasons carry the
+ * reserved 'concept-advisory' code appended AFTER the lexical ranking by the
+ * repository's recallExpander seam. Feeds MemoryReuseReceiptV1.conceptExpanded
+ * at receipt finalization; 0 when semantics were off (no expansion), matching
+ * the degraded==off byte-identity firewall. Best-effort: never throws.
+ */
+export function countConceptAdvisoryEntries(
+  context: MemoryTurnContextV2,
+): number {
+  try {
+    return context.result.reusableDiscovery.filter((entry) =>
+      entry.reasons.some((reason) => reason.code === 'concept-advisory'),
+    ).length
+  } catch {
+    return 0
+  }
+}

@@ -1,6 +1,7 @@
 import z from 'zod/v4'
 
 import { toolResultOutputSchema } from './messages/content-part'
+import { MemoryReuseReceiptV1Schema } from './memory-v2'
 
 export const printModeStartSchema = z.object({
   type: z.literal('start'),
@@ -211,6 +212,19 @@ export const printModeContextWindowSchema = z.object({
 export type PrintModeContextWindow = z.infer<
   typeof printModeContextWindowSchema
 >
+
+/**
+ * Per-turn memory reuse receipt on the public handleEvent surface. ADDITIVE,
+ * non-breaking: a NEW member of printModeEventSchema. Unknown-type-safe for
+ * older consumers (the SDK default handler only branches on 'error'; the CLI
+ * match chain has a catch-all .otherwise). Carried on the live turn stream
+ * only; never persisted to the memory-v2 event store.
+ */
+export const printModeMemoryReuseSchema = z.object({
+  type: z.literal('memory_reuse'),
+  receipt: MemoryReuseReceiptV1Schema,
+})
+export type PrintModeMemoryReuse = z.infer<typeof printModeMemoryReuseSchema>
 
 const contextCategoryStatsSchema = z.object({
   tokens: z.number(),
@@ -596,6 +610,7 @@ export const printModeEventSchema = z.discriminatedUnion('type', [
   printModeContextCompactionStatusSchema,
   printModeContextRequestTrimSchema,
   printModeContextWindowSchema,
+  printModeMemoryReuseSchema,
   printModeJobUpdateSchema,
   printModeReasoningDeltaSchema,
 ])
