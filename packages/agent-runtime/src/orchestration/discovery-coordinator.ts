@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { discoveryCoverageV1Schema } from '@codebuff/common/types/discovery-coverage'
 
 import type { DiscoveryCoverageV1 } from '@codebuff/common/types/discovery-coverage'
+import type { MemoryReuseReceiptV1 } from '@codebuff/common/types/memory-v2'
 
 function hash(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 24)
@@ -764,6 +765,59 @@ export function evaluateMemoryCover(params: {
       remainingGaps: [],
       reason: 'error',
     }
+  }
+}
+
+/**
+ * Deterministic best-effort accumulator for the per-turn memory reuse receipt
+ * (S2). Aggregates one memory-cover gate outcome onto agentState.memoryReuse,
+ * lazily initializing the receipt on first use. Integer counters only, bounded
+ * byTool cap of 32, and recordsServed counts only skip/narrow (never full).
+ * Never throws: reuse accounting must never break a tool call.
+ */
+export function recordMemoryReuse(
+  agentState: { memoryReuse?: MemoryReuseReceiptV1 },
+  entry: {
+    tool: string
+    decision: MemoryCoverDecision
+    served: number
+    gaps: number
+    recordedDecisions?: number
+  },
+): void {
+  try {
+    const receipt =
+      agentState.memoryReuse ??
+      (agentState.memoryReuse = {
+        schemaVersion: 1,
+        turnId: '',
+        skip: 0,
+        narrow: 0,
+        full: 0,
+        recordsServed: 0,
+        gapsRemaining: 0,
+        recordedDecisions: 0,
+        conceptExpanded: 0,
+        byTool: [],
+      })
+    if (entry.decision === 'skip') receipt.skip += 1
+    else if (entry.decision === 'narrow') receipt.narrow += 1
+    else receipt.full += 1
+    if (entry.decision === 'skip' || entry.decision === 'narrow') {
+      receipt.recordsServed += Math.max(0, Math.trunc(entry.served))
+    }
+    receipt.gapsRemaining += Math.max(0, Math.trunc(entry.gaps))
+    receipt.recordedDecisions += Math.max(0, Math.trunc(entry.recordedDecisions ?? 0))
+    if (receipt.byTool && receipt.byTool.length < 32) {
+      receipt.byTool.push({
+        tool: entry.tool.slice(0, 64),
+        decision: entry.decision,
+        served: Math.max(0, Math.trunc(entry.served)),
+        gaps: Math.max(0, Math.trunc(entry.gaps)),
+      })
+    }
+  } catch {
+    // best-effort: reuse accounting must never break a tool call
   }
 }
 

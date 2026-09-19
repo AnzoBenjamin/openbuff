@@ -3,6 +3,7 @@ import {
   getVerifiedMemoryExcerpts,
   getVerifiedMemoryPaths,
   recordDiscoveryResult,
+  recordMemoryReuse,
 } from '../../../orchestration/discovery-coordinator'
 
 import type { VerifiedExcerpt } from '../../../orchestration/discovery-coordinator'
@@ -103,26 +104,23 @@ export const handleGlob = (async (params: {
         workspaceSnapshotId: agentState.workspaceState?.snapshotId,
         existingIndexSnapshotId: agentState.discoveryCoverage?.indexSnapshotId,
       })
+      recordMemoryReuse(agentState, {
+        tool: 'glob',
+        decision: cover.decision,
+        served:
+          cover.decision === 'skip' || cover.decision === 'narrow'
+            ? cover.coveringExcerpts.length
+            : 0,
+        gaps: cover.remainingGaps.length,
+      })
       if (cover.decision === 'skip' && cover.coveringExcerpts.length > 0) {
         const output = buildSkipOutput(cover.coveringExcerpts)
         recordCoverage(output)
         return { output }
       }
-      if (cover.decision === 'narrow' && cover.remainingGaps.length > 0) {
-        const remaining = cover.remainingGaps.slice(0, 20)
-        const hasCwd =
-          typeof input.cwd === 'string' && input.cwd.length > 0
-        if (!hasCwd && remaining.length > 0) {
-          const narrowedCall = {
-            ...toolCall,
-            input: { ...input, cwd: remaining[0] },
-          } as unknown as ClientToolCall<ToolName>
-          const output = await requestClientToolCall(narrowedCall)
-          recordCoverage(output)
-          return { output }
-        }
-        // Otherwise fall through to the full call to preserve glob semantics.
-      }
+      // Narrow falls through to the full call: remainingGaps are file-like
+      // paths, but glob's cwd must be a directory, so rooting glob at a gap
+      // path would yield empty/incorrect results.
     }
   } catch {
     // Fall through to the full call on any memory-check failure.

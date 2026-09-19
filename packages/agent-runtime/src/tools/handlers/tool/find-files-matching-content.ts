@@ -3,6 +3,7 @@ import {
   getVerifiedMemoryExcerpts,
   getVerifiedMemoryPaths,
   recordDiscoveryResult,
+  recordMemoryReuse,
 } from '../../../orchestration/discovery-coordinator'
 
 import type { VerifiedExcerpt } from '../../../orchestration/discovery-coordinator'
@@ -108,6 +109,15 @@ export const handleFindFilesMatchingContent = (async (params: {
         workspaceRevision: agentState.workspaceState?.revision,
         workspaceSnapshotId: agentState.workspaceState?.snapshotId,
         existingIndexSnapshotId: agentState.discoveryCoverage?.indexSnapshotId,
+      })
+      recordMemoryReuse(agentState, {
+        tool: 'find_files_matching_content',
+        decision: cover.decision,
+        served:
+          cover.decision === 'skip' || cover.decision === 'narrow'
+            ? cover.coveringExcerpts.length
+            : 0,
+        gaps: cover.remainingGaps.length,
       })
       if (cover.decision === 'skip' && cover.coveringExcerpts.length > 0) {
         const output = buildSkipOutput(cover.coveringExcerpts)

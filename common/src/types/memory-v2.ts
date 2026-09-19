@@ -1309,6 +1309,38 @@ export const MemoryExportOutcomeSchema = z.discriminatedUnion('outcome', [
 ])
 export type MemoryExportOutcome = z.infer<typeof MemoryExportOutcomeSchema>
 
+/**
+ * Per-turn Memory Reuse Receipt (S2). A NEW standalone type, not an
+ * event-envelope variant: it is carried on the live turn stream only and is
+ * never persisted to the memory-v2 event store, so the store schemaVersion
+ * stays 2 while this receipt is versioned independently at 1.
+ */
+export const MemoryReuseReceiptV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    turnId: z.string().min(1).max(128),
+    skip: z.number().int().nonnegative(),
+    narrow: z.number().int().nonnegative(),
+    full: z.number().int().nonnegative(),
+    recordsServed: z.number().int().nonnegative(),
+    gapsRemaining: z.number().int().nonnegative(),
+    recordedDecisions: z.number().int().nonnegative(),
+    conceptExpanded: z.number().int().nonnegative(),
+    byTool: z
+      .array(
+        z.object({
+          tool: z.string().min(1).max(64),
+          decision: z.enum(['skip', 'narrow', 'full']),
+          served: z.number().int().nonnegative(),
+          gaps: z.number().int().nonnegative(),
+        }),
+      )
+      .max(32)
+      .optional(),
+  })
+  .strict()
+export type MemoryReuseReceiptV1 = z.infer<typeof MemoryReuseReceiptV1Schema>
+
 const operatorScopeShape = {
   schemaVersion: z.literal(2),
   projectId: ProjectIdSchema,

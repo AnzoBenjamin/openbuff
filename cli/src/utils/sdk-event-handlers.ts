@@ -69,6 +69,7 @@ import type {
   PrintModeContextRequestTrim,
   PrintModeEvent as SDKEvent,
   PrintModeJobUpdate,
+  PrintModeMemoryReuse,
   PrintModeFinish,
   PrintModePhase,
   PrintModeSubagentFinish,
@@ -1849,6 +1850,20 @@ const handleContextCompaction = (
   })
 }
 
+const handleMemoryReuse = (
+  state: EventHandlerState,
+  event: PrintModeMemoryReuse,
+) => {
+  const r = event.receipt
+  const line = `memory: ${r.skip} skip / ${r.narrow} narrow / ${r.full} full · saved ${r.recordsServed} reads · gaps ${r.gapsRemaining} · recorded ${r.recordedDecisions} decisions${r.conceptExpanded ? ` · concept +${r.conceptExpanded}` : ''}`
+  const block: ContentBlock = {
+    type: 'memory',
+    state: 'reuse',
+    lines: [line],
+  }
+  state.message.updater.updateAiMessageBlocks((blocks) => [...blocks, block])
+}
+
 const handleFinish = (state: EventHandlerState, event: PrintModeFinish) => {
   if (typeof event.totalCost === 'number' && state.onTotalCost) {
     state.onTotalCost(event.totalCost)
@@ -2022,5 +2037,6 @@ export const createEventHandler =
         handleContextRequestTrim(state, e),
       )
       .with({ type: 'job_update' }, (e) => handleJobUpdate(state, e))
+      .with({ type: 'memory_reuse' }, (e) => handleMemoryReuse(state, e))
       .otherwise(() => undefined)
   }

@@ -8,6 +8,7 @@ import {
   planDiscoveryBatch,
   reconcileInterruptedDiscoveryShards,
   recordDiscoveryResult,
+  recordMemoryReuse,
   tryClaimDiscoveryShard,
 } from '../discovery-coordinator'
 
@@ -458,5 +459,199 @@ describe('discovery coordinator', () => {
         workspaceRevision: 9,
       }),
     ).toThrow(/Duplicate discovery shard/)
+  })
+})
+
+describe('recordMemoryReuse', () => {
+  test('lazily initializes a zeroed receipt on first call', () => {
+    const state: Parameters<typeof recordMemoryReuse>[0] = {}
+
+    recordMemoryReuse(state, {
+      tool: 'code_search',
+      decision: 'full',
+      served: 0,
+      gaps: 0,
+    })
+
+    expect(state.memoryReuse).toEqual({
+      schemaVersion: 1,
+      turnId: '',
+      skip: 0,
+      narrow: 0,
+      full: 1,
+      recordsServed: 0,
+      gapsRemaining: 0,
+      recordedDecisions: 0,
+      conceptExpanded: 0,
+      byTool: [{ tool: 'code_search', decision: 'full', served: 0, gaps: 0 }],
+    })
+  })
+
+  test('skip increments skip and adds served to recordsServed', () => {
+    const state: Parameters<typeof recordMemoryReuse>[0] = {}
+
+    recordMemoryReuse(state, {
+      tool: 'query_index',
+      decision: 'skip',
+      served: 5,
+      gaps: 0,
+    })
+
+    expect(state.memoryReuse!.skip).toBe(1)
+    expect(state.memoryReuse!.recordsServed).toBe(5)
+  })
+
+  test('narrow increments narrow and adds served to recordsServed', () => {
+    const state: Parameters<typeof recordMemoryReuse>[0] = {}
+
+    recordMemoryReuse(state, {
+      tool: 'query_index',
+      decision: 'narrow',
+      served: 3,
+      gaps: 0,
+    })
+
+    expect(state.memoryReuse!.narrow).toBe(1)
+    expect(state.memoryReuse!.recordsServed).toBe(3)
+  })
+
+  test('full increments full and does NOT add served to recordsServed', () => {
+    const state: Parameters<typeof recordMemoryReuse>[0] = {}
+
+    recordMemoryReuse(state, {
+      tool: 'glob',
+      decision: 'full',
+      served: 7,
+      gaps: 0,
+    })
+
+    expect(state.memoryReuse!.full).toBe(1)
+    expect(state.memoryReuse!.recordsServed).toBe(0)
+  })
+
+  test('gaps accumulate into gapsRemaining for every decision', () => {
+    const state: Parameters<typeof recordMemoryReuse>[0] = {}
+
+    recordMemoryReuse(state, {
+      tool: 'a',
+      decision: 'skip',
+      served: 0,
+      gaps: 2,
+    })
+    recordMemoryReuse(state, {
+      tool: 'b',
+      decision: 'narrow',
+      served: 0,
+      gaps: 3,
+    })
+    recordMemoryReuse(state, {
+      tool: 'c',
+      decision: 'full',
+      served: 0,
+      gaps: 4,
+    })
+
+    expect(state.memoryReuse!.gapsRemaining).toBe(9)
+  })
+
+  test('recordedDecisions accumulate and default to 0 when omitted', () => {
+    const state: Parameters<typeof recordMemoryReuse>[0] = {}
+
+    recordMemoryReuse(state, {
+      tool: 'a',
+      decision: 'skip',
+      served: 0,
+      gaps: 0,
+      recordedDecisions: 4,
+    })
+    recordMemoryReuse(state, {
+      tool: 'b',
+      decision: 'skip',
+      served: 0,
+      gaps: 0,
+    })
+    recordMemoryReuse(state, {
+      tool: 'c',
+      decision: 'skip',
+      served: 0,
+      gaps: 0,
+      recordedDecisions: 6,
+    })
+
+    expect(state.memoryReuse!.recordedDecisions).toBe(10)
+  })
+
+  test('each call appends one byTool entry with the tool sliced to 64 chars', () => {
+    const state: Parameters<typeof recordMemoryReuse>[0] = {}
+    const longTool = 'x'.repeat(100)
+
+    recordMemoryReuse(state, {
+      tool: longTool,
+      decision: 'narrow',
+      served: 2,
+      gaps: 1,
+    })
+
+    expect(state.memoryReuse!.byTool).toHaveLength(1)
+    expect(state.memoryReuse!.byTool![0]).toEqual({
+      tool: 'x'.repeat(64),
+      decision: 'narrow',
+      served: 2,
+      gaps: 1,
+    })
+  })
+
+  test('byTool is capped at 32 while top-level counters keep incrementing', () => {
+    const state: Parameters<typeof recordMemoryReuse>[0] = {}
+
+    for (let i = 0; i < 33; i++) {
+      recordMemoryReuse(state, {
+        tool: `tool-${i}`,
+        decision: 'skip',
+        served: 1,
+        gaps: 0,
+      })
+    }
+
+    expect(state.memoryReuse!.byTool).toHaveLength(32)
+    expect(state.memoryReuse!.skip).toBe(33)
+    expect(state.memoryReuse!.recordsServed).toBe(33)
+  })
+
+  test('is deterministic across independent states for the same ordered sequence', () => {
+    const entries: Parameters<typeof recordMemoryReuse>[1][] = [
+      { tool: 'code_search', decision: 'skip', served: 5, gaps: 1, recordedDecisions: 2 },
+      { tool: 'glob', decision: 'narrow', served: 3, gaps: 2 },
+      { tool: 'query_index', decision: 'full', served: 9, gaps: 4, recordedDecisions: 1 },
+    ]
+
+    const stateA: Parameters<typeof recordMemoryReuse>[0] = {}
+    const stateB: Parameters<typeof recordMemoryReuse>[0] = {}
+    for (const entry of entries) {
+      recordMemoryReuse(stateA, entry)
+      recordMemoryReuse(stateB, entry)
+    }
+
+    expect(stateA.memoryReuse).toEqual(stateB.memoryReuse)
+  })
+
+  test('floors negative and fractional served/gaps to non-negative integers', () => {
+    const state: Parameters<typeof recordMemoryReuse>[0] = {}
+
+    recordMemoryReuse(state, {
+      tool: 'code_search',
+      decision: 'skip',
+      served: 4.9,
+      gaps: -3,
+    })
+
+    expect(state.memoryReuse!.recordsServed).toBe(4)
+    expect(state.memoryReuse!.gapsRemaining).toBe(0)
+    expect(state.memoryReuse!.byTool![0]).toEqual({
+      tool: 'code_search',
+      decision: 'skip',
+      served: 4,
+      gaps: 0,
+    })
   })
 })

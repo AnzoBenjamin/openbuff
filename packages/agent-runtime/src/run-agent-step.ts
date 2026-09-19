@@ -2549,6 +2549,23 @@ export async function loopAgentSteps(
         currentParams = undefined
       }
 
+      // Emit exactly one deterministic per-turn memory reuse receipt for the
+      // ROOT run only (subagents/inline agents have a parentId). Carried on the
+      // live turn stream, never persisted to the memory-v2 event store. Fires
+      // once here on the completed finish path after the loop exits. Mirrors
+      // the existing `context_window` chunk emission.
+      if (!currentAgentState.parentId && currentAgentState.memoryReuse) {
+        const receipt = currentAgentState.memoryReuse
+        receipt.turnId = String(userInputId).slice(0, 128)
+        if (receipt.byTool) {
+          receipt.byTool.sort((a, b) =>
+            a.tool < b.tool ? -1 : a.tool > b.tool ? 1 : 0,
+          )
+        }
+        onResponseChunk({ type: 'memory_reuse', receipt })
+        currentAgentState.memoryReuse = undefined
+      }
+
       if (clearUserPromptMessagesAfterResponse) {
         currentAgentState.messageHistory = expireMessages(
           currentAgentState.messageHistory,

@@ -96,6 +96,21 @@ export const MemoryBox = memo(
       )
     }
 
+    if (block.state === 'reuse') {
+      return (
+        <HarnessBox tone="secondary" gap={1} paddingBottom={1}>
+          {block.lines.map((line, index) => (
+            <text
+              key={`memory-reuse-${index}`}
+              style={{ wrapMode: 'word', fg: theme.secondary }}
+            >
+              {line}
+            </text>
+          ))}
+        </HarnessBox>
+      )
+    }
+
     if (block.state === 'status') {
       const ageText = formatAge(Math.max(0, Date.now() - block.updatedAt))
       const header = `${block.revision} · ${ageText}`
