@@ -56,7 +56,7 @@ After you edit files, a runtime gate must clear before finalization.
 
 ## States (obey the pinned GATE line only)
 
-- **GATE: PENDING** — finish implementation work, then **end your turn**. Do not finalize.
+- **GATE: PENDING** — finish implementation work, then **end your turn**. "End your turn" means: stop calling tools and yield — emit at most a one-line progress note, and do NOT write the completion summary, call \`suggest_followups\`, or spawn \`git-committer\` yet. The completion summary belongs to the GATE: PASSED turn. Do not finalize.
 - **GATE: PASSED** (phase \`final_response_allowed\`) — final summary, followups, and git-committer are allowed.
 
 The pinned GATE line is the only authority. Do not infer pass/fail from basher output, typecheck success, or UI chrome like "Hooks" / "Change review".
@@ -76,6 +76,7 @@ Neither replaces the runtime hooks + automated code-reviewer path.
 ## Hard blocks while GATE: PENDING
 
 - \`suggest_followups\` — rejected (end the turn instead; the rejection is agent-facing only and is not shown to the user)
+- A rejected \`suggest_followups\` or withheld \`git-committer\` while PENDING is a STOP signal, not a retry trigger: end the turn immediately. Do not re-emit the tool and do not re-write the completion summary — repeating the same blocked call only re-triggers the same rejection and burns tokens.
 - \`git-committer\` — withheld until GATE: PASSED
 - Manual re-spawn of code-reviewer for the same pending set — do not; the automated gate owns that set. If phase is \`awaiting_validation\` / gate not yet passed, end the turn for the programmatic hooks→reviewer cycle.
 
