@@ -76,7 +76,7 @@ Openbuff 自身不运行任何模型——把它指向一个你有密钥的提�
 3. `~/.config/openbuff/openbuff.json` —— 用户全局配置（备用名称）
 4. 当前目录及其各级祖先目录（含 `$HOME`）中的 `openbuff.json` —— 项目本地配置
 
-多文件合并语义详见 [configuration.md](./configuration.md)。
+多文件合并语义详见 [configuration.md](./docs/configuration.md)。
 
 有两条快速路径。
 
@@ -140,7 +140,7 @@ Openbuff 根据 `openbuff.json` 为每个智能体步骤路由模型：
 No model configured for agent '<id>'. Run /setup or set defaultModel ...
 ```
 
-用 `/models` 打开模型路由选择器，或用 `/models configure` 打开交互式路由向导。完整的解析顺序见 [local-mode.md](./local-mode.md)。
+用 `/models` 打开模型路由选择器，或用 `/models configure` 打开交互式路由向导。完整的解析顺序见 [local-mode.md](./docs/local-mode.md)。
 
 ### 4. 验证
 
@@ -162,7 +162,7 @@ bun run smoke:openbuff
 - **`No model configured for agent '<id>'`** —— 该智能体没有路由到任何模型。运行 `/setup <preset>`，或在 `openbuff.json` 中设置 `defaultModel`（或 `agents['<id>']`）。
 - **缺少 API key 环境变量** —— 提供商的 `apiKeyEnv` 变量未导出。导出它（例如 `export OPENAI_API_KEY="..."`）后重启。`/provider status` 会列出每个提供商缺失的环境变量。
 - **`chatgpt-oauth` 提供商失败** —— ChatGPT/Codex OAuth 提供商需要先执行 `/provider connect codex` 才能提供服务。
-- **配置未生效** —— `/provider status` 会显示实际加载了哪个文件。检查第 2 节的优先级顺序；当多个文件匹配时，[configuration.md](./configuration.md) 中的合并规则决定哪些值生效。
+- **配置未生效** —— `/provider status` 会显示实际加载了哪个文件。检查第 2 节的优先级顺序；当多个文件匹配时，[configuration.md](./docs/configuration.md) 中的合并规则决定哪些值生效。
 
 ## 创建自定义智能体
 
