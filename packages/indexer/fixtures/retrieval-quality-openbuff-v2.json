@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "name": "openbuff-repository-retrieval-v1",
+  "version": 2,
+  "name": "openbuff-repository-retrieval-v2",
   "documents": [
     {
       "path": "packages/indexer/src/index-manager.ts",
@@ -104,12 +104,61 @@
       "path": "evals/buffbench/cache-recall-eval.ts",
       "symbols": ["evaluateCacheRecall"],
       "concepts": ["cache recall assertions", "cache hit ratio"]
+    },
+    {
+      "path": "cli/src/services/memory-v2/concept-index.ts",
+      "symbols": [
+        "expandConceptRecall",
+        "conceptFingerprint",
+        "conceptEmbedText"
+      ],
+      "concepts": [
+        "concept vector cache",
+        "model fingerprint LRU",
+        "advisory recall expansion"
+      ]
+    },
+    {
+      "path": "common/src/util/claim-identity.ts",
+      "symbols": ["deriveClaimId", "normalizeClaimText"],
+      "concepts": ["claim identity", "deterministic claim id"]
+    },
+    {
+      "path": "common/src/util/contradiction-detector.ts",
+      "symbols": [
+        "detectContradictions",
+        "deriveTopicKey",
+        "resolveSupersessionHead",
+        "extractStableChunkIds"
+      ],
+      "concepts": ["contradiction grouping", "stable chunk id topics"]
+    },
+    {
+      "path": "common/src/util/compaction-eligibility.ts",
+      "symbols": [
+        "selectCompactionCandidates",
+        "observationIdsReferencedBy"
+      ],
+      "concepts": ["GC eligibility", "lifecycle groups", "shared event closure"]
+    },
+    {
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "symbols": [
+        "BunSQLiteMemoryRepository",
+        "openBunSQLiteMemoryRepository",
+        "MemoryV2StorageError"
+      ],
+      "concepts": [
+        "sqlite event store",
+        "canonical projections",
+        "privileged compaction"
+      ]
     }
   ],
   "queries": [
     {
       "id": "semantic-cache",
-      "query": "durable semantic vector cache schema migration content hash fingerprint",
+      "query": "loadIndex saveIndex durable semantic vector cache schema migration content hash",
       "relevant": [
         { "path": "packages/indexer/src/index-store.ts", "relevance": 3 },
         { "path": "packages/indexer/src/semantic.ts", "relevance": 1 }
@@ -175,7 +224,7 @@
     },
     {
       "id": "tool-schema",
-      "query": "queryIndexParams zod query index tool parameters",
+      "query": "queryIndexParams zod tool parameters graph modes",
       "relevant": [
         {
           "path": "common/src/tools/params/tool/query-index.ts",
@@ -202,6 +251,47 @@
       "query": "loadIndex expectedSnapshotId content addressed verify computeIndexSnapshotId",
       "relevant": [
         { "path": "packages/indexer/src/index-store.ts", "relevance": 3 }
+      ]
+    },
+    {
+      "id": "memory-concept-index",
+      "query": "expandConceptRecall concept vector cache model fingerprint LRU",
+      "relevant": [
+        {
+          "path": "cli/src/services/memory-v2/concept-index.ts",
+          "relevance": 3
+        }
+      ]
+    },
+    {
+      "id": "memory-claim-identity",
+      "query": "deriveClaimId normalizeClaimText claim identity evidence hashing",
+      "relevant": [
+        { "path": "common/src/util/claim-identity.ts", "relevance": 3 }
+      ]
+    },
+    {
+      "id": "memory-contradiction-detector",
+      "query": "detectContradictions deriveTopicKey resolveSupersessionHead stable chunk",
+      "relevant": [
+        { "path": "common/src/util/contradiction-detector.ts", "relevance": 3 }
+      ]
+    },
+    {
+      "id": "memory-compaction-eligibility",
+      "query": "selectCompactionCandidates observationIdsReferencedBy compaction eligibility",
+      "relevant": [
+        { "path": "common/src/util/compaction-eligibility.ts", "relevance": 3 }
+      ]
+    },
+    {
+      "id": "memory-sqlite-store",
+      "query": "BunSQLiteMemoryRepository privileged compaction sqlite event store projections",
+      "relevant": [
+        {
+          "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+          "relevance": 3
+        }
       ]
     }
   ]

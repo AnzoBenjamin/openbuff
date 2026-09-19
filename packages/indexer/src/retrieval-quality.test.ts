@@ -20,14 +20,14 @@ interface OpenbuffCorpus extends RetrievalQualityCorpus {
 const repositoryRoot = resolve(import.meta.dir, '../../..')
 const corpusPath = resolve(
   import.meta.dir,
-  '../fixtures/retrieval-quality-openbuff-v1.json',
+  '../fixtures/retrieval-quality-openbuff-v2.json',
 )
 const corpus = JSON.parse(readFileSync(corpusPath, 'utf8')) as OpenbuffCorpus
 
 describe('versioned Openbuff retrieval-quality corpus', () => {
   test('references files in this repository and has a meaningful fixed size', () => {
-    expect(corpus.version).toBe(1)
-    expect(corpus.name).toBe('openbuff-repository-retrieval-v1')
+    expect(corpus.version).toBe(2)
+    expect(corpus.name).toBe('openbuff-repository-retrieval-v2')
     expect(corpus.documents.length).toBeGreaterThanOrEqual(15)
     expect(corpus.queries.length).toBeGreaterThanOrEqual(10)
     for (const document of corpus.documents) {
@@ -93,7 +93,7 @@ describe('versioned Openbuff retrieval-quality corpus', () => {
     )
 
     expect(report.corpus).toEqual({
-      version: 1,
+      version: 2,
       documents: corpus.documents.length,
       queries: corpus.queries.length,
     })
