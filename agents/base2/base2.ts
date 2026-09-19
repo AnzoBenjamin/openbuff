@@ -2,7 +2,9 @@ import { buildArray } from '@codebuff/common/util/array'
 import type { SpecialistReviewerAgent } from '@codebuff/common/agents/specialist-risk-router'
 import {
   resolveMaxRepairRounds,
+  resolveMaxReviewerNoVerdictRetries,
   resolveMaxReviewerRepairRounds,
+  resolveMaxSpecialistNoVerdictRetries,
   resolveMaxSpecialistRepairRounds,
 } from '@codebuff/common/util/gate-repair-budgets'
 import { FALLBACK_GUIDES } from '@codebuff/common/util/guides'
@@ -252,6 +254,8 @@ export function createBase2(
     maxReviewerRepairRounds?: number
     maxRepairRounds?: number
     maxSpecialistRepairRounds?: number
+    maxReviewerNoVerdictRetries?: number
+    maxSpecialistNoVerdictRetries?: number
     model?: SecretAgentDefinition['model']
     providerOptions?: SecretAgentDefinition['providerOptions']
   },
@@ -266,6 +270,8 @@ export function createBase2(
     maxReviewerRepairRounds: maxReviewerRepairRoundsOption,
     maxRepairRounds: maxRepairRoundsOption,
     maxSpecialistRepairRounds: maxSpecialistRepairRoundsOption,
+    maxReviewerNoVerdictRetries: maxReviewerNoVerdictRetriesOption,
+    maxSpecialistNoVerdictRetries: maxSpecialistNoVerdictRetriesOption,
     model: modelOverride,
     providerOptions,
   } = options ?? {}
@@ -304,6 +310,24 @@ export function createBase2(
     maxSpecialistRepairRoundsOption ??
       (typeof process === 'object' && process !== null
         ? process.env?.OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS
+        : undefined),
+  )
+  // Explicit option wins over env. When omitted, resolve from
+  // OPENBUFF_MAX_REVIEWER_NO_VERDICT_RETRIES (positive integer string).
+  // Missing/invalid → 2 (default). Positive int capped at 10.
+  const maxReviewerNoVerdictRetries = resolveMaxReviewerNoVerdictRetries(
+    maxReviewerNoVerdictRetriesOption ??
+      (typeof process === 'object' && process !== null
+        ? process.env?.OPENBUFF_MAX_REVIEWER_NO_VERDICT_RETRIES
+        : undefined),
+  )
+  // Explicit option wins over env. When omitted, resolve from
+  // OPENBUFF_MAX_SPECIALIST_NO_VERDICT_RETRIES (positive integer string).
+  // Missing/invalid → 2 (default). Positive int capped at 10.
+  const maxSpecialistNoVerdictRetries = resolveMaxSpecialistNoVerdictRetries(
+    maxSpecialistNoVerdictRetriesOption ??
+      (typeof process === 'object' && process !== null
+        ? process.env?.OPENBUFF_MAX_SPECIALIST_NO_VERDICT_RETRIES
         : undefined),
   )
   const isDefault = mode === 'default'
@@ -449,6 +473,8 @@ export function createBase2(
       maxReviewerRepairRounds,
       maxRepairRounds,
       maxSpecialistRepairRounds,
+      maxReviewerNoVerdictRetries,
+      maxSpecialistNoVerdictRetries,
       // Contract for both keys:
       // packages/agent-runtime/src/util/base2-tool-tiers.ts.
       progressiveToolDisclosure: false,
@@ -812,6 +838,24 @@ ${guideSections}
         'timeout',
         'abort',
         'circuit',
+        'mutex',
+        'semaphore',
+        'throttle',
+        'debounce',
+        'latch',
+        'barrier',
+        'channel',
+        'stream',
+        'streams',
+        'socket',
+        'sockets',
+        'transaction',
+        'transactions',
+        'saga',
+        'reconcile',
+        'reconciler',
+        'watchdog',
+        'heartbeat',
       ])
       const reliabilityCodeExtension =
         /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|py|go|rs|java|kt|kts|rb|php|cs|swift|c|cc|cpp|h|hpp)$/
@@ -837,19 +881,19 @@ ${guideSections}
               file,
             ),
           ) ||
-          /\b(?:dependency|dependencies|lockfile|package manager|supply chain|license|vulnerabilit)/.test(
+          /\b(?:dependency|dependencies|lockfile|package manager|supply chain|license|vulnerabilit|cve|sbom|transitive dep\w*|peer dep\w*)/.test(
             requirements,
           )
         )
           selected.add('dependency-reviewer')
         if (
-          /(?:^|\/)(?:migrations?|schema|database|db)(?:\/|\.)|\.sql$|\b(?:migrations?|backfill|schema change|database compatibility|rollback)\b/.test(
+          /(?:^|\/)(?:migrations?|schema|database|db)(?:\/|\.)|\.sql$|\b(?:migrations?|backfill|schema change|database compatibility|rollback|data migration|reindex\w*|data backfill|dual-write|dual write)\b/.test(
             joined,
           )
         )
           selected.add('migration-reviewer')
         if (
-          /\b(?:public api|backward compat|breaking change|deprecat\w*|serialization|persisted format|config contract|environment variable|cli flag)\b/.test(
+          /\b(?:public api|backward compat|backwards compat|breaking change|deprecat\w*|serialization|persisted format|config contract|environment variable|cli flag|wire format|api contract|schema version\w*|protocol version\w*|semver|feature flag)\b/.test(
             requirements,
           ) ||
           files.some((file) =>
@@ -885,17 +929,17 @@ ${guideSections}
         }
 
         if (
-          /\b(?:race|concurr\w*|retry|retries|cancel|abort|idempoten\w*|deadlock|state machine|resource leak|partial failure)\b/.test(
+          /\b(?:race|concurr\w*|retry|retries|cancel|abort|idempoten\w*|deadlock|state machine|resource leak|partial failure|mutex|semaphore|throttl\w*|debounc\w*|livelock|lock contention|data race|atomic\w*|reentran\w*|backpressure|back-pressure|graceful shutdown|dropped (?:event|message)s?)\b/.test(
             requirements,
           ) ||
           files.some(isReliabilityCodePath)
         )
           selected.add('reliability-reviewer')
         if (
-          /\b(?:performance|latency|throughput|benchmark|profil\w*|allocation|hot path|load test|complexity)\b/.test(
+          /\b(?:performance|latency|throughput|benchmark|profil\w*|allocation|hot path|load test|complexity|memory leak|oom|regress\w*|slow\w*|bottleneck|cache miss|n\+1)\b/.test(
             requirements,
           ) ||
-          files.some((file) => /(?:bench|perf|load-test|profil)/.test(file))
+          files.some((file) => /(?:bench|perf|load-test|profil|flamegraph)/.test(file))
         )
           selected.add('performance-specialist')
         const hasUiFiles = files.some((file) =>
@@ -1042,7 +1086,18 @@ ${guideSections}
       const GATE_FILE_MISSING_CONTENT_MARKER = 'missing'
       const runReviewerGate = runValidationGate
       const reviewerAgentType = 'code-reviewer'
-      const MAX_REVIEWER_NO_VERDICT_RETRIES = 1
+      // Retry the reviewer twice before offering the user-authorized bypass:
+      // weaker (non-SOTA) models often fail the structured set_output contract
+      // on the first attempt but recover on a re-prompt. A no-verdict is never
+      // credited as a pass; this only adds one more retry before escalation.
+      const configuredMaxReviewerNoVerdictRetries =
+        config?.maxReviewerNoVerdictRetries
+      const MAX_REVIEWER_NO_VERDICT_RETRIES =
+        typeof configuredMaxReviewerNoVerdictRetries === 'number' &&
+        Number.isFinite(configuredMaxReviewerNoVerdictRetries) &&
+        configuredMaxReviewerNoVerdictRetries >= 1
+          ? Math.min(Math.floor(configuredMaxReviewerNoVerdictRetries), 10)
+          : 2
       // Optional validation-hook repair cap. Already resolved into
       // programmaticConfig at createBase2 load time (null = unlimited).
       // Re-clamp here with local literals only because handleSteps is
@@ -1073,7 +1128,14 @@ ${guideSections}
         configuredMaxSpecialistRepairRounds >= 1
           ? Math.min(Math.floor(configuredMaxSpecialistRepairRounds), 20)
           : Number.POSITIVE_INFINITY
-      const MAX_SPECIALIST_NO_VERDICT_RETRIES = 1
+      const configuredMaxSpecialistNoVerdictRetries =
+        config?.maxSpecialistNoVerdictRetries
+      const MAX_SPECIALIST_NO_VERDICT_RETRIES =
+        typeof configuredMaxSpecialistNoVerdictRetries === 'number' &&
+        Number.isFinite(configuredMaxSpecialistNoVerdictRetries) &&
+        configuredMaxSpecialistNoVerdictRetries >= 1
+          ? Math.min(Math.floor(configuredMaxSpecialistNoVerdictRetries), 10)
+          : 2
       // The post-gate finalization instruction shared by every gate-pass path
       // is built by buildGatePassFinalizationNotice() in the inline-helper
       // region below (see that function's comment for why it must stay a
@@ -4194,14 +4256,89 @@ ${guideSections}
                   const rateLimited =
                     activeWorkState.lastReviewerGateSkipReason ===
                     'specialist-rate-limited'
+                  // Deadlock escape: a specialist that keeps failing for a
+                  // non-source reason (protocol/attestation crash or provider
+                  // rate-limit) would otherwise block the turn forever. Mirror
+                  // the reviewer-crash bypass: after the harness has already
+                  // failed closed once, let the user explicitly authorize
+                  // crediting this ONE specialist on the recorded validation
+                  // evidence. The bypass credits the specialist exactly like
+                  // its success path so re-routing skips it, then re-enters the
+                  // loop toward the final code-reviewer (never finalizes here).
+                  const specialistBypassAuthorized =
+                    hasReviewerBypassAuthorization(
+                      currentConversationMessages,
+                      activeWorkState.reviewerBypassChallenge,
+                      reviewChallengeFingerprint(currentPendingGateFiles),
+                    )
+                  if (specialistBypassAuthorized) {
+                    // The terminal-failure handler runs AFTER the routed-agent
+                    // for loop, so the failing agentType is no longer bound.
+                    // Credit every routed specialist for this snapshot exactly
+                    // like the success path (done set + fingerprint + file
+                    // markers + owed clear) so re-routing skips them and the
+                    // loop advances toward the final code-reviewer.
+                    for (const routedAgent of routedSpecialists) {
+                      activeWorkState.specialistReviewGatesDone = Array.from(
+                        new Set([
+                          ...(activeWorkState.specialistReviewGatesDone ?? []),
+                          routedAgent,
+                        ]),
+                      )
+                      ;(activeWorkState.specialistReviewGateFingerprints ??=
+                        {})[routedAgent] = specialistCreditFingerprint
+                      const markerMap =
+                        ((activeWorkState.specialistReviewFileMarkers ??= {})[
+                          routedAgent
+                        ] ??= {})
+                      for (const scopedFile of specialistScopedFileSets.get(
+                        routedAgent,
+                      ) ?? []) {
+                        markerMap[scopedFile] =
+                          readGateFileContentMarker(scopedFile)
+                      }
+                      clearOwedReviewer(routedAgent)
+                    }
+                    activeWorkState.lastReviewerGateSkipReason = ''
+                    activeWorkState.validationAssurance = 'reduced'
+                    activeWorkState.reviewerGateBypassReason = `User authorized bypass of the specialist review gate after ${rateLimited ? 'a specialist rate-limit' : 'a specialist terminal (protocol/attestation) failure'}.`
+                    activeWorkState.reviewerGateBypassRecord = {
+                      reason: activeWorkState.reviewerGateBypassReason,
+                      authorizedAt: new Date().toISOString(),
+                      pendingFiles: Array.from(pendingGateFiles),
+                      fingerprint:
+                        reviewChallengeFingerprint(currentPendingGateFiles),
+                      validationSummary:
+                        activeWorkState.lastValidationSummary ?? '',
+                    }
+                    if (activeWorkState.reviewerBypassChallenge) {
+                      activeWorkState.reviewerBypassChallenge.consumed = true
+                    }
+                    markActiveWorkStateChanged()
+                    emitGateTelemetry({
+                      currentPhase: activeWorkState.currentPhase,
+                      pendingFileCount: pendingGateFiles.size,
+                      pendingFiles: Array.from(pendingGateFiles),
+                      reviewerStatus: 'skipped',
+                      validationStatus: 'passed',
+                      skipReason: rateLimited
+                        ? 'user-authorized-specialist-rate-limit-bypass'
+                        : 'user-authorized-specialist-terminal-bypass',
+                    })
+                    continue
+                  }
                   if (!activeWorkState.lastReviewerGateSkipReason) {
                     activeWorkState.lastReviewerGateSkipReason =
                       'specialist-terminal-failure'
                   }
+                  const specialistBypassChallenge =
+                    ensureReviewerBypassChallenge(
+                      reviewChallengeFingerprint(currentPendingGateFiles),
+                      currentConversationMessages,
+                    )
                   activeWorkState.currentPhase = 'blocked'
                   if (!rateLimited) {
-                    activeWorkState.nextRequiredAction =
-                      'Obtain a fresh matching specialist review against a stable review bundle before finalization can continue.'
+                    activeWorkState.nextRequiredAction = `Obtain a fresh matching specialist review against a stable review bundle before finalization can continue, or explicitly reply "BYPASS REVIEWER ${specialistBypassChallenge.id}".`
                     activeWorkState.latestWorkSummary =
                       'Specialist review protocol failed after one automatic refresh; finalization remains blocked.'
                   }
@@ -4219,6 +4356,7 @@ ${guideSections}
                             ...activeWorkState.openReviewerBlockers,
                             '',
                             'This is a transient provider limit, not a source-code finding. The harness did not spawn repair-editor or recompute bare-hex fingerprints. End turn and retry later.',
+                            `Or, to finalize on the recorded validation evidence for this snapshot only, explicitly reply "BYPASS REVIEWER ${specialistBypassChallenge.id}".`,
                           ].join('\n')
                         : [
                             'Specialist review gate failed snapshot/file attestation after one automatic refresh.',
@@ -4226,6 +4364,7 @@ ${guideSections}
                             ...activeWorkState.openReviewerBlockers,
                             '',
                             'This is a specialist reviewer protocol/configuration failure, not a source-code finding. The harness did not spawn repair-editor or finalize. Stop retrying automatically; obtain a fresh matching specialist review against a stable review bundle.',
+                            `Or, to finalize on the recorded validation evidence for this snapshot only, explicitly reply "BYPASS REVIEWER ${specialistBypassChallenge.id}".`,
                           ].join('\n'),
                     },
                     includeToolCall: false,
@@ -6216,32 +6355,93 @@ ${guideSections}
             } else {
               activeWorkState.reviewerNoVerdictCount =
                 (activeWorkState.reviewerNoVerdictCount ?? 0) + 1
-              if (
+              const noVerdictExhausted =
                 activeWorkState.reviewerNoVerdictCount >
                 MAX_REVIEWER_NO_VERDICT_RETRIES
-              ) {
-                activeWorkState.nextRequiredAction =
-                  'Reviewer repeatedly violated its structured output contract. Fix reviewer configuration before retrying.'
+              // Deadlock escape: a reviewer that keeps running but never emits
+              // a schema-valid verdict would otherwise block the turn forever
+              // (weaker non-SOTA models often fail the structured set_output
+              // contract). After the retry budget is spent, let the user
+              // explicitly authorize finalizing on the recorded validation
+              // evidence, mirroring the reviewer-crash bypass. A no-verdict is
+              // never silently credited; the bypass requires the exact
+              // "BYPASS REVIEWER <id>" reply and records reduced assurance.
+              const noVerdictBypassAuthorized =
+                noVerdictExhausted &&
+                hasReviewerBypassAuthorization(
+                  currentConversationMessages,
+                  activeWorkState.reviewerBypassChallenge,
+                  reviewSnapshotFingerprint,
+                )
+              if (noVerdictBypassAuthorized) {
+                activeWorkState.reviewerGateBypassReason = `User authorized bypass after ${activeWorkState.reviewerNoVerdictCount} reviewer no-verdict (structured-output) violations.`
+                activeWorkState.reviewerGateBypassRecord = {
+                  reason: activeWorkState.reviewerGateBypassReason,
+                  authorizedAt: new Date().toISOString(),
+                  pendingFiles: Array.from(pendingGateFiles),
+                  fingerprint: reviewSnapshotFingerprint,
+                  validationSummary,
+                }
+                if (activeWorkState.reviewerBypassChallenge) {
+                  activeWorkState.reviewerBypassChallenge.consumed = true
+                }
+                activeWorkState.nextRequiredAction = ''
+                activeWorkState.currentPhase = 'awaiting_review'
+                activeWorkState.validationAssurance = 'reduced'
+                activeWorkState.lastReviewerGateSkipReason =
+                  'user-authorized-reviewer-no-verdict-bypass'
+                reviewerFinalizationVerdict = 'LOOKS_GOOD'
+                markActiveWorkStateChanged()
+                emitGateTelemetry({
+                  currentPhase: 'awaiting_review',
+                  pendingFileCount: pendingGateFiles.size,
+                  pendingFiles: Array.from(pendingGateFiles),
+                  reviewerStatus: 'skipped',
+                  validationStatus: 'passed',
+                  skipReason: 'user-authorized-reviewer-no-verdict-bypass',
+                })
+                // No break/continue: fall through to shared finalization,
+                // exactly like the reviewer-crash bypass sibling.
+              } else if (noVerdictExhausted) {
+                const challenge = ensureReviewerBypassChallenge(
+                  reviewSnapshotFingerprint,
+                  currentConversationMessages,
+                )
+                activeWorkState.nextRequiredAction = `Reviewer repeatedly violated its structured output contract. Fix reviewer configuration before retrying, or explicitly reply "BYPASS REVIEWER ${challenge.id}" to finalize using the recorded validation evidence for this snapshot only.`
                 activeWorkState.latestWorkSummary =
                   'Reviewer no-verdict retry budget exhausted.'
                 markActiveWorkStateChanged()
+                yield {
+                  toolName: 'add_message',
+                  input: {
+                    role: 'user',
+                    content: [
+                      `Reviewer gate: ${reviewerAgentType} ran but never populated its structured verdict, repeatedly.`,
+                      '',
+                      'This is a reviewer output-contract failure, not a source finding. No repair-editor or additional retry runs automatically.',
+                      `Fix reviewer configuration, or explicitly reply "BYPASS REVIEWER ${challenge.id}" to finalize on the recorded validation evidence for this snapshot only.`,
+                    ].join('\n'),
+                  },
+                  includeToolCall: false,
+                } as any
                 break
+              } else {
+                activeWorkState.nextRequiredAction =
+                  'Retry the automated reviewer gate; reviewer did not populate its required structured output.'
+                markActiveWorkStateChanged()
+                yield {
+                  toolName: 'add_message',
+                  input: {
+                    role: 'user',
+                    content: [
+                      `Reviewer gate: ${reviewerAgentType} ran but returned no structured output. The verdict is unavailable.`,
+                      '',
+                      'Do not manually re-spawn the reviewer or ask it for a textual label. Continue the gate loop so the automated reviewer retries with its declared output schema; it must call set_output and populate verdict, findings, coverage, dimensions, requirementCoverage, snapshotFingerprint, and reviewedFiles.',
+                    ].join('\n'),
+                  },
+                  includeToolCall: false,
+                } as any
               }
-              activeWorkState.nextRequiredAction =
-                'Retry the automated reviewer gate; reviewer did not populate its required structured output.'
-              markActiveWorkStateChanged()
-              yield {
-                toolName: 'add_message',
-                input: {
-                  role: 'user',
-                  content: [
-                    `Reviewer gate: ${reviewerAgentType} ran but returned no structured output. The verdict is unavailable.`,
-                    '',
-                    'Do not manually re-spawn the reviewer or ask it for a textual label. Continue the gate loop so the automated reviewer retries with its declared output schema; it must call set_output and populate verdict, findings, coverage, dimensions, requirementCoverage, snapshotFingerprint, and reviewedFiles.',
-                  ].join('\n'),
-                },
-                includeToolCall: false,
-              } as any
             }
             if (!reviewerFinalizationVerdict) {
               continue

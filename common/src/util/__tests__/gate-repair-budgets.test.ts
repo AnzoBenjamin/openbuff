@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 
 import {
+  DEFAULT_MAX_NO_VERDICT_RETRIES,
   formatGateRepairBudgetsForCli,
   MAX_MAX_GATE_REPAIR_ROUNDS,
+  MAX_MAX_NO_VERDICT_RETRIES,
   resolveEffectiveGateRepairBudgets,
   resolveMaxRepairRounds,
+  resolveMaxReviewerNoVerdictRetries,
   resolveMaxReviewerRepairRounds,
+  resolveMaxSpecialistNoVerdictRetries,
   resolveMaxSpecialistRepairRounds,
   resolvePositiveIntBudget,
 } from '../gate-repair-budgets'
@@ -111,6 +115,32 @@ describe('gate-repair-budgets', () => {
     )
     expect(output).toContain('validation (hooks)')
     expect(output).toContain('unlimited')
+  })
+
+  it('no-verdict retry resolvers default to 2, reject invalid, and cap at 10', () => {
+    expect(DEFAULT_MAX_NO_VERDICT_RETRIES).toBe(2)
+    expect(MAX_MAX_NO_VERDICT_RETRIES).toBe(10)
+    for (const resolve of [
+      resolveMaxReviewerNoVerdictRetries,
+      resolveMaxSpecialistNoVerdictRetries,
+    ]) {
+      // Missing / invalid / empty / non-positive → default 2 (never null).
+      expect(resolve(undefined)).toBe(2)
+      expect(resolve('  ')).toBe(2)
+      expect(resolve('nope')).toBe(2)
+      expect(resolve(0)).toBe(2)
+      expect(resolve(-3)).toBe(2)
+      // Positive ints pass through; floats floor.
+      expect(resolve(3)).toBe(3)
+      expect(resolve(4.9)).toBe(4)
+      // Env string parsing.
+      expect(resolve('5')).toBe(5)
+      // Cap at 10.
+      expect(resolve(99)).toBe(MAX_MAX_NO_VERDICT_RETRIES)
+      expect(resolve('50')).toBe(MAX_MAX_NO_VERDICT_RETRIES)
+      // Explicit fallback wins for invalid input.
+      expect(resolve(undefined, 7)).toBe(7)
+    }
   })
 
   it('formatGateRepairBudgetsForCli is byte-stable with mixed caps', () => {

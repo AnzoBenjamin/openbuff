@@ -175,6 +175,12 @@ const REPRESENTATIVE_INPUTS: SelectSpecialistReviewersInput[] = [
   },
   { files: [], requirements: 'Independently evaluate requirement coverage.' },
   { files: [], requirements: 'Score against the acceptance criteria.' },
+  // Widened vocabulary coverage (new stems + keywords).
+  { files: ['src/mutex.ts'], requirements: '' },
+  { files: ['src/transaction.ts'], requirements: '' },
+  { files: [], requirements: 'Fix the memory leak.' },
+  { files: [], requirements: 'Preserve the wire format.' },
+  { files: [], requirements: 'Audit transitive deps for CVEs.' },
   MULTI_FAMILY_INPUT,
 ]
 

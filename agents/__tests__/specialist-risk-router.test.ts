@@ -173,6 +173,67 @@ describe('specialist risk router', () => {
     ).toEqual(['performance-specialist'])
   })
 
+  test('routes widened reliability/perf/compat/migration/dependency vocabulary', () => {
+    // Widened stem set: single-word concurrency/runtime stems on code files.
+    expect(
+      selectSpecialistReviewers({ files: ['src/mutex.ts'], requirements: '' }),
+    ).toEqual(['reliability-reviewer'])
+    expect(
+      selectSpecialistReviewers({
+        files: ['src/transaction.ts'],
+        requirements: '',
+      }),
+    ).toEqual(['reliability-reviewer'])
+    // Widened reliability keywords.
+    expect(
+      selectSpecialistReviewers({
+        files: [],
+        requirements: 'Add a mutex to avoid the data race.',
+      }),
+    ).toEqual(['reliability-reviewer'])
+    // Widened performance keywords.
+    expect(
+      selectSpecialistReviewers({
+        files: [],
+        requirements: 'Fix the memory leak in the hot loop.',
+      }),
+    ).toEqual(['performance-specialist'])
+    // Widened compatibility keywords.
+    expect(
+      selectSpecialistReviewers({
+        files: [],
+        requirements: 'Preserve the wire format.',
+      }),
+    ).toEqual(['compatibility-reviewer'])
+    // Widened migration keywords.
+    expect(
+      selectSpecialistReviewers({
+        files: [],
+        requirements: 'Plan the data migration and reindex.',
+      }),
+    ).toEqual(['migration-reviewer'])
+    // Widened dependency keywords.
+    expect(
+      selectSpecialistReviewers({
+        files: [],
+        requirements: 'Audit transitive deps for CVEs.',
+      }),
+    ).toEqual(['dependency-reviewer'])
+    // The widened stems still obey the compound-stem / non-code guards.
+    expect(
+      selectSpecialistReviewers({
+        files: ['src/mutex-helper.ts'],
+        requirements: '',
+      }),
+    ).toEqual([])
+    expect(
+      selectSpecialistReviewers({
+        files: ['src/transaction.json'],
+        requirements: '',
+      }),
+    ).toEqual([])
+  })
+
   test('normalizes path separators, casing, and dotfiles before matching', () => {
     // Backslash separators are normalized to '/' before path matching.
     expect(

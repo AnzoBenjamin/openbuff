@@ -62,6 +62,18 @@ gate repair budgets have optional env canaries:
   caps the specialist→repair→re-review loop (max `20`). Unset or invalid →
   **unlimited** (progress-gated). Explicit
   `createBase2({ maxSpecialistRepairRounds })` always wins over the env.
+- `OPENBUFF_MAX_REVIEWER_NO_VERDICT_RETRIES` — optional positive integer string
+  that caps how many times the reviewer is retried after returning no
+  schema-valid verdict before the user-authorized BYPASS REVIEWER escape is
+  offered (max `10`). Unset or invalid → **`2`** (default). Explicit
+  `createBase2({ maxReviewerNoVerdictRetries })` always wins over the env. Not
+  shown in the `/context` gate-repair-budgets display.
+- `OPENBUFF_MAX_SPECIALIST_NO_VERDICT_RETRIES` — optional positive integer
+  string that caps how many times the specialist is retried after returning no
+  schema-valid verdict before the user-authorized BYPASS REVIEWER escape is
+  offered (max `10`). Unset or invalid → **`2`** (default). Explicit
+  `createBase2({ maxSpecialistNoVerdictRetries })` always wins over the env. Not
+  shown in the `/context` gate-repair-budgets display.
 
 Do not document an `OPENBUFF_*` alias unless the code implements it.
 

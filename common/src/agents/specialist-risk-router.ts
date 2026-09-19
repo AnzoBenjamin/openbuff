@@ -32,6 +32,24 @@ const RELIABILITY_CODE_STEMS = new Set([
   'timeout',
   'abort',
   'circuit',
+  'mutex',
+  'semaphore',
+  'throttle',
+  'debounce',
+  'latch',
+  'barrier',
+  'channel',
+  'stream',
+  'streams',
+  'socket',
+  'sockets',
+  'transaction',
+  'transactions',
+  'saga',
+  'reconcile',
+  'reconciler',
+  'watchdog',
+  'heartbeat',
 ])
 
 const RELIABILITY_CODE_EXTENSION =
@@ -54,19 +72,19 @@ export function selectSpecialistReviewers(params: {
         file,
       ),
     ) ||
-    /\b(?:dependency|dependencies|lockfile|package manager|supply chain|license|vulnerabilit)/.test(
+    /\b(?:dependency|dependencies|lockfile|package manager|supply chain|license|vulnerabilit|cve|sbom|transitive dep\w*|peer dep\w*)/.test(
       requirements,
     )
   )
     selected.add('dependency-reviewer')
   if (
-    /(?:^|\/)(?:migrations?|schema|database|db)(?:\/|\.)|\.sql$|\b(?:migrations?|backfill|schema change|database compatibility|rollback)\b/.test(
+    /(?:^|\/)(?:migrations?|schema|database|db)(?:\/|\.)|\.sql$|\b(?:migrations?|backfill|schema change|database compatibility|rollback|data migration|reindex\w*|data backfill|dual-write|dual write)\b/.test(
       joined,
     )
   )
     selected.add('migration-reviewer')
   if (
-    /\b(?:public api|backward compat|breaking change|deprecat\w*|serialization|persisted format|config contract|environment variable|cli flag)\b/.test(
+    /\b(?:public api|backward compat|backwards compat|breaking change|deprecat\w*|serialization|persisted format|config contract|environment variable|cli flag|wire format|api contract|schema version\w*|protocol version\w*|semver|feature flag)\b/.test(
       requirements,
     ) ||
     files.some((file) =>
@@ -102,7 +120,7 @@ export function selectSpecialistReviewers(params: {
   }
 
   if (
-    /\b(?:race|concurr\w*|retry|retries|cancel|abort|idempoten\w*|deadlock|state machine|resource leak|partial failure)\b/.test(
+    /\b(?:race|concurr\w*|retry|retries|cancel|abort|idempoten\w*|deadlock|state machine|resource leak|partial failure|mutex|semaphore|throttl\w*|debounc\w*|livelock|lock contention|data race|atomic\w*|reentran\w*|backpressure|back-pressure|graceful shutdown|dropped (?:event|message)s?)\b/.test(
       requirements,
     ) ||
     files.some(isReliabilityCodePath)
@@ -110,10 +128,10 @@ export function selectSpecialistReviewers(params: {
     selected.add('reliability-reviewer')
   }
   if (
-    /\b(?:performance|latency|throughput|benchmark|profil\w*|allocation|hot path|load test|complexity)\b/.test(
+    /\b(?:performance|latency|throughput|benchmark|profil\w*|allocation|hot path|load test|complexity|memory leak|oom|regress\w*|slow\w*|bottleneck|cache miss|n\+1)\b/.test(
       requirements,
     ) ||
-    files.some((file) => /(?:bench|perf|load-test|profil)/.test(file))
+    files.some((file) => /(?:bench|perf|load-test|profil|flamegraph)/.test(file))
   )
     selected.add('performance-specialist')
   const hasUiFiles = files.some((file) =>
