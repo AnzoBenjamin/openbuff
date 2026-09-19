@@ -14,6 +14,9 @@ function errorOutput(message: string): { output: CodebuffToolOutput<ToolName> } 
   return { output: jsonToolResult({ errorMessage: message }) }
 }
 
+const SUPERSEDES_ERROR =
+  'record_decision: supersedes must contain 1..16 observation id strings of at most 128 characters.'
+
 export const handleRecordDecision = (async (params: {
   previousToolCallFinished: Promise<void>
   toolCall: CodebuffToolCall<ToolName>
@@ -28,6 +31,7 @@ export const handleRecordDecision = (async (params: {
       kind?: unknown
       evidenceSelectors?: unknown
       excerpt?: unknown
+      supersedes?: unknown
     }
     const rawText = typeof input.text === 'string' ? input.text.trim() : ''
     const kind = input.kind === 'decision' || input.kind === 'fact' || input.kind === 'constraint' ? input.kind : 'decision'
@@ -47,6 +51,29 @@ export const handleRecordDecision = (async (params: {
     }
     if (excerpt !== undefined && excerpt.length > 1024) {
       return errorOutput('record_decision: excerpt must be at most 1024 characters.')
+    }
+    let supersedes: string[] | undefined
+    if (input.supersedes !== undefined) {
+      const rawSupersedes = Array.isArray(input.supersedes) ? (input.supersedes as unknown[]) : []
+      if (rawSupersedes.length < 1 || rawSupersedes.length > 16) {
+        return errorOutput(SUPERSEDES_ERROR)
+      }
+      const normalizedSupersedes: string[] = []
+      const seen = new Set<string>()
+      for (const target of rawSupersedes) {
+        if (typeof target !== 'string') {
+          return errorOutput(SUPERSEDES_ERROR)
+        }
+        const trimmed = target.trim()
+        if (trimmed.length === 0 || trimmed.length > 128) {
+          return errorOutput(SUPERSEDES_ERROR)
+        }
+        if (!seen.has(trimmed)) {
+          seen.add(trimmed)
+          normalizedSupersedes.push(trimmed)
+        }
+      }
+      supersedes = normalizedSupersedes
     }
     const normalizedPaths: string[] = []
     for (const selector of rawSelectors) {
@@ -122,6 +149,7 @@ export const handleRecordDecision = (async (params: {
         text: rawText,
         evidenceSelectors: normalizedPaths,
         ...(excerpt !== undefined ? { excerpt } : {}),
+        ...(supersedes !== undefined ? { supersedes } : {}),
       }),
     }
   } catch (error) {

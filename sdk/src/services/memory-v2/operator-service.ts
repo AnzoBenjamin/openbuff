@@ -735,7 +735,23 @@ export class MemoryV2OperatorService {
     try {
       const action = request.action
       const targetObservationIds =
-        action.kind === 'forget' ? action.observationIds : [action.observationId]
+        action.kind === 'forget'
+          ? action.observationIds
+          : action.kind === 'supersede'
+            ? [action.observationId, action.supersededByObservationId]
+            : [action.observationId]
+      if (
+        action.kind === 'supersede' &&
+        action.observationId === action.supersededByObservationId
+      ) {
+        return MemoryCorrectionOutcomeSchema.parse({
+          outcome: 'rejected',
+          error: operationalError(
+            'invalid-request',
+            'An observation cannot supersede itself',
+          ),
+        })
+      }
       const tasks = observationTaskIds(await this.allEvents(request.projectId))
       const targetTasks = targetObservationIds.map((observationId) => tasks.get(observationId))
       const targetIsInvalid =
@@ -750,6 +766,18 @@ export class MemoryV2OperatorService {
             'Observation target is missing or outside the requested task',
           ),
         })
+      }
+      if (action.kind === 'supersede') {
+        const events = await this.allEvents(request.projectId)
+        if (!activeObservations(events).has(action.supersededByObservationId)) {
+          return MemoryCorrectionOutcomeSchema.parse({
+            outcome: 'rejected',
+            error: operationalError(
+              'invalid-request',
+              'The superseding observation must be active',
+            ),
+          })
+        }
       }
       const event = (() => {
         if (action.kind === 'correct') {
@@ -767,6 +795,17 @@ export class MemoryV2OperatorService {
           return {
             eventType: 'claim.forgotten' as const,
             payload: { payloadSchemaVersion: 1 as const, ...action, kind: undefined },
+          }
+        }
+        if (action.kind === 'supersede') {
+          return {
+            eventType: 'claim.superseded' as const,
+            payload: {
+              payloadSchemaVersion: 1 as const,
+              observationId: action.observationId,
+              supersededByObservationId: action.supersededByObservationId,
+              reason: action.reason,
+            },
           }
         }
         return {

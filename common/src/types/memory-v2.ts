@@ -436,6 +436,20 @@ export type ClaimSupersededPayload = z.infer<
   typeof ClaimSupersededPayloadSchema
 >
 
+export const ClaimReinforcedPayloadSchema = z
+  .object({
+    ...payloadVersionShape,
+    observationId: ObservationIdSchema,
+    claimId: z.string().regex(/^[0-9a-f]{64}$/),
+    reason: longTextSchema,
+    reinforcedAt: timestampSchema,
+    reinforcedBy: z.string().min(1).max(256).optional(),
+  })
+  .strict()
+export type ClaimReinforcedPayload = z.infer<
+  typeof ClaimReinforcedPayloadSchema
+>
+
 export const ClaimCorrectedPayloadSchema = z
   .object({
     ...payloadVersionShape,
@@ -725,6 +739,7 @@ export const MemoryEventDraftSchema = z.discriminatedUnion('eventType', [
   eventDraft('claim.forgotten', ClaimForgottenPayloadSchema),
   eventDraft('claim.pinned', ClaimPinnedPayloadSchema),
   eventDraft('claim.archived', ClaimArchivedPayloadSchema),
+  eventDraft('claim.reinforced', ClaimReinforcedPayloadSchema),
   eventDraft('migration.v1.reserved', V1MigrationReservedPayloadSchema),
   eventDraft('migration.v1.imported', V1MigrationPayloadSchema),
   eventDraft(
@@ -761,6 +776,7 @@ export const MemoryEventEnvelopeSchema = z.discriminatedUnion('eventType', [
   eventEnvelope('claim.forgotten', ClaimForgottenPayloadSchema),
   eventEnvelope('claim.pinned', ClaimPinnedPayloadSchema),
   eventEnvelope('claim.archived', ClaimArchivedPayloadSchema),
+  eventEnvelope('claim.reinforced', ClaimReinforcedPayloadSchema),
   eventEnvelope('migration.v1.reserved', V1MigrationReservedPayloadSchema),
   eventEnvelope('migration.v1.imported', V1MigrationPayloadSchema),
   eventEnvelope(
@@ -793,6 +809,7 @@ export const RankingReasonSchema = z
       'historical-only',
       'stale-evidence',
       'authority-penalty',
+      'concept-advisory',
     ]),
     contribution: z.number().min(-1).max(1),
     detail: z.string().min(1).max(1_024),
@@ -882,6 +899,7 @@ export const RereadRequiredSchema = z
       'missing',
       'expired',
       'authority-unavailable',
+      'contradiction-suspected',
     ]),
     detail: z.string().min(1).max(1_024),
     ...rankedShape,
@@ -987,6 +1005,11 @@ export const MemoryRetrievalResultSchema = z
       result.verifiedKnowledge.map((item) => item.observation.observationId),
     )
     result.rereadRequired.forEach((item, index) => {
+      // SPEC S4 exception: a verified observation can still be flagged
+      // 'contradiction-suspected' when another live claim shares its topic
+      // and neither supersedes the other — both must surface with a
+      // reconcile marker even though each is individually verified.
+      if (item.reason === 'contradiction-suspected') return
       if (verifiedObservationIds.has(item.observationId)) {
         context.addIssue({
           code: 'custom',
@@ -1457,6 +1480,14 @@ export const MemoryCorrectionActionSchema = z.discriminatedUnion('kind', [
       observationId: ObservationIdSchema,
       reason: shortTextSchema,
       pinnedBy: z.string().min(1).max(256),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('supersede'),
+      observationId: ObservationIdSchema,
+      supersededByObservationId: ObservationIdSchema,
+      reason: longTextSchema,
     })
     .strict(),
 ])

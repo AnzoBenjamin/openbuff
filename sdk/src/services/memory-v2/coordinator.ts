@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
 
+import { deriveClaimId } from '@codebuff/common/util/claim-identity'
+import { STABLE_CHUNK_ID_RE } from '@codebuff/common/util/contradiction-detector'
 import { classifyMemoryArtifactPath } from '@codebuff/common/util/memory-artifact-policy'
 
 import {
@@ -345,7 +347,9 @@ type CollectedChunk = {
 function normalizeStableChunkId(candidate: unknown): string | undefined {
   if (typeof candidate !== 'string') return undefined
   const sliced = candidate.slice(0, 128)
-  return CHUNK_ID_RE.test(sliced) ? sliced : undefined
+  // Bind the writer to the shared stableChunkId contract so what is persisted
+  // is exactly what read-side contradiction grouping keys on.
+  return STABLE_CHUNK_ID_RE.test(sliced) ? sliced : undefined
 }
 
 function boundedLineNumber(candidate: unknown): number | undefined {
@@ -1429,13 +1433,68 @@ export class MemoryV2Coordinator {
       return
     }
     const observedAt = this.now()
-    const observationId = deriveObservationId({
+    let observationId: string = deriveObservationId({
       projectId: this.config.projectId,
       sessionId: runtimeState.sessionId,
       userInputId: params.userInputId,
       callId: params.callId,
       sourceIndex: 0,
     })
+    // P7 wave X: record_decision echoes a stable success DTO. Derive the
+    // claim identity from it and check the claim-dedup projection
+    // best-effort so a duplicate decision reinforces the active claim
+    // instead of recording a second observation. An absent method, error,
+    // or malformed entry falls through to the normal observation.recorded
+    // path; the lookup never blocks or throws out of capture.
+    const recordDecisionValue =
+      params.toolName === 'record_decision' ? values[0] : undefined
+    const echoedText = recordDecisionValue?.text
+    const recordDecisionText =
+      typeof echoedText === 'string' && echoedText.length > 0
+        ? echoedText
+        : undefined
+    const echoedSelectors = recordDecisionValue?.evidenceSelectors
+    const recordDecisionEvidenceSelectors: string[] = Array.isArray(
+      echoedSelectors,
+    )
+      ? echoedSelectors
+          .filter((entry): entry is string => typeof entry === 'string')
+          .slice(0, 32)
+      : []
+    const echoedSupersedes = recordDecisionValue?.supersedes
+    const recordDecisionSupersedes: string[] = Array.isArray(echoedSupersedes)
+      ? echoedSupersedes
+          .filter((entry): entry is string => typeof entry === 'string')
+          .slice(0, 16)
+      : []
+    let recordDecisionClaimId: string | undefined
+    let dedupHit: { claimId: string; observationId: string } | undefined
+    if (recordDecisionText !== undefined) {
+      const claimId = deriveClaimId({
+        kind: observationKindHint,
+        text: recordDecisionText,
+        evidencePaths: recordDecisionEvidenceSelectors,
+      })
+      recordDecisionClaimId = claimId
+      // Best-effort, never-throw: absent method, error, or malformed entries
+      // all fall through to the normal observation.recorded path.
+      const dedup = await this.config.repository
+        ?.getClaimDedup?.({
+          projectId: this.config.projectId,
+          claimIds: [claimId],
+        })
+        .catch(() => undefined)
+      if (dedup?.status === 'ok' && Array.isArray(dedup.entries)) {
+        const entry = dedup.entries[0]
+        if (
+          typeof entry?.observationId === 'string' &&
+          entry.observationId.length > 0
+        ) {
+          observationId = entry.observationId
+          dedupHit = { claimId, observationId: entry.observationId }
+        }
+      }
+    }
     const countsJson = canonicalBounded(counts)
     const outputDigest = digestOutput(params.output)
     const toolNameBounded = params.toolName.slice(0, 128)
@@ -1444,6 +1503,7 @@ export class MemoryV2Coordinator {
       outputDigest,
       captureKind,
       counts,
+      ...(recordDecisionClaimId ? { claimId: recordDecisionClaimId } : {}),
       ...(actions.length > 0 ? { actions } : {}),
       ...(params.workspaceState
         ? {
@@ -1549,8 +1609,135 @@ export class MemoryV2Coordinator {
         },
       },
     })
+    // P7 wave X: when the claim-dedup projection already holds this claim,
+    // reinforce the existing observation instead of recording a duplicate.
+    const mainEvent = dedupHit
+      ? createMemoryEventDraft({
+          projectId: this.config.projectId,
+          sessionId: runtimeState.sessionId,
+          userInputId: params.userInputId,
+          callId: params.callId,
+          occurredAt: observedAt,
+          eventType: 'claim.reinforced',
+          payload: {
+            payloadSchemaVersion: 1,
+            observationId: dedupHit.observationId,
+            claimId: dedupHit.claimId,
+            reason: 'Duplicate decision capture reinforced the active claim',
+            reinforcedAt: observedAt,
+          },
+        })
+      : event
     if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState) return
-    await this.append([event], runtimeState, preparation)
+    await this.append([mainEvent], runtimeState, preparation)
+
+    // P7 wave X: explicit record_decision supersedes targets emit a
+    // best-effort second batch: one claim.superseded draft per validated,
+    // deduped, code-point-sorted target (max 16) plus exactly one
+    // observation.reused draft citing the captured observation. Mirrors the
+    // verify-hook posture: failures are logged and never affect the capture
+    // itself.
+    if (
+      params.toolName === 'record_decision' &&
+      recordDecisionSupersedes.length > 0
+    ) {
+      try {
+        // supersedes-unvalidated-targets repair: the echoed targets are only
+        // SHAPE-validated strings, so before retracting anything they are
+        // validated against the store exactly like the operator correct()
+        // supersede branch: the target must exist, belong to the active task,
+        // and still be active. Fail-closed: a missing repository, a missing
+        // getObservationStatus method, or a failed/errored read yields NO
+        // valid targets and the whole second batch (including the
+        // observation.reused cited draft) is skipped; the capture itself is
+        // unaffected.
+        const statusRead = await this.config.repository
+          ?.getObservationStatus?.({
+            projectId: this.config.projectId,
+            observationIds: recordDecisionSupersedes.slice(0, 16),
+          })
+          .catch(() => undefined)
+        const activeTaskId = String(runtimeState.activeTask.taskId)
+        const validTargets = new Set(
+          statusRead?.status === 'ok'
+            ? statusRead.entries
+                .filter(
+                  (entry) =>
+                    entry.status === 'active' &&
+                    entry.taskId === activeTaskId,
+                )
+                .map((entry) => entry.observationId)
+            : [],
+        )
+        const supersededDrafts = [
+          ...new Set(
+            recordDecisionSupersedes.filter((target) =>
+              validTargets.has(target),
+            ),
+          ),
+        ]
+          .sort((left, right) => {
+            const leftPoints = Array.from(left, (character) => character.codePointAt(0)!)
+            const rightPoints = Array.from(right, (character) => character.codePointAt(0)!)
+            const length = Math.min(leftPoints.length, rightPoints.length)
+            for (let index = 0; index < length; index++) {
+              const difference = leftPoints[index]! - rightPoints[index]!
+              if (difference !== 0) return difference
+            }
+            return leftPoints.length - rightPoints.length
+          })
+          .slice(0, 16)
+          .map((target, index) =>
+            createMemoryEventDraft({
+              projectId: this.config.projectId,
+              sessionId: runtimeState.sessionId,
+              userInputId: params.userInputId,
+              callId: params.callId,
+              sourceIndex: index + 1,
+              occurredAt: observedAt,
+              eventType: 'claim.superseded',
+              payload: {
+                payloadSchemaVersion: 1,
+                observationId: target,
+                supersededByObservationId: observationId,
+                reason: 'Superseded by explicit record_decision resolution',
+              },
+            }),
+          )
+        // Fail-closed: with no validated target the whole second batch
+        // (including the observation.reused cited draft) is skipped while the
+        // capture and the hooks below it stay unaffected.
+        if (supersededDrafts.length > 0) {
+          const reusedDraft = createMemoryEventDraft({
+            projectId: this.config.projectId,
+            sessionId: runtimeState.sessionId,
+            userInputId: params.userInputId,
+            callId: params.callId,
+            sourceIndex: supersededDrafts.length + 1,
+            occurredAt: observedAt,
+            eventType: 'observation.reused',
+            payload: {
+              payloadSchemaVersion: 1,
+              turnId: params.userInputId.slice(0, 128),
+              used: [{ observationId, mechanism: 'cited' as const }],
+              ignored: [],
+            },
+          })
+          if (
+            this.isCurrent(preparation) &&
+            this.runtimeState === runtimeState
+          ) {
+            await this.append(
+              [...supersededDrafts, reusedDraft],
+              runtimeState,
+              preparation,
+            )
+          }
+        }
+      } catch (error) {
+        this.logger?.warn({ error }, 'Memory V2 supersedes append failed')
+      }
+    }
 
     // After the observation append, check if this is an audit coverage result
     // and emit coverage.recorded events for each covered dimension.

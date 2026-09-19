@@ -101,6 +101,28 @@ const forgottenEvent = (
     },
   })
 
+const supersededEvent = (
+  sequence: number,
+  observationId: string,
+  supersededByObservationId: string,
+): MemoryEventEnvelope =>
+  MemoryEventEnvelopeSchema.parse({
+    schemaVersion: 2,
+    eventSchemaVersion: 1,
+    eventType: 'claim.superseded',
+    eventId: `event:superseded-${sequence}`,
+    projectId,
+    sessionId,
+    sequence,
+    occurredAt: timestamp,
+    payload: {
+      payloadSchemaVersion: 1,
+      observationId,
+      supersededByObservationId,
+      reason: 'Superseded by test setup',
+    },
+  })
+
 class RepositoryStub implements MemoryRepositoryV2 {
   events: MemoryEventEnvelope[]
   appendRequests: MemoryAppendRequest[] = []
@@ -440,6 +462,127 @@ describe('MemoryV2OperatorService', () => {
       error: { code: 'invalid-request' },
     })
     expect(crossTaskRepository.appendRequests).toHaveLength(0)
+  })
+
+  test('supersede preview is no-write and apply appends one claim.superseded event with the exact payload', async () => {
+    const repository = new RepositoryStub([
+      observationEvent(1, 'observation:target', 'Target'),
+      observationEvent(2, 'observation:winner', 'Winner'),
+    ])
+    const service = new MemoryV2OperatorService(repository)
+    const request = {
+      schemaVersion: 2,
+      projectId,
+      sessionId,
+      taskId: 'task:operator',
+      occurredAt: timestamp,
+      action: {
+        kind: 'supersede' as const,
+        observationId: 'observation:target',
+        supersededByObservationId: 'observation:winner',
+        reason: 'The winner contradicts the target',
+      },
+    }
+    const preview = await service.correct({ ...request, mode: 'preview' })
+    if (preview.outcome !== 'preview') throw new Error('expected preview')
+    expect(preview.plannedEvents).toHaveLength(1)
+    expect(preview.plannedEvents[0]).toMatchObject({
+      eventType: 'claim.superseded',
+      payload: {
+        payloadSchemaVersion: 1,
+        observationId: 'observation:target',
+        supersededByObservationId: 'observation:winner',
+        reason: 'The winner contradicts the target',
+      },
+    })
+    expect(repository.appendRequests).toHaveLength(0)
+    expect(repository.events).toHaveLength(2)
+
+    const applied = await service.correct({ ...request, mode: 'apply' })
+    expect(applied.outcome).toBe('applied')
+    expect(repository.events).toHaveLength(3)
+    expect(repository.events[2]!.eventType).toBe('claim.superseded')
+
+    expect(await service.correct({ ...request, mode: 'apply' })).toMatchObject({
+      outcome: 'no-op',
+    })
+    expect(repository.events).toHaveLength(3)
+  })
+
+  test('supersede rejects an already-superseded winner without writing', async () => {
+    const repository = new RepositoryStub([
+      observationEvent(1, 'observation:target', 'Target'),
+      observationEvent(2, 'observation:winner', 'Winner'),
+      supersededEvent(3, 'observation:winner', 'observation:newer'),
+    ])
+    const service = new MemoryV2OperatorService(repository)
+    expect(
+      await service.correct({
+        schemaVersion: 2,
+        projectId,
+        sessionId,
+        taskId: 'task:operator',
+        occurredAt: timestamp,
+        mode: 'apply',
+        action: {
+          kind: 'supersede' as const,
+          observationId: 'observation:target',
+          supersededByObservationId: 'observation:winner',
+          reason: 'The winner contradicts the target',
+        },
+      }),
+    ).toMatchObject({ outcome: 'rejected', error: { code: 'invalid-request' } })
+    expect(repository.appendRequests).toHaveLength(0)
+  })
+
+  test.each([
+    {
+      name: 'cross-task',
+      events: [
+        observationEvent(1, 'observation:target', 'Target'),
+        observationEvent(2, 'observation:winner', 'Winner', 'src/a.ts', 'task:other'),
+      ],
+      action: {
+        kind: 'supersede' as const,
+        observationId: 'observation:target',
+        supersededByObservationId: 'observation:winner',
+        reason: 'The winner contradicts the target',
+      },
+    },
+    {
+      name: 'target-missing',
+      events: [observationEvent(1, 'observation:winner', 'Winner')],
+      action: {
+        kind: 'supersede' as const,
+        observationId: 'observation:target',
+        supersededByObservationId: 'observation:winner',
+        reason: 'The winner contradicts the target',
+      },
+    },
+    {
+      name: 'self-supersede',
+      events: [observationEvent(1, 'observation:same', 'Same')],
+      action: {
+        kind: 'supersede' as const,
+        observationId: 'observation:same',
+        supersededByObservationId: 'observation:same',
+        reason: 'Cannot supersede itself',
+      },
+    },
+  ] as const)('supersede rejects $name without writing', async ({ events, action }) => {
+    const repository = new RepositoryStub([...events])
+    expect(
+      await new MemoryV2OperatorService(repository).correct({
+        schemaVersion: 2,
+        projectId,
+        sessionId,
+        taskId: 'task:operator',
+        occurredAt: timestamp,
+        mode: 'apply',
+        action,
+      }),
+    ).toMatchObject({ outcome: 'rejected', error: { code: 'invalid-request' } })
+    expect(repository.appendRequests).toHaveLength(0)
   })
 
   test('revalidation preview is no-write and apply preserves failed verification results', async () => {

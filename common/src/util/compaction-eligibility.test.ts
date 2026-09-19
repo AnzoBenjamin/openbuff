@@ -361,6 +361,100 @@ describe('P9 invariant enforcement (eligibility)', () => {
     expect(outcome.branch).toBeNull()
   })
 
+  test('a heavily reinforced never-used claim is never evicted by a heuristic branch and its score reflects the reinforcement', () => {
+    // GC scoring must honor the same reinforced signal retrieval scoring
+    // rewards (w_reinf=6): a heavily reinforced, never-used claim is not
+    // evictable on the orphan or lowScore branch.
+    const reinforced = compactionEligibility({
+      observation: {
+        observationId: 'obs:reinforced',
+        createdAtWall: CREATED_OLD,
+        tier: 'derived',
+        used: 0,
+        ignored: 10,
+        reinforced: 3,
+        pinned: false,
+        retracted: false,
+        hasVerifiedEvidence: false,
+      },
+      asOfTurnWall: AS_OF,
+    })
+    expect(reinforced.eligible).toBe(false)
+    expect(reinforced.branch).toBeNull()
+    // The folded signal raises the reported score by 18 (3 x w_reinf=6).
+    // Measured at age 0 with no ignores so the [0,1000] clamp cannot hide
+    // the delta (an old heavily-ignored observation clamps to 0 either way).
+    const freshBaseline = compactionEligibility({
+      observation: {
+        observationId: 'obs:reinforced',
+        createdAtWall: AS_OF,
+        tier: 'derived',
+        used: 0,
+        ignored: 0,
+        pinned: false,
+        retracted: false,
+        hasVerifiedEvidence: false,
+      },
+      asOfTurnWall: AS_OF,
+    })
+    const freshReinforced = compactionEligibility({
+      observation: {
+        observationId: 'obs:reinforced',
+        createdAtWall: AS_OF,
+        tier: 'derived',
+        used: 0,
+        ignored: 0,
+        reinforced: 3,
+        pinned: false,
+        retracted: false,
+        hasVerifiedEvidence: false,
+      },
+      asOfTurnWall: AS_OF,
+    })
+    expect(freshReinforced.score).toBe(freshBaseline.score + 18)
+  })
+
+  test('selectCompactionCandidates never selects a heavily reinforced never-used derived group', () => {
+    // Same store as the reused-observation selection test: an old orphan
+    // with heavy ignores plus reinforcement must stay out of the batch.
+    const selection = selectCompactionCandidates({
+      envelopes: [
+        recorded('event:obs', 1, 'obs:a'),
+        {
+          eventType: 'claim.reinforced',
+          eventId: 'event:reinforced-1',
+          sequence: 2,
+          occurredAt: CREATED_OLD,
+          payload: {
+            payloadSchemaVersion: 1,
+            observationId: 'obs:a',
+            claimId: 'a'.repeat(64),
+            reason: 'duplicate decision capture',
+            reinforcedAt: CREATED_OLD,
+          },
+        },
+        {
+          eventType: 'observation.reused',
+          eventId: 'event:reused-1',
+          sequence: 3,
+          occurredAt: CREATED_OLD,
+          payload: {
+            payloadSchemaVersion: 1,
+            turnId: 'turn:1',
+            used: [],
+            ignored: [{ observationId: 'obs:a', mechanism: 'query' },
+              { observationId: 'obs:a', mechanism: 'query' },
+              { observationId: 'obs:a', mechanism: 'query' }],
+          },
+        },
+      ],
+      maxEvents: 10,
+      asOfTurnWall: AS_OF,
+    })
+    expect(selection.eventIds).toEqual([])
+    expect(selection.branchCounts).toEqual({ retracted: 0, orphan: 0, lowScore: 0 })
+  })
+
   test('INV6 purity: the module never consults an ambient clock', () => {
     const source = readFileSync(
       join(import.meta.dir, 'compaction-eligibility.ts'),

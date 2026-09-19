@@ -127,6 +127,60 @@ export type MemoryUsageReadOutcome =
       error: { kind: string; message: string; retryable: boolean }
     }
 
+/** One bounded claim-dedup projection entry (P7 claim identity). */
+export interface MemoryClaimDedupEntry {
+  claimId: string
+  observationId: string
+}
+
+export interface MemoryClaimDedupReadRequest {
+  projectId: ProjectId
+  /** Optional bounded filter; implementations cap the filter (64 ids) and the returned rows (256). */
+  claimIds?: string[]
+}
+
+/**
+ * Runtime-neutral claim-dedup projection read outcome. The error branch keeps
+ * the driver's failure classification as an opaque bounded string so the
+ * boundary stays free of runtime or storage driver types.
+ */
+export type MemoryClaimDedupReadOutcome =
+  | { status: 'ok'; entries: MemoryClaimDedupEntry[] }
+  | {
+      status: 'error'
+      error: { kind: string; message: string; retryable: boolean }
+    }
+
+/** One bounded observation lifecycle-status entry (P7 supersede safety). */
+export interface MemoryObservationStatusEntry {
+  observationId: string
+  taskId: string
+  /**
+   * 'unknown' is the fail-closed branch: a row whose projection state is
+   * unreadable or malformed cannot be proven active, so supersession-safety
+   * callers (which accept only 'active' targets) must treat it as ineligible.
+   */
+  status: 'active' | 'retracted' | 'unknown'
+}
+
+export interface MemoryObservationStatusReadRequest {
+  projectId: ProjectId
+  /** Optional bounded filter; implementations cap the filter (64 ids) and the returned rows (256). */
+  observationIds: string[]
+}
+
+/**
+ * Runtime-neutral observation lifecycle-status read outcome. The error branch
+ * keeps the driver's failure classification as an opaque bounded string so the
+ * boundary stays free of runtime or storage driver types.
+ */
+export type MemoryObservationStatusReadOutcome =
+  | { status: 'ok'; entries: MemoryObservationStatusEntry[] }
+  | {
+      status: 'error'
+      error: { kind: string; message: string; retryable: boolean }
+    }
+
 /**
  * Runtime-neutral persistence boundary for Memory V2.
  *
@@ -147,6 +201,20 @@ export interface MemoryRepositoryV2 {
    * do not track reuse; callers must narrow before use (see getStoreStats).
    */
   getUsage?(params: MemoryUsageReadRequest): Promise<MemoryUsageReadOutcome>
+  /**
+   * Optional bounded read of the claim-dedup projection (P7). Absent on fakes
+   * that do not track claim identity; callers must narrow before use.
+   */
+  getClaimDedup?(
+    params: MemoryClaimDedupReadRequest,
+  ): Promise<MemoryClaimDedupReadOutcome>
+  /**
+   * Optional bounded read of observation lifecycle status (P7). Absent on
+   * fakes that do not track observations; callers must narrow before use.
+   */
+  getObservationStatus?(
+    params: MemoryObservationStatusReadRequest,
+  ): Promise<MemoryObservationStatusReadOutcome>
   /** Optional privileged GC surface. Absent on fakes; fail-closed when missing. */
   getStoreStats?(request: { projectId: ProjectId }): Promise<MemoryStoreStats>
   selectGCandidates?(request: {

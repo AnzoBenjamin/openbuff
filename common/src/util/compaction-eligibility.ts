@@ -25,6 +25,8 @@ export interface CompactionObservationInput {
   tier: UsefulnessTier
   used: number
   ignored: number
+  /** Folded claim.reinforced count; retrieval scoring rewards it too. */
+  reinforced?: number
   pinned: boolean
   retracted: boolean
   hasVerifiedEvidence: boolean
@@ -77,7 +79,7 @@ export function compactionEligibility(input: {
     used: observation.used,
     ignored: observation.ignored,
     staled: 0,
-    reinforced: 0,
+    reinforced: observation.reinforced ?? 0,
     pinned: observation.pinned ? 1 : 0,
     createdAtWall: observation.createdAtWall,
     asOfTurnWall: input.asOfTurnWall,
@@ -91,9 +93,12 @@ export function compactionEligibility(input: {
   } else if (
     orphan &&
     // SPEC invariant 11 + P6 DoD: age-driven heuristics never evict an
-    // unsuperseded agent-explicit decision, and a reused observation is
-    // never evicted by a heuristic branch (same guards as lowScore).
+    // unsuperseded agent-explicit decision, and a reused or reinforced
+    // observation is never evicted by a heuristic branch (the same guards
+    // apply in both branches): retrieval scoring rewards reinforcement, so
+    // GC scoring must honor the same signal instead of dropping it.
     observation.used === 0 &&
+    (observation.reinforced ?? 0) === 0 &&
     observation.tier !== 'explicit' &&
     ageDays > COMPACTION_ORPHAN_MIN_AGE_DAYS
   ) {
@@ -101,6 +106,7 @@ export function compactionEligibility(input: {
   } else if (
     score <= 0 &&
     observation.used === 0 &&
+    (observation.reinforced ?? 0) === 0 &&
     ageDays > COMPACTION_MIN_AGE_DAYS &&
     observation.ignored >= COMPACTION_IGNORE_THRESHOLD &&
     observation.tier !== 'explicit'
@@ -169,6 +175,7 @@ export function observationIdsReferencedBy(
       ]
     case 'claim.superseded':
     case 'claim.pinned':
+    case 'claim.reinforced':
     case 'evidence.attached':
     case 'evidence.verified':
     case 'evidence.invalidated':
@@ -212,6 +219,7 @@ interface SelectionGroup {
   tier: UsefulnessTier
   used: number
   ignored: number
+  reinforced: number
   pinned: boolean
   retracted: boolean
   hasVerifiedEvidence: boolean
@@ -236,6 +244,7 @@ function partitionEnvelopes(
       tier: 'derived',
       used: 0,
       ignored: 0,
+      reinforced: 0,
       pinned: false,
       retracted: false,
       hasVerifiedEvidence: false,
@@ -299,6 +308,9 @@ function partitionEnvelopes(
         break
       case 'claim.pinned':
         group.pinned = true
+        break
+      case 'claim.reinforced':
+        group.reinforced += 1
         break
       case 'evidence.verified':
         group.hasVerifiedEvidence = true
@@ -364,6 +376,7 @@ export function selectCompactionCandidates(params: {
         tier: group.tier,
         used: group.used,
         ignored: group.ignored,
+        reinforced: group.reinforced,
         pinned: group.pinned,
         retracted: group.retracted,
         hasVerifiedEvidence: group.hasVerifiedEvidence,
