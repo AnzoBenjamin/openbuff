@@ -1771,6 +1771,267 @@ describe('base2 pre-reviewer aux gate ordering e2e', () => {
   })
 })
 
+describe('base2 specialist terminal-failure user bypass e2e', () => {
+  // This suite writes `.e2e-scratch` specialist fixtures; clean them even when
+  // an assertion fails mid-test (identical to the first describe's afterEach).
+  afterEach(() => {
+    rmSync(SPECIALIST_SCRATCH_ROOT, { recursive: true, force: true })
+  })
+
+  test('unauthorized terminal failure offers a BYPASS REVIEWER challenge', () => {
+    // Route via SPECIALIST_FILE (state/session.ts) so reliability-reviewer is
+    // the routed specialist whose crash triggers the terminal-failure branch.
+    mkdirSync(`${SPECIALIST_SCRATCH_ROOT}/state`, { recursive: true })
+    writeFileSync(SPECIALIST_FILE, 'export const session = "v1"\n')
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2-custom',
+      base2ActiveWork: specialistSeed(),
+    }
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Please finish the pending reliability finding.',
+      params: {},
+    } as any)
+
+    // Resumed-state prelude (identical to the crash test).
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+    expect(gen.next().value).toBe('STEP')
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+
+    // Aux block: the router selects reliability-reviewer; freeze the bundle
+    // then spawn the specialist.
+    const specialistBundle = gen.next(
+      feedJson({ status: ` M ${SPECIALIST_FILE}` }),
+    )
+    expect(specialistBundle.value).toMatchObject({
+      toolName: 'get_change_review_bundle',
+      input: {},
+      includeToolCall: false,
+    })
+    const crashSpawn = gen.next(
+      feedJson({
+        snapshotId: 'specialist-crash-snapshot',
+        files: [SPECIALIST_FILE],
+      }),
+    )
+    expect(crashSpawn.value).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      includeToolCall: false,
+    })
+    const crashFingerprint = specialistFingerprintFromSpawn(crashSpawn.value)
+
+    // The specialist crashes: with no prior authorization the gate mints a
+    // bypass challenge and blocks, offering a BYPASS REVIEWER <id> escape.
+    const blocked = gen.next(
+      crashedSpawnedReviewerResult('reliability-reviewer', crashFingerprint, [
+        SPECIALIST_FILE,
+      ]),
+    )
+    expect(blocked.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+      includeToolCall: false,
+    })
+    const content = (blocked.value as any).input.content as string
+    expect(content).toContain('did not spawn repair-editor or finalize')
+    expect(content).toMatch(/BYPASS REVIEWER \S+/)
+    expect(gen.next().done).toBe(true)
+
+    expect((agentState as any).base2ActiveWork).toMatchObject({
+      currentPhase: 'blocked',
+      lastReviewerGateSkipReason: 'specialist-terminal-failure',
+    })
+    const challenge = (agentState as any).base2ActiveWork.reviewerBypassChallenge
+    expect(typeof challenge).toBe('object')
+    expect(typeof challenge.id).toBe('string')
+    expect(challenge.id.length).toBeGreaterThan(0)
+    expect(challenge.consumed).toBe(false)
+  })
+
+  test('a matching BYPASS REVIEWER reply credits the specialist and clears the block', () => {
+    mkdirSync(`${SPECIALIST_SCRATCH_ROOT}/state`, { recursive: true })
+    writeFileSync(SPECIALIST_FILE, 'export const session = "v1"\n')
+    const base2 = createBase2('default')
+    const agentState = {
+      agentId: 'base2-custom',
+      base2ActiveWork: specialistSeed(),
+    }
+
+    // --- Run 1: mint the challenge (identical to Test 1 steps 1-7). ---
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Please finish the pending reliability finding.',
+      params: {},
+    } as any)
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    expect(
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+    expect(gen.next().value).toBe('STEP')
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    const specialistBundle = gen.next(
+      feedJson({ status: ` M ${SPECIALIST_FILE}` }),
+    )
+    expect(specialistBundle.value).toMatchObject({
+      toolName: 'get_change_review_bundle',
+      input: {},
+      includeToolCall: false,
+    })
+    const crashSpawn = gen.next(
+      feedJson({
+        snapshotId: 'specialist-crash-snapshot',
+        files: [SPECIALIST_FILE],
+      }),
+    )
+    expect(crashSpawn.value).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      includeToolCall: false,
+    })
+    const crashFingerprint = specialistFingerprintFromSpawn(crashSpawn.value)
+    const blocked = gen.next(
+      crashedSpawnedReviewerResult('reliability-reviewer', crashFingerprint, [
+        SPECIALIST_FILE,
+      ]),
+    )
+    expect(blocked.value).toMatchObject({
+      toolName: 'add_message',
+      input: { role: 'user' },
+      includeToolCall: false,
+    })
+    expect(gen.next().done).toBe(true)
+    const challengeId = (agentState as any).base2ActiveWork
+      .reviewerBypassChallenge.id as string
+    expect(typeof challengeId).toBe('string')
+    expect(challengeId.length).toBeGreaterThan(0)
+
+    // --- Run 2: authorize the bypass by replying `BYPASS REVIEWER <id>`. ---
+    // Reuse the SAME mutated base2ActiveWork so the stored challenge and
+    // pendingGateFiles ([SPECIALIST_FILE]) carry over. Run 1 had no
+    // messageHistory, so the stored issuedAfterMessageIndex is 0 and the user
+    // message at index 0 satisfies the authorization scan.
+    const authorizedState = {
+      agentId: 'base2-custom',
+      messageHistory: [
+        { role: 'user', content: `BYPASS REVIEWER ${challengeId}` },
+      ],
+      base2ActiveWork: (agentState as any).base2ActiveWork,
+    }
+    const gen2 = base2.handleSteps!({
+      agentState: authorizedState,
+      prompt: 'Please finish the pending reliability finding.',
+      params: {},
+    } as any)
+
+    // Same prelude; the specialist spawns AGAIN because it is not yet credited.
+    expect(gen2.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    expect(
+      gen2.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    expect(gen2.next().value).toMatchObject({ toolName: 'add_message' })
+    expect(gen2.next().value).toBe('STEP')
+    expect(gen2.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    const bundle2 = gen2.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+    expect(bundle2.value).toMatchObject({
+      toolName: 'get_change_review_bundle',
+      input: {},
+      includeToolCall: false,
+    })
+    const spawn2 = gen2.next(
+      feedJson({
+        snapshotId: 'specialist-crash-snapshot-run2',
+        files: [SPECIALIST_FILE],
+      }),
+    )
+    expect(spawn2.value).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      includeToolCall: false,
+    })
+    const fp2 = specialistFingerprintFromSpawn(spawn2.value)
+
+    // Feed the SAME crash: the terminal-failure branch now finds the
+    // authorization, credits the routed specialist synchronously, and
+    // `continue`s the outer loop toward the final code-reviewer.
+    gen2.next(
+      crashedSpawnedReviewerResult('reliability-reviewer', fp2, [
+        SPECIALIST_FILE,
+      ]),
+    )
+
+    // The credit is applied synchronously before the `continue`, so it is
+    // already present once the crash-feeding next() returns. Drain a bounded
+    // number of steps as a guard; break as soon as the credit is observed.
+    for (let i = 0; i < 12; i += 1) {
+      if (
+        (authorizedState as any).base2ActiveWork.specialistReviewGatesDone?.includes(
+          'reliability-reviewer',
+        )
+      ) {
+        break
+      }
+      let step: IteratorResult<any, any>
+      try {
+        step = gen2.next(feedJson({ status: ` M ${SPECIALIST_FILE}` }))
+      } catch {
+        break
+      }
+      if (step.done) break
+    }
+
+    const work = (authorizedState as any).base2ActiveWork
+    expect(work.specialistReviewGatesDone).toContain('reliability-reviewer')
+    expect(work.lastReviewerGateSkipReason).not.toBe(
+      'specialist-terminal-failure',
+    )
+    expect(work.validationAssurance).toBe('reduced')
+    expect(typeof work.reviewerGateBypassRecord).toBe('object')
+    expect(typeof work.reviewerGateBypassRecord.reason).toBe('string')
+    expect(work.reviewerGateBypassRecord.reason.toLowerCase()).toContain(
+      'bypass',
+    )
+    expect(Array.isArray(work.reviewerGateBypassRecord.pendingFiles)).toBe(true)
+    expect(work.reviewerGateBypassRecord.pendingFiles).toContain(
+      SPECIALIST_FILE,
+    )
+    expect(work.reviewerBypassChallenge.consumed).toBe(true)
+  })
+})
+
 /* ------------------------------------------------------------------------ */
 /* Specialist reviewer-gate state machine (repair loop, budget, owed set,    */
 /* snapshot-bound credit, no-verdict retry). These tests use a REAL scratch  */

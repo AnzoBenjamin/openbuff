@@ -39,6 +39,16 @@ Post-edit reviewer-family routing is a pure deterministic function of (reviewabl
 
 Widening the vocabulary or path patterns in the router is the supported way to change routing — keep this table in sync with the router.
 
+#### Widened vocabulary (kept in sync with `selectSpecialistReviewers`)
+
+The router also matches these additional signals (added to reduce false negatives); they route to the same specialists as their row above:
+
+- `reliability-reviewer` — stems: `mutex`, `semaphore`, `throttle`, `debounce`, `latch`, `barrier`, `channel`, `stream(s)`, `socket(s)`, `transaction(s)`, `saga`, `reconcile`, `reconciler`, `watchdog`, `heartbeat`. Keywords: `mutex`, `semaphore`, `throttl*`, `debounc*`, `livelock`, `lock contention`, `data race`, `atomic*`, `reentran*`, `backpressure`/`back-pressure`, `graceful shutdown`, `dropped event(s)`/`dropped message(s)`.
+- `performance-specialist` — keywords: `memory leak`, `oom`, `regress*`, `slow*`, `bottleneck`, `cache miss`, `n+1`. Path: `flamegraph`.
+- `compatibility-reviewer` — keywords: `backwards compat`, `wire format`, `api contract`, `schema version*`, `protocol version*`, `semver`, `feature flag`.
+- `migration-reviewer` — keywords: `data migration`, `reindex*`, `data backfill`, `dual-write`/`dual write`.
+- `dependency-reviewer` — keywords: `cve`, `sbom`, `transitive dep*`, `peer dep*`.
+
 ## Gate vs Specialists
 
 Ownership and timing — Final Gate always runs last; specialist gates are scoped auxiliaries that run in the aux phase before it.

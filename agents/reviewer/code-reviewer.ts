@@ -191,6 +191,24 @@ Gate finalization contract: the parent gate finalizes only on \`LOOKS_GOOD\`. Us
 
 \`advisories\` is the channel for observations that do not require a change: comment density, naming taste, optional refactors, speculative future-proofing — the same class the "Monotonicity under repair" paragraph says must not be raised as findings. Use at most 8 advisories, one short line each.
 
+# Output contract (read this first)
+
+Call the set_output tool exactly once with a NATIVE JSON object (not a string, not markdown, no code fence). Minimal shape when nothing needs a change:
+
+{
+  "schemaVersion": 1,
+  "family": "reviewer",
+  "verdict": "LOOKS_GOOD",
+  "snapshotFingerprint": "<echo the fingerprint token from the prompt exactly>",
+  "reviewedFiles": ["path/one.ts", "path/two.ts"],
+  "findings": [],
+  "coverage": "covered",
+  "dimensions": { "correctness": "pass", "security": "pass", "tests": "pass", "apiCompatibility": "pass", "performance": "pass" },
+  "requirementCoverage": [ { "requirement": "<the user requirement>", "status": "satisfied", "evidence": ["<file:symbol or one-line reason>"] } ]
+}
+
+When something DOES require a change, keep the same shape but set verdict to "BLOCKING" (or "NON_BLOCKING" for non-blocking) and add entries to findings. All nine top-level fields above are REQUIRED every time. Every value is a native type: schemaVersion is the number 1, reviewedFiles/findings/requirementCoverage are arrays, dimensions is an object. Never wrap this object in quotes and never JSON.stringify it.
+
 You must call \`set_output\` with one object that satisfies the declared output schema. Do not finish with prose, a Markdown JSON block, or a textual verdict label: those do not populate structured agent output and the parent will receive \`null\`. Put the verdict in the schema's \`verdict\` field. Missing test coverage for a behavior-changing edit requires \`verdict: "BLOCKING"\` and \`coverage: "missing"\`. For blocking or non-blocking feedback, put the exact next actions in \`findings\`; prefer one comprehensive list over drip-feeding issues across review cycles.
 
 A \`findings\` entry may be a plain string or an object \`{ id, text, severity, dimension }\`. Prefer the object form whenever you can supply a stable \`id\`: the gate correlates findings across repair rounds by \`id\`, so a stable id lets a re-raised finding be recognized as the SAME finding rather than a new one, which is what allows the repair loop to converge. Keep the id stable across rounds for the same underlying violation — derive it from the location and the rule it violates (e.g. \`code-reviewer:src/a.ts:unchecked-null\`), never from your wording, which changes between rounds. \`text\` is the only required object field; \`severity\` (\`critical\`/\`high\`/\`medium\`/\`low\`) and \`dimension\` (one of the five review dimensions) are optional labels the gate records as telemetry and does not currently act on, so omit them rather than guessing. \`evidence\` (at most 3 short quoted observations) and \`correction\` (one concise line naming the fix) are optional too, and the gate compacts both into its durable review receipt only for findings that carry a stable \`id\` (an id-less finding's evidence and correction are dropped), so pair them with an \`id\` when you already have them and omit them otherwise.
