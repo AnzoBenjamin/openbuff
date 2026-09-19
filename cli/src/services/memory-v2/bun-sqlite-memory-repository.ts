@@ -44,6 +44,11 @@ import {
   type MemoryVerifyOutcome,
   type MemoryVerifyRequest,
 } from '../../../../common/src/types/memory-v2'
+import {
+  deriveUsefulnessTier,
+  scoreUsefulness,
+  type UsefulnessTier,
+} from './usefulness-scorer'
 import type {
   GcCandidateSelection,
   MemoryRepositoryV2,
@@ -3066,6 +3071,8 @@ function buildLexicalResult(
     superseded: boolean
     corrected: boolean
     pinned: boolean
+    used: number
+    ignored: number
     freshness: Map<
       string,
       {
@@ -3123,6 +3130,8 @@ function buildLexicalResult(
         superseded: false,
         corrected: false,
         pinned: false,
+        used: 0,
+        ignored: 0,
         freshness: new Map(),
       })
     } else if (event.eventType === 'evidence.attached') {
@@ -3148,6 +3157,8 @@ function buildLexicalResult(
         superseded: false,
         corrected: false,
         pinned: false,
+        used: 0,
+        ignored: 0,
         freshness: new Map(),
       })
     } else if (event.eventType === 'claim.corrected') {
@@ -3161,6 +3172,8 @@ function buildLexicalResult(
         superseded: false,
         corrected: false,
         pinned: prior?.pinned ?? false,
+        used: 0,
+        ignored: 0,
         freshness: new Map(),
       })
     } else if (event.eventType === 'claim.forgotten') {
@@ -3206,8 +3219,36 @@ function buildLexicalResult(
         }
         state.freshness.delete(selectorKey(event.payload.previousSelector))
       }
+    } else if (event.eventType === 'observation.reused') {
+      // Fold the P4 usage counters into observation state so retrieval can
+      // score reusability without ever reading the memory_usage projection
+      // table directly (fold events, never tables). Unknown observation ids
+      // are ignored and malformed payloads are tolerated objectArray-style.
+      for (const entry of objectArray(event.payload.used)) {
+        const state = observations.get(
+          typeof entry.observationId === 'string'
+            ? entry.observationId
+            : String(entry.observationId ?? ''),
+        )
+        if (state) state.used += 1
+      }
+      for (const entry of objectArray(event.payload.ignored)) {
+        const state = observations.get(
+          typeof entry.observationId === 'string'
+            ? entry.observationId
+            : String(entry.observationId ?? ''),
+        )
+        if (state) state.ignored += 1
+      }
     }
   }
+
+  // Deterministic as-of wall clock: the latest occurredAt across the admitted
+  // event page (never Date.now), so usefulness age buckets are reproducible.
+  const asOfTurnWall = events.reduce(
+    (max, e) => (e.occurredAt > max ? e.occurredAt : max),
+    '1970-01-01T00:00:00.000Z',
+  )
 
   const queryTokens = lexicalTokens(
     [request.query, ...request.selectors.map(selectorKey)].join(' '),
@@ -3252,11 +3293,17 @@ function buildLexicalResult(
   // verified-evidence 0.12 + digest-freshness (verified-evidence code)
   // <= 0.03 (only when verified evidence has matching contentDigest +
   // exact revision/snapshot; combined verified family <= 0.15, preserving
-  // the original verified cap) + reusability (pinned) 0.04 + recency 0.01.
-  // New-weight sum 0.06 + 0.03 = 0.09 <= 1; worst-case raw sum equals the
-  // pre-existing max and the final score is capped at 1.0. Tiebreak stays
+  // the original verified cap) + reusability (pinned) 0.04 + reusability
+  // (usage) <= 0.05 (bounded P4 usefulness correlation, display-only; the
+  // score itself stays Math.min(1, ...)) + recency 0.01.
+  // New-weight sum 0.06 + 0.03 + 0.05 = 0.14 <= 1; worst-case raw sum stays
+  // bounded and the final score is capped at 1.0. Tiebreak stays
   // exact > token > verified > pinned > sequence (see compare below);
-  // reasons stay within 1..16 entries.
+  // observation ordering additionally applies retraction, freshness class,
+  // tier, and usefulness via compareObservations — the age/tier reordering
+  // (agent-explicit decisions outranking discovery at equal lexical weight)
+  // is intended S3 behavior, not a regression. Reasons stay within 1..16
+  // entries.
   const rank = (
     text: string,
     taskId: string | undefined,
@@ -3266,6 +3313,7 @@ function buildLexicalResult(
     sourceSequence: number,
     excerptOverlap = 0,
     digestFresh = false,
+    usefulness = 0,
   ) => {
     const candidateTokens = lexicalTokens(text)
     let tokenMatches = 0
@@ -3339,6 +3387,14 @@ function buildLexicalResult(
       )
     if (pinned)
       reasons.push(reason('reusability', 0.04, 'The observation is pinned.'))
+    if (usefulness > 0)
+      reasons.push(
+        reason(
+          'reusability',
+          Math.min(0.05, (usefulness / 1000) * 0.05),
+          'P4 usage correlation score.',
+        ),
+      )
     reasons.push(
       reason('recency', 0.01, `Canonical source sequence ${sourceSequence}.`),
     )
@@ -3362,6 +3418,34 @@ function buildLexicalResult(
     right.ranking.exact - left.ranking.exact ||
     right.ranking.tokenMatches - left.ranking.tokenMatches ||
     right.ranking.verified - left.ranking.verified ||
+    right.ranking.pinned - left.ranking.pinned ||
+    right.ranking.sourceSequence - left.ranking.sourceSequence ||
+    compareUnicodeCodePoints(left.id, right.id)
+  // Observation-specific deterministic ordering: retraction first, then
+  // freshness class, agent-explicit tier, P4 usefulness (integer score), and
+  // only then the lexical core. The old verified key is dropped as redundant
+  // with freshnessClass. Tasks keep `compare` unchanged.
+  const tierRank = (t: UsefulnessTier) =>
+    t === 'explicit' ? 2 : t === 'outcome' ? 1 : 0
+  const compareObservations = <
+    T extends {
+      ranking: ReturnType<typeof rank>
+      id: string
+      tier: UsefulnessTier
+      usefulness: number
+      freshnessClass: number
+      retracted: boolean
+    },
+  >(
+    left: T,
+    right: T,
+  ) =>
+    Number(left.retracted) - Number(right.retracted) ||
+    right.freshnessClass - left.freshnessClass ||
+    tierRank(right.tier) - tierRank(left.tier) ||
+    right.usefulness - left.usefulness ||
+    right.ranking.exact - left.ranking.exact ||
+    right.ranking.tokenMatches - left.ranking.tokenMatches ||
     right.ranking.pinned - left.ranking.pinned ||
     right.ranking.sourceSequence - left.ranking.sourceSequence ||
     compareUnicodeCodePoints(left.id, right.id)
@@ -3417,10 +3501,42 @@ function buildLexicalResult(
         for (const token of queryTokens)
           if (excerptTokens.has(token)) excerptOverlap++
       }
+      // Usefulness-v1 scoring: tier from kind + provenance, integer score
+      // from folded usage counters against the deterministic as-of clock.
+      const tier = deriveUsefulnessTier({
+        kind: state.observation.kind,
+        provenance: state.observation.provenance,
+      })
+      const usefulness = scoreUsefulness({
+        used: state.used,
+        ignored: state.ignored,
+        staled: 0,
+        reinforced: 0,
+        pinned: state.pinned ? 1 : 0,
+        createdAtWall: state.observation.observedAt,
+        asOfTurnWall,
+        tier,
+      }).score
+      const freshnessClass =
+        verified && digestFresh
+          ? 3
+          : verified
+            ? 2
+            : [...state.freshness.values()].some(
+                  (freshness) => freshness.state === 'invalid',
+                )
+              ? 1
+              : 0
+      const retracted =
+        state.forgotten || state.superseded || state.corrected
       return {
         id: state.observation.observationId,
         state,
         selectors,
+        tier,
+        usefulness,
+        freshnessClass,
+        retracted,
         ranking: rank(
           `${state.observation.taskId} ${state.observation.kind} ${state.observation.summary} ${state.observation.detail} ${selectors.map(selectorKey).join(' ')}`,
           state.observation.taskId,
@@ -3430,6 +3546,7 @@ function buildLexicalResult(
           state.sourceSequence,
           excerptOverlap,
           digestFresh,
+          usefulness,
         ),
       }
     })
@@ -3444,7 +3561,7 @@ function buildLexicalResult(
           item.ranking.exact > 0 ||
           item.state.pinned),
     )
-    .sort(compare)
+    .sort(compareObservations)
 
   const limit = request.maxResultsPerCategory
   const verifiedCandidates = observationCandidates.filter(

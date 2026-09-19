@@ -3548,3 +3548,321 @@ describe('BunSQLiteMemoryRepository observation.reused usage projection', () => 
     ).resolves.toEqual({ status: 'ok', usage: [fakeEntry] })
   })
 })
+
+describe('BunSQLiteMemoryRepository usefulness-scored retrieval ordering', () => {
+  const toolProvenance = (toolName?: string) => ({
+    origin: 'tool' as const,
+    recordedBy: 'test',
+    sourceEventIds: [],
+    metadata: {},
+    ...(toolName ? { toolName } : {}),
+  })
+
+  const scoredObservation = (
+    observationId: string,
+    kind: 'decision' | 'discovery',
+    summary: string,
+    evidence: any[] = [],
+    provenance = toolProvenance(),
+    observedAt = '2025-01-02T03:04:05.000Z',
+  ) => ({
+    ...observationFixture(observationId, evidence),
+    kind,
+    summary,
+    provenance,
+    observedAt,
+  })
+
+  const verifiedDraft = (
+    eventId: string,
+    observationId: string,
+    evidence: ReturnType<typeof evidenceFixture>,
+  ) =>
+    canonicalDraft('evidence.verified', eventId, {
+      payloadSchemaVersion: 1,
+      observationId,
+      selector: evidence.selector,
+      verifier: 'test',
+      verifiedAt: '2025-01-02T03:05:05.000Z',
+      observedDigest: evidence.contentDigest,
+    })
+
+  const retrieval = (
+    queryId: string,
+    query: string,
+    extra: Record<string, unknown> = {},
+  ) =>
+    MemoryRetrievalRequestSchema.parse({
+      schemaVersion: 2,
+      queryId,
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      query,
+      selectors: [],
+      artifactKinds: [],
+      includeHistorical: false,
+      maxResultsPerCategory: 10,
+      ...extra,
+    })
+
+  test('golden: an agent-explicit verified decision outranks a same-observedAt discovery with more token matches', async () => {
+    const repository = await open(temporaryRepository())
+    const decisionEvidence = evidenceFixture('src/decision.ts')
+    const discoveryEvidence = evidenceFixture('src/discovery.ts')
+    const decision = scoredObservation(
+      'golden-decision',
+      'decision',
+      'Ship deterministic lexical ranking',
+      [decisionEvidence],
+      toolProvenance('record_decision'),
+    )
+    const discovery = scoredObservation(
+      'golden-discovery',
+      'discovery',
+      'Discovery deterministic lexical ranking policy',
+      [discoveryEvidence],
+    )
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'golden-decision-event', {
+                payloadSchemaVersion: 1,
+                observation: decision,
+              }),
+              canonicalDraft('observation.recorded', 'golden-discovery-event', {
+                payloadSchemaVersion: 1,
+                observation: discovery,
+              }),
+              verifiedDraft(
+                'golden-decision-verified',
+                'golden-decision',
+                decisionEvidence,
+              ),
+              verifiedDraft(
+                'golden-discovery-verified',
+                'golden-discovery',
+                discoveryEvidence,
+              ),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const queried = await repository.query(
+      retrieval('golden-query', 'deterministic lexical ranking policy'),
+    )
+    expect(queried.outcome).toBe('result')
+    if (queried.outcome !== 'result') return
+    // The discovery has strictly more query-token overlap (4 vs 3 tokens),
+    // yet the agent-explicit decision tier orders first in verifiedKnowledge
+    // (both are digest-fresh verified, so freshnessClass is equal at 3).
+    expect(
+      queried.result.verifiedKnowledge.map(
+        ({ observation }) => observation.observationId as string,
+      ),
+    ).toEqual(['golden-decision', 'golden-discovery'])
+  })
+
+  test('age-floor: an old ignored explicit decision still outranks an equally-ignored derived discovery', async () => {
+    const repository = await open(temporaryRepository())
+    const oldDecision = scoredObservation(
+      'floor-decision',
+      'decision',
+      'Ignored policy decision',
+      [evidenceFixture()],
+      toolProvenance('record_decision'),
+      '2024-06-01T00:00:00.000Z',
+    )
+    const oldDiscovery = scoredObservation(
+      'floor-discovery',
+      'discovery',
+      'Ignored policy discovery',
+      [evidenceFixture()],
+      toolProvenance(),
+      '2024-06-01T00:00:00.000Z',
+    )
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'floor-decision-event', {
+                payloadSchemaVersion: 1,
+                observation: oldDecision,
+              }),
+              canonicalDraft('observation.recorded', 'floor-discovery-event', {
+                payloadSchemaVersion: 1,
+                observation: oldDiscovery,
+              }),
+              canonicalDraft('observation.reused', 'floor-ignored', {
+                payloadSchemaVersion: 1,
+                turnId: 'input:floor-ignored',
+                used: [],
+                ignored: [
+                  {
+                    observationId: 'floor-decision',
+                    mechanism: 'reread-despite',
+                  },
+                  {
+                    observationId: 'floor-discovery',
+                    mechanism: 'reread-despite',
+                  },
+                ],
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const queried = await repository.query(retrieval('floor-query', 'policy'))
+    expect(queried.outcome).toBe('result')
+    if (queried.outcome !== 'result') return
+    // Both are old (age bucket 90) and ignored once: the explicit decision
+    // keeps its agent-explicit floor while the equally-ignored derived
+    // discovery clamps to 0, so the decision orders first despite identical
+    // lexical weight and source sequence.
+    expect(
+      queried.result.rereadRequired.map(
+        ({ observationId }) => observationId as string,
+      ),
+    ).toEqual(['floor-decision', 'floor-discovery'])
+  })
+
+  test('neutrality: same-kind, same-observedAt, no-usage candidates keep the exact→token order', async () => {
+    const repository = await open(temporaryRepository())
+    const rich = scoredObservation(
+      'neutral-rich',
+      'discovery',
+      'Neutrality alpha beta gamma delta',
+      [],
+    )
+    const poor = scoredObservation(
+      'neutral-poor',
+      'discovery',
+      'Neutrality alpha',
+      [],
+    )
+    // The lexically poorer match is recorded FIRST (earlier sourceSequence):
+    // the exact→token ordering must still put the richer match first.
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              canonicalDraft('observation.recorded', 'neutral-poor-event', {
+                payloadSchemaVersion: 1,
+                observation: poor,
+              }),
+              canonicalDraft('observation.recorded', 'neutral-rich-event', {
+                payloadSchemaVersion: 1,
+                observation: rich,
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const queried = await repository.query(
+      retrieval('neutral-query', 'neutrality alpha beta gamma delta'),
+    )
+    expect(queried.outcome).toBe('result')
+    if (queried.outcome !== 'result') return
+    expect(
+      queried.result.reusableDiscovery.map(
+        ({ observation }) => observation.observationId as string,
+      ),
+    ).toEqual(['neutral-rich', 'neutral-poor'])
+  })
+
+  test('usage-fold parity: appending observation.reused reorders a candidate against its unused sibling', async () => {
+    // Control store: two identical-shape discoveries, no usage events. The
+    // earlier-sourced sibling wins on sourceSequence tiebreak.
+    const controlRepository = await open(temporaryRepository())
+    const buildObservations = () => [
+      scoredObservation('fold-first', 'discovery', 'Fold usage sibling', []),
+      scoredObservation('fold-second', 'discovery', 'Fold usage sibling', []),
+    ]
+    expect(
+      (
+        await controlRepository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: buildObservations().map((observation, index) =>
+              canonicalDraft(
+                'observation.recorded',
+                `fold-control-${index}`,
+                { payloadSchemaVersion: 1, observation },
+              ),
+            ),
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const control = await controlRepository.query(
+      retrieval('fold-control-query', 'fold usage sibling'),
+    )
+    expect(control.outcome).toBe('result')
+    if (control.outcome !== 'result') return
+    // Without usage, ordering falls through to sourceSequence (the later
+    // source wins) — fold-second is the control winner.
+    expect(
+      control.result.reusableDiscovery.map(
+        ({ observation }) => observation.observationId as string,
+      ),
+    ).toEqual(['fold-second', 'fold-first'])
+
+    // Treatment store: same shape, but the second sibling is marked used.
+    const usedRepository = await open(temporaryRepository())
+    expect(
+      (
+        await usedRepository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [
+              ...buildObservations().map((observation, index) =>
+                canonicalDraft(
+                  'observation.recorded',
+                  `fold-used-${index}`,
+                  { payloadSchemaVersion: 1, observation },
+                ),
+              ),
+              canonicalDraft('observation.reused', 'fold-used-event', {
+                payloadSchemaVersion: 1,
+                turnId: 'input:fold-used',
+                used: [{ observationId: 'fold-first', mechanism: 'cited' }],
+                ignored: [],
+              }),
+            ],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+    const used = await usedRepository.query(
+      retrieval('fold-used-query', 'fold usage sibling'),
+    )
+    expect(used.outcome).toBe('result')
+    if (used.outcome !== 'result') return
+    // The used sibling now carries a higher usefulness score and outranks
+    // the unused one despite its earlier source sequence.
+    expect(
+      used.result.reusableDiscovery.map(
+        ({ observation }) => observation.observationId as string,
+      ),
+    ).toEqual(['fold-first', 'fold-second'])
+    const scoredEntry = used.result.reusableDiscovery[0]
+    expect(scoredEntry?.reasons.some(({ code, detail }) =>
+      code === 'reusability' && detail === 'P4 usage correlation score.',
+    )).toBe(true)
+    expect(scoredEntry?.score).toBeLessThanOrEqual(1)
+  })
+})
