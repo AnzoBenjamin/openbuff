@@ -44,13 +44,9 @@ cd your-project
 openbuff
 ```
 
-然后直接告诉 Openbuff 你想做什么，剩下的它自己搞定：
+配置提供商：在 TUI 内运行 `/setup <preset>`（如 `/setup openai`）快速套用预设，或在 `openbuff.json` 中声明提供商和模型路由。然后导出提供商 `apiKeyEnv` 指定的 API key 环境变量（如 `export OPENAI_API_KEY="..."`），再告诉 Openbuff 你想做什么。
 
-- "修掉用户注册里的 SQL 注入漏洞"
-- "给所有 API 端点加上限流"
-- "重构数据库连接代码，提升性能"
-
-Openbuff 会找到对应的文件，跨多个文件做改动，并跑测试确认没有破坏现有功能。
+完整流程——安装 → 提供商配置 → 模型路由 → 验证——见[《快速上手》](./docs/getting-started.md)。
 
 ## 创建自定义智能体
 
@@ -153,6 +149,8 @@ await client.run({
 更多 SDK 用法请看[这里](https://www.npmjs.com/package/@openbuff/sdk)。
 
 ## 提供商配置
+
+刚接触 Openbuff？[《快速上手》](./docs/getting-started.md)完整讲解了从安装、配置提供商、路由模型到验证的全流程。
 
 Openbuff 默认在本地/BYOK 模式下运行：不需要托管认证、积分或平台推理。在 `openbuff.json` 中配置 OpenAI 兼容或 Anthropic 兼容提供商和按智能体路由的模型。详情请见 [Openbuff 本地/BYOK 提供商模式](./docs/local-mode.md)。
 
