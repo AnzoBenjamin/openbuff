@@ -174,43 +174,18 @@ export const MessageWithAgents = memo(
       [theme?.background],
     )
 
-    if (isAgent) {
-      return (
-        <AgentMessage
-          message={message}
-          depth={depth}
-          availableWidth={availableWidth}
-        />
-      )
-    }
-
     const isAi = message.variant === 'ai'
     const isUser = message.variant === 'user'
     const isError = message.variant === 'error'
 
-    if (
-      message.blocks &&
-      message.blocks.length === 1 &&
-      message.blocks[0].type === 'mode-divider'
-    ) {
-      const dividerBlock = message.blocks[0]
-      return (
-        <ModeDivider
-          key={message.id}
-          mode={dividerBlock.mode}
-          width={availableWidth}
-        />
-      )
-    }
-
     const lineColor = isError
-      ? 'red'
+      ? (theme?.error ?? 'red')
       : isAi
         ? (theme?.aiLine ?? 'white')
         : (theme?.userLine ?? 'white')
     const textColor = theme?.foreground ?? 'white'
     const timestampColor = isError
-      ? 'red'
+      ? (theme?.error ?? 'red')
       : isAi
         ? (theme?.muted ?? 'white')
         : (theme?.muted ?? 'white')
@@ -236,6 +211,31 @@ export const MessageWithAgents = memo(
       () => ({ codeBlockWidth, palette: paletteForMessage! }),
       [codeBlockWidth, paletteForMessage],
     )
+
+    if (isAgent) {
+      return (
+        <AgentMessage
+          message={message}
+          depth={depth}
+          availableWidth={availableWidth}
+        />
+      )
+    }
+
+    if (
+      message.blocks &&
+      message.blocks.length === 1 &&
+      message.blocks[0].type === 'mode-divider'
+    ) {
+      const dividerBlock = message.blocks[0]
+      return (
+        <ModeDivider
+          key={message.id}
+          mode={dividerBlock.mode}
+          width={availableWidth}
+        />
+      )
+    }
 
     const isLoading =
       isAi && message.content === '' && !message.blocks && isWaitingForResponse

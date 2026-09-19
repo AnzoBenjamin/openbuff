@@ -7,6 +7,7 @@ import { SelectableList } from './selectable-list'
 import { useTerminalLayout } from '../hooks/use-terminal-layout'
 import { useTheme } from '../hooks/use-theme'
 import { createTextPasteHandler } from '../utils/strings'
+import { BORDER_CHARS } from '../utils/ui-constants'
 import {
   getEditableConfig,
   getKnownModelOptions,
@@ -17,7 +18,6 @@ import {
 
 import type { SelectableListItem } from './selectable-list'
 import type {
-  KnownModelOption,
   ModelRouteTarget,
   ReasoningEffortInput,
 } from '../utils/openbuff-provider'
@@ -528,7 +528,7 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
                 selectedModelId,
                 reasoningChoice,
               )
-              const configPath = writeMergedConfig(editableConfig)
+              writeMergedConfig(editableConfig)
 
               const reasoningDisplay =
                 reasoningChoice === 'default' ? 'default' : reasoningChoice
@@ -696,6 +696,7 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
               flexDirection: 'column',
               borderStyle: 'single',
               borderColor: activePane === 'left' ? theme.primary : theme.border,
+              customBorderChars: BORDER_CHARS,
               flexGrow: 1,
               flexShrink: 1,
               overflow: 'hidden',
@@ -742,6 +743,7 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
               paddingRight: 1,
               borderStyle: 'single',
               borderColor: theme.border,
+              customBorderChars: BORDER_CHARS,
               flexShrink: 0,
               marginBottom: 1,
             }}
@@ -805,6 +807,7 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
               borderStyle: 'single',
               borderColor:
                 activePane === 'right' ? theme.primary : theme.border,
+              customBorderChars: BORDER_CHARS,
               flexGrow: 1,
               flexShrink: 1,
               overflow: 'hidden',
@@ -853,6 +856,7 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
               paddingRight: 2,
               borderStyle: 'single',
               borderColor: theme.muted,
+              customBorderChars: BORDER_CHARS,
             }}
             border={['top', 'bottom', 'left', 'right']}
           >

@@ -499,6 +499,14 @@ export type DoctorContentBlock = {
   providerStatus: string
 }
 
+export type UpdateContentBlock = {
+  type: 'update'
+  updateStatus: 'staged' | 'current' | 'unavailable'
+  current: string | null
+  pending: string | null
+  lines: string[]
+}
+
 export type IndexStatusContentBlock = {
   type: 'index-status'
   statusLine: string
@@ -615,6 +623,7 @@ export type ContentBlock =
   | PlanStatusContentBlock
   | TextContentBlock
   | ToolContentBlock
+  | UpdateContentBlock
   | PlanContentBlock
 
 export type AgentMessage = {
@@ -748,6 +757,10 @@ export function isDoctorBlock(
   block: ContentBlock,
 ): block is DoctorContentBlock {
   return block.type === 'doctor'
+}
+
+export function isUpdateBlock(block: ContentBlock): block is UpdateContentBlock {
+  return block.type === 'update'
 }
 
 export function isIndexStatusBlock(

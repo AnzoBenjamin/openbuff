@@ -10,7 +10,7 @@ export interface StatusInfo {
 /** Get status indicator, label, color, and formatted text based on agent status */
 export function getAgentStatusInfo(
   status: AgentContentBlock['status'],
-  theme: { primary: string; foreground: string; muted: string },
+  theme: { primary: string; foreground: string; muted: string; error: string },
 ): StatusInfo {
   switch (status) {
     case 'running':
@@ -21,7 +21,12 @@ export function getAgentStatusInfo(
         text: '● running',
       }
     case 'failed':
-      return { indicator: '✗', label: 'failed', color: 'red', text: '✗ failed' }
+      return {
+        indicator: '✗',
+        label: 'failed',
+        color: theme.error,
+        text: '✗ failed',
+      }
     case 'complete':
       return {
         indicator: '✓',
@@ -40,7 +45,7 @@ export function getAgentStatusInfo(
       return {
         indicator: '⊘',
         label: 'cancelled',
-        color: 'red',
+        color: theme.error,
         text: '⊘ cancelled',
       }
     default:

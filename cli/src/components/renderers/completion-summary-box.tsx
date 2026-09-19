@@ -1,6 +1,5 @@
 import { memo } from 'react'
 
-import { HarnessBox } from './harness-box'
 import { useTheme } from '../../hooks/use-theme'
 
 import type { CompletionSummaryContentBlock } from '../../types/chat'
@@ -111,6 +110,7 @@ interface CompletionSummaryBoxProps {
 
 export const CompletionSummaryBox = memo(
   ({ block }: CompletionSummaryBoxProps) => {
+    const theme = useTheme()
     const summary = block.summary
     const tone = deriveTone(summary)
 
@@ -180,7 +180,8 @@ export const CompletionSummaryBox = memo(
           : 'success'
 
     return (
-      <HarnessBox tone={tone} title="Run summary" gap={0} paddingBottom={0}>
+      <box style={{ flexDirection: 'column' }}>
+        <text style={{ fg: statusColorForTone(tone, theme) }}>Run summary</text>
         {hasFiles ? (
           <SummaryRow
             label={ROW_LABELS.files}
@@ -223,7 +224,7 @@ export const CompletionSummaryBox = memo(
             tone="error"
           />
         ) : null}
-      </HarnessBox>
+      </box>
     )
   },
 )

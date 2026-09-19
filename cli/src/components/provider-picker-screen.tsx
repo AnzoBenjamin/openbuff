@@ -7,6 +7,7 @@ import { useTerminalLayout } from '../hooks/use-terminal-layout'
 import { useTheme } from '../hooks/use-theme'
 import { getSystemProcessEnv } from '../utils/env'
 import { createTextPasteHandler } from '../utils/strings'
+import { BORDER_CHARS } from '../utils/ui-constants'
 
 import type { KeyEvent } from '@opentui/core'
 
@@ -605,6 +606,7 @@ export function ProviderPickerScreen({ presets, onSelect }: Props) {
           width: contentWidth,
           borderStyle: 'single',
           borderColor: theme.muted,
+          customBorderChars: BORDER_CHARS,
           flexDirection: 'column',
           flexGrow: 1,
           overflow: 'hidden',
