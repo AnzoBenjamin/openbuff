@@ -214,15 +214,14 @@ async function expandConceptRecallInner(
   params: Parameters<typeof expandConceptRecall>[0],
   embed: ConceptEmbedFn,
   db: Database,
+  modelDigest: string,
   signal: { aborted: boolean },
 ): Promise<ConceptExpansion> {
-  const modelDigest = conceptFingerprint(embed)
   const budget = params.maxNewEmbeddings ?? DEFAULT_CONCEPT_MAX_NEW_EMBEDDINGS
   const queryText = conceptEmbedText({
     kind: 'query',
     summary: params.request.query,
   })
-  const queryHash = conceptEmbeddingHash(queryText)
 
   const seen = new Set<string>()
   const pending: PendingEmbedding[] = []
@@ -412,7 +411,7 @@ export async function expandConceptRecall(params: {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     return await Promise.race([
-      expandConceptRecallInner(params, embed, db, signal),
+      expandConceptRecallInner(params, embed, db, modelDigest, signal),
       new Promise<ConceptExpansion>((resolve) => {
         timer = setTimeout(
           () => {

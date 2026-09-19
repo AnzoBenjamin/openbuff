@@ -60,14 +60,6 @@ export function getEffectiveMemoryAuthority(
   }
 }
 
-/**
- * Runtime-neutral persistence boundary for Memory V2.
- *
- * Implementations own storage and concurrency. Append inputs are event drafts;
- * implementations assign sequences and expose committed event envelopes. All
- * inputs and outputs are bounded, schema-validated JSON DTOs and intentionally
- * expose no database or runtime driver types.
- */
 export interface MemoryStoreStats {
   eventCount: number
   bytes: number
