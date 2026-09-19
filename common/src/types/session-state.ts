@@ -287,10 +287,6 @@ export type AgentState = {
   childRunIds: string[]
   messageHistory: Message[]
   stepsRemaining: number
-  /** Hash of the previous repeated-step watchdog observation. */
-  lastStepProgressSignature?: string
-  /** Consecutive count for the current repeated-step signature. */
-  repeatedStepProgressCount?: number
   /** Consecutive text-only turns without task_completed for explicit-completion agents (bounded fallback, resets on tool use). */
   consecutiveTextOnlyWithoutCompletion?: number
   /** Message from the most recent rejected set_output call, cleared once output is successfully set. Used to make the missing-structured-output retry name the real failure. */
@@ -588,8 +584,6 @@ export function getInitialAgentState(): AgentState {
     childRunIds: [],
     messageHistory: [],
     stepsRemaining: MAX_AGENT_STEPS_DEFAULT,
-    lastStepProgressSignature: undefined,
-    repeatedStepProgressCount: 0,
     creditsUsed: 0,
     directCreditsUsed: 0,
     cacheInputTokens: 0,

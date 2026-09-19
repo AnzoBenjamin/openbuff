@@ -41,10 +41,6 @@ import { getToolSet } from './tools/prompts'
 import { processStream } from './tools/stream-parser'
 import { getAgentOutput } from './util/agent-output'
 import {
-  evaluateRepeatedStepLoop,
-  REPEATED_STEP_LOOP_LIMIT,
-} from './util/step-loop-guard'
-import {
   initBudgetFromTemplate,
   checkBudgetExceeded,
 } from './util/budget-enforcement'
@@ -1063,24 +1059,12 @@ export const runAgentStep = async (
     shouldEndTurn = false
   }
 
-  const repeatedStepLoop = evaluateRepeatedStepLoop({
-    previousSignature: agentState.lastStepProgressSignature,
-    previousRepeatCount: agentState.repeatedStepProgressCount,
-    toolCalls,
-    toolResults,
-    isThinkOnly,
-    responseText: responseWithoutThinkTags,
-    shouldEndTurn,
-  })
-
   agentState = {
     ...agentState,
     stepsRemaining:
       agentState.stepsRemaining > 0
         ? agentState.stepsRemaining - 1
         : agentState.stepsRemaining,
-    lastStepProgressSignature: repeatedStepLoop.signature,
-    repeatedStepProgressCount: repeatedStepLoop.repeatCount,
     agentContext,
     // Apply the step's accumulated cost once, here, on the post-spread object.
     // This avoids the stale-closure mutation bug where late async cost callbacks
@@ -1093,33 +1077,6 @@ export const runAgentStep = async (
     cacheInputTokens: agentState.cacheInputTokens + stepCacheInputTokens,
     cacheTotalInputTokens:
       agentState.cacheTotalInputTokens + stepCacheTotalInputTokens,
-  }
-
-  if (repeatedStepLoop.shouldStop) {
-    const message = [
-      `No-progress watchdog stopped the turn after ${REPEATED_STEP_LOOP_LIMIT} repeated step patterns.`,
-      'Current work and run state were preserved.',
-      'Resume after changing the approach or inputs; productive runs are not limited by a fixed step count.',
-    ].join(' ')
-    agentState = {
-      ...agentState,
-      messageHistory: [
-        ...agentState.messageHistory,
-        assistantMessage({
-          content: message,
-          tags: ['NO_PROGRESS_LOOP_GUARD'],
-          keepDuringTruncation: true,
-        }),
-      ],
-    }
-    onResponseChunk(`${message}\n\n`)
-    return {
-      agentState,
-      fullResponse: message,
-      shouldEndTurn: true,
-      messageId: null,
-      nResponses: undefined,
-    }
   }
 
   // P1-5: Enforce per-run budgets after accumulation. If either cap is
@@ -1751,10 +1708,6 @@ export async function loopAgentSteps(
     }
     initialAgentState.toolDefinitions = toolDefinitions
     let currentAgentState: AgentState = initialAgentState
-    if (prompt?.trim()) {
-      currentAgentState.lastStepProgressSignature = undefined
-      currentAgentState.repeatedStepProgressCount = 0
-    }
 
     let shouldEndTurn = false
     let outputSchemaRetryCount = 0
