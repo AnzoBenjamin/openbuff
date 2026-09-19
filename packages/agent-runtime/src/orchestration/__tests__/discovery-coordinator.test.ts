@@ -11,6 +11,7 @@ import {
   recordMemoryReuse,
   tryClaimDiscoveryShard,
 } from '../discovery-coordinator'
+import { MemoryReuseReceiptV1Schema } from '@codebuff/common/types/memory-v2'
 
 describe('discovery coordinator', () => {
   test('derives a stable non-empty question for params-only discovery agents', () => {
@@ -527,6 +528,72 @@ describe('recordMemoryReuse', () => {
 
     expect(state.memoryReuse!.full).toBe(1)
     expect(state.memoryReuse!.recordsServed).toBe(0)
+  })
+
+  test('coveredStableChunkIds dedupe, sort, cap, and stay absent when undefined', () => {
+    const state: Parameters<typeof recordMemoryReuse>[0] = {}
+
+    recordMemoryReuse(state, {
+      tool: 'read_files',
+      decision: 'skip',
+      served: 3,
+      gaps: 0,
+      coveredStableChunkIds: ['chunk:b', 'chunk:a', 'chunk:b', ''],
+    })
+    expect(state.memoryReuse!.byTool![0]!.coveredStableChunkIds).toEqual([
+      'chunk:a',
+      'chunk:b',
+    ])
+
+    const cappedState: Parameters<typeof recordMemoryReuse>[0] = {}
+    recordMemoryReuse(cappedState, {
+      tool: 'read_files',
+      decision: 'skip',
+      served: 40,
+      gaps: 0,
+      coveredStableChunkIds: Array.from(
+        { length: 40 },
+        (_, index) => `chunk:${String(index).padStart(2, '0')}`,
+      ).reverse(),
+    })
+    const capped = cappedState.memoryReuse!.byTool![0]!.coveredStableChunkIds!
+    expect(capped).toHaveLength(32)
+    expect([...capped].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(
+      capped,
+    )
+
+    const absentState: Parameters<typeof recordMemoryReuse>[0] = {}
+    recordMemoryReuse(absentState, {
+      tool: 'glob',
+      decision: 'full',
+      served: 0,
+      gaps: 0,
+    })
+    expect(
+      absentState.memoryReuse!.byTool![0]!.coveredStableChunkIds,
+    ).toBeUndefined()
+  })
+
+  test('drops coveredStableChunkIds entries longer than the receipt schema bound', () => {
+    const state: Parameters<typeof recordMemoryReuse>[0] = {}
+    const oversized = 'z'.repeat(129)
+    const bounded = 'k'.repeat(128)
+
+    recordMemoryReuse(state, {
+      tool: 'query_index',
+      decision: 'skip',
+      served: 2,
+      gaps: 0,
+      coveredStableChunkIds: [oversized, bounded, ''],
+    })
+
+    const receipt = state.memoryReuse!
+    expect(receipt.byTool![0]!.coveredStableChunkIds).toEqual([bounded])
+    // The produced receipt must satisfy its own published schema once the
+    // emit path stamps turnId (recordMemoryReuse leaves it '' in-flight).
+    expect(() =>
+      MemoryReuseReceiptV1Schema.parse({ ...receipt, turnId: 'input:test' }),
+    ).not.toThrow()
   })
 
   test('gaps accumulate into gapsRemaining for every decision', () => {

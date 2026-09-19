@@ -74,6 +74,7 @@ const CANONICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   'session.ended',
   'artifact.classified',
   'observation.recorded',
+  'observation.reused',
   'claim.consolidated',
   'claim.corrected',
   'claim.superseded',
@@ -289,6 +290,16 @@ interface QueryAdmissionRow {
   sequence: number
   payload_bytes: number
   metadata_bytes: number
+}
+
+interface UsageRow {
+  observation_id: string
+  used_count: number
+  ignored_count: number
+  staled_count: number
+  last_mechanism: string | null
+  last_turn_id: string | null
+  last_sequence: number
 }
 
 interface QueryScanResult {
@@ -808,6 +819,7 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
       const rebuild = this.database.transaction(() => {
         for (const table of PROJECTION_TABLES)
           this.database.exec(`DELETE FROM ${table}`)
+        this.database.exec('DELETE FROM memory_usage')
         setProjectionCursor(this.database, 0)
         return replayProjections(this.database)
       })
@@ -833,6 +845,83 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
         claims: readProjectionRows(this.database, 'memory_claims'),
         evidence: readProjectionRows(this.database, 'memory_evidence'),
         discoveries: readProjectionRows(this.database, 'memory_discoveries'),
+      }
+    } catch (error) {
+      return { status: 'error', error: classifyStorageError(error) }
+    }
+  }
+
+  /**
+   * Bounded read of the P4 usage projection. Filters by the bound project
+   * (single-project stores) and either the given observation ids (max 64) or
+   * up to 256 rows in code-point order of observation_id.
+   */
+  async getUsage(params: {
+    projectId: string
+    observationIds?: string[]
+  }): Promise<
+    MemoryV2Result<{
+      usage: Array<{
+        observationId: string
+        usedCount: number
+        ignoredCount: number
+        staledCount: number
+        lastMechanism: string | null
+        lastTurnId: string | null
+        lastSequence: number
+      }>
+    }>
+  > {
+    const unavailable = this.requireOpen()
+    if (unavailable) return unavailable
+
+    try {
+      this.requireBoundProject(params.projectId)
+      const filtered = Array.isArray(params.observationIds)
+        ? params.observationIds
+            .filter(
+              (id): id is string =>
+                typeof id === 'string' && id.length > 0 && id.length <= 512,
+            )
+            .slice(0, 64)
+        : undefined
+      if (filtered !== undefined && filtered.length === 0) {
+        return { status: 'ok', usage: [] }
+      }
+      const rows =
+        filtered !== undefined
+          ? (this.database
+              .query(
+                `SELECT observation_id, used_count, ignored_count, staled_count,
+                        last_mechanism, last_turn_id, last_sequence
+                   FROM memory_usage
+                  WHERE observation_id IN (${filtered
+                    .map((_, index) => `?${index + 1}`)
+                    .join(', ')})
+                  ORDER BY observation_id
+                  LIMIT 256`,
+              )
+              .all(...filtered) as UsageRow[])
+          : (this.database
+              .query(
+                `SELECT observation_id, used_count, ignored_count, staled_count,
+                        last_mechanism, last_turn_id, last_sequence
+                   FROM memory_usage
+                  ORDER BY observation_id
+                  LIMIT 256`,
+              )
+              .all() as UsageRow[])
+      return {
+        status: 'ok',
+        usage: rows.map((row) => ({
+          observationId: row.observation_id,
+          usedCount: row.used_count,
+          ignoredCount: row.ignored_count,
+          staledCount: row.staled_count,
+          lastMechanism: row.last_mechanism ?? null,
+          lastTurnId: row.last_turn_id ?? null,
+          lastSequence: row.last_sequence,
+        })),
       }
     } catch (error) {
       return { status: 'error', error: classifyStorageError(error) }
@@ -1439,6 +1528,12 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
           prepared.artifactId,
         )
       for (const table of PROJECTION_TABLES) this.database.exec(`DELETE FROM ${table}`)
+      // The usage projection must stay consistent with the surviving event log:
+      // clearing the canonical events (including archived 'observation.reused'
+      // events) invalidates their usage counters, so memory_usage is rebuilt
+      // from scratch exactly like every other projection table (matches
+      // rebuildProjections).
+      this.database.exec('DELETE FROM memory_usage')
       setProjectionCursor(this.database, 0)
       replayProjections(this.database, Number.MAX_SAFE_INTEGER)
       this.database.exec('COMMIT')
@@ -1895,6 +1990,10 @@ function migrate(database: Database): void {
   try {
     if (version < 1) database.exec(MIGRATION_1)
     if (version < 2) database.exec(MIGRATION_2)
+    // Additive P4 projection table: created idempotently on every open so
+    // existing version-2 stores gain it without a user_version bump (the
+    // store schemaVersion stays 2).
+    database.exec(MEMORY_USAGE_DDL)
     inferAndBindProject(database)
     // A v1->v2 migration replay must stay correct-and-complete: truncating it
     // would leave the projections partially applied while the migration commits,
@@ -2076,6 +2175,18 @@ const MIGRATION_2 = `
   CREATE TABLE memory_discoveries (
     entity_id TEXT PRIMARY KEY, task_id TEXT, session_id TEXT, state_json TEXT NOT NULL,
     source_sequence INTEGER NOT NULL, updated_at TEXT NOT NULL
+  ) WITHOUT ROWID;
+`
+
+const MEMORY_USAGE_DDL = `
+  CREATE TABLE IF NOT EXISTS memory_usage (
+    observation_id TEXT PRIMARY KEY,
+    used_count INTEGER NOT NULL DEFAULT 0,
+    ignored_count INTEGER NOT NULL DEFAULT 0,
+    staled_count INTEGER NOT NULL DEFAULT 0,
+    last_mechanism TEXT,
+    last_turn_id TEXT,
+    last_sequence INTEGER NOT NULL DEFAULT -1
   ) WITHOUT ROWID;
 `
 
@@ -2447,6 +2558,30 @@ function applyProjection(
         payload,
       )
       return
+    case 'observation.reused': {
+      const usageTurnId = projectionId(payload.turnId)
+      for (const entry of objectArray(payload.used)) {
+        upsertUsage(
+          database,
+          entry.observationId,
+          sequence,
+          entry.mechanism,
+          usageTurnId,
+          'used_count',
+        )
+      }
+      for (const entry of objectArray(payload.ignored)) {
+        upsertUsage(
+          database,
+          entry.observationId,
+          sequence,
+          entry.mechanism,
+          usageTurnId,
+          'ignored_count',
+        )
+      }
+      return
+    }
     case 'evidence.verified':
       upsertEvidence(
         database,
@@ -2628,6 +2763,58 @@ function upsertProjection(
       stableJson(state),
       sequence,
       event.occurredAt,
+    )
+}
+
+/**
+ * Monotonic usage projection for 'observation.reused' events: increments one
+ * counter per entry, guarded by the event sequence so duplicate replays never
+ * double-count. Never deletes; staled_count stays reserved (P4 never emits
+ * 'staled').
+ */
+function upsertUsage(
+  database: Database,
+  observationId: unknown,
+  sequence: number,
+  mechanism: unknown,
+  turnId: string | null,
+  column: 'used_count' | 'ignored_count',
+): void {
+  const id = projectionId(observationId)
+  if (!id) return
+  const prior = database
+    .query(
+      `SELECT used_count, ignored_count, last_sequence
+         FROM memory_usage WHERE observation_id = ?1`,
+    )
+    .get(id) as
+    | { used_count: number; ignored_count: number; last_sequence: number }
+    | null
+  if (prior && sequence <= prior.last_sequence) return
+  const usedCount = (prior?.used_count ?? 0) + (column === 'used_count' ? 1 : 0)
+  const ignoredCount =
+    (prior?.ignored_count ?? 0) + (column === 'ignored_count' ? 1 : 0)
+  database
+    .query(
+      `INSERT INTO memory_usage (
+         observation_id, used_count, ignored_count, staled_count,
+         last_mechanism, last_turn_id, last_sequence
+       ) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6)
+       ON CONFLICT(observation_id) DO UPDATE SET
+         used_count = excluded.used_count,
+         ignored_count = excluded.ignored_count,
+         staled_count = excluded.staled_count,
+         last_mechanism = excluded.last_mechanism,
+         last_turn_id = excluded.last_turn_id,
+         last_sequence = excluded.last_sequence`,
+    )
+    .run(
+      id,
+      usedCount,
+      ignoredCount,
+      projectionId(mechanism),
+      turnId,
+      sequence,
     )
 }
 

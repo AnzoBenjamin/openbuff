@@ -125,6 +125,9 @@ export const handleCodeSearch = (async (params: {
             ? cover.coveringExcerpts.length
             : 0,
         gaps: cover.remainingGaps.length,
+        coveredStableChunkIds: cover.coveringExcerpts
+          .map((entry) => entry.chunkId)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0),
       })
       if (cover.decision === 'skip' && cover.coveringExcerpts.length > 0) {
         const output = buildSkipOutput(cover.coveringExcerpts)

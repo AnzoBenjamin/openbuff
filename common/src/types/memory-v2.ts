@@ -339,6 +339,24 @@ export type CoverageRecordedPayload = z.infer<
   typeof CoverageRecordedPayloadSchema
 >
 
+const observationUsageEntryShape = {
+  observationId: ObservationIdSchema,
+  mechanism: z.enum(['gate-skip', 'cited', 'reread-despite']),
+} as const
+
+export const ObservationReusedPayloadSchema = z
+  .object({
+    ...payloadVersionShape,
+    turnId: z.string().min(1).max(128),
+    taskId: TaskIdSchema.optional(),
+    used: z.object(observationUsageEntryShape).strict().array().max(64),
+    ignored: z.object(observationUsageEntryShape).strict().array().max(64),
+  })
+  .strict()
+export type ObservationReusedPayload = z.infer<
+  typeof ObservationReusedPayloadSchema
+>
+
 export const EvidenceVerifiedPayloadSchema = z
   .object({
     ...payloadVersionShape,
@@ -696,6 +714,7 @@ export const MemoryEventDraftSchema = z.discriminatedUnion('eventType', [
   eventDraft('evidence.attached', EvidenceAttachedPayloadSchema),
   eventDraft('artifact.classified', ArtifactClassifiedPayloadSchema),
   eventDraft('observation.recorded', ObservationRecordedPayloadSchema),
+  eventDraft('observation.reused', ObservationReusedPayloadSchema),
   eventDraft('coverage.recorded', CoverageRecordedPayloadSchema),
   eventDraft('evidence.verified', EvidenceVerifiedPayloadSchema),
   eventDraft('evidence.invalidated', EvidenceInvalidatedPayloadSchema),
@@ -731,6 +750,7 @@ export const MemoryEventEnvelopeSchema = z.discriminatedUnion('eventType', [
   eventEnvelope('evidence.attached', EvidenceAttachedPayloadSchema),
   eventEnvelope('artifact.classified', ArtifactClassifiedPayloadSchema),
   eventEnvelope('observation.recorded', ObservationRecordedPayloadSchema),
+  eventEnvelope('observation.reused', ObservationReusedPayloadSchema),
   eventEnvelope('coverage.recorded', CoverageRecordedPayloadSchema),
   eventEnvelope('evidence.verified', EvidenceVerifiedPayloadSchema),
   eventEnvelope('evidence.invalidated', EvidenceInvalidatedPayloadSchema),
@@ -1333,6 +1353,7 @@ export const MemoryReuseReceiptV1Schema = z
           decision: z.enum(['skip', 'narrow', 'full']),
           served: z.number().int().nonnegative(),
           gaps: z.number().int().nonnegative(),
+          coveredStableChunkIds: z.array(z.string().min(1).max(128)).max(32).optional(),
         }),
       )
       .max(32)

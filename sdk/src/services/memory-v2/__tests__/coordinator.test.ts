@@ -5,6 +5,9 @@ import {
   MemoryEventIdSchema,
   MemoryQueryOutcomeSchema,
   ProjectIdSchema,
+  QueryIdSchema,
+  type MemoryReuseReceiptV1,
+  type MemoryTurnContextV2,
   type MemoryAppendOutcome,
   type MemoryEventDraft,
   type MemoryEventId,
@@ -1900,5 +1903,199 @@ describe('MemoryV2Coordinator lifecycle', () => {
     if (event.eventType === 'observation.recorded') {
       expect(event.payload.observation.kind).toBe('constraint')
     }
+  })
+})
+
+describe('MemoryV2Coordinator usage correlation (P4)', () => {
+  const chunkEvidence = (chunkId: string) => ({
+    artifact: {
+      artifactId: `artifact:${chunkId}`,
+      location: `src/${chunkId}.ts`,
+      classification: {
+        kind: 'source',
+        generated: false,
+        sensitivity: 'internal',
+        labels: [],
+      },
+    },
+    selector: {
+      kind: 'chunk',
+      path: `src/${chunkId}.ts`,
+      chunkId,
+      qualifiedName: 'sym',
+      startLine: 1,
+      endLine: 10,
+    },
+    provenance: {
+      origin: 'tool',
+      recordedBy: 'test',
+      sourceEventIds: [],
+      metadata: {},
+    },
+    capturedAt: generatedAt,
+    contentDigest: `sha256:${'a'.repeat(64)}`,
+  })
+
+  const usageContext = (queryId: QueryId) =>
+    ({
+      schemaVersion: 2,
+      userInputId: 'input:usage',
+      queryId,
+      result: {
+        schemaVersion: 2,
+        queryId,
+        projectId,
+        generatedAt,
+        matchedTasks: [],
+        verifiedKnowledge: ['used:chunk-a', 'other:chunk-b'].map((pair) => {
+          const [name, chunkId] = pair.split(':')
+          return {
+            observation: {
+              observationId: `observation:${name}`,
+              taskId: 'task-1',
+              kind: 'discovery',
+              summary: name,
+              detail: 'deterministic detail',
+              confidence: 0.9,
+              evidence: [chunkEvidence(chunkId!)],
+              selectors: [],
+              tags: ['test'],
+              observedAt: generatedAt,
+            },
+            verifiedEvidence: [chunkEvidence(chunkId!)],
+            verifiedAt: generatedAt,
+            score: 1,
+            reasons: [],
+          }
+        }),
+        reusableDiscovery: [],
+        rereadRequired: [],
+        historicalContext: [],
+        degradation: { state: 'none' },
+        rankingReasons: [],
+      },
+    }) as unknown as MemoryTurnContextV2
+
+  const usageReceipt = (): MemoryReuseReceiptV1 => ({
+    schemaVersion: 1,
+    turnId: 'input:usage',
+    skip: 1,
+    narrow: 0,
+    full: 1,
+    recordsServed: 1,
+    gapsRemaining: 0,
+    recordedDecisions: 1,
+    conceptExpanded: 0,
+    byTool: [
+      {
+        tool: 'read_files',
+        decision: 'skip',
+        served: 1,
+        gaps: 0,
+        coveredStableChunkIds: ['chunk-a'],
+      },
+    ],
+  })
+
+  test('appends one batched observation.reused event and clears the snapshot', async () => {
+    const repository = new RepositoryStub()
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:usage',
+      query: 'usage',
+    })
+    state.memoryV2Context = usageContext(state.memoryV2!.turn.queryId)
+    state.memoryUsageTurn = usageReceipt()
+    const before = allEvents(repository).length
+
+    await coordinator.finishTurn({
+      agentState: state,
+      output: { type: 'structuredOutput', value: {} },
+    })
+
+    const events = allEvents(repository).slice(before)
+    const reused = events.find(
+      (candidate) => candidate.eventType === 'observation.reused',
+    )
+    expect(reused).toBeDefined()
+    expect(events.at(-1)!.eventType).toBe('observation.reused')
+    if (reused && reused.eventType === 'observation.reused') {
+      expect(reused.payload.turnId).toBe('input:usage')
+      expect(
+        reused.payload.used.map((entry) => ({
+          observationId: entry.observationId as string,
+          mechanism: entry.mechanism,
+        })),
+      ).toEqual([{ observationId: 'observation:used', mechanism: 'gate-skip' }])
+      expect(
+        reused.payload.ignored.map((entry) => ({
+          observationId: entry.observationId as string,
+          mechanism: entry.mechanism,
+        })),
+      ).toEqual([
+        { observationId: 'observation:other', mechanism: 'reread-despite' },
+      ])
+    }
+    expect(state.memoryUsageTurn).toBeUndefined()
+  })
+
+  test('stale queryId or missing receipt appends no usage event', async () => {
+    const repository = new RepositoryStub()
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:usage',
+      query: 'usage',
+    })
+    state.memoryV2Context = usageContext(QueryIdSchema.parse('query:stale'))
+    state.memoryUsageTurn = usageReceipt()
+
+    await coordinator.finishTurn({
+      agentState: state,
+      output: { type: 'structuredOutput', value: {} },
+    })
+    expect(
+      allEvents(repository).some(
+        (candidate) => candidate.eventType === 'observation.reused',
+      ),
+    ).toBe(false)
+    expect(state.memoryUsageTurn).toBeUndefined()
+
+    const missingRepository = new RepositoryStub()
+    const missingState = getInitialAgentState()
+    const missingCoordinator = new MemoryV2Coordinator(
+      config(missingRepository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
+    await missingCoordinator.prepareTurn({
+      agentState: missingState,
+      trustedUserInputId: 'input:usage',
+      query: 'usage',
+    })
+    missingState.memoryV2Context = usageContext(
+      missingState.memoryV2!.turn.queryId,
+    )
+
+    await missingCoordinator.finishTurn({
+      agentState: missingState,
+      output: { type: 'structuredOutput', value: {} },
+    })
+    expect(
+      allEvents(missingRepository).some(
+        (candidate) => candidate.eventType === 'observation.reused',
+      ),
+    ).toBe(false)
   })
 })

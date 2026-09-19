@@ -2563,6 +2563,9 @@ export async function loopAgentSteps(
           )
         }
         onResponseChunk({ type: 'memory_reuse', receipt })
+        // Hand the stamped receipt to the SDK coordinator (finishTurn reads it
+        // for usage correlation) instead of dropping it.
+        currentAgentState.memoryUsageTurn = receipt
         currentAgentState.memoryReuse = undefined
       }
 

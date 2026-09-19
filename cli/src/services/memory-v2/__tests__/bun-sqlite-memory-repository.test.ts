@@ -33,12 +33,14 @@ import {
   type MemoryAppendRequest,
   type MemoryEventDraft,
 } from '../../../../../common/src/types/memory-v2'
+import type { MemoryUsageEntry } from '../../../../../sdk/src/services/memory-v2/types'
 
 import {
   BunSQLiteMemoryRepository,
   SQLITE_OPEN_POSTURE,
   openBunSQLiteMemoryRepository,
   type MemoryV2EventInput,
+  type RuntimeNeutralMemoryRepositoryV2,
 } from '../bun-sqlite-memory-repository'
 
 const repositories: BunSQLiteMemoryRepository[] = []
@@ -200,7 +202,7 @@ function insertStoredDraft(
         projectId: value.projectId,
         sessionId: value.sessionId,
       }),
-      'taskId' in value.payload ? value.payload.taskId : null,
+      'taskId' in value.payload ? (value.payload.taskId ?? null) : null,
       value.sessionId,
     )
 }
@@ -3299,5 +3301,250 @@ describe('BunSQLiteMemoryRepository strict secure-open gate', () => {
     expect(
       existsSync(join(root, '.openbuff', 'memory', 'memory-v2.sqlite')),
     ).toBe(true)
+  })
+})
+
+describe('BunSQLiteMemoryRepository observation.reused usage projection', () => {
+  test('projects canonical observation.reused events into bounded usage counters and survives a rebuild', async () => {
+    const repository = await open(temporaryRepository())
+    const reusedDraft = canonicalDraft('observation.reused', 'event:usage-1', {
+      payloadSchemaVersion: 1,
+      turnId: 'input:usage-1',
+      used: [
+        { observationId: 'observation:used-a', mechanism: 'gate-skip' },
+        { observationId: 'observation:used-b', mechanism: 'gate-skip' },
+      ],
+      ignored: [
+        { observationId: 'observation:ignored-c', mechanism: 'reread-despite' },
+      ],
+    })
+    const secondDraft = canonicalDraft('observation.reused', 'event:usage-2', {
+      payloadSchemaVersion: 1,
+      turnId: 'input:usage-2',
+      used: [{ observationId: 'observation:used-a', mechanism: 'gate-skip' }],
+      ignored: [],
+    })
+
+    const appended = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        events: [reusedDraft, secondDraft],
+      }),
+    )
+    expect(appended.outcome).toBe('appended')
+
+    const read = await repository.getUsage({ projectId: 'project-1' })
+    expect(read.status).toBe('ok')
+    if (read.status !== 'ok') return
+    expect(read.usage).toEqual([
+      {
+        observationId: 'observation:ignored-c',
+        usedCount: 0,
+        ignoredCount: 1,
+        staledCount: 0,
+        lastMechanism: 'reread-despite',
+        lastTurnId: 'input:usage-1',
+        lastSequence: 1,
+      },
+      {
+        observationId: 'observation:used-a',
+        usedCount: 2,
+        ignoredCount: 0,
+        staledCount: 0,
+        lastMechanism: 'gate-skip',
+        lastTurnId: 'input:usage-2',
+        lastSequence: 2,
+      },
+      {
+        observationId: 'observation:used-b',
+        usedCount: 1,
+        ignoredCount: 0,
+        staledCount: 0,
+        lastMechanism: 'gate-skip',
+        lastTurnId: 'input:usage-1',
+        lastSequence: 1,
+      },
+    ])
+
+    const filtered = await repository.getUsage({
+      projectId: 'project-1',
+      observationIds: ['observation:used-b'],
+    })
+    expect(filtered.status).toBe('ok')
+    if (filtered.status !== 'ok') return
+    expect(filtered.usage.map(({ observationId }) => observationId)).toEqual([
+      'observation:used-b',
+    ])
+
+    const beforeRebuild = read.usage
+    const rebuilt = await repository.rebuildProjections()
+    expect(rebuilt.status).toBe('ok')
+    if (rebuilt.status !== 'ok') return
+    expect(rebuilt.projectedEvents).toBe(2)
+    const afterRebuild = await repository.getUsage({ projectId: 'project-1' })
+    expect(afterRebuild.status).toBe('ok')
+    if (afterRebuild.status !== 'ok') return
+    expect(afterRebuild.usage).toEqual(beforeRebuild)
+  })
+
+  test('privileged compaction keeps memory_usage consistent with the surviving event log', async () => {
+    const repository = await open(temporaryRepository())
+    const reusedDraft = canonicalDraft(
+      'observation.reused',
+      'event:usage-compact-1',
+      {
+        payloadSchemaVersion: 1,
+        turnId: 'input:usage-compact-1',
+        used: [
+          { observationId: 'observation:used-compact', mechanism: 'gate-skip' },
+        ],
+        ignored: [],
+      },
+    )
+
+    expect(
+      (
+        await repository.append(
+          MemoryAppendRequestSchema.parse({
+            schemaVersion: 2,
+            projectId: 'project-1',
+            events: [reusedDraft],
+          }),
+        )
+      ).outcome,
+    ).toBe('appended')
+
+    const before = await repository.getUsage({ projectId: 'project-1' })
+    expect(before.status).toBe('ok')
+    if (before.status !== 'ok') return
+    expect(before.usage.map(({ observationId }) => observationId)).toEqual([
+      'observation:used-compact',
+    ])
+
+    const eventIds = ['event:usage-compact-1'] as const
+    const archiveLines = eventIds.map((eventId) => JSON.stringify({ eventId }))
+    const archiveHash = `sha256:${createHash('sha256').update(JSON.stringify(archiveLines)).digest('hex')}`
+    const archivedAt = new Date().toISOString()
+    const archivePath = '.openbuff/memory/archive/usage-compact.jsonl'
+    const archiveClaimDraft = MemoryEventDraftSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'claim.archived',
+      eventId: 'event:usage-compact-archive',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+      occurredAt: archivedAt,
+      payload: {
+        payloadSchemaVersion: 1,
+        archivedEventIds: [...eventIds],
+        archivePath,
+        archiveHash,
+        reason: 'Usage projection compaction test',
+        archivedAt,
+      },
+    })
+
+    const result = await repository.privilegedCompact({
+      projectId: ProjectIdSchema.parse('project-1'),
+      eventIds: [...eventIds] as unknown as Parameters<
+        BunSQLiteMemoryRepository['privilegedCompact']
+      >[0]['eventIds'],
+      archiveClaimDraft,
+      archiveLines,
+      archivePath,
+      archiveHash,
+    })
+    expect(result.archivedEventIds.map(String)).toEqual([...eventIds])
+
+    // The archived 'observation.reused' event is gone from the canonical log,
+    // so its usage counter must be gone too — not carried over from before.
+    const after = await repository.getUsage({ projectId: 'project-1' })
+    expect(after.status).toBe('ok')
+    if (after.status !== 'ok') return
+    expect(after.usage).toEqual([])
+  })
+
+  test('exposes getUsage through the runtime-neutral MemoryRepositoryV2 boundary', async () => {
+    const repository = await open(temporaryRepository())
+    const appended = await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        events: [
+          canonicalDraft('observation.reused', 'event:usage-boundary', {
+            payloadSchemaVersion: 1,
+            turnId: 'input:usage-boundary',
+            used: [
+              { observationId: 'observation:boundary', mechanism: 'gate-skip' },
+            ],
+            ignored: [],
+          }),
+        ],
+      }),
+    )
+    expect(appended.outcome).toBe('appended')
+
+    // The persistence boundary, not the concrete driver, is the documented
+    // contract for all Memory V2 storage access: the usage projection read
+    // must be reachable (and fake-substitutable) through that type.
+    const boundary: RuntimeNeutralMemoryRepositoryV2 = repository
+    expect(typeof boundary.getUsage).toBe('function')
+    const read = await boundary.getUsage?.({
+      projectId: ProjectIdSchema.parse('project-1'),
+      observationIds: ['observation:boundary'],
+    })
+    expect(read).toEqual({
+      status: 'ok',
+      usage: [
+        {
+          observationId: 'observation:boundary',
+          usedCount: 1,
+          ignoredCount: 0,
+          staledCount: 0,
+          lastMechanism: 'gate-skip',
+          lastTurnId: 'input:usage-boundary',
+          lastSequence: 1,
+        },
+      ],
+    })
+
+    // A runtime-neutral fake can substitute the projection read for tests.
+    const fakeEntry: MemoryUsageEntry = {
+      observationId: 'observation:fake',
+      usedCount: 2,
+      ignoredCount: 1,
+      staledCount: 0,
+      lastMechanism: null,
+      lastTurnId: null,
+      lastSequence: 3,
+    }
+    const fake: RuntimeNeutralMemoryRepositoryV2 = {
+      append: async () => {
+        throw new Error('not used')
+      },
+      query: async () => {
+        throw new Error('not used')
+      },
+      verify: async () => {
+        throw new Error('not used')
+      },
+      rebuild: async () => {
+        throw new Error('not used')
+      },
+      health: async () => {
+        throw new Error('not used')
+      },
+      export: async () => {
+        throw new Error('not used')
+      },
+      getUsage: async () => ({ status: 'ok', usage: [fakeEntry] }),
+    }
+    await expect(
+      fake.getUsage?.({
+        projectId: ProjectIdSchema.parse('project-1'),
+        observationIds: [],
+      }),
+    ).resolves.toEqual({ status: 'ok', usage: [fakeEntry] })
   })
 })

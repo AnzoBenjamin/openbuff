@@ -94,6 +94,39 @@ export interface GcCandidateSelection {
   eventIds: MemoryEventId[]
 }
 
+/** One bounded per-observation usage-projection entry (P4 usage correlation). */
+export interface MemoryUsageEntry {
+  observationId: string
+  usedCount: number
+  ignoredCount: number
+  staledCount: number
+  /** Last reuse mechanism observed for the observation, or null when unset. */
+  lastMechanism: string | null
+  lastTurnId: string | null
+  lastSequence: number
+}
+
+export interface MemoryUsageReadRequest {
+  projectId: ProjectId
+  /**
+   * Optional bounded filter; implementations cap the filter (64 ids) and the
+   * returned rows (256), so callers must not rely on full enumeration.
+   */
+  observationIds?: string[]
+}
+
+/**
+ * Runtime-neutral usage-projection read outcome. The error branch keeps the
+ * driver's failure classification as an opaque bounded string so the boundary
+ * stays free of runtime or storage driver types.
+ */
+export type MemoryUsageReadOutcome =
+  | { status: 'ok'; usage: MemoryUsageEntry[] }
+  | {
+      status: 'error'
+      error: { kind: string; message: string; retryable: boolean }
+    }
+
 /**
  * Runtime-neutral persistence boundary for Memory V2.
  *
@@ -109,6 +142,11 @@ export interface MemoryRepositoryV2 {
   rebuild(request: MemoryRebuildRequest): Promise<MemoryRebuildOutcome>
   health(request: MemoryHealthRequest): Promise<MemoryHealth>
   export(request: MemoryExportRequest): Promise<MemoryExportOutcome>
+  /**
+   * Optional bounded read of the usage projection (P4). Absent on fakes that
+   * do not track reuse; callers must narrow before use (see getStoreStats).
+   */
+  getUsage?(params: MemoryUsageReadRequest): Promise<MemoryUsageReadOutcome>
   /** Optional privileged GC surface. Absent on fakes; fail-closed when missing. */
   getStoreStats?(request: { projectId: ProjectId }): Promise<MemoryStoreStats>
   selectGCandidates?(request: {

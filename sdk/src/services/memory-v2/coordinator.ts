@@ -45,6 +45,7 @@ import {
   deriveTaskId,
 } from './event-factory'
 import { importTaskMemoryV1, type V1MigrationOutcome } from './v1-migration'
+import { correlateUsage } from './usage-observer'
 import {
   getEffectiveMemoryAuthority,
   type MemoryRepositoryV2,
@@ -1756,10 +1757,18 @@ export class MemoryV2Coordinator {
     runtimeState.pendingTerminal = decision
     params.agentState.memoryV2 = runtimeState
 
+    const usageDrafts = this.buildUsageDrafts(
+      params.agentState,
+      runtimeState,
+      endedAt,
+    )
     const committed = await this.appendBounded(
-      this.buildTerminalDrafts(runtimeState, decision),
+      [...this.buildTerminalDrafts(runtimeState, decision), ...usageDrafts],
       runtimeState,
     )
+    // Usage is advisory: on a CAS failure the draft is dropped (never retried
+    // or parked), so the snapshot is cleared in both commit outcomes.
+    params.agentState.memoryUsageTurn = undefined
     if (!committed) {
       this.logger?.warn(
         {},
@@ -1817,6 +1826,62 @@ export class MemoryV2Coordinator {
         error: value.query.error,
         retryable: value.query.retryable,
       },
+    }
+  }
+
+  /**
+   * P4 usage correlation drafts: at most one batched 'observation.reused'
+   * event per turn, appended in the terminal batch. Pure set-correlation of
+   * the injected memory set against the turn's reuse receipt. Best-effort:
+   * any missing/stale input yields no draft and never throws.
+   */
+  private buildUsageDrafts(
+    agentState: AgentState,
+    runtimeState: MemoryRuntimeStateV2,
+    endedAt: string,
+  ): MemoryEventDraft[] {
+    try {
+      const receipt = agentState.memoryUsageTurn
+      const context = agentState.memoryV2Context
+      if (!receipt || receipt.turnId !== runtimeState.turn.userInputId) return []
+      if (!context || context.queryId !== runtimeState.turn.queryId) return []
+      const signals = correlateUsage({ context, receipt })
+      if (signals.length === 0) return []
+      const used = signals
+        .filter((signal) => signal.kind === 'used')
+        .slice(0, 64)
+        .map((signal) => ({
+          observationId: signal.observationId,
+          mechanism: 'gate-skip' as const,
+        }))
+      const ignored = signals
+        .filter((signal) => signal.kind === 'ignored')
+        .slice(0, 64)
+        .map((signal) => ({
+          observationId: signal.observationId,
+          mechanism: 'reread-despite' as const,
+        }))
+      if (used.length === 0 && ignored.length === 0) return []
+      return [
+        createMemoryEventDraft({
+          projectId: this.config.projectId,
+          sessionId: runtimeState.sessionId,
+          userInputId: runtimeState.turn.userInputId,
+          sourceIndex: 3,
+          occurredAt: endedAt,
+          eventType: 'observation.reused',
+          payload: {
+            payloadSchemaVersion: 1,
+            turnId: receipt.turnId,
+            taskId: runtimeState.activeTask.taskId,
+            used,
+            ignored,
+          },
+        }),
+      ]
+    } catch (error) {
+      this.logger?.warn({ error }, 'Memory V2 usage correlation failed')
+      return []
     }
   }
 

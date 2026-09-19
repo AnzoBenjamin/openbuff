@@ -783,6 +783,7 @@ export function recordMemoryReuse(
     served: number
     gaps: number
     recordedDecisions?: number
+    coveredStableChunkIds?: string[]
   },
 ): void {
   try {
@@ -809,11 +810,29 @@ export function recordMemoryReuse(
     receipt.gapsRemaining += Math.max(0, Math.trunc(entry.gaps))
     receipt.recordedDecisions += Math.max(0, Math.trunc(entry.recordedDecisions ?? 0))
     if (receipt.byTool && receipt.byTool.length < 32) {
+      const chunks = Array.isArray(entry.coveredStableChunkIds)
+        ? [
+            ...new Set(
+              entry.coveredStableChunkIds.filter(
+                (id): id is string =>
+                  // Mirror the coveredStableChunkIds entry bound in
+                  // MemoryReuseReceiptV1Schema so a produced receipt never
+                  // violates its own schema when parsed downstream.
+                  typeof id === 'string' && id.length > 0 && id.length <= 128,
+              ),
+            ),
+          ]
+            .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+            .slice(0, 32)
+        : undefined
       receipt.byTool.push({
         tool: entry.tool.slice(0, 64),
         decision: entry.decision,
         served: Math.max(0, Math.trunc(entry.served)),
         gaps: Math.max(0, Math.trunc(entry.gaps)),
+        ...(chunks && chunks.length > 0
+          ? { coveredStableChunkIds: chunks }
+          : {}),
       })
     }
   } catch {
