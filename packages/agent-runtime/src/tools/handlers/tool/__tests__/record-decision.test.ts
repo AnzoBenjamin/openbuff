@@ -16,7 +16,7 @@ describe('handleRecordDecision', () => {
     const agentState = buildAgentState()
     const { output } = await handleRecordDecision({
       previousToolCallFinished: Promise.resolve(),
-      toolCall: buildToolCall({ text: 'Use Postgres for sessions', kind: 'decision', evidenceSelectors: ['docs/architecture.md'] }),
+      toolCall: buildToolCall({ text: 'Chose Postgres for sessions because they must survive restarts', kind: 'decision', evidenceSelectors: ['docs/architecture.md'] }),
       agentState,
     } as Parameters<typeof handleRecordDecision>[0])
     const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { message: string; kind: string; evidenceCount: number }

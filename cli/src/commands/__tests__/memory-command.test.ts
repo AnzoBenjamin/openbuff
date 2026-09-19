@@ -1118,7 +1118,7 @@ describe('/memory blocks', () => {
     const block = await handleMemoryCommandBlocks('inspect target', deps)
     if (block.state !== 'report') throw new Error('expected report')
     expect(block.tone).toBe('error')
-    expect(calls).toBe(1)
+    expect(calls).toBe(2)
     expect(block.lines.join('\n')).toContain(
       'operation could not be completed safely',
     )

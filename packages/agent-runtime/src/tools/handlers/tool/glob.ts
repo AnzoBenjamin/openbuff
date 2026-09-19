@@ -104,13 +104,11 @@ export const handleGlob = (async (params: {
         workspaceSnapshotId: agentState.workspaceState?.snapshotId,
         existingIndexSnapshotId: agentState.discoveryCoverage?.indexSnapshotId,
       })
+      const reuseSkip = cover.decision === 'skip' && cover.coveringExcerpts.length > 0
       recordMemoryReuse(agentState, {
         tool: 'glob',
-        decision: cover.decision,
-        served:
-          cover.decision === 'skip' || cover.decision === 'narrow'
-            ? cover.coveringExcerpts.length
-            : 0,
+        decision: reuseSkip ? 'skip' : 'full',
+        served: reuseSkip ? cover.coveringExcerpts.length : 0,
         gaps: cover.remainingGaps.length,
       })
       if (cover.decision === 'skip' && cover.coveringExcerpts.length > 0) {
