@@ -83,6 +83,7 @@ import {
   EVICTION_KEEP_RECENT_STEPS,
 } from './util/tool-result-eviction'
 import { archivePreCompaction } from './util/context-archive'
+import { maybeRunBackgroundConsolidation } from './util/context-consolidation-runner'
 import { verifyExtractionCoverage } from './util/compaction-verification'
 import {
   annotateLedgerAfterCompaction,
@@ -2318,6 +2319,22 @@ export async function loopAgentSteps(
         // for a suppressed/unannounced iteration too, where the gate inside the
         // emitter makes it a no-op.
         emitCompactionProgress('applying', 90)
+
+        // Background consolidation (PROTOTYPE, canary-gated OFF by default via
+        // `programmaticConfig.backgroundSnapshotConsolidation`): unconsolidated
+        // archive snapshots are summarized by a fire-and-forget prompt-only LLM
+        // child. Never awaited and never load-bearing — the call self-no-ops
+        // when the canary is off or every snapshot is already covered, so
+        // running it unconditionally per iteration is one cheap set lookup.
+        // Mechanical-trim snapshots archived later in this iteration consolidate
+        // on the next iteration's trigger (same turn, still background).
+        maybeRunBackgroundConsolidation({
+          ...params,
+
+          agentState: currentAgentState,
+          agentTemplate,
+          userInputId,
+        })
 
         // Capture the current root request directly from loopAgentSteps' trusted
         // prompt. Never infer it from messageHistory: that transcript also holds

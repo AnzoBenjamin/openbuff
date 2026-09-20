@@ -1633,6 +1633,29 @@ task memory, and gaps are named in the `context_compaction` event's
 (`recall_context` or a re-read). Deterministic fidelity scoring lives in
 `evals/compaction-fidelity/scenario.test.ts` (F1–F4, no LLM calls).
 
+An OPTIONAL background consolidation leg (canary-gated OFF by default) adds
+bounded SUMMARIES on top of the verbatim archive: when a template sets
+`programmaticConfig.backgroundSnapshotConsolidation === true`, the runtime
+fires a fire-and-forget prompt-only LLM child
+(`packages/agent-runtime/src/util/context-consolidation-runner.ts`) after each
+compaction settle that summarizes up to 3 not-yet-consolidated archive
+snapshots (oldest first, char-budgeted newest-first prompt; identifiers,
+paths, commands, and numbers preserved verbatim by instruction). The summary
+is stored capped (8 × 6k chars) on the new optional
+`AgentState.contextConsolidations` (`common/src/types/context-consolidation.ts`)
+and is surfaced by `recall_context` as an additive `consolidations` section
+(OR-ranked, max 3 hits, with `sourceArchivedAts` staleness provenance) —
+omitted entirely when no consolidations exist, so the tool's output contract
+is unchanged for sessions that never enable the canary. The child has NO
+tools and NO transcript write-back: its only product is the summary string,
+it never delays the agent step (the trigger call is synchronous and cheap;
+the LLM run continues in the background), and its failure is logged and
+dropped — the verbatim archive remains the source of truth. Because the
+background child costs one small LLM call per consolidation run, the canary
+is OFF by default and a template must opt in explicitly; summaries are
+agent-stale-by-construction (they describe PRE-compaction content) and cite
+their snapshot provenance for exactly that reason.
+
 Because every `loopAgentSteps` invocation emits these events — the root turn,
 foreground subagents, and inline agents alike — the protocol is scoped by run
 for both producers and consumers. Each emission carries the emitting run's own

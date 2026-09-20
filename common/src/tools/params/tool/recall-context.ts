@@ -17,9 +17,9 @@ const inputSchema = z
       .trim()
       .min(2)
       .max(512)
-      .describe(
-        'Case-insensitive search terms for archived pre-compaction transcripts. ALL terms must match a result (AND).',
-      ),
+  .describe(
+    'Case-insensitive search terms for archived pre-compaction transcripts. ALL terms must match a verbatim result (AND); stored background summaries use best-effort OR matching.',
+  ),
   })
   .describe(
     'Search archived pre-compaction transcripts for verbatim facts a compaction pass removed from visible context.',
@@ -55,6 +55,17 @@ export const recallContextParams = {
         ),
         snapshotsSearched: z.number().int().nonnegative(),
         archivedAt: z.array(z.number()),
+        consolidations: z
+          .array(
+            z.object({
+              consolidatedAt: z.number(),
+              action: z.string(),
+              sourceArchivedAts: z.array(z.number()),
+              coveredMessages: z.number().int().nonnegative(),
+              summary: z.string(),
+            }),
+          )
+          .optional(),
         message: z.string().optional(),
       }),
       z.object({

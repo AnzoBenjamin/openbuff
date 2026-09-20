@@ -4,6 +4,7 @@ import { MAX_AGENT_STEPS_DEFAULT } from '../constants/agents'
 
 import type { Message } from './messages/codebuff-message'
 import type { ContextArchiveSnapshot } from './context-archive'
+import type { ContextConsolidation } from './context-consolidation'
 import type { ProjectFileContext } from '../util/file'
 import type { TaskMemoryV1 } from './task-memory'
 import type { OrchestrationLedgerV1 } from './orchestration-ledger'
@@ -393,6 +394,17 @@ export type AgentState = {
    * `packages/agent-runtime/src/util/context-archive.ts`).
    */
   compactionArchive?: Array<ContextArchiveSnapshot>
+  /**
+   * Capped list of background LLM consolidations of archived snapshots (the
+   * canary-gated prototype leg of the compaction fidelity pipeline). Written
+   * only by the runtime consolidator behind
+   * `programmaticConfig.backgroundSnapshotConsolidation === true`; read by
+   * `recall_context` results (budgeted per call). Optional so persisted
+   * sessions from before the field existed parse cleanly; the runtime caps
+   * count and summary size (see
+   * `packages/agent-runtime/src/util/context-consolidation.ts`).
+   */
+  contextConsolidations?: ContextConsolidation[]
   /** Runtime-owned orchestrator state that must survive message compaction. */
   base2ActiveWork?: Record<string, unknown>
   /** Durable intents/terminal receipts for detached subagent work. */
