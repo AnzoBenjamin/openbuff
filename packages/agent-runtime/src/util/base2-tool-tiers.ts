@@ -30,6 +30,7 @@ import type { ToolName } from '@codebuff/common/tools/constants'
 export const BASE2_CORE_TOOL_NAMES: readonly ToolName[] = [
   'spawn_agents',
   'query_index',
+  'recall_context',
   'read_files',
   'read_outline',
   'read_subtree',

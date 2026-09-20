@@ -77,7 +77,13 @@ import {
   recordPassSettled,
   shouldRunSemanticPass,
 } from './util/context-pruning'
-import { evictStaleToolResults } from './util/tool-result-eviction'
+import {
+  deriveProtectedEvictionPaths,
+  evictStaleToolResults,
+  EVICTION_KEEP_RECENT_STEPS,
+} from './util/tool-result-eviction'
+import { archivePreCompaction } from './util/context-archive'
+import { verifyExtractionCoverage } from './util/compaction-verification'
 import {
   annotateLedgerAfterCompaction,
   applyMeasure,
@@ -2024,6 +2030,16 @@ export async function loopAgentSteps(
         ) {
           const evictionResult = evictStaleToolResults(
             currentAgentState.messageHistory,
+            {
+              // Importance-aware protection: tool results whose content
+              // references a path recorded in task memory (evidence, inspected
+              // files, edits) stay full regardless of age, so the
+              // deterministic evictor cannot strip the context behind a pinned
+              // decision or an unverified edit anchor.
+              protectedPaths: deriveProtectedEvictionPaths(
+                currentAgentState.taskMemory,
+              ),
+            },
           )
           if (evictionResult.messages !== currentAgentState.messageHistory) {
             // Eviction rewrites read-file bodies out of model-visible
@@ -2160,6 +2176,19 @@ export async function loopAgentSteps(
         // 1. Run programmatic step first if it exists
         let n: number | undefined = undefined
         const historyBeforeProgrammatic = currentAgentState.messageHistory
+        // Archive the pre-compaction transcript when this iteration will run
+        // a semantic pass: the pruner's rewrite below is the one history
+        // change with no deterministic recovery path, so the recall leg
+        // (`recall_context`) needs this snapshot. Identity-keyed inside
+        // archivePreCompaction, so an unchanged re-settle archives once.
+        if (announceSemanticPass) {
+          archivePreCompaction(
+            currentAgentState,
+            historyBeforeProgrammatic,
+            'semantic_compaction',
+            EVICTION_KEEP_RECENT_STEPS,
+          )
+        }
         const historyTokensBeforeProgrammatic = countTokensJson(
           historyBeforeProgrammatic,
         )
@@ -2378,6 +2407,16 @@ export async function loopAgentSteps(
             preCompactionHistoryTokens: historyTokensBeforeProgrammatic,
             postCompactionHistoryTokens: historyTokensAfterProgrammatic,
           })
+          // Post-compaction extraction verification: derive the expected-fact
+          // set (paths read/written, commands run) from the PRE-compaction
+          // transcript and check each survived into the post-compaction
+          // history or task memory. Gaps surface in the recovery guidance
+          // below; the archive holds the verbatim source (recall_context).
+          const extractionVerification = verifyExtractionCoverage({
+            preMessages: historyBeforeProgrammatic,
+            postMessages: currentAgentState.messageHistory,
+            taskMemory: currentAgentState.taskMemory,
+          })
           const semanticReason = exceededSemanticTrigger
             ? 'Total context exceeded the model-aware semantic trigger budget.'
             : 'An explicit maxContextLength override allowed semantic compaction before the model-aware trigger budget.'
@@ -2414,7 +2453,9 @@ export async function loopAgentSteps(
             removedCategories,
             retainedKnowledgeMemory: true,
             recovery:
-              'Resume from the retained <knowledge_memory> and verify exact live files before editing.',
+              extractionVerification.missing.length > 0
+                ? `Resume from the retained <knowledge_memory> and verify exact live files before editing. Pre-compaction detail was not retained (recover verbatim via recall_context): ${extractionVerification.missing.join(', ')}`
+                : 'Resume from the retained <knowledge_memory> and verify exact live files before editing.',
           })
           compactedThisIteration = true
         } else if (
@@ -2440,6 +2481,14 @@ export async function loopAgentSteps(
           logger,
         })
         if (pruningResult.pruned) {
+          // The mechanical trim drops whole messages with no recovery path,
+          // so the recall leg archives the pre-trim transcript first.
+          archivePreCompaction(
+            currentAgentState,
+            currentAgentState.messageHistory,
+            'mechanical_trim',
+            EVICTION_KEEP_RECENT_STEPS,
+          )
           revokeImplicitReadAuthorizationsAfterCompaction(currentAgentState)
           currentAgentState.messageHistory = pruningResult.messages
           messagesWithStepPrompt = buildArray(

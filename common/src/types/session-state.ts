@@ -382,6 +382,16 @@ export type AgentState = {
   confirmedPostEditAnchorsByPath?: Record<string, ConfirmedPostEditAnchor>
   /** Why a path must be read again after a failed edit, persisted across turns. */
   editRereadRequirementsByPath?: Record<string, EditRereadRequirement>
+  /**
+   * Capped in-memory archive of pre-compaction transcripts (the recall leg of
+   * the compaction fidelity pipeline). Written by the runtime when a semantic
+   * pass or mechanical trim rewrites history; read only by `recall_context`
+   * results, which are budgeted per call — the archive itself never enters
+   * the model context. Optional so persisted sessions from before the field
+   * existed parse cleanly; the runtime caps snapshot count and size (see
+   * `packages/agent-runtime/src/util/context-archive.ts`).
+   */
+  compactionArchive?: Array<import('./context-archive').ContextArchiveSnapshot>
   /** Runtime-owned orchestrator state that must survive message compaction. */
   base2ActiveWork?: Record<string, unknown>
   /** Durable intents/terminal receipts for detached subagent work. */

@@ -1600,13 +1600,38 @@ deliberately not gated on an explicit `maxContextLength` override. Before the
 governor is even consulted, a deterministic zero-cost tool-result evictor
 (`packages/agent-runtime/src/util/tool-result-eviction.ts`) replaces stale
 tool-result bodies with tombstones whenever context exceeds the eviction floor
-(55% of the window); the tokens it frees are reported as `evictedTokens` and
-frequently pull context below the semantic trigger so no LLM pass is needed.
+(55% of the window) — and it is importance-aware: paths recorded in task
+memory (evidence, inspected files, edits) mark tool results that cite them as
+protected, so the evictor cannot strip the context behind a recorded decision.
+The tokens it frees are reported as `evictedTokens` and frequently pull
+context below the semantic trigger so no LLM pass is needed.
 `settled` is emitted after both compaction branches whenever a `started` was
 emitted, and again on the run's exit path when a step throws or is cancelled
 before reaching them, so a pass that decides not to compact cannot leave a
 pending state on screen. As with `job_update`, consumers should treat unknown
 event variants as no-ops; no consumer migration is required.
+
+Compaction also carries a recall leg so its information loss stays
+recoverable. Before a semantic pass or mechanical trim rewrites history, the
+runtime archives the pre-compaction transcript onto the new optional
+`AgentState.compactionArchive`
+(`packages/agent-runtime/src/util/context-archive.ts`, capped at 8 snapshots
+of 200 messages with 4k-char per-message truncation; plain JSON, so sessions
+persisted before the field existed parse without it). The registered
+`recall_context` tool (granted to base2 CORE) searches those archived tool
+bodies with bounded case-insensitive AND-match snippets and returns
+provenance, so pre-compaction content is always marked stale-until-verified;
+the archive itself never enters the model context. Eviction is deliberately
+NOT archived: tombstones already instruct a re-run, and a fresh read of live
+files is more faithful than a stale body. After a semantic pass, the runtime
+verifies the extraction
+(`packages/agent-runtime/src/util/compaction-verification.ts`): expected facts
+(paths read or written, truncated commands) are derived from the
+PRE-compaction transcript and checked against the post-compaction history and
+task memory, and gaps are named in the `context_compaction` event's
+`recovery` guidance so the user sees what was lost and how to recover it
+(`recall_context` or a re-read). Deterministic fidelity scoring lives in
+`evals/compaction-fidelity/scenario.test.ts` (F1–F4, no LLM calls).
 
 Because every `loopAgentSteps` invocation emits these events — the root turn,
 foreground subagents, and inline agents alike — the protocol is scoped by run

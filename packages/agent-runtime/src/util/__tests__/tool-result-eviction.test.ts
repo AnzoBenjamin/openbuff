@@ -3,9 +3,11 @@ import { describe, expect, it } from 'bun:test'
 import {
   EVICTION_KEEP_RECENT_STEPS,
   EVICTION_MIN_SAVINGS_TOKENS,
+  deriveProtectedEvictionPaths,
   evictStaleToolResults,
 } from '../tool-result-eviction'
 
+import type { TaskMemoryV1 } from '@codebuff/common/types/task-memory'
 import type {
   AssistantMessage,
   Message,
@@ -138,5 +140,65 @@ describe('evictStaleToolResults', () => {
     const snapshot = JSON.stringify(messages)
     evictStaleToolResults(messages)
     expect(JSON.stringify(messages)).toBe(snapshot)
+  })
+
+  it('keeps stale tool results whose content references a task-memory path', () => {
+    const messages = buildHistory(EVICTION_KEEP_RECENT_STEPS + 2)
+    // Step 0's result embeds the file a task-memory decision cites.
+    const protectedResult = messages[2] as ToolMessage
+    protectedResult.content = [
+      { type: 'json', value: { output: 'export const KEY = 1 // src/keystone.ts' } },
+    ]
+    const taskMemory = {
+      evidence: [
+        { path: 'src/keystone.ts', source: 'src/keystone.ts' },
+      ],
+    } as unknown as TaskMemoryV1
+
+    const result = evictStaleToolResults(messages, {
+      protectedPaths: deriveProtectedEvictionPaths(taskMemory),
+    })
+    expect(result.evictedCount).toBe(1)
+    const toolResults = result.messages.filter(
+      (m): m is ToolMessage => m.role === 'tool',
+    )
+    // The cited result keeps its full body; the other stale one is evicted.
+    expect(JSON.stringify(toolResults[0])).not.toContain(
+      '[tool result evicted to free context',
+    )
+    expect(
+      (toolResults[1].content[0] as { type: string; value: string }).value,
+    ).toContain('[tool result evicted to free context')
+  })
+
+  it('derives protection paths from kind-prefixed list entries and drops unsafe ones', () => {
+    const taskMemory = {
+      filesInspected: ['read:src/a.ts', '/etc/passwd', '../escape.ts'],
+      editsMade: ['edit:packages/x/y.ts', 'not a path at all'],
+      evidence: [
+        { path: 'docs/guide.md' },
+        { source: 'deeply/nested/fixture.json' },
+      ],
+    } as unknown as TaskMemoryV1
+    const paths = deriveProtectedEvictionPaths(taskMemory)
+
+    expect(paths.has('src/a.ts')).toBe(true)
+    expect(paths.has('packages/x/y.ts')).toBe(true)
+    expect(paths.has('docs/guide.md')).toBe(true)
+    expect(paths.has('deeply/nested/fixture.json')).toBe(true)
+    // Absolute, traversal, and non-path entries never enter the set.
+    expect(paths.has('/etc/passwd')).toBe(false)
+    expect(paths.has('../escape.ts')).toBe(false)
+    expect(paths.has('not a path at all')).toBe(false)
+  })
+
+  it('derives an empty set for missing memory (recency-only behavior)', () => {
+    expect(deriveProtectedEvictionPaths(undefined).size).toBe(0)
+    const messages = buildHistory(EVICTION_KEEP_RECENT_STEPS + 2)
+    const before = evictStaleToolResults(messages)
+    const after = evictStaleToolResults(messages, {
+      protectedPaths: new Set(),
+    })
+    expect(after.evictedCount).toBe(before.evictedCount)
   })
 })

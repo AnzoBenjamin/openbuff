@@ -1,6 +1,7 @@
 import { isProtectedToolResult } from './tool-result-lifecycle'
 import { countTokensJson } from './token-counter'
 
+import type { TaskMemoryV1 } from '@codebuff/common/types/task-memory'
 import type { Message, ToolMessage } from '@codebuff/common/types/messages/codebuff-message'
 
 /**
@@ -36,6 +37,34 @@ export const EVICTION_KEEP_RECENT_STEPS = 6
 /** Do not rewrite history when the eviction would save fewer tokens than this. */
 export const EVICTION_MIN_SAVINGS_TOKENS = 4_000
 
+/** Bound the importance-derived path set so the per-candidate substring scan stays cheap. */
+const MAX_PROTECTED_PATHS = 512
+
+/**
+ * Conservative project-relative path check for importance-derived candidates:
+ * no traversal, no glob syntax, no absolute forms — the same shape the
+ * record_decision evidence contract enforces. A candidate that merely looks
+ * path-like (contains a separator or an extension) is accepted; false
+ * positives only PROTECT content, which is the safe direction. False
+ * negatives degrade to the previous recency-only behavior.
+ */
+const looksLikeProjectPath = (value: string): boolean => {
+  const trimmed = value.trim()
+  if (trimmed.length === 0 || trimmed.length > 1024) return false
+  if (trimmed.startsWith('/') || /^[A-Za-z]:\//.test(trimmed)) return false
+  if (/[?*{[\]}]/.test(trimmed)) return false
+  if (trimmed.split('/').includes('..')) return false
+  return trimmed.includes('/') || trimmed.includes('.')
+}
+
+/**
+ * Task-memory list entries are sometimes kind-prefixed tokens (e.g.
+ * 'read:src/a.ts' in filesInspected) rather than bare paths; strip a leading
+ * '<kind>:' before the path check so those entries still protect their file.
+ */
+const stripEvidenceKindPrefix = (value: string): string =>
+  value.replace(/^(read|edit|validation|review|note|decision|blocker|handoff|requirement):/, '')
+
 const TOMBSTONE_MARKER = '[tool result evicted to free context'
 
 const buildTombstone = (tokensSaved: number): string =>
@@ -55,17 +84,49 @@ export type ToolResultEvictionResult = {
 }
 
 /**
+ * Whether a tool result's content references any importance-derived path.
+ * Serializes the candidate's content once; the whole-array token accounting
+ * below already pays a serialization pass, so this adds no asymptotic cost.
+ * Substring matching is deliberate: a tool result that embeds a recorded
+ * path anywhere in its output (file bodies, command output, search hits) is
+ * exactly the content whose loss would orphan the memory that cites it.
+ */
+const contentReferencesProtectedPath = (
+  message: ToolMessage,
+  protectedPaths: ReadonlySet<string>,
+): boolean => {
+  const serialized = JSON.stringify(message.content)
+  for (const path of protectedPaths) {
+    if (serialized.includes(path)) return true
+  }
+  return false
+}
+
+/**
  * Replace the bodies of stale tool results with short tombstones. Pure with
  * respect to the input array (never mutates it); returns the same reference
  * when nothing was worth evicting.
  */
 export function evictStaleToolResults(
   messages: Message[],
-  opts?: { keepRecentSteps?: number; minSavingsTokens?: number },
+  opts?: {
+    keepRecentSteps?: number
+    minSavingsTokens?: number
+    /**
+     * Paths whose tool results stay full regardless of age (importance-aware
+     * protection, derived from task memory via `deriveProtectedEvictionPaths`).
+     * Recency-blind eviction would otherwise strip exactly the stale result a
+     * pinned decision or unverified edit anchor still depends on; the
+     * read-authorization revoke lets the agent RECOVER evicted content, but
+     * only when it knows to look — the paths memory cites are that knowledge.
+     */
+    protectedPaths?: ReadonlySet<string>
+  },
 ): ToolResultEvictionResult {
   const keepRecentSteps = opts?.keepRecentSteps ?? EVICTION_KEEP_RECENT_STEPS
   const minSavingsTokens =
     opts?.minSavingsTokens ?? EVICTION_MIN_SAVINGS_TOKENS
+  const protectedPaths = opts?.protectedPaths
 
   // Walk the history, numbering each step (one assistant message plus the
   // tool results following it) so the recency window is step-based, not
@@ -94,6 +155,13 @@ export function evictStaleToolResults(
         keepDuringTruncation: message.keepDuringTruncation,
         tags: message.tags,
       })
+    ) {
+      return false
+    }
+    if (
+      protectedPaths !== undefined &&
+      protectedPaths.size > 0 &&
+      contentReferencesProtectedPath(message, protectedPaths)
     ) {
       return false
     }
@@ -131,4 +199,35 @@ export function evictStaleToolResults(
   }
 
   return { messages: nextMessages, tokensSaved, evictedCount: candidates.length }
+}
+
+/**
+ * Derive the importance-aware protection set for `evictStaleToolResults` from
+ * task memory: every path the durable record cites (evidence paths/sources,
+ * inspected files, edited files) marks tool content that must not be evicted
+ * behind the memory's back. Duplicates collapse; the set is capped at
+ * MAX_PROTECTED_PATHS in insertion order; non-path-like or unsafe entries
+ * (absolute, traversal, glob syntax) are dropped rather than guessed at.
+ * Undefined/empty memory yields an empty set — the caller then behaves
+ * exactly like the previous recency-only evictor.
+ */
+export function deriveProtectedEvictionPaths(
+  taskMemory: TaskMemoryV1 | undefined,
+): ReadonlySet<string> {
+  const paths = new Set<string>()
+  if (!taskMemory) return paths
+
+  const consider = (raw: unknown): void => {
+    if (typeof raw !== 'string' || paths.size >= MAX_PROTECTED_PATHS) return
+    const candidate = stripEvidenceKindPrefix(raw)
+    if (looksLikeProjectPath(candidate)) paths.add(candidate)
+  }
+
+  for (const entry of taskMemory.evidence ?? []) {
+    consider(entry.path)
+    consider(entry.source)
+  }
+  for (const entry of taskMemory.filesInspected ?? []) consider(entry)
+  for (const entry of taskMemory.editsMade ?? []) consider(entry)
+  return paths
 }
