@@ -14,5 +14,14 @@ export type ContextArchiveSnapshot = {
   action: 'semantic_compaction' | 'mechanical_trim'
   /** Steps the caller pinned from eviction at archive time. */
   keepRecentSteps: number
+  /**
+   * Index of the first message of `messages` within the ORIGINAL transcript
+   * (0 when the whole history fit in the snapshot cap). `step` provenance in
+   * `recall_context` results is this base plus the index within the stored
+   * slice, so the reported step numbers refer to the original transcript
+   * rather than the archived slice. Optional so earlier serialized snapshots
+   * keep parsing; absent falls back to slice-local numbering.
+   */
+  stepBase?: number
   messages: Message[]
 }

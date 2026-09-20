@@ -18,31 +18,21 @@ export const handleRecallContext = (async (params: {
   agentState: AgentState
   logger?: Logger
 }): Promise<{ output: CodebuffToolOutput<ToolName> }> => {
-  const { previousToolCallFinished, toolCall, agentState, logger } = params
+  const { previousToolCallFinished, toolCall, agentState } = params
   await previousToolCallFinished
-  try {
-    const query = toolCall.input.query
-    const result = recallFromArchive(agentState.compactionArchive, query)
-    return {
-      output: jsonToolResult({
-        ...result,
-        ...(result.matches.length === 0
-          ? {
-              message:
-                'No archived pre-compaction content matched. Archived transcripts exist only after a compaction pass rewrote history; verify facts against live files with read_files instead.',
-            }
-          : {}),
-      }),
-    }
-  } catch (error) {
-    if (logger) {
-      logger.debug(
-        { error: error instanceof Error ? error.message : String(error) },
-        'recall_context failed best-effort',
-      )
-    }
-    return {
-      output: jsonToolResult({ errorMessage: 'recall_context: failed to search the archive.' }),
-    }
+  // recallFromArchive is a pure, bounded scan over an in-memory array — no
+  // I/O, no throwing call surface — so the handler is straight glue and
+  // needs no best-effort error envelope.
+  const result = recallFromArchive(agentState.compactionArchive, toolCall.input.query)
+  return {
+    output: jsonToolResult({
+      ...result,
+      ...(result.matches.length === 0
+        ? {
+            message:
+              'No archived pre-compaction content matched. Archived transcripts exist only after a compaction pass rewrote history; verify facts against live files with read_files instead.',
+          }
+        : {}),
+    }),
   }
 }) satisfies CodebuffToolHandlerFunction<ToolName>

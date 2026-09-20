@@ -1,3 +1,5 @@
+import { looksLikeProjectPath } from './project-path-policy'
+
 import type { Message } from '@codebuff/common/types/messages/codebuff-message'
 import type { TaskMemoryV1 } from '@codebuff/common/types/task-memory'
 
@@ -34,20 +36,10 @@ const isToolCallPart = (part: unknown): part is ToolCallPart =>
   (part as ToolCallPart).type === 'tool-call'
 
 /**
- * Same conservative policy as the eviction module's path check: project-
- * relative, no traversal, no glob syntax, bounded length. Absolute and
- * traversal strings are noise, not evidence — a false negative here only
- * weakens verification sensitivity, never correctness.
+ * Project-relative path policy shared with the eviction module (see
+ * `project-path-policy.ts`); a local alias keeps the call sites terse.
  */
-const pathLike = (value: unknown): value is string => {
-  if (typeof value !== 'string') return false
-  const trimmed = value.trim()
-  if (trimmed.length === 0 || trimmed.length > 1024) return false
-  if (trimmed.startsWith('/') || /^[A-Za-z]:\//.test(trimmed)) return false
-  if (/[?*{[\]}]/.test(trimmed)) return false
-  if (trimmed.split('/').includes('..')) return false
-  return trimmed.includes('/') || trimmed.includes('.')
-}
+const pathLike = looksLikeProjectPath
 
 /**
  * Derive expected facts from the pre-compaction transcript: file paths the

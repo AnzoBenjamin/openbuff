@@ -66,11 +66,13 @@ export function archivePreCompaction(
 ): void {
   const source = messages
   if (archivedSources.has(source)) return
+  const stored = source.slice(-MAX_ARCHIVE_MESSAGES)
   const snapshot: ContextArchiveSnapshot = {
     archivedAt: Date.now(),
     action,
     keepRecentSteps,
-    messages: source.slice(-MAX_ARCHIVE_MESSAGES).map(archiveMessage),
+    stepBase: source.length - stored.length,
+    messages: stored.map(archiveMessage),
   }
   agentState.compactionArchive = [
     ...(agentState.compactionArchive ?? []),
@@ -82,6 +84,7 @@ export function archivePreCompaction(
 export type RecallContextResult = {
   matches: Array<{ step: number; toolName: string; toolCallId: string; snippet: string }>
   snapshotsSearched: number
+  /** Archive timestamps, newest first — the same order matches return in. */
   archivedAt: number[]
 }
 
@@ -121,10 +124,12 @@ export function recallFromArchive(
   const matches: RecallContextResult['matches'] = []
   for (const snapshot of [...archive].reverse()) {
     for (let i = snapshot.messages.length - 1; i >= 0; i--) {
-      if (matches.length >= RECALL_MAX_RESULTS) return {
-        matches,
-        snapshotsSearched: archive.length,
-        archivedAt: archive.map((s) => s.archivedAt),
+      if (matches.length >= RECALL_MAX_RESULTS) {
+        return {
+          matches,
+          snapshotsSearched: archive.length,
+          archivedAt: [...archive].reverse().map((s) => s.archivedAt),
+        }
       }
       const message = snapshot.messages[i]
       if (message.role !== 'tool') continue
@@ -136,16 +141,19 @@ export function recallFromArchive(
       )
       const start = Math.max(0, first - 120)
       matches.push({
-        step: i,
+        // Original-transcript step number, not the index within the archived
+        // slice (they differ once the snapshot cap trims the oldest messages).
+        step: i + (snapshot.stepBase ?? 0),
         toolName: message.toolName,
         toolCallId: message.toolCallId,
         snippet: text.slice(start, start + RECALL_SNIPPET_CHARS),
       })
     }
   }
+  const archivedAt = [...archive].reverse().map((s) => s.archivedAt)
   return {
     matches,
     snapshotsSearched: archive.length,
-    archivedAt: archive.map((s) => s.archivedAt),
+    archivedAt,
   }
 }

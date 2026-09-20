@@ -3,6 +3,7 @@ import { z } from 'zod/v4'
 import { MAX_AGENT_STEPS_DEFAULT } from '../constants/agents'
 
 import type { Message } from './messages/codebuff-message'
+import type { ContextArchiveSnapshot } from './context-archive'
 import type { ProjectFileContext } from '../util/file'
 import type { TaskMemoryV1 } from './task-memory'
 import type { OrchestrationLedgerV1 } from './orchestration-ledger'
@@ -391,7 +392,7 @@ export type AgentState = {
    * existed parse cleanly; the runtime caps snapshot count and size (see
    * `packages/agent-runtime/src/util/context-archive.ts`).
    */
-  compactionArchive?: Array<import('./context-archive').ContextArchiveSnapshot>
+  compactionArchive?: Array<ContextArchiveSnapshot>
   /** Runtime-owned orchestrator state that must survive message compaction. */
   base2ActiveWork?: Record<string, unknown>
   /** Durable intents/terminal receipts for detached subagent work. */

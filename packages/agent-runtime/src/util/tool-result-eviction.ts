@@ -1,3 +1,4 @@
+import { looksLikeProjectPath } from './project-path-policy'
 import { isProtectedToolResult } from './tool-result-lifecycle'
 import { countTokensJson } from './token-counter'
 
@@ -39,23 +40,6 @@ export const EVICTION_MIN_SAVINGS_TOKENS = 4_000
 
 /** Bound the importance-derived path set so the per-candidate substring scan stays cheap. */
 const MAX_PROTECTED_PATHS = 512
-
-/**
- * Conservative project-relative path check for importance-derived candidates:
- * no traversal, no glob syntax, no absolute forms — the same shape the
- * record_decision evidence contract enforces. A candidate that merely looks
- * path-like (contains a separator or an extension) is accepted; false
- * positives only PROTECT content, which is the safe direction. False
- * negatives degrade to the previous recency-only behavior.
- */
-const looksLikeProjectPath = (value: string): boolean => {
-  const trimmed = value.trim()
-  if (trimmed.length === 0 || trimmed.length > 1024) return false
-  if (trimmed.startsWith('/') || /^[A-Za-z]:\//.test(trimmed)) return false
-  if (/[?*{[\]}]/.test(trimmed)) return false
-  if (trimmed.split('/').includes('..')) return false
-  return trimmed.includes('/') || trimmed.includes('.')
-}
 
 /**
  * Task-memory list entries are sometimes kind-prefixed tokens (e.g.
