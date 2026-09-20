@@ -1579,19 +1579,29 @@ Live compaction state is reported by a separate additive
 carries `state: 'started' | 'settled'`, the required agent/run correlation
 `runId` and `ancestorRunIds` (plus an optional `agentId`), and optional
 `contextTokens`, `resolvedContextWindowTokens`, `triggerBudgetTokens`, and
-`targetBudgetTokens`. `packages/agent-runtime/src/run-agent-step.ts` emits
+`targetBudgetTokens`, and `evictedTokens`. `packages/agent-runtime/src/run-agent-step.ts` emits
 `started` immediately before the programmatic step whenever the window-derived
-semantic trigger is exceeded, whether or not the agent has a `handleSteps`
+semantic trigger is exceeded AND the run's loop-local token-state compaction
+governor allows the pass — a pacing state machine (armed → cooldown →
+rearm-pending, with a per-turn pass cap and an emergency override at the
+provider-safe limit) that bounds how often the expensive full-transcript pruner
+pass may run per turn — whether or not the agent has a `handleSteps`
 generator: an orchestrator's generator spawns the pruner itself, while a
 prompt-only template gets a runtime-driven pass
 (`packages/agent-runtime/src/util/runtime-semantic-compaction.ts`). Two
 additional gates apply, and both suppress the announcement as well as the pass:
-the transient loop-owned anti-thrash advisory (`suppressSemanticCompaction`,
-set after consecutive passes reclaim no space and reset at loop entry), and — for
-the runtime-driven pass only — the ordinary spawn-permission contract, so a
+a governor-denied iteration, and the transient loop-owned anti-thrash advisory
+(`suppressSemanticCompaction`, set after consecutive passes reclaim no space
+and reset at loop entry). For
+the runtime-driven pass the ordinary spawn-permission contract also applies, so a
 prompt-only template that does not declare `context-pruner` in its
 `spawnableAgents` announces a pass that then declines to spawn. Emission is
-deliberately not gated on an explicit `maxContextLength` override.
+deliberately not gated on an explicit `maxContextLength` override. Before the
+governor is even consulted, a deterministic zero-cost tool-result evictor
+(`packages/agent-runtime/src/util/tool-result-eviction.ts`) replaces stale
+tool-result bodies with tombstones whenever context exceeds the eviction floor
+(55% of the window); the tokens it frees are reported as `evictedTokens` and
+frequently pull context below the semantic trigger so no LLM pass is needed.
 `settled` is emitted after both compaction branches whenever a `started` was
 emitted, and again on the run's exit path when a step throws or is cancelled
 before reaching them, so a pass that decides not to compact cannot leave a
@@ -1730,7 +1740,9 @@ revision, so `commitTaskMemory` would reject the transcript replacement for
 exactly the spellings documented as equivalent. The same match also governs the transient
 `suppressSemanticCompaction` anti-thrash skip, which declines a pruner spawn —
 after its input is validated — for the rest of a turn whose consecutive
-semantic passes reclaimed no context space. Custom history editors must opt in
+semantic passes reclaimed no context space. The skip also applies on an
+over-trigger iteration the loop's compaction governor denies, so the
+generator-driven spawn path honors the same pacing. Custom history editors must opt in
 with both `messageHistoryMode: 'full'` and
 `propagateMessageHistoryChanges: true`.
 Ordinary inline children have independent system prompts, tools, and

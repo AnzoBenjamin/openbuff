@@ -719,6 +719,84 @@ describe('selectStatusBarChips', () => {
     ).toBe('⇲ compacting 62%')
   })
 
+  test('an eviction-only turn renders the freed reclaim instead of hiding', () => {
+    // The deterministic evictor freed tokens but no LLM pass completed and
+    // nothing is live: the reclaim is real, user-visible work, so the chip
+    // renders even at count 0 — as an informational (secondary) state rather
+    // than a warning, because nothing failed.
+    const evictionOnly = {
+      count: 0,
+      action: 'semantic_compaction',
+      degraded: false,
+      evictedTokens: 12_000,
+    } as const
+    expect(compactionChipAt('md', evictionOnly)?.label).toBe('⇲ freed 12k')
+    expect(compactionChipAt('lg', evictionOnly)?.label).toBe('⇲ freed 12k')
+    expect(compactionChipAt('lg', evictionOnly)?.tone).toBe('secondary')
+    // The narrow sizes have no room for the worded form; the glyph keeps the
+    // reclaim distinguishable from a pass count.
+    expect(compactionChipAt('xs', evictionOnly)?.label).toBe('⇲ ↧12k')
+    expect(compactionChipAt('sm', evictionOnly)?.label).toBe('⇲ ↧12k')
+
+    // Zero/negative/non-finite values are no reclaim at all, so an otherwise
+    // empty notice still renders nothing (the count-0 drop is unchanged).
+    for (const evictedTokens of [0, -100, Number.NaN]) {
+      expect(
+        compactionChipAt('lg', {
+          count: 0,
+          action: 'semantic_compaction',
+          degraded: false,
+          evictedTokens,
+        }),
+      ).toBeUndefined()
+    }
+  })
+
+  test('a settled count label carries the freed-tokens suffix at lg only', () => {
+    const withEviction = {
+      count: 2,
+      action: 'semantic_compaction',
+      degraded: false,
+      evictedTokens: 34_000,
+    } as const
+    expect(compactionChipAt('lg', withEviction)?.label).toBe(
+      '⇲ compacted ×2 · freed 34k',
+    )
+    // 'md' keeps the exact verb form — the suffix is an 'lg'-only affordance.
+    expect(compactionChipAt('md', withEviction)?.label).toBe(
+      '⇲ compacted ×2',
+    )
+    // Narrow sizes unchanged.
+    expect(compactionChipAt('sm', withEviction)?.label).toBe('⇲ 2')
+
+    // The freed suffix does not mask a degraded outcome: the trim form keeps
+    // its label and the tone logic is untouched (settled degraded = error).
+    const trimmedWithEviction = {
+      count: 1,
+      action: 'mechanical_trim',
+      degraded: true,
+      evictedTokens: 5_000,
+    } as const
+    expect(compactionChipAt('lg', trimmedWithEviction)?.label).toBe(
+      '⇲ trimmed ×1 · freed 5k',
+    )
+    expect(compactionChipAt('lg', trimmedWithEviction)?.tone).toBe('error')
+  })
+
+  test('a pending pass label is unaffected by eviction telemetry', () => {
+    // The live label reports movement; the freed total only widens the
+    // settled forms.
+    expect(
+      compactionChipAt('lg', {
+        count: 0,
+        action: 'semantic_compaction',
+        degraded: false,
+        pending: true,
+        evictedTokens: 12_000,
+      })?.label,
+    ).toBe('⇲ compacting…')
+  })
+
   test('an idle run stops reporting a pending pass as live', () => {
     // The run aborted mid-compaction, so no settling event will ever arrive.
     // The chip must not keep claiming a compaction is running.
