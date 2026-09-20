@@ -107,6 +107,8 @@ This package contains code shared across the Openbuff monorepo, especially the l
 
 - _Knowledge refresh 2026-09-19 (advisory cleanup): `record_decision` tool description now documents the enforced decision/constraint rationale gate (text must be ≥24 chars AND include one of the `DECISION_RATIONALE_MARKERS` from `common/src/util/decision-rationale.ts` — because/so that/instead of/to avoid/rather than/chose/rejected/trade/prefer/must/require, case-insensitive first-2048-chars scan; `fact` kind exempt; capture rejected otherwise) so agents learn the rule from the tool bounds text instead of a runtime error. Description-only; regeneration produced byte-identical tool-def files (they do not embed tool-level descriptions) and the tool-registration consistency suite stays 6/0._
 
+- _Knowledge refresh 2026-09-20 (staleness guard touch): the repeated-step no-progress watchdog removal commit `a11539167` touched `common/src` (optional `AgentState.lastStepProgressSignature`/`repeatedStepProgressCount` fields removed from `common/src/types/session-state.ts` — backward-compatible, old persisted states still parse); this entry keeps `common/knowledge.md` newer than its sibling `src/` for the pre-push memory-drift guard._
+
 ## Scope Notes
 
 Openbuff is CLI/SDK-focused and local/BYOK. Do not add new dependencies from `common/` to hosted web, billing, credit, subscription, or BigQuery product surfaces. Provider-owned billing, quota, token usage, and OAuth flows may still be documented when they refer to the user's configured provider rather than an Openbuff-hosted product.

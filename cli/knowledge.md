@@ -970,3 +970,5 @@ Streaming markdown renders as plain text until the message or agent finishes. Th
 - _Knowledge refresh 2026-09-19 (staleness guard touch): the regenerated tool-definition commit for the `record_decision` supersedes param touched `cli/src`; this entry keeps `cli/knowledge.md` newer than its sibling `src/` for the pre-push memory-drift guard._
 
 - _Knowledge refresh 2026-09-19 (advisory cleanup): `concept-index.ts` drops the dead `queryHash` local (the query is embedded by position `vectors[0]`, never hash-looked-up) and `expandConceptRecall` now computes `modelDigest` once in the wrapper and passes it to `expandConceptRecallInner` instead of recomputing `conceptFingerprint(embed)` twice. No behavior change; concept-index/firewall/provider suites 25/0._
+
+- _Knowledge refresh 2026-09-20 (staleness guard touch): the TUI theme-consistency + picker-polish commit `325709938` touched `cli/src` (borderless run summary, themed `/update` box, rounded BORDER_CHARS on picker screens, theme-surface focus rows, emoji cleanup, diff-viewer/agent-helpers theme colors); this entry keeps `cli/knowledge.md` newer than its sibling `src/` for the pre-push memory-drift guard._
