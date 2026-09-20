@@ -18,6 +18,7 @@ import { loadRecentProjects } from '../utils/recent-projects'
 import { createTextPasteHandler } from '../utils/strings'
 import { isPlainEnterKey } from '../utils/terminal-enter-detection'
 import { getLogoBlockColor, getLogoAccentColor } from '../utils/theme-system'
+import { BORDER_CHARS } from '../utils/ui-constants'
 
 import type { SelectableListItem } from './selectable-list'
 
@@ -408,6 +409,7 @@ export const ProjectPickerScreen: React.FC<ProjectPickerScreenProps> = ({
               width: contentWidth,
               borderStyle: 'single',
               borderColor: theme.muted,
+              customBorderChars: BORDER_CHARS,
               flexShrink: 0,
             }}
             border={['top', 'bottom', 'left', 'right']}
@@ -499,11 +501,11 @@ export const ProjectPickerScreen: React.FC<ProjectPickerScreenProps> = ({
               paddingBottom: 0,
               borderStyle: 'single',
               borderColor: theme.primary,
-              backgroundColor: theme.primary,
+              customBorderChars: BORDER_CHARS,
             }}
             border={['top', 'bottom', 'left', 'right']}
           >
-            <text style={{ fg: '#1a1a1a' }}>Open (Ctrl+Enter)</text>
+            <text style={{ fg: theme.primary }}>Open (Ctrl+Enter)</text>
           </Button>
         </box>
       </box>

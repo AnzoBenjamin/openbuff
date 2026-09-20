@@ -20,6 +20,7 @@ import { createToolCallChunk, mockFileContext } from './test-utils'
 import type { AgentTemplate } from '../templates/types'
 import type { StepGenerator } from '@codebuff/common/types/agent-template'
 import type { AgentState } from '@codebuff/common/types/session-state'
+import type { Message } from '@codebuff/common/types/messages/codebuff-message'
 
 describe('loopAgentSteps', () => {
   let runtimeParams: Omit<
@@ -247,8 +248,8 @@ describe('loopAgentSteps', () => {
       max: 32_000,
       // Model-aware semantic-compaction budget for this window, published so
       // the CLI status chip can show where compaction will fire.
-      compactionTriggerTokens: 16_800,
-      compactionTargetTokens: 8_400,
+      compactionTriggerTokens: 18_000,
+      compactionTargetTokens: 9_600,
     })
     expect(result.agentState.contextWindowTokens).toBe(32_000)
   })
@@ -379,16 +380,16 @@ describe('loopAgentSteps', () => {
       expect.objectContaining({
         type: 'context_compaction',
         action: 'semantic_compaction',
-        triggerBudgetTokens: 16_800,
-        targetBudgetTokens: 8_400,
+        triggerBudgetTokens: 18_000,
+        targetBudgetTokens: 9_600,
       }),
     )
     expect(events).toContainEqual(
       expect.objectContaining({
         type: 'context_window',
         max: 32_000,
-        compactionTriggerTokens: 16_800,
-        compactionTargetTokens: 8_400,
+        compactionTriggerTokens: 18_000,
+        compactionTargetTokens: 9_600,
       }),
     )
   })
@@ -415,8 +416,8 @@ describe('loopAgentSteps', () => {
       type: 'context_window',
       used: expect.any(Number),
       max: 50_000,
-      compactionTriggerTokens: 140_000,
-      compactionTargetTokens: 72_000,
+      compactionTriggerTokens: 156_000,
+      compactionTargetTokens: 80_000,
     })
   })
 
@@ -601,8 +602,8 @@ describe('loopAgentSteps', () => {
         type: 'context_compaction',
         action: 'semantic_compaction',
         resolvedContextWindowTokens: 32_000,
-        triggerBudgetTokens: 16_800,
-        targetBudgetTokens: 8_400,
+        triggerBudgetTokens: 18_000,
+        targetBudgetTokens: 9_600,
         retainedKnowledgeMemory: true,
         // The result carries the run correlation, so a consumer can pair it
         // with the live status card this run opened. Root run: empty lineage.
@@ -662,8 +663,8 @@ describe('loopAgentSteps', () => {
       ancestorRunIds: [],
       contextTokens: expect.any(Number),
       resolvedContextWindowTokens: 32_000,
-      triggerBudgetTokens: 16_800,
-      targetBudgetTokens: 8_400,
+      triggerBudgetTokens: 18_000,
+      targetBudgetTokens: 9_600,
     })
     expect(settled[0]).toMatchObject({
       runId,
@@ -732,8 +733,8 @@ describe('loopAgentSteps', () => {
       agentId: 'test-agent-id',
       ancestorRunIds: [],
       resolvedContextWindowTokens: 64_000,
-      triggerBudgetTokens: 39_200,
-      targetBudgetTokens: 19_600,
+      triggerBudgetTokens: 42_000,
+      targetBudgetTokens: 22_400,
     })
   })
 
@@ -869,7 +870,7 @@ describe('loopAgentSteps', () => {
       agentId: 'test-agent-id',
       ancestorRunIds: [],
       contextTokens: expect.any(Number),
-      targetBudgetTokens: 8_400,
+      targetBudgetTokens: 9_600,
     })
     expect(progress.at(-1)).toMatchObject({ phase: 'applying', percent: 90 })
 
@@ -1049,15 +1050,16 @@ describe('loopAgentSteps', () => {
       onResponseChunk: (event) => events.push(event),
     })
 
-    // A `yield 'STEP'` generator drives more than one loop iteration, and every
-    // over-trigger iteration announces and settles its own pass, so assert the
-    // settled-equals-started invariant rather than a hard total.
+    // A `yield 'STEP'` generator drives more than one loop iteration, but the
+    // governor only lets the FIRST over-trigger iteration announce a pass —
+    // later iterations are cooldown/rearm-denied for the turn. Assert the
+    // settled-equals-started invariant on that single announced pass.
     const statusEvents = events.filter(
       (event) => event.type === 'context_compaction_status',
     )
     const started = statusEvents.filter((event) => event.state === 'started')
     const settled = statusEvents.filter((event) => event.state === 'settled')
-    expect(started.length).toBeGreaterThanOrEqual(2)
+    expect(started.length).toBe(1)
     expect(settled.length).toBe(started.length)
 
     // Nothing was compacted, so no result event may be reported...
@@ -1071,8 +1073,9 @@ describe('loopAgentSteps', () => {
     ).toBe(false)
   })
 
-  it('suppresses further semantic compaction after two zero-reclaim announced passes', async () => {
+  it('caps further semantic compaction for the turn after a zero-reclaim announced pass', async () => {
     setup()
+    const events: any[] = []
     seedZeroReclaimAnnouncedPasses()
 
     const result = await loopAgentSteps({
@@ -1080,17 +1083,88 @@ describe('loopAgentSteps', () => {
       agentState,
       resolveModelContextWindow: mock(() => 64_000),
       localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
     })
 
+    // The governor bounds the denial: the zero-reclaim pass extended its
+    // cooldown, and without a reclaim below the rearm budget no further pass
+    // is announced this turn. The later over-trigger iterations are
+    // governor-denied, and that denial is mirrored into the persisted
+    // advisory so the inline spawn path honors the same pacing.
+    const started = events.filter(
+      (event) =>
+        event.type === 'context_compaction_status' && event.state === 'started',
+    )
+    expect(started).toHaveLength(1)
     expect(result.agentState.suppressSemanticCompaction).toBe(true)
+  })
+
+  it('revokes implicit read authorizations when eviction rewrites read bodies out of history', async () => {
+    setup()
+    // A 200k window puts the eviction floor at 110k tokens, the semantic
+    // trigger at 156k, and the provider-safe mechanical ceiling at 176k, so a
+    // ~130k transcript of stale read results exercises ONLY the eviction
+    // branch: no semantic pass, no mechanical trim.
+    const chunk = 'old evidence '.repeat(500)
+    const chunkTokens = countTokens(chunk)
+    const repeatsPerResult = Math.ceil(16_000 / chunkTokens)
+    const history: Message[] = [userMessage('Initial message')]
+    for (let i = 0; i < 8; i++) {
+      history.push({
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: `call-${i}`,
+            toolName: 'read_files',
+            input: {},
+          },
+        ],
+      })
+      history.push({
+        role: 'tool',
+        toolCallId: `call-${i}`,
+        toolName: 'read_files',
+        content: [
+          { type: 'json', value: { output: chunk.repeat(repeatsPerResult) } },
+        ],
+      })
+    }
+
+    agentState.messageHistory = history
+    // Simulate prior whole-file reads: eviction must revoke these exactly the
+    // way the semantic and mechanical-trim branches do.
+    agentState.readAuthorizationsByPath = { 'src/a.ts': true }
+    agentState.readAuthorizationHashesByPath = {
+      'src/a.ts': `sha256:${'a'.repeat(64)}`,
+    }
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      resolveModelContextWindow: mock(() => 200_000),
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    // Eviction actually rewrote the stale read bodies...
+    expect(JSON.stringify(result.agentState.messageHistory)).toContain(
+      '[tool result evicted to free context',
+    )
+    // ...so the documented post-compaction read-authorization contract must
+    // have fired: the previously read path now requires a fresh read before
+    // the next edit.
+    expect(result.agentState.editRereadRequirementsByPath?.['src/a.ts']).toEqual({
+      reason: 'context_compacted',
+      sourceTool: 'context compaction',
+    })
   })
 
   it('emits compaction progress only while an announced pass is unsettled', async () => {
     setup()
     const events: any[] = []
-    // The suppression fixture drives several over-trigger iterations, only the
-    // first two of which announce a pass. Every later (suppressed) iteration
-    // must contribute no progress at all.
+    // The fixture drives several over-trigger iterations, but the governor
+    // only lets the first announce a pass. Every denied later iteration must
+    // contribute no progress at all.
     seedZeroReclaimAnnouncedPasses()
 
     await loopAgentSteps({
@@ -1105,7 +1179,7 @@ describe('loopAgentSteps', () => {
       (event) =>
         event.type === 'context_compaction_status' && event.state === 'started',
     )
-    expect(started.length).toBeGreaterThanOrEqual(2)
+    expect(started.length).toBe(1)
 
     // Walk the stream: a progress event may only appear while an announced pass
     // of the SAME run is still unsettled.
@@ -1268,8 +1342,8 @@ describe('loopAgentSteps', () => {
       agentId: 'test-agent-id',
       ancestorRunIds: [],
       resolvedContextWindowTokens: 64_000,
-      triggerBudgetTokens: 39_200,
-      targetBudgetTokens: 19_600,
+      triggerBudgetTokens: 42_000,
+      targetBudgetTokens: 22_400,
     })
     expect(settled[0]).toMatchObject({
       runId,
@@ -1318,13 +1392,13 @@ describe('loopAgentSteps', () => {
     )
   })
 
-  it('stops invoking the runtime-driven pruner once semantic compaction is suppressed', async () => {
+  it('stops announcing the runtime-driven pruner once the governor paces it', async () => {
     setup()
     const events: any[] = []
     seedPromptOnlyOverTriggerRun()
     // A pruner that returns without rewriting the transcript reclaims nothing,
-    // so the loop-owned `suppressSemanticCompaction` advisory trips after two
-    // unproductive passes and no further pruner call may be paid for this turn.
+    // so after the one announced pass the governor (cooldown + rearm margin)
+    // denies every later iteration and no further pruner call is paid for.
     let prunerRuns = 0
     const contextPruner = buildPrunerStub(function* () {
       prunerRuns++
@@ -1355,19 +1429,21 @@ describe('loopAgentSteps', () => {
       onResponseChunk: (event) => events.push(event),
     })
 
+    // Later over-trigger iterations are governor-denied, and that denial is
+    // mirrored into the persisted advisory (the inline path's pacing lever).
     expect(result.agentState.suppressSemanticCompaction).toBe(true)
     expect(llmCalls).toBeGreaterThanOrEqual(3)
-    // Two unproductive passes trip suppression; every later iteration skips the
-    // pruner entirely.
-    expect(prunerRuns).toBe(2)
-    // A suppressed iteration runs no pass, so it announces none either — and
-    // every announced pass is still settled.
+    // One announced pass; every later iteration is governor-denied and skips
+    // the pruner entirely.
+    expect(prunerRuns).toBe(1)
+    // A denied iteration runs no pass, so it announces none either — and every
+    // announced pass is still settled.
     const statusEvents = events.filter(
       (event) => event.type === 'context_compaction_status',
     )
     const started = statusEvents.filter((event) => event.state === 'started')
     const settled = statusEvents.filter((event) => event.state === 'settled')
-    expect(started).toHaveLength(2)
+    expect(started).toHaveLength(1)
     expect(settled.length).toBe(started.length)
     expect(statusEvents.at(-1)).toMatchObject({ state: 'settled' })
   })
@@ -1547,8 +1623,8 @@ describe('loopAgentSteps', () => {
     // The model-aware budget policy, the parent's operational memory, and the
     // workspace state all reach the pinned pruner.
     expect(injectedParams?.semanticBudget).toMatchObject({
-      triggerBudgetTokens: 39_200,
-      targetBudgetTokens: 19_600,
+      triggerBudgetTokens: 42_000,
+      targetBudgetTokens: 22_400,
     })
     expect(injectedParams?.taskMemory?.revision).toBe(0)
     expect(injectedParams?.workspaceState).toBeDefined()
@@ -1559,13 +1635,12 @@ describe('loopAgentSteps', () => {
     )
   })
 
-  it('honors the suppression advisory for a publisher/version-qualified inline pruner spawn', async () => {
+  it('paces inline pruner spawns under the governor for a publisher/version-qualified id', async () => {
     setup()
     // Generator-driven path: `validateAndGetAgentTemplate` resolves `agentType`
-    // to the declared publisher/version-qualified id, so the anti-thrash
-    // advisory must be keyed off pruner identity rather than the bare literal —
-    // otherwise the documented `suppressSemanticCompaction` contract silently
-    // does not hold for a pinned declaration.
+    // to the declared publisher/version-qualified id, so pruner-identity
+    // handling (transcript write-back, output silencing, advisory keying) must
+    // match the qualified spelling rather than the bare literal.
     agentTemplate.spawnableAgents = ['acme/context-pruner@1.2.3']
     agentTemplate.toolNames = ['spawn_agent_inline', 'end_turn']
     const chunk = 'old evidence '.repeat(500)
@@ -1583,7 +1658,7 @@ describe('loopAgentSteps', () => {
       }
     } as () => StepGenerator
     // A pruner that returns without rewriting the transcript reclaims nothing,
-    // so two announced passes trip the loop-owned advisory.
+    // so the one announced pass is also the only one the governor pays for.
     let prunerRuns = 0
     const qualifiedPruner = buildPrunerStub(
       function* () {
@@ -1626,11 +1701,138 @@ describe('loopAgentSteps', () => {
       },
     })
 
+    // The inline spawn path is paced through the mirrored advisory: the first
+    // over-trigger iteration announces and runs one pass; every later
+    // iteration is governor-denied, the denial is mirrored into
+    // `suppressSemanticCompaction`, and the handler declines those spawns
+    // instead of paying for another thrashing run.
     expect(result.agentState.suppressSemanticCompaction).toBe(true)
     expect(llmCalls).toBeGreaterThanOrEqual(3)
-    // Two unproductive passes trip suppression; every later inline spawn is
-    // skipped instead of paying for another thrashing pruner run.
+    expect(prunerRuns).toBe(1)
+  })
+
+  it('runs the re-armed second pass after a productive pass and cooldown regrowth', async () => {
+    setup()
+    // The full governor lifecycle for the generator-driven inline path: a
+    // productive pass buys headroom, context regrows past the trigger during
+    // cooldown (the advisory mirror marks those denied iterations), a
+    // set_messages shrink drops context below the rearm budget so the governor
+    // re-arms, and the SECOND paid pass must then be reachable — both for the
+    // announcement and for the inline spawn the advisory would otherwise still
+    // decline. Falsifies a sticky advisory mirror: a mirror that ORs the
+    // previous field value pins the flag for the turn and strands prunerRuns
+    // at 1.
+    agentTemplate.toolNames = ['spawn_agent_inline', 'set_messages', 'end_turn']
+    agentTemplate.spawnableAgents = ['context-pruner']
+    const chunk = 'old evidence '.repeat(500)
+    const chunkTokens = countTokens(chunk)
+    const bigTranscript = () => [
+      userMessage(chunk.repeat(Math.ceil(42_000 / chunkTokens))),
+    ]
+    agentState.messageHistory = bigTranscript()
+
+    let prunerRuns = 0
+    const contextPruner = buildPrunerStub(function* () {
+      prunerRuns++
+      yield {
+        toolName: 'set_messages',
+        input: { messages: retainedMemoryTranscript() },
+        includeToolCall: false,
+      }
+    } as () => StepGenerator)
+    const promptAiSdkStream = mock(async function* () {
+      yield { type: 'text' as const, text: '</think>' }
+      return promptSuccess('mock-message-id')
+    })
+    // BOTH the parent and the inline child have a `handleSteps` generator here,
+    // and `run-programmatic-step` caches generators by `runId` alone — so the
+    // fixture must mint unique run ids the way production `startAgentRun` does,
+    // or the pruner child resumes the parent's cached generator and never runs
+    // its own body.
+    let runIdCounter = 0
+    const startAgentRun = mock(async () => `test-run-id-${++runIdCounter}`)
+
+    // Yield→iteration mapping: run-programmatic-step consumes consecutive
+    // tool-call yields INSIDE one programmatic step; only a 'STEP' yield ends
+    // it. So every tool yield is followed by 'STEP' — each state change then
+    // lands in its own governor-visible loop iteration, which is what the
+    // governor decision, the advisory mirror, and advanceGovernorIteration all
+    // observe (they run once per loop iteration, reading context as of the
+    // iteration's top).
+    agentTemplate.handleSteps = function* () {
+      // Iter 1 — armed + over trigger: pass 1 announced; the pruner rewrites
+      // small (productive, so the streak never trips).
+      yield {
+        toolName: 'spawn_agent_inline',
+        input: { agent_type: 'context-pruner', prompt: '' },
+      }
+      yield 'STEP'
+      // Iter 2 — below trigger, cooldown 1/3: quiet.
+      yield {
+        toolName: 'set_messages',
+        input: { messages: bigTranscript() },
+        includeToolCall: false,
+      }
+      yield 'STEP'
+      // Iter 3 — over trigger, cooldown 2/3: DENIED; the advisory mirror
+      // marks it.
+      yield 'STEP'
+      // Iter 4 — over trigger, cooldown 3/3 → rearm-pending (still above the
+      // rearm budget): DENIED; the shrink lands afterwards.
+      yield {
+        toolName: 'set_messages',
+        input: { messages: retainedMemoryTranscript() },
+        includeToolCall: false,
+      }
+      yield 'STEP'
+      // Iter 5 — context below the rearm budget: the governor re-arms, and a
+      // NON-STICKY advisory mirror clears the field (under the trigger the
+      // streak does not hold it).
+      yield 'STEP'
+      // Iter 6 — armed, below trigger: quiet regrow.
+      yield {
+        toolName: 'set_messages',
+        input: { messages: bigTranscript() },
+        includeToolCall: false,
+      }
+      yield 'STEP'
+      // Iter 7 — armed + over trigger: pass 2 must be announced AND paid for
+      // (a sticky advisory mirror would skip this spawn).
+      yield {
+        toolName: 'spawn_agent_inline',
+        input: { agent_type: 'context-pruner', prompt: '' },
+      }
+      yield 'STEP'
+      yield { toolName: 'end_turn', input: {} }
+    } as () => StepGenerator
+
+    const events: any[] = []
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      promptAiSdkStream,
+      startAgentRun,
+      resolveModelContextWindow: mock(() => 64_000),
+      localAgentTemplates: {
+        'test-agent': agentTemplate,
+        'context-pruner': contextPruner,
+      },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    // The second announced pass actually ran: two paid pruner runs and two
+    // announced (and settled) passes. A sticky mirror strands this at 1.
     expect(prunerRuns).toBe(2)
+    const statusEvents = events.filter(
+      (event) => event.type === 'context_compaction_status',
+    )
+    const started = statusEvents.filter((event) => event.state === 'started')
+    const settled = statusEvents.filter((event) => event.state === 'settled')
+    expect(started.length).toBe(2)
+    expect(settled.length).toBe(started.length)
+    // The turn ends with the advisory clear: pass 2 was productive, and no
+    // cooldown-window denial may pin the flag across the re-arm boundary.
+    expect(result.agentState.suppressSemanticCompaction).toBeUndefined()
   })
 
   it('validates a suppressed pruner spawn before returning the anti-thrash skip envelope', async () => {

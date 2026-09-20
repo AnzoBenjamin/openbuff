@@ -384,8 +384,6 @@ describe('mainPrompt', () => {
   it('does not decrement or stop the default unlimited step sentinel', async () => {
     const sessionState = getInitialSessionState(mockFileContext)
     expect(sessionState.mainAgentState.stepsRemaining).toBe(-1)
-    sessionState.mainAgentState.lastStepProgressSignature = 'sha256:stale'
-    sessionState.mainAgentState.repeatedStepProgressCount = 5
 
     const { sessionState: nextState } = await mainPrompt({
       ...mainPromptBaseParams,
@@ -402,7 +400,6 @@ describe('mainPrompt', () => {
     })
 
     expect(nextState.mainAgentState.stepsRemaining).toBe(-1)
-    expect(nextState.mainAgentState.repeatedStepProgressCount).toBe(0)
   })
 
   it('should update consecutiveAssistantMessages when new prompt is received', async () => {

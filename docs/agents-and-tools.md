@@ -38,9 +38,9 @@ Common phase triggers and routing policies:
 Cross-cutting orchestration policy:
 
 - Ask the user before destructive commands, public API/contract changes, dependency additions, schema/data migrations, release/publish/deploy actions, production-affecting scripts, or ambiguous product behavior.
-- Terminal execution is enforced by runtime permission profiles, not prompt text alone: `read-only`, the clone-scoped `librarian-read-only`, `workspace-write`, and explicit `full-access`. Background commands are request-owned unless `detach` is explicitly requested.
+- All agents now run terminal commands under the `full-access` permission profile: the runtime resolves every agent to `full-access` in `packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts`, so the per-agent profile gates (`read-only`, the clone-scoped `librarian-read-only`, `workspace-write`, etc.) are not enforced for bundled agents. The profile catalog still exists in the SDK policy helper (`evaluateTerminalCommandPolicy`) for host use. Background commands are request-owned unless `detach` is explicitly requested.
 - Browser-use defaults to `params.interactionPolicy: "read-only"`. Clicks, typing, uploads, evaluation, and other browser-state mutations require `allow-interactions`; each run receives an isolated browser session that is closed with the owning SDK run.
-- `base2-plan` can spawn `basher`, `browser-use`, `debugger`, and `general-agent` for deep analysis. Plan-only authority propagates through descendants: terminal-capable children are clamped to the read-only terminal profile and browser interactions remain denied even if a child requests `allow-interactions`. Mutation agents and direct edit/terminal tools remain unavailable. The spawn batch limit (`MAX_SPAWN_BATCH_SIZE`, currently 12) is a concurrency bound; planners may launch additional joined waves until coverage is complete and can poll/cancel detached analysis with `check_background_agent`.
+- `base2-plan` can spawn `basher`, `browser-use`, `debugger`, and `general-agent` for deep analysis. Plan-only authority propagates through descendants: terminal-capable children are clamped to the read-only terminal profile (this plan-only terminal attenuation is currently superseded by the global full-access override — the runtime resolves all agents to `full-access` — so it no longer takes effect in the bundled runtime) and browser interactions remain denied even if a child requests `allow-interactions`. Mutation agents and direct edit/terminal tools remain unavailable. The spawn batch limit (`MAX_SPAWN_BATCH_SIZE`, currently 12) is a concurrency bound; planners may launch additional joined waves until coverage is complete and can poll/cancel detached analysis with `check_background_agent`.
 - Prefer dedicated tools over shell fallbacks: `git_status` for repo state, file/read/search tools for inspection, `read_image` for images, deterministic edit tools for edits, configured hooks for validation, and browser/CLI visual agents for smoke checks.
 - Maintain durable plan artifacts in EXECUTE_PLAN at phase boundaries, blockers, validation/review results, and finalization.
 - Parallelism is allowed for independent discovery shards, independent validation commands, and static review that does not depend on validation output. Dependent edits, fragile debug loops, and validation-repair cycles stay sequential.
@@ -57,9 +57,9 @@ Runtime agent restrictions keep real security boundaries while removing over-str
 - Project-path containment for reads/writes/spawned work
 - `cap.v3` HMAC signing with project/path/run scope binding
 - `replace_range` authority chain (authenticated capability, not prose hashes)
-- Plan-only terminal attenuation (descendants stay on the read-only terminal profile)
+- Plan-only terminal attenuation (descendants stay on the read-only terminal profile) — currently overridden by the global full-access terminal profile, so it is no longer effective in the bundled runtime
+- Privilege-escalation, system-package, and env-dump bans (these apply to the non-full-access policy profiles, still enforced for SDK hosts and the high-impact approval gate, not to bundled agents now on full-access)
 - Force/delete/default-branch push gating
-- Privilege-escalation, system-package, and env-dump bans
 - Large-file scoped `basedOnRead` hard-fail when the anchor is required and invalid
 - `str_replace` circuit-breaker non-draining success (limit 5)
 
@@ -1579,24 +1579,82 @@ Live compaction state is reported by a separate additive
 carries `state: 'started' | 'settled'`, the required agent/run correlation
 `runId` and `ancestorRunIds` (plus an optional `agentId`), and optional
 `contextTokens`, `resolvedContextWindowTokens`, `triggerBudgetTokens`, and
-`targetBudgetTokens`. `packages/agent-runtime/src/run-agent-step.ts` emits
+`targetBudgetTokens`, and `evictedTokens`. `packages/agent-runtime/src/run-agent-step.ts` emits
 `started` immediately before the programmatic step whenever the window-derived
-semantic trigger is exceeded, whether or not the agent has a `handleSteps`
+semantic trigger is exceeded AND the run's loop-local token-state compaction
+governor allows the pass — a pacing state machine (armed → cooldown →
+rearm-pending, with a per-turn pass cap and an emergency override at the
+provider-safe limit) that bounds how often the expensive full-transcript pruner
+pass may run per turn — whether or not the agent has a `handleSteps`
 generator: an orchestrator's generator spawns the pruner itself, while a
 prompt-only template gets a runtime-driven pass
 (`packages/agent-runtime/src/util/runtime-semantic-compaction.ts`). Two
 additional gates apply, and both suppress the announcement as well as the pass:
-the transient loop-owned anti-thrash advisory (`suppressSemanticCompaction`,
-set after consecutive passes reclaim no space and reset at loop entry), and — for
-the runtime-driven pass only — the ordinary spawn-permission contract, so a
+a governor-denied iteration, and the transient loop-owned anti-thrash advisory
+(`suppressSemanticCompaction`, set after consecutive passes reclaim no space
+and reset at loop entry). For
+the runtime-driven pass the ordinary spawn-permission contract also applies, so a
 prompt-only template that does not declare `context-pruner` in its
 `spawnableAgents` announces a pass that then declines to spawn. Emission is
-deliberately not gated on an explicit `maxContextLength` override.
+deliberately not gated on an explicit `maxContextLength` override. Before the
+governor is even consulted, a deterministic zero-cost tool-result evictor
+(`packages/agent-runtime/src/util/tool-result-eviction.ts`) replaces stale
+tool-result bodies with tombstones whenever context exceeds the eviction floor
+(55% of the window) — and it is importance-aware: paths recorded in task
+memory (evidence, inspected files, edits) mark tool results that cite them as
+protected, so the evictor cannot strip the context behind a recorded decision.
+The tokens it frees are reported as `evictedTokens` and frequently pull
+context below the semantic trigger so no LLM pass is needed.
 `settled` is emitted after both compaction branches whenever a `started` was
 emitted, and again on the run's exit path when a step throws or is cancelled
 before reaching them, so a pass that decides not to compact cannot leave a
 pending state on screen. As with `job_update`, consumers should treat unknown
 event variants as no-ops; no consumer migration is required.
+
+Compaction also carries a recall leg so its information loss stays
+recoverable. Before a semantic pass or mechanical trim rewrites history, the
+runtime archives the pre-compaction transcript onto the new optional
+`AgentState.compactionArchive`
+(`packages/agent-runtime/src/util/context-archive.ts`, capped at 8 snapshots
+of 200 messages with 4k-char per-message truncation; plain JSON, so sessions
+persisted before the field existed parse without it). The registered
+`recall_context` tool (granted to base2 CORE) searches those archived tool
+bodies with bounded case-insensitive AND-match snippets and returns
+provenance, so pre-compaction content is always marked stale-until-verified;
+the archive itself never enters the model context. Eviction is deliberately
+NOT archived: tombstones already instruct a re-run, and a fresh read of live
+files is more faithful than a stale body. After a semantic pass, the runtime
+verifies the extraction
+(`packages/agent-runtime/src/util/compaction-verification.ts`): expected facts
+(paths read or written, truncated commands) are derived from the
+PRE-compaction transcript and checked against the post-compaction history and
+task memory, and gaps are named in the `context_compaction` event's
+`recovery` guidance so the user sees what was lost and how to recover it
+(`recall_context` or a re-read). Deterministic fidelity scoring lives in
+`evals/compaction-fidelity/scenario.test.ts` (F1–F4, no LLM calls).
+
+An OPTIONAL background consolidation leg (canary-gated OFF by default) adds
+bounded SUMMARIES on top of the verbatim archive: when a template sets
+`programmaticConfig.backgroundSnapshotConsolidation === true`, the runtime
+fires a fire-and-forget prompt-only LLM child
+(`packages/agent-runtime/src/util/context-consolidation-runner.ts`) after each
+compaction settle that summarizes up to 3 not-yet-consolidated archive
+snapshots (oldest first, char-budgeted newest-first prompt; identifiers,
+paths, commands, and numbers preserved verbatim by instruction). The summary
+is stored capped (8 × 6k chars) on the new optional
+`AgentState.contextConsolidations` (`common/src/types/context-consolidation.ts`)
+and is surfaced by `recall_context` as an additive `consolidations` section
+(OR-ranked, max 3 hits, with `sourceArchivedAts` staleness provenance) —
+omitted entirely when no consolidations exist, so the tool's output contract
+is unchanged for sessions that never enable the canary. The child has NO
+tools and NO transcript write-back: its only product is the summary string,
+it never delays the agent step (the trigger call is synchronous and cheap;
+the LLM run continues in the background), and its failure is logged and
+dropped — the verbatim archive remains the source of truth. Because the
+background child costs one small LLM call per consolidation run, the canary
+is OFF by default and a template must opt in explicitly; summaries are
+agent-stale-by-construction (they describe PRE-compaction content) and cite
+their snapshot provenance for exactly that reason.
 
 Because every `loopAgentSteps` invocation emits these events — the root turn,
 foreground subagents, and inline agents alike — the protocol is scoped by run
@@ -1730,7 +1788,9 @@ revision, so `commitTaskMemory` would reject the transcript replacement for
 exactly the spellings documented as equivalent. The same match also governs the transient
 `suppressSemanticCompaction` anti-thrash skip, which declines a pruner spawn —
 after its input is validated — for the rest of a turn whose consecutive
-semantic passes reclaimed no context space. Custom history editors must opt in
+semantic passes reclaimed no context space. The skip also applies on an
+over-trigger iteration the loop's compaction governor denies, so the
+generator-driven spawn path honors the same pacing. Custom history editors must opt in
 with both `messageHistoryMode: 'full'` and
 `propagateMessageHistoryChanges: true`.
 Ordinary inline children have independent system prompts, tools, and

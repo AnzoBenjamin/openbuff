@@ -725,6 +725,113 @@ describe('sdk-event-handlers', () => {
     expect(Object.keys(captured[1] ?? {})).toEqual(['used', 'max'])
   })
 
+  test('accumulates eviction reclaim from context_window into the compaction notice', () => {
+    const { ctx } = createTestContext()
+    const notices: Array<CompactionNotice | null> = []
+    let notice: CompactionNotice | null = null
+    ctx.streaming.setCompactionNotice = (update) => {
+      notice = update(notice)
+      notices.push(notice)
+    }
+    const handleEvent = createEventHandler(ctx)
+
+    // Two eviction iterations in one turn; no pass has run yet.
+    handleEvent({ type: 'context_window', used: 60_000, max: 200_000, evictedTokens: 8_000 })
+    handleEvent({ type: 'context_window', used: 55_000, max: 200_000, evictedTokens: 4_000 })
+    // An iteration where the evictor was a no-op adds nothing — and writes
+    // nothing: the handler early-returns without invoking the setter.
+    handleEvent({ type: 'context_window', used: 55_000, max: 200_000 })
+
+    expect(notices[0]).toEqual({
+      count: 0,
+      action: 'semantic_compaction',
+      degraded: false,
+      evictedTokens: 8_000,
+    })
+    expect(notices[1]).toEqual({
+      count: 0,
+      action: 'semantic_compaction',
+      degraded: false,
+      evictedTokens: 12_000,
+    })
+    // Only the two eviction-bearing events wrote a NEW notice.
+    expect(notices).toHaveLength(2)
+
+    // Garbage values cannot corrupt the total: the setter is still invoked,
+    // but the updater returns the previous notice unchanged.
+    handleEvent({
+      type: 'context_window',
+      used: 55_000,
+      max: 200_000,
+      evictedTokens: Number.NaN,
+    })
+    handleEvent({
+      type: 'context_window',
+      used: 55_000,
+      max: 200_000,
+      evictedTokens: -500,
+    })
+    expect(notices).toHaveLength(4)
+    expect(notices[2]).toEqual(notices[1])
+    expect(notices[3]).toEqual(notices[1])
+    expect(notices.at(-1)?.evictedTokens).toBe(12_000)
+  })
+
+  test('a settled pass does not double-count the same iteration eviction', () => {
+    const { ctx } = createTestContext()
+    const notices: Array<CompactionNotice | null> = []
+    let notice: CompactionNotice | null = null
+    ctx.streaming.setCompactionNotice = (update) => {
+      notice = update(notice)
+      notices.push(notice)
+    }
+    const handleEvent = createEventHandler(ctx)
+    const runId = 'run-evict-1'
+
+    // One iteration announces a pass; its eviction is stamped on both events.
+    handleEvent({
+      type: 'context_compaction_status',
+      state: 'started',
+      runId,
+      ancestorRunIds: [],
+      contextTokens: 150_000,
+      evictedTokens: 9_000,
+    })
+    // The context_window emission of the SAME iteration carries the amount
+    // again — it must not be added a second time by the result path below.
+    handleEvent({
+      type: 'context_window',
+      used: 141_000,
+      max: 200_000,
+      evictedTokens: 9_000,
+    })
+    handleEvent({
+      type: 'context_compaction',
+      action: 'semantic_compaction',
+      runId,
+      ancestorRunIds: [],
+      evictedTokens: 9_000,
+      evictedCount: 3,
+      before: { tokens: 150_000, messages: 20, categories: {} as never },
+      after: { tokens: 130_000, messages: 12, categories: {} as never },
+      removedCategories: ['toolResults'],
+      retainedKnowledgeMemory: true,
+      recovery: 'ok',
+    })
+    handleEvent({
+      type: 'context_compaction_status',
+      state: 'settled',
+      runId,
+      ancestorRunIds: [],
+    })
+
+    // The result and settled writers carry the accumulated total forward
+    // unchanged (the context_window handler is the single accumulator), so
+    // the turn total is 9k — not 27k.
+    expect(notices.at(-1)?.evictedTokens).toBe(9_000)
+    expect(notices.at(-1)?.count).toBe(1)
+  })
+
   test('keeps the last context usage after finish', () => {
     const captured: Array<StatusBarContextUsage | null> = []
     const { ctx } = createTestContext()

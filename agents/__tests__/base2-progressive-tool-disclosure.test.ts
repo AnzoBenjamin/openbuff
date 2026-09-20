@@ -86,6 +86,7 @@ describe('base2 progressive tool disclosure (M1)', () => {
     expect(agent.toolNames).toEqual([
       'spawn_agents',
       'query_index',
+      'recall_context',
       'read_files',
       'read_outline',
       'read_subtree',
@@ -170,6 +171,7 @@ describe('base2 progressive tool disclosure (M1)', () => {
     expect(coreOnly.toolNames).toEqual([
       'spawn_agents',
       'query_index',
+      'recall_context',
       'read_files',
       'read_outline',
       'read_subtree',

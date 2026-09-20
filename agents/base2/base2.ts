@@ -10372,7 +10372,7 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
               'GATE: PENDING',
               `phase: ${state.currentPhase}`,
               `hooks summary present: ${state.lastValidationSummary ? 'yes' : 'no'}`,
-              'allowed actions: finish implementation work, then end your turn',
+              'allowed actions: finish implementation work, then end your turn (stop calling tools and yield; do not write the completion summary yet)',
               'blocked actions: git-committer, suggest_followups, claiming the gate is running',
               'local checks (basher/typecheck) are not the gate',
               hasDirtyGateLag
@@ -10433,7 +10433,7 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
         }
         if (hasUnresolvedGateWork) {
           sections.push(
-            'suggest_followups: BLOCKED — GATE: PENDING. End your turn; call suggest_followups only after GATE: PASSED.',
+            'suggest_followups: BLOCKED — GATE: PENDING. End your turn (do not retry this call or re-write the summary; re-emitting it now only re-triggers this rejection). Call suggest_followups only after GATE: PASSED.',
           )
         }
         if (state.openReviewerBlockers.length > 0) {

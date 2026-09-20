@@ -83,9 +83,10 @@ const lineColor = (
   line: string,
   themeName: ThemeName,
   mutedColor: string,
+  infoColor: string,
 ): { fg: string; attrs?: number } => {
   if (line.startsWith('@@')) {
-    return { fg: 'cyan', attrs: TextAttributes.BOLD }
+    return { fg: infoColor, attrs: TextAttributes.BOLD }
   }
   if (line.startsWith('+++') || line.startsWith('---')) {
     return { fg: mutedColor, attrs: TextAttributes.BOLD }
@@ -375,7 +376,7 @@ export const DiffViewer = ({
 
   const renderFileHeader = (line: string, idx: number): ReactNode => {
     const safeLine = line.length === 0 ? ' ' : line
-    const { fg, attrs } = lineColor(line, theme.name, theme.muted)
+    const { fg, attrs } = lineColor(line, theme.name, theme.muted, theme.info)
     const resolvedFg = fg || theme.foreground
     return wrapTextToVisualLines(safeLine, width).map((wrappedLine, wrapIdx) =>
       renderNodeCount++ < DIFF_MAX_RENDER_NODES ? (
@@ -405,7 +406,7 @@ export const DiffViewer = ({
             style={{ flexDirection: 'row' }}
           >
             <text style={{ wrapMode: 'none' }}>
-              <span fg="cyan" attributes={TextAttributes.BOLD}>
+              <span fg={theme.info} attributes={TextAttributes.BOLD}>
                 {label}
               </span>
             </text>
@@ -419,7 +420,7 @@ export const DiffViewer = ({
     return (
       <box style={{ flexDirection: 'row', alignItems: 'center' }}>
         <text style={{ wrapMode: 'none' }}>
-          <span fg="cyan" attributes={TextAttributes.BOLD}>
+          <span fg={theme.info} attributes={TextAttributes.BOLD}>
             {headerText}
           </span>
         </text>

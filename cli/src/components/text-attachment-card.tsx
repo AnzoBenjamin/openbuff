@@ -62,7 +62,7 @@ export const TextAttachmentCard = ({
           gap: 1,
         }}
       >
-        <text style={{ fg: theme.info }}>📄</text>
+        <text style={{ fg: theme.muted }}>text</text>
         <text
           style={{
             fg: theme.muted,

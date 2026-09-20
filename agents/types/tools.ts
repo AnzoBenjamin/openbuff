@@ -30,6 +30,7 @@ export type ToolName =
   | 'list_jobs'
   | 'lookup_agent_info'
   | 'query_index'
+  | 'recall_context'
   | 'record_decision'
   | 'read_docs'
   | 'read_files'
@@ -90,6 +91,7 @@ export interface ToolParamsMap {
   list_jobs: ListJobsParams
   lookup_agent_info: LookupAgentInfoParams
   query_index: QueryIndexParams
+  recall_context: RecallContextParams
   record_decision: RecordDecisionParams
   read_docs: ReadDocsParams
   read_files: ReadFilesParams
@@ -594,6 +596,14 @@ export interface QueryIndexParams {
   from?: string
   /** Optional target file path for path mode. Also used as the seed file for references mode when from is omitted or not indexed. */
   to?: string
+}
+
+/**
+ * Search archived pre-compaction transcripts for verbatim facts a compaction pass removed from visible context.
+ */
+export interface RecallContextParams {
+  /** Case-insensitive search terms for archived pre-compaction transcripts. ALL terms must match a verbatim result (AND); stored background summaries use best-effort OR matching. */
+  query: string
 }
 
 /**

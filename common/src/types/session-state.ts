@@ -3,6 +3,8 @@ import { z } from 'zod/v4'
 import { MAX_AGENT_STEPS_DEFAULT } from '../constants/agents'
 
 import type { Message } from './messages/codebuff-message'
+import type { ContextArchiveSnapshot } from './context-archive'
+import type { ContextConsolidation } from './context-consolidation'
 import type { ProjectFileContext } from '../util/file'
 import type { TaskMemoryV1 } from './task-memory'
 import type { OrchestrationLedgerV1 } from './orchestration-ledger'
@@ -287,10 +289,6 @@ export type AgentState = {
   childRunIds: string[]
   messageHistory: Message[]
   stepsRemaining: number
-  /** Hash of the previous repeated-step watchdog observation. */
-  lastStepProgressSignature?: string
-  /** Consecutive count for the current repeated-step signature. */
-  repeatedStepProgressCount?: number
   /** Consecutive text-only turns without task_completed for explicit-completion agents (bounded fallback, resets on tool use). */
   consecutiveTextOnlyWithoutCompletion?: number
   /** Message from the most recent rejected set_output call, cleared once output is successfully set. Used to make the missing-structured-output retry name the real failure. */
@@ -386,6 +384,27 @@ export type AgentState = {
   confirmedPostEditAnchorsByPath?: Record<string, ConfirmedPostEditAnchor>
   /** Why a path must be read again after a failed edit, persisted across turns. */
   editRereadRequirementsByPath?: Record<string, EditRereadRequirement>
+  /**
+   * Capped in-memory archive of pre-compaction transcripts (the recall leg of
+   * the compaction fidelity pipeline). Written by the runtime when a semantic
+   * pass or mechanical trim rewrites history; read only by `recall_context`
+   * results, which are budgeted per call — the archive itself never enters
+   * the model context. Optional so persisted sessions from before the field
+   * existed parse cleanly; the runtime caps snapshot count and size (see
+   * `packages/agent-runtime/src/util/context-archive.ts`).
+   */
+  compactionArchive?: Array<ContextArchiveSnapshot>
+  /**
+   * Capped list of background LLM consolidations of archived snapshots (the
+   * canary-gated prototype leg of the compaction fidelity pipeline). Written
+   * only by the runtime consolidator behind
+   * `programmaticConfig.backgroundSnapshotConsolidation === true`; read by
+   * `recall_context` results (budgeted per call). Optional so persisted
+   * sessions from before the field existed parse cleanly; the runtime caps
+   * count and summary size (see
+   * `packages/agent-runtime/src/util/context-consolidation.ts`).
+   */
+  contextConsolidations?: ContextConsolidation[]
   /** Runtime-owned orchestrator state that must survive message compaction. */
   base2ActiveWork?: Record<string, unknown>
   /** Durable intents/terminal receipts for detached subagent work. */
@@ -588,8 +607,6 @@ export function getInitialAgentState(): AgentState {
     childRunIds: [],
     messageHistory: [],
     stepsRemaining: MAX_AGENT_STEPS_DEFAULT,
-    lastStepProgressSignature: undefined,
-    repeatedStepProgressCount: 0,
     creditsUsed: 0,
     directCreditsUsed: 0,
     cacheInputTokens: 0,

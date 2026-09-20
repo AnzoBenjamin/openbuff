@@ -103,7 +103,7 @@ export const ImageCard = ({
     return () => {
       cancelled = true
     }
-  }, [image, image.filename, canShowInlineImages])
+  }, [image, canShowInlineImages])
 
   const truncatedName = truncateFilename(image.filename)
 
@@ -128,7 +128,7 @@ export const ImageCard = ({
             image={image}
             width={THUMBNAIL_WIDTH}
             height={THUMBNAIL_HEIGHT}
-            fallback={<text style={{ fg: theme.info }}>🖼️</text>}
+            fallback={<text style={{ fg: theme.muted }}>img</text>}
           />
         )}
       </box>

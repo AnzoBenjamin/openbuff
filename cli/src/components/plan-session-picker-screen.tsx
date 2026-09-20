@@ -9,6 +9,7 @@ import { useTerminalLayout } from '../hooks/use-terminal-layout'
 import { useTheme } from '../hooks/use-theme'
 import { createTextPasteHandler } from '../utils/strings'
 import { isPlainEnterKey } from '../utils/terminal-enter-detection'
+import { BORDER_CHARS } from '../utils/ui-constants'
 
 import type { SelectableListItem } from './selectable-list'
 
@@ -253,6 +254,7 @@ export const PlanSessionPickerScreen: React.FC<
             width: contentWidth,
             borderStyle: 'single',
             borderColor: theme.muted,
+            customBorderChars: BORDER_CHARS,
             flexGrow: 1,
             flexShrink: 1,
             overflow: 'hidden',

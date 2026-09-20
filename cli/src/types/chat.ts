@@ -413,6 +413,19 @@ export type CompactionNotice = {
    * notice produced before this field existed carries.
    */
   progressPercent?: number
+  /**
+   * Cumulative tokens freed THIS TURN by the deterministic tool-result
+   * evictor. `context_window` events carry the per-iteration amount and are
+   * often the only event an eviction iteration produces — the free reclaim
+   * frequently prevents an LLM pass entirely — so this handler is the single
+   * accumulation point; the compaction status/result paths carry the total
+   * forward unchanged so the same iteration's eviction is never counted
+   * twice. The total is user-visible work: a notice that holds only this
+   * field (no completed pass, nothing live) stays observable instead of being
+   * cleared, so the chip can report the free reclaim. Absent on notices
+   * produced before this field existed.
+   */
+  evictedTokens?: number
 }
 
 export type AskUserContentBlock = {
@@ -497,6 +510,14 @@ export type DoctorContentBlock = {
   mcpCount: number
   diagnostics: Array<{ filePath?: string; agentId?: string; message: string }>
   providerStatus: string
+}
+
+export type UpdateContentBlock = {
+  type: 'update'
+  updateStatus: 'staged' | 'current' | 'unavailable'
+  current: string | null
+  pending: string | null
+  lines: string[]
 }
 
 export type IndexStatusContentBlock = {
@@ -615,6 +636,7 @@ export type ContentBlock =
   | PlanStatusContentBlock
   | TextContentBlock
   | ToolContentBlock
+  | UpdateContentBlock
   | PlanContentBlock
 
 export type AgentMessage = {
@@ -748,6 +770,10 @@ export function isDoctorBlock(
   block: ContentBlock,
 ): block is DoctorContentBlock {
   return block.type === 'doctor'
+}
+
+export function isUpdateBlock(block: ContentBlock): block is UpdateContentBlock {
+  return block.type === 'update'
 }
 
 export function isIndexStatusBlock(

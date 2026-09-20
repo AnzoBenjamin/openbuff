@@ -347,15 +347,28 @@ export const buildContextLabel = (
  * ellipsis. The percent is best-effort telemetry, so a missing, non-finite or
  * zero value falls back to the previous ellipsis label, and the narrow sizes —
  * which have no room for it — keep their exact previous labels.
+ *
+ * Eviction telemetry: `evictedTokens` is the turn-cumulative reclaim of the
+ * deterministic tool-result evictor. A turn where eviction freed tokens but
+ * no pass completed still renders ('⇲ freed 12k' at 'md'/'lg'), because that
+ * reclaim is real work; a settled count label gains a '· freed <k>' suffix at
+ * 'lg' only, where the row budget has room. Narrow sizes keep their exact
+ * previous labels.
  */
 const buildCompactionLabel = (
   widthSize: StatusBarWidthSize,
   notice: Pick<
     CompactionNotice,
-    'count' | 'action' | 'pending' | 'progressPercent'
+    'count' | 'action' | 'pending' | 'progressPercent' | 'evictedTokens'
   >,
 ): string => {
   const narrow = widthSize === 'xs' || widthSize === 'sm'
+  const freedTokens =
+    typeof notice.evictedTokens === 'number' &&
+    Number.isFinite(notice.evictedTokens) &&
+    notice.evictedTokens > 0
+      ? Math.round(notice.evictedTokens)
+      : 0
   if (notice.pending) {
     if (narrow) return '⇲ …'
     const percent = notice.progressPercent
@@ -365,9 +378,22 @@ const buildCompactionLabel = (
       ? `⇲ compacting ${Math.min(100, Math.round(percent))}%`
       : '⇲ compacting…'
   }
+  if (notice.count === 0) {
+    // Eviction-only turn: no pass completed, but the free reclaim is real.
+    if (freedTokens > 0) {
+      const freed = formatStatusTokenCount(freedTokens)
+      return narrow ? `⇲ ↧${freed}` : `⇲ freed ${freed}`
+    }
+    if (narrow) return `⇲ ${notice.count}`
+  }
   if (narrow) return `⇲ ${notice.count}`
   const verb = notice.action === 'mechanical_trim' ? 'trimmed' : 'compacted'
-  return `⇲ ${verb} ×${notice.count}`
+  const base = `⇲ ${verb} ×${notice.count}`
+  // The freed suffix is 'lg'-only: 'md' spends its budget on the verb form,
+  // and the overflow loop drops the whole chip before shortening mid-label.
+  return freedTokens > 0 && widthSize === 'lg'
+    ? `${base} · freed ${formatStatusTokenCount(freedTokens)}`
+    : base
 }
 
 /**
@@ -509,7 +535,14 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
   // no longer running. A notice that never counted a completed pass then has
   // nothing to report and is dropped entirely rather than rendering '⇲ 0'.
   const compactionPending = compactionNotice?.pending === true && isActive
-  if (compactionNotice && (compactionPending || compactionNotice.count > 0)) {
+  // An eviction-only turn (free reclaim, no completed pass, nothing live)
+  // still renders: the freed tokens are real, user-visible work.
+  const evictionOnly =
+    (compactionNotice?.evictedTokens ?? 0) > 0 && compactionNotice!.count === 0
+  if (
+    compactionNotice &&
+    (compactionPending || compactionNotice.count > 0 || evictionOnly)
+  ) {
     chips.push({
       id: 'compaction',
       label: buildCompactionLabel(widthSize, {
@@ -519,11 +552,19 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
         ...(compactionNotice.progressPercent !== undefined && {
           progressPercent: compactionNotice.progressPercent,
         }),
+        ...(compactionNotice.evictedTokens !== undefined && {
+          evictedTokens: compactionNotice.evictedTokens,
+        }),
       }),
       // A live pass reads as in-progress, not as a failed one: a degraded
-      // earlier pass only tones the chip red once it has settled.
+      // earlier pass only tones the chip red once it has settled. An
+      // eviction-only turn is informational, not a warning: nothing failed.
       tone:
-        compactionNotice.degraded && !compactionPending ? 'error' : 'warning',
+        compactionNotice.degraded && !compactionPending
+          ? 'error'
+          : compactionNotice.count > 0 || compactionPending
+            ? 'warning'
+            : 'secondary',
     })
   }
 

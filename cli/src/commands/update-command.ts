@@ -91,12 +91,19 @@ function asVersionString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
+export type UpdateStatus = {
+  status: 'staged' | 'current' | 'unavailable'
+  current: string | null
+  pending: string | null
+  lines: string[]
+}
+
 /**
  * Read wrapper metadata (openbuff-metadata.json) plus the CLI version fallback
- * and return a short user-facing update status string. Sync, no network, no
- * downloads: the TUI only reports what the wrapper staged in the background.
+ * and return a structured update status. Sync, no network, no downloads: the
+ * TUI only reports what the wrapper staged in the background.
  */
-export function buildUpdateStatusMessage(deps: UpdateStatusDeps = {}): string {
+export function buildUpdateStatus(deps: UpdateStatusDeps = {}): UpdateStatus {
   try {
     const env = deps.env ?? (getCliEnv() as unknown as Record<string, string | undefined>)
     const platform = deps.platform ?? process.platform
@@ -130,14 +137,42 @@ export function buildUpdateStatusMessage(deps: UpdateStatusDeps = {}): string {
       pending &&
       (current === null || current === undefined || compare(current, pending) < 0)
     ) {
-      return [
-        `Update ${pending} staged (current ${current ?? 'unknown'}) \u2014 restart to apply.`,
-        'The binary cannot update while running; run `openbuff --update` from your shell to apply now.',
-      ].join(' ')
+      return {
+        status: 'staged',
+        current: current ?? null,
+        pending,
+        lines: [
+          `Update ${pending} staged (current ${current ?? 'unknown'}) \u2014 restart to apply.`,
+          'The binary cannot update while running; run `openbuff --update` from your shell to apply now.',
+        ],
+      }
     }
 
-    return `Openbuff is up to date (${current ?? 'unknown'}). Background wrapper checks stage updates; run \`openbuff --check-update\` from your shell to check now.`
+    return {
+      status: 'current',
+      current: current ?? null,
+      pending: null,
+      lines: [
+        `Openbuff is up to date (${current ?? 'unknown'}). Background wrapper checks stage updates; run \`openbuff --check-update\` from your shell to check now.`,
+      ],
+    }
   } catch {
-    return 'Openbuff update status unavailable (could not read update metadata). Run `openbuff --check-update` from your shell to check now.'
+    return {
+      status: 'unavailable',
+      current: null,
+      pending: null,
+      lines: [
+        'Openbuff update status unavailable (could not read update metadata). Run `openbuff --check-update` from your shell to check now.',
+      ],
+    }
   }
+}
+
+/**
+ * User-facing update status string built from {@link buildUpdateStatus}. The
+ * staged branch joins its two sentences with a space; the up-to-date and
+ * unavailable branches are single sentences.
+ */
+export function buildUpdateStatusMessage(deps: UpdateStatusDeps = {}): string {
+  return buildUpdateStatus(deps).lines.join(' ')
 }

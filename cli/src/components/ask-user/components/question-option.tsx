@@ -44,7 +44,11 @@ export const QuestionOption: React.FC<QuestionOptionProps> = memo(
       : isSelected
         ? SYMBOLS.SELECTED
         : SYMBOLS.UNSELECTED
-    const fg = isFocused ? '#000000' : isSelected ? selectedFg : theme.muted
+    const fg = isFocused
+      ? theme.foreground
+      : isSelected
+        ? selectedFg
+        : theme.muted
     const attributes = isFocused || isSelected ? TextAttributes.BOLD : undefined
 
     return (
@@ -55,7 +59,7 @@ export const QuestionOption: React.FC<QuestionOptionProps> = memo(
           flexDirection: 'column',
           gap: 0,
           width: '100%',
-          backgroundColor: isFocused ? theme.primary : undefined,
+          backgroundColor: isFocused ? theme.surface : undefined,
           marginBottom: 0,
           paddingTop: 0,
           paddingBottom: 0,
@@ -67,7 +71,7 @@ export const QuestionOption: React.FC<QuestionOptionProps> = memo(
         {isFocused && description && (
           <text
             style={{
-              fg: '#000000',
+              fg: theme.muted,
               marginLeft: 2,
             }}
           >

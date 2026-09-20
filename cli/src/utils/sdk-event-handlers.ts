@@ -1292,6 +1292,38 @@ const handleContextWindow = (
       compactionTriggerTokens: event.compactionTriggerTokens,
     }),
   })
+  // Eviction telemetry. The deterministic evictor's per-iteration reclaim is
+  // stamped on three events of the same iteration (status `started`,
+  // `context_compaction`, and this one), so THIS handler is the single
+  // accumulation point: `context_window` is emitted exactly once per
+  // iteration and is often the only event an eviction iteration produces,
+  // because the free reclaim frequently prevents an LLM pass entirely. A
+  // notice is created here even at count 0 when eviction has freed tokens —
+  // that reclaim is real, user-visible work, and the settled-clear condition
+  // in {@link handleContextCompactionStatus} is amended to keep it.
+  if (event.evictedTokens === undefined) return
+  state.streaming.setCompactionNotice((previous) => {
+    const freed =
+      typeof event.evictedTokens === 'number' &&
+      Number.isFinite(event.evictedTokens) &&
+      event.evictedTokens > 0
+        ? Math.round(event.evictedTokens)
+        : 0
+    if (freed === 0) return previous
+    return {
+      count: previous?.count ?? 0,
+      action: previous?.action ?? 'semantic_compaction',
+      degraded: previous?.degraded ?? false,
+      ...(previous?.progressPercent !== undefined && {
+        progressPercent: previous.progressPercent,
+      }),
+      ...pendingNoticeFields(
+        previous?.pendingRunIds ?? [],
+        hasUncorrelatedPending(previous),
+      ),
+      evictedTokens: (previous?.evictedTokens ?? 0) + freed,
+    }
+  })
 }
 
 /**
@@ -1538,6 +1570,11 @@ const handleContextCompactionStatus = (
       // only completed pass was a mechanical trim would read '⇲ compacted ×N'.
       action: previous?.action ?? 'semantic_compaction',
       degraded: previous?.degraded ?? false,
+      // The eviction total is turn-cumulative and owned by the context_window
+      // handler; every other notice writer carries it forward unchanged.
+      ...(previous?.evictedTokens !== undefined && {
+        evictedTokens: previous.evictedTokens,
+      }),
       ...pendingNoticeFields(
         addPendingRunId(previous?.pendingRunIds, event.runId),
       ),
@@ -1563,11 +1600,23 @@ const handleContextCompactionStatus = (
     // unreachable). An uncorrelated legacy `pending: true` is settled here
     // rather than carried: a `settled` is the only event that can ever clear a
     // live flag whose run is unknown, so keeping it would strand the chip.
-    if (previous.count === 0 && pendingRunIds.length === 0) return null
+    // EXCEPTION: a notice that accumulated eviction-only reclaim stays
+    // observable — the freed tokens are real work the chip reports even with
+    // no completed pass.
+    if (
+      previous.count === 0 &&
+      (previous.evictedTokens ?? 0) === 0 &&
+      pendingRunIds.length === 0
+    ) {
+      return null
+    }
     return {
       count: previous.count,
       action: previous.action,
       degraded: previous.degraded,
+      ...(previous.evictedTokens !== undefined && {
+        evictedTokens: previous.evictedTokens,
+      }),
       ...pendingNoticeFields(pendingRunIds),
     }
   })
@@ -1694,6 +1743,11 @@ const handleContextRequestTrim = (
     // A request-time trim means the runtime brakes failed, so the turn is
     // degraded regardless of how the earlier passes reported.
     degraded: true,
+    // The eviction total is turn-cumulative and owned by the context_window
+    // handler; every other notice writer carries it forward unchanged.
+    ...(previous?.evictedTokens !== undefined && {
+      evictedTokens: previous.evictedTokens,
+    }),
     // This trim settles no announced pass, so every live pass is carried
     // forward — including a legacy notice's uncorrelated `pending: true`,
     // which would otherwise silently lose its live flag here.
@@ -1845,6 +1899,13 @@ const handleContextCompaction = (
         : (previous?.count ?? 0) + 1,
       action: event.action,
       degraded,
+      // The eviction total is turn-cumulative and owned by the context_window
+      // handler, which also emits the SAME iteration's per-iteration amount
+      // after this result — adding it here too would double-count. Carry the
+      // accumulated total forward unchanged.
+      ...(previous?.evictedTokens !== undefined && {
+        evictedTokens: previous.evictedTokens,
+      }),
       ...pendingNoticeFields(pendingRunIds, legacyPending),
     }
   })

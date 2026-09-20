@@ -12,13 +12,13 @@
 import { TextAttributes } from '@opentui/core'
 import React, { useCallback, useMemo, useState } from 'react'
 
-import { Button } from './button'
 import { MultilineInput } from './multiline-input'
 import { SelectableList } from './selectable-list'
 import { useTerminalLayout } from '../hooks/use-terminal-layout'
 import { useTheme } from '../hooks/use-theme'
 import { createTextPasteHandler } from '../utils/strings'
 import { isPlainEnterKey } from '../utils/terminal-enter-detection'
+import { BORDER_CHARS } from '../utils/ui-constants'
 import { fuzzyMatch } from '../utils/fuzzy-match'
 
 import { getAllPathsWithDirectories } from '@codebuff/common/project-file-tree'
@@ -350,6 +350,7 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
             width: contentWidth,
             borderStyle: 'single',
             borderColor: theme.muted,
+            customBorderChars: BORDER_CHARS,
             flexGrow: 1,
             flexShrink: 1,
             overflow: 'hidden',

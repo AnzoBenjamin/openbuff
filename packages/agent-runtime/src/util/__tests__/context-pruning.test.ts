@@ -12,10 +12,21 @@ import {
 import {
   maybePruneContext,
   DEFAULT_MAX_CONTEXT_TOKENS,
+  DEFAULT_SEMANTIC_REARM_BUDGET_TOKENS,
   getModelContextReservedTokens,
   getModelContextMessageLimit,
   getEffectiveContextLimits,
   getSemanticCompactionBudget,
+  createSemanticCompactionGovernor,
+  shouldRunSemanticPass,
+  recordPassAnnounced,
+  advanceGovernorIteration,
+  recordPassSettled,
+  getSemanticRearmBudgetTokens,
+  getSemanticEvictionFloorTokens,
+  SEMANTIC_COOLDOWN_ITERATIONS,
+  SEMANTIC_MAX_PASSES_PER_TURN,
+  SEMANTIC_EVICTION_FRACTION,
   MODEL_CONTEXT_MIN_RESERVED_TOKENS,
   MODEL_CONTEXT_MAX_RESERVED_TOKENS,
   MODEL_CONTEXT_RESERVED_FRACTION,
@@ -222,10 +233,10 @@ describe('getModelContextMessageLimit (M4 unified threshold convergence)', () =>
 
 describe('getSemanticCompactionBudget', () => {
   it.each([
-    [8_000, 2_000, 1_400, 2_000],
-    [16_000, 5_600, 2_800, 2_000],
-    [32_000, 16_800, 8_400, 6_000],
-    [64_000, 39_200, 19_600, 14_000],
+    [8_000, 2_000, 1_600, 2_000],
+    [16_000, 6_000, 3_200, 2_000],
+    [32_000, 18_000, 9_600, 6_000],
+    [64_000, 42_000, 22_400, 14_000],
   ])(
     'keeps a meaningful working set for a small %i-token window',
     (window, trigger, target, headroom) => {
@@ -242,11 +253,11 @@ describe('getSemanticCompactionBudget', () => {
   )
 
   it.each([
-    [128_000, 89_600, 72_000, 32_000],
-    [200_000, 140_000, 72_000, 32_000],
-    [262_144, 183_500, 91_750, 39_321],
-    [500_000, 350_000, 175_000, 75_000],
-    [1_000_000, 700_000, 350_000, 150_000],
+    [128_000, 96_000, 72_000, 32_000],
+    [200_000, 156_000, 80_000, 32_000],
+    [262_144, 204_472, 104_857, 39_321],
+    [500_000, 390_000, 200_000, 75_000],
+    [1_000_000, 780_000, 400_000, 150_000],
   ])(
     'scales trigger and target budgets for a %i-token window',
     (window, trigger, target, headroom) => {
@@ -308,5 +319,294 @@ describe('getEffectiveContextLimits', () => {
       providerSafeMessageLimit: 50_000,
       statusWindowTokens: 50_000,
     })
+  })
+})
+
+describe('semantic compaction governor', () => {
+  const decide = (
+    governor: ReturnType<typeof createSemanticCompactionGovernor>,
+    contextTokens: number,
+    emergencyLimitTokens = 190_000,
+  ) =>
+    shouldRunSemanticPass(governor, {
+      contextTokens,
+      triggerBudgetTokens: 100_000,
+      rearmBudgetTokens: 50_000,
+      emergencyLimitTokens,
+    })
+
+  it('allows a pass while armed above the trigger, then enters cooldown', () => {
+    const governor = createSemanticCompactionGovernor()
+    expect(decide(governor, 100_500).shouldRunSemanticPass).toBe(true)
+    expect(decide(governor, 50_000).shouldRunSemanticPass).toBe(false)
+
+    recordPassAnnounced(governor)
+    expect(governor.state).toBe('cooldown')
+    expect(governor.passesThisTurn).toBe(1)
+    expect(governor.iterationsSincePass).toBe(0)
+    // Cooldown denies even far above the trigger.
+    expect(decide(governor, 180_000).shouldRunSemanticPass).toBe(false)
+  })
+
+  it('re-arms only after the cooldown AND a drop below the rearm budget', () => {
+    const governor = createSemanticCompactionGovernor()
+    recordPassAnnounced(governor)
+    for (let i = 0; i < SEMANTIC_COOLDOWN_ITERATIONS; i++) {
+      advanceGovernorIteration(governor)
+    }
+    // Cooldown served, but context is still above the rearm budget: denied.
+    expect(decide(governor, 150_000).shouldRunSemanticPass).toBe(false)
+    expect(governor.state).toBe('rearm-pending')
+    expect(decide(governor, 150_000).shouldRunSemanticPass).toBe(false)
+    expect(governor.state).toBe('rearm-pending')
+    // Context falls below the rearm budget: this call re-arms (and denies,
+    // since the trigger is not exceeded at 49_999).
+    expect(decide(governor, 49_999).shouldRunSemanticPass).toBe(false)
+    expect(governor.state).toBe('armed')
+    // Re-armed: the next over-trigger observation is allowed.
+    expect(decide(governor, 100_500).shouldRunSemanticPass).toBe(true)
+  })
+
+  it('keeps the unknown-window rearm budget strictly below the fallback trigger', () => {
+    const rearm = getSemanticRearmBudgetTokens(undefined)
+    const trigger = getSemanticCompactionBudget(undefined).triggerBudgetTokens
+    // The rearm budget must not coincide with (or sit at/above) the fallback
+    // trigger: in the fallback band an observation that re-arms would
+    // otherwise immediately satisfy the trigger check and announce a pass.
+    expect(rearm).toBeLessThan(trigger)
+    // The margin must absorb the +1_000 trigger hysteresis in
+    // shouldRunSemanticPass.
+    expect(rearm - 1 + 1_000).toBeLessThanOrEqual(trigger)
+  })
+
+  it('denies the trigger check on the observation that re-arms the fallback band', () => {
+    const rearm = getSemanticRearmBudgetTokens(undefined)
+    const trigger = getSemanticCompactionBudget(undefined).triggerBudgetTokens
+    const governor = createSemanticCompactionGovernor()
+    recordPassAnnounced(governor)
+    for (let i = 0; i < SEMANTIC_COOLDOWN_ITERATIONS; i++) {
+      advanceGovernorIteration(governor)
+    }
+    // Context just below the fallback rearm budget re-arms...
+    const decision = shouldRunSemanticPass(governor, {
+      contextTokens: rearm - 1,
+      triggerBudgetTokens: trigger,
+      rearmBudgetTokens: rearm,
+      emergencyLimitTokens: 190_000,
+    })
+    // ...and the trigger check must deny, so the NEXT over-trigger
+    // observation is the first allowed pass (documented invariant).
+    expect(decision.shouldRunSemanticPass).toBe(false)
+    expect(governor.state).toBe('armed')
+    expect(decision.reason).toBe('Context below the semantic trigger budget.')
+  })
+
+  it('clamps the rearm budget above the min-target floor on 128k windows', () => {
+    const window = 128_000
+    const budget = getSemanticCompactionBudget(window)
+    const rearm = getSemanticRearmBudgetTokens(window)
+    // The 72k min-target floor pins the achievable post-pass target ABOVE the
+    // bare 0.5 share (64k), so the rearm budget must be clamped strictly
+    // above the target — otherwise a settled pass could never re-arm the
+    // governor from its own reclaim (the 128k rearm inversion).
+    expect(budget.targetBudgetTokens).toBe(72_000)
+    expect(budget.targetBudgetTokens).toBeGreaterThan(64_000)
+    expect(rearm).toBeGreaterThan(budget.targetBudgetTokens)
+    // The clamp margin keeps the re-arming observation's trigger check
+    // denied, so the NEXT over-trigger observation is the first allowed pass.
+    expect(rearm - 1 + 1_000).toBeLessThanOrEqual(budget.triggerBudgetTokens)
+  })
+
+  it('re-arms a 128k-window settled pass at the target without announcing', () => {
+    const budget = getSemanticCompactionBudget(128_000)
+    const rearm = getSemanticRearmBudgetTokens(128_000)
+    const governor = createSemanticCompactionGovernor()
+    recordPassAnnounced(governor)
+    for (let i = 0; i < SEMANTIC_COOLDOWN_ITERATIONS; i++) {
+      advanceGovernorIteration(governor)
+    }
+    // Context at exactly the achievable post-pass target: the unclamped
+    // rearm budget (64k) would strand the governor in rearm-pending, but the
+    // clamped budget re-arms here — and the trigger check must still deny so
+    // this observation does not itself announce a pass.
+    const rearmDecision = shouldRunSemanticPass(governor, {
+      contextTokens: budget.targetBudgetTokens,
+      triggerBudgetTokens: budget.triggerBudgetTokens,
+      rearmBudgetTokens: rearm,
+      emergencyLimitTokens: 190_000,
+    })
+    expect(governor.state).toBe('armed')
+    expect(rearmDecision.shouldRunSemanticPass).toBe(false)
+    expect(rearmDecision.emergencyOverride).toBeUndefined()
+    // The next over-trigger observation on the SAME window is allowed.
+    expect(
+      shouldRunSemanticPass(governor, {
+        contextTokens: budget.triggerBudgetTokens + 1_000,
+        triggerBudgetTokens: budget.triggerBudgetTokens,
+        rearmBudgetTokens: rearm,
+        emergencyLimitTokens: 190_000,
+      }).shouldRunSemanticPass,
+    ).toBe(true)
+  })
+
+  it('keeps the rearm budget below the trigger hysteresis band on every window class', () => {
+    // Invariant (every window class): the highest re-arming observation sits
+    // at rearm − 1, and it must still be denied by the +1_000 trigger
+    // hysteresis in shouldRunSemanticPass — including the small-window
+    // branch, where the trigger sits close to the target.
+    for (const window of [
+      8_000,
+      16_000,
+      32_000,
+      64_000,
+      128_000,
+      200_000,
+      262_144,
+      500_000,
+      1_000_000,
+    ] as const) {
+      const budget = getSemanticCompactionBudget(window)
+      const rearm = getSemanticRearmBudgetTokens(window)
+      expect(rearm).toBeGreaterThanOrEqual(1)
+      expect(rearm - 1 + 1_000).toBeLessThanOrEqual(budget.triggerBudgetTokens)
+    }
+  })
+
+  it('denies the trigger check on the observation that re-arms a 16k window', () => {
+    const window = 16_000
+    const budget = getSemanticCompactionBudget(window)
+    const rearm = getSemanticRearmBudgetTokens(window)
+    // floor(16k / 2) = 8_000 beats the target floor (3_200 + 1_000), but the
+    // trigger cap (6_000 − 1_000) wins: the unclamped 8_000 rearm budget sat
+    // ABOVE the 6_000 trigger, letting a re-arming observation announce an
+    // immediate paid pass.
+    expect(budget.triggerBudgetTokens).toBe(6_000)
+    expect(rearm).toBe(5_000)
+    const governor = createSemanticCompactionGovernor()
+    recordPassAnnounced(governor)
+    for (let i = 0; i < SEMANTIC_COOLDOWN_ITERATIONS; i++) {
+      advanceGovernorIteration(governor)
+    }
+    // Context just below the rearm budget re-arms...
+    const rearmDecision = shouldRunSemanticPass(governor, {
+      contextTokens: rearm - 1,
+      triggerBudgetTokens: budget.triggerBudgetTokens,
+      rearmBudgetTokens: rearm,
+      emergencyLimitTokens: 8_000,
+    })
+    // ...and the trigger check must deny: the NEXT over-trigger observation,
+    // not the re-arming one, is the first allowed pass.
+    expect(governor.state).toBe('armed')
+    expect(rearmDecision.shouldRunSemanticPass).toBe(false)
+    expect(rearmDecision.emergencyOverride).toBeUndefined()
+    expect(
+      shouldRunSemanticPass(governor, {
+        contextTokens: budget.triggerBudgetTokens + 1_000,
+        triggerBudgetTokens: budget.triggerBudgetTokens,
+        rearmBudgetTokens: rearm,
+        emergencyLimitTokens: 8_000,
+      }).shouldRunSemanticPass,
+    ).toBe(true)
+  })
+
+  it('re-arms an 8k window only after real reclaim, never via an immediate paid pass', () => {
+    const window = 8_000
+    const budget = getSemanticCompactionBudget(window)
+    const rearm = getSemanticRearmBudgetTokens(window)
+    // On an 8k window the trigger (2_000) sits WITHIN the hysteresis margin
+    // of the target (1_600), so the invariant cap wins over the target floor:
+    // rearm = trigger − 1_000 = 1_000 instead of the old max(4_000, 2_600)
+    // that exceeded the trigger and let a re-arming observation announce.
+    expect(budget.triggerBudgetTokens).toBe(2_000)
+    expect(budget.targetBudgetTokens).toBe(1_600)
+    expect(rearm).toBe(1_000)
+    const governor = createSemanticCompactionGovernor()
+    recordPassAnnounced(governor)
+    for (let i = 0; i < SEMANTIC_COOLDOWN_ITERATIONS; i++) {
+      advanceGovernorIteration(governor)
+    }
+    // A settled pass landing at the target stays rearm-pending (the target is
+    // at/above the clamped rearm budget), so it can never announce an
+    // immediate paid pass.
+    expect(
+      shouldRunSemanticPass(governor, {
+        contextTokens: budget.targetBudgetTokens,
+        triggerBudgetTokens: budget.triggerBudgetTokens,
+        rearmBudgetTokens: rearm,
+        emergencyLimitTokens: 4_000,
+      }).shouldRunSemanticPass,
+    ).toBe(false)
+    expect(governor.state).toBe('rearm-pending')
+    // Further reclaim below the clamped rearm budget re-arms without
+    // announcing (999 + 1_000 = 1_999 ≤ trigger 2_000).
+    const rearmDecision = shouldRunSemanticPass(governor, {
+      contextTokens: rearm - 1,
+      triggerBudgetTokens: budget.triggerBudgetTokens,
+      rearmBudgetTokens: rearm,
+      emergencyLimitTokens: 4_000,
+    })
+    expect(governor.state).toBe('armed')
+    expect(rearmDecision.shouldRunSemanticPass).toBe(false)
+    // The next over-trigger observation is the first allowed pass.
+    expect(
+      shouldRunSemanticPass(governor, {
+        contextTokens: budget.triggerBudgetTokens + 1_000,
+        triggerBudgetTokens: budget.triggerBudgetTokens,
+        rearmBudgetTokens: rearm,
+        emergencyLimitTokens: 4_000,
+      }).shouldRunSemanticPass,
+    ).toBe(true)
+  })
+
+  it('emergency-overrides at the provider-safe limit once disarmed', () => {
+    const governor = createSemanticCompactionGovernor()
+    recordPassAnnounced(governor)
+    for (let i = 0; i < SEMANTIC_COOLDOWN_ITERATIONS; i++) {
+      advanceGovernorIteration(governor)
+    }
+    const emergency = decide(governor, 190_000, 190_000)
+    expect(emergency.shouldRunSemanticPass).toBe(true)
+    expect(emergency.emergencyOverride).toBe(true)
+    // Below the emergency limit the rearm margin still holds.
+    expect(decide(governor, 150_000, 190_000).shouldRunSemanticPass).toBe(false)
+  })
+
+  it('denies every pass once the per-turn cap is spent', () => {
+    const governor = createSemanticCompactionGovernor()
+    governor.passesThisTurn = SEMANTIC_MAX_PASSES_PER_TURN
+    const denied = decide(governor, 200_000)
+    expect(denied.shouldRunSemanticPass).toBe(false)
+    expect(denied.reason).toContain('cap')
+  })
+
+  it('two consecutive no-progress passes spend the turn cap (bounded denial)', () => {
+    const governor = createSemanticCompactionGovernor()
+    recordPassSettled(governor, { productive: false })
+    expect(governor.passesThisTurn).toBe(0)
+    recordPassSettled(governor, { productive: false })
+    expect(governor.passesThisTurn).toBe(SEMANTIC_MAX_PASSES_PER_TURN)
+    expect(decide(governor, 200_000).shouldRunSemanticPass).toBe(false)
+  })
+
+  it('a productive pass resets the no-progress streak without restoring the cap', () => {
+    const governor = createSemanticCompactionGovernor()
+    recordPassSettled(governor, { productive: false })
+    recordPassSettled(governor, { productive: false })
+    recordPassSettled(governor, { productive: true })
+    expect(governor.consecutiveNoProgressPasses).toBe(0)
+    // The spent cap is not refunded: bounded denial for the rest of the turn.
+    expect(governor.passesThisTurn).toBe(SEMANTIC_MAX_PASSES_PER_TURN)
+  })
+
+  it('exposes rearm and eviction budget helpers with unknown-window fallbacks', () => {
+    expect(getSemanticRearmBudgetTokens(200_000)).toBe(100_000)
+    expect(getSemanticRearmBudgetTokens(undefined)).toBe(
+      DEFAULT_SEMANTIC_REARM_BUDGET_TOKENS,
+    )
+    expect(getSemanticEvictionFloorTokens(200_000)).toBe(
+      Math.floor(200_000 * SEMANTIC_EVICTION_FRACTION),
+    )
+    // Unknown window: eviction is disabled (0) rather than guessed.
+    expect(getSemanticEvictionFloorTokens(undefined)).toBe(0)
   })
 })

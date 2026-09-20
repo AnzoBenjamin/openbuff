@@ -3423,20 +3423,20 @@ describe('context-pruner threshold behavior', () => {
     )
   })
 
-  // Trigger thresholds mirror the generated SEMANTIC_* budgets (0.70 trigger)
+  // Trigger thresholds mirror the generated SEMANTIC_* budgets (0.78 trigger)
   // emitted into context-pruner.ts by scripts/generate-pruner-budgets.ts from
   // packages/agent-runtime/src/util/context-pruning.ts. Keep in sync with the
   // pruner-budgets-freshness pointer if these change.
   test.each([
     [8_000, 2_000],
-    [16_000, 5_600],
-    [32_000, 16_800],
-    [64_000, 39_200],
-    [128_000, 89_600],
-    [200_000, 140_000],
-    [262_144, 183_500],
-    [500_000, 350_000],
-    [1_000_000, 700_000],
+    [16_000, 6_000],
+    [32_000, 18_000],
+    [64_000, 42_000],
+    [128_000, 96_000],
+    [200_000, 156_000],
+    [262_144, 204_472],
+    [500_000, 390_000],
+    [1_000_000, 780_000],
   ])(
     'scales the default semantic threshold for a %i-token context window',
     (contextWindowTokens, triggerBudgetTokens) => {
@@ -3644,8 +3644,8 @@ describe('context-pruner threshold behavior', () => {
   // The 2,400-character goal cap documented in docs/agents-and-tools.md and
   // cli/CHANGELOG.md is a baseline at the legacy 100k semantic target, not a
   // fixed absolute: it is scaled by clamp(targetTokens / 100_000, 0.5, 3).
-  // A 200k-class window resolves a 72k target, so the effective cap is
-  // round(2_400 * 0.72) = 1_728 characters.
+  // A 200k-class window resolves an 80k target, so the effective cap is
+  // round(2_400 * 0.8) = 1_920 characters.
   test('scales the pinned goal cap below the documented baseline on a 200k window', () => {
     mockAgentState.contextWindowTokens = 200_000
     const latest: Message = {
@@ -3666,7 +3666,7 @@ describe('context-pruner threshold behavior', () => {
     expect(goal).toBeDefined()
     expect(goal).toContain('GOAL-HEAD')
     expect(goal).toContain('GOAL-TAIL')
-    expect(goal!.length).toBeLessThanOrEqual(1_728)
+    expect(goal!.length).toBeLessThanOrEqual(1_920)
     expect(goal!.length).toBeGreaterThan(1_400)
   })
 

@@ -51,7 +51,7 @@ export const OptionsList: React.FC<OptionsListProps> = memo(
         ? SYMBOLS.SELECTED
         : SYMBOLS.UNSELECTED
     const customFg = isCustomFocused
-      ? '#000000'
+      ? theme.foreground
       : isCustomSelected
         ? selectedFg
         : theme.muted
@@ -111,7 +111,7 @@ export const OptionsList: React.FC<OptionsListProps> = memo(
             width: '100%',
             flexDirection: 'column',
             gap: 0,
-            backgroundColor: isCustomFocused ? theme.primary : undefined,
+            backgroundColor: isCustomFocused ? theme.surface : undefined,
             paddingTop: 0,
             paddingBottom: 0,
             paddingLeft: optionIndent,
@@ -123,7 +123,7 @@ export const OptionsList: React.FC<OptionsListProps> = memo(
           {isCustomFocused && (
             <text
               style={{
-                fg: '#000000',
+                fg: theme.muted,
                 marginLeft: 2,
               }}
             >

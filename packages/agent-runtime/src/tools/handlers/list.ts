@@ -22,6 +22,7 @@ import { handleListJobs } from './tool/list-jobs'
 import { handleListDirectory } from './tool/list-directory'
 import { handleLookupAgentInfo } from './tool/lookup-agent-info'
 import { handleQueryIndex } from './tool/query-index'
+import { handleRecallContext } from './tool/recall-context'
 import { handleRecordDecision } from './tool/record-decision'
 import { handleReadDocs } from './tool/read-docs'
 import { handleReadFiles } from './tool/read-files'
@@ -101,6 +102,7 @@ export const codebuffToolHandlers = {
   list_directory: handleListDirectory,
   lookup_agent_info: handleLookupAgentInfo,
   query_index: handleQueryIndex,
+  recall_context: handleRecallContext,
   record_decision: handleRecordDecision,
   read_docs: handleReadDocs,
   read_files: handleReadFiles,

@@ -62,11 +62,12 @@ const INTERRUPTED_TEXT = 'Interrupted before this pass reported a result.'
 const PROGRESS_BAR_WIDTH = 24
 
 /**
- * How long a settled `transient` card stays visible after it reaches 100%
- * before it hides itself: long enough to see the bar complete, short enough
- * that a healthy pass does not linger in the transcript. Hiding is purely
- * visual — the event handler is what removes the block from state (at turn end
- * or on abort), so the two cannot fight over ownership.
+ * How long a settled `transient` card stays fully expanded after it reaches
+ * 100% before it collapses: long enough to see the bar complete, short enough
+ * that a healthy pass does not occupy the transcript. Collapsing is purely
+ * visual — the block stays as a one-line summary for the rest of the turn, and
+ * the event handler is what removes it from state (at turn end or on abort),
+ * so the two cannot fight over ownership.
  */
 const TRANSIENT_COMPACTION_HOLD_MS = 1_200
 
@@ -149,10 +150,12 @@ interface CompactionBoxProps {
 
 export const CompactionBox = memo(({ block }: CompactionBoxProps) => {
   const theme = useTheme()
-  // A healthy settled pass is a transient progress affordance: it holds at 100%
-  // briefly and then renders nothing. The timer lives here rather than in the
-  // event handler so state stays a pure function of the events, and its cleanup
-  // is what makes a card dropped mid-hold harmless.
+  // A healthy settled pass is a transient progress affordance: it holds at
+  // 100% briefly and then collapses to a persistent one-line summary instead of
+  // vanishing, so the compaction's end state stays legible for the rest of the
+  // turn. The timer lives here rather than in the event handler so state stays
+  // a pure function of the events, and its cleanup is what makes a card
+  // replaced mid-hold harmless.
   const transient = block.transient === true
   const [holdExpired, setHoldExpired] = useState(false)
   useEffect(() => {
@@ -239,7 +242,20 @@ export const CompactionBox = memo(({ block }: CompactionBoxProps) => {
   const showProgressBar = pending || transient
   const progressValue = sanitizeCount(block.progressPercent)
 
-  if (transient && holdExpired) return null
+  // Collapsed end state: a healthy settled pass reduces to one persistent
+  // line instead of disappearing, so start (pending card) → progress (bar) →
+  // end (this summary) is always visible. `sanitizeCount` already absorbed
+  // missing result fields, so the headline renders safely for a replayed
+  // block too.
+  if (transient && holdExpired) {
+    return (
+      <HarnessBox tone={tone} title={title} gap={0} paddingBottom={0}>
+        <text style={{ wrapMode: 'word', fg: theme.success }}>
+          {`✓ ${headline}`}
+        </text>
+      </HarnessBox>
+    )
+  }
 
   return (
     <HarnessBox tone={tone} title={title} gap={0} paddingBottom={1}>

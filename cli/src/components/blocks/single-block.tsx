@@ -19,6 +19,7 @@ import { InfoBox } from '../renderers/info-box'
 import { MemoryBox } from '../renderers/memory-box'
 import { PlanBox } from '../renderers/plan-box'
 import { PlanStatusBox } from '../renderers/plan-status-box'
+import { UpdateBox } from '../renderers/update-box'
 
 import type { ContentBlock, TextContentBlock } from '../../types/chat'
 import type { MarkdownPalette } from '../../utils/markdown-renderer'
@@ -184,6 +185,14 @@ export const SingleBlock = memo(
         return (
           <box key={`${messageId}-doctor-${idx}`} style={{ width: '100%' }}>
             <DoctorBox block={block} />
+          </box>
+        )
+      }
+
+      case 'update': {
+        return (
+          <box key={`${messageId}-update-${idx}`} style={{ width: '100%' }}>
+            <UpdateBox block={block} />
           </box>
         )
       }

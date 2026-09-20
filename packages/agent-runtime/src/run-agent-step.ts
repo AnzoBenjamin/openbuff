@@ -41,10 +41,6 @@ import { getToolSet } from './tools/prompts'
 import { processStream } from './tools/stream-parser'
 import { getAgentOutput } from './util/agent-output'
 import {
-  evaluateRepeatedStepLoop,
-  REPEATED_STEP_LOOP_LIMIT,
-} from './util/step-loop-guard'
-import {
   initBudgetFromTemplate,
   checkBudgetExceeded,
 } from './util/budget-enforcement'
@@ -70,10 +66,25 @@ import { countTokensJson } from './util/token-counter'
 import {
   COMPACTION_NO_PROGRESS_FRACTION,
   DEFAULT_MAX_CONTEXT_TOKENS,
+  advanceGovernorIteration,
+  createSemanticCompactionGovernor,
   getEffectiveContextLimits,
   getSemanticCompactionBudget,
+  getSemanticEvictionFloorTokens,
+  getSemanticRearmBudgetTokens,
   maybePruneContext,
+  recordPassAnnounced,
+  recordPassSettled,
+  shouldRunSemanticPass,
 } from './util/context-pruning'
+import {
+  deriveProtectedEvictionPaths,
+  evictStaleToolResults,
+  EVICTION_KEEP_RECENT_STEPS,
+} from './util/tool-result-eviction'
+import { archivePreCompaction } from './util/context-archive'
+import { maybeRunBackgroundConsolidation } from './util/context-consolidation-runner'
+import { verifyExtractionCoverage } from './util/compaction-verification'
 import {
   annotateLedgerAfterCompaction,
   applyMeasure,
@@ -1063,24 +1074,12 @@ export const runAgentStep = async (
     shouldEndTurn = false
   }
 
-  const repeatedStepLoop = evaluateRepeatedStepLoop({
-    previousSignature: agentState.lastStepProgressSignature,
-    previousRepeatCount: agentState.repeatedStepProgressCount,
-    toolCalls,
-    toolResults,
-    isThinkOnly,
-    responseText: responseWithoutThinkTags,
-    shouldEndTurn,
-  })
-
   agentState = {
     ...agentState,
     stepsRemaining:
       agentState.stepsRemaining > 0
         ? agentState.stepsRemaining - 1
         : agentState.stepsRemaining,
-    lastStepProgressSignature: repeatedStepLoop.signature,
-    repeatedStepProgressCount: repeatedStepLoop.repeatCount,
     agentContext,
     // Apply the step's accumulated cost once, here, on the post-spread object.
     // This avoids the stale-closure mutation bug where late async cost callbacks
@@ -1093,33 +1092,6 @@ export const runAgentStep = async (
     cacheInputTokens: agentState.cacheInputTokens + stepCacheInputTokens,
     cacheTotalInputTokens:
       agentState.cacheTotalInputTokens + stepCacheTotalInputTokens,
-  }
-
-  if (repeatedStepLoop.shouldStop) {
-    const message = [
-      `No-progress watchdog stopped the turn after ${REPEATED_STEP_LOOP_LIMIT} repeated step patterns.`,
-      'Current work and run state were preserved.',
-      'Resume after changing the approach or inputs; productive runs are not limited by a fixed step count.',
-    ].join(' ')
-    agentState = {
-      ...agentState,
-      messageHistory: [
-        ...agentState.messageHistory,
-        assistantMessage({
-          content: message,
-          tags: ['NO_PROGRESS_LOOP_GUARD'],
-          keepDuringTruncation: true,
-        }),
-      ],
-    }
-    onResponseChunk(`${message}\n\n`)
-    return {
-      agentState,
-      fullResponse: message,
-      shouldEndTurn: true,
-      messageId: null,
-      nResponses: undefined,
-    }
   }
 
   // P1-5: Enforce per-run budgets after accumulation. If either cap is
@@ -1751,10 +1723,6 @@ export async function loopAgentSteps(
     }
     initialAgentState.toolDefinitions = toolDefinitions
     let currentAgentState: AgentState = initialAgentState
-    if (prompt?.trim()) {
-      currentAgentState.lastStepProgressSignature = undefined
-      currentAgentState.repeatedStepProgressCount = 0
-    }
 
     let shouldEndTurn = false
     let outputSchemaRetryCount = 0
@@ -1807,8 +1775,9 @@ export async function loopAgentSteps(
     //     COMPACTION_NO_PROGRESS_FRACTION of its OWN pre-compaction history
     //     size, which also covers an announced pass that returned the
     //     transcript unchanged. Once it reaches
-    //     COMPACTION_NO_PROGRESS_STREAK_THRESHOLD the loop stops spawning the
-    //     semantic pruner for the rest of this turn.
+    //     COMPACTION_NO_PROGRESS_STREAK_THRESHOLD the loop logs a warning;
+    //     the governor (not the streak) caps further paid passes for the rest
+    //     of this turn via `recordPassSettled`.
     //
     // Budgets are still never silently lowered and pinned state is never
     // dropped as a reaction: the only remediation is to stop paying for a
@@ -1819,23 +1788,42 @@ export async function loopAgentSteps(
     let warnedCompactionNoProgress = false
     let consecutiveUnproductiveSemanticPasses = 0
     let warnedSemanticCompactionSuppressed = false
+    // Loop-local streak state backing the persisted advisory. The advisory
+    // field itself is recomputed once per iteration (see the mirror below), so
+    // the streak must live here: a field write inside
+    // registerUnproductiveSemanticPass alone would be overwritten by the next
+    // iteration's recomputation.
+    let streakSuppressionActive = false
     // `suppressSemanticCompaction` is a transient, loop-owned advisory. Reset
     // once here, before the loop, so a persisted or inherited `true` from an
     // earlier turn can never leak in and deadlock a recoverable run.
     initialAgentState.suppressSemanticCompaction = undefined
+    // Token-state governor replacing the old announce-every-over-trigger-iteration
+    // + permanent-suppression design. Loop-local for the same reason the other
+    // telemetry locals are: each turn starts clean, and the rearm margin is
+    // observable in the token counts themselves, so nothing needs to persist.
+    const compactionGovernor = createSemanticCompactionGovernor()
     const registerUnproductiveSemanticPass = () => {
       consecutiveUnproductiveSemanticPasses += 1
+      // The governor owns loop pacing: an unproductive pass extends its
+      // cooldown, and a SECOND consecutive unproductive pass spends the
+      // turn's remaining pass budget (bounded denial). The persisted
+      // `suppressSemanticCompaction` advisory keeps its documented
+      // streak-based contract, so crossing the streak threshold also sets
+      // it, making the inline pruner spawn path decline for the rest of the
+      // turn. Eviction and the mechanical trim still respond to pressure,
+      // and next turn starts with a fresh governor and a loop-entry reset.
+      recordPassSettled(compactionGovernor, { productive: false })
       if (
         consecutiveUnproductiveSemanticPasses <
         COMPACTION_NO_PROGRESS_STREAK_THRESHOLD
       ) {
         return
       }
-      // Advisory only: both pruner paths (an orchestrator's inline spawn and
-      // the runtime-driven pass) honor it for the rest of this loop, and a
-      // suppressed iteration announces no pass at all. No budget is lowered and
-      // no pinned state is dropped, and every announced pass still settles.
-      currentAgentState.suppressSemanticCompaction = true
+      // Streak state, not a direct field write: the per-iteration advisory
+      // mirror below is the single writer of the persisted field, so the
+      // streak is folded into that recomputation instead of racing it.
+      streakSuppressionActive = true
       if (warnedSemanticCompactionSuppressed) return
       warnedSemanticCompactionSuppressed = true
       logger.warn(
@@ -1844,7 +1832,7 @@ export async function loopAgentSteps(
           runId,
           consecutiveUnproductiveSemanticPasses,
         },
-        'Suppressing further semantic compaction for this turn after consecutive unproductive passes',
+        'Semantic compaction passes are not reclaiming space; further passes this turn are capped',
       )
     }
     const registerCompaction = (compaction: {
@@ -1887,7 +1875,12 @@ export async function loopAgentSteps(
           registerUnproductiveSemanticPass()
         } else {
           consecutiveUnproductiveSemanticPasses = 0
-          currentAgentState.suppressSemanticCompaction = undefined
+          // Clearing the streak flag (not the field directly) is what makes
+          // the documented "cleared by a productive pass" path reachable: the
+          // next iteration's advisory mirror recomputes the field from this
+          // flag plus the current governor decision.
+          streakSuppressionActive = false
+          recordPassSettled(compactionGovernor, { productive: true })
         }
       }
 
@@ -2019,44 +2012,184 @@ export async function loopAgentSteps(
         const semanticBudget = getSemanticCompactionBudget(
           currentAgentState.contextWindowTokens,
         )
+
+        // Continuous light consolidation, FIRST: deterministic, zero-cost
+        // eviction of stale tool-result bodies above the eviction floor. This
+        // frequently pulls context below the semantic trigger on its own, so
+        // the expensive LLM pruner pass below becomes a last resort rather
+        // than the first response to context pressure. Skipped when the model
+        // window is unknown (floor 0): eviction is only valuable while it is
+        // strictly cheaper than the alternatives.
+        const evictionFloorTokens = getSemanticEvictionFloorTokens(
+          currentAgentState.contextWindowTokens,
+        )
+        let evictedTokensThisIteration = 0
+        let evictedCountThisIteration = 0
+        if (
+          evictionFloorTokens > 0 &&
+          contextTokensBeforeProgrammatic > evictionFloorTokens
+        ) {
+          const evictionResult = evictStaleToolResults(
+            currentAgentState.messageHistory,
+            {
+              // Importance-aware protection: tool results whose content
+              // references a path recorded in task memory (evidence, inspected
+              // files, edits) stay full regardless of age, so the
+              // deterministic evictor cannot strip the context behind a pinned
+              // decision or an unverified edit anchor.
+              protectedPaths: deriveProtectedEvictionPaths(
+                currentAgentState.taskMemory,
+              ),
+            },
+          )
+          if (evictionResult.messages !== currentAgentState.messageHistory) {
+            // Eviction rewrites read-file bodies out of model-visible
+            // history, so it owes the same post-compaction
+            // read-authorization contract as the semantic and
+            // mechanical-trim branches: previously read paths require a
+            // fresh read before the next edit.
+            revokeImplicitReadAuthorizationsAfterCompaction(currentAgentState)
+            currentAgentState.messageHistory = evictionResult.messages
+            evictedTokensThisIteration = evictionResult.tokensSaved
+            evictedCountThisIteration = evictionResult.evictedCount
+            // Same rebuild the post-prune branch performs below: the request
+            // must reflect the evicted history, and the token estimate must be
+            // recomputed before the trigger decision reads it.
+            messagesWithStepPrompt = buildArray(
+              ...currentAgentState.messageHistory,
+              buildCompiledTaskMemoryMessage(currentAgentState),
+              buildCompiledMemoryV2Message(currentAgentState),
+              stepPrompt &&
+                userMessage({
+                  content: stepPrompt,
+                }),
+            )
+            currentAgentState.contextTokenCount = estimateContextTokensLocally()
+            logger.debug(
+              {
+                runId,
+                tokensSaved: evictionResult.tokensSaved,
+                evictedCount: evictionResult.evictedCount,
+              },
+              'Deterministic tool-result eviction reclaimed context without an LLM pass',
+            )
+          }
+        }
+
+        // Effective per-model limits for THIS iteration. Hoisted ABOVE the
+        // governor decision so the emergency override reads the effective
+        // provider-safe limit — `getEffectiveContextLimits` clamps an explicit
+        // `maxContextLength` override — instead of a value declared further
+        // down the same block scope (a use-before-declaration TDZ error).
+        // `contextWindowTokens` and `maxContextLength` only ever change
+        // BETWEEN iterations (the streaming callback runs inside the LLM step
+        // at the end of the loop body), so this single per-iteration value is
+        // the one authoritative limit shared by the governor's emergency
+        // check, the mechanical trim, and the status emission below.
+        const activeContextLimits = getEffectiveContextLimits(
+          currentAgentState.contextWindowTokens,
+          maxContextLength,
+        )
+        const activeMaxContextLength =
+          activeContextLimits.providerSafeMessageLimit
+        const activeContextWindowForStatus =
+          activeContextLimits.statusWindowTokens
+        const hasExplicitMaxContextLength = maxContextLength !== undefined
+
+        const contextTokensForTrigger = currentAgentState.contextTokenCount
         const exceededSemanticTrigger =
-          contextTokensBeforeProgrammatic + 1_000 >
+          contextTokensForTrigger + 1_000 >
           semanticBudget.triggerBudgetTokens
-        // Transient, loop-owned anti-thrash advisory. Read once per iteration so
-        // the announcement, the pass itself, and the unproductive-pass
-        // bookkeeping below can never disagree about whether this iteration is
-        // allowed to compact.
-        const semanticCompactionSuppressed =
-          currentAgentState.suppressSemanticCompaction === true
-        // Announced for BOTH pruner paths: an orchestrator's generator spawns
-        // the pruner itself, while a prompt-only template gets the
-        // runtime-driven pass below. A suppressed iteration runs no pass, so it
-        // must not announce one either.
+        // Governed trigger: the loop-local governor decides whether THIS
+        // iteration may announce (and pay for) a semantic pass, replacing the
+        // old announce-every-over-trigger-iteration behavior. The `+1_000`
+        // hysteresis is preserved from the previous design.
+        const governorDecision = shouldRunSemanticPass(compactionGovernor, {
+          contextTokens: contextTokensForTrigger,
+          triggerBudgetTokens: semanticBudget.triggerBudgetTokens,
+          rearmBudgetTokens: getSemanticRearmBudgetTokens(
+            currentAgentState.contextWindowTokens,
+          ),
+          emergencyLimitTokens:
+            activeMaxContextLength ?? DEFAULT_MAX_CONTEXT_TOKENS,
+        })
+        // The announcement gate is the semantic trigger plus the governor's
+        // per-iteration decision. The persisted `suppressSemanticCompaction`
+        // advisory keeps its documented streak-based contract (owned by the
+        // pass-outcome accounting above), and an OVER-TRIGGER iteration the
+        // governor denies is additionally mirrored into it: the generator-
+        // driven inline spawn path has no other pacing lever, so without the
+        // mirror a handleSteps template could keep spawning pruner children
+        // every iteration while only the announcement was paced.
+        //
+        // The mirror is deliberately NON-STICKY: it recomputes the field every
+        // iteration from the CURRENT governor decision plus the loop-local
+        // streak flag. A sticky version (OR-ing the previous field value)
+        // would let the cooldown denials right after an announced pass pin the
+        // advisory for the whole turn, making the documented clearing paths
+        // unreachable — a productive pass could never clear it, and the second
+        // pass the governor re-arms for (context below the rearm budget
+        // regrowing past the trigger) could never spawn. Below the trigger a
+        // quiet iteration clears the field unless the streak holds it. A
+        // denied iteration runs no pass and announces neither half of the
+        // status pair, exactly as before.
+        const governorWithheldOverTriggerPass =
+          exceededSemanticTrigger && !governorDecision.shouldRunSemanticPass
+        currentAgentState.suppressSemanticCompaction =
+          governorWithheldOverTriggerPass || streakSuppressionActive
+            ? true
+            : undefined
         const announceSemanticPass =
-          exceededSemanticTrigger && !semanticCompactionSuppressed
+          exceededSemanticTrigger && governorDecision.shouldRunSemanticPass
         if (announceSemanticPass) {
+          recordPassAnnounced(compactionGovernor)
+          if (governorDecision.emergencyOverride) {
+            logger.warn(
+              { runId, contextTokens: contextTokensForTrigger },
+              'Semantic compaction allowed by emergency override: context reached the provider-safe limit while the governor was disarmed',
+            )
+          }
           unsettledCompactionStart = true
           onResponseChunk({
             type: 'context_compaction_status',
             state: 'started',
             ...compactionCorrelation,
-            contextTokens: contextTokensBeforeProgrammatic,
+            contextTokens: contextTokensForTrigger,
             resolvedContextWindowTokens:
               semanticBudget.resolvedContextWindowTokens,
             triggerBudgetTokens: semanticBudget.triggerBudgetTokens,
             targetBudgetTokens: semanticBudget.targetBudgetTokens,
+            ...(evictedTokensThisIteration > 0 && {
+              evictedTokens: evictedTokensThisIteration,
+            }),
           })
           // First milestone of the announced pass, so the UI shows real movement
           // instead of an idle bar while the inline pruner starts up.
           emitCompactionProgress('analyzing', 20, {
-            contextTokens: contextTokensBeforeProgrammatic,
+            contextTokens: contextTokensForTrigger,
             targetBudgetTokens: semanticBudget.targetBudgetTokens,
           })
         }
+        // Advance the cooldown counter once per iteration, AFTER the decision
+        // consumed it and AFTER any announced pass reset it to 0.
+        advanceGovernorIteration(compactionGovernor)
 
         // 1. Run programmatic step first if it exists
         let n: number | undefined = undefined
         const historyBeforeProgrammatic = currentAgentState.messageHistory
+        // Archive the pre-compaction transcript when this iteration will run
+        // a semantic pass: the pruner's rewrite below is the one history
+        // change with no deterministic recovery path, so the recall leg
+        // (`recall_context`) needs this snapshot. Identity-keyed inside
+        // archivePreCompaction, so an unchanged re-settle archives once.
+        if (announceSemanticPass) {
+          archivePreCompaction(
+            currentAgentState,
+            historyBeforeProgrammatic,
+            'semantic_compaction',
+            EVICTION_KEEP_RECENT_STEPS,
+          )
+        }
         const historyTokensBeforeProgrammatic = countTokensJson(
           historyBeforeProgrammatic,
         )
@@ -2187,6 +2320,22 @@ export async function loopAgentSteps(
         // emitter makes it a no-op.
         emitCompactionProgress('applying', 90)
 
+        // Background consolidation (PROTOTYPE, canary-gated OFF by default via
+        // `programmaticConfig.backgroundSnapshotConsolidation`): unconsolidated
+        // archive snapshots are summarized by a fire-and-forget prompt-only LLM
+        // child. Never awaited and never load-bearing — the call self-no-ops
+        // when the canary is off or every snapshot is already covered, so
+        // running it unconditionally per iteration is one cheap set lookup.
+        // Mechanical-trim snapshots archived later in this iteration consolidate
+        // on the next iteration's trigger (same turn, still background).
+        maybeRunBackgroundConsolidation({
+          ...params,
+
+          agentState: currentAgentState,
+          agentTemplate,
+          userInputId,
+        })
+
         // Capture the current root request directly from loopAgentSteps' trusted
         // prompt. Never infer it from messageHistory: that transcript also holds
         // tool output, system wrappers, and compiled task-memory messages that
@@ -2250,15 +2399,6 @@ export async function loopAgentSteps(
                 ),
             ),
         )
-        const activeContextLimits = getEffectiveContextLimits(
-          currentAgentState.contextWindowTokens,
-          maxContextLength,
-        )
-        const activeMaxContextLength =
-          activeContextLimits.providerSafeMessageLimit
-        const activeContextWindowForStatus =
-          activeContextLimits.statusWindowTokens
-        const hasExplicitMaxContextLength = maxContextLength !== undefined
         if (
           retainedSemanticMemory &&
           historyTokensAfterProgrammatic < historyTokensBeforeProgrammatic &&
@@ -2284,6 +2424,16 @@ export async function loopAgentSteps(
             preCompactionHistoryTokens: historyTokensBeforeProgrammatic,
             postCompactionHistoryTokens: historyTokensAfterProgrammatic,
           })
+          // Post-compaction extraction verification: derive the expected-fact
+          // set (paths read/written, commands run) from the PRE-compaction
+          // transcript and check each survived into the post-compaction
+          // history or task memory. Gaps surface in the recovery guidance
+          // below; the archive holds the verbatim source (recall_context).
+          const extractionVerification = verifyExtractionCoverage({
+            preMessages: historyBeforeProgrammatic,
+            postMessages: currentAgentState.messageHistory,
+            taskMemory: currentAgentState.taskMemory,
+          })
           const semanticReason = exceededSemanticTrigger
             ? 'Total context exceeded the model-aware semantic trigger budget.'
             : 'An explicit maxContextLength override allowed semantic compaction before the model-aware trigger budget.'
@@ -2295,6 +2445,10 @@ export async function loopAgentSteps(
               semanticBudget.resolvedContextWindowTokens,
             triggerBudgetTokens: semanticBudget.triggerBudgetTokens,
             targetBudgetTokens: semanticBudget.targetBudgetTokens,
+            ...(evictedTokensThisIteration > 0 && {
+              evictedTokens: evictedTokensThisIteration,
+              evictedCount: evictedCountThisIteration,
+            }),
             compactionCount: compactionTelemetry.compactionCount,
             consecutiveNoProgressCompactions:
               compactionTelemetry.consecutiveNoProgressCompactions,
@@ -2316,7 +2470,9 @@ export async function loopAgentSteps(
             removedCategories,
             retainedKnowledgeMemory: true,
             recovery:
-              'Resume from the retained <knowledge_memory> and verify exact live files before editing.',
+              extractionVerification.missing.length > 0
+                ? `Resume from the retained <knowledge_memory> and verify exact live files before editing. Pre-compaction detail was not retained (recover verbatim via recall_context): ${extractionVerification.missing.join(', ')}`
+                : 'Resume from the retained <knowledge_memory> and verify exact live files before editing.',
           })
           compactedThisIteration = true
         } else if (
@@ -2342,6 +2498,14 @@ export async function loopAgentSteps(
           logger,
         })
         if (pruningResult.pruned) {
+          // The mechanical trim drops whole messages with no recovery path,
+          // so the recall leg archives the pre-trim transcript first.
+          archivePreCompaction(
+            currentAgentState,
+            currentAgentState.messageHistory,
+            'mechanical_trim',
+            EVICTION_KEEP_RECENT_STEPS,
+          )
           revokeImplicitReadAuthorizationsAfterCompaction(currentAgentState)
           currentAgentState.messageHistory = pruningResult.messages
           messagesWithStepPrompt = buildArray(
@@ -2435,6 +2599,9 @@ export async function loopAgentSteps(
           // so neither value is reconciled against the other before emission.
           compactionTriggerTokens: semanticBudget.triggerBudgetTokens,
           compactionTargetTokens: semanticBudget.targetBudgetTokens,
+          ...(evictedTokensThisIteration > 0 && {
+            evictedTokens: evictedTokensThisIteration,
+          }),
         })
 
         // Check if output is required but missing
