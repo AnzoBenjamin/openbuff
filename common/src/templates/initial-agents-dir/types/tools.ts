@@ -602,7 +602,7 @@ export interface QueryIndexParams {
  * Search archived pre-compaction transcripts for verbatim facts a compaction pass removed from visible context.
  */
 export interface RecallContextParams {
-  /** Case-insensitive search terms for archived pre-compaction transcripts. ALL terms must match a result (AND). */
+  /** Case-insensitive search terms for archived pre-compaction transcripts. ALL terms must match a verbatim result (AND); stored background summaries use best-effort OR matching. */
   query: string
 }
 
