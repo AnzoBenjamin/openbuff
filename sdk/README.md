@@ -132,6 +132,23 @@ approval.
 
 ## Terminal command permission profiles
 
+**Note:** In the bundled runtime, all agents currently execute their terminal
+commands under the `full-access` profile. The runtime handler
+(`packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts`)
+hardcodes `permission_profile: 'full-access'` for every agent, so the per-agent
+profile gates described below (`read-only`, `workspace-write`, `git-commit`,
+`dependency-mutation`, `validation-diagnosis`, `tmux-test`,
+`librarian-read-only`) are **not** enforced for bundled agents. Under
+`full-access`, `evaluateTerminalCommandPolicy` bypasses every policy gate: no
+path-containment/traversal checks, no temp restriction, no
+read-only/env-dump/shell-indirection/sed/dependency/git denials, and no
+per-profile allowlists. The profile catalog below is therefore the SDK helper's
+contract, not the bundled per-agent enforcement: the profiles still exist in the
+policy code and remain callable via the exported `evaluateTerminalCommandPolicy`
+helper, so SDK hosts can still invoke any profile directly. The separate
+high-impact-action approval gate (previous section) is UNCHANGED and still
+applies on top of `full-access`.
+
 `run_terminal_command` is gated by the exported
 `evaluateTerminalCommandPolicy` helper, which decides whether a command may
 run under an agent's permission profile. Hosts can call it directly to

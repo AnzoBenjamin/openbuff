@@ -38,9 +38,9 @@ Common phase triggers and routing policies:
 Cross-cutting orchestration policy:
 
 - Ask the user before destructive commands, public API/contract changes, dependency additions, schema/data migrations, release/publish/deploy actions, production-affecting scripts, or ambiguous product behavior.
-- Terminal execution is enforced by runtime permission profiles, not prompt text alone: `read-only`, the clone-scoped `librarian-read-only`, `workspace-write`, and explicit `full-access`. Background commands are request-owned unless `detach` is explicitly requested.
+- All agents now run terminal commands under the `full-access` permission profile: the runtime resolves every agent to `full-access` in `packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts`, so the per-agent profile gates (`read-only`, the clone-scoped `librarian-read-only`, `workspace-write`, etc.) are not enforced for bundled agents. The profile catalog still exists in the SDK policy helper (`evaluateTerminalCommandPolicy`) for host use. Background commands are request-owned unless `detach` is explicitly requested.
 - Browser-use defaults to `params.interactionPolicy: "read-only"`. Clicks, typing, uploads, evaluation, and other browser-state mutations require `allow-interactions`; each run receives an isolated browser session that is closed with the owning SDK run.
-- `base2-plan` can spawn `basher`, `browser-use`, `debugger`, and `general-agent` for deep analysis. Plan-only authority propagates through descendants: terminal-capable children are clamped to the read-only terminal profile and browser interactions remain denied even if a child requests `allow-interactions`. Mutation agents and direct edit/terminal tools remain unavailable. The spawn batch limit (`MAX_SPAWN_BATCH_SIZE`, currently 12) is a concurrency bound; planners may launch additional joined waves until coverage is complete and can poll/cancel detached analysis with `check_background_agent`.
+- `base2-plan` can spawn `basher`, `browser-use`, `debugger`, and `general-agent` for deep analysis. Plan-only authority propagates through descendants: terminal-capable children are clamped to the read-only terminal profile (this plan-only terminal attenuation is currently superseded by the global full-access override — the runtime resolves all agents to `full-access` — so it no longer takes effect in the bundled runtime) and browser interactions remain denied even if a child requests `allow-interactions`. Mutation agents and direct edit/terminal tools remain unavailable. The spawn batch limit (`MAX_SPAWN_BATCH_SIZE`, currently 12) is a concurrency bound; planners may launch additional joined waves until coverage is complete and can poll/cancel detached analysis with `check_background_agent`.
 - Prefer dedicated tools over shell fallbacks: `git_status` for repo state, file/read/search tools for inspection, `read_image` for images, deterministic edit tools for edits, configured hooks for validation, and browser/CLI visual agents for smoke checks.
 - Maintain durable plan artifacts in EXECUTE_PLAN at phase boundaries, blockers, validation/review results, and finalization.
 - Parallelism is allowed for independent discovery shards, independent validation commands, and static review that does not depend on validation output. Dependent edits, fragile debug loops, and validation-repair cycles stay sequential.
@@ -57,9 +57,9 @@ Runtime agent restrictions keep real security boundaries while removing over-str
 - Project-path containment for reads/writes/spawned work
 - `cap.v3` HMAC signing with project/path/run scope binding
 - `replace_range` authority chain (authenticated capability, not prose hashes)
-- Plan-only terminal attenuation (descendants stay on the read-only terminal profile)
+- Plan-only terminal attenuation (descendants stay on the read-only terminal profile) — currently overridden by the global full-access terminal profile, so it is no longer effective in the bundled runtime
+- Privilege-escalation, system-package, and env-dump bans (these apply to the non-full-access policy profiles, still enforced for SDK hosts and the high-impact approval gate, not to bundled agents now on full-access)
 - Force/delete/default-branch push gating
-- Privilege-escalation, system-package, and env-dump bans
 - Large-file scoped `basedOnRead` hard-fail when the anchor is required and invalid
 - `str_replace` circuit-breaker non-draining success (limit 5)
 
