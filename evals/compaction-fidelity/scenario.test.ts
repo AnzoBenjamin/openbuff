@@ -20,10 +20,18 @@
  *  - F4 aggregate fidelity score: retained + recallable planted facts over
  *    all planted facts, asserted >= 1.0 for the fixture (the recall leg makes
  *    the pipeline information-lossless in principle for evicted content).
+ *  - F5 consolidation recall-ability: a faithful background summary (the
+ *    canary-gated consolidation leg) keeps every planted fact findable after
+ *    its source snapshot ages out of the archive, and an unfaithful summary
+ *    that drops identifiers is detected (the metric is not vacuously 1.0).
  */
 import { describe, expect, test } from 'bun:test'
 
 import { archivePreCompaction, recallFromArchive } from '@codebuff/agent-runtime/util/context-archive'
+import {
+  recordConsolidation,
+  searchConsolidations,
+} from '@codebuff/agent-runtime/util/context-consolidation'
 import {
   deriveProtectedEvictionPaths,
   evictStaleToolResults,
@@ -34,6 +42,7 @@ import {
 } from '@codebuff/agent-runtime/util/compaction-verification'
 
 import type { ContextArchiveSnapshot } from '@codebuff/common/types/context-archive'
+import type { ContextConsolidation } from '@codebuff/common/types/context-consolidation'
 import type { Message, ToolMessage } from '@codebuff/common/types/messages/codebuff-message'
 import type { TaskMemoryV1 } from '@codebuff/common/types/task-memory'
 
@@ -95,7 +104,7 @@ const compactWorstCase = (messages: Message[]): Message[] => {
   return messages.slice(0, 1).concat(messages.slice(keepFrom))
 }
 
-describe('compaction fidelity (F1–F4)', () => {
+describe('compaction fidelity (F1–F5)', () => {
   const transcript = buildLongTranscript()
   // A task-memory decision cites one planted path: eviction must spare it.
   const citedPath = PLANTED_PATHS[0]
@@ -195,5 +204,86 @@ describe('compaction fidelity (F1–F4)', () => {
     const recovered = new Set([...retained, ...recallable])
     const fidelityScore = recovered.size / allPlanted.length
     expect(fidelityScore).toBe(1)
+  })
+
+  test('F5: consolidation recall survives archive aging (and detects an unfaithful summary)', () => {
+    // Fresh transcript: archivePreCompaction dedupes by array identity, so
+    // sharing a fixture array would silently no-op the archive.
+    const transcriptF5 = buildLongTranscript()
+    const state: {
+      compactionArchive?: ContextArchiveSnapshot[]
+      contextConsolidations?: ContextConsolidation[]
+    } = {}
+    archivePreCompaction(
+      state,
+      transcriptF5,
+      'semantic_compaction',
+      EVICTION_KEEP_RECENT_STEPS,
+    )
+    const evictedSnapshot = state.compactionArchive![0]
+
+    // A FAITHFUL consolidator keeps identifiers verbatim (its instruction):
+    // the summary carries every planted path.
+    const faithfulSummary = PLANTED_PATHS.map(
+      (path) => `Touched ${path}: ${plantedFact(path)}`,
+    ).join('\n')
+    recordConsolidation(state, {
+      consolidatedAt: evictedSnapshot.archivedAt + 1,
+      sourceArchivedAts: [evictedSnapshot.archivedAt],
+      action: 'semantic_compaction',
+      summary: faithfulSummary,
+      coveredMessages: evictedSnapshot.messages.length,
+    })
+
+    // Age the source snapshot out of the archive: MAX_ARCHIVE_SNAPSHOTS more
+    // distinct archives evict everything older.
+    for (let i = 0; i < 8; i++) {
+      archivePreCompaction(
+        state,
+        [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: `filler ${i}` }],
+          },
+        ],
+        'mechanical_trim',
+        0,
+      )
+    }
+    expect(
+      state.compactionArchive!.some((s) =>
+        JSON.stringify(s.messages).includes('keystone-'),
+      ),
+    ).toBe(false)
+
+    // Verbatim recall is gone; the summary layer is what still recovers.
+    const allPlanted = [...new Set(PLANTED_PATHS)]
+    const verbatim = allPlanted.filter(
+      (path) =>
+        recallFromArchive(state.compactionArchive, path).matches.length > 0,
+    )
+    const consolidated = allPlanted.filter(
+      (path) =>
+        searchConsolidations(state.contextConsolidations, path).length > 0,
+    )
+    expect(verbatim.length).toBe(0)
+    expect(consolidated.length).toBe(allPlanted.length)
+
+    // An UNFAITHFUL consolidator (drops identifiers) must be detectable: the
+    // metric is not vacuously 1.0.
+    const unfaithful: ContextConsolidation[] = [
+      {
+        consolidatedAt: evictedSnapshot.archivedAt + 2,
+        sourceArchivedAts: [evictedSnapshot.archivedAt],
+        action: 'semantic_compaction',
+        summary:
+          'General work on service configuration; nothing specific retained.',
+        coveredMessages: evictedSnapshot.messages.length,
+      },
+    ]
+    const unfaithfulScore =
+      allPlanted.filter((path) => searchConsolidations(unfaithful, path).length > 0)
+        .length / allPlanted.length
+    expect(unfaithfulScore).toBe(0)
   })
 })
