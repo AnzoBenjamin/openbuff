@@ -98,6 +98,15 @@ export const COMPACTION_NO_PROGRESS_FRACTION = 0.05
  * "continuous light consolidation" shape as background-compaction designs like
  * cortexkit/magic-context, without background LLM calls.
  */
+/**
+ * Base share of the window the governor's rearm budget tracks. The EFFECTIVE
+ * budget is computed in `getSemanticRearmBudgetTokens`, which clamps it above
+ * the window's achievable post-pass target where trigger headroom allows and
+ * caps it strictly below the trigger (see its invariant doc): on 128k–180k
+ * windows the 72k min-target floor pins the target above a bare 50% share, so
+ * an unclamped rearm budget could never be reached by the pass's own reclaim
+ * and the governor would only ever re-arm via the emergency override.
+ */
 export const SEMANTIC_REARM_FRACTION = 0.5
 export const SEMANTIC_COOLDOWN_ITERATIONS = 3
 export const SEMANTIC_MAX_PASSES_PER_TURN = 3
@@ -501,6 +510,23 @@ export function recordPassSettled(
  * sits strictly below the fallback semantic trigger (see its doc) with enough
  * margin to absorb the `+1_000` trigger hysteresis in `shouldRunSemanticPass`,
  * so a re-arming observation can never itself announce a pass.
+ *
+ * Known windows clamp the bare `SEMANTIC_REARM_FRACTION` share ABOVE the
+ * window's achievable `targetBudgetTokens` where trigger headroom allows: a
+ * settled pass lands at (or just above) the target, so a rearm budget at or
+ * below it would strand the governor in rearm-pending forever — every later
+ * pass would wait for the emergency override instead of being re-armed by the
+ * pass's own reclaim.
+ *
+ * INVARIANT (every window class): the highest re-arming observation sits at
+ * `rearm − 1`, and it must fail the `contextTokens + 1_000 > trigger` check,
+ * so the rearm budget is capped at `triggerBudgetTokens − 1_000`. On small
+ * windows the trigger can sit WITHIN the hysteresis margin of the target
+ * (e.g. an 8k window: trigger 2_000, target 1_600 — a bare
+ * `Math.max(0.5 * window, target + 1_000)` yields 4_000 > trigger), so there
+ * the cap wins over the target floor: a settled pass re-arms only through
+ * further reclaim (deterministic eviction, the mechanical trim) or the
+ * emergency override, never by announcing an immediate paid pass.
  */
 export function getSemanticRearmBudgetTokens(
   contextWindowTokens: number | undefined,
@@ -508,7 +534,11 @@ export function getSemanticRearmBudgetTokens(
   if (!isUsableContextWindow(contextWindowTokens)) {
     return DEFAULT_SEMANTIC_REARM_BUDGET_TOKENS
   }
-  return Math.floor(contextWindowTokens * SEMANTIC_REARM_FRACTION)
+  const base = Math.floor(contextWindowTokens * SEMANTIC_REARM_FRACTION)
+  const budget = getSemanticCompactionBudget(contextWindowTokens)
+  const targetFloor = budget.targetBudgetTokens + 1_000
+  const triggerCap = budget.triggerBudgetTokens - 1_000
+  return Math.max(1, Math.min(Math.max(base, targetFloor), triggerCap))
 }
 
 /**
