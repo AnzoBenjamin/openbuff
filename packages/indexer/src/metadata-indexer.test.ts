@@ -296,7 +296,7 @@ describe('metadata indexer', () => {
     expect(updated.graph.nodes['file:docs/keep.md']).toBeDefined()
   })
 
-  test('drops stale metadata when a walked file cannot be read during incremental hashing', async () => {
+  test('keeps stale metadata when a walked file cannot be read during incremental hashing', async () => {
     const root = await makeTempProject({
       'docs/a.md': '# Alpha\n\nalpha topic\n',
     })
@@ -320,8 +320,12 @@ describe('metadata indexer', () => {
     try {
       const second = await updateMetadataIndex(first, root)
 
-      expect(second.files['docs/a.md']).toBeUndefined()
-      expect(second.graph.nodes['file:docs/a.md']).toBeUndefined()
+      // The walk still lists the file, so a transient read failure must NOT
+      // silently drop a still-existing file from the index; the previous
+      // entry is retained until a later refresh can re-read it.
+      expect(second.files['docs/a.md']).toBeDefined()
+      expect(second.files['docs/a.md']?.hash).toBe(first.files['docs/a.md']?.hash)
+      expect(second.graph.nodes['file:docs/a.md']).toBeDefined()
     } finally {
       readFileSpy.mockRestore()
     }
@@ -360,8 +364,14 @@ describe('metadata indexer', () => {
     try {
       const second = await updateMetadataIndex(first, root)
 
-      expect(second.files['src/unreadable.ts']).toBeUndefined()
-      expect(second.graph.nodes['file:src/unreadable.ts']).toBeUndefined()
+      // The walk still lists the unreadable file, so its previous entry is
+      // retained with stale metadata instead of being dropped; the changed
+      // sibling is re-read and refreshed normally.
+      expect(second.files['src/unreadable.ts']).toBeDefined()
+      expect(second.files['src/unreadable.ts']?.hash).toBe(
+        first.files['src/unreadable.ts']?.hash,
+      )
+      expect(second.graph.nodes['file:src/unreadable.ts']).toBeDefined()
       expect(second.files['src/live.ts']?.symbols).toContain('freshLiveSymbol')
       expect(second.files['src/live.ts']?.symbols).not.toContain(
         'oldLiveSymbol',
@@ -508,6 +518,32 @@ describe('metadata indexer', () => {
     for (const edge of referencesEdges) {
       expect(edge.weight).toBe(DEFAULT_GRAPH_WEIGHTS.references)
     }
+  })
+
+  test('keeps a still-present indexed file when a transient read failure hits', async () => {
+    const root = await makeTempProject({
+      'src/a.ts': 'export const a = 1\n',
+    })
+    const first = await buildMetadataIndex(root)
+    expect(first.files['src/a.ts']).toBeDefined()
+
+    // Touch the mtime so the incremental refresh treats the file as changed,
+    // then force every content read (hash + indexWalkedFile) to fail — e.g.
+    // EACCES/EBUSY on a locked file. The walk still lists the file, so the
+    // refresh must keep the previous indexed entry rather than dropping it.
+    const future = new Date(Date.now() + 5_000)
+    await fs.promises.utimes(path.join(root, 'src/a.ts'), future, future)
+    const readFileSpy = spyOn(fs.promises, 'readFile').mockRejectedValue(
+      Object.assign(new Error('EACCES: file is locked'), { code: 'EACCES' }),
+    )
+    let second
+    try {
+      second = await updateMetadataIndex(first, root)
+    } finally {
+      readFileSpy.mockRestore()
+    }
+
+    expect(second.files['src/a.ts']).toEqual(first.files['src/a.ts'])
   })
 })
 

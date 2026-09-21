@@ -1,0 +1,13 @@
+# LESSONS — compat-remediation-2026-09
+
+## Lessons (verified this session)
+1. **Bun `mock.module` registrations persist per-process and are not reliably undone** by `mock.restore()` or re-registering the real module for already-imported consumers. Remedy: give `mock.module`-based tests their own file AND run the suite with `bun test --isolate` (fresh global object per file). Applied in `packages/indexer/src/p8-lite.test.ts` → `p8-degraded-delta.test.ts` split + `package.json` test script.
+2. **Repair-editor agents can repeatedly block without submitting edits** ("no edit_transaction was submitted"). When a second consecutive block occurs, fall back to direct root edits with fresh `read_files` capabilities — this worked for the migration repairs (credentials, v1-migration retirement, invalid-record reason).
+3. **Copy-based fallback beats move-based backup for atomic writes over an existing target**: `copyFileSync` of the old file to a unique `.bak` keeps the target path never-emptied, so a crash in any window leaves either old or new content in place. Used in `sdk/src/credentials.ts` `writeCredentialsFileAtomic`.
+4. **Post-marker ordering for destructive lifecycle events**: retirement (`claim.forgotten`) drafts must be appended only AFTER the replacement marker is durably confirmed; a pre-marker failure would strand claims as forgotten without a replacement. Fail-safe on retirement failure (leave claims active), never report it as a generic import failure.
+5. **Distinguish schema-invalid from checksum-mismatch**: a record failing its own schema is corrupt, not hash-drifted; callers need a distinct reason (`invalid-record`) to choose "rebuild from source" vs "record is unreadable". Remember to extend the typed reason unions AND the CLI reason-string records keyed by them (non-exhaustive records are TS errors — good tripwire).
+6. **Local recovery mirrors must use the same filename derivation as the canonical artifact**: the CLI's 8-hex truncated mirror never matched the SDK's full 64-hex `claim.archived` path, so the post-apply suffix verification always failed. Derive both from the same hash slice.
+
+## Follow-ups (not part of this session's scope)
+- The four NON_BLOCKING compatibility findings (saveChunkSidecar boolean contract publication, legacy AgentState field passthrough proof, legacy 8-hex archive mirror surfacing, researcher-web set_output embedder contract docs) are scoped in PLAN.md tasks C1–C4 for the next execution pass.
+- Large P7/P8 perf redesigns (trigram index, sharded binary vector cache) remain deferred in the original harness-remediation plan.

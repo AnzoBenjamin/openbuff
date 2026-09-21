@@ -11,6 +11,9 @@ on:
   pull_request:
     branches: ['main']
 
+permissions:
+  contents: read
+
 # Define reusable job template
 jobs:
   # Build and check
@@ -18,15 +21,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322ed31b03a90a06f # v5.0.0
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@v2 # TODO: pin to SHA
         with:
           bun-version: '1.3.5'
 
       - name: Cache dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v5 # TODO: pin to SHA
         with:
           path: |
             node_modules
@@ -41,15 +44,38 @@ jobs:
 
       - name: Set environment variables
         env:
-          SECRETS_CONTEXT: ${{ toJSON(secrets) }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CANOPYWAVE_API_KEY: ${{ secrets.CANOPYWAVE_API_KEY }}
+          CODEBUFF_GITHUB_TOKEN: ${{ secrets.OPENBUFF_GITHUB_TOKEN }}
+          CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          GRAVITY_API_KEY: ${{ secrets.GRAVITY_API_KEY }}
+          IPINFO_TOKEN: ${{ secrets.IPINFO_TOKEN }}
+          LINKUP_API_KEY: ${{ secrets.LINKUP_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          NEXT_PUBLIC_CODEBUFF_APP_URL: ${{ secrets.NEXT_PUBLIC_CODEBUFF_APP_URL }}
+          NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION_ID: ${{ secrets.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION_ID }}
+          NEXT_PUBLIC_OPENBUFF_APP_URL: ${{ secrets.NEXT_PUBLIC_OPENBUFF_APP_URL }}
+          NEXT_PUBLIC_POSTHOG_API_KEY: ${{ secrets.NEXT_PUBLIC_POSTHOG_API_KEY }}
+          NEXT_PUBLIC_POSTHOG_HOST_URL: ${{ secrets.NEXT_PUBLIC_POSTHOG_HOST_URL }}
+          NEXT_PUBLIC_SUPPORT_EMAIL: ${{ secrets.NEXT_PUBLIC_SUPPORT_EMAIL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPEN_ROUTER_API_KEY: ${{ secrets.OPEN_ROUTER_API_KEY }}
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
         run: |
           VAR_NAMES=$(bun scripts/generate-ci-env.ts)
-          echo "$SECRETS_CONTEXT" | jq -r --argjson vars "$VAR_NAMES" '
-            to_entries | .[] | select(.key as $k | $vars | index($k)) | .key + "=" + .value
-          ' >> $GITHUB_ENV
+          # Export each required var from its named step env entry above.
+          for name in $VAR_NAMES; do
+            value="${!name:-}"
+            if [ -n "$value" ]; then
+              echo "$name=$value" >> $GITHUB_ENV
+            fi
+          done
           echo "CODEBUFF_GITHUB_ACTIONS=true" >> $GITHUB_ENV
           echo "NEXT_PUBLIC_CB_ENVIRONMENT=test" >> $GITHUB_ENV
-          echo "CODEBUFF_GITHUB_TOKEN=${{ secrets.OPENBUFF_GITHUB_TOKEN }}" >> $GITHUB_ENV
+          echo "CODEBUFF_GITHUB_TOKEN=$CODEBUFF_GITHUB_TOKEN" >> $GITHUB_ENV
 
       - name: Check generated tool definitions are current
         run: |
@@ -85,24 +111,26 @@ jobs:
             agents,
             cli,
             common,
+            evals,
             packages/agent-runtime,
             packages/indexer,
             packages/internal,
             sdk,
+            scripts,
           ]
     name: test-${{ matrix.package }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322ed31b03a90a06f # v5.0.0
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@v2 # TODO: pin to SHA
         with:
           bun-version: '1.3.5'
 
       - name: Cache dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v5 # TODO: pin to SHA
         with:
           path: |
             node_modules
@@ -117,16 +145,39 @@ jobs:
 
       - name: Set environment variables
         env:
-          SECRETS_CONTEXT: ${{ toJSON(secrets) }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CANOPYWAVE_API_KEY: ${{ secrets.CANOPYWAVE_API_KEY }}
+          CODEBUFF_GITHUB_TOKEN: ${{ secrets.OPENBUFF_GITHUB_TOKEN }}
+          CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          GRAVITY_API_KEY: ${{ secrets.GRAVITY_API_KEY }}
+          IPINFO_TOKEN: ${{ secrets.IPINFO_TOKEN }}
+          LINKUP_API_KEY: ${{ secrets.LINKUP_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          NEXT_PUBLIC_CODEBUFF_APP_URL: ${{ secrets.NEXT_PUBLIC_CODEBUFF_APP_URL }}
+          NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION_ID: ${{ secrets.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION_ID }}
+          NEXT_PUBLIC_OPENBUFF_APP_URL: ${{ secrets.NEXT_PUBLIC_OPENBUFF_APP_URL }}
+          NEXT_PUBLIC_POSTHOG_API_KEY: ${{ secrets.NEXT_PUBLIC_POSTHOG_API_KEY }}
+          NEXT_PUBLIC_POSTHOG_HOST_URL: ${{ secrets.NEXT_PUBLIC_POSTHOG_HOST_URL }}
+          NEXT_PUBLIC_SUPPORT_EMAIL: ${{ secrets.NEXT_PUBLIC_SUPPORT_EMAIL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPEN_ROUTER_API_KEY: ${{ secrets.OPEN_ROUTER_API_KEY }}
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
         run: |
           VAR_NAMES=$(bun scripts/generate-ci-env.ts)
-          echo "$SECRETS_CONTEXT" | jq -r --argjson vars "$VAR_NAMES" '
-            to_entries | .[] | select(.key as $k | $vars | index($k)) | .key + "=" + .value
-          ' >> $GITHUB_ENV
+          # Export each required var from its named step env entry above.
+          for name in $VAR_NAMES; do
+            value="${!name:-}"
+            if [ -n "$value" ]; then
+              echo "$name=$value" >> $GITHUB_ENV
+            fi
+          done
           echo "CODEBUFF_GITHUB_ACTIONS=true" >> $GITHUB_ENV
           echo "NEXT_PUBLIC_CB_ENVIRONMENT=test" >> $GITHUB_ENV
           echo "NEXT_PUBLIC_INFISICAL_UP=true" >> $GITHUB_ENV
-          echo "CODEBUFF_GITHUB_TOKEN=${{ secrets.OPENBUFF_GITHUB_TOKEN }}" >> $GITHUB_ENV
+          echo "CODEBUFF_GITHUB_TOKEN=$CODEBUFF_GITHUB_TOKEN" >> $GITHUB_ENV
 
       - name: Build SDK before tests
         run: cd sdk && bun run build
@@ -136,7 +187,7 @@ jobs:
         run: cd cli && bun run prebuild:agents
 
       - name: Run ${{ matrix.package }} tests
-        uses: nick-fields/retry@v3
+        uses: nick-fields/retry@v3 # TODO: pin to SHA
         with:
           timeout_minutes: 10
           max_attempts: 3
@@ -171,15 +222,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322ed31b03a90a06f # v5.0.0
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@v2 # TODO: pin to SHA
         with:
           bun-version: '1.3.5'
 
       - name: Cache dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v5 # TODO: pin to SHA
         with:
           path: |
             node_modules
@@ -194,16 +245,39 @@ jobs:
 
       - name: Set environment variables
         env:
-          SECRETS_CONTEXT: ${{ toJSON(secrets) }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CANOPYWAVE_API_KEY: ${{ secrets.CANOPYWAVE_API_KEY }}
+          CODEBUFF_GITHUB_TOKEN: ${{ secrets.OPENBUFF_GITHUB_TOKEN }}
+          CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          GRAVITY_API_KEY: ${{ secrets.GRAVITY_API_KEY }}
+          IPINFO_TOKEN: ${{ secrets.IPINFO_TOKEN }}
+          LINKUP_API_KEY: ${{ secrets.LINKUP_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          NEXT_PUBLIC_CODEBUFF_APP_URL: ${{ secrets.NEXT_PUBLIC_CODEBUFF_APP_URL }}
+          NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION_ID: ${{ secrets.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION_ID }}
+          NEXT_PUBLIC_OPENBUFF_APP_URL: ${{ secrets.NEXT_PUBLIC_OPENBUFF_APP_URL }}
+          NEXT_PUBLIC_POSTHOG_API_KEY: ${{ secrets.NEXT_PUBLIC_POSTHOG_API_KEY }}
+          NEXT_PUBLIC_POSTHOG_HOST_URL: ${{ secrets.NEXT_PUBLIC_POSTHOG_HOST_URL }}
+          NEXT_PUBLIC_SUPPORT_EMAIL: ${{ secrets.NEXT_PUBLIC_SUPPORT_EMAIL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPEN_ROUTER_API_KEY: ${{ secrets.OPEN_ROUTER_API_KEY }}
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
         run: |
           VAR_NAMES=$(bun scripts/generate-ci-env.ts)
-          echo "$SECRETS_CONTEXT" | jq -r --argjson vars "$VAR_NAMES" '
-            to_entries | .[] | select(.key as $k | $vars | index($k)) | .key + "=" + .value
-          ' >> $GITHUB_ENV
+          # Export each required var from its named step env entry above.
+          for name in $VAR_NAMES; do
+            value="${!name:-}"
+            if [ -n "$value" ]; then
+              echo "$name=$value" >> $GITHUB_ENV
+            fi
+          done
           echo "CODEBUFF_GITHUB_ACTIONS=true" >> $GITHUB_ENV
           echo "NEXT_PUBLIC_CB_ENVIRONMENT=test" >> $GITHUB_ENV
           echo "NEXT_PUBLIC_INFISICAL_UP=true" >> $GITHUB_ENV
-          echo "CODEBUFF_GITHUB_TOKEN=${{ secrets.OPENBUFF_GITHUB_TOKEN }}" >> $GITHUB_ENV
+          echo "CODEBUFF_GITHUB_TOKEN=$CODEBUFF_GITHUB_TOKEN" >> $GITHUB_ENV
 
       - name: Build SDK before integration tests
         run: cd sdk && bun run build
@@ -213,7 +287,7 @@ jobs:
         run: cd cli && bun run prebuild:agents
 
       - name: Run ${{ matrix.package }} integration tests
-        uses: nick-fields/retry@v3
+        uses: nick-fields/retry@v3 # TODO: pin to SHA
         with:
           timeout_minutes: 15
           max_attempts: 3

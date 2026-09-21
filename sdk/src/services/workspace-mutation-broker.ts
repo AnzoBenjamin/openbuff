@@ -17,6 +17,9 @@ const DEFAULT_LOCK_TIMEOUT_MS = 10_000
 const DEFAULT_STALE_LOCK_MS = 120_000
 const DEFAULT_LOCK_POLL_MS = 20
 
+/** Newest receipts to report from listReceipts (no pruning this session). */
+const RECEIPT_LIST_LIMIT = 500
+
 export const WORKSPACE_MUTATION_AUTHORITY = 'cooperative_cas' as const
 
 type BrokerAction = 'commit' | 'create' | 'delete' | 'move'
@@ -516,16 +519,26 @@ export class WorkspaceMutationBroker {
 
   async listReceipts(): Promise<WorkspaceMutationReceipt[]> {
     await fs.mkdir(this.receiptsDir, { recursive: true, mode: 0o700 })
+    // Bound the listing: receipts accumulate indefinitely, so report the newest
+    // N instead of re-reading every historical receipt (file names sort by
+    // zero-padded broker revision, newest last). Malformed receipt files are
+    // skipped rather than failing the whole listing.
     const names = (await fs.readdir(this.receiptsDir))
       .filter((name) => name.endsWith('.json'))
       .sort()
+      .slice(-RECEIPT_LIST_LIMIT)
     const receipts: WorkspaceMutationReceipt[] = []
     for (const name of names) {
-      receipts.push(
-        await this.readJson<WorkspaceMutationReceipt>(
-          path.join(this.receiptsDir, name),
-        ),
-      )
+      try {
+        receipts.push(
+          await this.readJson<WorkspaceMutationReceipt>(
+            path.join(this.receiptsDir, name),
+          ),
+        )
+      } catch (error) {
+        if (error instanceof SyntaxError) continue
+        throw error
+      }
     }
     return receipts
   }

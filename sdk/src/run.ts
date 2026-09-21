@@ -134,6 +134,39 @@ import { listJobs } from './tools/list-jobs'
 import type { ListJobsViewRow } from '@codebuff/common/util/list-jobs-view'
 import { fingerprintListJobsRows } from '@codebuff/common/util/list-jobs-view'
 import { getSystemProcessEnv } from './env'
+import { spawn as nodeSpawn } from 'node:child_process'
+
+/**
+ * Stable trusted background-job ownership seed for THIS client session.
+ *
+ * The seed is created lazily ONCE per process (never per run), so consecutive
+ * `run()` calls from the same CLI session resolve the same
+ * `trustedJobOwner.clientSessionId`. That keeps a background process spawned in
+ * turn N owned (and manageable via check_job/kill_job/read_logs/list_jobs /
+ * end_turn) in turn N+1, instead of every new run stamping a fresh random id
+ * that makes all earlier jobs look 'foreign'.
+ *
+ * Trust invariants (unchanged):
+ * - The seed is runtime-owned process state; it is NEVER derived from model,
+ *   tool input, or anything the model can influence.
+ * - It is scoped to one client session/process, so separate sessions stay
+ *   distinct owners.
+ * - `sessionState` itself carries no stable session-level identifier today
+ *   (`AgentState` has only per-run `runId` / deprecated `agentId`, and turn
+ *   ids like `promptId` are per-run by design), which is exactly why a
+ *   process-owned seed is used. No per-run fallback is needed: every
+ *   background job this session spawns is stamped with this same seed.
+ */
+let trustedSessionClientId: string | undefined
+
+/**
+ * Exported for tests: the same accessor `runOnce` uses, so ownership tests
+ * can pin consecutive-run stability against the production symbol.
+ */
+export function getTrustedSessionClientId(): string {
+  trustedSessionClientId ??= crypto.randomUUID()
+  return trustedSessionClientId
+}
 
 /**
  * Wraps content for user messages, ensuring text is wrapped in <user_message> tags.
@@ -724,7 +757,7 @@ async function runOnce({
     const spawnSourceValue = await spawnSource
     spawn = spawnSourceValue as CodebuffSpawn
   } else {
-    spawn = require('child_process').spawn as CodebuffSpawn
+    spawn = nodeSpawn as CodebuffSpawn
   }
   const preparedContent = wrapContentForUserMessage(content)
 
@@ -789,11 +822,13 @@ async function runOnce({
     ? new MemoryV2Coordinator(memoryV2, logger)
     : undefined
   // Trusted ownership identity for every process-job operation. Derived
-  // ONLY from run/session state (the per-run promptId + the runtime's own
-  // run/agent ids) — NEVER from model or tool input — and injected into
-  // check_job/kill_job/read_logs/list_jobs/run_terminal_command below.
+  // ONLY from trusted runtime state — NEVER from model or tool input — and
+  // injected into check_job/kill_job/read_logs/list_jobs/run_terminal_command
+  // below. `clientSessionId` comes from the stable per-process session seed
+  // (see getTrustedSessionClientId), NOT from the per-turn promptId, so
+  // ownership survives across consecutive turns of the same client session.
   const trustedJobOwner: JobOwner = {
-    clientSessionId: promptId,
+    clientSessionId: getTrustedSessionClientId(),
     rootRunId:
       sessionState.mainAgentState.runId ?? sessionState.mainAgentState.agentId,
     parentRunId:
@@ -1427,7 +1462,12 @@ async function runOnce({
   callbacksEnabled = false
   unsubscribeJobEvents()
   if (timeoutHandle) clearTimeout(timeoutHandle)
-  await stopBrowserSessionsByOwner({ clientSessionId: promptId })
+  await stopBrowserSessionsByOwner({
+    // Same resolved owner identity the job tools scope by: browser sessions
+    // follow the stable session seed (not the per-turn promptId), so
+    // browses opened this run are still owned next turn until stopped here.
+    clientSessionId: trustedJobOwner.clientSessionId,
+  })
   const cleanupLibrarianClone = (cloneDir: string) => {
     try {
       rmSync(cloneDir, { recursive: true, force: true })
@@ -1925,8 +1965,15 @@ export async function handleToolCall({
         )
       }
     } else if (toolName === 'end_turn') {
+      // Mirror the runtime end_turn handler's fail-closed scoping: list ONLY
+      // jobs owned by THIS run's trusted owner (the registry pairs owner
+      // equality on clientSessionId + rootRunId). An unscoped
+      // `listRunning()` here would surface other client sessions' jobs.
       const runningJobs = jobRegistry
-        .listRunning()
+        .listRunning({
+          clientSessionId: trustedJobOwner.clientSessionId,
+          rootRunId: trustedJobOwner.rootRunId,
+        })
         .filter((job) => job.kind === 'process')
       result = [
         {
@@ -2010,6 +2057,15 @@ export async function handleToolCall({
       >[0] & {
         approval_receipt_id?: string
       }
+      // `permission_profile` passes through verbatim from the client tool call
+      // input, but that input is constructed by the agent runtime handler
+      // (handleRunTerminalCommand), which always sets it from the agent
+      // template's declared `terminalPermissionProfile` (defaulting to
+      // 'full-access') and never from model/tool input — see the parity test
+      // in packages/agent-runtime/src/tools/handlers/tool/__tests__/
+      // run-terminal-command.test.ts. The per-profile policy engine is
+      // therefore clamped to the template declaration, never widened by the
+      // model. The schema on the SDK side still validates the value.
       result = await runTerminalCommand({
         ...terminalInput,
         // Ownership identity is runtime-injected from trusted run state; any

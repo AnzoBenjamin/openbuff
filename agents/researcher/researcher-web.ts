@@ -1,6 +1,5 @@
 import { publisher } from '../constants'
 
-import type { ToolCall } from '../types/agent-definition'
 import type { SecretAgentDefinition } from '../types/secret-agent-definition'
 
 const definition: SecretAgentDefinition = {
@@ -75,198 +74,37 @@ const definition: SecretAgentDefinition = {
     required: ['questions', 'sources', 'skippedQuestions'],
   },
   includeMessageHistory: false,
-  toolNames: ['web_search'],
-  programmaticToolNames: ['set_output'],
+  toolNames: ['web_search', 'set_output'],
+  programmaticToolNames: [],
   spawnableAgents: [],
 
-  systemPrompt: `You are an expert researcher who can search the web to find relevant information. Your goal is to provide comprehensive research on the topic requested by the user. Use web_search to find current information.`,
-  instructionsPrompt: `Provide comprehensive research on the user's prompt.
+  systemPrompt: `You are an expert researcher who can search the web to find relevant information. Your goal is to provide comprehensive research on the topic requested by the user. You have full control of the research process: run web_search, read results, refine queries, and iterate until the topic is covered before calling set_output.`,
+  instructionsPrompt: `Research the user's prompt thoroughly using web_search.
 
-Use web_search to find current information. Repeat the web_search tool call until you have gathered all the relevant information.
+Start from the seed questions listed in the first message. For each:
+- Run web_search with a focused query. Adapt and refine your queries based on the results you actually read: if a search comes back thin or noisy, reformulate the query with better keywords, synonyms, or site: filters, and search again.
+- Read the returned results before deciding anything. When a result includes links you can pass include_links, follow the most promising ones to get richer source material or fetch a specific URL directly with web_search.
+- Follow leads that appear mid-research (new terms, contradicting sources, missing details). Iterate as many rounds as the topic needs — there is no fixed number of searches.
+- Stop only when every seed question is answered well or you have honestly exhausted useful searches.
+- Depth guidance: prefer deeper, multi-round research for broad or multi-part prompts; fewer rounds for narrow questions.
 
-Then, write up a concise report that includes key findings for the user's prompt.
+Then call set_output with the structured output contract:
+- questions: every seed question, each with status "answered", "failed", or "skipped", its answer text, and citations as URLs of the sources that support the answer.
+- sources: every URL you consulted during research, with a title.
+- skippedQuestions: the question strings for anything you could not answer.
+Be honest: mark questions you could not answer as failed or skipped instead of inventing content. Always cite real URLs from your searches in citations;
+never fabricate citations.
+
+The web_search backend also enforces egress/SSRF protection on any URL: do not attempt to fetch internal or private hosts.
 `.trim(),
 
+  // Bootstrap-only handleSteps: decompose the prompt into seed questions,
+  // seed them into the model's reasoning, then hand full control to the
+  // model-driven STEP loop. No deterministic search budget; the model decides
+  // how many web_search calls the topic needs.
   handleSteps: function* ({ prompt, params }) {
     // Keep helpers inside handleSteps because built-in agents serialize this
     // function without top-level lexical bindings.
-
-    // SSRF guard (C1.8): reject URLs that target internal/private/link-local
-    // addresses before handing them to web_search. This is a lexical check on
-    // the hostname; the web_search backend should also enforce its own egress
-    // guard (defense in depth). Async DNS resolution isn't possible inside the
-    // serialized generator body, so DNS-rebinding-to-internal is out of scope
-    // here and must be handled by the backend.
-    const PRIVATE_HOST_BLOCKLIST = new Set([
-      'localhost',
-      'metadata',
-      'metadata.google.internal',
-      'metadata.aws.internal',
-      '169.254.169.254',
-      '0.0.0.0',
-      '::1',
-      '::',
-    ])
-    function expandShortIpv4(ip: string): string | null {
-      const parts = ip.split('.')
-      if (parts.length < 1 || parts.length > 4) return null
-      if (parts.some((part) => !/^\d+$/.test(part))) return null
-      const nums = parts.map(Number)
-      if (nums.some((n) => !Number.isInteger(n) || n < 0)) return null
-      if (parts.length === 4) {
-        if (nums.some((n) => n > 255)) return null
-        return nums.join('.')
-      }
-      if (parts.length === 1) {
-        if (nums[0] > 0xffffffff) return null
-        const n = nums[0]
-        return [
-          (n >>> 24) & 255,
-          (n >>> 16) & 255,
-          (n >>> 8) & 255,
-          n & 255,
-        ].join('.')
-      }
-      if (parts.length === 2) {
-        if (nums[0] > 255 || nums[1] > 0xffffff) return null
-        const rest = nums[1]
-        return [
-          nums[0],
-          (rest >>> 16) & 255,
-          (rest >>> 8) & 255,
-          rest & 255,
-        ].join('.')
-      }
-      if (nums[0] > 255 || nums[1] > 255 || nums[2] > 0xffff) return null
-      const rest = nums[2]
-      return [nums[0], nums[1], (rest >>> 8) & 255, rest & 255].join('.')
-    }
-    function isPrivateIpv4(ip: string): boolean {
-      const expanded = expandShortIpv4(ip)
-      if (!expanded) return false
-      const parts = expanded.split('.').map(Number)
-      const [a, b] = parts
-      return (
-        a === 0 || // 0.0.0.0/8
-        a === 10 || // 10.0.0.0/8 (RFC1918)
-        (a === 172 && b >= 16 && b <= 31) || // 172.16.0.0/12 (RFC1918)
-        (a === 192 && b === 168) || // 192.168.0.0/16 (RFC1918)
-        a === 127 || // 127.0.0.0/8 (loopback)
-        (a === 169 && b === 254) || // 169.254.0.0/16 (link-local + cloud metadata)
-        (a === 100 && b >= 64 && b <= 127) // 100.64.0.0/10 (CGNAT)
-      )
-    }
-    function isPrivateIpv6(ip: string): boolean {
-      const lower = ip.toLowerCase()
-      return (
-        lower === '::1' ||
-        lower === '::' ||
-        lower.startsWith('fe80:') || // link-local
-        lower.startsWith('fc') || // ULA fc00::/7
-        lower.startsWith('fd') // ULA fc00::/7
-      )
-    }
-    // Expand compressed IPv6 and rewrite IPv4-mapped/compatible forms so
-    // 0:0:0:0:0:0:0:1, ::ffff:7f00:1, and ::127.0.0.1 hit the same checks as
-    // ::1 / 127.0.0.1 before the private-host blocklist runs.
-    function expandIpv6Hextets(ip: string): string[] | null {
-      const lower = ip.toLowerCase()
-      if (!lower.includes(':')) return null
-      const dotted = lower.match(/:(\d{1,3}(?:\.\d{1,3}){3})$/)
-      let ipv4Tail: number[] | null = null
-      let core = lower
-      if (dotted) {
-        const parts = dotted[1].split('.').map(Number)
-        if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
-          return null
-        }
-        ipv4Tail = parts
-        core = lower.slice(0, -dotted[1].length)
-      }
-      if (core.includes(':::')) return null
-      const sides = core.split('::')
-      if (sides.length > 2) return null
-      const parseGroups = (s: string): string[] | null => {
-        if (s === '' || s === ':') return []
-        const groups = s.replace(/^:|:$/g, '').split(':')
-        if (groups.some((g) => g === '' || !/^[0-9a-f]{1,4}$/.test(g))) {
-          return null
-        }
-        return groups
-      }
-      let groups: string[]
-      if (sides.length === 2) {
-        const left = parseGroups(sides[0])
-        const right = parseGroups(sides[1])
-        if (!left || !right) return null
-        const needed = 8 - left.length - right.length - (ipv4Tail ? 2 : 0)
-        if (needed < 0) return null
-        groups = [...left, ...Array(needed).fill('0'), ...right]
-      } else {
-        const parsedGroups = parseGroups(sides[0])
-        if (!parsedGroups) return null
-        groups = parsedGroups
-      }
-      if (ipv4Tail) {
-        groups.push(((ipv4Tail[0] << 8) | ipv4Tail[1]).toString(16))
-        groups.push(((ipv4Tail[2] << 8) | ipv4Tail[3]).toString(16))
-      }
-      if (groups.length !== 8) return null
-      return groups.map((g) => g.replace(/^0+/, '') || '0')
-    }
-    function ipv4FromHextets(hi: string, lo: string): string | null {
-      const high = Number.parseInt(hi, 16)
-      const low = Number.parseInt(lo, 16)
-      if (!Number.isInteger(high) || !Number.isInteger(low)) return null
-      return `${(high >> 8) & 255}.${high & 255}.${(low >> 8) & 255}.${low & 255}`
-    }
-    function normalizeSsrfHost(host: string): string {
-      const hextets = expandIpv6Hextets(host)
-      if (!hextets) return host
-      const isZero = (h: string) => h === '0'
-      if (hextets.slice(0, 7).every(isZero) && hextets[7] === '1') return '::1'
-      if (hextets.every(isZero)) return '::'
-      if (hextets.slice(0, 5).every(isZero) && hextets[5] === 'ffff') {
-        const mapped = ipv4FromHextets(hextets[6], hextets[7])
-        if (mapped) return mapped
-      }
-      // Deprecated IPv4-compatible form, e.g. ::127.0.0.1
-      if (hextets.slice(0, 6).every(isZero)) {
-        const compatible = ipv4FromHextets(hextets[6], hextets[7])
-        if (compatible) return compatible
-      }
-      return hextets.join(':')
-    }
-    function isSsrfUrl(rawUrl: string): boolean {
-      let parsed: URL
-      try {
-        parsed = new URL(rawUrl)
-      } catch {
-        return true // malformed -> treat as unsafe, skip url mode
-      }
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        return true
-      }
-      const host = normalizeSsrfHost(
-        parsed.hostname.replace(/^\[|\]$/g, ''), // strip IPv6 brackets
-      )
-      if (PRIVATE_HOST_BLOCKLIST.has(host.toLowerCase())) {
-        return true
-      }
-      const ipv4Mapped = host.match(/^::ffff:([^:]+)$/i)?.[1]
-      if (ipv4Mapped && isPrivateIpv4(ipv4Mapped)) {
-        return true
-      }
-      if (isPrivateIpv4(host)) {
-        return true
-      }
-      if (host.includes(':') && isPrivateIpv6(host)) {
-        return true
-      }
-      return false
-    }
-
-    // --- Research planning helpers (M1.1-M1.2-M1.3) ---
 
     // Strip meta-instructions from text: "search for", "research", "find info
     // about", "look up", "can you find", etc. These are instructions to the
@@ -281,97 +119,8 @@ Then, write up a concise report that includes key findings for the user's prompt
         .trim()
     }
 
-    // Decompose a broad prompt into focused subquestions. Each subquestion has
-    // a human-readable `question` and a shorter search-engine `query`.
-    // Returns at most MAX_SUBQUERIES entries.
-    const MAX_SUBQUERIES = 5
-    function decomposePrompt(
-      p: string,
-    ): Array<{ question: string; query: string }> {
-      const subquestions: Array<{ question: string; query: string }> = []
-
-      // Strategy 1: Split on numbered items (1. 2. 3. or 1) 2) etc)
-      const numberedSplit = p.split(/(?:^|\n)\s*\d+[.)]\s+/m).filter(Boolean)
-      if (numberedSplit.length >= 2) {
-        for (
-          let i = 0;
-          i < numberedSplit.length && subquestions.length < MAX_SUBQUERIES;
-          i++
-        ) {
-          const item = stripMetaInstructions(numberedSplit[i].trim())
-          if (item.length > 5) {
-            subquestions.push({ question: item, query: trimQuery(item) })
-          }
-        }
-        if (subquestions.length >= 2) return subquestions
-      }
-
-      // Strategy 2: Extract sentences ending with ? as individual questions
-      const questionSentences = p.match(/[^.!?]+\?/g)
-      if (questionSentences && questionSentences.length >= 2) {
-        for (
-          let i = 0;
-          i < questionSentences.length && subquestions.length < MAX_SUBQUERIES;
-          i++
-        ) {
-          const q = stripMetaInstructions(questionSentences[i].trim())
-          if (q.length > 5) {
-            subquestions.push({ question: q, query: trimQuery(q) })
-          }
-        }
-        if (subquestions.length >= 2) return subquestions
-      }
-
-      // Strategy 3: Split on bullet markers (- * •)
-      const bulletSplit = p.split(/(?:^|\n)\s*[\-*•]\s+/m).filter(Boolean)
-      if (bulletSplit.length >= 2) {
-        for (
-          let i = 0;
-          i < bulletSplit.length && subquestions.length < MAX_SUBQUERIES;
-          i++
-        ) {
-          const item = stripMetaInstructions(bulletSplit[i].trim())
-          if (item.length > 5) {
-            subquestions.push({ question: item, query: trimQuery(item) })
-          }
-        }
-        if (subquestions.length >= 2) return subquestions
-      }
-
-      // Strategy 4: Split on common comparison connectors ("vs", "compared to",
-      // "and", "or" between topic phrases) to extract topic pairs.
-      const topics = extractTopics(p)
-      if (topics.length >= 2 && subquestions.length === 0) {
-        for (
-          let i = 0;
-          i < topics.length && subquestions.length < MAX_SUBQUERIES;
-          i++
-        ) {
-          subquestions.push({
-            question: topics[i],
-            query: trimQuery(topics[i]),
-          })
-        }
-      }
-
-      return subquestions
-    }
-
-    // Trim a question down to a concise search-engine query: strip leading
-    // question words, trailing punctuation, and keep under ~100 chars.
-    function trimQuery(q: string): string {
-      return q
-        .replace(
-          /^(what is|what are|how does|how do|how can|how should|why is|why does|why are|when is|when does|where is|where are|which is|which are|who is|who are|can you|please|could you|tell me|explain|describe|elaborate on|i want to know|i need to|i would like to)\s+/i,
-          '',
-        )
-        .replace(/[?.,;:!]+$/, '')
-        .trim()
-        .slice(0, 120)
-    }
-
     // Extract topic phrases from a comparison-style prompt by splitting on
-    // delimiters like "vs", "compared to", "versus", "and", "or".
+    // delimiters like "vs", "compared to", "versus", "or".
     function extractTopics(p: string): string[] {
       const cleaned = stripMetaInstructions(p)
       const parts = cleaned.split(
@@ -390,7 +139,79 @@ Then, write up a concise report that includes key findings for the user's prompt
       return []
     }
 
-    const searchDepth = params?.depth === 'deep' ? 'deep' : 'standard'
+    // Decompose a broad prompt into focused seed questions heuristically.
+    // These are starting points for the model's own research loop, not a
+    // fixed list of one-shot searches.
+    const MAX_SUBQUERIES = 5
+    function decomposePrompt(
+      p: string,
+    ): Array<{ question: string }> {
+      const subquestions: Array<{ question: string }> = []
+
+      // Strategy 1: Split on numbered items (1. 2. 3. or 1) 2) etc)
+      const numberedSplit = p.split(/(?:^|\n)\s*\d+[.)]\s+/m).filter(Boolean)
+      if (numberedSplit.length >= 2) {
+        for (
+          let i = 0;
+          i < numberedSplit.length && subquestions.length < MAX_SUBQUERIES;
+          i++
+        ) {
+          const item = stripMetaInstructions(numberedSplit[i].trim())
+          if (item.length > 5) {
+            subquestions.push({ question: item })
+          }
+        }
+        if (subquestions.length >= 2) return subquestions
+      }
+
+      // Strategy 2: Extract sentences ending with ? as individual questions
+      const questionSentences = p.match(/[^.!?]+\?/g)
+      if (questionSentences && questionSentences.length >= 2) {
+        for (
+          let i = 0;
+          i < questionSentences.length && subquestions.length < MAX_SUBQUERIES;
+          i++
+        ) {
+          const q = stripMetaInstructions(questionSentences[i].trim())
+          if (q.length > 5) {
+            subquestions.push({ question: q })
+          }
+        }
+        if (subquestions.length >= 2) return subquestions
+      }
+
+      // Strategy 3: Split on bullet markers (- * •)
+      const bulletSplit = p.split(/(?:^|\n)\s*[\-*•]\s+/m).filter(Boolean)
+      if (bulletSplit.length >= 2) {
+        for (
+          let i = 0;
+          i < bulletSplit.length && subquestions.length < MAX_SUBQUERIES;
+          i++
+        )
+        {
+          const item = stripMetaInstructions(bulletSplit[i].trim())
+          if (item.length > 5) {
+            subquestions.push({ question: item })
+          }
+        }
+        if (subquestions.length >= 2) return subquestions
+      }
+
+      // Strategy 4: Split on comparison connectors to extract topic pairs.
+      const topics = extractTopics(p)
+      if (topics.length >= 2 && subquestions.length === 0) {
+        for (
+          let i = 0;
+          i < topics.length && subquestions.length < MAX_SUBQUERIES;
+          i++
+        ) {
+          subquestions.push({ question: topics[i] })
+        }
+      }
+
+      return subquestions
+    }
+
     const queryControls = [
       typeof params?.locale === 'string' ? params.locale : '',
       typeof params?.dateRange === 'string' ? params.dateRange : '',
@@ -402,226 +223,42 @@ Then, write up a concise report that includes key findings for the user's prompt
     ]
       .filter(Boolean)
       .join(' ')
-    const withControls = (query: string) =>
-      queryControls ? `${query} ${queryControls}` : query
 
-    // Extract URL from prompt, including IPv6 literals in brackets.
-    const match = prompt?.match(
-      /https?:\/\/(?:\[[^\]]+\][^\s)>"']*|[^\s)\]>"']+)/,
-    )
-    const rawUrl = match?.[0].replace(/[.,;:!?]+$/, '')
-    // Only use url mode when the URL is safe; otherwise fall back to query mode
-    // so an internal-IP URL can't drive a web_search fetch.
-    const url = rawUrl && !isSsrfUrl(rawUrl) ? rawUrl : undefined
-
-    // --- URL mode: fetch directly, exactly as before ---
-    if (url) {
-      const { toolResult: urlResult } = yield {
-        toolName: 'web_search' as const,
-        input: { url, include_links: true, max_links: 40 },
-        includeToolCall: false,
-      } satisfies ToolCall<'web_search'>
-
-      const results = (urlResult
-        ?.filter((r) => r.type === 'json')
-        ?.map((r) => r.value)?.[0] ?? {}) as {
-        result: string | undefined
-        errorMessage: string | undefined
-        links?: Array<{ href: string; text: string }>
-      }
-
-      const citations = (results.links ?? []).map((link) => link.href)
-      yield {
-        toolName: 'set_output',
-        input: {
-          data: {
-            questions: [
-              {
-                question: prompt ?? url,
-                status: results.result ? 'answered' : 'failed',
-                answer: results.result ?? results.errorMessage ?? '',
-                citations,
-              },
-            ],
-            sources: (results.links ?? []).map((link) => ({
-              url: link.href,
-              title: link.text || link.href,
-            })),
-            skippedQuestions: [],
-          },
-        },
-      }
-      return
-    }
-
-    // --- Broad-prompt decomposition path (M1.2-M1.3-M1.4) ---
     const cleanedPrompt = prompt ? stripMetaInstructions(prompt) : ''
-    const subquestions = cleanedPrompt ? decomposePrompt(cleanedPrompt) : []
+    const subquestions = cleanedPrompt
+      ? decomposePrompt(cleanedPrompt)
+      : []
+    const seedQuestions =
+      subquestions.length >= 2
+        ? subquestions.map((sq) => sq.question)
+        : [prompt && prompt.trim() ? prompt.trim() : 'the user\'s request']
 
-    if (subquestions.length >= 2) {
-      const MAX_QUERY_CALLS = Math.min(subquestions.length, MAX_SUBQUERIES)
-      const MAX_ATTEMPTS = searchDepth === 'deep' ? 2 : 1
-      // Reserve at least one call per decomposed question. Deep mode permits
-      // one retry per question; standard mode stays to one call each.
-      const MAX_TOTAL_CALLS = MAX_QUERY_CALLS * MAX_ATTEMPTS
-      const allLinks: Array<{ href: string; text: string }> = []
-      const seenLinks = new Set<string>()
-      const sections: Array<{
-        question: string
-        result: string
-        status: 'answered' | 'failed'
-        citations: string[]
-      }> = []
-      let totalCalls = 0
+    const seedList = seedQuestions
+      .map((question, index) => `${index + 1}. ${question}`)
+      .join('\n')
 
-      for (
-        let i = 0;
-        i < MAX_QUERY_CALLS && totalCalls < MAX_TOTAL_CALLS;
-        i++
-      ) {
-        const sq = subquestions[i]
-        let queryText = withControls(sq.query)
-        let attempt = 0
-        let gotResult = false
-        let lastError: string | undefined
-
-        while (
-          attempt < MAX_ATTEMPTS &&
-          !gotResult &&
-          totalCalls < MAX_TOTAL_CALLS
-        ) {
-          const { toolResult: sqResult } = yield {
-            toolName: 'web_search' as const,
-            input: { query: queryText, depth: searchDepth },
-            includeToolCall: false,
-          } satisfies ToolCall<'web_search'>
-          totalCalls++
-          attempt++
-
-          const parsed = (sqResult
-            ?.filter((r) => r.type === 'json')
-            ?.map((r) => r.value)?.[0] ?? {}) as {
-            result: string | undefined
-            errorMessage: string | undefined
-            links?: Array<{ href: string; text: string }>
-          }
-          lastError = parsed?.errorMessage
-
-          if (parsed.result) {
-            const citations = (parsed.links ?? []).map((link) => link.href)
-            sections.push({
-              question: sq.question,
-              result: parsed.result,
-              status: 'answered',
-              citations,
-            })
-            gotResult = true
-            // Collect links, deduplicating by href
-            if (parsed.links) {
-              for (const link of parsed.links) {
-                if (!seenLinks.has(link.href)) {
-                  seenLinks.add(link.href)
-                  allLinks.push(link)
-                }
-              }
-            }
-          } else if (attempt < MAX_ATTEMPTS && totalCalls < MAX_TOTAL_CALLS) {
-            // M1.5: Retry/fallback query generation when search returns no results.
-            // First retry: shorten the query to core keywords.
-            // Second retry: use just the question text without trimming.
-            if (attempt === 1) {
-              queryText = sq.query
-                .split(' ')
-                .filter((w) => w.length > 3)
-                .slice(0, 5)
-                .join(' ')
-            }
-          }
-        }
-
-        // If all attempts failed, record the error
-        if (!gotResult) {
-          sections.push({
-            question: sq.question,
-            result: lastError ?? `No search results found for "${sq.query}"`,
-            status: 'failed',
-            citations: [],
-          })
-        }
-      }
-
-      const skippedQuestions = subquestions
-        .slice(sections.length)
-        .map((question) => question.question)
-      yield {
-        toolName: 'set_output',
-        input: {
-          data: {
-            questions: [
-              ...sections.map((section) => ({
-                question: section.question,
-                status: section.status,
-                answer: section.result,
-                citations: section.citations,
-              })),
-              ...skippedQuestions.map((question) => ({
-                question,
-                status: 'skipped',
-                answer:
-                  'Skipped because the bounded search-call budget was exhausted.',
-                citations: [],
-              })),
-            ],
-            sources: allLinks.map((link) => ({
-              url: link.href,
-              title: link.text || link.href,
-            })),
-            skippedQuestions,
-          },
-        },
-      }
-      return
-    }
-
-    // --- Simple single-query path (unchanged behavior for narrow prompts) ---
-    const { toolResult } = yield {
-      toolName: 'web_search' as const,
+    yield {
+      toolName: 'add_message',
       input: {
-        query: withControls(cleanedPrompt) || undefined,
-        depth: searchDepth,
+        role: 'user',
+        content:
+          'Research this request using web_search. First, a suggested decomposition into seed questions (adapt them as you learn more; they are not a fixed checklist):\n\n' +
+          seedList +
+          '\n\nHow to research:\n- Run web_search for each seed question with focused queries.' +
+          (queryControls ? ` Prefer queries that also include these constraints: "${queryControls}".` : '') +
+          ' READ each result before your next move: refine queries that returned thin or noisy results, try different keywords, synonyms, or site: filters, and follow up with include_links or a direct URL fetch when a result points somewhere promising.\n' +
+          '- Iterate for as many rounds as the topic needs. There is no hard cap on searches; stop only when the seed questions are covered well or further searching is clearly not helping.\n' +
+          '- If your searches turn up questions beyond the seeds that matter for the request, research those too.\n\n' +
+          "Here is the request:\n\n" +
+          (prompt ?? '') +
+          '\n\nWhen coverage is adequate, call set_output with ALL of: questions (every seed question with status answered/failed/skipped, its answer, and citations as real URLs), sources (every URL you consulted, with a title), and skippedQuestions (question strings you could not answer). Cite URLs in answers; be honest about failures instead of inventing content.',
       },
       includeToolCall: false,
-    } satisfies ToolCall<'web_search'>
-
-    const results = (toolResult
-      ?.filter((r) => r.type === 'json')
-      ?.map((r) => r.value)?.[0] ?? {}) as {
-      result: string | undefined
-      errorMessage: string | undefined
-      links?: Array<{ href: string; text: string }>
     }
 
-    const citations = (results.links ?? []).map((link) => link.href)
-    yield {
-      toolName: 'set_output',
-      input: {
-        data: {
-          questions: [
-            {
-              question: prompt ?? '',
-              status: results.result ? 'answered' : 'failed',
-              answer: results.result ?? results.errorMessage ?? '',
-              citations,
-            },
-          ],
-          sources: (results.links ?? []).map((link) => ({
-            url: link.href,
-            title: link.text || link.href,
-          })),
-          skippedQuestions: [],
-        },
-      },
-    }
+    // Hand full control to the model-driven STEP loop; the structured
+    // set_output contract is enforced by outputMode/outputSchema.
+    yield 'STEP_ALL'
   },
 }
 

@@ -349,9 +349,11 @@ async function expandConceptRecallInner(
   db.prepare(
     'INSERT OR REPLACE INTO fingerprint_lru (fingerprint, updated_at) VALUES (?, ?)',
   ).run(modelDigest, now)
-  db.exec(
-    `DELETE FROM fingerprint_lru WHERE fingerprint NOT IN (SELECT fingerprint FROM fingerprint_lru ORDER BY updated_at DESC, rowid DESC LIMIT ${FINGERPRINT_LRU_LIMIT})`,
-  )
+  db
+    .prepare(
+      `DELETE FROM fingerprint_lru WHERE fingerprint NOT IN (SELECT fingerprint FROM fingerprint_lru ORDER BY updated_at DESC, rowid DESC LIMIT ?)`,
+    )
+    .run(FINGERPRINT_LRU_LIMIT)
   // The vector rows are the LRU's payload: a fingerprint evicted from the
   // LRU loses its persisted vectors, so the cache stays bounded to the 4
   // retained fingerprints instead of accumulating rows forever.

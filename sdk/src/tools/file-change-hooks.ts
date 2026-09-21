@@ -24,9 +24,11 @@ export type FileChangeHook = {
   runPerFile?: boolean
 }
 
-// Hooks are unbounded by default; -1 means no timeout. A project opts into a
-// bound with the per-hook `timeoutSeconds`.
-const HOOK_DEFAULT_TIMEOUT_SECONDS = -1
+// Hooks default to a bounded 300s wall-clock timeout so a hung typecheck/lint
+// command cannot stall the agent forever. An explicit -1 in a hook's config is
+// a deliberate opt-out (unbounded), and any positive `timeoutSeconds` still
+// takes precedence.
+const HOOK_DEFAULT_TIMEOUT_SECONDS = 300
 const MAX_HOOK_OUTPUT_CHARS = 6000
 const MAX_MANIFEST_BYTES = 512_000
 const MAX_PROJECT_SCAN_ENTRIES = 2_000

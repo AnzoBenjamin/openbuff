@@ -1005,55 +1005,13 @@ export const runAgentStep = async (
     shouldEndTurn = hasTaskCompleted || (hasNoToolResults && !isThinkOnly)
   }
 
-  const isThinkOnlyWithoutCompletion =
-    requiresExplicitCompletion &&
-    !hasTaskCompleted &&
-    hasNoToolResults &&
-    isThinkOnly
-  if (isThinkOnlyWithoutCompletion) {
-    agentState.consecutiveTextOnlyWithoutCompletion = 0
-  }
-
-  // Bounded fallback for explicit-completion agents that produce a text-only
-  // answer without calling task_completed (general-agent, last_message). Keep
-  // task_completed semantics strict, but don't loop forever: first text-only
-  // gets a nudge, second consecutive text-only ends the turn. Think-only
-  // turns never count (the model was just reasoning).
-  const isExplicitTextOnlyWithoutCompletion =
-    requiresExplicitCompletion &&
-    !hasTaskCompleted &&
-    hasNoToolResults &&
-    !isThinkOnly &&
-    responseWithoutThinkTags.length > 0
-  let injectedCompletionNudge = false
-  if (isExplicitTextOnlyWithoutCompletion) {
-    const consecutive =
-      (agentState.consecutiveTextOnlyWithoutCompletion ?? 0) + 1
-    agentState.consecutiveTextOnlyWithoutCompletion = consecutive
-    if (consecutive === 1) {
-      const nudge = withSystemTags(
-        'You produced an answer without calling task_completed. If work is done, call task_completed now; otherwise continue with tool calls.',
-      )
-      agentState.messageHistory = [
-        ...agentState.messageHistory,
-        userMessage({ content: nudge, keepDuringTruncation: true }),
-      ]
-      onResponseChunk(`${nudge}\n\n`)
-      injectedCompletionNudge = true
-    } else {
-      shouldEndTurn = true
-      if (
-        agentTemplate.outputMode === 'last_message' &&
-        agentState.output === undefined
-      ) {
-        agentState.output = { harvestedFromFallback: true }
-      }
-    }
-  } else if (!isThinkOnlyWithoutCompletion) {
-    if (!hasNoToolResults || hasTaskCompleted) {
-      agentState.consecutiveTextOnlyWithoutCompletion = 0
-    }
-  }
+  // Explicit-completion agents (task_completed in the tool list) are never
+  // killed for running a long time without completing: a text-only response
+  // without task_completed does not count toward anything, gets no nudge, and
+  // does NOT end the turn — the turn continues until task_completed, the step
+  // cap, a budget, or cancellation ends it. Think-only intent in such a run is
+  // likewise just a continue. Only task_completed/end_turn ends the turn for
+  // explicit-completion templates.
 
   // For structured-output agents, once set_output successfully sets the
   // agent's output, the turn should end regardless of other heuristics.
@@ -1070,11 +1028,7 @@ export const runAgentStep = async (
     shouldEndTurn = true
   }
 
-  if (injectedCompletionNudge) {
-    shouldEndTurn = false
-  }
-
-  agentState = {
+agentState = {
     ...agentState,
     stepsRemaining:
       agentState.stepsRemaining > 0
@@ -2759,14 +2713,22 @@ export async function loopAgentSteps(
         )
       }
 
-      await finishAgentRun({
-        ...params,
-        runId,
-        status: 'completed',
-        totalSteps,
-        directCredits: currentAgentState.directCreditsUsed,
-        totalCredits: currentAgentState.creditsUsed,
-      })
+      try {
+        await finishAgentRun({
+          ...params,
+          runId,
+          status: 'completed',
+          totalSteps,
+          directCredits: currentAgentState.directCreditsUsed,
+          totalCredits: currentAgentState.creditsUsed,
+        })
+      } catch (finishError) {
+        // Finalization must not replace the successful run result.
+        logger.warn(
+          { error: finishError, runId },
+          'Failed to finalize agent run after completion (non-fatal)',
+        )
+      }
 
       return {
         agentState: currentAgentState,
@@ -2802,14 +2764,23 @@ export async function loopAgentSteps(
           'Agent run cancelled by user (abort error)',
         )
 
-        await finishAgentRun({
-          ...params,
-          runId,
-          status: 'cancelled',
-          totalSteps,
-          directCredits: currentAgentState.directCreditsUsed,
-          totalCredits: currentAgentState.creditsUsed,
-        })
+        try {
+          await finishAgentRun({
+            ...params,
+            runId,
+            status: 'cancelled',
+            totalSteps,
+            directCredits: currentAgentState.directCreditsUsed,
+            totalCredits: currentAgentState.creditsUsed,
+          })
+        } catch (finishError) {
+          // Preserve the abort flow; a finalization failure at this point must
+          // not replace the original cancellation with a different error.
+          logger.warn(
+            { error: finishError, runId },
+            'Failed to finalize agent run after cancellation (non-fatal)',
+          )
+        }
 
         return {
           agentState: currentAgentState,
@@ -2843,15 +2814,24 @@ export async function loopAgentSteps(
       const statusCode = apiErrorDetails.statusCode
 
       const status = signal.aborted ? 'cancelled' : 'failed'
-      await finishAgentRun({
-        ...params,
-        runId,
-        status,
-        totalSteps,
-        directCredits: currentAgentState.directCreditsUsed,
-        totalCredits: currentAgentState.creditsUsed,
-        errorMessage,
-      })
+      try {
+        await finishAgentRun({
+          ...params,
+          runId,
+          status,
+          totalSteps,
+          directCredits: currentAgentState.directCreditsUsed,
+          totalCredits: currentAgentState.creditsUsed,
+          errorMessage,
+        })
+      } catch (finishError) {
+        // Propagate the ORIGINAL error, not a finalization failure that would
+        // mask it.
+        logger.warn(
+          { error: finishError, runId, status },
+          'Failed to finalize agent run after error (non-fatal)',
+        )
+      }
 
       // Payment required errors (402) should propagate
       if (statusCode === 402) {

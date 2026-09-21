@@ -1,3 +1,9 @@
+import {
+  getOwnedTempRoots,
+  isOwnedTempPath,
+} from '@codebuff/common/util/project-path-containment'
+import { isMandatorySensitiveReadPath } from '@codebuff/common/util/sensitive-paths'
+
 import path from 'node:path'
 
 export type TerminalPermissionProfile =
@@ -1883,6 +1889,42 @@ function isInsideQuotedRegion(
 const MUTATION_EXECUTABLE_COMMAND_PATTERN =
   /^\s*(?:(?:sudo|doas)\s+)?(?:rm|mv|cp|chmod|chown|chgrp|dd|shred|truncate|ln|install)\b/i
 
+const isWindows = process.platform === 'win32'
+
+/**
+ * True when `input` resolves to an OS-owned temp ROOT itself
+ * (`/tmp` on POSIX; `os.tmpdir()`-equivalent on every platform, i.e. macOS
+ * `/var/folders/.../T/`) or strictly inside one, using the ONE containment
+ * helper the write/read tools already rely on
+ * (`isOwnedTempPath` / `getOwnedTempRoots` in
+ * `common/src/util/project-path-containment.ts`) instead of the previous
+ * platform-conditional hardcode of `/tmp`. On Debian/Ubuntu containers
+ * `/var/tmp` is a legitimate second temp namespace (systemd consolidates it),
+ * so it is included as an alias of the same OS temp-root scope.
+ */
+function isOwnedTempScope(input: string): boolean {
+  const resolved = path.resolve(input)
+  // The root itself qualifies (the earlier hardcode exempted bare `/tmp`)
+  // plus anything strictly inside: os.tmpdir()-equivalent roots
+  // (`getOwnedTempRoots()` includes macOS /var/folders), their children via
+  // `isOwnedTempPath`, and the Debian/Ubuntu second temp namespace
+  // `/var/tmp` (its root and children). Sibling-prefix paths like `/tmpfoo`
+  // never resolve into any of these roots and stay refused.
+  if (
+    getOwnedTempRoots().some((root) => path.resolve(root) === resolved) ||
+    isOwnedTempPath(resolved)
+  ) {
+    return true
+  }
+  if (isWindows) return false
+  const varTmp = path.resolve('/var/tmp')
+  return (
+    resolved === varTmp ||
+    resolved.startsWith(varTmp + path.sep) ||
+    (resolved !== varTmp && (resolved + path.sep).startsWith(varTmp + path.sep))
+  )
+}
+
 function findOutsideAbsolutePath(
   command: string,
   projectRoot: string,
@@ -1891,13 +1933,56 @@ function findOutsideAbsolutePath(
   const shellTokens = command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
   const outsideShellToken = shellTokens.find((rawToken) => {
     const token = rawToken.replace(/^["']|["',);]+$/g, '')
-    return (
+    // A path-suffixed home token (`~/x`, `$HOME/x`, `${HOME}/x`) names a
+    // SPECIFIC file inside the user's home tree — still outside the project
+    // root and outside every owned-temp namespace — so the blanket denial
+    // stays (the same way `cat ~/.ssh/id_rsa` is an out-of-tree read). The
+    // BARE tokens (`~`, `$HOME`, `${HOME}`) only became an argument to a
+    // real executable as the value of a shell variable; when no OTHER
+    // mandatory-sensitive operand (`.env`, credential store, key file) is
+    // present this is a read-only argument (e.g. `echo $HOME`,
+    // `ls ${HOME}`) — the capability fix that stops the bare(`${HOME}`)
+    // token gap for the terminal-profile redesign.
+    if (
       token === '~' ||
       token.startsWith('~/') ||
       token === '$HOME' ||
       token.startsWith('$HOME/') ||
+      token === '${HOME}' ||
       token.startsWith('${HOME}/')
-    )
+    ) {
+      const isBareHomeToken =
+        token === '~' || token === '$HOME' || token === '${HOME}'
+      if (isBareHomeToken) {
+        // Capability fix for the terminal-profile redesign (concrete rule):
+        // deny when the command's operand list contains BOTH a
+        // mandatory-sensitive path (`.env`, `credentials.json`,
+        // `.aws/config`, …) AND an outside-project destination — an absolute
+        // path or home-tree token (`${HOME}`, `$HOME`, `~`, or a
+        // home-suffixed form). Otherwise the bare token is an expansion
+        // VALUE argument to a real executable (read-only invocation-like
+        // `echo $HOME`, `ls ${HOME}`) and stays allowed.
+        const operands = command
+          .split(/\s+/)
+          .filter(Boolean)
+        const hasSensitiveOperand = operands.some((operand) =>
+          isMandatorySensitiveReadPath(operand.replace(/^["']|["']$/g, '')),
+        )
+        const hasOutsideAbsoluteOperand = operands.some((operand) =>
+          /^(?:(?:[A-Za-z]:\\|\/)|~|\$HOME|\$\{HOME\})/.test(
+            operand.replace(/^["']|["']$/g, ''),
+          ),
+        )
+        if (hasSensitiveOperand && hasOutsideAbsoluteOperand) {
+          return true
+        }
+        if (!isMandatorySensitiveReadPath(token)) {
+          return false
+        }
+      }
+      return true
+    }
+    return false
   })
   if (outsideShellToken) return outsideShellToken
   // One linear quote scan per command (never per token) feeds the root-only
@@ -1948,19 +2033,16 @@ function findOutsideAbsolutePath(
     if (token.startsWith('/dev/null')) continue
     if (token.startsWith('/bin/') || token.startsWith('/usr/bin/')) continue
     const resolved = path.resolve(token)
-    const tempRoot = path.resolve('/tmp')
-    const relativeToTemp = path.relative(tempRoot, resolved)
-    // Exempt the temp root itself (`/tmp`, `/tmp/`) as well as anything
-    // strictly inside it, so bare-`/tmp` operands like `stat -c '%a %U' /tmp`
-    // and the tmux-cli stale-capture sweep (`find /tmp -maxdepth 1 ...`) are
-    // tolerated. The gate is the RESOLVED relationship, never a raw `/tmp`
-    // string prefix: `'/tmpfoo'.startsWith('/tmp')` is true, so a prefix test
-    // would silently admit siblings like `/tmpfoo` and `/tmpevil/x`, which
-    // resolve outside the temp root and must stay refused.
-    if (
-      relativeToTemp === '' ||
-      (!relativeToTemp.startsWith('..') && !path.isAbsolute(relativeToTemp))
-    ) {
+    // Exempt the OS temp roots (the temp root itself plus anything strictly
+    // inside it) so operands like `stat -c '%a %U' /tmp`, the tmux-cli
+    // stale-capture sweep (`find /tmp -maxdepth 1 ...`), and mktemp/tee
+    // targets under Linux `/tmp` or macOS `os.tmpdir()` (`/var/folders/...`)
+    // are tolerated. The gate is the RESOLVED relationship through
+    // `getOwnedTempRoots()`/`isOwnedTempPath`, never a raw `/tmp` string
+    // prefix: `'/tmpfoo'.startsWith('/tmp')` is true, so a prefix test would
+    // silently admit siblings like `/tmpfoo` and `/tmpevil/x`, which resolve
+    // outside the temp root and must stay refused.
+    if (isOwnedTempScope(token)) {
       continue
     }
     const relative = path.relative(root, resolved)
@@ -1968,6 +2050,44 @@ function findOutsideAbsolutePath(
   }
   return undefined
 }
+
+/**
+ * Workspace-write per-segment containment scan. Returns the FIRST offending
+ * absolute token, or `undefined` when every operand lands in-project, in
+ * `/bin/`/`/usr/bin/`, or in an OS-owned temp root (`/tmp`,
+ * `os.tmpdir()`-equivalent, `/var/tmp`). Unparseable fragments are left to
+ * the whole-command scan (`findOutsideAbsolutePath`) to judge.
+ */
+function findWorkspaceSegmentOutsidePath(
+  segment: string,
+  root: string,
+): string | undefined {
+  const resolved = resolveTmuxCommand(segment)
+  if (resolved === undefined) {
+    return undefined
+  }
+  if (resolved.executable === '__unsafe-tmux-wrapper__') {
+    return undefined
+  }
+  for (const rawArgument of resolved.arguments) {
+    const argument = rawArgument.replace(/^["']|["']$/g, '')
+    const absolute = argument.match(
+      /(?:^|=)((?:[A-Za-z]:\\|\/)[^\s"'|;&)]*)/,
+    )
+    if (!absolute) continue
+    const token = absolute[1].replace(/[),.:]+$/, '')
+    if (token.startsWith('/dev/null')) continue
+    if (token.startsWith('/bin/') || token.startsWith('/usr/bin/')) continue
+    if (isOwnedTempScope(token)) continue
+    const resolvedPath = path.resolve(token)
+    const relative = path.relative(root, resolvedPath)
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      return token
+    }
+  }
+  return undefined
+}
+
 
 export function evaluateTerminalCommandPolicy(params: {
   command: string
@@ -2292,6 +2412,32 @@ export function evaluateTerminalCommandPolicy(params: {
         : 'fail-closed',
     )
     if (envIssue) return { allowed: false, reason: envIssue }
+
+    // Capability fix (stage P1.1): ONLY workspace-write judges composition
+    // per resolved executable+operand segment via resolveTmuxCommand so a
+    // mixed-shape pipeline like `cmdA | cmdB && cmdC` is skipped
+    // command-fragment-by-fragment rather than rejected wholesale when one
+    // fragment is merely unparseable. Other restricted profiles keep the
+    // existing whole-command scan exactly as before.
+    if (params.permissionProfile === 'workspace-write') {
+      const segments = splitReadOnlyShellSegments(command)
+      if (segments) {
+        const root = path.resolve(params.projectRoot)
+        for (const segment of segments) {
+          const token =
+            findWorkspaceSegmentOutsidePath(segment, root) ??
+            findOutsideAbsolutePath(segment, params.projectRoot)
+          if (token) {
+            return {
+              allowed: false,
+              reason: `absolute path is outside the project: ${token}`,
+            }
+          }
+        }
+        return { allowed: true }
+      }
+    }
+
     const outsidePath = findOutsideAbsolutePath(command, params.projectRoot)
     if (outsidePath) {
       return {

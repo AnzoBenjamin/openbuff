@@ -134,15 +134,36 @@ describe('languages module', () => {
     it('should set and get custom WASM directory', () => {
       const testDir = '/custom/wasm/path'
       setWasmDir(testDir)
+      // P8.7 (restored public contract): the directory is stored verbatim;
+      // relative values resolve against the process cwd at grammar-load time.
       expect(getWasmDir()).toBe(testDir)
 
       // Reset for other tests
       setWasmDir('')
     })
 
-    it('should return empty string when no custom directory is set', () => {
+    it('should return undefined when no custom directory is set', () => {
       setWasmDir('')
-      expect(getWasmDir()).toBe('')
+      expect(getWasmDir()).toBeUndefined()
+    })
+
+    it('should store relative and traversal-containing directories verbatim', () => {
+      const validDir = '/custom/wasm/path'
+      setWasmDir(validDir)
+      expect(getWasmDir()).toBe(validDir)
+
+      // P8.7 (restored public contract): every caller-supplied value is kept
+      // verbatim — silently dropping it back to the default location with no
+      // error would be a breaking API change. Strict validation applies only
+      // to the untrusted CODEBUFF_WASM_DIR env override.
+      setWasmDir('relative/wasm/path')
+      expect(getWasmDir()).toBe('relative/wasm/path')
+
+      setWasmDir('/custom/../..//etc/wasm')
+      expect(getWasmDir()).toBe('/custom/../..//etc/wasm')
+
+      // Reset for other tests
+      setWasmDir('')
     })
 
     it('should allow changing WASM directory multiple times', () => {

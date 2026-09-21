@@ -22,6 +22,20 @@ const LOCK_FILE = '.openbuff-index.lock'
 const LOCK_TIMEOUT_MS = 10_000
 const STALE_LOCK_MS = 5 * 60_000
 
+/**
+ * P8.6b: whether saveIndex may side-effect-write `.git/info/exclude`. Left
+ * enabled for backward compatibility; embedders that manage gitignore state
+ * themselves can opt out via {@link setWriteGitExclude}.
+ */
+let writeGitExclude = true
+
+export function setWriteGitExclude(enabled: boolean): void {
+  writeGitExclude = enabled
+}
+
+/** Line already written this session, keyed by projectRoot + line. */
+const writtenGitExcludeLines = new Set<string>()
+
 export function sanitizeIndexCacheDir(cacheDir = DEFAULT_CACHE_DIR): string {
   const normalized = cacheDir
     .replace(/\\/g, '/')
@@ -74,6 +88,10 @@ export async function loadIndex(
       return null
     }
     if (!isMetadataIndex(parsed, projectRoot)) return null
+    // P8.2a: validate each IndexedFile entry at load. Malformed entries are
+    // dropped here so callers treat them as rebuild-worthy rather than as
+    // silently corrupt data feeding hash/ranking logic.
+    sanitizeIndexedFiles(parsed)
     if (options?.expectedSnapshotId !== undefined) {
       const expected = options.expectedSnapshotId
       if (typeof expected !== 'string' || expected.length === 0 || expected.length > 256) return null
@@ -85,7 +103,11 @@ export async function loadIndex(
       }
       if (snapshotId !== expected) return null
     }
-    if (!parsed.queryData) {
+    // P8.2b: validate the persisted query accelerators at load. A
+    // structurally corrupt queryData would otherwise poison postings/adjacency
+    // for every query; rebuild it once here (degrade once at load, not per
+    // query) instead of trusting corrupt data.
+    if (!parsed.queryData || !isValidQueryData(parsed.queryData, parsed.graph)) {
       parsed.queryData = buildIndexQueryData(parsed.files, parsed.graph)
     }
     return parsed
@@ -474,14 +496,38 @@ export async function loadChunkSidecar(
   }
 }
 
-/** Persist a validated sidecar atomically under the cache lock. */
+/**
+ * Persist a validated sidecar atomically under the cache lock.
+ *
+ * Signature note (compatibility): this function previously returned
+ * `Promise<void>` and silently dropped invalid input; it now returns
+ * `Promise<boolean>` so callers can distinguish a committed write from a
+ * rejected one and fall back to chunkId/inline chunks instead of leaving
+ * stale sidecar content under the shared lock while metadata.json advances.
+ * A `Promise<boolean>` return is assignable wherever a `Promise<void>`
+ * callback was expected, so `Promise<void>`-typed adapters keep compiling —
+ * but consumers built against the previous `.d.ts` should re-baseline and
+ * branch on the boolean instead of assuming every call committed.
+ * Returns `true` when the validated sidecar was written; `false` when the
+ * strict validator or the entry-count check rejected the input.
+ */
 export async function saveChunkSidecar(
   projectRoot: string,
   sidecar: ChunkSidecar,
   cacheDir = DEFAULT_CACHE_DIR,
-): Promise<void> {
+): Promise<boolean> {
   const normalized = normalizeChunkSidecar(sidecar, projectRoot)
-  if (!normalized) return
+  if (!normalized) return false
+  // Strict save validation: sanitization drops invalid entries, so a
+  // caller-built sidecar whose entry count shrank contains data outside the
+  // validator contract. Reject the write (leaving any prior sidecar intact)
+  // instead of silently stripping entries under the shared lock.
+  if (
+    Object.keys(normalized.chunks).length !==
+    Object.keys(sidecar.chunks).length
+  ) {
+    return false
+  }
   const dir = getIndexDir(projectRoot, cacheDir)
   await assertCacheOwnership(dir)
   await ensureGitInfoExcludes(projectRoot, cacheDir)
@@ -491,6 +537,7 @@ export async function saveChunkSidecar(
   await withCacheLock(dir, async () => {
     await atomicWriteJson(sidecarPath, normalized)
   })
+  return true
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -516,6 +563,93 @@ function isMetadataIndex(
     return false
   }
   value.fileCount = Object.keys(value.files).length
+  return true
+}
+
+/**
+ * P8.2a: drop IndexedFile entries whose persisted shape is malformed. A valid
+ * entry needs string path/hash/ext plus symbols/imports/headings/concepts
+ * arrays; older writers may have produced partial entries, and a missing-key
+ * entry is rebuild-worthy, not silently corrupt. Mutates `index.files` (the
+ * already-validated record) and recomputes `fileCount`.
+ */
+function sanitizeIndexedFiles(index: {
+  files: Record<string, unknown>
+  fileCount: number
+}): void {
+  const files = index.files
+  for (const filePath of Object.keys(files)) {
+    const entry = files[filePath]
+    if (!isRecord(entry) || !isValidIndexedFileShape(entry)) {
+      delete files[filePath]
+    }
+  }
+  index.fileCount = Object.keys(files).length
+}
+
+function isValidIndexedFileShape(entry: Record<string, unknown>): boolean {
+  const requiredStringKeys = ['path', 'hash', 'ext'] as const
+  for (const key of requiredStringKeys) {
+    if (typeof entry[key] !== 'string') return false
+  }
+  const requiredArrayKeys = [
+    'symbols',
+    'imports',
+    'headings',
+    'concepts',
+  ] as const
+  for (const key of requiredArrayKeys) {
+    if (
+      !Array.isArray(entry[key]) ||
+      (entry[key] as unknown[]).some((item) => typeof item !== 'string')
+    ) {
+      return false
+    }
+  }
+  return (
+    typeof entry.mtime === 'number' &&
+    Number.isFinite(entry.mtime) &&
+    typeof entry.size === 'number' &&
+    Number.isFinite(entry.size)
+  )
+}
+
+/**
+ * P8.2b: structural validation of the persisted {
+ * queryData.IndexQueryData} accelerators. Postings values must be string
+ * arrays naming paths; adjacency edge indexes must be numeric and within
+ * range of graph.edges so indexing them cannot throw or yield undefined
+ * edges downstream.
+ */
+function isValidQueryData(
+  queryData: unknown,
+  graph: { edges?: unknown[] } | undefined,
+): boolean {
+  if (!isRecord(queryData) || !isRecord(queryData.postings)) return false
+  if (!isRecord(queryData.documentFrequencies)) return false
+  if (!isRecord(queryData.adjacency)) return false
+  const edgeCount = graph?.edges?.length ?? 0
+  for (const paths of Object.values(queryData.postings)) {
+    if (!Array.isArray(paths)) return false
+    for (const filePath of paths) {
+      const value: unknown = filePath
+      if (typeof value !== 'string') return false
+    }
+  }
+  for (const edgeIndexes of Object.values(queryData.adjacency)) {
+    if (!Array.isArray(edgeIndexes)) return false
+    for (const edgeIndex of edgeIndexes) {
+      const value: unknown = edgeIndex
+      if (
+        typeof value !== 'number' ||
+        !Number.isInteger(value) ||
+        value < 0 ||
+        value >= edgeCount
+      ) {
+        return false
+      }
+    }
+  }
   return true
 }
 
@@ -649,8 +783,17 @@ async function ensureGitInfoExcludes(
       existing = await fs.promises.readFile(excludePath, 'utf8')
     } catch {}
     const excludeLine = `/${normalizedCacheDir}/`
-    if (existing.split('\n').includes(excludeLine)) return
-    const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : ''
+  // P8.6b: skip everything (including the exclude-file read) when the exact
+  // line was already written for this project this session, keeping the
+  // write rate bounded.
+  const dedupKey = `${projectRoot}\0${excludeLine}`
+  if (writtenGitExcludeLines.has(dedupKey)) return
+  if (existing.split('\n').includes(excludeLine)) {
+    writtenGitExcludeLines.add(dedupKey)
+    return
+  }
+  if (!writeGitExclude) return
+  const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : ''
     await fs.promises.appendFile(
       excludePath,
       `${prefix}${excludeLine}\n`,

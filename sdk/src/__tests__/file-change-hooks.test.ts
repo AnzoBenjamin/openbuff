@@ -234,7 +234,7 @@ describe('runFileChangeHooks', () => {
     })
   })
 
-  test('forwards no timeout to runCommand when a hook omits timeoutSeconds', async () => {
+  test('forwards the default 300s bound when a hook omits timeoutSeconds', async () => {
     const { run, paramsList } = fakeRunner({
       tsc: { exitCode: 0 },
     })
@@ -248,8 +248,25 @@ describe('runFileChangeHooks', () => {
     expect(results).toBeDefined()
     expect(results).toHaveLength(1)
     expect(results![0]).toMatchObject({ hookName: 'typecheck', exitCode: 0 })
-    // No per-hook bound configured: -1 means the hook runs unbounded.
+    // No per-hook bound configured: the deliberate 300s default is forwarded.
     expect(paramsList).toHaveLength(1)
+    expect(paramsList[0]).toMatchObject({
+      command: 'tsc',
+      timeout_seconds: 300,
+    })
+  })
+
+  test('treats an explicit timeoutSeconds of -1 as an unbounded opt-out', async () => {
+    const { run, paramsList } = fakeRunner({
+      tsc: { exitCode: 0 },
+    })
+    await runFileChangeHooks({
+      files: ['src/a.ts'],
+      cwd: '/repo',
+      hooks: [{ name: 'typecheck', command: 'tsc', timeoutSeconds: -1 }],
+      runCommand: run,
+    })
+    // The explicit -1 is honored instead of being replaced by the default.
     expect(paramsList[0]).toMatchObject({
       command: 'tsc',
       timeout_seconds: -1,
@@ -275,6 +292,59 @@ describe('runFileChangeHooks', () => {
     })
 
     expect(calls).toEqual(["php -l 'src/a.php' && php -l 'src/space file.php'"])
+  })
+
+  test('reports a per-file hook whose only matching changed files escape the cwd without running a command', async () => {
+    const { run, calls } = fakeRunner({})
+    const out = await runFileChangeHooks({
+      files: ['src/../outside.php'],
+      cwd: '/repo',
+      hooks: [
+        {
+          name: 'php syntax',
+          command: 'php -l',
+          filePattern: '**/*.php',
+          runPerFile: true,
+        },
+      ],
+      runCommand: run,
+    })
+
+    expect(calls).toEqual([])
+    // A hook whose only matching changed files are unsafe matches nothing, so
+    // the run-level envelope reports hooks_skipped (the shape runFileChangeHooks
+    // actually produces when no hook has a safe file to run).
+    expect(jsonValue(out)).toEqual([
+      {
+        configuredHookCount: 1,
+        changedFiles: ['src/../outside.php'],
+        message:
+          'Configured file-change hooks were skipped because none matched the changed files.',
+        validationStatus: 'hooks_skipped',
+      },
+    ])
+  })
+
+  test('truncates hook output at the bounded character cap', async () => {
+    const longStdout = 'x'.repeat(7000)
+    const { run } = fakeRunner({
+      'tsc --noEmit': { exitCode: 0, stdout: longStdout },
+    })
+    const out = await runFileChangeHooks({
+      files: ['src/a.ts'],
+      cwd: '/repo',
+      hooks: [{ name: 'typecheck', command: 'tsc --noEmit' }],
+      runCommand: run,
+    })
+
+    expect(jsonValue(out)).toEqual([
+      {
+        hookName: 'typecheck',
+        exitCode: 0,
+        stdout: 'x'.repeat(6000) + '\n…[truncated]',
+        stderr: '',
+      },
+    ])
   })
 
   test('adds structured diagnostics without discarding native output', async () => {

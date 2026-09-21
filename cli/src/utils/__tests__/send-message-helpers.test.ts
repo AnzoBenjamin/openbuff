@@ -236,7 +236,9 @@ describe('generateAiMessageId', () => {
     const id1 = generateAiMessageId()
     const id2 = generateAiMessageId()
 
-    expect(id1).toMatch(/^ai-\d+-[a-f0-9]+$/)
+    // P6.2: counter + random suffix instead of `Date.now()` so ids never
+    // collide when messages are created in the same millisecond.
+    expect(id1).toMatch(/^ai-\d+-[a-z0-9]+$/)
     expect(id1).not.toBe(id2)
   })
 })

@@ -168,11 +168,15 @@ Do not use any tools! Only report the output of the command.`,
     if (!what_to_summarize) {
       // Return the raw command output without summarization
       const result = toolResult?.[0]
-      // Only return object values (command output objects), not plain strings
+      // Pass through object values, wrap plain-string results as
+      // { message: stringValue } so they aren't dropped, and fall back to an
+      // empty message only for genuinely empty results.
       const output =
         result?.type === 'json' && typeof result.value === 'object'
           ? result.value
-          : { message: '' }
+          : result?.type === 'json' && typeof result.value === 'string'
+            ? { message: result.value }
+            : { message: '' }
       yield {
         toolName: 'set_output',
         input: { data: output },

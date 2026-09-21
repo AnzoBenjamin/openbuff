@@ -113,7 +113,12 @@ const defaultOpener: RepositoryOpener<BunSQLiteMemoryRepository> = (root) => {
           corpus: params.corpus,
         })
     }
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[memory-v2] indexing config composition failed at stage '${
+        error instanceof Error ? error.name : 'unknown'
+      }'; advisory recall expansion disabled (open unaffected)`,
+    )
     // Advisory only: recall expansion stays off when composition fails.
   }
   return openBunSQLiteMemoryRepository(options)

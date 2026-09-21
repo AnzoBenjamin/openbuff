@@ -1,6 +1,4 @@
 import { buildArray } from '@codebuff/common/util/array'
-import { containsStructuralAuditReceipt } from '@codebuff/common/util/audit-receipt'
-
 import { publisher } from '../constants'
 
 import type { SecretAgentDefinition } from '../types/secret-agent-definition'
@@ -297,6 +295,65 @@ export const createGeneralAgent = (options: {
         const error = (output as { error?: unknown }).error
         return typeof error === 'string' && error.trim() ? error : ''
       }
+      // Local closure: this generator is serialized for sandbox execution, so
+      // helpers must not reference module-level bindings — the audit detector
+      // therefore mirrors common/src/util/audit-receipt.ts's
+      // containsStructuralAuditReceipt here instead of importing it. It scans
+      // nested values for durable-persistence proof — a `structuralReceipt`
+      // from a successful write_audit_findings, or an `alreadyPersisted`
+      // marker from a byte-identical collision — bound to the expected
+      // snapshot_id. Depth-bounded (<=32) traversal — the same
+      // MAX_TRAVERSAL_DEPTH bound the canonical containsStructuralAuditReceipt
+      // uses, so the two gates cannot drift on deeply nested receipts — using
+      // Object.values for objects and direct iteration for arrays, cycle-safe
+      // via a min-depth identity WeakSet.
+      const structuralReceiptPresent = (
+        value: unknown,
+        expectedId: string,
+      ): boolean => {
+        const MAX_TRAVERSAL_DEPTH = 32
+        let found = false
+        const visited = new WeakMap<object, number>()
+        const bindsExpectedSnapshot = (marker: unknown): boolean => {
+          if (!marker || typeof marker !== 'object' || Array.isArray(marker)) {
+            return false
+          }
+          const markerSnapshotId = (marker as Record<string, unknown>)
+            .snapshot_id
+          return (
+            typeof markerSnapshotId === 'string' &&
+            (!expectedId || markerSnapshotId === expectedId)
+          )
+        }
+        const visit = (item: unknown, depth = 0): void => {
+          if (
+            found ||
+            !item ||
+            depth > MAX_TRAVERSAL_DEPTH ||
+            typeof item !== 'object'
+          ) {
+            return
+          }
+          const existing = visited.get(item)
+          if (existing !== undefined && existing <= depth) return
+          visited.set(item, depth)
+          if (Array.isArray(item)) {
+            for (const nested of item) visit(nested, depth + 1)
+            return
+          }
+          const record = item as Record<string, unknown>
+          if (
+            bindsExpectedSnapshot(record.structuralReceipt) ||
+            bindsExpectedSnapshot(record.alreadyPersisted)
+          ) {
+            found = true
+            return
+          }
+          for (const nested of Object.values(record)) visit(nested, depth + 1)
+        }
+        visit(value)
+        return found
+      }
       while (true) {
         const tokenCount = latestAgentStateForPruner?.contextTokenCount ?? 0
         const windowTokens = latestAgentStateForPruner?.contextWindowTokens
@@ -378,7 +435,7 @@ export const createGeneralAgent = (options: {
         const auditRequested = Boolean(sessionSlug && shardId && snapshotId)
         if (
           auditRequested &&
-          !containsStructuralAuditReceipt(
+          !structuralReceiptPresent(
             stepResult.agentState?.messageHistory,
             expectedSnapshotId,
           ) &&
@@ -400,6 +457,19 @@ export const createGeneralAgent = (options: {
         // that only records a step error, must still reach the parent as
         // structured output with a usable summary.
         const completedOutput = stepResult.agentState?.output
+        // Retries are exhausted with no structuralReceipt in history: the
+        // exiting set_output must carry an explicit unresolved marker so the
+        // shard is never silently accepted — the text-only harvest must not
+        // stand in as confirmation of the audit write.
+        const auditReceiptMissingOnExit =
+          auditRequested &&
+          !structuralReceiptPresent(
+            stepResult.agentState?.messageHistory,
+            expectedSnapshotId,
+          )
+        const auditReceiptMissingUnresolvedMarker = [
+          `No write_audit_findings structuralReceipt for snapshotId ${expectedSnapshotId} after ${auditCompletionRetries + 1} attempts (audit completion rejected twice)`,
+        ]
         if (needsHarvestedAnswer(completedOutput)) {
           const harvestedText = harvestedAnswerText(
             stepResult.agentState?.messageHistory,
@@ -415,6 +485,32 @@ export const createGeneralAgent = (options: {
               // partial for the parent, not a completed run.
               ...(harvestedText ? {} : { noHarvestedAnswer: true }),
               ...(recordedError ? { error: recordedError } : {}),
+              ...(auditReceiptMissingOnExit
+                ? {
+                    unresolved: [
+                      ...auditReceiptMissingUnresolvedMarker,
+                      ...(recordedError ? [recordedError] : []),
+                    ],
+                  }
+                : {}),
+            },
+            includeToolCall: false,
+          }
+        } else if (auditReceiptMissingOnExit) {
+          // An explicit set_output exists but confirms no audit shard: upgrade
+          // it to unresolved output so the parent sees the missing receipt
+          // instead of a plain accepted summary.
+          const unresolvedList = [
+            ...auditReceiptMissingUnresolvedMarker,
+            ...(recordedOutputError(completedOutput)
+              ? [recordedOutputError(completedOutput)]
+              : []),
+          ]
+          yield {
+            toolName: 'set_output',
+            input: {
+              ...(completedOutput as Record<string, unknown>),
+              unresolved: unresolvedList,
             },
             includeToolCall: false,
           }

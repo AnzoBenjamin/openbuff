@@ -51,8 +51,7 @@ import {
 } from '@codebuff/common/util/compaction-eligibility'
 
 const EXPORT_PAGE_SIZE = 1_000
-const MAX_EXPORT_PAGES = 10
-const MAX_CANONICAL_EVENTS = EXPORT_PAGE_SIZE * MAX_EXPORT_PAGES
+const MAX_CANONICAL_EVENTS = 10_000
 const MAX_GROUP_SOURCES = 19
 const MAX_MANIFEST_EVENTS_ENCODED_BYTES = 32 * 1024 * 1024
 const MAX_EXPORT_WARNINGS = 100
@@ -457,7 +456,7 @@ export class MemoryV2OperatorService {
     const events: MemoryEventEnvelope[] = []
     let afterEventId: MemoryEventEnvelope['eventId'] | undefined
     const cursors = new Set<string>()
-    for (let page = 0; page < MAX_EXPORT_PAGES; page++) {
+    while (true) {
       const request = MemoryExportRequestSchema.parse({
         schemaVersion: 2,
         projectId,
@@ -481,7 +480,6 @@ export class MemoryV2OperatorService {
       cursors.add(outcome.nextAfterEventId)
       afterEventId = outcome.nextAfterEventId
     }
-    throw new Error('Canonical export page limit exceeded')
   }
 
   async consolidate(input: unknown): Promise<MemoryConsolidationOutcome> {
@@ -1174,6 +1172,14 @@ export class MemoryV2OperatorService {
       }
       const warnings = compactionWarnings(eventCount, bytes)
       if (request.mode === 'preview') {
+        if (request.maxEvents > COMPACTION_APPLY_MAX_EVENTS) {
+          // Preview honors the requested budget, but a single apply is capped
+          // lower; warn the operator that the candidate list exceeds one
+          // apply batch instead of letting the divergence surface silently.
+          warnings.push(
+            `Preview maxEvents ${request.maxEvents} exceeds the single-apply cap of ${COMPACTION_APPLY_MAX_EVENTS}; one apply archives at most ${COMPACTION_APPLY_MAX_EVENTS} events (repeat applies archive the rest).`.slice(0, 512),
+          )
+        }
         const selection = selectCompactionCandidates({
           envelopes,
           maxEvents: request.maxEvents,
@@ -1254,9 +1260,19 @@ export class MemoryV2OperatorService {
       }
       const archiveLines = applyCandidates.map((event) => stableJson(event)).slice(0, COMPACTION_APPLY_MAX_EVENTS)
       const archiveHash = digest(archiveLines)
-      const archivePath = `.openbuff/memory/archive/archive-${archiveHash.slice(7, 15)}.jsonl`
+      // Full 64-hex (256-bit) digest in the filename: a 32-bit truncation
+      // would let two distinct archived batches collide and a later apply
+      // overwrite a prior archive — the only recovery artifact for
+      // irreversible archival.
+      const archivePath = `.openbuff/memory/archive/archive-${archiveHash.slice(7, 71)}.jsonl`
       const archivedEventIds = applyCandidates.map((event) => event.eventId)
-      const archivedAt = new Date().toISOString()
+      // claim.archived eventId/depends stay reproducible on retry after an
+      // interrupted apply: the derived payload/values exclude the wall-clock
+      // archivedAt and instead pin the derivable max occurredAt of the batch.
+      const archivedAt = applyCandidates.reduce(
+        (latest, event) => (event.occurredAt > latest ? event.occurredAt : latest),
+        '1970-01-01T00:00:00.000Z',
+      )
       const payload = {
         payloadSchemaVersion: 1 as const,
         archivedEventIds,

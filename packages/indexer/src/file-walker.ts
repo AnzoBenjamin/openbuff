@@ -228,12 +228,21 @@ export async function statProjectFiles(
       continue
     }
     const absolutePath = path.join(projectRoot, relativePath)
+    // P8.6: lstat (not stat) so symlink entries are skipped instead of
+    // followed, matching the recursive walk's no-follow semantics — an
+    // out-of-project symlink must not be stat'd/hashed as an in-project file.
     let stat: fs.Stats
     try {
-      stat = await fs.promises.stat(absolutePath)
+      stat = await fs.promises.lstat(absolutePath)
     } catch {
       continue
     }
+    // stat-only checks like isFile() are skipped for symlinks entirely: a
+    // symlink to a regular file inside the project would still be indexed
+    // through its target's content, which the walk's readdir no-follow
+    // contract does not do (readdir classifies symlinks as neither
+    // isFile() nor isDirectory()).
+    if (stat.isSymbolicLink()) continue
     if (!stat.isFile()) continue
     const ext = path.extname(relativePath).toLowerCase()
     const is3dAsset = THREE_D_ASSET_EXTENSIONS.has(ext)

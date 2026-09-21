@@ -67,6 +67,39 @@ export function resolveGraphWeights(
   return resolved
 }
 
+function toRevisionKey(
+  value: string | number | undefined,
+): number | string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : String(value)
+  }
+  const trimmed = value.trim()
+  if (/^\d+$/.test(trimmed)) return Number.parseInt(trimmed, 10)
+  return trimmed
+}
+
+/**
+ * P8.3: numeric-aware ordered comparison of persisted/incoming workspace
+ * revisions. Plain `<` on the raw values mis-orders numeric strings against
+ * numbers and each other ('10' < '9'); numeric strings are coerced to numbers.
+ * Returns a negative number when a sorts before b.
+ */
+export function compareRevisions(
+  a: string | number | undefined,
+  b: string | number | undefined,
+): number {
+  const keyA = toRevisionKey(a)
+  const keyB = toRevisionKey(b)
+  if (keyA === undefined || keyB === undefined) return 0
+  if (typeof keyA === 'number' && typeof keyB === 'number') {
+    return keyA < keyB ? -1 : keyA > keyB ? 1 : 0
+  }
+  const strA = String(keyA)
+  const strB = String(keyB)
+  return strA < strB ? -1 : strA > strB ? 1 : 0
+}
+
 // Captures the module specifier from: `import … from 'x'`, `export … from 'x'`
 // (re-exports), `require('x')` / `import('x')` (dynamic), and `import 'x'`
 // (side-effect). The {0,500} bound avoids catastrophic backtracking.
@@ -192,7 +225,7 @@ export async function updateMetadataIndex(
     mutationDelta?.complete === true &&
     mutationDelta.revision !== undefined &&
     existing.workspaceRevision !== undefined &&
-    mutationDelta.revision < existing.workspaceRevision
+    compareRevisions(mutationDelta.revision, existing.workspaceRevision) < 0
   ) {
     return { ...existing, builtAt: Date.now() }
   }
@@ -295,6 +328,8 @@ export async function updateMetadataIndex(
     return {
       ...existing,
       builtAt: Date.now(),
+      // A refresh that applied changes clears any prior degraded flag (P8.1).
+      parserDegraded: undefined,
       files: metadataOnlyChange ? updatedFiles : existing.files,
       graph,
       queryData: buildIndexQueryData(
@@ -355,9 +390,15 @@ export async function updateMetadataIndex(
   }
 
   if (parserDegraded) {
+    // P8.1: the parser degraded, so `files`/`parseData` above were not
+    // refreshed and the pending mutation delta was dropped. Keep the prior
+    // builtAt (and workspaceRevision) intact — re-stamping Date.now() would
+    // mark a stale index fresh and suppress the manager's staleness-driven
+    // retry. parseDiagnostics/coverage are preserved; the returned
+    // `parserDegraded` flag makes IndexManager re-queue the delta once.
     return {
       ...existing,
-      builtAt: Date.now(),
+      parserDegraded: true,
       parseDiagnostics,
       coverage: createIndexCoverage(walked, parseCoverage),
     }
@@ -385,6 +426,13 @@ export async function updateMetadataIndex(
     })
     if (indexed) {
       updatedFiles[file.relativePath] = indexed
+    } else if (
+      hashReadFailedPaths.has(file.relativePath) &&
+      existing.files[file.relativePath]
+    ) {
+      // Transient (non-deletion) read failure: the walk still sees the file,
+      // so keep the previous indexed entry until a later refresh can re-read
+      // it instead of silently dropping a still-existing file from the index.
     } else {
       delete updatedFiles[file.relativePath]
     }

@@ -485,9 +485,16 @@ describe('index cache ownership', () => {
       files: { 'src/a.ts': file },
       graph: { nodes: {}, edges: [] },
     }
-    await saveChunkSidecar(root, buildChunkSidecarDocument(index))
+    expect(await saveChunkSidecar(root, buildChunkSidecarDocument(index))).toBe(true)
     expect((await loadChunkSidecar(root))?.chunks['stable-helper']?.contentHash).toBe(
       'chunk-hash-helper',
     )
+    // A validator-rejected sidecar returns false instead of silently dropping
+    // the write, and prior valid content is left intact for the caller to
+    // fall back to chunkId/inline chunks.
+    const rejected = buildChunkSidecarDocument(index)
+    const leakedEntry = { ...rejected.chunks['stable-helper']!, kind: '' }
+    expect(await saveChunkSidecar(root, { ...rejected, chunks: { ...rejected.chunks, 'stable-bad': leakedEntry } })).toBe(false)
+    expect((await loadChunkSidecar(root))?.chunks['stable-bad']).toBeUndefined()
   })
 })
