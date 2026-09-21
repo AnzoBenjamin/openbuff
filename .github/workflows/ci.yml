@@ -202,7 +202,10 @@ jobs:
               # This avoids xargs exit code issues with orphaned child processes
               TEST_FILES=$(find src -name '*.test.ts' ! -name '*.integration.test.ts' 2>/dev/null | sort | tr '\n' ' ')
               if [ -n "$TEST_FILES" ]; then
-                bun test $TEST_FILES
+                # --isolate: per-file test isolation prevents cross-file
+                # mock.module / module-state leakage (e.g. indexer's
+                # p8-degraded-delta mock leaking into p8-lite).
+                bun test --isolate $TEST_FILES
               else
                 echo "No tests found in ${{ matrix.package }}"
               fi
