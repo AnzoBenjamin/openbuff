@@ -33,15 +33,18 @@ const makeToolCall = (extraInput: Record<string, unknown> = {}) => ({
 const runHandler = async ({
   agentTemplate,
   toolCall,
+  spawnParams,
 }: {
   agentTemplate: AgentTemplate
   toolCall: CodebuffToolCallFixture
+  spawnParams?: Record<string, unknown>
 }) => {
   const requestedCalls: any[] = []
   const pending = handleRunTerminalCommand({
     previousToolCallFinished: Promise.resolve(),
     toolCall,
     agentTemplate,
+    spawnParams,
     agentState: {
       // resolveRuntimeJobOwner dereferences ancestorRunIds; omitting it
       // crashes the handler (undefined[0] TypeError) before any assertion.
@@ -93,5 +96,33 @@ describe('handleRunTerminalCommand permission_profile forwarding', () => {
       }) as never,
     })
     expect(call.input.permission_profile).toBe('full-access')
+  })
+})
+
+describe('handleRunTerminalCommand approval_receipt_id forwarding', () => {
+  test('forwards spawnParams.approval_receipt_id on the client call input', async () => {
+    const call = await runHandler({
+      agentTemplate: baseAgentTemplate as AgentTemplate,
+      toolCall: makeToolCall() as never,
+      spawnParams: { approval_receipt_id: 'rcpt-1' },
+    })
+    expect(call.input.approval_receipt_id).toBe('rcpt-1')
+  })
+
+  test('missing spawnParams leaves approval_receipt_id undefined', async () => {
+    const call = await runHandler({
+      agentTemplate: baseAgentTemplate as AgentTemplate,
+      toolCall: makeToolCall() as never,
+    })
+    expect(call.input.approval_receipt_id).toBeUndefined()
+  })
+
+  test('maps camelCase spawnParams.approvalReceiptId to approval_receipt_id', async () => {
+    const call = await runHandler({
+      agentTemplate: baseAgentTemplate as AgentTemplate,
+      toolCall: makeToolCall() as never,
+      spawnParams: { approvalReceiptId: 'rcpt-camel' },
+    })
+    expect(call.input.approval_receipt_id).toBe('rcpt-camel')
   })
 })

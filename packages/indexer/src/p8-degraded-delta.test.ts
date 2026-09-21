@@ -2,9 +2,10 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 
 import { IndexManager } from './index-manager'
+import * as metadataIndexer from './metadata-indexer'
 import { saveIndex } from './index-store'
 import type { MetadataIndex } from './types'
 
@@ -16,7 +17,16 @@ function makeProject(): string {
   return root
 }
 
+/** Active namespace spy, restored before any other test file can observe it. */
+let activeUpdateSpy: { mockRestore: () => void } | undefined
+
 afterEach(() => {
+  // Restore the real updateMetadataIndex: module-level spies leak across
+  // test files that share one bun test process (CI's bun does not fully
+  // isolate module registries between files), so restoration here is
+  // mandatory, not optional.
+  activeUpdateSpy?.mockRestore()
+  activeUpdateSpy = undefined
   for (const root of roots.splice(0)) {
     try {
       fs.rmSync(root, { recursive: true, force: true })
@@ -31,12 +41,13 @@ afterEach(() => {
  * must NOT stamp the pending delta revision, and must re-queue the delta
  * exactly once so the next refresh converges.
  *
- * This test lives in its own file on purpose: it uses bun's mock.module,
- * whose registrations persist for the process lifetime (mock.restore() and
- * re-registration cannot reliably undo them for already-imported
- * consumers). Keeping it isolated guarantees no other test file — p8-lite,
- * metadata-indexer, or any later file in the same run — inherits the
- * mocked updateMetadataIndex.
+ * Uses spyOn on the metadata-indexer module namespace instead of
+ * mock.module (repo convention, docs/testing.md): mock.module registrations
+ * persist for the process lifetime on CI's bun and leaked into later test
+ * files (p8-lite inherited the mocked updateMetadataIndex/compareRevisions
+ * and failed there), while a namespace spy is restored in afterEach. The
+ * real numeric-aware compareRevisions stays live for the manager's
+ * mergeMutationDeltas.
  */
 describe('P8.1 parserDegraded delta retention in IndexManager', () => {
   const PERSISTED_INDEX: MetadataIndex = {
@@ -62,40 +73,27 @@ describe('P8.1 parserDegraded delta retention in IndexManager', () => {
 
   test('re-queues a dropped delta once when updateMetadataIndex degrades, then converges', async () => {
     let callCount = 0
-    // Local numeric-aware copy so the mock keeps revision semantics for the
-    // manager's mergeMutationDeltas.
-    const toRevision = (value: string | number | undefined) =>
-      typeof value === 'number' ? value : Number.parseInt(value ?? '', 10)
-    mock.module('./metadata-indexer', () => ({
-      updateMetadataIndex: (
-        existing: MetadataIndex,
-        _root: string,
-        _config: unknown,
-        delta?: { revision?: string | number },
-      ): MetadataIndex => {
-        callCount += 1
-        if (callCount === 1) {
-          // Simulate a degraded parse: result is the prior snapshot, builtAt
-          // kept untouched, delta NOT incorporated (parserDegraded flag).
-          return { ...existing, parserDegraded: true }
-        }
-        // Second refresh incorporates the delta normally (a real
-        // createMetadataIndex result never carries parserDegraded).
-        const { parserDegraded: _dropped, ...rest } = existing
-        void _dropped
-        return {
-          ...rest,
-          builtAt: existing.builtAt + 1,
-          workspaceRevision: delta?.revision,
-        }
-      },
-      compareRevisions: (a?: string | number, b?: string | number) => {
-        const x = toRevision(a)
-        const y = toRevision(b)
-        if (x === undefined || y === undefined) return 0
-        return x < y ? -1 : x > y ? 1 : 0
-      },
-    }))
+    const spy = spyOn(
+      metadataIndexer,
+      'updateMetadataIndex',
+    ).mockImplementation(async (existing, _projectRoot, _config, delta) => {
+      callCount += 1
+      if (callCount === 1) {
+        // Simulate a degraded parse: result is the prior snapshot, builtAt
+        // kept untouched, delta NOT incorporated (parserDegraded flag).
+        return { ...existing, parserDegraded: true }
+      }
+      // Second refresh incorporates the delta normally (a real
+      // createMetadataIndex result never carries parserDegraded).
+      const { parserDegraded: _dropped, ...rest } = existing
+      void _dropped
+      return {
+        ...rest,
+        builtAt: existing.builtAt + 1,
+        workspaceRevision: delta?.revision,
+      }
+    })
+    activeUpdateSpy = spy
 
     const root = makeProject()
     // Seed the on-disk index so _build takes the updateMetadataIndex path.

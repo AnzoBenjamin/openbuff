@@ -56,7 +56,7 @@ export const handleRunTerminalCommand = (async ({
             ? spawnParams.approvalReceiptId
             : undefined,
     },
-  } as ClientToolCall<ToolName>
+  }
   await previousToolCallFinished
   return { output: await requestClientToolCall(clientToolCall) }
 }) satisfies CodebuffToolHandlerFunction<ToolName>

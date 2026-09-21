@@ -1892,9 +1892,9 @@ export async function handleToolCall({
         `Tool not implemented in SDK. Please provide an override or modify your agent to not use this tool: ${toolName}`,
       )
     }
-    if (isClientTool) {
-      clientToolCallSchema.parse(normalizedAction)
-    }
+    const parsed = isClientTool
+      ? clientToolCallSchema.parse(normalizedAction)
+      : undefined
 
     if (override) {
       const overrideSignal = signal ?? new AbortController().signal
@@ -2052,11 +2052,12 @@ export async function handleToolCall({
       })
     } else if (toolName === 'run_terminal_command') {
       const projectRoot = requireCwd(cwd, 'run_terminal_command')
-      const terminalInput = input as Parameters<
-        typeof runTerminalCommand
-      >[0] & {
-        approval_receipt_id?: string
+      if (parsed?.toolName !== 'run_terminal_command') {
+        throw new Error(
+          'Expected a parsed run_terminal_command client tool call',
+        )
       }
+      const terminalInput = parsed.input
       // `permission_profile` passes through verbatim from the client tool call
       // input, but that input is constructed by the agent runtime handler
       // (handleRunTerminalCommand), which always sets it from the agent
@@ -2068,6 +2069,7 @@ export async function handleToolCall({
       // model. The schema on the SDK side still validates the value.
       result = await runTerminalCommand({
         ...terminalInput,
+        timeout_seconds: terminalInput.timeout_seconds ?? -1,
         // Ownership identity is runtime-injected from trusted run state; any
         // model-supplied `owner` in terminalInput is overridden here.
         owner: trustedJobOwner,
