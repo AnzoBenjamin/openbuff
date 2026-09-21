@@ -1028,8 +1028,7 @@ export const runAgentStep = async (
     shouldEndTurn = true
   }
 
-agentState = {
-    ...agentState,
+agentState = {    ...agentState,
     stepsRemaining:
       agentState.stepsRemaining > 0
         ? agentState.stepsRemaining - 1

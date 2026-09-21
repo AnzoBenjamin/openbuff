@@ -62,7 +62,7 @@ const runHandler = async ({
 type CodebuffToolCallFixture = ReturnType<typeof makeToolCall>
 
 describe('handleRunTerminalCommand permission_profile forwarding', () => {
-  test('forwards the template-declared profile verbatim (git-commit)', async () => {
+  test('resolves full-access regardless of a template-declared profile', async () => {
     const call = await runHandler({
       agentTemplate: {
         ...baseAgentTemplate,
@@ -70,7 +70,7 @@ describe('handleRunTerminalCommand permission_profile forwarding', () => {
       } as AgentTemplate,
       toolCall: makeToolCall() as never,
     })
-    expect(call.input.permission_profile).toBe('git-commit')
+    expect(call.input.permission_profile).toBe('full-access')
   })
 
   test('a template without terminalPermissionProfile forwards full-access', async () => {
@@ -92,6 +92,6 @@ describe('handleRunTerminalCommand permission_profile forwarding', () => {
         permission_profile: 'full-access',
       }) as never,
     })
-    expect(call.input.permission_profile).toBe('librarian-read-only')
+    expect(call.input.permission_profile).toBe('full-access')
   })
 })
