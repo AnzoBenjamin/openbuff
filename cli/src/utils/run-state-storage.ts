@@ -15,6 +15,7 @@ import type {
   AgentState,
   SessionState,
 } from '@codebuff/common/types/session-state'
+import { z } from 'zod'
 
 const RUN_STATE_FILENAME = 'run-state.json'
 const CHAT_MESSAGES_FILENAME = 'chat-messages.json'
@@ -31,6 +32,24 @@ type PersistedChatState = {
   version: 1
   runState: RunState
   messages: ChatMessage[]
+}
+
+// P6.5: Minimal shape guard for legacy session files. Deliberately loose — we
+// only need the fields the restore path reads — so older-but-valid sessions
+// keep loading unchanged; anything that fails is treated as a corrupt session
+// and the caller starts fresh instead of rendering broken messages.
+const persistedMessagesSchema = z.array(
+  z.looseObject({
+    id: z.string(),
+    variant: z.string(),
+    timestamp: z.string(),
+  }),
+)
+
+const validatePersistedMessages = (messages: unknown): ChatMessage[] | null => {
+  const parsed = persistedMessagesSchema.safeParse(messages)
+  if (!parsed.success) return null
+  return parsed.data as ChatMessage[]
 }
 
 function quarantineCorruptStateFile(filePath: string): string | null {
@@ -50,6 +69,48 @@ function quarantineCorruptStateFile(filePath: string): string | null {
   }
 }
 
+/**
+ * The envelope schema version this CLI reads and writes. Bump when the
+ * persisted chat-state shape changes in a way older CLIs cannot read.
+ */
+const CHAT_STATE_ENVELOPE_VERSION = 1 as const
+
+/**
+ * Whether `parsed` is an envelope whose version this CLI does not understand
+ * (e.g. written by a newer release). A parseable newer envelope must never be
+ * quarantined on read or overwritten on write: a downgraded CLI leaves it in
+ * place so it is found again after re-upgrade.
+ */
+function hasUnrecognizedEnvelopeVersion(parsed: unknown): boolean {
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return false
+  }
+  const version = (parsed as { version?: unknown }).version
+  return (
+    version !== undefined && version !== CHAT_STATE_ENVELOPE_VERSION
+  )
+}
+
+/**
+ * Parse the envelope version out of the chat-state.json on disk without
+ * assuming which CLI release wrote it. Returns undefined when the file is
+ * absent, unreadable, or not a JSON object carrying a numeric `version` —
+ * those are the legacy/corrupt cases handled elsewhere.
+ */
+function readEnvelopeVersion(filePath: string): number | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+  } catch {
+    return undefined
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return undefined
+  }
+  const version = (parsed as { version?: unknown }).version
+  return typeof version === 'number' ? version : undefined
+}
+
 export function loadChatStateFromCompatibilityFiles(
   chatDir: string,
 ): SavedChatState | null {
@@ -66,13 +127,29 @@ export function loadChatStateFromCompatibilityFiles(
   const runState = sanitizeForChatPersistence(
     JSON.parse(fs.readFileSync(runStatePath, 'utf8')) as RunState,
   )
-  const messages = sanitizeForChatPersistence(
-    JSON.parse(fs.readFileSync(messagesPath, 'utf8')) as ChatMessage[],
-  )
-  if (!runState || !Array.isArray(messages)) {
+  let messages: ChatMessage[]
+  try {
+    messages = sanitizeForChatPersistence(
+      JSON.parse(fs.readFileSync(messagesPath, 'utf8')) as ChatMessage[],
+    )
+  } catch (error) {
+    logger.warn(
+      {
+        messagesPath,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'Legacy chat messages file is unreadable; starting a fresh session',
+    )
+    return null
+  }
+  if (
+    !runState ||
+    validatePersistedMessages(messages) === null ||
+    !Array.isArray(messages)
+  ) {
     logger.warn(
       { runStatePath, messagesPath },
-      'Legacy chat state files are malformed',
+      'Legacy chat state files are malformed; starting a fresh session',
     )
     return null
   }
@@ -90,25 +167,13 @@ export function loadChatStateFromDirectory(
 ): SavedChatState | null {
   const chatStatePath = path.join(chatDir, CHAT_STATE_FILENAME)
   if (fs.existsSync(chatStatePath)) {
+    let parsed: unknown
     try {
-      const persisted = sanitizeForChatPersistence(
-        JSON.parse(
-          fs.readFileSync(chatStatePath, 'utf8'),
-        ) as PersistedChatState,
-      )
-      if (
-        persisted.version !== 1 ||
-        !persisted.runState ||
-        !Array.isArray(persisted.messages)
-      ) {
-        throw new Error('Chat state envelope has an invalid shape')
-      }
-      return {
-        runState: persisted.runState,
-        messages: persisted.messages,
-        chatId: path.basename(chatDir),
-      }
+      parsed = JSON.parse(fs.readFileSync(chatStatePath, 'utf8'))
     } catch (error) {
+      // Unreadable bytes cannot be interpreted by any CLI version, so
+      // quarantine them rather than letting corrupt data shadow the
+      // compatibility recovery below.
       const quarantinePath = quarantineCorruptStateFile(chatStatePath)
       logger.warn(
         {
@@ -116,8 +181,51 @@ export function loadChatStateFromDirectory(
           quarantinePath,
           error: error instanceof Error ? error.message : String(error),
         },
+        'Chat state envelope is unreadable; quarantining and attempting compatibility recovery',
+      )
+      return loadChatStateFromCompatibilityFiles(chatDir)
+    }
+    if (hasUnrecognizedEnvelopeVersion(parsed)) {
+      // A parseable envelope whose only defect is an unrecognized (e.g.
+      // newer) envelope version was written by a different CLI release.
+      // Never quarantine it: a downgraded CLI must leave a newer session's
+      // state file in place so it is found again after re-upgrade. Fall
+      // through to compatibility recovery instead.
+      logger.warn(
+        { chatStatePath, version: (parsed as { version?: unknown }).version },
+        'Chat state envelope has an unrecognized version; leaving file in place and attempting compatibility recovery',
+      )
+      return loadChatStateFromCompatibilityFiles(chatDir)
+    }
+    const persisted = sanitizeForChatPersistence(parsed as PersistedChatState)
+    if (
+      !persisted ||
+      typeof persisted !== 'object' ||
+      Array.isArray(persisted) ||
+      persisted.version !== 1 ||
+      !persisted.runState ||
+      !Array.isArray(persisted.messages) ||
+      // P6.5: an invalid messages payload means the session cannot be
+      // rendered safely; fall through to the compatibility recovery rather
+      // than crashing.
+      validatePersistedMessages(persisted.messages) === null
+    ) {
+      // Version-1 data with a corrupt shape is unreadable for every CLI
+      // version, so quarantine it before attempting compatibility recovery.
+      const quarantinePath = quarantineCorruptStateFile(chatStatePath)
+      logger.warn(
+        {
+          chatStatePath,
+          quarantinePath,
+        },
         'Chat state envelope is corrupt; attempting compatibility recovery',
       )
+      return loadChatStateFromCompatibilityFiles(chatDir)
+    }
+    return {
+      runState: persisted.runState,
+      messages: persisted.messages,
+      chatId: path.basename(chatDir),
     }
   }
   return loadChatStateFromCompatibilityFiles(chatDir)
@@ -234,7 +342,30 @@ export function saveChatState(
     // The envelope is the authoritative resume state, so a crash cannot pair
     // one turn's run state with another turn's messages. Legacy files remain
     // as atomic compatibility/read-model outputs for history views.
-    writeJsonAtomic(getChatStatePath(), envelope)
+    //
+    // Mixed-version tolerance on the write path mirrors the read path: if the
+    // envelope on disk was written by a different CLI release (any other
+    // version), it must not be overwritten — a downgraded CLI continuing a
+    // session would otherwise destroy the newer release's only authoritative
+    // resume state. The legacy sidecars still advance so compatibility
+    // recovery and history views keep working for this process.
+    const chatStatePath = getChatStatePath()
+    const diskVersion = readEnvelopeVersion(chatStatePath)
+    if (
+      diskVersion !== undefined &&
+      diskVersion !== CHAT_STATE_ENVELOPE_VERSION
+    ) {
+      logger.warn(
+        {
+          chatStatePath,
+          diskVersion,
+          writeVersion: CHAT_STATE_ENVELOPE_VERSION,
+        },
+        'Chat state envelope has an unrecognized version; leaving it in place and updating only the legacy compatibility files',
+      )
+    } else {
+      writeJsonAtomic(chatStatePath, envelope)
+    }
     writeJsonAtomic(getRunStatePath(), persistedRunState)
     writeJsonAtomic(getChatMessagesPath(), persistedMessages)
   } catch (error) {

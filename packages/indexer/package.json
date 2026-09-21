@@ -19,7 +19,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
-    "test": "bun test"
+    "test": "bun test --isolate"
   },
   "sideEffects": false,
   "engines": {

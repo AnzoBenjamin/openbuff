@@ -1369,12 +1369,8 @@ export function buildRuntimeAgentReceipt(params: {
     typeof shardId === 'string' &&
     shardId.trim().length > 0 &&
     trimmedSnapshotId.length > 0
-  // Credit the generator harvest from the harvest flag alone: the harvest
-  // never sets AgentState.consecutiveTextOnlyWithoutCompletion, and the
-  // step-cap early return never touches it either, so requiring that counter
-  // suppressed the retryable 'no task_completed' error on one exit path and not
-  // the other. Only a harvest that recovered REAL answer text may stand in for
-  // explicit completion: an answerless / step-capped run marks its output with
+  // Credit the generator harvest from the harvest flag alone. Only a harvest
+  // that recovered REAL answer text may stand in for explicit completion: an answerless / step-capped run marks its output with
   // noHarvestedAnswer, whose summary is just a placeholder, so it stays a
   // retryable partial the parent can re-spawn instead of completed with zero
   // errors.

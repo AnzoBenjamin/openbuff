@@ -143,9 +143,19 @@ let customWasmDir: string | undefined
 /**
  * Set a custom WASM directory for loading tree-sitter WASM files.
  * This can be useful for custom packaging or deployment scenarios.
+ *
+ * Public-API compatibility: the directory is stored VERBATIM (an empty
+ * string clears it), exactly as the original contract promised. Relative
+ * directories remain valid and are resolved against the process cwd at
+ * grammar-load time by `resolveWasmPath`. The strict absolute/no-traversal
+ * validation is deliberately applied only to the untrusted
+ * `CODEBUFF_WASM_DIR` environment override, which callers cannot pass
+ * through this typed API — never silently to a caller-supplied argument,
+ * which would drop the caller's directory back to the default location
+ * with no error or returned status.
  */
 export function setWasmDir(dir: string): void {
-  customWasmDir = dir
+  customWasmDir = dir || undefined
 }
 
 export function getWasmDir(): string | undefined {
@@ -153,10 +163,11 @@ export function getWasmDir(): string | undefined {
 }
 
 /**
- * Validate a user-supplied WASM directory. Rejects relative paths (which could
- * escape the intended sandbox depending on CWD) and paths containing `..`
- * segments (path traversal). Returns the resolved absolute path or `null` if
- * invalid.
+ * Validate the untrusted `CODEBUFF_WASM_DIR` environment override. Rejects
+ * relative paths (which could escape the intended sandbox depending on CWD)
+ * and paths containing `..` segments (path traversal). Returns the resolved
+ * absolute path or `null` if invalid. NOT applied to `setWasmDir`, whose
+ * public contract stores caller-supplied directories verbatim.
  */
 function validateWasmDir(dir: string): string | null {
   if (!dir || dir.includes('..')) {

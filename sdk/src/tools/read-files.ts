@@ -26,6 +26,7 @@ import {
   resolveFilePathForFileSystemOperation,
   resolveFilePathForFileSystemReadOperation,
 } from './path-utils'
+import { mapWithConcurrency, throwIfAborted } from './concurrency'
 
 import type { FileLineRange } from '@codebuff/common/types/contracts/client'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
@@ -447,26 +448,6 @@ async function readCanonicalSnapshot(params: {
             }),
     }
   }
-}
-
-async function mapWithConcurrency<T, R>(
-  values: readonly T[],
-  concurrency: number,
-  map: (value: T, index: number) => Promise<R>,
-  signal?: AbortSignal,
-): Promise<R[]> {
-  const results = new Array<R>(values.length)
-  let nextIndex = 0
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-      while (nextIndex < values.length) {
-        throwIfAborted(signal)
-        const index = nextIndex++
-        results[index] = await map(values[index]!, index)
-      }
-    }),
-  )
-  return results
 }
 
 async function planNativeReads(params: {
@@ -894,13 +875,6 @@ export async function getFilesStructured(params: {
       : renderRangeItem(selector, snapshot, capabilityIssuer)
   })
   return buildReadFilesResultV1(results)
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (!signal?.aborted) return
-  throw signal.reason instanceof Error
-    ? signal.reason
-    : new DOMException('Operation aborted', 'AbortError')
 }
 
 export async function getFileForEditResult(params: {

@@ -174,6 +174,9 @@ When you are done, call set_output with status: "answered", your answer, all rel
           shellQuote(repoUrl) +
           ' ' +
           shellQuote(cloneDir),
+        // Large repos can exceed the default terminal timeout; a timeout here
+        // would fail the whole run, so give the clone a generous 10 minutes.
+        timeout_seconds: 600,
       },
     }
 
@@ -221,7 +224,200 @@ When you are done, call set_output with status: "answered", your answer, all rel
       includeToolCall: false,
     }
 
-    yield 'STEP_ALL'
+    // ---- Post-STEP_ALL guarantee: the parent MUST receive structured output ----
+    // This generator is serialized for sandbox execution without top-level
+    // bindings, so every helper lives inside the generator body (same
+    // precedent as general-agent.ts's needsHarvestedAnswer/harvestedAnswerText).
+
+    // Step results carry agentState (output + messageHistory) in this
+    // codebase; the shared type doesn't expose it, so cast narrowly like
+    // general-agent.ts does.
+    type ResumedAgentState = {
+      output?: unknown
+      messageHistory?: unknown[]
+      lastSetOutputError?: unknown
+    }
+
+    const harvestedAnswerText = (messageHistory: unknown): string => {
+      if (!Array.isArray(messageHistory)) return ''
+      // Mirrors getLastAssistantTurnMessages: harvest the whole contiguous
+      // trailing assistant turn, not only its last message.
+      let turnEnd = -1
+      for (let index = messageHistory.length - 1; index >= 0; index--) {
+        const message = messageHistory[index] as
+          | { role?: unknown }
+          | undefined
+        if (message && message.role === 'assistant') {
+          turnEnd = index
+          break
+        }
+      }
+      if (turnEnd < 0) return ''
+      let turnStart = turnEnd
+      while (turnStart > 0) {
+        const previous = messageHistory[turnStart - 1] as
+          | { role?: unknown }
+          | undefined
+        if (!previous || previous.role !== 'assistant') break
+        turnStart--
+      }
+      const messageTexts: string[] = []
+      for (let index = turnStart; index <= turnEnd; index++) {
+        const message = messageHistory[index] as
+          | { content?: unknown; tags?: unknown }
+          | undefined
+        if (!message) continue
+        // A runtime terminal notice (step cap, tool-call error) is never the
+        // model's answer, so it must never be reported as one.
+        const tags = Array.isArray(message.tags)
+          ? (message.tags as unknown[])
+          : []
+        if (
+          tags.includes('STEP_CAP_REACHED') ||
+          tags.includes('TOOL_CALL_ERROR')
+        ) {
+          continue
+        }
+        // Message content may be a string or an array of typed parts; parse
+        // defensively and harvest only text parts.
+        const content = message.content
+        const text = Array.isArray(content)
+          ? content
+              .filter(
+                  (part) =>
+                    part &&
+                    (part as { type?: unknown }).type === 'text' &&
+                    typeof (part as { text?: unknown }).text === 'string',
+                )
+                .map((part) => (part as { text: string }).text)
+                .join('')
+            : typeof content === 'string'
+              ? content
+              : ''
+        if (text) messageTexts.push(text)
+      }
+      return messageTexts
+        .join('\n')
+        .replace(/<think>[\s\S]*?<\/think>/g, '')
+        .replace(/<think>[\s\S]*$/, '')
+        .trim()
+    }
+
+    // Only an output carrying a real status is a successful set_output; an
+    // object without one (e.g. a zod-parse failure record) must be harvested.
+    const hasSuccessfulOutput = (output: unknown): boolean =>
+      !!output &&
+      typeof output === 'object' &&
+      !Array.isArray(output) &&
+      typeof (output as { status?: unknown }).status === 'string'
+
+    // run-agent's set_output schema-validation failure is surfaced here; the
+    // error may be a plain string or an Error-like object.
+    const lastSetOutputErrorText = (state: ResumedAgentState | undefined): string => {
+      const err = state?.lastSetOutputError
+      if (typeof err === 'string' && err.trim()) return err
+      if (err && typeof err === 'object') {
+        const message = (err as { message?: unknown }).message
+        if (typeof message === 'string' && message.trim()) return message
+      }
+      return ''
+    }
+
+    // Relevant files are harvested from text parts of assistant messages that
+    // mention paths under the clone directory. Best-effort: an empty array is
+    // always a valid result.
+    const harvestedRelevantFiles = (
+      messageHistory: unknown,
+      dir: string,
+    ): string[] => {
+      if (!dir || !Array.isArray(messageHistory)) return []
+      const escaped = dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const pathRe = new RegExp(escaped + '\\/[^\\s\'"\\)\\]}:`,;]+', 'g')
+      const found = new Set<string>()
+      for (const message of messageHistory) {
+        const m = message as { role?: unknown; content?: unknown } | undefined
+        if (!m || typeof m !== 'object' || m.role !== 'assistant') continue
+        const content = m.content
+        const texts = Array.isArray(content)
+          ? content
+              .filter(
+                  (part) =>
+                    part &&
+                    (part as { type?: unknown }).type === 'text' &&
+                    typeof (part as { text?: unknown }).text === 'string',
+                )
+                .map((part) => (part as { text: string }).text)
+          : [typeof content === 'string' ? content : '']
+        for (const text of texts) {
+          for (const match of text.matchAll(pathRe)) {
+            found.add(match[0].replace(/[.,;]+$/, ''))
+          }
+        }
+      }
+      return [...found].slice(0, 50)
+    }
+
+    let stepAllResult = (yield 'STEP_ALL') as
+      | { agentState?: ResumedAgentState }
+      | undefined
+
+    // One guided retry max, then a guaranteed harvest — never an infinite
+    // loop, never a silent exit with no output for the parent.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const state = stepAllResult?.agentState as ResumedAgentState | undefined
+      const output = state?.output
+      if (hasSuccessfulOutput(output)) break
+
+      const validationError = lastSetOutputErrorText(state)
+      if (attempt === 0) {
+        // Guided recovery: name the exact required fields so the model
+        // understands what set_output was missing, then give it one STEP.
+        yield {
+          toolName: 'add_message',
+          input: {
+            role: 'user',
+            content:
+              '<system>Your previous set_output call ' +
+              (validationError
+                ? 'failed validation: ' + validationError + '. '
+                : 'never succeeded, so no structured output was recorded. ') +
+              'Call set_output again with ALL required fields: status ("answered" or "failed"), answer (non-empty string), relevantFiles (array of strings), cloneDir: "' +
+              cloneDir +
+              '", and cloneRetained: ' +
+              String(params?.retainClone === true) +
+              '.</system>',
+          },
+          includeToolCall: false,
+        }
+        stepAllResult = (yield 'STEP') as typeof stepAllResult
+        continue
+      }
+
+      // Terminal harvest: guaranteed structured output for the parent.
+      const harvestedText = harvestedAnswerText(state?.messageHistory)
+      yield {
+        toolName: 'set_output',
+        input: {
+          status: harvestedText ? 'answered' : 'failed',
+          answer: harvestedText,
+          relevantFiles: harvestedRelevantFiles(
+            state?.messageHistory,
+            cloneDir,
+          ),
+          cloneDir,
+          cloneRetained: params?.retainClone === true,
+          agentHarvestedFallback: true,
+          ...(harvestedText
+            ? {}
+            : {
+                error:
+                  'Librarian finished without a valid set_output and no harvestable answer text.',
+              }),
+        },
+        includeToolCall: false,
+      }
+      break
+    }
   },
 }
 

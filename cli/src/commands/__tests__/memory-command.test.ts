@@ -1801,7 +1801,7 @@ describe('/memory blocks compact-memory', () => {
     const expectedLines = [first, second, forgotten].map((event) => stableJson(event))
     const expectedHash =
       'sha256:' + createHash('sha256').update(stableJson(expectedLines)).digest('hex')
-    const fileName = 'archive-' + expectedHash.slice(7, 15) + '.jsonl'
+    const fileName = 'archive-' + expectedHash.slice(7, 71) + '.jsonl'
     const compactCalls: Array<Record<string, unknown>> = []
     let releases = 0
     deps.getMemoryV2 = async () =>
@@ -1871,6 +1871,9 @@ describe('/memory blocks compact-memory', () => {
     expect(compactCalls.at(-1)?.['mode']).toBe('apply')
     const files = collectArchiveFiles(root)
     expect(files).toHaveLength(1)
+    // The local mirror file must be the canonical full 64-hex digest filename
+    // the SDK's claim.archived references (suffix check must succeed).
+    expect(files[0]!.endsWith(fileName)).toBe(true)
     // INV7: the archive jsonl is owner-only 0600.
     expect(statSync(files[0]!).mode & 0o777).toBe(0o600)
     const content = readFileSync(files[0]!, 'utf8')

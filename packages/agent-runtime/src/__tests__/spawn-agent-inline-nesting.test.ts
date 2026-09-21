@@ -746,10 +746,10 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
     expect(receipt.errors[0]?.retryable).toBe(true)
   })
 
-  // The generator harvest never sets AgentState.consecutiveTextOnlyWithoutCompletion
-  // (and the step-cap early return never touches it), so completion credit must
-  // come from the harvest flag alone. Otherwise the same harvest suppresses the
-  // retryable 'no task_completed' error on one exit path and not the other.
+  // Completion credit for a harvested-fallback general agent must come from
+  // the harvest flag alone, never from turn-ending behavior. Otherwise the
+  // same harvest suppresses the retryable 'no task_completed' error on one
+  // exit path and not the other.
   it('credits a harvested-fallback general agent without the text-only counter', () => {
     const harvestedOutput = {
       summary: 'Harvested final answer for the parent.',

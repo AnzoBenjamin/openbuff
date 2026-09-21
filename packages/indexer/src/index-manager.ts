@@ -28,6 +28,7 @@ import type {
   QueryIndexMode,
   QueryIndexResult,
 } from './types'
+import { compareRevisions } from './metadata-indexer'
 
 export class IndexManager {
   // Bounded LRU-ish (FIFO) cache of per-project-root singletons. Prevents
@@ -47,6 +48,12 @@ export class IndexManager {
   private lastBuildError: IndexBuildError | undefined
   private pendingMutationDelta: IndexMutationDelta | undefined
   private mutationEpoch = 0
+  /**
+   * P8.1: bound on parserDegraded delta re-queueing — the currently pending
+   * mutation signal may be re-queued at most once; the guard resets only
+   * when a new signal arrives or a non-degraded refresh persists.
+   */
+  private degradedDeltaRequeued = false
   private snapshotCache:
     | { index: MetadataIndex; identity: IndexSnapshotIdentity }
     | undefined
@@ -163,6 +170,8 @@ export class IndexManager {
   /** Queue a precise filesystem mutation delta for the next refresh. */
   markPathsChanged(delta: IndexMutationDelta): void {
     this.mutationEpoch += 1
+    // A fresh mutation signal re-arms the P8.1 parserDegraded re-queue bound.
+    this.degradedDeltaRequeued = false
     this.pendingMutationDelta = mergeMutationDeltas(
       this.pendingMutationDelta,
       delta,
@@ -356,7 +365,19 @@ export class IndexManager {
       } else {
         index = await buildMetadataIndex(this.projectRoot, this.config)
       }
-      if (mutationDelta?.revision !== undefined) {
+      // P8.1: a degraded refresh did not incorporate the delta, so its
+      // revision must not be stamped onto the preserved prior snapshot.
+      // Never regress either: updateMetadataIndex early-returns stale
+      // complete deltas without applying them (and otherwise preserves the
+      // already-incorporated revision), so only stamp the delta revision
+      // when it does not move the persisted workspaceRevision backwards.
+      if (
+        mutationDelta?.revision !== undefined &&
+        !index.parserDegraded &&
+        (index.workspaceRevision === undefined ||
+          compareRevisions(mutationDelta.revision, index.workspaceRevision) >=
+            0)
+      ) {
         index.workspaceRevision = mutationDelta.revision
       }
       stage = 'persist'
@@ -371,6 +392,22 @@ export class IndexManager {
             mutationDelta,
           )
         }
+      }
+      if (index.parserDegraded && mutationDelta && !this.degradedDeltaRequeued) {
+        // P8.1: the tree-sitter parse degraded and the delta was dropped.
+        // Re-queue it once so the next refresh re-applies it; the raw flag
+        // bound prevents infinite retries when parsing stays degraded.
+        this.degradedDeltaRequeued = true
+        this.forceRefresh = true
+        this.pendingMutationDelta = mergeMutationDeltas(
+          this.pendingMutationDelta,
+          mutationDelta,
+        )
+        console.debug(
+          '[indexer] parser degraded; mutation delta re-queued for the next refresh.',
+        )
+      } else if (persisted && !index.parserDegraded) {
+        this.degradedDeltaRequeued = false
       }
       if (persisted) {
         // Fail-closed verification: only trust disk when it still holds the
@@ -649,10 +686,15 @@ function isSameIndexSnapshot(
   )
 }
 
-function mergeMutationDeltas(
-  current: IndexMutationDelta | undefined,
-  next: IndexMutationDelta,
-): IndexMutationDelta {
+function mergeMutationDeltas(current: IndexMutationDelta | undefined, next: IndexMutationDelta): IndexMutationDelta {
+  // P8.3: select the max revision with numeric-aware comparison; plain string
+  // territory ("10" < "9") would let an older-dated delta win the merge.
+  const revision =
+    current?.revision !== undefined &&
+    next.revision !== undefined &&
+    compareRevisions(current.revision, next.revision) > 0
+      ? current.revision
+      : (next.revision ?? current?.revision)
   const changedPaths = new Set([
     ...(current?.changedPaths ?? []),
     ...(next.changedPaths ?? []),
@@ -668,7 +710,7 @@ function mergeMutationDeltas(
     complete: current
       ? current.complete === true && next.complete === true
       : next.complete,
-    revision: next.revision ?? current?.revision,
+    revision,
   }
 }
 

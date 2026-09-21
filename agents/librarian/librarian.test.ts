@@ -11,14 +11,216 @@
  * The env guard prevents `bun test` from running this expensive E2E script.
  */
 
+import { describe, expect, test } from 'bun:test'
+
 import * as fs from 'fs'
 import * as path from 'path'
 
 import { OpenbuffClient, loadLocalAgents } from '@openbuff/sdk'
 
+import librarian from './librarian'
+
 import type { AgentDefinition } from '@openbuff/sdk'
 
 const TRACE_DIR = path.join(process.cwd(), 'debug', 'librarian-traces')
+
+describe('librarian handleSteps guaranteed output', () => {
+  const makeLogger = () => ({ info: () => {}, error: () => {} }) as any
+
+  /** Drive the generator through the clone -> STEP_ALL prefix. */
+  const start = (repoUrl = 'https://github.com/expressjs/express') => {
+    const generator = librarian.handleSteps!({
+      prompt: 'What is the entry point?',
+      params: { repoUrl },
+      logger: makeLogger(),
+    } as any)
+    const cloneCall = generator.next({ toolResult: [] } as any).value as any
+    expect(cloneCall).toMatchObject({ toolName: 'run_terminal_command' })
+    // Must pass the clone result to reach the instruction add_message.
+    const resumed = generator
+      .next({ toolResult: [{ type: 'json', value: { exitCode: 0 } }] } as any)
+      .value as any
+    expect(resumed).toMatchObject({ toolName: 'add_message' })
+    return generator
+  }
+
+  test('emits a set_output fallback when STEP_ALL ends without output', () => {
+    const generator = start()
+
+    // The instruction add_message is still suspended; resolving it yields STEP_ALL.
+    expect(generator.next({ toolResult: [] } as any).value).toBe('STEP_ALL')
+
+    // Guided retry: STEP_ALL ends with no output at all -> add_message first.
+    const guided = generator.next({ stepsComplete: true, agentState: {}, toolResult: [] } as any) as any
+    expect(guided.value).toMatchObject({ toolName: 'add_message' })
+    expect(guided.value.input.content).toContain('never succeeded')
+
+    // One STEP retry: the guided path must not loop indefinitely.
+    expect(generator.next({ toolResult: [] } as any).value).toBe('STEP')
+
+    const harvest = generator.next({
+      stepsComplete: true,
+      agentState: {
+        output: undefined,
+        messageHistory: [
+          {
+            role: 'assistant',
+            content: [
+              { type: 'text', text: 'The entry point is index.js.' },
+            ],
+          },
+        ],
+      },
+      toolResult: [],
+    } as any) as any
+
+    expect(harvest.value).toEqual({
+      toolName: 'set_output',
+      input: {
+        status: 'answered',
+        answer: 'The entry point is index.js.',
+        relevantFiles: [],
+        cloneDir: expect.any(String),
+        cloneRetained: false,
+        agentHarvestedFallback: true,
+      },
+      includeToolCall: false,
+    })
+    expect(generator.next({ toolResult: [] } as any).done).toBe(true)
+  })
+
+  test('does not harvest when a valid set_output already ran', () => {
+    const generator = start()
+    generator.next({ toolResult: [] } as any)
+
+    const result = generator.next({
+      stepsComplete: true,
+      agentState: {
+        output: {
+          status: 'answered',
+          answer: 'Explicit answer.',
+          relevantFiles: ['/tmp/librarian-x/index.js'],
+          cloneDir: '/tmp/librarian-x',
+          cloneRetained: false,
+        },
+        messageHistory: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Stale prose.' }],
+          },
+        ],
+      },
+      toolResult: [],
+    } as any)
+
+    expect(result.done).toBe(true)
+    expect((result.value as any)?.toolName).toBeUndefined()
+  })
+
+  test('gives one guided retry on schema failure, then harvests', () => {
+    const generator = start()
+    generator.next({ toolResult: [] } as any)
+
+    // Output exists but carries no status: an unusable set_output result.
+    const guided = generator.next({
+      stepsComplete: true,
+      agentState: {
+        output: { answer: 'Answer only, missing required fields' },
+        lastSetOutputError: 'Missing required fields: status, relevantFiles',
+        messageHistory: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Recovered answer text.' }],
+          },
+        ],
+      },
+      toolResult: [],
+    } as any) as any
+
+    expect(guided.value).toMatchObject({ toolName: 'add_message' })
+    expect(guided.value.input.content).toContain('status')
+    expect(guided.value.input.content).toContain('relevantFiles')
+
+    // One STEP retry: the guided path must not loop indefinitely.
+    expect(generator.next({ toolResult: [] } as any).value).toBe('STEP')
+
+    const harvest = generator.next({
+      stepsComplete: true,
+      agentState: {
+        output: undefined,
+        messageHistory: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Recovered answer text.' }],
+          },
+        ],
+      },
+      toolResult: [],
+    } as any) as any
+
+    expect(harvest.value).toEqual({
+      toolName: 'set_output',
+      input: {
+        status: 'answered',
+        answer: 'Recovered answer text.',
+        relevantFiles: [],
+        cloneDir: expect.any(String),
+        cloneRetained: false,
+        agentHarvestedFallback: true,
+      },
+      includeToolCall: false,
+    })
+    expect(generator.next({ toolResult: [] } as any).done).toBe(true)
+  })
+
+  test('no guided retry after failed harvest: at most one attempt', () => {
+    const generator = start()
+    generator.next({ toolResult: [] } as any)
+
+    const guided = generator.next({
+      stepsComplete: true,
+      agentState: { messageHistory: [] },
+      toolResult: [],
+    } as any) as any
+    expect(guided.value).toMatchObject({ toolName: 'add_message' })
+    expect(generator.next({ toolResult: [] } as any).value).toBe('STEP')
+
+    // Second attempt also empty -> terminal set_output with status failed.
+    const harvest = generator.next({
+      stepsComplete: true,
+      agentState: { output: undefined, messageHistory: [] },
+      toolResult: [],
+    } as any) as any
+    expect(harvest.value).toMatchObject({
+      toolName: 'set_output',
+      input: { status: 'failed', answer: '', agentHarvestedFallback: true },
+    })
+    // Terminal: nothing more is yielded.
+    expect(generator.next({ toolResult: [] } as any).done).toBe(true)
+  })
+
+  test('fields unchanged behavior for missing or bad repoUrl', () => {
+    const badGenerator = librarian.handleSteps!({
+      prompt: 'Q',
+      params: { repoUrl: 'https://evil.com/repo' },
+      logger: makeLogger(),
+    } as any)
+    const badYield = badGenerator.next() as any
+    expect(badYield.value.toolName).toBe('set_output')
+    expect(badYield.value.input.status).toBe('failed')
+    expect(badGenerator.next().done).toBe(true)
+
+    const missingGenerator = librarian.handleSteps!({
+      prompt: 'Q',
+      params: {},
+      logger: makeLogger(),
+    } as any)
+    const missingYield = missingGenerator.next() as any
+    expect(missingYield.value.toolName).toBe('set_output')
+    expect(missingYield.value.input.status).toBe('failed')
+    expect(missingGenerator.next().done).toBe(true)
+  })
+})
 
 interface TaskDefinition {
   name: string

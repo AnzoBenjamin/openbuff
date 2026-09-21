@@ -188,6 +188,140 @@ describe('credentials', () => {
     })
   })
 
+  describe('writeCredentialsFileAtomic EEXIST/EPERM fallback', () => {
+    const makeErrnoError = (code: string): NodeJS.ErrnoException => {
+      const error: NodeJS.ErrnoException = new Error(
+        `simulated ${code} from renameSync`,
+      )
+      error.code = code
+      return error
+    }
+
+    // Fail specific 1-indexed renameSync call numbers so tests can exercise
+    // each branch of the fallback independently.
+    const stubRenameFailures = (failingCalls: number[], code = 'EEXIST') => {
+      const originalRenameSync = fs.renameSync
+      const failing = new Set(failingCalls)
+      let call = 0
+      ;(fs as any).renameSync = (...args: unknown[]) => {
+        call++
+        if (failing.has(call)) {
+          throw makeErrnoError(code)
+        }
+        return (originalRenameSync as (...renameArgs: unknown[]) => void)(
+          ...(args as [string, string]),
+        )
+      }
+      return () => {
+        fs.renameSync = originalRenameSync
+      }
+    }
+    const setupCredentialsFile = (env: any) => {
+      const configDir = getConfigDir(env)
+      fs.mkdirSync(configDir, { recursive: true })
+      const credPath = getCredentialsPath(env)
+      const oldContent = JSON.stringify({
+        default: {
+          userId: 'user-fallback',
+          email: 'user-fallback@test.com',
+          token: 'token-old',
+        },
+      })
+      fs.writeFileSync(credPath, oldContent)
+      return { configDir, credPath, oldContent }
+    }
+
+    const newCreds = (): ChatGptOAuthCredentials => ({
+      accessToken: 'chatgpt-fallback-access',
+      refreshToken: 'chatgpt-fallback-refresh',
+      expiresAt: Date.now() + 3_600_000,
+      connectedAt: Date.now(),
+    })
+
+    test(
+      'keeps the credentials file present with old or new content when ' +
+        'the first rename fails with EEXIST',
+      () => {
+        const tmpDir = fs.mkdtempSync(
+          path.join(os.tmpdir(), 'chatgpt-fallback-eexist-'),
+        )
+        const env = { NEXT_PUBLIC_CB_ENVIRONMENT: 'test' } as any
+        const originalHomedir = os.homedir
+        ;(os as any).homedir = () => tmpDir
+
+        try {
+          const { credPath, configDir } = setupCredentialsFile(env)
+          const restoreRename = stubRenameFailures([1])
+
+          try {
+            saveChatGptOAuthCredentials(newCreds(), env)
+
+            // The swap succeeded via the fallback: new content is in place.
+            expect(fs.existsSync(credPath)).toBe(true)
+            const parsed = JSON.parse(fs.readFileSync(credPath, 'utf8'))
+            expect(parsed.chatgptOAuth.accessToken).toBe(
+              'chatgpt-fallback-access',
+            )
+            expect(parsed.default.userId).toBe('user-fallback')
+
+            // The backup was cleaned up and no stray temp/backup files remain.
+            const leftovers = fs
+              .readdirSync(configDir)
+              .filter((name) => /\.bak\.|\.tmp\./.test(name))
+            expect(leftovers).toEqual([])
+          } finally {
+            restoreRename()
+          }
+        } finally {
+          ;(os as any).homedir = originalHomedir
+          fs.rmSync(tmpDir, { recursive: true })
+        }
+      },
+    )
+
+    test(
+      'preserves the old credentials file and a recoverable backup when ' +
+        'the swap rename fails again — the file is never left missing',
+      () => {
+        const tmpDir = fs.mkdtempSync(
+          path.join(os.tmpdir(), 'chatgpt-fallback-fail-'),
+        )
+        const env = { NEXT_PUBLIC_CB_ENVIRONMENT: 'test' } as any
+        const originalHomedir = os.homedir
+        ;(os as any).homedir = () => tmpDir
+
+        // Copy-based fallback: renameSync is only called for temp -> target.
+        // Failing BOTH calls (calls 1 and 2) exercises the branch where the
+        // swap rename fails again after the copy — the target must still
+        // hold the old content and the backup must survive for recovery.
+        const restoreRename = stubRenameFailures([1, 2], 'EPERM')
+
+        try {
+          const { credPath, configDir, oldContent } = setupCredentialsFile(env)
+
+          expect(() => saveChatGptOAuthCredentials(newCreds(), env)).toThrow()
+
+          // Copy-based fallback: the target is never moved away, so after a
+          // failed rename it still exists with the OLD content, and the
+          // copy-based backup preserves a recoverable copy of the original.
+          expect(fs.existsSync(credPath)).toBe(true)
+          expect(fs.readFileSync(credPath, 'utf8')).toBe(oldContent)
+          const backups = fs
+            .readdirSync(configDir)
+            .filter((name) => /\.bak\./.test(name))
+          expect(backups.length).toBe(1)
+          expect(fs.readFileSync(path.join(configDir, backups[0]!), 'utf8')).toBe(
+            oldContent,
+          )
+        } finally {
+          restoreRename()
+          ;(os as any).homedir = originalHomedir
+          fs.rmSync(tmpDir, { recursive: true })
+        }
+      },
+    )
+  })
+
   describe('isChatGptOAuthValid', () => {
     test('returns false when no credentials exist', () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatgpt-novalid-'))

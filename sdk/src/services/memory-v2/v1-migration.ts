@@ -26,7 +26,6 @@ import type { MemoryRepositoryV2 } from './types'
 
 const MAX_OBSERVATIONS = 100
 const APPEND_PAGE_SIZE = 100
-const MAX_EXPORT_PAGES = 10
 const MAX_TEXT = 1_024
 const MAX_AGGREGATE_DETAIL = 16_384
 
@@ -95,7 +94,11 @@ export type V1MigrationOutcome =
     }
   | {
       outcome: 'rejected' | 'failed'
-      reason: 'checksum-mismatch' | 'repository-rejected' | 'repository-failed'
+      reason:
+        | 'checksum-mismatch'
+        | 'invalid-record'
+        | 'repository-rejected'
+        | 'repository-failed'
       revision?: number
       checksum?: string
     }
@@ -690,7 +693,9 @@ async function findMigrationMarker(
   // compute the migration identity once instead of per reservation event.
   const identity = getV1MigrationIdentity({ projectId, revision, checksum })
 
-  for (let page = 0; page < MAX_EXPORT_PAGES; page++) {
+  // Cursor-resumable scan: termination is `nextAfterEventId` exhaustion,
+  // not a page-count ceiling.
+  while (true) {
     const outcome = await repository.export({
       schemaVersion: 2,
       projectId,
@@ -748,7 +753,6 @@ async function findMigrationMarker(
     }
     afterEventId = outcome.nextAfterEventId
   }
-  throw new Error('Migration marker lookup exceeded page limit')
 }
 
 function outcomeFromMarker(params: {
@@ -1128,6 +1132,7 @@ export type V1MigrationAuditOutcome =
       outcome: 'rejected' | 'failed'
       reason:
         | 'checksum-mismatch'
+        | 'invalid-record'
         | 'repository-rejected'
         | 'repository-failed'
         | 'invalid-export'
@@ -1160,7 +1165,11 @@ async function scanV1MigrationAuditEvents(
   let afterEventId: MemoryEventId | undefined
   let repositoryLastEventId: MemoryEventId | undefined
 
-  for (let page = 0; page < MAX_EXPORT_PAGES; page++) {
+  // Cursor-resumable scan: termination is `nextAfterEventId` exhaustion,
+  // not a page-count ceiling, mirroring findMigrationMarker and the import
+  // progress lookup so stores larger than the former ten-page export scan
+  // still audit completely.
+  while (true) {
     let raw: unknown
     try {
       raw = await repository.export({
@@ -1209,8 +1218,6 @@ async function scanV1MigrationAuditEvents(
     cursors.add(nextAfterEventId)
     afterEventId = nextAfterEventId
   }
-
-  return { outcome: 'failed', reason: 'page-limit-exceeded' }
 }
 
 function auditMigrationMarkerBody(params: {
@@ -1316,9 +1323,12 @@ export async function auditTaskMemoryV1Migration(params: {
   const { revision, updatedAt, checksum, ...candidateDraft } = memory
   const parsedDraft = taskMemoryDraftV1Schema.safeParse(candidateDraft)
   if (!parsedDraft.success) {
+    // A record that fails its own schema is corrupt, not merely hash-drifted:
+    // callers must be able to distinguish 'rebuild from source' from 'the
+    // record itself is unreadable', so this is never 'checksum-mismatch'.
     return {
       outcome: 'rejected',
-      reason: 'checksum-mismatch',
+      reason: 'invalid-record',
       revision,
       checksum,
     }
@@ -1515,9 +1525,12 @@ export async function importTaskMemoryV1(params: {
   const { revision, updatedAt, checksum, ...candidateDraft } = memory
   const parsedDraft = taskMemoryDraftV1Schema.safeParse(candidateDraft)
   if (!parsedDraft.success) {
+    // A record that fails its own schema is corrupt, not merely hash-drifted:
+    // callers must be able to distinguish 'rebuild from source' from 'the
+    // record itself is unreadable', so this is never 'checksum-mismatch'.
     return {
       outcome: 'rejected',
-      reason: 'checksum-mismatch',
+      reason: 'invalid-record',
       revision,
       checksum,
     }
@@ -1620,37 +1633,11 @@ export async function importTaskMemoryV1(params: {
     : { kind: 'empty' as const }
   const drafts = [...build.bodyDrafts]
 
-  if (lookup.prior) {
-    const currentObservationIds = new Set(importedObservationIds)
-    const retirementIdentity = `v1-retire:${hashToken(
-      `${bodyIdentity}:${lookup.prior.eventId}`,
-    )}`
-    lookup.prior.importedObservationIds
-      .filter((observationId) => !currentObservationIds.has(observationId))
-      .forEach((observationId, index) => {
-        drafts.push(
-          withMigrationEventId(
-            createMemoryEventDraft({
-              projectId,
-              sessionId,
-              userInputId: retirementIdentity,
-              sourceIndex: index + 1,
-              occurredAt,
-              eventType: 'claim.forgotten',
-              payload: {
-                payloadSchemaVersion: 1,
-                observationIds: [observationId],
-                reason: 'duplicate',
-                requestedBy: bounded(`migration:${revision}`, 256),
-                evidenceDisposition: 'remove-references',
-              },
-            }),
-            retirementIdentity,
-            index,
-          ),
-        )
-      })
-  }
+  // Retirement (claim.forgotten) drafts for a prior validated marker are
+  // intentionally NOT part of the body pages: they are appended only after
+  // the replacement import is durably marked (see the post-marker block
+  // below), so a permanent marker-append failure can never strand prior
+  // memory claims as forgotten without a replacement.
 
   const reservation = {
     ...createMemoryEventDraft({
@@ -1823,36 +1810,65 @@ export async function importTaskMemoryV1(params: {
     return revalidated
   }
 
+  const existingEvents = new Map<MemoryEventId, MemoryEventEnvelope[]>()
+  // Cursor-resumable progress lookup: on large stores (>10k canonical
+  // events) the pre-existing imported body can extend past any fixed
+  // page ceiling, so termination is `nextAfterEventId` exhaustion —
+  // not a page-count cap — to keep re-entrant dedup sound.
+  //
+  // The scan runs ONCE before the paged body-append loop (plus once per
+  // conflict recovery) instead of once per batch: per-batch full-store
+  // rescans made backfill quadratic in store size.
+  const scanExistingEvents = async (): Promise<boolean> => {
+    existingEvents.clear()
+    let afterEventId: MemoryEventId | undefined
+    while (true) {
+      let exported
+      try {
+        exported = await repository.export({
+          schemaVersion: 2,
+          projectId,
+          ...(afterEventId ? { afterEventId } : {}),
+          limit: 1_000,
+        })
+      } catch {
+        return false
+      }
+      if (exported.outcome !== 'page') return false
+      for (const event of exported.events) {
+        const matching = existingEvents.get(event.eventId) ?? []
+        matching.push(event)
+        existingEvents.set(event.eventId, matching)
+      }
+      if (!exported.nextAfterEventId) break
+      afterEventId = exported.nextAfterEventId
+    }
+    return true
+  }
+  if (!(await scanExistingEvents())) {
+    return {
+      outcome: 'failed',
+      reason: 'repository-failed',
+      revision,
+      checksum,
+    }
+  }
+
   for (let offset = 0; offset < drafts.length; offset += APPEND_PAGE_SIZE) {
     let recoveries = 0
     while (true) {
       const remainingDrafts = drafts.slice(offset, offset + APPEND_PAGE_SIZE)
-      const existingEvents = new Map<MemoryEventId, MemoryEventEnvelope[]>()
-      try {
-        let afterEventId: MemoryEventId | undefined
-        for (let page = 0; page < MAX_EXPORT_PAGES; page++) {
-          const exported = await repository.export({
-            schemaVersion: 2,
-            projectId,
-            ...(afterEventId ? { afterEventId } : {}),
-            limit: 1_000,
-          })
-          if (exported.outcome !== 'page')
-            throw new Error('Migration progress lookup failed')
-          for (const event of exported.events) {
-            const matching = existingEvents.get(event.eventId) ?? []
-            matching.push(event)
-            existingEvents.set(event.eventId, matching)
+      if (recoveries > 0) {
+        // After a conflict the repository tail may have moved under us, so
+        // refresh the dedup map once per recovery instead of rescanning the
+        // full store for every batch.
+        if (!(await scanExistingEvents())) {
+          return {
+            outcome: 'failed',
+            reason: 'repository-failed',
+            revision,
+            checksum,
           }
-          if (!exported.nextAfterEventId) break
-          afterEventId = exported.nextAfterEventId
-        }
-      } catch {
-        return {
-          outcome: 'failed',
-          reason: 'repository-failed',
-          revision,
-          checksum,
         }
       }
       for (const draft of remainingDrafts) {
@@ -1971,6 +1987,79 @@ export async function importTaskMemoryV1(params: {
         revision,
         checksum,
       }
+
+    // Retirement AFTER the confirmed marker: claim.forgotten events retire
+    // prior imported observations only once the replacement import is
+    // durably marked, so a permanent marker-append failure can never strand
+    // prior memory claims as forgotten without a replacement. A permanent
+    // retirement failure is fail-safe (duplicate claims remain active; no
+    // data is destroyed) and is never reported as a generic repository
+    // failure of the import itself.
+    let outcomeLastEventId = completed.lastEventId
+    if (lookup.prior) {
+      const currentObservationIds = new Set(importedObservationIds)
+      const retirementIdentity = `v1-retire:${hashToken(
+        `${bodyIdentity}:${lookup.prior.eventId}`,
+      )}`
+      const retirementDrafts = lookup.prior.importedObservationIds
+        .filter((observationId) => !currentObservationIds.has(observationId))
+        .map((observationId, index) =>
+          withMigrationEventId(
+            createMemoryEventDraft({
+              projectId,
+              sessionId,
+              userInputId: retirementIdentity,
+              sourceIndex: index + 1,
+              occurredAt,
+              eventType: 'claim.forgotten',
+              payload: {
+                payloadSchemaVersion: 1,
+                observationIds: [observationId],
+                reason: 'duplicate',
+                requestedBy: bounded(`migration:${revision}`, 256),
+                evidenceDisposition: 'remove-references',
+              },
+            }),
+            retirementIdentity,
+            index,
+          ),
+        )
+      let retirementTail: typeof expectedTail = {
+        kind: 'event',
+        eventId: completed.lastEventId,
+      }
+      for (
+        let offset = 0;
+        offset < retirementDrafts.length;
+        offset += APPEND_PAGE_SIZE
+      ) {
+        try {
+          const retired = MemoryAppendOutcomeSchema.parse(
+            await repository.append(
+              MemoryAppendRequestSchema.parse({
+                schemaVersion: 2,
+                projectId,
+                expectedTail: retirementTail,
+                events: retirementDrafts.slice(
+                  offset,
+                  offset + APPEND_PAGE_SIZE,
+                ),
+              }),
+            ),
+          )
+          if (retired.outcome === 'appended') {
+            retirementTail = { kind: 'event', eventId: retired.lastEventId }
+            outcomeLastEventId = retired.lastEventId
+            continue
+          }
+          // Fail-safe: leave prior claims active rather than forgetting
+          // them without a durable replacement.
+          break
+        } catch {
+          break
+        }
+      }
+    }
     return {
       outcome: markerDuplicate ? 'no-op' : 'imported',
       revision,
@@ -1980,7 +2069,7 @@ export async function importTaskMemoryV1(params: {
       importedObservationIds,
       omittedFields,
       warnings: build.warnings,
-      lastEventId: completed.lastEventId,
+      lastEventId: outcomeLastEventId,
       sourceItemCounts,
       truncatedFields,
     }

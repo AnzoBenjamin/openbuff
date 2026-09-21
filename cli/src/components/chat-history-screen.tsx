@@ -281,6 +281,14 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
           </box>
         )}
 
+        {/* P6.3: make the render cap explicit instead of silently hiding
+            the rest of the list. */}
+        {!isCompactMode && filteredItems.length > LAYOUT.MAX_RENDERED_CHATS && (
+          <text style={{ fg: theme.muted, flexShrink: 0 }}>
+            {`Showing the ${LAYOUT.MAX_RENDERED_CHATS} most recent of ${filteredItems.length} chats — refine your search to see more`}
+          </text>
+        )}
+
         {/* Search input */}
         <box
           style={{

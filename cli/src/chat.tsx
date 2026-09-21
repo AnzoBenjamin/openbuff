@@ -59,6 +59,7 @@ import { trackEvent } from './utils/analytics'
 import { showClipboardMessage } from './utils/clipboard'
 import { readClipboardImage } from './utils/clipboard-image'
 import { getSystemMessage } from './utils/message-history'
+import { createErrorMessage } from './utils/send-message-helpers'
 import { getInputModeConfig } from './utils/input-modes'
 import {
   addCustomOpenbuffProvider,
@@ -552,6 +553,10 @@ export const Chat = ({
           })()
         : null
 
+      // P6.1: Guard the top-level submit path so an unexpected rejection is
+      // caught, logged, and surfaced as a visible inline error message instead
+      // of becoming an unhandled rejection that can crash the TUI. The final
+      // restore of input/attachments still runs in the finally block below.
       try {
         const result = await routeUserPrompt({
           abortControllerRef,
@@ -574,6 +579,22 @@ export const Chat = ({
         })
 
         return result
+      } catch (error) {
+        logger.error(
+          { error, contentLength: content.length, agentMode: mode },
+          '[submit] Prompt submission failed with an unexpected error',
+        )
+        setMessages((prev) => [
+          ...prev,
+          createErrorMessage(
+            '⚠️ Something went wrong while handling your message. Please try again.',
+          ),
+        ])
+        setTimeout(() => scrollToLatest(), 0)
+        // The caller receives undefined (no command result) and errors attached
+        // to this path are handled above rather than propagating as an
+        // unhandled rejection.
+        return undefined
       } finally {
         if (previousInputValue) {
           setInputValue({

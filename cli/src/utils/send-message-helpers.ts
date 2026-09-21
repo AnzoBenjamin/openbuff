@@ -6,6 +6,7 @@
 
 import { shouldHideAgent } from './constants'
 import { formatTimestamp } from './helpers'
+import { generateMessageId } from './message-id'
 import { autoCollapseBlocks, createAgentBlock } from './message-block-helpers'
 
 import type { AgentMode } from './constants'
@@ -18,7 +19,7 @@ import type { ChatMessage, ContentBlock } from '../types/chat'
 export const createModeDividerMessage = (
   agentMode: AgentMode,
 ): ChatMessage => ({
-  id: `divider-${Date.now()}`,
+  id: generateMessageId('divider'),
   variant: 'ai',
   content: '',
   blocks: [
@@ -39,14 +40,13 @@ export const createAiMessageShell = (messageId: string): ChatMessage => ({
 })
 
 export const createErrorMessage = (content: string): ChatMessage => ({
-  id: `error-${Date.now()}`,
+  id: generateMessageId('error'),
   variant: 'error',
   content,
   timestamp: formatTimestamp(),
 })
 
-export const generateAiMessageId = (): string =>
-  `ai-${Date.now()}-${Math.random().toString(16).slice(2)}`
+export const generateAiMessageId = (): string => generateMessageId('ai')
 
 // -----------------------------------------------------------------------------
 // Auto-Collapse Logic

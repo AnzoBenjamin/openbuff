@@ -156,40 +156,49 @@ export const useSendMessage = ({
   const streamRefs = streamRefsRef.current
   const activeRunOwnerRef = useRef<symbol | null>(null)
 
+  // P6.4: The restore path performs synchronous fs reads; deferring it until
+  // after the first paint lets the TUI shell render immediately and the
+  // restored state is swapped in once ready. The persisted format is unchanged.
   useEffect(() => {
-    if (continueChat && !previousRunStateRef.current) {
+    if (!continueChat || previousRunStateRef.current) return
+    let cancelled = false
+    const timer = setTimeout(() => {
+      if (cancelled) return
       const loadedState = loadMostRecentChatState(continueChatId ?? undefined)
-      if (loadedState) {
-        const { setRunState, setMessages } = useChatStore.getState()
-        previousRunStateRef.current = loadedState.runState
-        setRunState(loadedState.runState)
-        setMessages(loadedState.messages)
-        if (loadedState.chatId) {
-          setCurrentChatId(loadedState.chatId)
-        }
-        // P2-3: Check for a mid-turn checkpoint from an interrupted (crashed)
-        // turn. Validate that checkpointTurnId matches a message id in the
-        // restored messages — if not, the checkpoint is stale and discarded.
-        const checkpoint = loadCheckpoint()
-        if (checkpoint) {
-          const matchesMessage = loadedState.messages.some(
-            (msg) => msg.id === checkpoint.checkpointTurnId,
+      if (!loadedState) return
+      const { setRunState, setMessages } = useChatStore.getState()
+      previousRunStateRef.current = loadedState.runState
+      setRunState(loadedState.runState)
+      setMessages(loadedState.messages)
+      if (loadedState.chatId) {
+        setCurrentChatId(loadedState.chatId)
+      }
+      // P2-3: Check for a mid-turn checkpoint from an interrupted (crashed)
+      // turn. Validate that checkpointTurnId matches a message id in the
+      // restored messages — if not, the checkpoint is stale and discarded.
+      const checkpoint = loadCheckpoint()
+      if (checkpoint) {
+        const matchesMessage = loadedState.messages.some(
+          (msg) => msg.id === checkpoint.checkpointTurnId,
+        )
+        if (matchesMessage) {
+          resumableCheckpointRef.current = checkpoint
+          logger.info(
+            { checkpointTurnId: checkpoint.checkpointTurnId },
+            '[send-message] Loaded mid-turn checkpoint for interrupted turn',
           )
-          if (matchesMessage) {
-            resumableCheckpointRef.current = checkpoint
-            logger.info(
-              { checkpointTurnId: checkpoint.checkpointTurnId },
-              '[send-message] Loaded mid-turn checkpoint for interrupted turn',
-            )
-          } else {
-            logger.debug(
-              { checkpointTurnId: checkpoint.checkpointTurnId },
-              '[send-message] Mid-turn checkpoint is stale (no matching message), discarding',
-            )
-            clearCheckpoint()
-          }
+        } else {
+          logger.debug(
+            { checkpointTurnId: checkpoint.checkpointTurnId },
+            '[send-message] Mid-turn checkpoint is stale (no matching message), discarding',
+          )
+          clearCheckpoint()
         }
       }
+    }, 0)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
     }
   }, [continueChat, continueChatId])
 

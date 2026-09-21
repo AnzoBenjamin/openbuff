@@ -218,7 +218,10 @@ export function transformChatGptBackendRequestBody(
 // Response Transform: Responses API SSE → Chat Completions SSE
 // ============================================================================
 
-function createSseTransformStream(): TransformStream<Uint8Array, Uint8Array> {
+function createSseTransformStream(): {
+  transform: TransformStream<Uint8Array, Uint8Array>
+  error: (err: unknown) => void
+} {
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
 
@@ -484,7 +487,11 @@ function createSseTransformStream(): TransformStream<Uint8Array, Uint8Array> {
     }
   }
 
-  return new TransformStream<Uint8Array, Uint8Array>({
+  let streamController: TransformStreamDefaultController<Uint8Array> | undefined
+  const stream: TransformStream<Uint8Array, Uint8Array> = new TransformStream<Uint8Array, Uint8Array>({
+    start(controller) {
+      streamController = controller
+    },
     transform(chunk, controller) {
       buffer += decoder.decode(chunk, { stream: true })
 
@@ -522,13 +529,29 @@ function createSseTransformStream(): TransformStream<Uint8Array, Uint8Array> {
       }
     },
   })
+
+  return {
+    transform: stream,
+    error: (err: unknown) => {
+      try {
+        streamController?.error(err)
+      } catch {
+        // TransformStream already errored/closed; the readable still surfaces
+        // the original failure.
+      }
+    },
+  }
 }
 
 export function transformResponseStream(
   inputStream: ReadableStream<Uint8Array>,
 ): ReadableStream<Uint8Array> {
-  const transform = createSseTransformStream()
-  inputStream.pipeTo(transform.writable).catch(() => {})
+  const { transform, error } = createSseTransformStream()
+  inputStream.pipeTo(transform.writable).catch((err) => {
+    // Surface the backend stream failure in the readable instead of silently
+    // truncating the response to a clean completion.
+    error(err)
+  })
   return transform.readable
 }
 

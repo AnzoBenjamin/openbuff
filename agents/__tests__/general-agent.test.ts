@@ -159,6 +159,56 @@ describe('general-agent programmatic tools', () => {
     expect((afterHarvest.value as any)?.toolName).not.toBe('add_message')
   })
 
+  test('clears the audit gate for receipts nested deeper than the old mirror cap', () => {
+    const agent = createGeneralAgent({ model: 'opus' })
+    const generator = agent.handleSteps!({
+      prompt: 'Audit service completeness',
+      params: {
+        sessionSlug: 'readiness',
+        shardId: 'services',
+        snapshotId: 'snapshot-1',
+      },
+    } as any)
+
+    expect(generator.next().value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    expect(generator.next({ toolResult: [] } as any).value).toBe('STEP')
+
+    // A receipt nested 20 wrapper objects deep exceeds the old 8-level inline
+    // mirror cap but stays within the canonical containsStructuralAuditReceipt
+    // MAX_TRAVERSAL_DEPTH (32) that backs the runtime receipt gate, so the
+    // agent-level gate must also clear it — the two gates must not drift.
+    let deeplyNested: unknown = {
+      structuralReceipt: { snapshot_id: 'snapshot-1' },
+    }
+    for (let i = 0; i < 20; i++) {
+      deeplyNested = { nested: deeplyNested }
+    }
+
+    const completion = generator.next({
+      stepsComplete: true,
+      agentState: {
+        messageHistory: [
+          {
+            role: 'tool',
+            content: [{ type: 'json', value: deeplyNested }],
+          },
+        ],
+      },
+      toolResult: [],
+    } as any)
+
+    expect(completion.done).toBe(false)
+    expect(completion.value).toMatchObject({
+      toolName: 'set_output',
+      input: { harvestedFromFallback: true },
+    })
+    const afterHarvest = generator.next({ toolResult: [] } as any)
+    expect(afterHarvest.done).toBe(true)
+    expect((afterHarvest.value as any)?.toolName).not.toBe('add_message')
+  })
+
   test('keeps rejecting when the present receipt is for a different snapshot', () => {
     const agent = createGeneralAgent({ model: 'opus' })
     const generator = agent.handleSteps!({
@@ -944,5 +994,192 @@ describe('general-agent programmatic tools', () => {
       harvestedFromFallback: true,
     })
     expect(generator.next({ toolResult: [] } as any).done).toBe(true)
+  })
+
+  // Reproduces run-programmatic-step's sandbox: handleSteps is serialized and
+  // re-materialized with `new Function`, so the generator body only sees its
+  // own closures. The former module-level `import
+  // { containsStructuralAuditReceipt }` was invisible there and threw
+  // `containsStructuralAuditReceipt is not defined` at runtime.
+  const materializeHandleSteps = (
+    agent: ReturnType<typeof createGeneralAgent>,
+  ) =>
+    // eslint-disable-next-line no-new-func -- reproduces the runtime sandbox
+    new Function(
+      'return (' + String(agent.handleSteps) + ')',
+    )() as (args: unknown) => Generator<any, void, unknown>
+
+  test('serialized handleSteps clears the audit gate on a snapshot-bound receipt', () => {
+    const agent = createGeneralAgent({ model: 'opus' })
+    const generator = materializeHandleSteps(agent)({
+      prompt: 'Audit service completeness',
+      params: {
+        sessionSlug: 'readiness',
+        shardId: 'services',
+        snapshotId: 'snapshot-1',
+      },
+    })
+
+    expect(generator.next().value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    expect(generator.next({ toolResult: [] } as any).value).toBe('STEP')
+
+    // A write_audit_findings tool result embedding a snapshot-bound receipt:
+    // the gate must pass without any ReferenceError, so the next yield is the
+    // ordinary harvest fallback rather than an add_message nudge.
+    const completion = generator.next({
+      stepsComplete: true,
+      agentState: {
+        messageHistory: [
+          {
+            role: 'tool',
+            content: [
+              {
+                type: 'json',
+                value: {
+                  structuralReceipt: {
+                    schema_version: 1,
+                    snapshot_id: 'snapshot-1',
+                    shard_id: 'services',
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+      toolResult: [],
+    } as any)
+
+    expect(completion.value).toMatchObject({
+      toolName: 'set_output',
+      input: { harvestedFromFallback: true },
+    })
+    const after = generator.next({ toolResult: [] } as any)
+    expect(after.done).toBe(true)
+    expect((after.value as any)?.toolName).not.toBe('add_message')
+  })
+
+  test('serialized handleSteps still nudges on a wrong-snapshot receipt', () => {
+    const agent = createGeneralAgent({ model: 'opus' })
+    const generator = materializeHandleSteps(agent)({
+      prompt: 'Audit service completeness',
+      params: {
+        sessionSlug: 'readiness',
+        shardId: 'services',
+        snapshotId: 'snapshot-2',
+      },
+    })
+
+    expect(generator.next().value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    expect(generator.next({ toolResult: [] } as any).value).toBe('STEP')
+
+    // The inline detector must discriminate on snapshot_id: a receipt for a
+    // different snapshot does not clear the gate, so the nudge is emitted.
+    const mismatch = generator.next({
+      stepsComplete: true,
+      agentState: {
+        messageHistory: [
+          {
+            role: 'tool',
+            content: [
+              {
+                type: 'json',
+                value: {
+                  structuralReceipt: {
+                    schema_version: 1,
+                    snapshot_id: 'snapshot-1',
+                    shard_id: 'services',
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+      toolResult: [],
+    } as any)
+
+    expect(mismatch.value).toMatchObject({ toolName: 'add_message' })
+  })
+
+  test('serialized handleSteps marks the shard unresolved when retries are exhausted without a receipt', () => {
+    const agent = createGeneralAgent({ model: 'opus' })
+    const generator = materializeHandleSteps(agent)({
+      prompt: 'Audit service completeness',
+      params: {
+        sessionSlug: 'readiness',
+        shardId: 'services',
+        snapshotId: 'snapshot-2',
+      },
+    })
+
+    expect(generator.next().value).toMatchObject({
+      toolName: 'spawn_agent_inline',
+    })
+    expect(generator.next({ toolResult: [] } as any).value).toBe('STEP')
+
+    // Drive the run to exhaustion: two nudded retries with a wrong-snapshot
+    // receipt present, then the third stepsComplete transition. The retries
+    // are capped at 2, so the exiting set_output must carry an explicit
+    // unresolved marker naming the missing structuralReceipt instead of the
+    // harvest silently confirming the shard.
+    const wrongReceiptState = () => ({
+      stepsComplete: true,
+      agentState: {
+        messageHistory: [
+          {
+            role: 'tool',
+            content: [
+              {
+                type: 'json',
+                value: {
+                  structuralReceipt: {
+                    schema_version: 1,
+                    snapshot_id: 'snapshot-1',
+                    shard_id: 'services',
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+      toolResult: [],
+    })
+
+    // Each rejected completion yields a nudge followed by a 'STEP' yield;
+    // two rejected completions exhaust the retry cap (checked before
+    // incrementing), so the third completion reaches the exit path.
+    expect(generator.next(wrongReceiptState() as any).value).toMatchObject({
+      toolName: 'add_message',
+    })
+    expect(generator.next(wrongReceiptState() as any).value).toBe('STEP')
+    expect(generator.next(wrongReceiptState() as any).value).toMatchObject({
+      toolName: 'add_message',
+    })
+    expect(generator.next(wrongReceiptState() as any).value).toBe('STEP')
+
+    // Retry cap exhausted: the exiting set_output must carry the explicit
+    // unresolved marker naming the missing structuralReceipt instead of the
+    // harvest silently confirming the shard.
+    const exhausted = generator.next(wrongReceiptState() as any)
+    expect(exhausted.value).toMatchObject({
+      toolName: 'set_output',
+      input: {
+        harvestedFromFallback: true,
+        noHarvestedAnswer: true,
+        unresolved: [
+          expect.stringContaining(
+            'No write_audit_findings structuralReceipt for snapshotId snapshot-2',
+          ),
+        ],
+      },
+    })
+    const after = generator.next({ toolResult: [] } as any)
+    expect(after.done).toBe(true)
   })
 })

@@ -289,8 +289,6 @@ export type AgentState = {
   childRunIds: string[]
   messageHistory: Message[]
   stepsRemaining: number
-  /** Consecutive text-only turns without task_completed for explicit-completion agents (bounded fallback, resets on tool use). */
-  consecutiveTextOnlyWithoutCompletion?: number
   /** Message from the most recent rejected set_output call, cleared once output is successfully set. Used to make the missing-structured-output retry name the real failure. */
   lastSetOutputError?: string
   creditsUsed: number

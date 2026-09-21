@@ -3,15 +3,18 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 
+import { setProjectRoot, setCurrentChatId } from '../../project-files'
 import {
   getAllToggleIdsFromMessages,
   getRunStatePath,
   getChatMessagesPath,
+  getChatStatePath,
   saveChatState,
   loadMostRecentChatState,
   clearChatState,
   isValidChatId,
   loadChatStateFromDirectory,
+  loadChatStateFromCompatibilityFiles,
 } from '../run-state-storage'
 import type { ChatMessage, ContentBlock } from '../../types/chat'
 import type { RunState } from '@openbuff/sdk'
@@ -280,6 +283,242 @@ describe('run-state-storage', () => {
       '   ',
     ])('rejects unsafe chat id %s', (chatId) => {
       expect(isValidChatId(chatId)).toBe(false)
+    })
+  })
+
+  describe('legacy session validation (P6.5)', () => {
+    test('rejects a legacy messages file whose entries fail the shape guard', () => {
+      fs.writeFileSync(
+        path.join(mockCurrentChatDir, 'run-state.json'),
+        JSON.stringify({ output: { type: 'error', message: 'x' } }),
+      )
+      fs.writeFileSync(
+        path.join(mockCurrentChatDir, 'chat-messages.json'),
+        JSON.stringify([{ notAnId: true }]),
+      )
+
+      expect(loadChatStateFromCompatibilityFiles(mockCurrentChatDir)).toBeNull()
+    })
+
+    test('rejects a chat-state envelope whose messages fail the shape guard', () => {
+      fs.writeFileSync(
+        path.join(mockCurrentChatDir, 'chat-state.json'),
+        JSON.stringify({
+          version: 1,
+          runState: { output: { type: 'error', message: 'x' } },
+          messages: [{ id: 123 }],
+        }),
+      )
+
+      // Falls through to compatibility recovery, which finds no legacy files
+      // either, so the caller starts a fresh session.
+      expect(loadChatStateFromDirectory(mockCurrentChatDir)).toBeNull()
+    })
+
+    test('accepts valid legacy messages that include extra fields', () => {
+      const runState = {
+        output: { type: 'error', message: 'Recovered output' },
+      } as unknown as RunState
+      const messages: ChatMessage[] = [
+        {
+          id: 'msg-1',
+          variant: 'user',
+          timestamp: new Date().toISOString(),
+          content: 'Recovered prompt',
+        },
+      ]
+      fs.writeFileSync(
+        path.join(mockCurrentChatDir, 'run-state.json'),
+        JSON.stringify(runState),
+      )
+      fs.writeFileSync(
+        path.join(mockCurrentChatDir, 'chat-messages.json'),
+        JSON.stringify(messages),
+      )
+
+      const loaded = loadChatStateFromCompatibilityFiles(mockCurrentChatDir)
+      expect(loaded?.messages).toEqual(messages)
+    })
+
+    test('accepts a legacy AgentState snapshot carrying removed fields', () => {
+      // Compat contract: fields removed from the AgentState type (e.g. the
+      // former consecutiveTextOnlyWithoutCompletion) must never make an
+      // older persisted snapshot unloadable. The read path is non-strict
+      // (JSON.parse + sanitizeForChatPersistence), so legacy payloads load
+      // unchanged and the stale field is dropped on the next save.
+      const legacyRunState = {
+        sessionState: {
+          mainAgentState: {
+            agentId: 'main',
+            agentType: null,
+            agentContext: {},
+            subagents: [],
+            messageHistory: [],
+            stepsRemaining: 10,
+            // Removed in a prior release; must be tolerated on read.
+            consecutiveTextOnlyWithoutCompletion: 7,
+          },
+          subagents: [],
+        },
+        output: { type: 'error', message: 'Legacy output' },
+      } as unknown as RunState
+      const messages: ChatMessage[] = [
+        {
+          id: 'legacy-msg-1',
+          variant: 'user',
+          timestamp: new Date().toISOString(),
+          content: 'Legacy prompt',
+        },
+      ]
+      fs.writeFileSync(
+        path.join(mockCurrentChatDir, 'chat-state.json'),
+        JSON.stringify({ version: 1, runState: legacyRunState, messages }),
+      )
+
+      const loaded = loadChatStateFromDirectory(mockCurrentChatDir)
+      expect(loaded).not.toBeNull()
+      expect(loaded?.runState).toEqual(legacyRunState)
+      expect(loaded?.messages).toEqual(messages)
+      // The stale field is still present on the loaded object (passthrough,
+      // not rejection); the next save simply stops writing it.
+      const mainAgentState = (
+        loaded?.runState as unknown as {
+          sessionState: { mainAgentState: Record<string, unknown> }
+        }
+      ).sessionState.mainAgentState
+      expect(mainAgentState['consecutiveTextOnlyWithoutCompletion']).toBe(7)
+    })
+  })
+
+  describe('mixed CLI version envelope tolerance', () => {
+    // saveChatState resolves its write target through project-files, and bun
+    // module mocking does not reliably intercept bound imports; point the real
+    // resolvers at an isolated temp dir instead (same pattern as
+    // turn-checkpoint.test.ts).
+    const tmpConfigDir = path.join(
+      os.tmpdir(),
+      `codebuff-envelope-test-${process.pid}`,
+    )
+    const originalConfigDir = process.env.OPENBUFF_CONFIG_DIR
+
+    beforeEach(() => {
+      mock.restore()
+      if (fs.existsSync(tmpConfigDir)) {
+        fs.rmSync(tmpConfigDir, { recursive: true, force: true })
+      }
+      fs.mkdirSync(tmpConfigDir, { recursive: true })
+      process.env.OPENBUFF_CONFIG_DIR = tmpConfigDir
+      setProjectRoot(tmpConfigDir)
+      setCurrentChatId('test-chat-envelope')
+    })
+
+    afterEach(() => {
+      if (originalConfigDir === undefined) {
+        delete process.env.OPENBUFF_CONFIG_DIR
+      } else {
+        process.env.OPENBUFF_CONFIG_DIR = originalConfigDir
+      }
+      if (fs.existsSync(tmpConfigDir)) {
+        fs.rmSync(tmpConfigDir, { recursive: true, force: true })
+      }
+    })
+
+    test('saveChatState leaves a newer envelope in place instead of clobbering it', () => {
+      // A downgraded CLI continuing a session must not destroy the newer
+      // release's chat-state.json: the read path relies on that file being
+      // found again after re-upgrade.
+      const newerEnvelope = {
+        version: 2,
+        runState: {
+          output: { type: 'error', message: 'written by a newer CLI' },
+        },
+        messages: [
+          {
+            id: 'newer-msg-1',
+            variant: 'user',
+            content: 'Newer session prompt',
+            timestamp: new Date().toISOString(),
+            blocks: [],
+          },
+        ],
+      }
+      const chatStatePath = getChatStatePath()
+      fs.writeFileSync(chatStatePath, JSON.stringify(newerEnvelope, null, 2))
+
+      saveChatState(
+        {
+          output: { type: 'error', message: 'downgraded CLI output' },
+        } as unknown as RunState,
+        [
+          {
+            id: 'downgraded-msg-1',
+            variant: 'user',
+            content: 'Downgraded session prompt',
+            timestamp: new Date().toISOString(),
+            blocks: [],
+          },
+        ],
+      )
+
+      expect(JSON.parse(fs.readFileSync(chatStatePath, 'utf8'))).toEqual(
+        newerEnvelope,
+      )
+      // Legacy sidecars still advance so compatibility recovery keeps working
+      // for the downgraded process.
+      expect(fs.existsSync(getRunStatePath())).toBe(true)
+      expect(fs.existsSync(getChatMessagesPath())).toBe(true)
+    })
+
+    test('saveChatState still refreshes an envelope of its own version', () => {
+      // The guard must only skip unrecognized versions, never strand a stale
+      // session behind a same-version envelope.
+      fs.writeFileSync(
+        getChatStatePath(),
+        JSON.stringify({ version: 1, runState: {}, messages: [] }),
+      )
+      saveChatState(
+        { output: { type: 'error', message: 'fresh output' } } as unknown as RunState,
+        [
+          {
+            id: 'fresh-msg-1',
+            variant: 'user',
+            content: 'Fresh prompt',
+            timestamp: new Date().toISOString(),
+            blocks: [],
+          },
+        ],
+      )
+
+      const parsed = JSON.parse(fs.readFileSync(getChatStatePath(), 'utf8'))
+      expect(parsed.version).toBe(1)
+      expect(parsed.messages).toHaveLength(1)
+      expect(parsed.messages[0].id).toBe('fresh-msg-1')
+    })
+
+    test('a newer envelope survives a downgraded session load for re-upgrade', () => {
+      // Read-path counterpart: the parseable newer envelope is neither
+      // quarantined nor deleted, so the re-upgraded CLI finds it again; the
+      // downgraded CLI falls back to compatibility recovery, which finds no
+      // legacy files here and reports no session.
+      const newerEnvelope = {
+        version: 2,
+        runState: {},
+        messages: [],
+      }
+      const chatStatePath = getChatStatePath()
+      fs.writeFileSync(chatStatePath, JSON.stringify(newerEnvelope))
+      const chatDir = path.dirname(chatStatePath)
+
+      expect(loadChatStateFromDirectory(chatDir)).toBeNull()
+
+      expect(JSON.parse(fs.readFileSync(chatStatePath, 'utf8'))).toEqual(
+        newerEnvelope,
+      )
+      expect(
+        fs
+          .readdirSync(chatDir)
+          .some((name) => name.startsWith('chat-state.json.corrupt.')),
+      ).toBe(false)
     })
   })
 

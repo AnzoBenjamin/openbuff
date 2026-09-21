@@ -293,6 +293,7 @@ export const clientToolCallSchema = z.discriminatedUnion('toolName', [
           'full-access',
         ]),
         allowed_paths: z.array(z.string()).optional(),
+        approval_receipt_id: z.string().optional(),
       }),
     ),
   }),

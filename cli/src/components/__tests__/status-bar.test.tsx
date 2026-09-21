@@ -45,8 +45,8 @@ const renderFrame = async (node: React.ReactNode): Promise<string> => {
   let setup!: Awaited<ReturnType<typeof testRender>>
   await act(async () => {
     setup = await testRender(
-      <box style={{ flexDirection: 'column', width: 100 }}>{node}</box>,
-      { width: 100, height: 40 },
+      <box style={{ flexDirection: 'column', width: 152 }}>{node}</box>,
+      { width: 152, height: 40 },
     )
   })
   await act(async () => {
@@ -98,9 +98,17 @@ const baseProps = {
   scrollToLatest: () => {},
   statusIndicatorState: STREAMING,
   contextWindowUsage: { used: 48_000, max: 100_000 },
+  sessionCostCents: 25,
   modelName: 'anthropic/claude-sonnet',
   diffStats: { modified: 2, added: 1, deleted: 0 },
 }
+
+/**
+ * sessionCostCents large enough that formatCostLabel renders '$0.25' (not
+ * '<$0.0001'), pinning the low-priority cost chip the selector now renders
+ * beside the context chip in this scenario.
+ */
+const COST_LABEL = '$0.25'
 
 describe('StatusBar through the real OpenTUI reconciler', () => {
   renderTest(
@@ -110,7 +118,12 @@ describe('StatusBar through the real OpenTUI reconciler', () => {
         <StatusBar {...baseProps} isAtBottom={false} />,
       )
 
-      expectRendered(frame, ['working...', CONTEXT_PERCENT, SCROLL_GLYPH])
+      expectRendered(frame, [
+        'working...',
+        CONTEXT_PERCENT,
+        COST_LABEL,
+        SCROLL_GLYPH,
+      ])
     },
   )
 
@@ -138,7 +151,7 @@ describe('StatusBar through the real OpenTUI reconciler', () => {
     async () => {
       const frame = await renderFrame(<StatusBar {...baseProps} isAtBottom />)
 
-      expectRendered(frame, ['working...', CONTEXT_PERCENT])
+      expectRendered(frame, ['working...', CONTEXT_PERCENT, COST_LABEL])
       expect(frame).not.toContain(SCROLL_GLYPH)
     },
   )

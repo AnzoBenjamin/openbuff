@@ -3,6 +3,8 @@
  * the current project root. Read-only by default; `prune` drops stale evidence.
  */
 import { createHash } from 'node:crypto'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 
 import {
   auditTaskMemoryV1Migration,
@@ -38,7 +40,7 @@ import type {
 import {
   selectCompactionCandidates,
   type GCRelevantEnvelope,
-} from '../../../common/src/util/compaction-eligibility'
+} from '@codebuff/common/util/compaction-eligibility'
 
 export type MemoryCommandDeps = {
   getRootDir: () => string
@@ -316,6 +318,7 @@ const AUDIT_FAILURE_REASONS: Record<
   string
 > = {
   'checksum-mismatch': 'The V1 source record failed checksum validation.',
+  'invalid-record': 'The V1 source record failed schema validation.',
   'repository-rejected': 'The audit read was rejected safely.',
   'repository-failed': 'The audit read could not be completed safely.',
   'invalid-export':
@@ -1094,7 +1097,11 @@ async function runCompact(
   }
   const archiveLines = selected.map((event) => stableManifestJson(event))
   const archiveHash = `sha256:${createHash('sha256').update(stableManifestJson(archiveLines)).digest('hex')}`
-  const fileName = `archive-${archiveHash.slice(7, 15)}.jsonl`
+  // The pre-apply local recovery mirror must use the same full 64-hex digest
+  // filename as the SDK's canonical claim.archived path; a truncated name
+  // would make the post-apply suffix check fail and leave the mirror as a
+  // file the canonical claim never references.
+  const fileName = `archive-${archiveHash.slice(7, 71)}.jsonl`
   const content = archiveLines.length > 0 ? `${archiveLines.join('\n')}\n` : ''
   if (Buffer.byteLength(content) > EXPORT_MAX_BYTES) {
     return commandError('Memory compaction failed: local output could not be created safely.')
@@ -1131,6 +1138,26 @@ async function runCompact(
     )
   }
   if (outcome.archiveHash !== archiveHash || !outcome.archivePath.endsWith(fileName)) {
+    // Legacy naming (pre-64-hex): older CLI versions wrote the pre-apply
+    // mirror with an 8-hex truncated digest. Those files remain on disk as
+    // recoverable artifacts but never match the canonical claim.archived
+    // suffix, so surface them instead of leaving them invisible.
+    const legacyMirrorNote = (() => {
+      try {
+        const archiveDir = '.openbuff/memory/archive'
+        const entries = fs
+          .readdirSync(path.join(root, archiveDir))
+          .filter(
+            (name) =>
+              /^archive-[0-9a-f]{8}\.jsonl$/.test(name) && name !== fileName,
+          )
+        return entries.length > 0
+          ? `Note: legacy 8-hex archive mirror file(s) ${entries.join(', ')} exist in ${archiveDir}; they predate the full-digest naming scheme and are not the canonical claim's archive file (${fileName} is authoritative).`
+          : undefined
+      } catch {
+        return undefined
+      }
+    })()
     return report(
       'Memory V2 compaction',
       [
@@ -1139,6 +1166,7 @@ async function runCompact(
         `Archive: ${outcome.archivePath} (${outcome.archiveHash}).`,
         `Counts: ${outcome.beforeCount} -> ${outcome.afterCount}; bytes: ${outcome.beforeBytes} -> ${outcome.afterBytes}.`,
         `Mismatch: expected archive file .openbuff/memory/archive/${fileName} (${archiveHash}) but canonical claim reports ${outcome.archivePath} (${outcome.archiveHash}); the local archive file may not match the canonical claim.`,
+        ...(legacyMirrorNote ? [legacyMirrorNote] : []),
         `Warnings: ${outcome.warnings.length ? outcome.warnings.join('; ') : 'none'}.`,
       ],
       'warning',

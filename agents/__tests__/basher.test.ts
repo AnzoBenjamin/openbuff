@@ -478,7 +478,7 @@ describe('commander agent', () => {
         input: { data: { message: string } }
       }
       expect(toolCall.toolName).toBe('set_output')
-      expect(toolCall.input.data.message).toBe('')
+      expect(toolCall.input.data.message).toBe('plain text output')
     })
 
     test('handleSteps can be serialized for sandbox execution', () => {

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   MemoryAppendRequestSchema,
+  MemoryEventIdSchema,
   MemoryEventDraftSchema,
   MemoryEventEnvelopeSchema,
   MemoryExportManifestV2Schema,
@@ -333,6 +334,58 @@ describe('MemoryV2OperatorService', () => {
     expect(await service.consolidate({ ...consolidationRequest, mode: 'apply' })).toMatchObject({
       outcome: 'no-op',
     })
+  })
+
+  test('export scans beyond the former 10-page ceiling return every page until cursor exhaustion', async () => {
+    const pages = 12
+    const repository = new (class extends RepositoryStub {
+      exportCalls = 0
+
+      constructor() {
+        super([
+          observationEvent(1, 'observation:1', 'One'),
+          observationEvent(2, 'observation:2', 'Two'),
+        ])
+      }
+
+      async export(
+        request: Parameters<MemoryRepositoryV2['export']>[0],
+      ) {
+        this.exportCalls++
+        if (this.exportCalls > pages) {
+          // Defensive exhaustion page; the scan must stop before reaching it.
+          return {
+            outcome: 'page' as const,
+            events: [],
+            nextAfterEventId: null,
+          }
+        }
+        return {
+          outcome: 'page' as const,
+          events: [observationEvent(this.exportCalls, `observation:page-${this.exportCalls}`, `Page ${this.exportCalls}`)],
+          nextAfterEventId:
+            this.exportCalls < pages
+              ? MemoryEventIdSchema.parse(`event:cursor-${this.exportCalls}`)
+              : null,
+        }
+      }
+    })()
+    const service = new MemoryV2OperatorService(repository)
+    const outcome = await service.exportManifest({
+      schemaVersion: 2,
+      projectId,
+      generatedAt: timestamp,
+      includeStale: false,
+    })
+    expect(outcome.outcome).toBe('exported')
+    if (outcome.outcome === 'exported') {
+      // The 11+-page store is fully collected instead of truncated: the
+      // scan's canonical view and the manifest both carry every paged event.
+      expect(outcome.manifest.canonicalEventCount).toBe(pages)
+      expect(outcome.manifest.events).toHaveLength(pages)
+    }
+    // Exactly `pages` polls: the scan terminates on cursor exhaustion.
+    expect(repository.exportCalls).toBe(pages)
   })
 
   test.each(['correct', 'forget', 'pin'] as const)('%s preview is no-write and apply appends one explicit event', async (kind) => {
@@ -1123,7 +1176,76 @@ describe('MemoryV2OperatorService', () => {
     expect(capped.candidateEventIds.map(String)).toEqual(['event:observation-1'])
   })
 
-  test('compact apply echoes in-memory counts and bytes with threshold warnings', async () => {
+  test('compact preview warns when maxEvents exceeds the single-apply cap', async () => {
+    const repository = new RepositoryStub([
+      observationEvent(1, 'observation:1', 'One'),
+    ])
+    const service = new MemoryV2OperatorService(repository)
+    const withinCap = await service.compact({
+      schemaVersion: 2,
+      projectId,
+      sessionId,
+      mode: 'preview',
+      olderThanDays: 1,
+      maxEvents: 100,
+    })
+    if (withinCap.outcome !== 'preview') throw new Error('expected preview')
+    expect(withinCap.warnings.join('\n')).not.toContain('single-apply cap')
+
+    const overCap = await service.compact({
+      schemaVersion: 2,
+      projectId,
+      sessionId,
+      mode: 'preview',
+      olderThanDays: 1,
+      maxEvents: 1000,
+    })
+    if (overCap.outcome !== 'preview') throw new Error('expected preview')
+    expect(overCap.warnings.join('\n')).toContain(
+      'exceeds the single-apply cap of 100',
+    )
+    expect(overCap.warnings.join('\n')).toContain(
+      'one apply archives at most 100 events',
+    )
+    expect(repository.appendRequests).toHaveLength(0)
+    expect(repository.privilegedCompactRequests).toHaveLength(0)
+  })
+
+  test('compact apply archives to a full-64-hex digest path and retries deterministically', async () => {
+  const build = () =>
+    new RepositoryStub([
+      observationEvent(1, 'observation:1', 'One'),
+      observationEvent(2, 'observation:2', 'Two'),
+      forgottenEvent(3, ['observation:1', 'observation:2']),
+    ])
+  const first = await new MemoryV2OperatorService(build()).compact({
+    schemaVersion: 2,
+    projectId,
+    sessionId,
+    mode: 'apply',
+    olderThanDays: 1,
+    maxEvents: 1000,
+  })
+  expect(first.outcome).toBe('applied')
+  if (first.outcome !== 'applied') return
+  expect(first.archiveHash.slice(7)).toHaveLength(64)
+  expect(first.archivePath).toBe(`.openbuff/memory/archive/archive-${first.archiveHash.slice(7)}.jsonl`)
+  expect(first.archivePath.split('/').at(-1)!).toMatch(/^archive-[a-f0-9]{64}\.jsonl$/)
+  const second = await new MemoryV2OperatorService(build()).compact({
+    schemaVersion: 2,
+    projectId,
+    sessionId,
+    mode: 'apply',
+    olderThanDays: 1,
+    maxEvents: 1000,
+  })
+  expect(second.outcome).toBe('applied')
+  if (second.outcome !== 'applied') return
+  expect(second.archiveHash).toBe(first.archiveHash)
+  expect(second.archivePath).toBe(first.archivePath)
+})
+
+test('compact apply echoes in-memory counts and bytes with threshold warnings', async () => {
     const repository = new RepositoryStub([
       observationEvent(1, 'observation:1', 'One'),
       observationEvent(2, 'observation:2', 'Two'),

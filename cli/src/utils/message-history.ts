@@ -15,6 +15,7 @@ import { randomUUID } from 'crypto'
 
 import { getConfigDir } from './auth'
 import { formatTimestamp } from './helpers'
+import { generateMessageId } from './message-id'
 import { logger } from './logger'
 
 import type {
@@ -78,7 +79,7 @@ export function getUserMessage(
   fileAttachments?: FileAttachment[],
 ): ChatMessage {
   return {
-    id: `user-${Date.now()}`,
+    id: generateMessageId('user'),
     variant: 'user',
     ...(typeof message === 'string'
       ? {
@@ -110,7 +111,7 @@ export function getSystemMessage(
 ): ChatMessage {
   if (typeof content === 'string') {
     return {
-      id: `sys-${Date.now()}`,
+      id: generateMessageId('sys'),
       variant: 'ai' as const,
       content,
       timestamp: formatTimestamp(),
@@ -118,7 +119,7 @@ export function getSystemMessage(
   }
   if (legacyContent !== undefined) {
     return {
-      id: `sys-${Date.now()}`,
+      id: generateMessageId('sys'),
       variant: 'ai' as const,
       content: legacyContent,
       blocks: content,
@@ -126,7 +127,7 @@ export function getSystemMessage(
     }
   }
   return {
-    id: `sys-${Date.now()}`,
+    id: generateMessageId('sys'),
     variant: 'ai' as const,
     content: '',
     blocks: content,

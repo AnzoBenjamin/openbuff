@@ -324,6 +324,32 @@ describe('V1 memory migration', () => {
     expect(invalid).toEqual(before)
   })
 
+  test('reports a schema-invalid record as invalid-record, not checksum-mismatch', async () => {
+    // A record that fails taskMemoryDraftV1Schema is corrupt, not hash-drift:
+    // both import and audit must distinguish 'rebuild from source' from 'the
+    // record itself is unreadable'. Build the malformed record by hand so the
+    // memory() fixture's own schema parse does not reject it first.
+    const valid = memory()
+    const malformed = {
+      ...valid,
+      goal: 123 as unknown as string,
+    }
+    const repository = new Repository()
+    expect(await run(repository, malformed as TaskMemoryV1)).toMatchObject({
+      outcome: 'rejected',
+      reason: 'invalid-record',
+    })
+    expect(repository.events.size).toBe(0)
+    const auditRepository = new Repository()
+    expect(
+      await audit(auditRepository, malformed as TaskMemoryV1),
+    ).toMatchObject({
+      outcome: 'rejected',
+      reason: 'invalid-record',
+    })
+    expect(auditRepository.exportCalls).toBe(0)
+  })
+
   test('returns the canonical tail for an exact-repeat no-op', async () => {
     const repository = new Repository()
     const first = memory()
@@ -625,14 +651,18 @@ describe('V1 memory migration', () => {
           }
         }
       }
+      // Retirement is post-marker: claim.forgotten events retire prior
+      // observations only AFTER the replacement marker is durably appended,
+      // so a permanent marker-append failure can never strand prior claims
+      // as forgotten without a replacement.
       expect(
         [...repository.events.values()].findIndex(
           (event) =>
             event.eventType === 'migration.v1.imported' &&
             event.payload.sourceRevision === 4,
         ),
-      ).toBeGreaterThan(
-        [...repository.events.values()].findLastIndex(
+      ).toBeLessThan(
+        [...repository.events.values()].findIndex(
           (event) => event.eventType === 'claim.forgotten',
         ),
       )
@@ -1510,14 +1540,20 @@ describe('V1 memory migration audit', () => {
     }
   })
 
-  test('fails rather than certifying a scan with a tenth continuation page', async () => {
+  test('scans audit continuation pages past the former ten-page ceiling', async () => {
     const source = memory()
     const repository = new Repository()
     await run(repository, source)
-    const template = [...repository.events.values()][0]!
+    const template = [...repository.events.values()].find(
+      (event) => event.eventType === 'task.created',
+    )!
+    const pageCount = 12
     let page = 0
     const reader: V1MigrationAuditReader = {
       async export() {
+        if (page >= pageCount) {
+          return { outcome: 'page', events: [], nextAfterEventId: null }
+        }
         const event = cloneEvent(template, {
           eventId: MemoryEventIdSchema.parse(`event:audit-page-${page}`),
           sequence: page + 1,
@@ -1532,10 +1568,38 @@ describe('V1 memory migration audit', () => {
     }
 
     expect(await audit(reader, source)).toMatchObject({
-      outcome: 'failed',
-      reason: 'page-limit-exceeded',
+      outcome: 'not-migrated',
     })
-    expect(page).toBe(10)
+    expect(page).toBe(pageCount)
+  })
+
+  test('fails rather than certifying a scan with a runaway repeated cursor', async () => {
+    const source = memory()
+    const repository = new Repository()
+    await run(repository, source)
+    const template = [...repository.events.values()][0]!
+    const stuckCursor = MemoryEventIdSchema.parse('event:audit-stuck')
+    let calls = 0
+    const reader: V1MigrationAuditReader = {
+      async export() {
+        const event = cloneEvent(template, {
+          eventId: MemoryEventIdSchema.parse(`event:audit-page-${calls}`),
+          sequence: calls + 1,
+        })
+        calls++
+        return {
+          outcome: 'page',
+          events: [event],
+          nextAfterEventId: stuckCursor,
+        }
+      },
+    }
+
+    expect(await audit(reader, source)).toMatchObject({
+      outcome: 'failed',
+      reason: 'pagination-invalid',
+    })
+    expect(calls).toBe(2)
   })
 
   test('allows a full final page to be followed by an empty terminal page', async () => {
@@ -1621,5 +1685,111 @@ describe('V1 memory migration audit', () => {
     }
     expect(await audit(repository, source)).toMatchObject({ outcome: 'exact' })
     expect((await run(repository, source)).outcome).toBe('no-op')
+  })
+
+  test('retry after interruption dedups imported drafts on stores beyond a ten-page scan', async () => {
+    // A strict store that refuses duplicate eventIds non-retryably mirrors
+    // repositories that reject re-appended migration drafts: if the progress
+    // lookup has a page ceiling, interruption retries on large stores see
+    // the imported body as missing and re-append it.
+    class StrictRepository extends Repository {
+      override async append(input: Parameters<MemoryRepositoryV2['append']>[0]) {
+        const request = MemoryAppendRequestSchema.parse(input)
+        for (const event of request.events) {
+          if (this.events.has(event.eventId)) {
+            return {
+              outcome: 'rejected' as const,
+              error: {
+                code: 'conflict' as const,
+                message: 'duplicate eventId',
+                retryable: false,
+              },
+            }
+          }
+        }
+        return super.append(input)
+      }
+    }
+
+    const source = memory()
+    const imported = new Repository()
+    expect((await run(imported, source)).outcome).toBe('imported')
+    const canonical = [...imported.events.values()]
+    const marker = migrationMarkers(imported)[0]!
+
+    // Simulate the interrupted migration on a large store: the already-
+    // imported body sits past a ten-page scan boundary (10,400 filler rows
+    // precede it), the reservation survives, and the marker was lost.
+    const strict = new StrictRepository()
+    // Neutral padding: cloning a task event (not a migration event) so the
+    // filler rows do not perturb reservation/marker lookup accounting.
+    const template = canonical.find(
+      (event) => event.eventType === 'task.created',
+    )!
+    const fillerCount = 10_400
+    let sequence = 0
+    for (let index = 0; index < fillerCount; index++) {
+      const filler = cloneEvent(template, {
+        eventId: MemoryEventIdSchema.parse(`event:filler-${index}`),
+        sequence: ++sequence,
+      })
+      strict.events.set(filler.eventId, filler)
+    }
+    for (const event of canonical) {
+      if (event.eventId === marker.eventId) continue
+      strict.events.set(event.eventId, {
+        ...event,
+        sequence: ++sequence,
+      } as MemoryEventEnvelope)
+    }
+
+    const outcome = await run(strict, source)
+    expect(outcome.outcome).toBe('imported')
+    // Exactly one copy of each canonical event: dedup skipped the stored
+    // drafts instead of re-appending them against the strict repository.
+    expect(strict.events.size).toBe(fillerCount + canonical.length)
+    expect(
+      [...strict.events.values()].filter(
+        (event) => event.eventType === 'migration.v1.imported',
+      ),
+    ).toHaveLength(1)
+  })
+
+  test('returns no-op on a completed import retry beyond a ten-page scan', async () => {
+    // With the exact completed marker present, importTaskMemoryV1 re-audits
+    // the whole store before deduping. A page-capped audit scan would map the
+    // audit failure to failed/'repository-failed' on every retry; the
+    // cursor-resumable scan must return no-op instead.
+    const source = memory()
+    const imported = new Repository()
+    expect((await run(imported, source)).outcome).toBe('imported')
+    const canonical = [...imported.events.values()]
+
+    const large = new Repository()
+    const template = canonical.find(
+      (event) => event.eventType === 'task.created',
+    )!
+    const fillerCount = 10_400
+    let sequence = 0
+    for (let index = 0; index < fillerCount; index++) {
+      const filler = cloneEvent(template, {
+        eventId: MemoryEventIdSchema.parse(`event:filler-${index}`),
+        sequence: ++sequence,
+      })
+      large.events.set(filler.eventId, filler)
+    }
+    for (const event of canonical) {
+      large.events.set(event.eventId, {
+        ...event,
+        sequence: ++sequence,
+      } as MemoryEventEnvelope)
+    }
+
+    const outcome = await run(large, source)
+    expect(outcome.outcome).toBe('no-op')
+    // The completed import is deduped, not re-imported: exactly the filler
+    // and canonical events remain.
+    expect(large.events.size).toBe(fillerCount + canonical.length)
+    expect(migrationMarkers(large)).toHaveLength(1)
   })
 })

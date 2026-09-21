@@ -94,6 +94,13 @@ export interface MetadataIndex {
   /** Durable per-file tree-sitter summaries used by incremental rebuilds. */
   parseData?: Record<string, import('@codebuff/code-map').ParsedFileTokens>
   parseDiagnostics?: ParseDiagnostic[]
+  /**
+   * P8.1: set by updateMetadataIndex when the tree-sitter parse degraded for
+   * this refresh. The returned snapshot is the prior one (builtAt and
+   * workspaceRevision untouched) and IndexManager re-queues the dropped
+   * mutation delta once so the next refresh reapplies it.
+   */
+  parserDegraded?: boolean
   coverage?: IndexCoverage
   /** Workspace journal revision incorporated by the latest precise refresh. */
   workspaceRevision?: string | number
