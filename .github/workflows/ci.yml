@@ -67,7 +67,8 @@ jobs:
         run: |
           VAR_NAMES=$(bun scripts/generate-ci-env.ts)
           # Export each required var from its named step env entry above.
-          for name in $VAR_NAMES; do
+          # generate-ci-env.ts prints a JSON array, so parse it before looping.
+          for name in $(printf '%s' "$VAR_NAMES" | jq -r '.[]'); do
             value="${!name:-}"
             if [ -n "$value" ]; then
               echo "$name=$value" >> $GITHUB_ENV
@@ -168,7 +169,8 @@ jobs:
         run: |
           VAR_NAMES=$(bun scripts/generate-ci-env.ts)
           # Export each required var from its named step env entry above.
-          for name in $VAR_NAMES; do
+          # generate-ci-env.ts prints a JSON array, so parse it before looping.
+          for name in $(printf '%s' "$VAR_NAMES" | jq -r '.[]'); do
             value="${!name:-}"
             if [ -n "$value" ]; then
               echo "$name=$value" >> $GITHUB_ENV
@@ -268,7 +270,8 @@ jobs:
         run: |
           VAR_NAMES=$(bun scripts/generate-ci-env.ts)
           # Export each required var from its named step env entry above.
-          for name in $VAR_NAMES; do
+          # generate-ci-env.ts prints a JSON array, so parse it before looping.
+          for name in $(printf '%s' "$VAR_NAMES" | jq -r '.[]'); do
             value="${!name:-}"
             if [ -n "$value" ]; then
               echo "$name=$value" >> $GITHUB_ENV
