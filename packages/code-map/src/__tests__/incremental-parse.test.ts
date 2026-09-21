@@ -32,7 +32,12 @@ describe('getFileTokenScores incremental reuse', () => {
   })
 
   test('returns parsed output for freshly parsed files', async () => {
-    const data = await getFileTokenScores(process.cwd(), ['src/parse.ts'])
+    // Inline source so this does not depend on process.cwd() / on-disk layout.
+    const data = await getFileTokenScores(
+      '/virtual-root',
+      ['src/parse.ts'],
+      () => 'export function parseTokens() { return 1 }\n',
+    )
     expect(data.parsed['src/parse.ts']).toBeDefined()
     expect(data.parsed['src/parse.ts'].identifiers.length).toBeGreaterThan(0)
   })

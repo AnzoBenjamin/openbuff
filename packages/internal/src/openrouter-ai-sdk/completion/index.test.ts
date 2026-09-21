@@ -392,7 +392,7 @@ describe('doGenerate', () => {
     )
     expect(requestHeaders['custom-request-header']).toBe('request-header-value')
     expect(requestHeaders['user-agent']).toMatch(
-      /^ai-sdk\/provider-utils\/\d+\.\d+\.\d+ runtime\/bun\/\d+\.\d+\.\d+$/,
+      /^ai-sdk\/provider-utils\/\d+\.\d+\.\d+ runtime\/(?:bun\/\d+\.\d+\.\d+|browser)$/,
     )
   })
 })
@@ -674,7 +674,7 @@ describe('doStream', () => {
     )
     expect(requestHeaders['custom-request-header']).toBe('request-header-value')
     expect(requestHeaders['user-agent']).toMatch(
-      /^ai-sdk\/provider-utils\/\d+\.\d+\.\d+ runtime\/bun\/\d+\.\d+\.\d+$/,
+      /^ai-sdk\/provider-utils\/\d+\.\d+\.\d+ runtime\/(?:bun\/\d+\.\d+\.\d+|browser)$/,
     )
   })
 
