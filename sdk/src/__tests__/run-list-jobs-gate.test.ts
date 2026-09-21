@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
 
 import { OpenbuffClient } from '../client'
 import * as databaseModule from '../impl/database'
-import { applyListJobsDigestGate } from '../run'
+import { applyListJobsDigestGate, getTrustedSessionClientId } from '../run'
 import { __clearJobsForTest } from '../tools/background-jobs'
 
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
@@ -184,7 +184,7 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
         const { requestToolCall, sendAction, promptId } = params
         const sessionState = getInitialSessionState(getStubProjectFileContext())
 
-        seedRunningJob(promptId)
+        seedRunningJob(getTrustedSessionClientId())
 
         results.push(
           (
@@ -245,7 +245,10 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
         const { requestToolCall, sendAction, promptId } = params
         const sessionState = getInitialSessionState(getStubProjectFileContext())
 
-        const jobId = seedRunningJob(promptId)
+        // Seed with the same stable per-process session owner production
+        // scopes list_jobs by (see run.ts getTrustedSessionClientId); the
+        // old per-run promptId seed is invisible to the scoped listing.
+        const jobId = seedRunningJob(getTrustedSessionClientId())
 
         results.push(
           (
