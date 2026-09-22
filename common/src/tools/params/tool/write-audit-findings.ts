@@ -1,7 +1,7 @@
 import z from 'zod/v4'
 
 import { jsonToolResultSchema } from '../utils'
-import { auditCoverageDomainSchema } from './audit-intelligence'
+import { auditCoverageDomainSchema, auditCoverageDomains } from './audit-intelligence'
 
 import type { $ToolParams } from '../../constants'
 
@@ -278,6 +278,99 @@ const inputSchema = z
   })
 
 /**
+ * Wire-facing twin of `inputSchema`: `compileToolDefinitions` derives the wire
+ * JSON Schema and the generated tool types from `providerInputSchema ??
+ * inputSchema`, so this is the surface every provider request carries. Same
+ * fields and identical bounds, but every free-text and entry field is a plain
+ * bounded string with NO regex `pattern`: `findingTextSchema` and
+ * `coverageEntrySchema` can express their control/format rejection only through
+ * ECMAScript Unicode property escapes (`\p{Cc}` / `\p{Cf}`), which strict
+ * provider-side schema validators reject at request time — the reason every run
+ * died with a provider 400 before any generation. The hygiene rules therefore
+ * ride in `.describe()` text here (reusing the exported rule constants) and stay
+ * regex-enforced only on `inputSchema`, which the SDK handler re-validates
+ * against. Cross-field rules (noIssuesFound/findings agreement, snapshot
+ * coverage completeness, per-list uniqueness) likewise stay handler-side: no
+ * `.superRefine` here, so this surface always remains representable by
+ * `z.toJSONSchema`.
+ */
+const providerInputSchema = z.object({
+  sessionSlug: auditIdentifierSchema.describe(
+    `Existing durable audit session slug under .agents/sessions/. ${auditIdentifierRule}`,
+  ),
+  shardId: auditIdentifierSchema.describe(
+    `Unique shard identifier used as the findings filename. ${auditIdentifierRule}`,
+  ),
+  snapshotId: auditIdentifierSchema
+    .optional()
+    .describe(
+      `Exact snapshotId returned by inspect_codebase_structure, such as its 64-character sha256 digest. Required for a directly composable structuralReceipt; omitted only for legacy callers. ${auditIdentifierRule} ${snapshotCoverageCompletenessRule}`,
+    ),
+  findings: z
+    .array(
+      z.object({
+        severity: auditFindingSeveritySchema,
+        // Plain enum with the legacy alias spelled out instead of
+        // `auditFindingDomainSchema`: the provider surface must carry no
+        // `.transform()`, so the api-abi to api-contract normalization stays on
+        // `inputSchema`, which the handler parses against.
+        domain: z
+          .enum([...auditCoverageDomains, 'api-abi'])
+          .describe(coverageDomainAliasRule),
+        // Pattern-free twins of `coverageEntrySchema(500)` and
+        // `findingTextSchema(...)`: identical bounds, and each `.describe()`
+        // carries the hygiene rule the dropped regex used to enforce.
+        path: z.string().min(1).max(500).describe(findingEntryHygieneRule),
+        line: z.number().int().positive().optional(),
+        title: z.string().min(1).max(300).describe(findingEntryHygieneRule),
+        risk: z.string().min(1).max(2_000).describe(findingEntryHygieneRule),
+        fix: z.string().min(1).max(2_000).describe(findingEntryHygieneRule),
+        evidence: z
+          .string()
+          .min(1)
+          .max(4_000)
+          .describe(findingEntryHygieneRule),
+      }),
+    )
+    .max(100)
+    .describe(findingEntryHygieneRule),
+  coverage: z
+    .object({
+      subsystemIds: z
+        .array(z.string().min(1).max(200))
+        .max(100)
+        .describe(
+          `${coverageEntryHygieneCrossReference} ${coverageUniquenessCrossReference}`,
+        ),
+      featureIds: z
+        .array(z.string().min(1).max(200))
+        .max(100)
+        .describe(
+          `${coverageEntryHygieneCrossReference} ${coverageUniquenessCrossReference}`,
+        ),
+      files: z
+        .array(z.string().min(1).max(500))
+        .max(500)
+        .describe(
+          `${coverageEntryHygieneCrossReference} ${coverageUniquenessCrossReference}`,
+        ),
+      domains: z
+        .array(auditCoverageDomainSchema)
+        .min(1)
+        .optional()
+        .describe(
+          `${coverageDomainAliasRule} ${coverageDomainsNonEmptyRule} ${coverageUniquenessCrossReference}`,
+        ),
+    })
+    .describe(`${coverageUniquenessRule} ${coverageEntryHygieneRule}`),
+  noIssuesFound: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(noIssuesFoundRule),
+})
+
+/**
  * Idempotency marker carried by an already-exists collision whose persisted
  * artifact is BYTE-IDENTICAL to the findings this call renders. The artifact is
  * created exclusively, so a collision proves an artifact for THIS shard is
@@ -349,9 +442,20 @@ export const writeAuditFindingsParams = {
   endsAgentStep: false,
   description: `Persist one audit shard's structured findings to a runtime-owned Markdown artifact. The path is derived as .agents/sessions/<sessionSlug>/findings/<shardId>.md; callers cannot choose another path. New audit flows must copy the exact inspect_codebase_structure snapshotId into snapshotId and explicitly list every evaluated coverage domain; the result then includes structuralReceipt for direct use with evaluate_audit_coverage. Legacy calls without both fields remain accepted but do not receive that attestation. Creation is exclusive: when an artifact already exists at the derived path and its contents are byte-identical to this call, no second write happens and the rejection carries a snapshot-bound alreadyPersisted marker the coverage gate accepts, so the retry stays composable; when the existing contents differ, the call is rejected, nothing from it is persisted, and those findings must be written under a distinct shard id. Every rejection returns one generic message, so read the field descriptions of noIssuesFound and coverage for the rules they enforce. Return only the compact receipt after writing—do not repeat findings in prose.`,
   inputSchema,
+  providerInputSchema,
   outputSchema: jsonToolResultSchema(
     z.union([auditFindingsReceiptSchema, auditFindingsErrorSchema]),
   ),
 } satisfies $ToolParams
 
-export type AuditFindingsInput = z.infer<typeof inputSchema>
+/**
+ * Accepted call surface of `write_audit_findings`: the INPUT of `inputSchema`,
+ * before its `.transform()` normalizes the legacy `api-abi` findings[].domain
+ * alias to `api-contract` and `.default()` fills `noIssuesFound`. It therefore
+ * includes `findings[].domain: 'api-abi'` and treats `noIssuesFound` as
+ * omittable, matching both the generated `WriteAuditFindingsParams` contract
+ * and the provider-facing `providerInputSchema` wire schema — the exported
+ * surfaces now agree on exactly what a caller may pass. The normalized parsed
+ * result is `z.output<typeof inputSchema>` instead.
+ */
+export type AuditFindingsInput = z.input<typeof inputSchema>

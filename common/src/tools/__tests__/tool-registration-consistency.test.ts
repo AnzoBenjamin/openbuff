@@ -1,11 +1,15 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 
+import z from 'zod/v4'
+
 import { describe, expect, it } from 'bun:test'
 
 import { publishedTools, quarantinedToolNames, toolNames } from '../constants'
 import { compileToolDefinitions } from '../compile-tool-definitions'
 import { toolParams } from '../list'
+
+import type { $ToolParams } from '../constants'
 
 /**
  * Guards against the "added here but missing there" failure mode that caused the
@@ -116,5 +120,63 @@ describe('tool registration consistency', () => {
         'utf8',
       ),
     )
+  })
+
+  it('wire tool schemas use only portable regex patterns', () => {
+    // Strict provider-side JSON Schema validators reject non-portable
+    // ECMAScript extensions such as Unicode property escapes (\p{Cc} / \p{Cf})
+    // at request time: the write_audit_findings patterns built from them killed
+    // every run with a provider 400 before any generation. Convert the same
+    // surface compileToolDefinitions sends on the wire — providerInputSchema ??
+    // inputSchema — and require every emitted pattern to be a plain RegExp any
+    // validator can compile.
+    const patterns: string[] = []
+    const converted: string[] = []
+    const unrepresentable: string[] = []
+
+    const collectPatterns = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        for (const entry of node) {
+          collectPatterns(entry)
+        }
+        return
+      }
+      if (node === null || typeof node !== 'object') return
+      for (const [key, value] of Object.entries(node)) {
+        if (key === 'pattern' && typeof value === 'string') {
+          patterns.push(value)
+        } else {
+          collectPatterns(value)
+        }
+      }
+    }
+
+    for (const [name, toolDef] of Object.entries(toolParams)) {
+      const params = toolDef as $ToolParams
+      const schema = (params.providerInputSchema ??
+        params.inputSchema) as z.ZodType
+      try {
+        collectPatterns(z.toJSONSchema(schema, { io: 'input' }))
+        converted.push(name)
+      } catch {
+        // A few pre-existing schemas (e.g. z.preprocess-based input like
+        // evaluate_audit_coverage) are not JSON-Schema representable at all;
+        // those conversion throws are recorded here, never asserted.
+        unrepresentable.push(name)
+      }
+    }
+
+    // write_audit_findings must convert cleanly: its declared wire schema is
+    // what every provider request carries, so an unrepresentable surface would
+    // regress the harness back to the pre-generation 400s.
+    expect(converted).toContain('write_audit_findings')
+    expect(unrepresentable).not.toContain('write_audit_findings')
+
+    expect(patterns.length).toBeGreaterThan(0)
+    for (const pattern of patterns) {
+      expect(pattern).not.toContain('\\p{')
+      expect(pattern).not.toContain('\\P{')
+      expect(() => new RegExp(pattern)).not.toThrow()
+    }
   })
 })

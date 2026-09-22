@@ -1183,6 +1183,7 @@ export interface WriteAuditFindingsParams {
   /** Each findings entry rejects control and Unicode format characters in title, risk, fix, and evidence — NUL, any other control character, and the U+2028/U+2029 line separators — while still accepting tabs and line breaks in that prose. findings[].path is a location rather than prose, so it must be a single-line value with none of those characters and no tabs or line breaks; it is trimmed, and the trimmed value is the one rendered into the finding heading. */
   findings: {
     severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW'
+    /** coverage.domains accepts canonical domain ids only, so use api-contract there: the legacy api-abi alias is accepted only in findings[].domain. */
     domain:
       | 'security'
       | 'correctness'
@@ -1193,11 +1194,16 @@ export interface WriteAuditFindingsParams {
       | 'test-coverage'
       | 'api-contract'
       | 'api-abi'
+    /** Each findings entry rejects control and Unicode format characters in title, risk, fix, and evidence — NUL, any other control character, and the U+2028/U+2029 line separators — while still accepting tabs and line breaks in that prose. findings[].path is a location rather than prose, so it must be a single-line value with none of those characters and no tabs or line breaks; it is trimmed, and the trimmed value is the one rendered into the finding heading. */
     path: string
     line?: number
+    /** Each findings entry rejects control and Unicode format characters in title, risk, fix, and evidence — NUL, any other control character, and the U+2028/U+2029 line separators — while still accepting tabs and line breaks in that prose. findings[].path is a location rather than prose, so it must be a single-line value with none of those characters and no tabs or line breaks; it is trimmed, and the trimmed value is the one rendered into the finding heading. */
     title: string
+    /** Each findings entry rejects control and Unicode format characters in title, risk, fix, and evidence — NUL, any other control character, and the U+2028/U+2029 line separators — while still accepting tabs and line breaks in that prose. findings[].path is a location rather than prose, so it must be a single-line value with none of those characters and no tabs or line breaks; it is trimmed, and the trimmed value is the one rendered into the finding heading. */
     risk: string
+    /** Each findings entry rejects control and Unicode format characters in title, risk, fix, and evidence — NUL, any other control character, and the U+2028/U+2029 line separators — while still accepting tabs and line breaks in that prose. findings[].path is a location rather than prose, so it must be a single-line value with none of those characters and no tabs or line breaks; it is trimmed, and the trimmed value is the one rendered into the finding heading. */
     fix: string
+    /** Each findings entry rejects control and Unicode format characters in title, risk, fix, and evidence — NUL, any other control character, and the U+2028/U+2029 line separators — while still accepting tabs and line breaks in that prose. findings[].path is a location rather than prose, so it must be a single-line value with none of those characters and no tabs or line breaks; it is trimmed, and the trimmed value is the one rendered into the finding heading. */
     evidence: string
   }[]
   /** Every coverage list must name each entry at most once: a repeated file, subsystemId, featureId, or domain is rejected rather than counted twice. Entries are compared after trimming surrounding whitespace, and the trimmed value is what reaches the artifact and the receipt, so two spellings that differ only in whitespace are the same entry. Every coverage files, subsystemIds, and featureIds entry must be a single-line value: tabs, carriage returns, newlines, NUL, any other control or Unicode format character, and the U+2028/U+2029 line separators are rejected. Entries are trimmed, and the trimmed value is the one uniqueness is judged on. */
