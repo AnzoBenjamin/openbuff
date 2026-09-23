@@ -55,6 +55,12 @@ export const agentFindingSchema = z
     text: z.string().min(1),
     files: z.array(z.string().min(1)),
     snapshotFingerprint: z.string().min(1),
+    // Q4-3 (gate-robustness fix): the reviewer family that reported the
+    // finding (code-reviewer / security-reviewer / a specialist agent type).
+    // Optional for legacy envelopes; when present it lets repair-progress
+    // reconciliation scope `findingsAddressed` to the OWNING family instead
+    // of accepting any family's id.
+    reviewer: z.string().min(1).optional(),
   })
   .strict()
 

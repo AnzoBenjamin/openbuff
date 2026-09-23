@@ -1945,11 +1945,25 @@ ${guideSections}
           gitStatusObservedDirty &&
           gitStatusFiles.length === 0
         ) {
+          // Q2-1 (gate-robustness fix): dropping a file here means it was
+          // COMMITTED, not that it was ever reviewed — the commit may have
+          // landed via the user, another agent, or a bypass path. Crediting
+          // it into gatePassedFiles manufactured review evidence for bytes
+          // no reviewer attested, and those files then dropped out of every
+          // future gate submission. Record the lifecycle truthfully: remove
+          // from pending (so the gate is not stuck on a clean tree) with NO
+          // credit. If the same bytes return as dirty later, P0 re-arm
+          // re-pends them from scratch.
+          let prunedCommitted = false
           for (const pendingFile of Array.from(pendingGateFiles)) {
             if (gitStatusObservedFiles.has(pendingFile)) {
               pendingGateFiles.delete(pendingFile)
-              creditGatePassedFiles([pendingFile])
+              prunedCommitted = true
             }
+          }
+          if (prunedCommitted) {
+            activeWorkState.pendingGateFiles = Array.from(pendingGateFiles)
+            markActiveWorkStateChanged()
           }
         }
         for (const file of gitStatusFiles) {
@@ -3019,11 +3033,14 @@ ${guideSections}
                       ],
                       unknowns: [],
                       findings: activeWorkState.openReviewerFindings.map(
-                        ({ id, text, files, snapshotFingerprint }) => ({
+                        ({ id, text, files, snapshotFingerprint, reviewer }) => ({
                           id,
                           text,
                           files,
                           snapshotFingerprint,
+                          // Q4-3: carry the owning family so the repair
+                          // receipt's findingsAddressed can be scoped to it.
+                          ...(reviewer && { reviewer }),
                         }),
                       ),
                       permissions: {
@@ -3083,8 +3100,19 @@ ${guideSections}
             const securityRepairReceipt = extractAgentReceipt(
               (securityRepairResult as any)?.toolResult ?? securityRepairResult,
             )
+            // Q4-3 (gate-robustness fix): scope the open-id set to the
+            // SECURITY family. The unfiltered map let a repair receipt
+            // address a code-reviewer finding's id (or any other family's)
+            // and satisfy this security check through a cross-family id —
+            // and conversely the every-id-addressed completion check below
+            // could demand code-reviewer ids a security repair cannot touch.
             const openSecurityFindingIds = new Set(
-              activeWorkState.openReviewerFindings.map((finding) => finding.id),
+              (activeWorkState.openReviewerFindings ?? [])
+                .filter(
+                  (finding) =>
+                    reviewerFamilyFromFinding(finding) === 'security-reviewer',
+                )
+                .map((finding) => finding.id),
             )
             const securityRepairHasProgress =
               !!securityRepairReceipt &&
@@ -5549,6 +5577,9 @@ ${guideSections}
                     blocker,
                     reviewerFindingRecords,
                   )?.id,
+                  // Q4-2: match against THIS reviewer family's condone
+                  // records only.
+                  requiredReviewerAgentType,
                 )
               }
               return !legacyCondonedTextMatches(condonedTexts, blocker)
@@ -5577,6 +5608,8 @@ ${guideSections}
                   reviewerVerdictClass(b),
                   stripReviewerVerdictPrefix(b),
                   correlateReviewerFindingRecord(b, reviewerFindingRecords)?.id,
+                  // Q4-2: record under THIS reviewer family's namespace.
+                  requiredReviewerAgentType,
                 ),
               ),
             ])
@@ -5635,6 +5668,8 @@ ${guideSections}
                       blocker,
                       reviewerFindingRecords,
                     )?.id,
+                    // Q4-2: family-scoped cleanup, mirroring the filter.
+                    requiredReviewerAgentType,
                   )
                 }
                 return !legacyCondonedTextMatches(cleanupCondonedTexts, blocker)
@@ -5758,6 +5793,8 @@ ${guideSections}
                 stripReviewerVerdictPrefix(blocker),
                 correlateReviewerFindingRecord(blocker, reviewerFindingRecords)
                   ?.id,
+                // Q4-2: same family, other verdict class.
+                requiredReviewerAgentType,
               ).some((key) => condonedKeys.has(key))
             })
             // Emitted only on this non-exhausted path; an exhausted round is
@@ -5910,11 +5947,14 @@ ${guideSections}
                           ],
                           unknowns: [],
                           findings: activeWorkState.openReviewerFindings.map(
-                            ({ id, text, files, snapshotFingerprint }) => ({
+                            ({ id, text, files, snapshotFingerprint, reviewer }) => ({
                               id,
                               text,
                               files,
                               snapshotFingerprint,
+                              // Q4-3: carry the owning family so the repair
+                              // receipt's findingsAddressed can be scoped to it.
+                              ...(reviewer && { reviewer }),
                             }),
                           ),
                           permissions: {
@@ -6005,11 +6045,14 @@ ${guideSections}
                           ],
                           unknowns: [],
                           findings: activeWorkState.openReviewerFindings.map(
-                            ({ id, text, files, snapshotFingerprint }) => ({
+                            ({ id, text, files, snapshotFingerprint, reviewer }) => ({
                               id,
                               text,
                               files,
                               snapshotFingerprint,
+                              // Q4-3: carry the owning family so the repair
+                              // receipt's findingsAddressed can be scoped to it.
+                              ...(reviewer && { reviewer }),
                             }),
                           ),
                           permissions: {
@@ -6082,10 +6125,18 @@ ${guideSections}
             const reviewerRepairReceipt = extractAgentReceipt(
               (reviewerRepairResult as any)?.toolResult ?? reviewerRepairResult,
             )
+            // Q4-3 (gate-robustness fix): scope the open-id set to the
+            // OWNING family (requiredReviewerAgentType) so another family's
+            // open finding id can neither satisfy this repair-progress check
+            // nor be demanded of this repair round.
             const openFindingIds = new Set(
-              (activeWorkState.openReviewerFindings ?? []).map(
-                (finding) => finding.id,
-              ),
+              (activeWorkState.openReviewerFindings ?? [])
+                .filter(
+                  (finding) =>
+                    reviewerFamilyFromFinding(finding) ===
+                    requiredReviewerAgentType,
+                )
+                .map((finding) => finding.id),
             )
             const reviewerRepairHasProgress =
               !!reviewerRepairReceipt &&
@@ -6164,6 +6215,10 @@ ${guideSections}
                     reviewerVerdictClass(finding.text),
                     stripReviewerVerdictPrefix(finding.text),
                     finding.id,
+                    // Q4-2: the OWNING family from the finding record, so a
+                    // mixed code/specialist repair round namespaces each
+                    // condone key to the family that reported it.
+                    finding.reviewer,
                   ),
                 ),
               ])
@@ -6258,15 +6313,21 @@ ${guideSections}
             )
             if (reFailures.length === 0) {
               // Same no-drift rule: only seed the owed family when nothing is
-              // owed yet, and do it through the mutator.
+              // owed yet, and do it through the mutator. Q4-1: seed EVERY
+              // family that owns an open finding, not just findings[0]'s —
+              // with mixed reviewer/specialist findings, findings[0] alone
+              // dropped the other families' owed revalidations.
               if (
                 (activeWorkState.owedReviewerRevalidations ?? []).length === 0
               ) {
-                addOwedReviewer(
-                  reviewerOriginFromGateId(
-                    activeWorkState.openReviewerFindings[0]?.gateId,
+                const openFamilies = new Set(
+                  (activeWorkState.openReviewerFindings ?? []).map((finding) =>
+                    reviewerFamilyFromFinding(finding),
                   ),
                 )
+                for (const family of openFamilies) {
+                  addOwedReviewer(family)
+                }
               }
               validationSummary = summarizeHookResults(
                 (reVerify as any) && (reVerify as any).toolResult,
@@ -7334,12 +7395,23 @@ ${guideSections}
         return 'idle'
       }
 
+      // Q4-1 (gate-robustness fix): derive the reviewer family from the
+      // gateId prefix GENERALLY, not a binary code/security split. Specialist
+      // gateIds are `${specialistAgentType}:${fingerprint}`, so the old binary
+      // version misattributed every specialist finding to 'code-reviewer' and
+      // the owed-revalidation seeding then summoned the wrong family. The
+      // unknown-prefix case now resolves to that specialist agent type —
+      // mirroring revalidationFamily's fail-closed rule that a non-code/
+      // non-security marker routes to the specialist aux block, never the
+      // final code-reviewer block. A missing gateId keeps the code-reviewer
+      // default (the final gate family).
       function reviewerOriginFromGateId(
         gateId: string | undefined,
-      ): 'code-reviewer' | 'security-reviewer' {
-        return gateId?.startsWith('security-reviewer:')
-          ? 'security-reviewer'
-          : 'code-reviewer'
+      ): 'code-reviewer' | 'security-reviewer' | SpecialistReviewerAgent {
+        const prefix = gateId?.split(':')[0]
+        if (prefix === 'security-reviewer') return 'security-reviewer'
+        if (!prefix || prefix === 'code-reviewer') return 'code-reviewer'
+        return prefix as SpecialistReviewerAgent
       }
 
       // Classify a requiredReviewerRevalidation marker into the reviewer family
@@ -7509,10 +7581,19 @@ ${guideSections}
         verdictClass: string,
         strippedText: string,
         id?: string,
+        reviewer?: string,
       ): string[] {
-        const keys = [`${verdictClass}::text:${strippedText}`]
+        // Q4-2 (gate-robustness fix): keys are REVIEWER-NAMESPACED so an id
+        // (or text) condoned for one reviewer family can never condone
+        // another family's finding that happens to reuse the same free-form
+        // id or text. Call sites thread the owning family
+        // (requiredReviewerAgentType / finding.reviewer / record.reviewer).
+        // Legacy prefix-less keys (state serialized before namespacing) are
+        // still honored at MATCH time by condonedKeyMatches below.
+        const scope = reviewer ? `${reviewer}::` : ''
+        const keys = [`${scope}${verdictClass}::text:${strippedText}`]
         if (id && !isMintedReviewerFindingId(id)) {
-          keys.push(`${verdictClass}::id:${id}`)
+          keys.push(`${scope}${verdictClass}::id:${id}`)
         }
         return keys
       }
@@ -7522,15 +7603,23 @@ ${guideSections}
         verdictClass: string,
         strippedText: string,
         id?: string,
+        reviewer?: string,
       ): boolean {
+        const matches = (candidateKeys: string[]) =>
+          candidateKeys.some((key) => condonedKeys.has(key))
         // Same-class match first: a `*` (prefix-less, legacy) entry condones
         // only another `*` finding, and a NON_BLOCKING entry never condones a
         // BLOCKING re-raise of the same identity — an escalation is new
-        // information and must reopen the gate.
+        // information and must reopen the gate. Q4-2: when a reviewer family
+        // is supplied, the legacy PREFIX-LESS keys recorded before reviewer
+        // namespacing still match (migration compatibility) — but new records
+        // are always namespaced, so cross-family contamination stops growing.
         if (
-          condonedFindingKeysFor(verdictClass, strippedText, id).some((key) =>
-            condonedKeys.has(key),
-          )
+          matches(
+            condonedFindingKeysFor(verdictClass, strippedText, id, reviewer),
+          ) ||
+          (reviewer !== undefined &&
+            matches(condonedFindingKeysFor(verdictClass, strippedText, id)))
         ) {
           return true
         }
@@ -7542,8 +7631,12 @@ ${guideSections}
         // converging. The reverse direction is NOT accepted: only the same-class
         // check above can condone a BLOCKING re-raise.
         if (verdictClass === 'NON_BLOCKING') {
-          return condonedFindingKeysFor('BLOCKING', strippedText, id).some(
-            (key) => condonedKeys.has(key),
+          return (
+            matches(
+              condonedFindingKeysFor('BLOCKING', strippedText, id, reviewer),
+            ) ||
+            (reviewer !== undefined &&
+              matches(condonedFindingKeysFor('BLOCKING', strippedText, id)))
           )
         }
         return false
@@ -7604,13 +7697,20 @@ ${guideSections}
         const condonedTexts: Set<string> = new Set<string>(
           activeWorkState.condonedFindingTexts ?? [],
         )
-        const isCondoned = (record: { text: string; id: string }): boolean => {
+        const isCondoned = (record: {
+          text: string
+          id: string
+          reviewer?: string
+        }): boolean => {
           if (condonedKeys.size > 0) {
             return condonedKeyMatches(
               condonedKeys,
               reviewerVerdictClass(record.text),
               stripReviewerVerdictPrefix(record.text),
               record.id,
+              // Q4-2: the incoming record's own family, so a family's condone
+              // record only condones that family's re-raise.
+              record.reviewer,
             )
           }
           return legacyCondonedTextMatches(condonedTexts, record.text)

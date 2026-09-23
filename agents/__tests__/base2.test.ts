@@ -7254,12 +7254,13 @@ describe('base2 verification and reviewer gates', () => {
         findingText,
       )
       const active = (agentState as any).base2ActiveWork
-      // The repair round condoned the NON_BLOCKING class only.
+      // The repair round condoned the NON_BLOCKING class only (Q4-2: keys are
+      // reviewer-namespaced).
       expect(active.condonedFindingKeys).toContain(
-        `NON_BLOCKING::text:${findingText}`,
+        `code-reviewer::NON_BLOCKING::text:${findingText}`,
       )
       expect(active.condonedFindingKeys).not.toContain(
-        `BLOCKING::text:${findingText}`,
+        `code-reviewer::BLOCKING::text:${findingText}`,
       )
       // Same text, escalated verdict class: new information, must stay open.
       const secondReview = attestedReviewerResult(
@@ -7347,12 +7348,12 @@ describe('base2 verification and reviewer gates', () => {
       const active = (agentState as any).base2ActiveWork
       // The repair round condoned the BLOCKING class only; the NON_BLOCKING key
       // is never written, so convergence relies on the de-escalation allowance
-      // rather than on a same-class key.
+      // rather than on a same-class key. (Q4-2: reviewer-namespaced keys.)
       expect(active.condonedFindingKeys).toContain(
-        `BLOCKING::text:${findingText}`,
+        `code-reviewer::BLOCKING::text:${findingText}`,
       )
       expect(active.condonedFindingKeys).not.toContain(
-        `NON_BLOCKING::text:${findingText}`,
+        `code-reviewer::NON_BLOCKING::text:${findingText}`,
       )
       // Same identity, DE-ESCALATED verdict class: still condoned.
       const secondReview = attestedReviewerResult(
@@ -7420,14 +7421,15 @@ describe('base2 verification and reviewer gates', () => {
       )
       const active = (agentState as any).base2ActiveWork
       const condonedKeys = active.condonedFindingKeys as string[]
-      // (a) the reviewer-supplied id produced an id-keyed condone entry.
-      expect(condonedKeys).toContain(`NON_BLOCKING::id:${findingId}`)
-      expect(condonedKeys).toContain(`NON_BLOCKING::text:${blockerText}`)
+      // (a) the reviewer-supplied id produced an id-keyed condone entry
+      // (Q4-2: reviewer-namespaced).
+      expect(condonedKeys).toContain(`code-reviewer::NON_BLOCKING::id:${findingId}`)
+      expect(condonedKeys).toContain(`code-reviewer::NON_BLOCKING::text:${blockerText}`)
       // (c) the record-less finding got a minted RF-... id, which is positional
       // and therefore never keyed on.
-      expect(condonedKeys).toContain(`NON_BLOCKING::text:${plainFindingText}`)
+      expect(condonedKeys).toContain(`code-reviewer::NON_BLOCKING::text:${plainFindingText}`)
       expect(condonedKeys.filter((key) => key.includes('::id:'))).toEqual([
-        `NON_BLOCKING::id:${findingId}`,
+        `code-reviewer::NON_BLOCKING::id:${findingId}`,
       ])
       expect(
         condonedKeys.some((key) => /::id:RF-\d+-[0-9a-f]{8}$/.test(key)),
