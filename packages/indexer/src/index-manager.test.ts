@@ -302,4 +302,191 @@ describe('IndexManager.indexMutationEpoch', () => {
     })
     expect(mgr.indexMutationEpoch).toBe(3)
   })
+
+  test('a detached instance advances its own epoch while forwarding to the singleton', () => {
+    const key = '/tmp/openbuff-indexer-test-detached-epoch'
+    const holder = IndexManager.getInstance(key, { enabled: false })
+
+    // Overflow the bounded registry (MAX_INSTANCE_ROOTS = 8) so the holder is
+    // evicted, then re-register the same key: the replacement becomes the
+    // singleton and the holder is detached but still held by this test.
+    for (let i = 0; i < 8; i++) {
+      IndexManager.getInstance(
+        `/tmp/openbuff-indexer-test-detached-epoch-${i}`,
+        { enabled: false },
+      )
+    }
+    const replacement = IndexManager.getInstance(key, { enabled: false })
+    expect(replacement).not.toBe(holder)
+
+    holder.markStale()
+    // The detached holder's own epoch must advance (per-instance epoch
+    // contract), not only the singleton's.
+    expect(holder.indexMutationEpoch).toBe(1)
+    // ...and the registered singleton still receives the mutation signal.
+    expect(replacement.indexMutationEpoch).toBe(1)
+
+    holder.markPathsChanged({
+      changedPaths: ['src/auth.ts'],
+      complete: true,
+      revision: 1,
+    })
+    expect(holder.indexMutationEpoch).toBe(2)
+    expect(replacement.indexMutationEpoch).toBe(2)
+  })
+
+  test('a detached holder never regresses its epoch after the singleton restarts', () => {
+    const key = '/tmp/openbuff-indexer-test-detached-epoch-regress'
+    const holder = IndexManager.getInstance(key, { enabled: false })
+    // While the holder is the registered singleton, advance its own epoch.
+    holder.markStale()
+    holder.markStale()
+    expect(holder.indexMutationEpoch).toBe(2)
+
+    // Overflow the bounded registry so the holder is evicted, then
+    // re-register the same key: the replacement singleton restarts at
+    // epoch 0 while the detached holder keeps its accumulated epoch.
+    for (let i = 0; i < 8; i++) {
+      IndexManager.getInstance(
+        `/tmp/openbuff-indexer-test-detached-epoch-regress-${i}`,
+        { enabled: false },
+      )
+    }
+    const replacement = IndexManager.getInstance(key, { enabled: false })
+    expect(replacement).not.toBe(holder)
+    expect(replacement.indexMutationEpoch).toBe(0)
+
+    holder.markStale()
+    // The forward still signals the restarted singleton...
+    expect(replacement.indexMutationEpoch).toBe(1)
+    // ...but the holder's monotonic epoch must never move backwards.
+    expect(holder.indexMutationEpoch).toBe(3)
+
+    holder.markPathsChanged({
+      changedPaths: ['src/auth.ts'],
+      complete: true,
+      revision: 1,
+    })
+    expect(replacement.indexMutationEpoch).toBe(2)
+    expect(holder.indexMutationEpoch).toBe(4)
+  })
+})
+
+describe('IndexManager.detached holder forwarding', () => {
+  test('a detached holder forwards readiness and queries to the registered singleton instead of building its own index', async () => {
+    const root = makeProject()
+    const holder = IndexManager.getInstance(root, {})
+
+    // Overflow the bounded registry (MAX_INSTANCE_ROOTS = 8) so the holder is
+    // evicted, then re-register the same key: the replacement becomes the
+    // singleton and the holder is detached but still held by this test.
+    for (let i = 0; i < 8; i++) {
+      IndexManager.getInstance(
+        `/tmp/openbuff-indexer-test-detached-build-loop-${i}`,
+        { enabled: false },
+      )
+    }
+    const replacement = IndexManager.getInstance(root, {})
+    expect(replacement).not.toBe(holder)
+
+    await replacement.waitUntilReady(10_000)
+
+    writeFileSync(
+      join(root, 'src', 'extra.ts'),
+      'export function extraLogin() {}\n',
+    )
+    // The detached holder's mutation signal reaches the singleton...
+    holder.markStale()
+    // ...and readiness is forwarded, so the holder never runs its own _build
+    // loop against the same cache directory (reliability finding
+    // detached-index-manager-still-runs-own-build-loop).
+    await holder.waitUntilReady(10_000)
+
+    const internal = holder as unknown as {
+      index: MetadataIndex | null
+    }
+    // No detached build loop: the holder's own index was never populated.
+    expect(internal.index).toBeNull()
+
+    // Queries are served from the registered singleton's fresh index.
+    const result = holder.query('extraLogin')
+    expect(result.ready).toBe(true)
+    expect(
+      result.results.some((candidate) => candidate.path === 'src/extra.ts'),
+    ).toBe(true)
+  })
+
+  test('a detached holder merges its accumulated pending delta into the forwarded markPathsChanged signal', () => {
+    const key = '/tmp/openbuff-indexer-test-detached-delta-merge'
+    const holder = IndexManager.getInstance(key, { enabled: false })
+    // Accumulate a delta while the holder is still the registered singleton.
+    holder.markPathsChanged({
+      changedPaths: ['src/auth.ts'],
+      complete: true,
+      revision: 1,
+    })
+
+    // Overflow the bounded registry so the holder is evicted, then
+    // re-register the same key (reliability finding
+    // detached-indexmanager-pending-delta-dropped-on-forward).
+    for (let i = 0; i < 8; i++) {
+      IndexManager.getInstance(
+        `/tmp/openbuff-indexer-test-detached-delta-merge-${i}`,
+        { enabled: false },
+      )
+    }
+    const replacement = IndexManager.getInstance(key, { enabled: false })
+    expect(replacement).not.toBe(holder)
+
+    // The holder is now detached: this signal must carry BOTH the delta
+    // accumulated before eviction and the new one to the singleton.
+    holder.markPathsChanged({
+      changedPaths: ['src/extra.ts'],
+      complete: true,
+      revision: 2,
+    })
+
+    const internal = replacement as unknown as {
+      pendingMutationDelta: { changedPaths: string[] } | undefined
+    }
+    expect(internal.pendingMutationDelta?.changedPaths).toEqual(
+      expect.arrayContaining(['src/auth.ts', 'src/extra.ts']),
+    )
+  })
+
+  test('a detached holder forwards its pending delta to the singleton via ensureBuilt', () => {
+    const key = '/tmp/openbuff-indexer-test-detached-delta-ensurebuilt'
+    const holder = IndexManager.getInstance(key, { enabled: false })
+    holder.markPathsChanged({
+      changedPaths: ['src/auth.ts'],
+      complete: true,
+      revision: 1,
+    })
+
+    for (let i = 0; i < 8; i++) {
+      IndexManager.getInstance(
+        `/tmp/openbuff-indexer-test-detached-delta-ensurebuilt-${i}`,
+        { enabled: false },
+      )
+    }
+    const replacement = IndexManager.getInstance(key, { enabled: false })
+    expect(replacement).not.toBe(holder)
+
+    holder.ensureBuilt()
+
+    // The singleton received the holder's queued delta (the disabled config
+    // stops the singleton's own build before it consumes the delta, so the
+    // forwarded signal stays observable here).
+    const singletonInternal = replacement as unknown as {
+      pendingMutationDelta: { changedPaths: string[] } | undefined
+    }
+    expect(singletonInternal.pendingMutationDelta?.changedPaths).toContain(
+      'src/auth.ts',
+    )
+    // ...and the holder no longer holds it.
+    const holderInternal = holder as unknown as {
+      pendingMutationDelta: unknown
+    }
+    expect(holderInternal.pendingMutationDelta).toBeUndefined()
+  })
 })

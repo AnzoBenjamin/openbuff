@@ -65,7 +65,7 @@ bun test
 
 For comprehensive E2E terminal testing (which requires `tmux`):
 
-- See [cli/src/**tests**/README.md](../cli/src/__tests__/README.md) for detailed instructions on E2E test runs.
+- See [`cli/src/__tests__/README.md`](../cli/src/__tests__/README.md) for detailed instructions on E2E test runs.
 
 ## CI-local / pre-push checks
 

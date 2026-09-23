@@ -1032,6 +1032,12 @@ export function checkBrokenLink(
  * repo gate (CI and the pre-push hook), so it must only judge tracked
  * repository content: an untracked record is skipped entirely, because no
  * source change produced its contents and none can clear a finding on it.
+ *
+ * M4-T3: the `.openbuff/.gitignore` written by check:ci-local is scoped to the
+ * transient lock file only (OPENBUFF_DIR_GITIGNORE_CONTENT in
+ * scripts/check-ci-local.ts is the single source for those rules), so a
+ * tracked task-memory.json stays `git add`-able on machines that run
+ * check:ci-local and this tracked-mode path remains reachable.
  */
 export function checkTaskMemory(root: string): Finding[] {
   const memoryProjectPath = '.openbuff/memory/task-memory.json'

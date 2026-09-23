@@ -107,14 +107,14 @@ diagnostics (`file`, range, severity, code, message, command, source) while the
 original bounded stdout/stderr remains available for recovery.
 
 - Automated security/test/doc auxiliary agents have explicit lifecycle handling. Their done flags are written only after successful completion; crashes and blocking security verdicts persist as blockers. Test/doc writers run automatically only when the user request explicitly includes those deliverables, and mixed-package test targets are routed to package-specific commands.
-- Productive agent steps, subagent duration, file mutations, configured file-change hooks, and terminal commands are all unbounded in wall-clock time by default. The remaining safeguards are user cancellation, the repeated-step no-progress watchdog, cost/token budgets, spawn-depth limits, and context compaction; observational poll bounds (`check_job`, `check_background_agent`) and network/lock timeouts are unchanged. Reviewer crashes retry once; repeated crashes require the explicit user phrase `bypass reviewer gate` before finalization can continue.
+- Productive agent steps, subagent duration, file mutations, configured file-change hooks, and terminal commands are all unbounded in wall-clock time by default. The remaining safeguards are user cancellation, cost/token budgets, spawn-depth limits, and context compaction; observational poll bounds (`check_job`, `check_background_agent`) and network/lock timeouts are unchanged. Gate repair and reviewer/specialist no-verdict retries are unlimited by default (finite caps only via `OPENBUFF_MAX_*` env or `createBase2` options); reviewer crashes retry once, and repeated no-verdict outputs keep re-prompting the reviewer instead of parking. Repeated reviewer crashes require the explicit user phrase `bypass reviewer gate` before finalization can continue.
 - Root-orchestrator mutating/control gate operations such as Git-status observation, file-change hooks, and structural inventory are model-hidden programmatic tools. Their results are injected when needed after edits, so the harness remains active without paying for those schemas on every provider request. The orchestrator must **not** treat basher typechecks or `run_targeted_validation` as gate substitutes — only the runtime-owned hooks→reviewer cycle clears the gate. The read-only `get_change_review_bundle` tool remains model-visible so an orchestrator can refresh a stale reviewer snapshot after compaction. Fresh greetings and simple gratitude prompts take a narrow conversational fast path only when no pending work or reviewer blocker exists.
 
 **Pattern-specific agents** are intentionally **excluded** from `spawnableAgents` because they have a narrow contract that only makes sense within a specific workflow pattern. They are spawned by the pattern flow itself, not by the orchestrator:
 
 - **`synthesizer`** — the "reduce" half of the [`audit-codebase`](../agents/patterns/audit-codebase.md) map-reduce pattern. It reads ONLY finding files from a scratchpad directory (`.agents/sessions/<slug>/findings/*.md`) and produces a single cross-cutting audit report. It never reads raw source, has `includeMessageHistory: false`, and uses `outputMode: 'structured_output'`. Spawning it outside the audit pattern would be a misuse: it lacks source-reading tools (no `code_search`, `read_outline`, `query_index`, etc.) and its prompt is scoped to a findings directory, so it cannot perform general review or analysis tasks. The `audit-codebase` pattern spawns it directly in Step 4 (Synthesize) after all shard auditors have written their findings to disk.
 
-The distinction matters because adding a pattern-specific agent to `spawnableAgents` would let the orchestrator spawn it in contexts where its contract doesn't apply, producing confusing or empty results. If you add a new pattern-specific agent, follow the same convention: register it in `openbuff.d/routes.json` so the pattern can route it, but leave it out of `base2`/`base-deep` `spawnableAgents`.
+The distinction matters because adding a pattern-specific agent to `spawnableAgents` would let the orchestrator spawn it in contexts where its contract doesn't apply, producing confusing or empty results. If you add a new pattern-specific agent, follow the same convention: copy the shipped `openbuff.d.example/routes.json` into your project's `openbuff.d/routes.json` and register it there so the pattern can route it, but leave it out of `base2`/`base-deep` `spawnableAgents`.
 
 ### Model Routing and Configuration
 
@@ -1243,7 +1243,9 @@ Bounds: `text` 1..1024 characters (trimmed, non-empty); `kind` `decision`|`fact`
 ```
 
 ### `create_plan` and `update_plan_status`
-  right tool for incremental status or lesson updates.
+
+`update_plan_status` is the right tool for incremental status or lesson
+updates.
 
 These tools back the PlanLink slash commands (`/resume-plan`,
 `/update-plan`, `/plan-status`, `/lessons`); `/plans` and `/plan-use`
@@ -1973,7 +1975,7 @@ purpose:
 | Project scaffold   | `init` (implicit)                                                                                   |
 | Provider account   | `connect` (`chatgpt`, `connect:chatgpt`) — only present when `CHATGPT_OAUTH_ENABLED` is `true`      |
 | Edit history       | `undo`, `redo`                                                                                      |
-| Durable plans      | `interview`, `resume-plan` (`rp`), `update-plan` (`up`), `plan-status` (`ps`), `lessons` (`lesson`) |
+| Durable plans      | `interview`, `resume-plan` (`rp`), `update-plan` (`up`), `plan-status` (`ps`), `lessons` (`lesson`), `plans` (`plan-ls`), `plan-use` (`plan-active`, `use-plan`) |
 | Code review        | `review`                                                                                            |
 | Conversation       | `new` (`n`, `clear`, `c`, `reset`, implicit), `history` (`chats`), `prompts` (`prompt-search`)      |
 | Agent shortcuts    | `agent:general` (inserts `@general-agent `)                                                         |

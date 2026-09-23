@@ -15,6 +15,7 @@ import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 import {
+  OPENBUFF_DIR_GITIGNORE_CONTENT,
   TOOL_DEF_TRACKED_PATHS,
   acquireCiLocalLock,
   ciLocalLockPath,
@@ -235,10 +236,32 @@ describe('ci-local lock', () => {
     expect(second.message).not.toContain('holder PID')
   })
 
-  test('acquiring the lock gitignores .openbuff so stale locks stay untracked', () => {
+  test('acquiring the lock gitignores only the transient lock (M4-T3)', () => {
     acquireCiLocalLock(tmpRoot)
     const ignorePath = join(tmpRoot, '.openbuff', '.gitignore')
-    expect(readFileSync(ignorePath, 'utf8')).toBe('*\n')
+    // Single source: OPENBUFF_DIR_GITIGNORE_CONTENT in check-ci-local.ts.
+    // Scoped to the lock — an ignore-all `*` would hide a tracked
+    // .openbuff/memory/task-memory.json from git and contradict the
+    // memory-drift guard's tracked-record contract.
+    expect(readFileSync(ignorePath, 'utf8')).toBe(
+      OPENBUFF_DIR_GITIGNORE_CONTENT,
+    )
+    expect(OPENBUFF_DIR_GITIGNORE_CONTENT).not.toContain('*')
+    expect(OPENBUFF_DIR_GITIGNORE_CONTENT).toContain('/ci-local.lock')
+    releaseCiLocalLock(tmpRoot)
+  })
+
+  test('ensureLockDirIgnored upgrades a legacy ignore-all file (M4-T3)', () => {
+    // Idempotent-retry hygiene: machines with the pre-M4-T3 `*` file are
+    // migrated on the next acquire instead of keeping the contradictory rule.
+    mkdirSync(join(tmpRoot, '.openbuff'), { recursive: true })
+    writeFileSync(join(tmpRoot, '.openbuff', '.gitignore'), '*\n', 'utf8')
+
+    acquireCiLocalLock(tmpRoot)
+
+    expect(readFileSync(join(tmpRoot, '.openbuff', '.gitignore'), 'utf8')).toBe(
+      OPENBUFF_DIR_GITIGNORE_CONTENT,
+    )
     releaseCiLocalLock(tmpRoot)
   })
 

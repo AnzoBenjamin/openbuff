@@ -350,6 +350,19 @@ export async function walkProjectDetailed(
   type ScopedMatcher = { base: string; matcher: ReturnType<typeof ignore> }
 
   async function walk(dir: string, parents: ScopedMatcher[]): Promise<void> {
+    // No-follow guard at the recursion point (reliability finding
+    // walk-dir-swap-after-lstat-window): the caller's lstat re-verify and
+    // this readdir are separate path-based operations, so a directory
+    // swapped to an out-of-project symlink between them must be refused
+    // HERE — this is the last check before any traversal into its bytes.
+    // Cheap (one lstat per directory visited), ENOENT tolerated (vanished
+    // mid-walk is skipped like any other disappearance).
+    try {
+      const dirStat = await fs.promises.lstat(dir)
+      if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return
+    } catch {
+      return
+    }
     let entries: fs.Dirent[]
     try {
       entries = await fs.promises.readdir(dir, { withFileTypes: true })
@@ -384,6 +397,18 @@ export async function walkProjectDetailed(
           continue
         }
         if (ignored) continue
+        // P8.6 follow-up (reliability finding walk-dir-symlink-toctou):
+        // re-verify the directory entry with lstat before recursing — a path
+        // swapped from directory to out-of-project symlink between readdir
+        // and the recursive readdir must not be followed (the walk's
+        // documented no-follow contract). A vanished entry is skipped like
+        // any other mid-walk disappearance.
+        try {
+          const dirStat = await fs.promises.lstat(abs)
+          if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) continue
+        } catch {
+          continue
+        }
         await walk(abs, matchers)
       } else if (entry.isFile()) {
         if (
@@ -394,10 +419,16 @@ export async function walkProjectDetailed(
           continue
         let stat: fs.Stats
         try {
-          stat = await fs.promises.stat(abs)
+          // P8.6: lstat (not stat) so a symlink swapped in between readdir
+          // and stat is skipped instead of followed, matching the
+          // statProjectFiles no-follow contract. An entry that vanished
+          // mid-walk lands in the catch below and is skipped.
+          stat = await fs.promises.lstat(abs)
         } catch {
           continue
         }
+        if (stat.isSymbolicLink()) continue
+        if (!stat.isFile()) continue
         const ext = path.extname(entry.name).toLowerCase()
         const is3dAsset = THREE_D_ASSET_EXTENSIONS.has(ext)
         if (stat.size > MAX_FILE_SIZE && !is3dAsset) continue

@@ -44,6 +44,8 @@ import {
   MAX_RETRIES_PER_MESSAGE,
   RETRY_BACKOFF_BASE_DELAY_MS,
   computeBackoffDelayMs,
+  isTransientNetworkError,
+  runWithRetryPolicy,
   waitForBackoffDelay,
 } from '../retry-config'
 
@@ -1015,134 +1017,6 @@ export function classifyChatGptOAuthStreamError(params: {
   return 'fail-fast'
 }
 
-/**
- * Check if an error is a transient network error that should be retried.
- * Handles socket disconnections, connection resets, timeouts, and other
- * temporary network failures that can occur during LLM streaming.
- */
-function isTransientNetworkError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false
-
-  const err = error as {
-    name?: string
-    message?: string
-    cause?: unknown
-  }
-  const message = (err.message ?? '').toLowerCase()
-
-  // Check error names that indicate transient network issues.
-  // TypeError is only treated as transient when the message also
-  // indicates a network/fetch failure, to avoid retrying programming errors.
-  const transientErrorNames = ['TimeoutError', 'FetchError']
-  if (err.name && transientErrorNames.some((n) => err.name === n)) {
-    return true
-  }
-
-  // AbortError from the underlying fetch (not our user cancellation)
-  if (err.name === 'AbortError' && !message.includes('user cancelled')) {
-    return true
-  }
-
-  // TypeError from Node fetch for network failures
-  if (err.name === 'TypeError' && message.includes('fetch')) {
-    return true
-  }
-
-  // Check common transient network error patterns in message
-  const transientPatterns = [
-    'socket',
-    'connection was closed',
-    'connection reset',
-    'econnreset',
-    'etimedout',
-    'fetch failed',
-    'network error',
-    'unexpectedly closed',
-    'broken pipe',
-    'timeout',
-    'econnrefused',
-    'econnaborted',
-    'enetunreach',
-    'eai_again',
-  ]
-
-  for (const pattern of transientPatterns) {
-    if (message.includes(pattern)) return true
-  }
-
-  // Check if AbortError by message (but not from our own signal.aborted)
-  if (message.includes('abort') && !message.includes('user cancelled')) {
-    return true
-  }
-
-  // Check cause chain for error codes and messages (walk recursively through causes)
-  const seen = new Set<unknown>()
-  let currentCause: unknown = err.cause
-  while (currentCause && typeof currentCause === 'object') {
-    if (seen.has(currentCause)) break // Guard against cyclic cause chains
-    seen.add(currentCause)
-
-    const causeObj = currentCause as {
-      code?: string
-      message?: string
-      name?: string
-      cause?: unknown
-    }
-
-    // Check nested cause codes (normalized to uppercase)
-    if (causeObj.code) {
-      const codeUpper = causeObj.code.toUpperCase()
-      const transientCodes = [
-        'ECONNRESET',
-        'ETIMEDOUT',
-        'ECONNREFUSED',
-        'ECONNABORTED',
-        'ENETUNREACH',
-        'EAI_AGAIN',
-        'UND_ERR_SOCKET',
-        'UND_ERR_CONNECT_TIMEOUT',
-        'UND_ERR_HEADERS_TIMEOUT',
-        'UND_ERR_BODY_TIMEOUT',
-        'UND_ERR_ABORTED',
-        'EPIPE',
-        'ENOTFOUND',
-        'ENETDOWN',
-      ]
-      if (transientCodes.some((c) => codeUpper === c)) return true
-    }
-
-    // Check nested cause messages for transient patterns
-    if (causeObj.message) {
-      const causeMessage = causeObj.message.toLowerCase()
-      for (const pattern of transientPatterns) {
-        if (causeMessage.includes(pattern)) return true
-      }
-      if (
-        causeMessage.includes('abort') &&
-        !causeMessage.includes('user cancelled')
-      ) {
-        return true
-      }
-    }
-
-    // Check nested cause names
-    if (causeObj.name) {
-      if (
-        causeObj.name === 'TimeoutError' ||
-        causeObj.name === 'FetchError' ||
-        (causeObj.name === 'AbortError' &&
-          !(causeObj.message ?? '').toLowerCase().includes('user cancelled'))
-      ) {
-        return true
-      }
-    }
-
-    currentCause = causeObj.cause
-  }
-
-  return false
-}
-
 export async function* promptAiSdkStream(
   params: ParamsOf<PromptAiSdkStreamFn> & {
     skipChatGptOAuth?: boolean
@@ -1997,36 +1871,61 @@ export async function promptAiSdk(
     includeTools: compatibility.supportsTools !== false,
   })
 
+  // Hoisted out of the retry closure below: the message context is identical
+  // on every attempt, so the emergency-brake trim — and its side-effecting
+  // onRequestContextTrimmed consumer — must run once per request, not once
+  // per retry attempt.
+  const requestMessages = convertCbToModelMessages({
+    ...params,
+    messages: getMessagesForModelContext({
+      messages: params.messages,
+      contextWindowTokens,
+      systemTokens: requestOverheadTokens,
+      logger,
+      trackEvent: params.trackEvent,
+      userId: params.userId,
+      userInputId: params.userInputId,
+      model: effectiveModelSdk,
+      onTrimmed: params.onRequestContextTrimmed,
+    }),
+    includeCacheControl: compatibility.stripCacheControl === false,
+  })
+
   let response: Awaited<ReturnType<typeof generateText>>
   try {
-    response = await generateText({
-      ...params,
-      // M3-T1: finite default request timeout (see DEFAULT_LLM_REQUEST_TIMEOUT_MS);
-      // the caller's params.signal is merged and keeps precedence.
-      abortSignal: withDefaultRequestTimeout(params, params.signal),
-      ...(compatibility.supportsTools === false
-        ? { tools: undefined, toolChoice: undefined }
-        : {}),
-      prompt: undefined,
-      model: aiSDKModel,
-      messages: convertCbToModelMessages({
-        ...params,
-        messages: getMessagesForModelContext({
-          messages: params.messages,
-          contextWindowTokens,
-          systemTokens: requestOverheadTokens,
-          logger,
-          trackEvent: params.trackEvent,
-          userId: params.userId,
-          userInputId: params.userInputId,
-          model: effectiveModelSdk,
-          onTrimmed: params.onRequestContextTrimmed,
-        }),
-        includeCacheControl: compatibility.stripCacheControl === false,
-      }),
-      ...(hasProviderOptions(requestProviderOptions)
-        ? { providerOptions: requestProviderOptions }
-        : {}),
+    // M3-T4: non-streaming paths retry transient failures exactly like the
+    // streaming path — same shared policy object, same backoff helpers.
+    response = await runWithRetryPolicy({
+      signal: params.signal,
+      operation: async () => {
+        try {
+          return await generateText({
+            ...params,
+            // M3-T1: finite default request timeout (see DEFAULT_LLM_REQUEST_TIMEOUT_MS);
+            // the caller's params.signal is merged and keeps precedence.
+            abortSignal: withDefaultRequestTimeout(params, params.signal),
+            ...(compatibility.supportsTools === false
+              ? { tools: undefined, toolChoice: undefined }
+              : {}),
+            prompt: undefined,
+            model: aiSDKModel,
+            messages: requestMessages,
+            ...(hasProviderOptions(requestProviderOptions)
+              ? { providerOptions: requestProviderOptions }
+              : {}),
+          })
+        } catch (error) {
+          // Normalize before the retry classifier sees the error so a
+          // content-policy refusal is never retried.
+          throw normalizeProviderContentPolicyError(error) ?? error
+        }
+      },
+      onRetry: ({ error, attempt, delayMs }) => {
+        logger.warn(
+          { error: getErrorObject(error), attempt, delayMs },
+          'Transient error in non-streaming prompt, retrying with delay',
+        )
+      },
     })
   } catch (error) {
     throw normalizeProviderContentPolicyError(error) ?? error
@@ -2130,40 +2029,64 @@ export async function promptAiSdkStructured<T>(
         cacheDebugCorrelation: params.cacheDebugCorrelation,
       })
 
+  // Hoisted out of the retry closure below (same rationale as promptAiSdk):
+  // the emergency-brake trim and its side-effecting onRequestContextTrimmed
+  // consumer run once per request, not once per retry attempt.
+  const requestMessages = convertCbToModelMessages({
+    ...params,
+    // `PromptAiSdkStructuredInput` has no `system`/`tools` request surface
+    // (unlike the streamText/generateText param types), so there is
+    // nothing comparable to subtract and systemTokens stays at its 0
+    // default here.
+    messages: getMessagesForModelContext({
+      messages: params.messages,
+      contextWindowTokens,
+      logger,
+      trackEvent: params.trackEvent,
+      userId: params.userId,
+      userInputId: params.userInputId,
+      model: effectiveModelStructured,
+      onTrimmed: params.onRequestContextTrimmed,
+    }),
+    includeCacheControl: compatibility.stripCacheControl === false,
+  })
+
   let response: GenerateObjectResult<T>
   try {
-    response = await generateObject<z.ZodType<T>, 'object'>({
-      ...params,
-      // M3-T1: finite default request timeout (see DEFAULT_LLM_REQUEST_TIMEOUT_MS);
-      // the caller's params.signal is merged and keeps precedence.
-      abortSignal: withDefaultRequestTimeout(params, params.signal),
-      ...(compatibility.supportsTools === false
-        ? { tools: undefined, toolChoice: undefined }
-        : {}),
-      prompt: undefined,
-      model: aiSDKModel,
-      output: 'object',
-      messages: convertCbToModelMessages({
-        ...params,
-        // `PromptAiSdkStructuredInput` has no `system`/`tools` request surface
-        // (unlike the streamText/generateText param types), so there is
-        // nothing comparable to subtract and systemTokens stays at its 0
-        // default here.
-        messages: getMessagesForModelContext({
-          messages: params.messages,
-          contextWindowTokens,
-          logger,
-          trackEvent: params.trackEvent,
-          userId: params.userId,
-          userInputId: params.userInputId,
-          model: effectiveModelStructured,
-          onTrimmed: params.onRequestContextTrimmed,
-        }),
-        includeCacheControl: compatibility.stripCacheControl === false,
-      }),
-      ...(hasProviderOptions(requestProviderOptions)
-        ? { providerOptions: requestProviderOptions }
-        : {}),
+    // M3-T4: non-streaming paths retry transient failures exactly like the
+    // streaming path — same shared policy object, same backoff helpers.
+    response = await runWithRetryPolicy({
+      signal: params.signal,
+      operation: async () => {
+        try {
+          return await generateObject<z.ZodType<T>, 'object'>({
+            ...params,
+            // M3-T1: finite default request timeout (see DEFAULT_LLM_REQUEST_TIMEOUT_MS);
+            // the caller's params.signal is merged and keeps precedence.
+            abortSignal: withDefaultRequestTimeout(params, params.signal),
+            ...(compatibility.supportsTools === false
+              ? { tools: undefined, toolChoice: undefined }
+              : {}),
+            prompt: undefined,
+            model: aiSDKModel,
+            output: 'object',
+            messages: requestMessages,
+            ...(hasProviderOptions(requestProviderOptions)
+              ? { providerOptions: requestProviderOptions }
+              : {}),
+          })
+        } catch (error) {
+          // Normalize before the retry classifier sees the error so a
+          // content-policy refusal is never retried.
+          throw normalizeProviderContentPolicyError(error) ?? error
+        }
+      },
+      onRetry: ({ error, attempt, delayMs }) => {
+        logger.warn(
+          { error: getErrorObject(error), attempt, delayMs },
+          'Transient error in non-streaming structured prompt, retrying with delay',
+        )
+      },
     })
   } catch (error) {
     throw normalizeProviderContentPolicyError(error) ?? error

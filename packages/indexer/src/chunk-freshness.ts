@@ -191,6 +191,15 @@ export function evaluateChunkFreshness(
         if (inline.hash !== undefined && inline.hash !== selector.contentHash) {
           return { state: 'STALE', reason: 'inline-hash-mismatch' }
         }
+        if (inline.hash !== undefined && inline.hash === selector.contentHash) {
+          // The live index proves the chunk exists and is unmodified; the
+          // sidecar merely lags (its write is best-effort and can fail while
+          // metadata.json commits). The documented FRESH definition is
+          // "stableChunkId exists AND hash matches", so returning ORPHAN here
+          // would discard live unmodified chunks whenever the sidecar write
+          // failed. Reserve ORPHAN for 'not in sidecar AND not in live index'.
+          return { state: 'FRESH', reason: 'inline-hash-match' }
+        }
       }
       return { state: 'ORPHAN', reason: 'unknown-stable-chunk-id' }
     }

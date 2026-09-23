@@ -34,7 +34,7 @@ import type { ChatMessage } from '../../types/chat'
 import type { AgentMode } from '../../utils/constants'
 import type { SendMessageTimerController } from '../../utils/send-message-timer'
 import type { StreamController } from '../stream-state'
-import type { StreamStatus } from '../use-message-queue'
+import type { QueuedMessage, StreamStatus } from '../use-message-queue'
 import type { MessageContent, RunState } from '@openbuff/sdk'
 import type { MutableRefObject, SetStateAction } from 'react'
 
@@ -179,6 +179,41 @@ export const formatFileAttachmentForPrompt = (
       : '\n[Warning: This attachment is incomplete. Use read_files/read_subtree to verify the live source before relying on omitted content.]'
   const kind = att.isDirectory ? 'Directory' : 'File'
   return `[${kind}: ${att.path}; source=${context.provenance}; completeness=${context.completeness}${bounds}]\n${att.content}${warning}`
+}
+
+/**
+ * Fold a queued prompt's attachments into the text persisted to the session
+ * history, mirroring the folding prepareUserMessage applies at send time so a
+ * drained queue entry survives the restart with its context intact
+ * (reliability finding exit-drain-drops-queued-attachments). Text attachments
+ * keep the `[Pasted Text]` shape and file attachments reuse
+ * formatFileAttachmentForPrompt; image attachments cannot round-trip their
+ * binary payload through the text journal, so a locating note is persisted
+ * instead of silently discarding them.
+ */
+export const formatQueuedMessageForHistory = (
+  queued: QueuedMessage,
+): string => {
+  if (queued.attachments.length === 0) return queued.content
+  const parts = queued.content ? [queued.content] : []
+  for (const att of queued.attachments) {
+    switch (att.kind) {
+      case 'text':
+        parts.push(`[Pasted Text]\n${att.content}`)
+        break
+      case 'file':
+        parts.push(formatFileAttachmentForPrompt(att))
+        break
+      case 'image':
+        parts.push(
+          att.status === 'error'
+            ? `[Image attachment: ${att.path}; failed: ${att.note ?? 'error'}]`
+            : `[Image attachment: ${att.path}]`,
+        )
+        break
+    }
+  }
+  return parts.join('\n\n')
 }
 
 export const prepareUserMessage = async (params: {

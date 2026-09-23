@@ -117,28 +117,29 @@ describe('gate-repair-budgets', () => {
     expect(output).toContain('unlimited')
   })
 
-  it('no-verdict retry resolvers default to 2, reject invalid, and cap at 10', () => {
+  it('no-verdict retry resolvers default to Infinity, reject invalid, and cap at 10', () => {
+    // Legacy reference value only; the resolvers no longer default to it.
     expect(DEFAULT_MAX_NO_VERDICT_RETRIES).toBe(2)
     expect(MAX_MAX_NO_VERDICT_RETRIES).toBe(10)
     for (const resolve of [
       resolveMaxReviewerNoVerdictRetries,
       resolveMaxSpecialistNoVerdictRetries,
     ]) {
-      // Missing / invalid / empty / non-positive → default 2 (never null).
-      expect(resolve(undefined)).toBe(2)
-      expect(resolve('  ')).toBe(2)
-      expect(resolve('nope')).toBe(2)
-      expect(resolve(0)).toBe(2)
-      expect(resolve(-3)).toBe(2)
+      // Missing / invalid / empty / non-positive → unlimited (Infinity).
+      expect(resolve(undefined)).toBe(Number.POSITIVE_INFINITY)
+      expect(resolve('  ')).toBe(Number.POSITIVE_INFINITY)
+      expect(resolve('nope')).toBe(Number.POSITIVE_INFINITY)
+      expect(resolve(0)).toBe(Number.POSITIVE_INFINITY)
+      expect(resolve(-3)).toBe(Number.POSITIVE_INFINITY)
       // Positive ints pass through; floats floor.
       expect(resolve(3)).toBe(3)
       expect(resolve(4.9)).toBe(4)
       // Env string parsing.
       expect(resolve('5')).toBe(5)
-      // Cap at 10.
+      // Cap at 10 only when a finite positive int is configured.
       expect(resolve(99)).toBe(MAX_MAX_NO_VERDICT_RETRIES)
       expect(resolve('50')).toBe(MAX_MAX_NO_VERDICT_RETRIES)
-      // Explicit fallback wins for invalid input.
+      // Explicit finite fallback overrides the unlimited default for invalid input.
       expect(resolve(undefined, 7)).toBe(7)
     }
   })

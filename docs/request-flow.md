@@ -187,8 +187,6 @@ deduction.
 Tool calls always execute on the user's machine:
 
 ```
-
-Control-plane reads and validation use the same local dispatch path. A targeted validation call must include the snapshot ID observed before execution; the SDK rejects the call if the workspace is already stale and rejects its result if files mutate while the command is running. This prevents an old compiler/test result or reviewer verdict from clearing a newer change.
 LLM Response (tool_call)          Agent Runtime processes stream
         │                                    │
         ▼                                    ▼
@@ -203,6 +201,8 @@ LLM Response (tool_call)          Agent Runtime processes stream
         │
   Feeds result back into next provider call
 ```
+
+Control-plane reads and validation use the same local dispatch path. A targeted validation call must include the snapshot ID observed before execution; the SDK rejects the call if the workspace is already stale and rejects its result if files mutate while the command is running. This prevents an old compiler/test result or reviewer verdict from clearing a newer change.
 
 ### Staged read-before-edit enforcement
 

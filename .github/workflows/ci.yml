@@ -89,6 +89,12 @@ jobs:
           bun --cwd=scripts run guard:memory-drift
           bun --cwd=scripts run guard:sync-agent-config
 
+      # M4-T3: the gate-helpers generator's --check mode is the documented
+      # freshness contract; fail CI on drift instead of silently rewriting the
+      # tracked file during prebuild.
+      - name: Check generated gate helpers are current
+        run: bun run scripts/generate-gate-helpers.ts --check agents/base2/base2.ts
+
       - name: Typecheck
         run: bun run typecheck
 
@@ -188,7 +194,8 @@ jobs:
         if: matrix.package == 'cli'
         run: cd cli && bun run prebuild:agents
 
-      - name: Run ${{ matrix.package }} tests
+      - id: tests
+        name: Run ${{ matrix.package }} tests
         uses: nick-fields/retry@ce71cc2ab81d554ebbe88c79ab5975992d79ba08 # v3
         with:
           timeout_minutes: 10
@@ -209,9 +216,43 @@ jobs:
                 # p8-degraded-delta mock leaking into p8-lite).
                 bun test --isolate $TEST_FILES
               else
-                echo "No tests found in ${{ matrix.package }}"
+                # M4-T3: an empty glob is a truth failure, not a pass. A
+                # missing/pruned test directory must fail the job instead of
+                # reporting a vacuous green suite.
+                echo "No tests found in ${{ matrix.package }} (expected '*.test.ts' files; find glob or checkout is broken)" >&2
+                exit 1
               fi
             fi
+
+      # M4-T3: flake ledger — retry@v3 exposes how many attempts the step
+      # needed via its `total_attempts` output. Persist that per-suite so
+      # flakes are tracked to zero instead of silently absorbed by the x3
+      # retry. The ledger lives at scripts/flake-ledger.json (validated by
+      # scripts/__tests__/flake-ledger.test.ts).
+      - name: Record test flakiness
+        if: always()
+        run: |
+          SUITE=${{ matrix.package }}
+          if [ -f scripts/flake-ledger.json ]; then
+            LEDGER=$(cat scripts/flake-ledger.json)
+          else
+            LEDGER='{}'
+          fi
+          UPDATED=$(LEDGER="$LEDGER" SUITE="$SUITE" ATTEMPTS="${{ steps.tests.outputs.total_attempts }}" bun -e '
+            const ledger = JSON.parse(process.env.LEDGER);
+            ledger[process.env.SUITE] = Number(process.env.ATTEMPTS) || 1;
+            console.log(JSON.stringify(ledger, null, 2) + "\n");
+          ')
+          printf '%s\n' "$UPDATED" > scripts/flake-ledger.json
+          cat scripts/flake-ledger.json
+
+      - name: Upload flake ledger
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flake-ledger-${{ matrix.package }}
+          path: scripts/flake-ledger.json
+          if-no-files-found: error
 
       # - name: Open interactive debug shell
       #   if: ${{ failure() }}

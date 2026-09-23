@@ -29,10 +29,9 @@ describe('createQueueProcessingOwnership', () => {
     expect(activeQueueProcessingOwnerRef.current).toBe(null)
   })
 
-  test('stale finally-style cleanup leaves newer processing lock and watchdog intact', () => {
+  test('stale finally-style cleanup leaves newer processing lock and owner intact', () => {
     const activeQueueProcessingOwnerRef = { current: null as symbol | null }
     const isProcessingQueueRef = { current: false }
-    const watchdogTimeoutRef = { current: Symbol('watchdog') as symbol | null }
 
     const ownerA = createQueueProcessingOwnership(activeQueueProcessingOwnerRef)
 
@@ -43,12 +42,10 @@ describe('createQueueProcessingOwnership', () => {
 
     if (ownerA.isCurrentQueueProcessingOwner()) {
       isProcessingQueueRef.current = false
-      watchdogTimeoutRef.current = null
       ownerA.releaseQueueProcessingOwner()
     }
 
     expect(isProcessingQueueRef.current).toBe(true)
-    expect(watchdogTimeoutRef.current).not.toBe(null)
     expect(ownerB.isCurrentQueueProcessingOwner()).toBe(true)
   })
 })
@@ -65,30 +62,10 @@ describe('runQueuedMessage', () => {
 
   const flushPromises = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-  const createTimerHarness = () => {
-    const callbacks = new Map<ReturnType<typeof setTimeout>, () => void>()
-    const setTimeoutFn = (callback: () => void) => {
-      const timer = setTimeout(() => {}, 0)
-      clearTimeout(timer)
-      callbacks.set(timer, callback)
-      return timer
-    }
-    const clearTimeoutFn = (timer: ReturnType<typeof setTimeout>) => {
-      callbacks.delete(timer)
-      clearTimeout(timer)
-    }
-
-    return { callbacks, setTimeoutFn, clearTimeoutFn }
-  }
-
   test('processing lock is acquired before queue mutation and send starts', () => {
     const activeQueueProcessingOwnerRef = { current: null as symbol | null }
     const isProcessingQueueRef = { current: false }
     const isQueuePausedRef = { current: false }
-    const watchdogTimeoutRef = {
-      current: null as ReturnType<typeof setTimeout> | null,
-    }
-    const timerHarness = createTimerHarness()
     const queue: QueuedMessage[] = [{ content: 'queued', attachments: [] }]
     const messageToProcess = queue[0]
     expect(messageToProcess).toBeDefined()
@@ -96,11 +73,8 @@ describe('runQueuedMessage', () => {
     const queueProcessingRun = beginQueuedMessageProcessing({
       isProcessingQueueRef,
       isQueuePausedRef,
-      watchdogTimeoutRef,
       queueProcessingOwnerRef: activeQueueProcessingOwnerRef,
       setCanProcessQueue: () => {},
-      setTimeoutFn: timerHarness.setTimeoutFn,
-      clearTimeoutFn: timerHarness.clearTimeoutFn,
     })
 
     // Mirrors `processNextMessage`: the lock must be visible before queue state
@@ -114,7 +88,6 @@ describe('runQueuedMessage', () => {
       messageToProcess: messageToProcess!,
       sendMessage: () => Promise.resolve(),
       isProcessingQueueRef,
-      watchdogTimeoutRef,
       queueProcessingRun,
     })
   })
@@ -123,10 +96,6 @@ describe('runQueuedMessage', () => {
     const activeQueueProcessingOwnerRef = { current: null as symbol | null }
     const isProcessingQueueRef = { current: false }
     const isQueuePausedRef = { current: false }
-    const watchdogTimeoutRef = {
-      current: null as ReturnType<typeof setTimeout> | null,
-    }
-    const timerHarness = createTimerHarness()
     const message = { content: 'do not lose me', attachments: [] }
     const restored: QueuedMessage[] = []
 
@@ -136,11 +105,8 @@ describe('runQueuedMessage', () => {
       onRejected: (rejectedMessage) => restored.push(rejectedMessage),
       isProcessingQueueRef,
       isQueuePausedRef,
-      watchdogTimeoutRef,
       queueProcessingOwnerRef: activeQueueProcessingOwnerRef,
       setCanProcessQueue: () => {},
-      setTimeoutFn: timerHarness.setTimeoutFn,
-      clearTimeoutFn: timerHarness.clearTimeoutFn,
     })
 
     await flushPromises()
@@ -149,15 +115,41 @@ describe('runQueuedMessage', () => {
     expect(isProcessingQueueRef.current).toBe(false)
   })
 
-  test('stale completion cannot clear newer queued-send processing lock or watchdog', async () => {
+  test('a synchronously throwing sendMessage still releases the processing lock', async () => {
+    // Reviewer advisory: a sendMessage implementation that throws instead of
+    // rejecting returns nothing to attach .catch/.finally to, so the lock
+    // would leak and the queue would stay stuck. The message must also be
+    // restorable to the caller.
     const activeQueueProcessingOwnerRef = { current: null as symbol | null }
     const isProcessingQueueRef = { current: false }
     const isQueuePausedRef = { current: false }
-    const watchdogTimeoutRef = {
-      current: null as ReturnType<typeof setTimeout> | null,
-    }
+    const message = { content: 'sync throw', attachments: [] }
+    const restored: QueuedMessage[] = []
+
+    runQueuedMessage({
+      messageToProcess: message,
+      sendMessage: () => {
+        throw new Error('boom')
+      },
+      onRejected: (rejectedMessage) => restored.push(rejectedMessage),
+      isProcessingQueueRef,
+      isQueuePausedRef,
+      queueProcessingOwnerRef: activeQueueProcessingOwnerRef,
+      setCanProcessQueue: () => {},
+    })
+
+    await flushPromises()
+
+    expect(restored).toEqual([message])
+    expect(isProcessingQueueRef.current).toBe(false)
+    expect(activeQueueProcessingOwnerRef.current).toBeNull()
+  })
+
+  test('stale completion cannot clear newer queued-send processing lock', async () => {
+    const activeQueueProcessingOwnerRef = { current: null as symbol | null }
+    const isProcessingQueueRef = { current: false }
+    const isQueuePausedRef = { current: false }
     let canProcessQueue = false
-    const timerHarness = createTimerHarness()
     const runA = createDeferred()
     const runB = createDeferred()
 
@@ -166,13 +158,10 @@ describe('runQueuedMessage', () => {
       sendMessage: () => runA.promise,
       isProcessingQueueRef,
       isQueuePausedRef,
-      watchdogTimeoutRef,
       queueProcessingOwnerRef: activeQueueProcessingOwnerRef,
       setCanProcessQueue: (can) => {
         canProcessQueue = can
       },
-      setTimeoutFn: timerHarness.setTimeoutFn,
-      clearTimeoutFn: timerHarness.clearTimeoutFn,
     })
 
     // Abort cleanup from run A releases the processing lock, allowing run B to
@@ -184,24 +173,18 @@ describe('runQueuedMessage', () => {
       sendMessage: () => runB.promise,
       isProcessingQueueRef,
       isQueuePausedRef,
-      watchdogTimeoutRef,
       queueProcessingOwnerRef: activeQueueProcessingOwnerRef,
       setCanProcessQueue: (can) => {
         canProcessQueue = can
       },
-      setTimeoutFn: timerHarness.setTimeoutFn,
-      clearTimeoutFn: timerHarness.clearTimeoutFn,
     })
 
-    const runBWatchdog = watchdogTimeoutRef.current
     expect(isProcessingQueueRef.current).toBe(true)
-    expect(runBWatchdog).not.toBe(null)
 
     runA.resolve()
     await flushPromises()
 
     expect(isProcessingQueueRef.current).toBe(true)
-    expect(watchdogTimeoutRef.current).toBe(runBWatchdog)
     expect(activeQueueProcessingOwnerRef.current).not.toBe(null)
     expect(canProcessQueue).toBe(false)
 
@@ -209,76 +192,7 @@ describe('runQueuedMessage', () => {
     await flushPromises()
 
     expect(isProcessingQueueRef.current).toBe(false)
-    expect(watchdogTimeoutRef.current).toBe(null)
     expect(activeQueueProcessingOwnerRef.current).toBe(null)
-  })
-
-  test('stale watchdog cannot clear newer queued-send processing lock or timer', () => {
-    const activeQueueProcessingOwnerRef = { current: null as symbol | null }
-    const isProcessingQueueRef = { current: false }
-    const isQueuePausedRef = { current: false }
-    const watchdogTimeoutRef = {
-      current: null as ReturnType<typeof setTimeout> | null,
-    }
-    let canProcessQueue = false
-    const timerHarness = createTimerHarness()
-    const runA = createDeferred()
-    const runB = createDeferred()
-
-    runQueuedMessage({
-      messageToProcess: { content: 'run A', attachments: [] },
-      sendMessage: () => runA.promise,
-      isProcessingQueueRef,
-      isQueuePausedRef,
-      watchdogTimeoutRef,
-      queueProcessingOwnerRef: activeQueueProcessingOwnerRef,
-      setCanProcessQueue: (can) => {
-        canProcessQueue = can
-      },
-      setTimeoutFn: timerHarness.setTimeoutFn,
-      clearTimeoutFn: timerHarness.clearTimeoutFn,
-    })
-    const runAWatchdog = watchdogTimeoutRef.current
-    expect(runAWatchdog).not.toBe(null)
-    const staleWatchdogCallback = timerHarness.callbacks.get(runAWatchdog!)
-    expect(staleWatchdogCallback).toBeDefined()
-
-    // Abort cleanup from run A releases the processing lock, allowing run B to
-    // start before run A's watchdog callback fires. Starting run B clears run A's
-    // active timer entry, so capture the stale callback first to exercise the
-    // real queued-send watchdog branch after run B owns the shared refs.
-    isProcessingQueueRef.current = false
-
-    runQueuedMessage({
-      messageToProcess: { content: 'run B', attachments: [] },
-      sendMessage: () => runB.promise,
-      isProcessingQueueRef,
-      isQueuePausedRef,
-      watchdogTimeoutRef,
-      queueProcessingOwnerRef: activeQueueProcessingOwnerRef,
-      setCanProcessQueue: (can) => {
-        canProcessQueue = can
-      },
-      setTimeoutFn: timerHarness.setTimeoutFn,
-      clearTimeoutFn: timerHarness.clearTimeoutFn,
-    })
-    const runBWatchdog = watchdogTimeoutRef.current
-    expect(runBWatchdog).not.toBe(null)
-
-    staleWatchdogCallback!()
-
-    expect(isProcessingQueueRef.current).toBe(true)
-    expect(watchdogTimeoutRef.current).toBe(runBWatchdog)
-    expect(activeQueueProcessingOwnerRef.current).not.toBe(null)
-    expect(canProcessQueue).toBe(false)
-
-    const currentWatchdogCallback = timerHarness.callbacks.get(runBWatchdog!)
-    currentWatchdogCallback?.()
-
-    expect(isProcessingQueueRef.current).toBe(false)
-    expect(watchdogTimeoutRef.current).toBe(null)
-    expect(activeQueueProcessingOwnerRef.current).toBe(null)
-    expect(canProcessQueue).toBe(true)
   })
 })
 

@@ -69,35 +69,43 @@ export class HarnessApprovalService {
     target: string
     snapshotId: string
   }): ApprovalRecord {
-    const existing = this.store.read(
-      params.repositoryId,
-      'approvals',
-      params.approvalId,
-    ) as ApprovalRecord | undefined
-    if (!existing) throw new Error('Approval not found.')
-    if (existing.consumedAt) throw new Error('Approval was already consumed.')
-    if (existing.expiresAt && Date.parse(existing.expiresAt) <= Date.now()) {
-      throw new Error('Approval has expired.')
-    }
-    if (
-      existing.action !== params.action ||
-      existing.target !== params.target ||
-      existing.workspaceId !== params.workspaceId ||
-      existing.runId !== params.runId ||
-      existing.snapshotId !== params.snapshotId
-    ) {
-      throw new Error('Approval scope does not match the requested action.')
-    }
-    return this.store.put(
-      'approvals',
-      {
-        ...existing,
-        revision: existing.revision + 1,
-        updatedAt: now(),
-        consumedAt: now(),
-      },
-      existing.revision,
-    ) as ApprovalRecord
+    // Race fix: read + consume must be one critical section. The read outside
+    // the lock plus the CAS'd put inside it is safe against lost updates, but
+    // a parallel consumer that reads between the two steps observes a live
+    // approval and then fails with a raw revision-conflict error instead of
+    // the documented single-use semantics. Holding the kind lock for the whole
+    // read-modify-write serializes consumers so exactly one consume wins.
+    return this.store.withKindLock(params.repositoryId, 'approvals', () => {
+      const existing = this.store.read(
+        params.repositoryId,
+        'approvals',
+        params.approvalId,
+      ) as ApprovalRecord | undefined
+      if (!existing) throw new Error('Approval not found.')
+      if (existing.consumedAt) throw new Error('Approval was already consumed.')
+      if (existing.expiresAt && Date.parse(existing.expiresAt) <= Date.now()) {
+        throw new Error('Approval has expired.')
+      }
+      if (
+        existing.action !== params.action ||
+        existing.target !== params.target ||
+        existing.workspaceId !== params.workspaceId ||
+        existing.runId !== params.runId ||
+        existing.snapshotId !== params.snapshotId
+      ) {
+        throw new Error('Approval scope does not match the requested action.')
+      }
+      return this.store.put(
+        'approvals',
+        {
+          ...existing,
+          revision: existing.revision + 1,
+          updatedAt: now(),
+          consumedAt: now(),
+        },
+        existing.revision,
+      ) as ApprovalRecord
+    })
   }
 }
 

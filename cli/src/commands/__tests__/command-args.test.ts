@@ -1064,6 +1064,127 @@ describe('command factory pattern', () => {
     })
   })
 
+  describe('exit command shutdown sequence', () => {
+    /**
+     * The /exit handler ends in an async analytics flush whose .finally
+     * callback calls process.exit, so the test must stub both process.exit and
+     * process.kill (the handler must never self-signal) and yield a macrotask
+     * for the flush's .finally to run before asserting.
+     */
+    const stubProcessExitAndKill = () => {
+      const exitSpy = mock(() => undefined)
+      const killSpy = mock(() => true)
+      const originalExit = process.exit
+      const originalKill = process.kill
+      process.exit = exitSpy as unknown as typeof process.exit
+      process.kill = killSpy as unknown as typeof process.kill
+      return {
+        exitSpy,
+        killSpy,
+        restore: () => {
+          process.exit = originalExit
+          process.kill = originalKill
+        },
+      }
+    }
+
+    test('drains the guarded-submit queue into session history before exiting', async () => {
+      const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
+      expect(exitCmd).toBeDefined()
+
+      const stubs = stubProcessExitAndKill()
+      try {
+        const clearQueue = mock(() => [
+          { content: 'queued one', attachments: [] },
+          { content: 'queued two', attachments: [] },
+        ])
+        const saveToHistory = mock(() => {})
+        const stopStreaming = mock(() => {})
+        const params = createMockParams({ clearQueue, saveToHistory, stopStreaming })
+
+        exitCmd!.handler(params, '')
+        await new Promise((resolve) => setTimeout(resolve, 10))
+
+        // Every queued prompt (with its attachments) is persisted to the
+        // session history instead of being dropped by the restart, and the
+        // queue is drained so a late handler cannot resend it.
+        expect(saveToHistory).toHaveBeenCalledWith('queued one')
+        expect(saveToHistory).toHaveBeenCalledWith('queued two')
+        expect(clearQueue).toHaveBeenCalledTimes(1)
+        // Shutdown sequencing: stream stopped before the exit is scheduled.
+        expect(stopStreaming).toHaveBeenCalled()
+        expect(stubs.exitSpy).toHaveBeenCalledWith(0)
+      } finally {
+        stubs.restore()
+      }
+    })
+
+    test('exits without queueing when the queue is empty', async () => {
+      const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
+      expect(exitCmd).toBeDefined()
+
+      const stubs = stubProcessExitAndKill()
+      try {
+        const clearQueue = mock(() => [] as Array<{ content: string; attachments: never[] }>)
+        const saveToHistory = mock(() => {})
+        const params = createMockParams({ clearQueue, saveToHistory })
+
+        exitCmd!.handler(params, '')
+        await new Promise((resolve) => setTimeout(resolve, 10))
+
+        expect(saveToHistory).not.toHaveBeenCalled()
+        expect(stubs.exitSpy).toHaveBeenCalledWith(0)
+      } finally {
+        stubs.restore()
+      }
+    })
+
+    test('degrades to a no-op drain when clearQueue is not wired', async () => {
+      const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
+      expect(exitCmd).toBeDefined()
+
+      const stubs = stubProcessExitAndKill()
+      try {
+        const saveToHistory = mock(() => {})
+        const params = createMockParams({ saveToHistory })
+        expect(params.clearQueue).toBeUndefined()
+
+        exitCmd!.handler(params, '')
+        await new Promise((resolve) => setTimeout(resolve, 10))
+
+        expect(saveToHistory).not.toHaveBeenCalled()
+        expect(stubs.exitSpy).toHaveBeenCalledWith(0)
+      } finally {
+        stubs.restore()
+      }
+    })
+
+    test('cancels in-flight resources instead of self-signalling SIGINT', async () => {
+      const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
+      expect(exitCmd).toBeDefined()
+
+      const stubs = stubProcessExitAndKill()
+      try {
+        const abortController = new AbortController()
+        const params = createMockParams({
+          abortControllerRef: { current: abortController },
+        })
+        expect(abortController.signal.aborted).toBe(false)
+
+        exitCmd!.handler(params, '')
+        await new Promise((resolve) => setTimeout(resolve, 10))
+
+        // The stream's abort controller is cancelled so in-flight SDK streams
+        // unwind before the exit, and the process never signals its own PID.
+        expect(abortController.signal.aborted).toBe(true)
+        expect(stubs.killSpy).not.toHaveBeenCalled()
+        expect(stubs.exitSpy).toHaveBeenCalledWith(0)
+      } finally {
+        stubs.restore()
+      }
+    })
+  })
+
   describe('feedback command arg handling', () => {
     test('pre-populates feedback text when args are provided', () => {
       const feedbackCmd = COMMAND_REGISTRY.find((c) => c.name === 'feedback')

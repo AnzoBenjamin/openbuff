@@ -253,4 +253,119 @@ describe('harness enforcement services', () => {
       action: 'workspace-delete',
     })
   })
+
+  test('consume observes a concurrent consumer through the kind lock', () => {
+    const store = setup()
+    const service = new HarnessApprovalService(store)
+    const grant = service.grant(scope, {
+      action: 'push',
+      target: 'origin/feature',
+    })
+    // A parallel consumer holds the approvals kind lock, consumes the grant,
+    // and commits the consumed revision inside the critical section. Our
+    // consume must then observe the committed record and fail closed with the
+    // documented single-use error instead of consuming a second time.
+    const consumedAt = new Date().toISOString()
+    store.withKindLock(scope.repositoryId, 'approvals', () => {
+      store.put(
+        'approvals',
+        {
+          ...grant,
+          revision: grant.revision + 1,
+          updatedAt: consumedAt,
+          consumedAt,
+        },
+        grant.revision,
+      )
+    })
+    expect(() =>
+      service.consume({
+        repositoryId: 'repo-1',
+        workspaceId: 'workspace-1',
+        runId: 'run-1',
+        approvalId: grant.id,
+        action: 'push',
+        target: 'origin/feature',
+        snapshotId: 'snapshot-1',
+      }),
+    ).toThrow('already consumed')
+  })
+
+  test('exactly one consume wins across repeated attempts', () => {
+    const service = new HarnessApprovalService(setup())
+    const grant = service.grant(scope, {
+      action: 'push',
+      target: 'origin/main',
+    })
+    const consume = () =>
+      service.consume({
+        repositoryId: 'repo-1',
+        workspaceId: 'workspace-1',
+        runId: 'run-1',
+        approvalId: grant.id,
+        action: 'push',
+        target: 'origin/main',
+        snapshotId: 'snapshot-1',
+      })
+    const attempts = Array.from({ length: 8 }, () => {
+      try {
+        return { ok: true as const, record: consume() }
+      } catch (error) {
+        return { ok: false as const, error }
+      }
+    })
+    const successes = attempts.filter((attempt) => attempt.ok)
+    expect(successes.length).toBe(1)
+    expect(successes[0]?.record.consumedAt).toBeDefined()
+    for (const attempt of attempts) {
+      if (!attempt.ok) {
+        expect(String(attempt.error)).toMatch(/already consumed/)
+      }
+    }
+  })
+
+  test('a non-EEXIST acquire failure never deletes a competing holder lock', () => {
+    const store = setup()
+    const lockDir = path.join(
+      store.rootDir,
+      scope.repositoryId,
+      'approvals.lock',
+    )
+    // Simulate a competing waiter that already acquired the kind lock.
+    fs.mkdirSync(lockDir, { recursive: true })
+    const ownerFilePath = path.join(lockDir, 'owner.json')
+    fs.writeFileSync(
+      ownerFilePath,
+      JSON.stringify({ pid: process.pid, token: 'victim-token' }),
+    )
+
+    // Force the acquire's mkdir to fail with a non-EEXIST error (EMFILE),
+    // the way an environment refusal (EACCES/ENOSPC/...) would.
+    const realMkdirSync = fs.mkdirSync
+    fs.mkdirSync = ((target: fs.PathLike, options?: fs.MakeDirectoryOptions) => {
+      if (target === lockDir) {
+        const error = new Error(
+          'simulated acquire failure',
+        ) as NodeJS.ErrnoException
+        error.code = 'EMFILE'
+        throw error
+      }
+      return realMkdirSync(target, options)
+    }) as typeof fs.mkdirSync
+    try {
+      expect(() =>
+        store.withKindLock(scope.repositoryId, 'approvals', () => {}),
+      ).toThrow('simulated acquire failure')
+    } finally {
+      fs.mkdirSync = realMkdirSync
+    }
+
+    // The competing holder's lock dir and owner record must survive: the
+    // failed acquirer must never delete a lock it does not own.
+    expect(fs.existsSync(lockDir)).toBe(true)
+    const owner = JSON.parse(fs.readFileSync(ownerFilePath, 'utf8')) as {
+      token?: unknown
+    }
+    expect(owner.token).toBe('victim-token')
+  })
 })

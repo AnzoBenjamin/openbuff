@@ -55,6 +55,35 @@ const archiveMessage = (message: Message): Message => {
  */
 const archivedSources = new WeakSet<Message[]>()
 
+/**
+ * Collision-safe `archivedAt` minting (M3-T4): multiple compaction passes can
+ * archive in the same millisecond (e.g. a semantic pass plus a mechanical trim
+ * in one iteration), and downstream consumers key coverage and provenance per
+ * `archivedAt` value — duplicate timestamps would mark BOTH same-tick
+ * snapshots covered off a single consolidation, or report one snapshot's
+ * timestamp twice. Monotonic per process: the wall clock when it advances,
+ * bumped just past the previous mint on a same-millisecond collision.
+ */
+let lastMintedArchivedAt = 0
+/**
+ * A forward clock jump (NTP correction, VM resume) must not permanently
+ * inflate the mint: without a bound, one jump makes lastMintedArchivedAt far
+ * ahead of the wall clock and every later archive across ALL agent states
+ * inherits timestamps minutes/hours ahead of reality, corrupting the
+ * archivedAt provenance consumers sort and key coverage by (reliability
+ * finding mintarchivedat-shared-monotonic-counter). Detections beyond this
+ * window resync to the wall clock; same-millisecond collisions within the
+ * window still bump monotonically.
+ */
+const MAX_MINT_AHEAD_OF_WALL_CLOCK_MS = 5_000
+const mintArchivedAt = (now: number): number => {
+  if (lastMintedArchivedAt > now + MAX_MINT_AHEAD_OF_WALL_CLOCK_MS) {
+    lastMintedArchivedAt = now
+  }
+  lastMintedArchivedAt = Math.max(lastMintedArchivedAt + 1, now)
+  return lastMintedArchivedAt
+}
+
 /** Archive a pre-compaction transcript on `agentState`. Identity-keyed. */
 export function archivePreCompaction(
   agentState: {
@@ -68,7 +97,7 @@ export function archivePreCompaction(
   if (archivedSources.has(source)) return
   const stored = source.slice(-MAX_ARCHIVE_MESSAGES)
   const snapshot: ContextArchiveSnapshot = {
-    archivedAt: Date.now(),
+    archivedAt: mintArchivedAt(Date.now()),
     action,
     keepRecentSteps,
     stepBase: source.length - stored.length,

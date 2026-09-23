@@ -524,7 +524,9 @@ export type Base2ActiveWorkState = Base2GateState & {
   specialistRepairRoundCount?: number
   /**
    * Per-specialist consecutive no-verdict runs. Bounded by
-   * MAX_SPECIALIST_NO_VERDICT_RETRIES; while under the cap the specialist is
+   * MAX_SPECIALIST_NO_VERDICT_RETRIES when explicitly configured (default
+   * unlimited: retry without crediting until a verdict or a crash detector
+   * interrupts the gate). While under a configured cap the specialist is
    * NOT credited (fail closed) and re-runs, and once over the cap it is
    * credited with reduced assurance so the gate cannot spin forever. MUST stay
    * a plain JSON-serializable record.

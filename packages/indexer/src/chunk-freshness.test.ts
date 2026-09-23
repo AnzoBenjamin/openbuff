@@ -220,6 +220,45 @@ describe('evaluateChunkFreshness matrix', () => {
     ).toBe('FRESH')
   })
 
+  test('FRESH when the sidecar lags but the live inline chunk hash matches', () => {
+    const index = makeIndex()
+    // A sidecar write failure after metadata.json committed leaves an empty
+    // sidecar: the stable id is unknown to it but present in the live index.
+    const laggingSidecar = {
+      version: 1,
+      snapshotId: 'snap-1',
+      builtAt: 1,
+      projectRoot: '/repo',
+      chunks: {},
+    } satisfies ChunkSidecar
+    expect(
+      evaluateChunkFreshness(
+        { stableChunkId: 'stable-a', path: 'src/a.ts', contentHash: 'hash-a' },
+        index,
+        laggingSidecar,
+        'snap-1',
+      ),
+    ).toEqual({ state: 'FRESH', reason: 'inline-hash-match' })
+    // The inline fallback must still prove STALE on a hash mismatch.
+    expect(
+      evaluateChunkFreshness(
+        { stableChunkId: 'stable-a', path: 'src/a.ts', contentHash: 'other' },
+        index,
+        laggingSidecar,
+        'snap-1',
+      ).state,
+    ).toBe('STALE')
+    // A chunk absent from BOTH the sidecar and the live index stays ORPHAN.
+    expect(
+      evaluateChunkFreshness(
+        { stableChunkId: 'nope', path: 'src/a.ts', contentHash: 'x' },
+        index,
+        laggingSidecar,
+        'snap-1',
+      ),
+    ).toEqual({ state: 'ORPHAN', reason: 'unknown-stable-chunk-id' })
+  })
+
   test('fail-closed: never throws', () => {
     expect(
       evaluateChunkFreshness(null, null, null, null).state,

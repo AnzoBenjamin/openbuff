@@ -24,23 +24,56 @@ const GLOBAL_OSC_TIMEOUT_MS = 600 // Bounds both sequential fallback probes
  * @param promise - The promise to wrap
  * @param timeoutMs - Timeout in milliseconds
  * @param timeoutValue - Value to return on timeout
+ * @param signal - Optional abort signal that ends the race early when it
+ *   fires while the window is open (reliability finding
+ *   exit-flush-not-tied-to-timeout): an abort racing the wrapped work
+ *   resolves with `timeoutValue` right away instead of leaving the window
+ *   unobserved until the timeout elapses. A signal that was already aborted
+ *   before the call does NOT shorten the window (reliability finding
+ *   exit-flush-window-collapsed-by-pre-aborted-signal): the wrapped work
+ *   still gets the full `timeoutMs` bound.
  */
 export function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
   timeoutValue: T,
+  signal?: AbortSignal,
 ): Promise<T> {
   let timeoutId: NodeJS.Timeout | null = null
+  let onAbort: (() => void) | undefined
 
   const timeoutPromise = new Promise<T>((resolve) => {
     timeoutId = setTimeout(() => {
       resolve(timeoutValue)
     }, timeoutMs)
+    if (signal) {
+      // A signal that was already aborted before this call must NOT collapse
+      // the window to zero (reliability finding
+      // exit-flush-window-collapsed-by-pre-aborted-signal): the /exit and
+      // SIGINT paths abort the stream controller before wrapping
+      // flushAnalytics(), and the wrapped work must still get the full
+      // `timeoutMs` bound. Only an abort that fires while the window is open
+      // resolves early.
+      if (!signal.aborted) {
+        onAbort = () => resolve(timeoutValue)
+        signal.addEventListener('abort', onAbort, { once: true })
+      }
+    }
   })
+
+  // Absorb a late rejection: when the timeout wins the race, the original
+  // promise may still reject afterwards (e.g. a failing in-flight stream
+  // during shutdown); without a handler attached that rejection becomes an
+  // unhandledRejection, which is fatal in some runtimes (reliability finding
+  // withtimeout-unhandled-late-rejection).
+  promise.catch(() => {})
 
   return Promise.race([promise, timeoutPromise]).finally(() => {
     if (timeoutId) {
       clearTimeout(timeoutId)
+    }
+    if (onAbort && signal) {
+      signal.removeEventListener('abort', onAbort)
     }
   })
 }

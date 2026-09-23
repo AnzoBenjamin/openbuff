@@ -314,7 +314,7 @@ export function createBase2(
   )
   // Explicit option wins over env. When omitted, resolve from
   // OPENBUFF_MAX_REVIEWER_NO_VERDICT_RETRIES (positive integer string).
-  // Missing/invalid → 2 (default). Positive int capped at 10.
+  // Missing/invalid → unlimited (Infinity); positive ints capped at 10.
   const maxReviewerNoVerdictRetries = resolveMaxReviewerNoVerdictRetries(
     maxReviewerNoVerdictRetriesOption ??
       (typeof process === 'object' && process !== null
@@ -323,7 +323,7 @@ export function createBase2(
   )
   // Explicit option wins over env. When omitted, resolve from
   // OPENBUFF_MAX_SPECIALIST_NO_VERDICT_RETRIES (positive integer string).
-  // Missing/invalid → 2 (default). Positive int capped at 10.
+  // Missing/invalid → unlimited (Infinity); positive ints capped at 10.
   const maxSpecialistNoVerdictRetries = resolveMaxSpecialistNoVerdictRetries(
     maxSpecialistNoVerdictRetriesOption ??
       (typeof process === 'object' && process !== null
@@ -1103,10 +1103,12 @@ ${guideSections}
       >()
       const runReviewerGate = runValidationGate
       const reviewerAgentType = 'code-reviewer'
-      // Retry the reviewer twice before offering the user-authorized bypass:
+      // Retry the reviewer before offering the user-authorized bypass:
       // weaker (non-SOTA) models often fail the structured set_output contract
       // on the first attempt but recover on a re-prompt. A no-verdict is never
-      // credited as a pass; this only adds one more retry before escalation.
+      // credited as a pass. Default is unlimited (Infinity): retries continue
+      // without crediting until a schema-valid verdict arrives; a finite
+      // configured value ≥ 1 must be set explicitly to bound the retries.
       const configuredMaxReviewerNoVerdictRetries =
         config?.maxReviewerNoVerdictRetries
       const MAX_REVIEWER_NO_VERDICT_RETRIES =
@@ -1114,7 +1116,7 @@ ${guideSections}
         Number.isFinite(configuredMaxReviewerNoVerdictRetries) &&
         configuredMaxReviewerNoVerdictRetries >= 1
           ? Math.min(Math.floor(configuredMaxReviewerNoVerdictRetries), 10)
-          : 2
+          : Number.POSITIVE_INFINITY
       // Optional validation-hook repair cap. Already resolved into
       // programmaticConfig at createBase2 load time (null = unlimited).
       // Re-clamp here with local literals only because handleSteps is
@@ -1152,7 +1154,7 @@ ${guideSections}
         Number.isFinite(configuredMaxSpecialistNoVerdictRetries) &&
         configuredMaxSpecialistNoVerdictRetries >= 1
           ? Math.min(Math.floor(configuredMaxSpecialistNoVerdictRetries), 10)
-          : 2
+          : Number.POSITIVE_INFINITY
       // The post-gate finalization instruction shared by every gate-pass path
       // is built by buildGatePassFinalizationNotice() in the inline-helper
       // region below (see that function's comment for why it must stay a

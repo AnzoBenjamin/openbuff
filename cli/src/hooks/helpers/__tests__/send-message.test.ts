@@ -25,6 +25,7 @@ const {
   cleanupProviderReadinessFailure,
   createRunOwnership,
   formatFileAttachmentForPrompt,
+  formatQueuedMessageForHistory,
   setupStreamingContext,
   handleRunCompletion,
   handleRunError,
@@ -37,7 +38,10 @@ const { markPendingCompactionInterrupted } =
   await import('../../../utils/message-block-helpers')
 const { CLI_LIVE_SESSION_ID } = await import('../../../types/chat')
 import type { RunState } from '@openbuff/sdk'
-import type { PendingFileAttachment } from '../../../types/store'
+import type {
+  PendingFileAttachment,
+  PendingImageAttachment,
+} from '../../../types/store'
 
 type TestHttpError = Error & { statusCode: number }
 
@@ -186,6 +190,65 @@ describe('file attachment prompt provenance', () => {
     expect(prompt).toContain('completeness=truncated')
     expect(prompt).toContain('bytes=102400/200000')
     expect(prompt).toContain('Use read_files/read_subtree to verify')
+  })
+})
+
+describe('formatQueuedMessageForHistory', () => {
+  test('returns the content unchanged when no attachments are queued', () => {
+    expect(
+      formatQueuedMessageForHistory({
+        content: 'plain prompt',
+        attachments: [],
+      }),
+    ).toBe('plain prompt')
+  })
+
+  test('folds text and file attachments into the persisted prompt text', () => {
+    const persisted = formatQueuedMessageForHistory({
+      content: 'review this',
+      attachments: [
+        {
+          kind: 'text',
+          id: 'text-1',
+          content: 'pasted body',
+          preview: 'pasted…',
+          charCount: 12,
+        },
+        {
+          kind: 'file',
+          id: 'file-1',
+          path: 'src/a.ts',
+          filename: 'a.ts',
+          isDirectory: false,
+          content: 'file body',
+          status: 'ready',
+        } as PendingFileAttachment,
+      ],
+    })
+
+    // Nothing is silently discarded: the prompt and both attachment bodies
+    // survive the restart in the persisted text.
+    expect(persisted).toContain('review this')
+    expect(persisted).toContain('[Pasted Text]\npasted body')
+    expect(persisted).toContain('file body')
+    expect(persisted).toContain('src/a.ts')
+  })
+
+  test('persists a locating note for image attachments instead of dropping them', () => {
+    const persisted = formatQueuedMessageForHistory({
+      content: 'look at this',
+      attachments: [
+        {
+          kind: 'image',
+          path: '/tmp/shot.png',
+          filename: 'shot.png',
+          status: 'ready',
+        } as PendingImageAttachment,
+      ],
+    })
+
+    expect(persisted).toContain('look at this')
+    expect(persisted).toContain('[Image attachment: /tmp/shot.png]')
   })
 })
 

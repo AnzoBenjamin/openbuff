@@ -432,4 +432,41 @@ describe('file-walker statProjectFiles', () => {
     expect(walkedPaths).not.toContain('vendor/lib/hidden.ts')
     expect(walkedPaths).not.toContain('tmp-data/cache.ts')
   })
+
+  test('walkProjectDetailed does not follow file symlinks (shared no-follow policy)', async () => {
+    const root = await makeTempProject({
+      'src/real.ts': 'export const real = 1\n',
+    })
+    // A symlink (swapped in between readdir and stat in the TOCTOU window, or
+    // simply present on disk) must be skipped, not stat'd/hashed through its
+    // target — matching statProjectFiles' P8.6 lstat contract.
+    try {
+      await fs.promises.symlink(
+        path.join(root, 'src/real.ts'),
+        path.join(root, 'src/link.ts'),
+        'file',
+      )
+    } catch {
+      // Platform cannot create symlinks (e.g. Windows without privileges):
+      // the no-follow assertion is untestable here, so skip.
+      return
+    }
+    const result = await walkProjectDetailed(root)
+    const paths = result.files.map((file) => file.relativePath)
+    expect(paths).toContain('src/real.ts')
+    expect(paths).not.toContain('src/link.ts')
+  })
+
+  test('walkProjectDetailed skips entries that vanish between readdir and stat', async () => {
+    const root = await makeTempProject({
+      'src/keep.ts': 'export const keep = 1\n',
+    })
+    // Simulate a vanished entry by removing the file after building the tree
+    // shape: a missing file must be skipped (ENOENT on lstat) without failing
+    // the walk or inventing an entry.
+    await fs.promises.unlink(path.join(root, 'src/keep.ts'))
+    const result = await walkProjectDetailed(root)
+    expect(result.files).toEqual([])
+    expect(result.truncated).toBe(false)
+  })
 })
